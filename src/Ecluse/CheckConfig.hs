@@ -4,10 +4,11 @@
 
 {- | @ecluse check-config@: validate the configuration exactly as a boot would and print
 the resolved posture, without starting anything. It hands the loaded config to
-'Ecluse.Composition.Plan.resolveBootPlan' and prints that plan's lines, applying none of
-it: no socket opens, no capability count changes, no re-exec, no cloud call. It predicts
-the posture from 'appliedRuntimePlan', because the checker's own process posture is not
-the boot's. It exits @0@ on a valid configuration and @2@ on a refused one.
+'Ecluse.Composition.Plan.resolveBootPlan', takes its verdict through the boot's own
+'bootRefusals', and prints the plan's lines, applying none of it: no socket opens, no
+capability count changes, no re-exec, no cloud call. It predicts the posture from
+'appliedRuntimePlan', because the checker's own process posture is not the boot's. It
+exits @0@ on a valid configuration and @2@ on a refused one.
 -}
 module Ecluse.CheckConfig (runCheckConfig) where
 
@@ -15,7 +16,7 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import System.Environment (getEnvironment)
 
-import Ecluse.Boot (applySecretFileIndirection, orExit, readConfigDocument)
+import Ecluse.Boot (applySecretFileIndirection, bootRefusals, orExit, readConfigDocument)
 import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.Plan (BootPlan (bpLines, bpWarnings), resolveBootPlan)
 import Ecluse.Composition.Sizing (openFileSoftLimit)
@@ -64,7 +65,9 @@ runCheckConfig = do
     traverse_ (TIO.putStrLn . ("warning: " <>)) (renderPostureWarnings effective)
     -- Printed ahead of every refusable phase, exactly where the boot logs it.
     traverse_ TIO.putStrLn preamble
-    bootPlan <- orRefuse (T.unlines . map renderBootError) planE
+    -- The boot resolves the ambient AWS_ENDPOINT_URL beside the plan, so the pre-flight
+    -- verdict must cover it too. The endpoint is a boot resource this tool never dials.
+    (bootPlan, _endpoint) <- orRefuse (T.unlines . map renderBootError) (bootRefusals envVars planE)
     traverse_ TIO.putStrLn (bpLines bootPlan)
     -- Standard output carries no severity field, so the prefix stands in for the boot's
     -- katip WarningS.

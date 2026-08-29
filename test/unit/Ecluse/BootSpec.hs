@@ -18,9 +18,11 @@ import UnliftIO (throwIO, timeout, try)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (ProcessOutcome (..), exitCodeFor, run, superviseProcess)
-import Ecluse.Boot (BootAborted (..), applySecretFileIndirection, orExit, readConfigDocument)
+import Ecluse.Boot (BootAborted (..), applySecretFileIndirection, bootRefusals, orExit, readConfigDocument)
+import Ecluse.Composition.BootError (BootError (AwsEndpointMalformed, QueueRegionMissing), renderBootError)
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
-import Ecluse.Core.Credential (unSecret)
+import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
+import Ecluse.Test.Log (captureStderr)
 
 runEnv :: [(String, String)]
 runEnv =
@@ -311,6 +313,38 @@ spec = do
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left ExitSuccess
 
+    describe "the ambient AWS_ENDPOINT_URL refusal (one verdict for both entry points)" $ do
+        it "refuses one malformed override in the boot and in check-config alike" $ do
+            -- The pre-flight tool must never pass a value the real boot then refuses.
+            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
+            traverse_ (uncurry setEnv) runEnv
+            setEnv "AWS_ENDPOINT_URL" malformedEndpoint
+            -- Each outcome leaves its capture through a ref, so every assertion waits for
+            -- the cleanup below and no failure strands the malformed override.
+            bootOutcome <- newIORef (Nothing :: Maybe (Either ExitCode (Maybe ())))
+            bootReport <- captureStderr $ do
+                outcome <- try (timeout 100000 (withArgs ["proxy"] run))
+                writeIORef bootOutcome (Just outcome)
+            checkOutcome <- newIORef (Nothing :: Maybe (Either ExitCode ()))
+            checkReport <- captureStderr $ do
+                outcome <- try (withArgs ["check-config"] run)
+                writeIORef checkOutcome (Just outcome)
+            unsetEnv "AWS_ENDPOINT_URL"
+            traverse_ (unsetEnv . fst) runEnv
+            readIORef bootOutcome `shouldReturn` Just (Left (ExitFailure 2))
+            readIORef checkOutcome `shouldReturn` Just (Left (ExitFailure 2))
+            reportLines bootReport `shouldBe` [endpointRefusal]
+            reportLines checkReport `shouldBe` [endpointRefusal, "configuration: refused"]
+            -- The override can carry a credential, so no report may echo it.
+            checkReport `shouldNotSatisfy` T.isInfixOf "s3cr3t"
+
+        it "reports the plan's own refusals and the endpoint's in one aggregated list" $
+            bootRefusals [("AWS_ENDPOINT_URL", malformedEndpoint)] (Left [QueueRegionMissing])
+                `shouldBe` Left [QueueRegionMissing, AwsEndpointMalformed malformedSecret]
+
+        it "adds no refusal when AWS_ENDPOINT_URL is unset" $
+            bootRefusals [] (Left [QueueRegionMissing]) `shouldBe` Left [QueueRegionMissing]
+
     describe "superviseProcess (the typed process perimeter)" $ do
         it "classifies a graceful return as ShutdownRequested" $
             superviseProcess pass `shouldReturn` ShutdownRequested
@@ -357,6 +391,22 @@ spec = do
             case outcome of
                 Left BootAborted -> pure ()
                 Right () -> expectationFailure "expected the boot to abort"
+
+-- | An AWS_ENDPOINT_URL the egress gate refuses: userinfo, carrying a credential.
+malformedEndpoint :: String
+malformedEndpoint = "http://operator:s3cr3t@localhost:9000"
+
+-- | 'malformedEndpoint' as the refusal carries it, redacted behind the secret.
+malformedSecret :: Secret
+malformedSecret = mkSecret (toText malformedEndpoint)
+
+-- | The one rendered line both entry points report for 'malformedEndpoint'.
+endpointRefusal :: Text
+endpointRefusal = renderBootError (AwsEndpointMalformed malformedSecret)
+
+-- | The non-blank lines of a captured refusal report.
+reportLines :: Text -> [Text]
+reportLines = filter (not . T.null) . lines
 
 -- | A typed stand-in for a service's synchronous escape.
 newtype SimulatedServiceFault = SimulatedServiceFault Text

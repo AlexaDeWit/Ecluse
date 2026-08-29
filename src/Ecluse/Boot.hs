@@ -14,6 +14,7 @@ module Ecluse.Boot (
     applySecretFileIndirection,
     readConfigDocument,
     withBootEnv,
+    bootRefusals,
     BootAborted (..),
     orExit,
     logBootWarning,
@@ -57,7 +58,6 @@ import Ecluse.Config (
  )
 import Ecluse.Config.Ambient (ambientAwsFromEnv, ambientS3Endpoint)
 import Ecluse.Config.Resolve (secretEnvSpellings)
-import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus, deliveryBudget))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Rules (renderBootOrder)
@@ -175,7 +175,6 @@ withBootEnv :: (BootEnv -> IO ()) -> IO ()
 withBootEnv action = do
     rawEnvVars <- getEnvironment
     envVars <- applySecretFileIndirection rawEnvVars >>= orExit id
-    let ambient = ambientAwsFromEnv envVars
     docBlob <- readConfigDocument envVars >>= orExit id
     config <- orExit (T.unlines . map renderConfigError) (loadConfig envVars docBlob)
     let env = configApp config
@@ -201,7 +200,7 @@ withBootEnv action = do
     -- config key stays traceable to the layer that set it.
     traverse_ (logBootInfo logEnv) preamble
     (bootPlan, s3Endpoint) <-
-        orExit (T.unlines . map renderBootError) (bootRefusals planE (ambientS3Endpoint ambient))
+        orExit (T.unlines . map renderBootError) (bootRefusals envVars planE)
     -- @ecluse check-config@ prints the same two lists in this order, so a transcript and a
     -- boot log agree line for line.
     traverse_ (logBootInfo logEnv) (bpLines bootPlan)
@@ -217,17 +216,19 @@ withBootEnv action = do
                 , beBootPlan = bootPlan
                 }
 
-{- The plan and the ambient S3 endpoint together, or every refusal from both sides, so one
-launch names each problem an operator must fix. -}
+{- | The plan and the ambient S3 endpoint together, or every refusal from both sides, so one
+launch names each problem. @ecluse check-config@ calls it too, so the two verdicts agree.
+-}
 bootRefusals ::
+    [(String, String)] ->
     Either [BootError] BootPlan ->
-    Either Secret (Maybe AwsEndpoint) ->
     Either [BootError] (BootPlan, Maybe AwsEndpoint)
-bootRefusals planE rawEndpointE = case (planE, endpointE) of
+bootRefusals envVars planE = case (planE, endpointE) of
     (Right plan, Right endpoint) -> Right (plan, endpoint)
     (p, e) -> Left (concat (lefts [void p, void e]))
   where
-    endpointE = first (pure . AwsEndpointMalformed) rawEndpointE
+    endpointE =
+        first (pure . AwsEndpointMalformed) (ambientS3Endpoint (ambientAwsFromEnv envVars))
 
 {- Build the config-selected mirror queue. Only the memory arm spends @memoryDepth@, and
 'deadLetterTerminusWarning' is decided here because it needs the built handle. -}
