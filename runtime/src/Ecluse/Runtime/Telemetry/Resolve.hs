@@ -20,9 +20,8 @@ is deliberately /not/ a general per-variable merge: only these four cross betwee
 dialects, and only their fixed precedence is encoded. The @DD_API_KEY@ \/ @DD_SITE@
 agentless-SaaS credentials are __never read__. The exporter targets an
 __operator-declared__, node-local collector\/Agent, never a vendor's cloud directly,
-so no key in the environment can turn into off-cluster egress. The endpoint itself is
-a declared destination (like the mirror queue), not an attack surface. This module
-normalises it and uses it as given, never classified or gated.
+so no key in the environment can turn into off-cluster egress. This module normalises
+the endpoint and uses it as given, never classified or gated.
 
 @OTEL_RESOURCE_ATTRIBUTES@ is read with the __W3C baggage grammar the SDK itself
 uses__. One grammar reads the variable, so a percent-encoded value decodes the same
@@ -30,8 +29,16 @@ way for the @dd@ log object and for the span resource. Blank members are dropped
 first, because operator-authored configuration carries a stray comma often enough.
 A value the grammar still rejects warns at boot and contributes nothing. The
 projection then overwrites the variable with the resolved identity alone. Both the
-@dd@ log object and the span resource carry that identity, and neither carries the
-operator's attributes.
+@dd@ log object and the span resource carry that identity, and in that rejected case
+neither carries the operator's attributes.
+
+The exported header carries the operator's own attributes plus @deployment.environment@
+and @service.version@. It never carries @service.name@, because @OTEL_SERVICE_NAME@ in
+the same projection already does and every SDK signal path prefers that variable. The
+W3C baggage limits cap the header, and the SDK's encoder sheds whatever overflows them in
+hash order. 'resourceAttributes' therefore makes the choice first: the resolved identity
+is admitted ahead of the operator's own keys, and a key the limits exclude warns once at
+boot, by name.
 
 The resolved 'ResolvedTelemetry' is the __single source of truth__ for both halves of
 the telemetry stack. 'otelEnvironmentOverrides' projects it back to the canonical
@@ -63,6 +70,8 @@ module Ecluse.Runtime.Telemetry.Resolve (
 
     -- * Canonical @OTEL_*@ projection
     otelEnvironmentOverrides,
+    ResourceAttributes (..),
+    resourceAttributes,
 
     -- * Export-failure throttle (pure core)
     ThrottleState (..),
@@ -84,15 +93,17 @@ module Ecluse.Runtime.Telemetry.Resolve (
     prepareTelemetry,
 ) where
 
+import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import Data.Version (showVersion)
+import GHC.Exts qualified as Exts
 import Paths_ecluse (version)
 import System.Environment (setEnv)
 
 import Katip (LogEnv, Severity (WarningS))
-import OpenTelemetry.Baggage (Baggage)
+import OpenTelemetry.Baggage (Baggage, Element, Token)
 import OpenTelemetry.Baggage qualified as Baggage
 import OpenTelemetry.Exporter.Span (ExportResult (..))
 import OpenTelemetry.Internal.Logging (setGlobalErrorHandler)
@@ -219,7 +230,7 @@ otelEnvironmentOverrides environment =
     [ ("OTEL_SERVICE_NAME", toString (rtServiceName resolved))
     , ("OTEL_EXPORTER_OTLP_ENDPOINT", toString (teUrl (rtEndpoint resolved)))
     , ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
-    , ("OTEL_RESOURCE_ATTRIBUTES", renderResourceAttributes (mergedResourceAttributes resolved environment))
+    , ("OTEL_RESOURCE_ATTRIBUTES", renderResourceAttributes (raCarried (resourceAttributes environment)))
     ]
   where
     resolved :: ResolvedTelemetry
@@ -229,17 +240,21 @@ otelEnvironmentOverrides environment =
 -- an inherited one of the same name, so a stale operator value never overrides the resolution.
 mergedResourceAttributes :: ResolvedTelemetry -> [(String, String)] -> Baggage
 mergedResourceAttributes resolved environment =
-    foldr insertAttribute inherited (resolvedAttributes resolved)
+    foldr insertAttribute withoutServiceName (resolvedAttributes resolved)
   where
     inherited :: Baggage
     inherited = fromRight Baggage.empty (decodeResourceAttributes environment)
+
+    -- OTEL_SERVICE_NAME carries the service name, and every SDK signal path prefers that
+    -- variable, so an inherited copy here spends header budget to fight it and lose.
+    withoutServiceName :: Baggage
+    withoutServiceName = maybe inherited (`Baggage.delete` inherited) (Baggage.mkToken "service.name")
 
 resolvedAttributes :: ResolvedTelemetry -> [(Text, Text)]
 resolvedAttributes resolved =
     [ (key, value)
     | (key, Just value) <-
-        [ ("service.name", Just (rtServiceName resolved))
-        , ("deployment.environment", rtEnvironment resolved)
+        [ ("deployment.environment", rtEnvironment resolved)
         , ("service.version", rtVersion resolved)
         ]
     ]
@@ -249,6 +264,72 @@ resolvedAttributes resolved =
 insertAttribute :: (Text, Text) -> Baggage -> Baggage
 insertAttribute (key, value) bag =
     maybe bag (\name -> Baggage.insert name (Baggage.element value) bag) (Baggage.mkToken key)
+
+-- | The members the exported header carries, and the keys the W3C baggage limits left out.
+data ResourceAttributes = ResourceAttributes
+    { raCarried :: Baggage
+    -- ^ What @OTEL_RESOURCE_ATTRIBUTES@ exports.
+    , raDropped :: [Text]
+    -- ^ The keys the limits excluded, in admission order.
+    }
+    deriving stock (Eq, Show)
+
+{- | Decide what the exported header carries. The SDK's encoder would shed the overflow in hash
+order, so the choice is made here: the carried set is stable and every shed key warns at boot.
+-}
+resourceAttributes :: [(String, String)] -> ResourceAttributes
+resourceAttributes environment = carry (admitMembers 0 0 (admissionOrder resolved merged))
+  where
+    resolved :: ResolvedTelemetry
+    resolved = resolveTelemetry environment
+
+    merged :: Baggage
+    merged = mergedResourceAttributes resolved environment
+
+    carry :: ([(Token, Element)], [Text]) -> ResourceAttributes
+    carry (kept, dropped) = ResourceAttributes (foldr (uncurry Baggage.insert) Baggage.empty kept) dropped
+
+-- The resolved identity is offered first, so the limits shed the operator's extras rather than
+-- the keys a dashboard joins on. Everything else follows in key order.
+admissionOrder :: ResolvedTelemetry -> Baggage -> [(Token, Element)]
+admissionOrder resolved bag = sortOn (rank . memberKey . fst) (Exts.toList (Baggage.values bag))
+  where
+    identityKeys :: [Text]
+    identityKeys = map fst (resolvedAttributes resolved)
+
+    rank :: Text -> (Int, Text)
+    rank key = (if key `elem` identityKeys then 0 else 1, key)
+
+{- Take members while the W3C limits allow and name the rest. An excluded member is skipped rather
+than ending the scan, so a small attribute still lands after a large one is left out. -}
+admitMembers :: Int -> Int -> [(Token, Element)] -> ([(Token, Element)], [Text])
+admitMembers _ _ [] = ([], [])
+admitMembers usedBytes usedMembers ((tok, el) : rest)
+    | admissible = first ((tok, el) :) (admitMembers (usedBytes + separator + size) (usedMembers + 1) rest)
+    | otherwise = second (memberKey tok :) (admitMembers usedBytes usedMembers rest)
+  where
+    size :: Int
+    size = encodedMemberBytes tok el
+
+    separator :: Int
+    separator = if usedMembers == 0 then 0 else 1
+
+    admissible :: Bool
+    admissible =
+        size <= Baggage.maxMemberBytes
+            && usedMembers < Baggage.maxMembers
+            && usedBytes + separator + size <= Baggage.maxBaggageBytes
+
+-- One member's encoded size, measured with the SDK's own encoder. That encoder emits nothing for a
+-- member over its per-member limit, so an empty encoding reports as one byte past the limit.
+encodedMemberBytes :: Token -> Element -> Int
+encodedMemberBytes tok el =
+    case BS.length (Baggage.encodeBaggageHeader (Baggage.insert tok el Baggage.empty)) of
+        0 -> Baggage.maxMemberBytes + 1
+        n -> n
+
+memberKey :: Token -> Text
+memberKey = decodeUtf8 . Baggage.tokenValue
 
 {- Decode @OTEL_RESOURCE_ATTRIBUTES@ with the SDK's own W3C baggage parser, which percent-decodes
 every value. Blank members are dropped first, so a trailing comma or stray spacing still parses
@@ -264,8 +345,8 @@ decodeResourceAttributes environment = case members of
     raw :: Text
     raw = maybe "" toText (lookup "OTEL_RESOURCE_ATTRIBUTES" environment)
 
--- Render with the SDK's own encoder, so the value the SDK decodes is the one this module
--- resolved. The encoder percent-encodes every value and applies the W3C size caps.
+-- Render with the SDK's own encoder, so the value the SDK decodes is the one this module resolved.
+-- 'resourceAttributes' has already brought the bag within the limits, so nothing is shed here.
 renderResourceAttributes :: Baggage -> String
 renderResourceAttributes = decodeUtf8 . Baggage.encodeBaggageHeader
 
@@ -273,7 +354,7 @@ renderResourceAttributes = decodeUtf8 . Baggage.encodeBaggageHeader
 Exposed as values so a test pins each message without a @katip@ scribe.
 -}
 telemetryWarnings :: [(String, String)] -> [Text]
-telemetryWarnings environment = endpointWarning <> attributeWarning
+telemetryWarnings environment = endpointWarning <> attributeWarning <> droppedWarning
   where
     endpoint :: TelemetryEndpoint
     endpoint = rtEndpoint (resolveTelemetry environment)
@@ -289,6 +370,11 @@ telemetryWarnings environment = endpointWarning <> attributeWarning
             (const [])
             (decodeResourceAttributes environment)
 
+    droppedWarning :: [Text]
+    droppedWarning = case raDropped (resourceAttributes environment) of
+        [] -> []
+        dropped -> [droppedAttributesMessage dropped]
+
 defaultedEndpointMessage :: Text -> Text
 defaultedEndpointMessage url =
     "no telemetry export endpoint configured (DD_AGENT_HOST / OTEL_EXPORTER_OTLP_ENDPOINT unset); defaulting to "
@@ -300,6 +386,18 @@ malformedAttributesMessage reason =
     "OTEL_RESOURCE_ATTRIBUTES is not valid W3C baggage ("
         <> reason
         <> "). Dropping its attributes and exporting the resolved service identity alone."
+
+droppedAttributesMessage :: [Text] -> Text
+droppedAttributesMessage dropped =
+    "OTEL_RESOURCE_ATTRIBUTES is over the W3C baggage limits ("
+        <> show Baggage.maxBaggageBytes
+        <> " bytes total, "
+        <> show Baggage.maxMemberBytes
+        <> " bytes per member, "
+        <> show Baggage.maxMembers
+        <> " members). Dropping "
+        <> T.intercalate ", " dropped
+        <> " from the exported resource attributes."
 
 {- | The throttle state for SDK export-error routing. Exposed so a test asserts the throttle
 decision without wall-clock timing.

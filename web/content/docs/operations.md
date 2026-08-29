@@ -80,6 +80,10 @@ to a node-local collector or Agent, at `http://localhost:4318` by default or whe
 `DD_AGENT_HOST`/`OTEL_EXPORTER_OTLP_ENDPOINT` points. Authenticate a remote collector out of band
 with `OTEL_EXPORTER_OTLP_HEADERS`.
 
+The W3C baggage limits cap `OTEL_RESOURCE_ATTRIBUTES` at 8192 bytes in total, 4096 bytes per
+attribute, and 180 attributes. Écluse admits its own identity first, then your attributes in key
+order, and warns once at boot naming every key that did not fit.
+
 ## Memory plan and runtime sizing
 
 Every byte-valued bound is a named tenant of the effective heap ceiling, not an independent
