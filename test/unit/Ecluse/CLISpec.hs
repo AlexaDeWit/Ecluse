@@ -8,6 +8,7 @@ import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, hel
 import Test.Hspec
 
 import Ecluse.CLI (AppCommand (..), commandParser)
+import Ecluse.Composition.MirrorRole (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Pilot (PilotCompileOptions (..))
 
 parseCLI :: [String] -> ParserResult AppCommand
@@ -16,15 +17,30 @@ parseCLI = execParserPure defaultPrefs (info (commandParser <**> helper) idm)
 spec :: Spec
 spec = do
     describe "CLI commandParser" $ do
-        it "defaults to RunProxy when no arguments are provided" $ do
+        it "defaults to the serve-and-mirror role when no arguments are provided" $ do
             case parseCLI [] of
-                Success cmd -> cmd `shouldBe` RunProxy
-                _ -> expectationFailure "expected Success RunProxy"
+                Success cmd -> cmd `shouldBe` RunService ServeAndMirror
+                _ -> expectationFailure "expected Success (RunService ServeAndMirror)"
 
-        it "parses 'proxy' as RunProxy" $ do
+        it "parses 'proxy' as the serve-and-mirror role (the worker stays embedded)" $ do
             case parseCLI ["proxy"] of
-                Success cmd -> cmd `shouldBe` RunProxy
-                _ -> expectationFailure "expected Success RunProxy"
+                Success cmd -> cmd `shouldBe` RunService ServeAndMirror
+                _ -> expectationFailure "expected Success (RunService ServeAndMirror)"
+
+        it "parses 'proxy --no-worker' as the serve-only role" $ do
+            case parseCLI ["proxy", "--no-worker"] of
+                Success cmd -> cmd `shouldBe` RunService ServeOnly
+                _ -> expectationFailure "expected Success (RunService ServeOnly)"
+
+        it "parses 'mirror' as the worker-only role" $ do
+            case parseCLI ["mirror"] of
+                Success cmd -> cmd `shouldBe` RunService MirrorOnly
+                _ -> expectationFailure "expected Success (RunService MirrorOnly)"
+
+        it "rejects --no-worker on the dedicated worker, which has no worker to drop" $ do
+            case parseCLI ["mirror", "--no-worker"] of
+                Success cmd -> expectationFailure ("expected a parse failure, got " <> show cmd)
+                _ -> pure ()
 
         it "parses 'pilot' as RunPilot" $ do
             case parseCLI ["pilot"] of

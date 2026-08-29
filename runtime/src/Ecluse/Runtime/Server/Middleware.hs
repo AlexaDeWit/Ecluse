@@ -23,9 +23,11 @@ module Ecluse.Runtime.Server.Middleware (
     jsonResponse,
 ) where
 
+import Data.Aeson (encode, object, (.=))
 import Network.HTTP.Types (Status, hConnection, hContentType, status200, status404, status503)
 import Network.Wai (Application, Middleware, Response, mapResponseHeaders, modifyResponse, pathInfo, responseLBS)
 
+import Ecluse.Core.Worker (Liveness (liveHealthy, liveLastPoll))
 import Ecluse.Runtime.Server.Drain (DrainSignal, isDraining)
 
 {- | While the instance is draining, stamp @Connection: close@ on every response. A keep-alive
@@ -52,16 +54,23 @@ timeoutSeconds = 60
 {- | The control-plane health probes, answered above any mount: @\/livez@ from the injected
 liveness check, @\/readyz@ from the drain signal and startup gate. Any other path is a @404@.
 -}
-probeApplication :: DrainSignal -> IO Bool -> IO Bool -> Application
+probeApplication :: DrainSignal -> IO Bool -> IO Liveness -> Application
 probeApplication drain checkReady checkLiveness request respond =
     case pathInfo request of
-        ["livez"] -> do
-            alive <- checkLiveness
-            if alive
-                then respond (jsonResponse status200 "{\"status\":\"live\"}")
-                else respond (jsonResponse status503 "{\"status\":\"liveness check failed\"}")
+        ["livez"] -> checkLiveness >>= respond . livenessResponse
         ["readyz"] -> readiness drain checkReady >>= respond
         _ -> respond notFound
+
+{- The @\/livez@ body carries the loop's last recorded progress beside the verdict, so a
+dedicated worker fleet's orchestrator can judge staleness rather than only pass or fail. -}
+livenessResponse :: Liveness -> Response
+livenessResponse liveness
+    | liveHealthy liveness = body status200 "live"
+    | otherwise = body status503 "liveness check failed"
+  where
+    body :: Status -> Text -> Response
+    body status label =
+        jsonResponse status (encode (object ["status" .= label, "lastPoll" .= liveLastPoll liveness]))
 
 {- Readiness stays lenient about public-upstream reachability, because the proxy still serves
 private-upstream hits when public is down. A blip must not flap a healthy pod out of rotation.

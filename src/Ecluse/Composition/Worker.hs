@@ -6,21 +6,14 @@
 mounts, the resolved publish targets, and the adapter registry into the per-ecosystem
 'WorkerPolicies' the mirror worker dispatches every job through.
 
-'Ecluse.Proxy.runProxy' consumes this, and a worker-only binary is a thin entry over
-the same function. This function assembles everything the worker's dispatch needs,
-rather than threading it through the proxy's own wiring. That means the re-evaluation
-inputs, the artifact request formation, and the married mirror-write capability. Only
-the composition root consumes the adapter registry, per the standing rule. The worker
-itself receives plain handles and never resolves an adapter.
+'Ecluse.Service.withServiceRuntime' consumes it for every role, so the embedded worker
+and the dedicated @ecluse mirror@ worker dispatch through one construction. Only the
+composition root consumes the adapter registry: the worker receives plain handles.
 
-Each bundle reuses its mount's __own__ 'PackumentDeps': the same prepared rules,
-floors, host gate, and request formation the serve path gates with. The ingest
-decision therefore cannot diverge from the serve decision. It also marries its
-ecosystem's publish codec to the shared publish transport at the mount's declared
-mirror target.
-A mount that serves no packument contributes no bundle, and neither does an ecosystem
-without a resolved publish target or adapter. A job for it is fail-closed at the
-worker rather than half-wired here.
+Each bundle reuses its mount's __own__ 'PackumentDeps', so the ingest decision cannot
+diverge from the serve decision. A mount that serves no packument contributes no bundle,
+and neither does an ecosystem without a resolved publish target or adapter. A job for it
+is fail-closed at the worker rather than half-wired here.
 -}
 module Ecluse.Composition.Worker (
     workerPoliciesFor,

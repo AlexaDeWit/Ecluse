@@ -6,7 +6,7 @@
 @*_FILE@ secret indirection, loads the configuration under the @ECLUSE_CONFIG@ semantics,
 applies the runtime posture, builds the process logger, resolves the 'BootPlan', and
 brackets the telemetry substrate. It is the one place the plan's lines reach the boot log.
-It then hands the 'BootEnv' to a role-specific composition root such as "Ecluse.Proxy",
+It then hands the 'BootEnv' to a role-specific composition root such as "Ecluse.Service",
 which applies the plan's decisions and builds its own service resources.
 -}
 module Ecluse.Boot (
@@ -77,7 +77,7 @@ import Ecluse.Runtime.Telemetry.Correlation (ddIdentityFromEnvironment)
 import Ecluse.Runtime.Telemetry.Resolve (prepareTelemetry)
 
 {- | The boot context 'withBootEnv' assembles once at start-up. Each subcommand builds the
-heavier serve- and worker-side handles later (see "Ecluse.Proxy").
+heavier serve- and worker-side handles later (see "Ecluse.Service").
 -}
 data BootEnv = BootEnv
     { beConfig :: Config

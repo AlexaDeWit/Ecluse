@@ -24,11 +24,10 @@ Two invariants make this hold together:
   @docs\/architecture\/technology-stack.md@ → "Key Decisions").
 
 * __It is the sole composition root.__ The server and worker are each a
-  self-contained entry function over this shared record. Those are
-  @runServer :: Env -> IO ()@ and @runWorker :: Env -> IO ()@ in @Ecluse@. The
-  single-process program and any future split into separate binaries both wire up
-  through here and nowhere else (see @docs\/architecture\/cloud-backends.md@ →
-  "Process model").
+  self-contained entry function over this shared record, @runServer@ and @runWorker@ in
+  @Ecluse@. The single-process proxy and the split deployment (@ecluse proxy --no-worker@
+  beside an @ecluse mirror@ fleet) both wire up through here and nowhere else (see
+  @docs\/architecture\/cloud-backends.md@ → "Process model").
 
 Request handlers read this 'Env' through a per-request
 'Ecluse.Core.Server.Context.RequestCtx': the request runtime projected by

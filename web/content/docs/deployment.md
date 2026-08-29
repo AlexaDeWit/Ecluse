@@ -15,14 +15,43 @@ selects the role:
 
 - **`ecluse proxy`** (default): the HTTP proxy on `ECLUSE_SERVER__PORT` (default `8080`) plus the
   mirror worker. It scales horizontally behind a load balancer.
+- **`ecluse mirror`**: the mirror worker on its own, for a worker fleet you scale separately. See
+  [Splitting the proxy from the mirror worker](#splitting-the-proxy-from-the-mirror-worker).
 - **`ecluse pilot`**: the OSV advisory ingestion pipeline.
 - **`ecluse dredger`**: the registry cleanup worker.
 - **`ecluse check-config`**: validates the shared configuration exactly as a boot would and prints
   the resolved posture without starting anything (exit `0` valid, `2` refused). Run it in CI or
   before a rollout.
 
-All roles share one configuration. Only the proxy scales: run Pilot and Dredger as singletons,
-because multiple instances race, duplicate API calls, and overlap registry deletions.
+All roles share one configuration. The proxy and the mirror worker scale: run Pilot and Dredger as
+singletons, because multiple instances race, duplicate API calls, and overlap registry deletions.
+
+### Splitting the proxy from the mirror worker
+
+By default one `ecluse proxy` process does both jobs: it serves clients and drains the mirror
+queue. The two loads are unrelated. Request rate follows your builds, while queue depth follows how
+many novel versions those builds pull, so a burst of new packages can make a proxy fleet sized for
+traffic look busy for the wrong reason.
+
+Split them when you want to size each on its own signal:
+
+1. Point `ECLUSE_QUEUE__URL` at a durable queue. This is required, not advisory: the in-memory
+   queue holds its jobs inside one process, so a split deployment would strand every one of them.
+   Écluse refuses both split roles at boot without it and tells you which key to set.
+2. Run the proxy fleet as `ecluse proxy --no-worker`. It still admits versions and still enqueues a
+   mirror job for each one. It just does not drain the queue.
+3. Run a second fleet as `ecluse mirror`. It boots the same configuration and the same rules, so a
+   worker's re-evaluation of a job reaches the same verdict the proxy did. It serves no registry
+   paths, only its health probes on `ECLUSE_SERVER__PORT`.
+4. Scale the worker fleet on queue depth (KEDA's SQS scaler, or an Auto Scaling policy on
+   `ApproximateNumberOfMessagesVisible`) and the proxy fleet on request rate.
+
+Both fleets need the mirror-write credential and the advisory bucket, because the worker
+re-evaluates policy before it publishes. Neither `ecluse mirror` nor `ecluse proxy --no-worker`
+changes what gets mirrored, only which process does the work.
+
+Health-check a worker pod on `GET /livez`. It reports the consume loop's last successful poll
+beside the verdict, so you can alert on staleness as well as on the `503`.
 
 A Pilot pod does not need to idle between syncs. `ecluse pilot compile --out DIR` runs one OSV
 compilation and exits: it fetches an ecosystem's advisory export, writes
@@ -188,6 +217,7 @@ Each role needs a different slice of that allowance, and only the proxy needs in
 | Role | Ingress | Egress allowlist | Credentials held |
 |---|---|---|---|
 | `ecluse proxy` | Client traffic, behind the edge you front it with | The upstreams, the mirror target, the metadata endpoint, and the advisory bucket when `ECLUSE_ADVISORIES__BUCKET` is set | The mirror-write credential, plus the advisory-bucket read (`s3:GetObject`) when that bucket is set. Nothing more |
+| `ecluse mirror` | None public (health probes only, for the orchestrator) | The public upstream, the mirror target, the mirror queue, the metadata endpoint, and the advisory bucket when `ECLUSE_ADVISORIES__BUCKET` is set | The same as the proxy: the mirror-write credential and the advisory-bucket read |
 | `ecluse pilot` | None public | The OSV export host in `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` (default `osv-vulnerabilities.storage.googleapis.com`), the metadata endpoint, and your object store | `s3:PutObject` to upload the advisory database |
 | `ecluse dredger` | None public | Your private mirror, for delete requests, and the metadata endpoint, for credentials | A standing high-privilege delete on the mirror |
 

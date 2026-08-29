@@ -5,8 +5,8 @@
 {- | The advisory-sync plan: one ecosystem's sync wiring ('CveSyncHandle') and the
 config-driven plan that builds it ('planCveSync'). It also holds the projections the
 composition root reads off that plan: the per-ecosystem rule capabilities, the
-first-sync readiness gate, and the sync schedule. "Ecluse.Proxy"'s @runProxy@ builds
-the plan at boot and runs one supervised sync task per handle.
+first-sync readiness gate, and the sync schedule. "Ecluse.Service" builds the plan at boot
+and hands every role one supervised sync task per handle.
 -}
 module Ecluse.Proxy.CveSync (
     CveSyncHandle (..),

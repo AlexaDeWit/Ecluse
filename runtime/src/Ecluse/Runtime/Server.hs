@@ -116,6 +116,7 @@ import Ecluse.Core.Server.Context (
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause, rqDetail), classifyEscape)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
+import Ecluse.Core.Worker (Liveness, alwaysLive)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envTelemetry, serveRuntimeOf)
 import Ecluse.Runtime.Server.Drain (
     DrainSignal,
@@ -164,7 +165,7 @@ data ServerConfig = ServerConfig
     @\/readyz@. It must be a one-way flip (today the advisory database's first sync), so readiness
     never flaps a pod out of rotation. It gates routing, not whether the process answers.
     -}
-    , scCheckLive :: IO Bool
+    , scCheckLive :: IO Liveness
     {- ^ The liveness check @\/livez@ answers from, beyond the listener itself. A worker
     heartbeat is wired here only when a worker runs, so a serve-only deployment stays live.
     -}
@@ -186,7 +187,7 @@ mkServerConfig mounts =
         , scDrain = neverDraining
         , scDrainTimeout = defaultShutdownDrainTimeout
         , scCheckReady = pure True
-        , scCheckLive = pure True
+        , scCheckLive = pure alwaysLive
         , scOnException = \_ _ -> pass
         }
 

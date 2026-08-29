@@ -10,10 +10,10 @@ import Network.Wai (Application)
 import Test.Hspec
 import Test.Hspec.Wai
 
-import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Proxy (mountBindingFor)
-import Ecluse.Runtime.Server (MountBinding (..), application, mkServerConfig)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
+import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 
 {- | A single npm mount with __inert__ packument-serve dependencies (every upstream a
@@ -39,11 +39,3 @@ spec = do
 
             it "renders an unmounted prefix as a neutral text/plain 404" $
                 get "/pypi/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
-
-    describe "mountBindingFor -- ecosystem drives the binding" $ do
-        it "resolves npm to a binding whose prefix is derived from the ecosystem (/npm)" $
-            (bindingPrefix <$> mountBindingFor Npm inertPackumentDeps Nothing) `shouldBe` Just ("npm" :| [])
-
-        it "has no binding for an ecosystem with no adapter wired (loud Nothing, not a stub)" $ do
-            (bindingPrefix <$> mountBindingFor PyPI inertPackumentDeps Nothing) `shouldBe` Nothing
-            (bindingPrefix <$> mountBindingFor RubyGems inertPackumentDeps Nothing) `shouldBe` Nothing

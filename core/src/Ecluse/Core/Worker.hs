@@ -60,7 +60,9 @@ module Ecluse.Core.Worker (
     lastPoll,
     workerHeartbeatStaleAfter,
     heartbeatHealthy,
-    heartbeatHealthyNow,
+    Liveness (..),
+    alwaysLive,
+    heartbeatLivenessNow,
 
     -- * Integrity verification
     IntegrityResult (..),
