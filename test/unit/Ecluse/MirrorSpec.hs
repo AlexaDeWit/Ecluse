@@ -38,7 +38,7 @@ spec = do
 
         it "serves no mount: a worker pod exposes probes and no request surface" $ do
             appCfg <- expectAppConfig [] Nothing
-            scMounts (mirrorServerConfig appCfg (pure True) (pure alive)) `shouldSatisfy` null
+            null (scMounts (mirrorServerConfig appCfg (pure True) (pure alive))) `shouldBe` True
 
     describe "the dedicated worker's probes -- a healthy consume loop" $
         with (mirrorApp alive True) $ do
