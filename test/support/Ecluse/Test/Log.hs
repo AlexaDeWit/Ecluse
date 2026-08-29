@@ -65,7 +65,6 @@ captureStdout = captureHandle stdout
 captureStderr :: IO () -> IO Text
 captureStderr = captureHandle stderr
 
--- Redirect one stream to a temporary file for the action and read back what it wrote.
 -- The stream is restored on every exit path, so output never leaks into the run.
 captureHandle :: Handle -> IO () -> IO Text
 captureHandle stream act =

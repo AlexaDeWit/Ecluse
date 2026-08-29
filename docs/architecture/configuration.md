@@ -186,8 +186,8 @@ config load, runtime plan, sizing and memory-budget resolvers, mirror-queue sele
 ambient `AWS_ENDPOINT_URL` override the boot resolves beside the plan. It prints every decision, one
 provenance line per resolved key, secrets redacted, precedence environment > document > default. It
 exits `0` on a valid configuration, and `2` with the same aggregated report a boot would log. The
-two entry points take that report from one function, so a value the checker passes cannot refuse
-the boot.
+two entry points take that report from one function, so the checker's verdict and the boot's cannot
+drift.
 
 ## Client authentication
 

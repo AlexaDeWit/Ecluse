@@ -316,16 +316,23 @@ spec = do
     describe "the ambient AWS_ENDPOINT_URL refusal (one verdict for both entry points)" $ do
         it "refuses one malformed override in the boot and in check-config alike" $ do
             -- The pre-flight tool must never pass a value the real boot then refuses.
+            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             traverse_ (uncurry setEnv) runEnv
             setEnv "AWS_ENDPOINT_URL" malformedEndpoint
+            -- Each outcome leaves its capture through a ref, so every assertion waits for
+            -- the cleanup below and no failure strands the malformed override.
+            bootOutcome <- newIORef (Nothing :: Maybe (Either ExitCode (Maybe ())))
             bootReport <- captureStderr $ do
-                outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-                outcome `shouldBe` Left (ExitFailure 2)
+                outcome <- try (timeout 100000 (withArgs ["proxy"] run))
+                writeIORef bootOutcome (Just outcome)
+            checkOutcome <- newIORef (Nothing :: Maybe (Either ExitCode ()))
             checkReport <- captureStderr $ do
-                outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-                outcome `shouldBe` Left (ExitFailure 2)
+                outcome <- try (withArgs ["check-config"] run)
+                writeIORef checkOutcome (Just outcome)
             unsetEnv "AWS_ENDPOINT_URL"
             traverse_ (unsetEnv . fst) runEnv
+            readIORef bootOutcome `shouldReturn` Just (Left (ExitFailure 2))
+            readIORef checkOutcome `shouldReturn` Just (Left (ExitFailure 2))
             reportLines bootReport `shouldBe` [endpointRefusal]
             reportLines checkReport `shouldBe` [endpointRefusal, "configuration: refused"]
             -- The override can carry a credential, so no report may echo it.
