@@ -2655,7 +2655,7 @@
               "privilegeLevel": "",
               "threats": [
                 {
-                  "number": 16,
+                  "number": 27,
                   "status": "Mitigated",
                   "severity": "Medium",
                   "title": "Poisoned OSV payload exploits parser",
@@ -3057,7 +3057,7 @@
               "hasOpenThreats": true,
               "threats": [
                 {
-                  "number": 14,
+                  "number": 25,
                   "status": "Mitigated",
                   "severity": "Medium",
                   "title": "Dredger inappropriately purges valid packages",
@@ -3068,7 +3068,7 @@
                   "id": "43f60aec-7a7c-4450-8992-ae2b42d20b0f"
                 },
                 {
-                  "number": 15,
+                  "number": 26,
                   "status": "Open",
                   "severity": "High",
                   "title": "Dredger container-role privilege escalation",
@@ -3079,7 +3079,7 @@
                   "id": "c12bddfe-96d4-47c6-92e0-a961abadb5b2"
                 },
                 {
-                  "number": 16,
+                  "number": 28,
                   "status": "Open",
                   "severity": "High",
                   "title": "First-party data loss from collapsed registries",
@@ -3188,6 +3188,6 @@
     ],
     "diagramTop": 1,
     "reviewer": "",
-    "threatTop": 23
+    "threatTop": 28
   }
 }

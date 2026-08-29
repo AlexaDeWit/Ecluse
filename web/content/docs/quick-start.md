@@ -7,11 +7,20 @@ weight = 2
 The fastest way to put the gate in front of real installs is a **serve-only** deployment. It needs
 no private registry, no mirror, no queue, and no cloud account.
 
+Écluse ships as a container image and nowhere else: `ghcr.io/alexadewit/ecluse`, one immutable
+tag per version and no `latest`. Pick the tag from the
+[releases](https://github.com/AlexaDeWit/Ecluse/releases) page. The image entrypoint is the
+`ecluse` binary, so the only argument is the role to run, here `proxy`:
+
 ```bash
-ECLUSE_MOUNTS__NPM__ENABLED=true \
-ECLUSE_SERVER__PUBLIC_URL=http://127.0.0.1:8080 \
-ecluse proxy
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -e ECLUSE_MOUNTS__NPM__ENABLED=true \
+  -e ECLUSE_SERVER__PUBLIC_URL=http://127.0.0.1:8080 \
+  ghcr.io/alexadewit/ecluse:<version> proxy
 ```
+
+A binary you built yourself (`nix build`) runs the same way: set the two variables in the
+environment and run `ecluse proxy`.
 
 Then point your package manager at the npm mount. For an npm-protocol client, that is one
 line in `.npmrc`:

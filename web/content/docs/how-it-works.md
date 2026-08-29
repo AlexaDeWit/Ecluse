@@ -12,9 +12,9 @@ pnpm, yarn, or bun.
 
 A new public version waits in a quarantine, seven days by default, before a build can install it.
 Most malicious publishes are found and pulled within days, so the wait alone sidesteps them, with
-no attempt to detect malice. A version that an advisory names as the fix for a vulnerability skips
-the wait, so the quarantine never delays a security patch. Everything else is deny by default and
-opt-in by name.
+no attempt to detect malice. With an advisory database synced, a version that an advisory names
+as the exact fix for a vulnerability skips the wait, so the quarantine never delays a security
+patch. Everything else is deny by default and opt-in by name.
 
 If you run a private registry, Écluse reads it first and passes your own packages through
 untouched. It can also mirror each admitted public version into that registry, so a mirrored
