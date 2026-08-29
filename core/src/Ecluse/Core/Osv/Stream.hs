@@ -60,11 +60,11 @@ import Data.Aeson (decodeStrict)
 import Data.ByteString qualified as BS
 import Katip (KatipContext, Severity (..), logFM, ls)
 import Network.HTTP.Simple (getResponseBody, httpSource, parseRequest, setRequestCheckStatus)
-import OpenTelemetry.Context qualified as Ctx
-import OpenTelemetry.Trace.Core (SpanKind (Internal), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, tracerOptions)
+import OpenTelemetry.Trace.Core (SpanKind (Internal), TracerProvider, addAttribute)
 
 import Ecluse.Core.Osv.Advisory (ExtractedOsv, OsvAdvisory, extractFromAdvisory, osvId)
 import Ecluse.Core.Security.Authority (authorityLabel)
+import Ecluse.Core.Telemetry.Span (closeOptionalSpan, openOptionalSpan)
 
 {- | The tunable per-advisory ingest bounds. Generous by design, because Pilot trusts
 osv.dev in normal operation. They only backstop a pathological or tampered payload, and
@@ -167,10 +167,9 @@ instance Exception PilotIngestAborted
 streamOsvUrl :: (MonadResource m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> OsvIngest -> String -> ConduitT i ExtractedOsv m ()
 streamOsvUrl mTracerProvider ingest urlStr = do
     lift $ logFM InfoS (ls ("Initializing OSV stream from " <> authorityLabel (toText urlStr)))
-    let mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> mTracerProvider
     bracketP
-        (traverse (\t -> createSpan t Ctx.empty "ecluse.pilot.osv.stream" defaultSpanArguments{kind = Internal}) mTracer)
-        (mapM_ (`endSpan` Nothing))
+        (openOptionalSpan mTracerProvider Internal "ecluse.pilot.osv.stream")
+        closeOptionalSpan
         ( \mSpan -> do
             forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText urlStr))
             -- 'setRequestCheckStatus' makes a non-2xx response throw at the header boundary,
@@ -184,10 +183,9 @@ streamOsvUrl mTracerProvider ingest urlStr = do
 parseOsvStream :: (MonadResource m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> OsvIngest -> ConduitT ByteString ExtractedOsv m ()
 parseOsvStream mTracerProvider ingest = do
     lift $ logFM InfoS (ls ("Starting OSV zip extraction and parsing pipeline" :: String))
-    let mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> mTracerProvider
     bracketP
-        (traverse (\t -> createSpan t Ctx.empty "ecluse.pilot.osv.parse" defaultSpanArguments{kind = Internal}) mTracer)
-        (mapM_ (`endSpan` Nothing))
+        (openOptionalSpan mTracerProvider Internal "ecluse.pilot.osv.parse")
+        closeOptionalSpan
         (\_ -> void (transPipe liftIO unZipStream) .| processZipEntries ingest)
 
 processZipEntries :: (MonadThrow m, KatipContext m) => OsvIngest -> ConduitT (Either ZipEntry ByteString) ExtractedOsv m ()

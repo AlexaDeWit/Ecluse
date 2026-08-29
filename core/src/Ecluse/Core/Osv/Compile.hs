@@ -42,8 +42,8 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisoryDropCause (DropMalformed, DropOversize),
  )
 import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (acmpCompileAccepted, acmpCompileDropped, acmpCompileRun))
-import OpenTelemetry.Context qualified as Ctx
-import OpenTelemetry.Trace.Core (Span, SpanKind (Internal), SpanStatus (Error), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, setStatus, tracerOptions)
+import Ecluse.Core.Telemetry.Span (withOptionalSpan)
+import OpenTelemetry.Trace.Core (Span, SpanKind (Internal), SpanStatus (Error), TracerProvider, addAttribute, setStatus)
 
 {- | Compile an ecosystem's OSV advisory export into the SQLite artifact at @outDir@.
 The artifact's name, epoch stamp, and @meta@ table follow "Ecluse.Core.Osv.Schema".
@@ -55,7 +55,6 @@ reports an abandoned pass instead.
 compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> Text -> String -> m FilePath
 compileOsvToSqlite metrics mTracerProvider outDir ecosystem urlStr = do
     let dbFile = outDir </> osvDbFileName ecosystem
-        mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> mTracerProvider
     logFM InfoS (ls ("Compiling OSV data for " <> ecosystem <> " to " <> toText dbFile))
 
     liftIO $ createDirectoryIfMissing True outDir
@@ -63,10 +62,8 @@ compileOsvToSqlite metrics mTracerProvider outDir ecosystem urlStr = do
 
     -- One span covers the whole compile pass. A systemic-drop abort marks it errored, so
     -- an abandoned run is legible from the trace alone.
-    bracket
-        (traverse (\t -> createSpan t Ctx.empty "ecluse.pilot.osv.compile" defaultSpanArguments{kind = Internal}) mTracer)
-        (mapM_ (`endSpan` Nothing))
-        $ \mSpan -> do
+    withOptionalSpan mTracerProvider Internal "ecluse.pilot.osv.compile" $
+        \mSpan -> do
             forM_ mSpan $ \sp -> do
                 addAttribute sp "ecluse.osv.ecosystem" ecosystem
                 addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText urlStr))

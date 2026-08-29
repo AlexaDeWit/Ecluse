@@ -129,6 +129,7 @@ import Ecluse.Core.Telemetry.Metrics (
     metricName,
  )
 import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (..), AdvisorySyncMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Span (ecluseScope)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryMeterProvider)
 
 {- | The live metric instruments, one per @ecluse.*@ signal, built by 'newMetrics' on one meter.
@@ -235,11 +236,6 @@ gauge meter name description =
 observableGauge :: Meter -> MetricName -> Text -> IO (ObservableGauge Int64)
 observableGauge meter name description =
     meterCreateObservableGaugeInt64 meter (metricName name) Nothing (Just description) defaultAdvisoryParameters []
-
--- The instrumentation scope for these instruments, matching the hand-added spans.
--- Polymorphic over 'IsString' because the metric API does not export @InstrumentationLibrary@.
-ecluseScope :: (IsString s) => s
-ecluseScope = "ecluse"
 
 {- | Project the instruments onto the core 'MetricsPort' that "Ecluse.Core.Server.Pipeline" records
 through. It is inert when telemetry is off, since the instruments are.
