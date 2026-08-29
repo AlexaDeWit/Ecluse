@@ -71,7 +71,7 @@ shedMessage = "server is busy; retry later"
 no header, because a transience with no suggested delay has nothing to promise.
 -}
 retryAfterHeaders :: Maybe RetryAfter -> ResponseHeaders
-retryAfterHeaders = foldMap (\(RetryAfter secs) -> [(hRetryAfter, show secs)])
+retryAfterHeaders = maybe [] (\(RetryAfter secs) -> [(hRetryAfter, show secs)])
 
 {- | Run the gated work under the serve admission bound, counting one unavailable serve decision
 when it sheds. @answer@ runs __outside__ the slot, so committing a response never holds one.

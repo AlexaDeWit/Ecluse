@@ -49,9 +49,8 @@ import UnliftIO.Exception (finally, mask, tryAny)
 
 import Ecluse.Core.Server.Conditional (isNotModified)
 
-{- | The two ways an upstream relay can answer, over the caller's route-scoped response value.
-WAI construction stays out of this module, so a pipeline holds the upstream connection's
-callback lifetime without holding an unrestricted WAI responder.
+{- | The two ways an upstream relay can answer, over the caller's route-scoped response value. WAI
+construction stays out of this module, so no pipeline holds an unrestricted WAI responder.
 -}
 data RelayResponder response = RelayResponder
     { relayStreamResponse :: Status -> ResponseHeaders -> StreamingBody -> IO response

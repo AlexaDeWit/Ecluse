@@ -198,10 +198,8 @@ retryOrDrop transience reason = case transience of
     Just WontResolve -> Dropped reason
     Nothing -> Dropped reason
 
-{- Derive the publish descriptor from what the admission gate settled: the floor-checked digests
-the tamper gate verifies against, the filename it matched against current metadata, and the
-declared size. Nothing the queue payload asserted reaches the trusted-tier publish document
-unchecked. -}
+{- Derive the publish descriptor from what the gate settled, so nothing the queue payload asserted
+reaches the trusted-tier publish document unchecked. The size is current metadata's. -}
 readmittedDescriptor :: Filename -> Artifact -> NonEmpty Hash -> MirrorArtifact
 readmittedDescriptor filename artifact digests =
     MirrorArtifact
