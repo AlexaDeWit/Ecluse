@@ -83,11 +83,11 @@ nameGrammarSpec = describe "projectName -- the one npm name grammar" $ do
     it "reads an unscoped name whole" $
         projectName "left-pad" `shouldBe` Right (mkPackageName Npm Nothing "left-pad")
 
-{- | The two refusals the splitter shares with npm's own validator. A refused name is one the
-public registry can never serve, so legitimate traffic loses nothing.
+{- | The two npm rules the splitter adopts: no Unicode format character, and no name over 214
+characters. npm applies its length rule to new packages, so a publisher loses nothing here.
 -}
 npmValidatorRefusalSpec :: Spec
-npmValidatorRefusalSpec = describe "projectName -- npm's own name refusals" $ do
+npmValidatorRefusalSpec = describe "projectName -- the npm rules the splitter adopts" $ do
     it "refuses a zero-width space, so an invisible twin cannot shadow a real name" $ do
         -- Two distinct names that render identically. Admitting the second one would let an
         -- invisible character dodge a rule written against the first.
@@ -117,6 +117,13 @@ npmValidatorRefusalSpec = describe "projectName -- npm's own name refusals" $ do
 
     it "refuses an over-long scope on its own, the publish allow-list entry point" $
         projectScope (T.replicate 215 "a") `shouldSatisfy` isLeft
+
+    it "measures a scope after its leading @, so both spellings agree at the cap" $ do
+        -- The @ is wire punctuation, not part of the scope, so @myorg and myorg are one scope
+        -- at 214 characters just as they are below it.
+        projectScope (T.replicate 214 "a") `shouldSatisfy` isRight
+        projectScope ("@" <> T.replicate 214 "a") `shouldSatisfy` isRight
+        projectScope ("@" <> T.replicate 215 "a") `shouldSatisfy` isLeft
   where
     realName, invisibleTwin :: Text
     realName = "left-pad"

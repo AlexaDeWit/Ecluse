@@ -98,12 +98,12 @@ the publish guard, and the queue decode all read a name through it, so one spell
 verdict everywhere. A scope or bare name that is not a usable path component is a
 'ParseError', and a bare @\@foo@ is a malformed scoped name, never an unscoped one.
 
-The grammar carries two further refusals, both taken from npm's own validator, so a name this
-splitter admits is a name a registry can serve. A Unicode __format__ character (U+200B,
+The grammar adopts two of npm's own name rules. A Unicode __format__ character (U+200B,
 U+202E, and the rest of the @Cf@ class) never parses. An invisible or direction-reversing
 character makes two distinct names render identically, which is how a name-based rule gets
 dodged and how a log line gets forged. A name over 214 characters never parses, counted over
-the whole name including any scope prefix, which is what npm counts.
+the whole name including any scope prefix, which is how npm counts it. npm applies its length
+rule to new packages, so a publisher refused here had nothing it could publish upstream.
 -}
 module Ecluse.Core.Registry.Npm.Project (
     -- * Projection
@@ -404,11 +404,14 @@ scope @myorg@).
 -}
 projectScope :: Text -> Either ParseError Scope
 projectScope raw = do
-    withinNameLimit raw
-    mkScope <$> nameComponent (fromMaybe raw (T.stripPrefix "@" raw))
+    -- Measure after the strip, so @myorg and myorg stay one scope at the cap as well as below it.
+    withinNameLimit bare
+    mkScope <$> nameComponent bare
+  where
+    bare = fromMaybe raw (T.stripPrefix "@" raw)
 
 {- One component of an npm name, the scope or the bare name. It reaches an interpolated upstream
-URL, so an unsafe spelling must never parse. -}
+URL, so an unsafe spelling must never parse. 'projectName' and 'projectScope' own the length cap. -}
 nameComponent :: Text -> Either ParseError Text
 nameComponent component
     | T.null component = Left (ParseError "empty npm name component")
@@ -419,15 +422,17 @@ nameComponent component
     -- names look like one in a log, a terminal, or a name-based rule.
     usable ch = ch /= '@' && not (isSpace ch) && generalCategory ch /= Format
 
-{- Refuse a name over npm's own length cap. 'projectName' measures the whole name, scope prefix
-included, because that is what npm's validator measures. -}
+{- Refuse a name over npm's own cap. 'projectName' measures the whole name including any scope
+prefix, and 'projectScope' measures a bare scope. 'T.compareLength' stops at the cap. -}
 withinNameLimit :: Text -> Either ParseError ()
 withinNameLimit raw
-    | T.length raw > npmNameLimit =
-        Left (ParseError ("npm name over " <> show npmNameLimit <> " characters: " <> show (T.length raw)))
+    | T.compareLength raw npmNameLimit == GT = Left (ParseError overLong)
     | otherwise = Right ()
+  where
+    overLong :: Text
+    overLong = "npm name over " <> show npmNameLimit <> " characters, starting " <> show (T.take 24 raw)
 
--- npm's own cap on a package name, the one its validate-npm-package-name validator applies.
+-- npm's own cap on a package name, the one its validator applies to a new package.
 npmNameLimit :: Int
 npmNameLimit = 214
 
