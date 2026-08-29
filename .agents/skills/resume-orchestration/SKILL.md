@@ -21,7 +21,8 @@ retrievable from repository files.
    - the current branch and working tree
    - recent commits relevant to active work
    - the worktrees or agents the checkpoint names
-   - open PRs and their draft/check state
+   - open PRs and their draft/check state, restarting the detached background watch on every open
+     draft the loop owns (a gap kills watches)
    - the issues of PRs merged since the checkpoint. GitHub auto-close is not configured on this
      repository, so a merged PR's issue stays open until the team lead closes it by hand.
    - the `status:` and acceptance criteria of active or next-dispatchable slice files
