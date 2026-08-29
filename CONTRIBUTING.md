@@ -92,12 +92,12 @@ Rules for the Summary:
 
 - Lead with the point: what a reviewer or operator gains or is protected from. The mechanism comes
   second, and only as far as the diff does not already show it. No play-by-play of files.
-- Prefer the plain word. Define an unavoidable term in a clause.
 - Short paragraphs. A bullet list only when enumerating cases. No headings or bold lead-ins inside
   the Summary.
 - Include evidence only where review depends on it (a verification table, a sweep result), and keep
   it compact.
-- Canadian spelling. No em-dashes or en-dashes. No filler adjectives.
+- The floor in [`docs/prose.md`](docs/prose.md) applies (plain words, Canadian spelling, no em- or
+  en-dashes, no filler adjectives).
 
 ### The same change, written twice
 
