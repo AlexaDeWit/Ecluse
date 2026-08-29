@@ -21,8 +21,9 @@ import Ecluse.Core.Cve (CveDb (..), DbEtag (..))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup))
+import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Proxy.CveSync (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, planCveSync, sweepStaleTemps, sweepStep)
-import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (..), bootBackoffDelays, bootBurstPolicy)
+import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
 import Ecluse.Runtime.Test.Cve (refusingFetch)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
@@ -127,11 +128,11 @@ spec = do
             schedPollDelay schedule `shouldBe` 90_000_000
             schedBootBackoff schedule `shouldBe` bootBackoffDelays
 
-    describe "bootBurstPolicy -- the boot burst compiled to a retry policy" $
+    describe "the boot burst compiled to a retry policy" $
         it "attempts immediately, backs off over the shipped schedule, then concedes" $ do
             -- 'simulatePolicy' walks the policy without sleeping, so this case pins the burst
             -- schedule directly. The length of 'bootBackoffDelays' is the retry budget.
-            delays <- simulatePolicy (length bootBackoffDelays) (bootBurstPolicy bootBackoffDelays)
+            delays <- simulatePolicy (length bootBackoffDelays) (delayListPolicy bootBackoffDelays)
             map snd delays `shouldBe` map Just bootBackoffDelays <> [Nothing]
 
 -- A handle as 'planCveSync' would build it, minus the transport (the tests

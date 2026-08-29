@@ -75,6 +75,7 @@ import Ecluse.Core.Supervision (
     FaultDisposition (Permanent, Transient),
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
     superviseLoop,
+    transientPolicy,
  )
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
 import Ecluse.Core.Text (displayExceptionT)
@@ -233,7 +234,7 @@ cveSyncTasks :: Env -> SyncSchedule -> Map.Map Ecosystem CveSyncHandle -> [IO ()
 cveSyncTasks builtEnv schedule plan =
     [ void . runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "cve-sync" $
         superviseLoop
-            (transientPolicy ("cve-sync[" <> show (syncEcosystem (csEnv handle)) <> "]"))
+            (transientPolicy ("cve-sync[" <> show (syncEcosystem (csEnv handle)) <> "]") shellBackoff)
             (runCveSync syncMetrics syncTracing (csEnv handle) schedule (atomically (writeTVar (csReady handle) True)))
     | handle <- Map.elems plan
     ]
@@ -241,22 +242,17 @@ cveSyncTasks builtEnv schedule plan =
     syncMetrics = advisorySyncMetricsPortOf (envMetrics builtEnv)
     syncTracing = advisorySyncTracingPortOf (envTelemetry builtEnv)
 
-{- The policy for the shell's background loops, which have no wiring fault to fail up on.
-Every synchronous escape is residue and is retried. -}
-transientPolicy :: Text -> SupervisionPolicy
-transientPolicy label =
-    SupervisionPolicy
-        { spLabel = label
-        , spClassify = const Transient
-        , spBackoff = BackoffSchedule{bsBaseMicros = 1_000_000, bsCapMicros = 30_000_000}
-        }
+{- The pace every shell background loop retries a transient fault at: one second after the
+first failure, doubling to a thirty-second ceiling. -}
+shellBackoff :: BackoffSchedule
+shellBackoff = BackoffSchedule{bsBaseMicros = 1_000_000, bsCapMicros = 30_000_000}
 
 {- The enqueue-buffer drain under the shared supervision combinator. Pacing lives in the
 buffer's own loop, so this wrapper only stops residue ending mirror-job delivery. -}
 superviseDrain :: Env -> IO () -> IO ()
 superviseDrain builtEnv drain =
     void . runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "mirror-enqueue-drain" $
-        superviseLoop (transientPolicy "mirror-enqueue-drain") (liftIO drain)
+        superviseLoop (transientPolicy "mirror-enqueue-drain" shellBackoff) (liftIO drain)
 
 {- Run the server and the mirror worker over one composition-root 'Env'. The worker loop
 never returns, so the server's graceful return must cancel it, never wait on it. -}
@@ -317,7 +313,7 @@ workerSupervision =
     SupervisionPolicy
         { spLabel = "worker"
         , spClassify = classify
-        , spBackoff = BackoffSchedule{bsBaseMicros = 1_000_000, bsCapMicros = 30_000_000}
+        , spBackoff = shellBackoff
         }
   where
     classify fault

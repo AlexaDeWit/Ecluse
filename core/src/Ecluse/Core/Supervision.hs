@@ -24,13 +24,18 @@ module Ecluse.Core.Supervision (
     -- * The combinator
     superviseLoop,
     SupervisionPolicy (..),
+    transientPolicy,
     FaultDisposition (..),
 
     -- * Bounded exponential backoff
     BackoffSchedule (..),
     backoffMicros,
+
+    -- * Bounded retry pacing
+    delayListPolicy,
 ) where
 
+import Control.Retry (RetryPolicyM, RetryStatus (rsIterNumber), retryPolicy)
 import Katip (KatipContext, Severity (ErrorS), logFM, ls)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Concurrent (threadDelay)
@@ -84,6 +89,23 @@ data SupervisionPolicy = SupervisionPolicy
     , spBackoff :: BackoffSchedule
     -- ^ The pace for retrying transient faults. A completed step resets it.
     }
+
+{- | The policy for a loop with no wiring fault to fail up on: every synchronous escape is
+residue, logged and retried at @schedule@'s pace.
+-}
+transientPolicy :: Text -> BackoffSchedule -> SupervisionPolicy
+transientPolicy label schedule =
+    SupervisionPolicy
+        { spLabel = label
+        , spClassify = const Transient
+        , spBackoff = schedule
+        }
+
+{- | A delay list as a "Control.Retry" policy: retry @n@ waits the @n@-th delay in microseconds,
+so the list's length is the retry budget. It paces a bounded run, not an endless loop.
+-}
+delayListPolicy :: (Monad m) => [Int] -> RetryPolicyM m
+delayListPolicy delays = retryPolicy (\rs -> delays !!? rsIterNumber rs)
 
 {- | Run the step forever under the policy. A completed step resets the backoff and
 reruns at once, since the step owns its own pacing: poll waits and cycle delays live

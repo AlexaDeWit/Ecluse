@@ -48,11 +48,10 @@ module Ecluse.Runtime.Cve.Sync (
     SyncSchedule (..),
     runCveSync,
     bootBackoffDelays,
-    bootBurstPolicy,
 ) where
 
 import Conduit (ConduitT, await, runResourceT, yield, (.|))
-import Control.Retry (RetryPolicyM, RetryStatus (rsIterNumber), retryPolicy, retrying)
+import Control.Retry (retrying)
 import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as C
 import Katip (KatipContext, Severity (DebugS, ErrorS, InfoS), logFM, ls)
@@ -71,6 +70,7 @@ import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, DbEtag (..
 import Ecluse.Core.Cve.Slot (CveSlot, swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
+import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
  )
@@ -209,12 +209,6 @@ then the burst concedes to the steady poll. The poll interval, not this, is the 
 bootBackoffDelays :: [Int]
 bootBackoffDelays = [1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000]
 
-{- | The boot-burst backoff compiled to a "Control.Retry" policy. The n-th retry waits the n-th
-delay in microseconds. The policy stops once the list is spent, so its length is the retry budget.
--}
-bootBurstPolicy :: (Monad m) => [Int] -> RetryPolicyM m
-bootBurstPolicy delays = retryPolicy (\rs -> delays !!? rsIterNumber rs)
-
 {- | One ecosystem's sync task: the boot burst, then the steady poll, forever. The burst concedes
 early on a refused artifact, because the same bytes cannot end differently. An empty slot denies by
 default. @notifyFirstSync@ runs after every successful swap, so its consumer must be idempotent.
@@ -240,7 +234,7 @@ runCveSync metrics tracing env schedule notifyFirstSync = do
     burst = do
         (settled, seen') <-
             retrying
-                (bootBurstPolicy (schedBootBackoff schedule))
+                (delayListPolicy (schedBootBackoff schedule))
                 (\_ (done, _) -> pure (not done))
                 (\_ -> step Nothing)
         unless settled $
