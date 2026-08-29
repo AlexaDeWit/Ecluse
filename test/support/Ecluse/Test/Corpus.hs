@@ -24,6 +24,7 @@ import Data.Time (nominalDay)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, renderPackageName)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
+import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Rules (atDefaultPrecedence)
 
 {- | A corpus package's size and shape tier, which labels the rendered benchmark groups.
@@ -50,19 +51,18 @@ takes the leading entries. A few-version package stresses nothing, so none are h
 corpusPackages :: [CorpusPackage]
 corpusPackages =
     [ entry Heavy 8 (scoped "types" "node") (corpusRoot <> "types-node.full.json")
-    , entry Heavy 8 (unscoped "webpack") (corpusRoot <> "webpack.full.json")
+    , entry Heavy 8 (unscopedNpm "webpack") (corpusRoot <> "webpack.full.json")
     , entry Heavy 6 (scoped "aws-sdk" "client-s3") (corpusRoot <> "aws-sdk-client-s3.full.json")
-    , entry Large 4 (unscoped "express") "core/test/unit/fixtures/npm/express.full.json"
-    , entry Large 4 (unscoped "typescript") (corpusRoot <> "typescript.full.json")
+    , entry Large 4 (unscopedNpm "express") "core/test/unit/fixtures/npm/express.full.json"
+    , entry Large 4 (unscopedNpm "typescript") (corpusRoot <> "typescript.full.json")
     , entry Large 3 (scoped "babel" "core") (corpusRoot <> "babel-core.full.json")
-    , entry Large 2 (unscoped "react") (corpusRoot <> "react.full.json")
-    , entry Medium 2 (unscoped "request") (corpusRoot <> "request.full.json")
-    , entry Medium 2 (unscoped "lodash") (corpusRoot <> "lodash.full.json")
+    , entry Large 2 (unscopedNpm "react") (corpusRoot <> "react.full.json")
+    , entry Medium 2 (unscopedNpm "request") (corpusRoot <> "request.full.json")
+    , entry Medium 2 (unscopedNpm "lodash") (corpusRoot <> "lodash.full.json")
     ]
   where
     entry tier weight name path =
         CorpusPackage{cpPackage = name, cpPath = path, cpTier = tier, cpWeight = weight}
-    unscoped = mkPackageName Npm Nothing
     scoped s = mkPackageName Npm (Just (mkScope s))
 
 -- Every capture but the reused express fixture lives here, relative to the package root.

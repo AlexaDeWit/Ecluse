@@ -10,12 +10,8 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
-    Artifact (..),
-    ArtifactKind (Tarball),
-    Availability (Available),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     PackageDetails (..),
-    Trust (Untrusted),
     mkPackageName,
     mkScope,
  )
@@ -44,7 +40,7 @@ import Ecluse.Core.Server.Response (
     rejectUnavailable,
     serveDecisionOf,
  )
-import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Package (sampleDetails, v1_0_0)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 
 -- | A fixed "now" so age-based fixtures are deterministic.
@@ -55,35 +51,15 @@ now = UTCTime (fromGregorian 2026 6 20) 0
 decideAt :: [PrecededRule] -> PackageDetails -> IO Decision
 decideAt prs pd = prepare inertRuleDeps prs >>= \prepared -> evalRules (EvalContext now Nothing) prepared pd
 
--- | A single inert artifact. The response model does not inspect artifacts.
-sampleArtifact :: Artifact
-sampleArtifact =
-    Artifact
-        { artFilename = "evil-1.0.0.tgz"
-        , artUrl = "https://example.test/evil-1.0.0.tgz"
-        , artKind = Tarball
-        , artHashes = []
-        , artSize = Nothing
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
-        }
-
 {- | A scoped package version published @ageDays@ before 'now'. The caller supplies the
 install-code signal, so a case can exercise a deny rule.
 -}
 pkg :: Text -> Integer -> CodeExecSignal -> PackageDetails
 pkg scope ageDays code =
-    PackageDetails
-        { pkgName = mkPackageName Npm (Just (mkScope scope)) "pkg"
-        , pkgVersion = mkVersion Npm "1.0.0"
-        , pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
+    (sampleDetails (mkPackageName Npm (Just (mkScope scope)) "pkg") v1_0_0)
+        { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
         , pkgInstallCode = code
-        , pkgTrust = Untrusted
-        , pkgAvailability = Available
-        , pkgArtifacts = sampleArtifact :| []
         , pkgLicenses = ["MIT"]
-        , pkgPublisher = Nothing
         }
 
 spec :: Spec

@@ -18,15 +18,9 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
-    Artifact (..),
-    ArtifactKind (Tarball),
-    Availability (Available),
-    CodeExecSignal (NoCodeOnInstall),
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
-    Trust (Untrusted),
-    mkPackageName,
     renderPackageName,
  )
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
@@ -39,34 +33,11 @@ import Ecluse.Core.Security (
     defaultLimits,
  )
 import Ecluse.Core.Version (Version, mkVersion)
-
-sampleArtifact :: Artifact
-sampleArtifact =
-    Artifact
-        { artFilename = "thing-1.0.0.tgz"
-        , artUrl = "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz"
-        , artKind = Tarball
-        , artHashes = []
-        , artSize = Nothing
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
-        }
+import Ecluse.Test.Package (sampleDetails, unscopedNpm)
 
 -- | A minimal per-version snapshot. Only the name and version are meaningful here.
 details :: PackageName -> Version -> PackageDetails
-details name version =
-    PackageDetails
-        { pkgName = name
-        , pkgVersion = version
-        , pkgPublishedAt = Nothing
-        , pkgInstallCode = NoCodeOnInstall
-        , pkgTrust = Untrusted
-        , pkgAvailability = Available
-        , pkgArtifacts = sampleArtifact :| []
-        , pkgLicenses = ["MIT"]
-        , pkgPublisher = Nothing
-        }
+details name version = (sampleDetails name version){pkgLicenses = ["MIT"]}
 
 {- | Drive 'boundedRead' with a 'State'-monad chunk producer. It pops one chunk per call and
 yields an empty 'ByteString', the @BodyReader@ EOF signal, once the list runs out.
@@ -225,7 +196,7 @@ realPackumentSpec = describe "default Limits admit a real large trusted packumen
             Right v -> pure v
         -- 4. Project to the typed view (it is a well-formed packument), then
         -- 5. version-count check it (within maxVersionCount).
-        info <- case parsePackageInfoFromValue (unscoped "express") depthChecked of
+        info <- case parsePackageInfoFromValue (unscopedNpm "express") depthChecked of
             Left err -> expectationFailure ("real packument did not project: " <> show err) >> pure emptyInfo
             Right (Projected i) -> pure i
             Right (NameMismatch reported) ->
@@ -244,7 +215,7 @@ realPackumentSpec = describe "default Limits admit a real large trusted packumen
 emptyInfo :: PackageInfo
 emptyInfo =
     PackageInfo
-        { infoName = unscoped "unused"
+        { infoName = unscopedNpm "unused"
         , infoVersions = Map.empty
         , infoDistTags = Map.empty
         , infoInvalidEntries = []
@@ -281,12 +252,9 @@ nestArray n
     | n <= 1 = Number 1
     | otherwise = Array (V.singleton (nestArray (n - 1)))
 
-unscoped :: Text -> PackageName
-unscoped = mkPackageName Npm Nothing
-
 packumentWith :: Int -> PackageInfo
 packumentWith n =
-    let name = unscoped "thing"
+    let name = unscopedNpm "thing"
         ver i = "0.0." <> show i
      in PackageInfo
             { infoName = name

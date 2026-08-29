@@ -34,6 +34,7 @@ import Ecluse.Core.Registry.Npm.Request (
     noValidators,
  )
 
+import Ecluse.Test.Registry.Npm (isOdd)
 import Ecluse.Test.Stub (
     stubBaseUrl,
     withStub,
@@ -171,9 +172,6 @@ urlFailureSpec = describe "URL-formation failures" $ do
 
     it "builds a metadata request against a well-formed base URL" $ do
         metadataRequest "https://reg.test/" Nothing Abbreviated noValidators isOdd `shouldNotSatisfy` isLeft
-
-isOdd :: PackageName
-isOdd = mkPackageName Npm Nothing "is-odd"
 
 babelCodeFrame :: PackageName
 babelCodeFrame = mkPackageName Npm (Just (mkScope "babel")) "code-frame"

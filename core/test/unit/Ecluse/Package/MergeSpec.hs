@@ -26,26 +26,21 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Merge
 import Ecluse.Core.Version (mkVersion, unVersion)
-import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, unsafeHash)
+import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash)
+import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.WireVocab (wireRoundTrips)
 
 name :: PackageName
-name = mkPackageName Npm Nothing "thing"
+name = thingName
 
-{- | One tarball artifact carrying the given integrity digests, so a test varies only
-integrity.
+{- | One tarball artifact carrying the given integrity digests. Every fixture version shares
+the one file name, because the merge keys digests by artifact file.
 -}
 artifactWith :: [Hash] -> Artifact
 artifactWith hs =
-    Artifact
+    (Package.artifactWith hs)
         { artFilename = "thing.tgz"
         , artUrl = "https://example.test/thing.tgz"
-        , artKind = Tarball
-        , artHashes = hs
-        , artSize = Nothing
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
         }
 
 {- | A per-version snapshot carrying the given integrity digests. The merge reads only
@@ -53,16 +48,10 @@ the version key, the parsed version (for @latest@), and artifact integrity.
 -}
 detailsWith :: Text -> [Hash] -> PackageDetails
 detailsWith rawVer hs =
-    PackageDetails
-        { pkgName = name
-        , pkgVersion = mkVersion Npm rawVer
-        , pkgPublishedAt = Just t0
-        , pkgInstallCode = NoCodeOnInstall
-        , pkgTrust = Untrusted
-        , pkgAvailability = Available
+    (Package.sampleDetails name (mkVersion Npm rawVer))
+        { pkgPublishedAt = Just t0
         , pkgArtifacts = artifactWith hs :| []
         , pkgLicenses = ["MIT"]
-        , pkgPublisher = Nothing
         }
 
 {- | The fixed publish instant every 'detailsWith' version carries. 'withPublishedAt'

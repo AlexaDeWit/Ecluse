@@ -48,7 +48,7 @@ import Ecluse.Core.Registry.Npm.Project (
  )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion, unVersion)
 import Ecluse.Test.Json (genJsonText, genKey, genValue)
-import Ecluse.Test.Package (unsafeHash)
+import Ecluse.Test.Package (unsafeHash, unscopedNpm)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
@@ -132,14 +132,14 @@ npmValidatorRefusalSpec = describe "projectName -- the npm rules the splitter ad
 nameValidationSpec :: Spec
 nameValidationSpec = describe "name validation against the requested name" $ do
     it "projects a document whose self-reported name matches the request" $ do
-        case parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "thing") of
+        case parsePackageInfoFromValue (unscopedNpm "thing") (packumentValueNamed "thing") of
             Right (Projected info) -> renderName (infoName info) `shouldBe` "thing"
             other -> fail ("expected a matching projection, got: " <> show other)
 
     it "flags a document whose self-reported name disagrees with the request" $ do
         -- A present-but-different name is a NameMismatch carrying the upstream's
         -- self-reported name for the audit log. It is never a rewrite to the route name.
-        parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "other")
+        parsePackageInfoFromValue (unscopedNpm "thing") (packumentValueNamed "other")
             `shouldBe` Right (NameMismatch "other")
 
     it "validates the scope, not just the bare name (@scope/a is not @scope/b)" $
@@ -149,14 +149,14 @@ nameValidationSpec = describe "name validation against the requested name" $ do
     it "refuses a document whose self-reported name is not a usable npm name" $
         -- The "../evil" traversal name the URL rewrite must never interpolate. The name gate
         -- runs here, so it is a ParseError, not a PackageName that fails agreement later.
-        parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "../evil")
+        parsePackageInfoFromValue (unscopedNpm "thing") (packumentValueNamed "../evil")
             `shouldSatisfy` isLeft
 
     it "never substitutes the served name: a match carries the upstream's own name" $ do
         -- The route name is the validation authority, not a rewrite. infoName is the
         -- name the upstream reported, here equal to the request because it matched.
-        case parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "thing") of
-            Right (Projected info) -> infoName info `shouldBe` unscoped "thing"
+        case parsePackageInfoFromValue (unscopedNpm "thing") (packumentValueNamed "thing") of
+            Right (Projected info) -> infoName info `shouldBe` unscopedNpm "thing"
             other -> fail ("expected a matching projection, got: " <> show other)
 
 signalMappingSpec :: Spec
@@ -349,7 +349,7 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
         -- survives. It runs through parsePackageInfoFromValue, so field-level and version-level
         -- leniency compose on the production decode path.
         value <- decodeJsonOrFail advisoryJunkPackument
-        case parsePackageInfoFromValue (unscoped "adv") value of
+        case parsePackageInfoFromValue (unscopedNpm "adv") value of
             Right (Projected info) -> do
                 Map.keys (infoVersions info) `shouldBe` ["1.0.0", "2.0.0", "3.0.0"]
                 case Map.lookup "2.0.0" (infoVersions info) of
@@ -676,10 +676,6 @@ the path Cabal runs tests from).
 -}
 readFixture :: FilePath -> IO ByteString
 readFixture name = readFileBS ("core/test/unit/fixtures/npm/" <> name)
-
--- | An unscoped npm 'PackageName' (the common case in these fixtures).
-unscoped :: Text -> PackageName
-unscoped = mkPackageName Npm Nothing
 
 -- | A minimal packument 'Value' self-reporting the given top-level @name@.
 packumentValueNamed :: Text -> Value

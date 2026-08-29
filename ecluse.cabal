@@ -686,6 +686,8 @@ test-suite ecluse-core-unit
     Ecluse.Worker.LivenessSpec
     Ecluse.Worker.LoopSpec
     Ecluse.Worker.Support
+    Ecluse.Worker.Support.Fixtures
+    Ecluse.Worker.Support.Runtime
     Paths_ecluse
 
   autogen-modules:    Paths_ecluse

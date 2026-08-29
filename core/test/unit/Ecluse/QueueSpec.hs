@@ -22,7 +22,8 @@ import Ecluse.Core.Queue (
     mkReceiptHandle,
     newEnqueueBuffer,
  )
-import Ecluse.Queue.Support (otherJob, sampleJob, thirdJob, unwrap)
+import Ecluse.Queue.Support (otherJob, thirdJob, unwrap)
+import Ecluse.Test.Queue (sampleJob)
 
 {- | Tests for the contract module's buffered producer hand-off. The in-memory
 backend's coverage lives beside it in "Ecluse.Queue.MemorySpec".

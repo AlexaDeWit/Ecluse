@@ -5,12 +5,11 @@
 {- | Test helpers and fixtures for "Ecluse.Core.Package".
 
 The module name follows this support library's @Ecluse.X → Ecluse.Test.X@ convention.
-It carries the digest plumbing every suite reuses. 'unsafeHash' lifts a known-good
-digest into a 'Hash'. The canonical well-formed digest fixtures, each the empty-input
-digest of its algorithm, appear across the queue, integrity, env, and worker specs. The
-suites and harnesses gate with the SHA-256 admission-floor fixtures. The digest
-renderers compute npm's hexadecimal shasums and Subresource-Integrity text apart from
-the production integrity machinery, so tests keep a separate oracle.
+The @unsafe@ formers lift a known-good fixture string into a domain value and error on a
+typo, so a bad fixture fails loudly. Each canonical digest is the empty-input digest of its
+algorithm, immaterial beyond being well-formed. The renderers compute npm's hexadecimal
+shasums and Subresource-Integrity text apart from the production integrity machinery, so
+tests keep a separate oracle.
 -}
 module Ecluse.Test.Package (
     -- * Constructing hashes from fixtures
@@ -43,15 +42,23 @@ module Ecluse.Test.Package (
     validSha384Sri,
     validSha512Sri,
 
-    -- * Shared fixtures
+    -- * Shared identity fixtures
+    unscopedNpm,
+    thingName,
+    v1_0_0,
+
+    -- * Shared package fixtures
     sampleArtifact,
+    artifactWith,
     sampleDetails,
+    detailsWith,
 ) where
 
 import Crypto.Hash (Blake2b_512, Digest, SHA1, SHA256, SHA384, SHA512, hash, hashlazy)
 import Data.ByteArray (ByteArrayAccess)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     Artifact (..),
     ArtifactKind (Tarball),
@@ -63,6 +70,7 @@ import Ecluse.Core.Package (
     PackageName,
     Trust (Untrusted),
     mkHash,
+    mkPackageName,
     mkSriHashes,
  )
 import Ecluse.Core.Package.Integrity (
@@ -72,7 +80,7 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
-import Ecluse.Core.Version (Version)
+import Ecluse.Core.Version (Version, mkVersion)
 
 {- HLINT ignore unsafeHash "Avoid restricted function" -}
 
@@ -100,9 +108,8 @@ unsafeRegistryUrl = either error id . mkRegistryUrl
 
 {- HLINT ignore defaultMinIntegrity "Avoid restricted function" -}
 
-{- | The SHA-256 public-integrity floor fixture, the hard minimum 'mkMinIntegrity' enforces, so the
-construction cannot fail. Suites gate with it wherever a spec needs an admission floor and the floor
-is not the axis under test.
+{- | The SHA-256 public-integrity floor fixture: the hard minimum 'mkMinIntegrity' enforces, so
+the construction cannot fail. Use it wherever the floor is not the axis under test.
 -}
 defaultMinIntegrity :: MinIntegrity
 defaultMinIntegrity = either error id (mkMinIntegrity SHA256)
@@ -157,6 +164,17 @@ validSha256Sri = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
 validSha384Sri = "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
 validSha512Sri = "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
 
+-- | An unscoped npm package name, the identity most fixtures carry.
+unscopedNpm :: Text -> PackageName
+unscopedNpm = mkPackageName Npm Nothing
+
+-- | The conventional fixture package and version, @thing\@1.0.0@.
+thingName :: PackageName
+thingName = unscopedNpm "thing"
+
+v1_0_0 :: Version
+v1_0_0 = mkVersion Npm "1.0.0"
+
 -- | A single inert artifact. The packument-level tests do not inspect artifacts.
 sampleArtifact :: Artifact
 sampleArtifact =
@@ -187,3 +205,11 @@ sampleDetails name version =
         , pkgLicenses = []
         , pkgPublisher = Nothing
         }
+
+-- | 'sampleArtifact' carrying the given integrity digests, so a test varies only integrity.
+artifactWith :: [Hash] -> Artifact
+artifactWith hs = sampleArtifact{artHashes = hs}
+
+-- | 'sampleDetails' whose sole artifact carries the given integrity digests.
+detailsWith :: PackageName -> Version -> [Hash] -> PackageDetails
+detailsWith name version hs = (sampleDetails name version){pkgArtifacts = artifactWith hs :| []}

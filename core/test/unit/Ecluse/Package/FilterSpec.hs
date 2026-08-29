@@ -18,27 +18,23 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
-    Artifact (..),
-    ArtifactKind (Tarball),
-    Availability (Available),
+    Artifact (artUrl),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     InvalidEntry (invalidKind, invalidValue),
     InvalidEntryKind (InvalidVersionManifest),
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
-    Trust (Untrusted),
-    mkPackageName,
  )
 import Ecluse.Core.Package.Filter (FilterPlan (..), enforceArtifactScheme, enforceArtifactSchemeDetails)
 import Ecluse.Core.Rules.Types (
-    Decision (Admitted),
     EvalContext (EvalContext),
     PrecededRule,
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
  )
 import Ecluse.Core.Version (compareVersions, isStable, mkVersion, parseVersionKey, unVersion)
-import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps)
+import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName)
+import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isApproved)
 
 spec :: Spec
 spec = do
@@ -66,7 +62,7 @@ policy =
     ]
 
 name :: PackageName
-name = mkPackageName Npm Nothing "thing"
+name = thingName
 
 -- | An instant @ageDays@ before 'now', for a version's publish time.
 publishedDaysAgo :: Integer -> UTCTime
@@ -77,29 +73,10 @@ and the install-code signal. Every other field is inert.
 -}
 detailsAt :: Text -> Integer -> Bool -> PackageDetails
 detailsAt rawVer ageDays hasInstall =
-    PackageDetails
-        { pkgName = name
-        , pkgVersion = mkVersion Npm rawVer
-        , pkgPublishedAt = Just (publishedDaysAgo ageDays)
+    (sampleDetails name (mkVersion Npm rawVer))
+        { pkgPublishedAt = Just (publishedDaysAgo ageDays)
         , pkgInstallCode = if hasInstall then RunsCodeOnInstall "postinstall" else NoCodeOnInstall
-        , pkgTrust = Untrusted
-        , pkgAvailability = Available
-        , pkgArtifacts = inertArtifact :| []
         , pkgLicenses = ["MIT"]
-        , pkgPublisher = Nothing
-        }
-
-inertArtifact :: Artifact
-inertArtifact =
-    Artifact
-        { artFilename = "thing.tgz"
-        , artUrl = "https://upstream.test/thing.tgz"
-        , artKind = Tarball
-        , artHashes = []
-        , artSize = Nothing
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
         }
 
 {- | Build a 'PackageInfo' from @(rawVersion, ageDays, hasInstall)@ triples, with
@@ -263,11 +240,6 @@ versionPool = ["1.0.0", "1.1.0", "2.0.0-rc.1", "2.0.0", "3.0.0-beta", "10.0.0"]
 latestRaw :: FilterPlan -> Maybe Text
 latestRaw = fmap unVersion . fpLatest
 
-isApproved :: Decision -> Bool
-isApproved = \case
-    Admitted{} -> True
-    _ -> False
-
 -- | Whether a raw npm version string parses to a stable (non-prerelease) release.
 isStableRaw :: Text -> Bool
 isStableRaw raw = either (const False) isStable (parseVersionKey Npm raw)
@@ -342,4 +314,4 @@ infoWithArtifact url =
 -- | A 'PackageDetails' whose sole artifact carries the given URL (age\/install-signal inert).
 detailsWithArtifact :: Text -> PackageDetails
 detailsWithArtifact url =
-    (detailsAt "1.0.0" 30 False){pkgArtifacts = inertArtifact{artUrl = url} :| []}
+    (detailsAt "1.0.0" 30 False){pkgArtifacts = sampleArtifact{artUrl = url} :| []}

@@ -3,7 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Shared npm fixtures: packument and version-object builders, the public-registry
-defaults, the name grammar as a table, and the URL path-segment generators.
+defaults, the mirror-write subject, the name grammar as a table, and the URL
+path-segment generators.
 
 'npmNameVerdicts' is the one list every entry point that splits an npm name asserts
 against, so a verdict cannot drift between the read path, the route, the URL rewrite,
@@ -16,6 +17,10 @@ module Ecluse.Test.Registry.Npm (
     versionValue,
     packumentValue,
     publishedDaysAgo,
+
+    -- * Mirror-write fixtures
+    isOdd,
+    dummyArtifact,
 
     -- * The npm name grammar, as a shared table
     npmNameVerdicts,
@@ -33,6 +38,7 @@ import Data.Aeson (Value (Object), object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair)
+import Data.List.NonEmpty qualified as NE
 import Data.Time (UTCTime, addUTCTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Hedgehog (Gen)
@@ -40,8 +46,11 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Network.HTTP.Client (Manager)
 
+import Ecluse.Core.Package (HashAlg (SHA1), PackageName)
+import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Test.Package (unsafeHash, unscopedNpm, validSha1)
 
 {- | Each npm name a splitter must agree on, paired with whether it names a package. A bare
 @\@foo@ is a malformed scoped name, not an unscoped one, so it is refused everywhere.
@@ -63,6 +72,21 @@ npmNameVerdicts =
 -- | The example name for one 'npmNameVerdicts' row, so a failure names the input and its verdict.
 nameVerdictLabel :: Text -> Bool -> String
 nameVerdictLabel raw valid = show raw <> (if valid then " names a package" else " is refused")
+
+-- | The package the registry-client and mirror-write specs address.
+isOdd :: PackageName
+isOdd = unscopedNpm "is-odd"
+
+{- | The artifact descriptor a mirror write carries for @is-odd\@1.0.0@. Only the filename and
+digests reach the publish document, so the size stays absent unless a case sets it.
+-}
+dummyArtifact :: MirrorArtifact
+dummyArtifact =
+    MirrorArtifact
+        { maFilename = "is-odd-1.0.0.tgz"
+        , maHashes = NE.singleton (unsafeHash SHA1 validSha1)
+        , maSize = Nothing
+        }
 
 {- | The common fields of an npm version object. An extra pair in 'vsExtraPairs' overrides the
 common field with the same key.
@@ -162,9 +186,8 @@ The default target when no managed backend is configured.
 publicRegistryBaseUrl :: Text
 publicRegistryBaseUrl = "https://registry.npmjs.org"
 
-{- | An anonymous client config against the public registry, with the secure-default response
-bounds ('Ecluse.Core.Security.defaultLimits'). Override 'npmBaseUrl', 'npmToken', or 'npmLimits'
-for a managed backend or a per-deployment budget.
+{- | An anonymous client config against the public registry at the secure-default response
+bounds. Override 'npmBaseUrl', 'npmToken', or 'npmLimits' for a managed backend.
 -}
 defaultNpmConfig :: Manager -> NpmClientConfig
 defaultNpmConfig manager =

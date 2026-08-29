@@ -10,9 +10,6 @@ import Data.Universe.Class (Universe (..))
 import Test.Hspec
 
 import Ecluse.Core.Package (
-    Artifact (..),
-    ArtifactKind (Tarball),
-    Hash,
     HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI),
     isComputable,
  )
@@ -29,6 +26,7 @@ import Ecluse.Core.Package.Integrity (
     unMinTrustedIntegrity,
  )
 import Ecluse.Test.Package (
+    artifactWith,
     defaultMinIntegrity,
     defaultMinTrustedIntegrity,
     unsafeHash,
@@ -39,20 +37,6 @@ import Ecluse.Test.Package (
     validSha512Sri,
  )
 import Ecluse.Test.Support (expectRight)
-
--- A tarball carrying a chosen set of integrity digests. Every other field is inert.
-artifactWith :: [Hash] -> Artifact
-artifactWith hs =
-    Artifact
-        { artFilename = "thing.tgz"
-        , artUrl = "https://example.test/thing.tgz"
-        , artKind = Tarball
-        , artHashes = hs
-        , artSize = Nothing
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
-        }
 
 spec :: Spec
 spec = do

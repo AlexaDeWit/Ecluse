@@ -26,14 +26,12 @@ import Network.TLS qualified as TLS
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import UnliftIO (evaluate)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (
     TransportCause (TransportProtocol, TransportTimeout, TransportTls, TransportUnreachable),
     TransportFault (tfCause),
     transportRetryable,
  )
 import Ecluse.Core.Fault.Http (classifyTransport)
-import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     RegistryResponse (..),
@@ -46,7 +44,7 @@ import Ecluse.Core.Registry.Npm (
  )
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), noValidators)
 import Ecluse.Core.Security (defaultLimits, maxBodyBytes)
-import Ecluse.Test.Registry.Npm (defaultNpmConfig, publicRegistryBaseUrl)
+import Ecluse.Test.Registry.Npm (defaultNpmConfig, isOdd, publicRegistryBaseUrl)
 
 import Ecluse.Test.Stub (
     stubConfig,
@@ -158,9 +156,6 @@ configAndWiringSpec = describe "config wiring" $ do
         -- assertion that the field carries the manager we passed, not a bottom.
         _ <- evaluate (npmManager config)
         pure ()
-
-isOdd :: PackageName
-isOdd = mkPackageName Npm Nothing "is-odd"
 
 -- A body larger than the tight 64-byte cap the bounded-body test sets.
 oversizedBody :: ByteString

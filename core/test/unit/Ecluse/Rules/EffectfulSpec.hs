@@ -35,13 +35,20 @@ import Ecluse.Core.Rules.Effectful (
     defaultEffectfulConfig,
     newBreaker,
  )
-import Ecluse.Test.Rules (inertRuleDeps, noFaultReporter)
+import Ecluse.Test.Package (sampleDetails, v1_0_0)
+import Ecluse.Test.Rules (
+    admittedBy,
+    blockedBy,
+    inertRuleDeps,
+    isUndecidable,
+    noFaultReporter,
+    withInstallScripts,
+ )
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), newTestClock)
 
 -- The spec builds 'PreparedRule's directly with a fake 'prepEval', exercising the
 -- resilience harness and the parallel engine without a closure on the closed 'Rule' data.
 import Ecluse.Core.Rules.Types
-import Ecluse.Core.Version (mkVersion)
 
 -- | A fixed "now", so age and cooldown arithmetic stay deterministic.
 now :: UTCTime
@@ -56,35 +63,14 @@ ctxAt t = EvalContext t Nothing
 ctx :: EvalContext
 ctx = ctxAt now
 
--- | A single inert artifact. The rules under test do not inspect artifacts.
-sampleArtifact :: Artifact
-sampleArtifact =
-    Artifact
-        { artFilename = "thing-1.0.0.tgz"
-        , artUrl = "https://example.test/thing-1.0.0.tgz"
-        , artKind = Tarball
-        , artHashes = []
-        , artSize = Nothing
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
-        }
-
 {- | A package version under an optional npm scope, published @ageDays@ days before 'now'.
 Everything outside the scope, age, and install-code signals is fixed.
 -}
 pkg :: Maybe Text -> Integer -> PackageDetails
 pkg mScope ageDays =
-    PackageDetails
-        { pkgName = mkPackageName Npm (mkScope <$> mScope) "thing"
-        , pkgVersion = mkVersion Npm "1.0.0"
-        , pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
-        , pkgInstallCode = NoCodeOnInstall
-        , pkgTrust = Untrusted
-        , pkgAvailability = Available
-        , pkgArtifacts = sampleArtifact :| []
+    (sampleDetails (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0)
+        { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
         , pkgLicenses = ["MIT"]
-        , pkgPublisher = Nothing
         }
 
 -- | A config with no retries, so a test never waits on a backoff.
@@ -150,25 +136,8 @@ capturingBreakerReporter = do
     breakerLog <- newIORef []
     pure (breakerLog, BreakerReporter (\b -> modifyIORef' breakerLog (<> [b])))
 
--- | Mark the version as running code on install, so the install-script deny fires.
-withInstallScripts :: PackageDetails -> PackageDetails
-withInstallScripts pd = pd{pkgInstallCode = RunsCodeOnInstall "postinstall hook"}
-
-admittedBy :: Decision -> Maybe Text
-admittedBy (Admitted name _) = Just name
-admittedBy _ = Nothing
-
-blockedBy :: Decision -> Maybe Text
-blockedBy (Blocked name _) = Just name
-blockedBy _ = Nothing
-
 isAdmitted :: Decision -> Bool
 isAdmitted = isJust . admittedBy
-
-isUndecidable :: Decision -> Bool
-isUndecidable = \case
-    Undecidable{} -> True
-    _ -> False
 
 isUnavailable :: RuleEvaluation -> Bool
 isUnavailable = \case

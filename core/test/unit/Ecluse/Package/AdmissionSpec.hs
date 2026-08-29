@@ -24,14 +24,12 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 import Text.Show (showsPrec)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     Artifact (..),
     Hash,
     HashAlg (Blake2b, SHA1, SHA256, SHA384, SHA512, SRI),
     PackageDetails (..),
     hashValue,
-    mkPackageName,
  )
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
@@ -51,18 +49,22 @@ import Ecluse.Core.Package.Integrity (
     authoritativeDigest,
     classifyArtifacts,
  )
-import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
 import Ecluse.Core.Rules.Types (
     Decision (Blocked, Undecidable),
     EvalContext (EvalContext),
-    FailureAlignment (FailDeny),
-    RuleVerdict (Allow, CannotVet, Deny),
     Transience (WillResolve, WontResolve),
  )
-import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityMismatch, IntegrityVerified), verifyIntegrity)
-import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails, unsafeHash, unsafeSriHashes)
+import Ecluse.Test.Package (
+    artifactWith,
+    defaultMinIntegrity,
+    thingName,
+    unsafeHash,
+    unsafeSriHashes,
+    v1_0_0,
+ )
 import Ecluse.Test.Package qualified as Package
+import Ecluse.Test.Rules (admitRule, cannotVetRule, denyRule)
 
 -- The sanctioned splitter, as the plain list the artifact fixtures take.
 sriHashesOf :: Text -> [Hash]
@@ -74,32 +76,10 @@ sriHashesOf = toList . unsafeSriHashes
 ctx :: EvalContext
 ctx = EvalContext (UTCTime (fromGregorian 2026 1 1) 0) Nothing
 
--- A pure prepared rule returning a constant verdict, bypassing config preparation
--- exactly as the worker unit fixtures do.
-constRule :: Text -> RuleVerdict -> PreparedRule
-constRule ruleName verdict =
-    PreparedRule
-        { prepName = ruleName
-        , prepPrecedence = 0
-        , prepResilience = Nothing
-        , prepEval = \_ _ -> pure verdict
-        }
-
-admitRule, denyRule, cannotVetRule :: PreparedRule
-admitRule = constRule "test-admit" (Allow "admitted for test")
-denyRule = constRule "test-deny" (Deny "denied by current policy")
-cannotVetRule = constRule "test-cannot-vet" (CannotVet FailDeny "no advisory database is loaded")
-
--- The version snapshot under test: the shared sample snapshot, its one artifact
--- renamed to @thing-1.0.0.tgz@ and carrying the given digests.
+-- The version snapshot under test: the shared @thing\@1.0.0@ snapshot, its one artifact
+-- carrying the given digests.
 detailsWith :: [Hash] -> PackageDetails
-detailsWith hs =
-    (sampleDetails (mkPackageName Npm Nothing "thing") (mkVersion Npm "1.0.0"))
-        { pkgArtifacts = one (artifactWith hs)
-        }
-
-artifactWith :: [Hash] -> Artifact
-artifactWith hs = sampleArtifact{artFilename = "thing-1.0.0.tgz", artHashes = hs}
+detailsWith = Package.detailsWith thingName v1_0_0
 
 -- ── real digests over real bytes ────────────────────────────────────────────────
 
