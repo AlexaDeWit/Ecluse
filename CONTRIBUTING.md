@@ -7,7 +7,7 @@ requirements. This file is policy. The practical guides live alongside it:
 - **Testing and CI**: [Testing Strategy](docs/testing.md) covers the tiers, what gates, and
   coverage.
 - **Code style**: [`docs/style.md`](docs/style.md). Documentation:
-  [`docs/haddock.md`](docs/haddock.md).
+  [`docs/haddock.md`](docs/haddock.md). Prose: [`docs/prose.md`](docs/prose.md).
 - **Design**: [`docs/architecture.md`](docs/architecture.md).
 - **Agent instructions**: [`AGENTS.md`](AGENTS.md).
 
@@ -145,4 +145,5 @@ The first tells them which functions changed, which the diff already shows.
 - **Semgrep and Stan ignores require the repo owner's approval**. Do not add `.semgrepignore`
   entries, `nosemgrep` comments, or Stan `[[ignore]]` entries on your own.
 - **Diagrams are Mermaid, not ASCII art**: a fenced ` ```mermaid ` block, never box-drawing
-  characters.
+  characters. This governs the repository's Markdown. The site authors diagrams as d2 sources
+  rendered to SVG at build ([docs/prose.md](docs/prose.md#diagrams)).
