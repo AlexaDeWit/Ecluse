@@ -76,6 +76,18 @@ resolveSpec = describe "resolveTelemetry" $ do
         rtEnvironment attrs `shouldBe` Just "stg"
         rtVersion attrs `shouldBe` Just "9"
 
+    it "prefers deployment.environment.name over the deprecated spelling, both behind DD_ENV" $ do
+        -- The SDK deprecates deployment.environment for deployment.environment.name, so the newer
+        -- key wins between the two attributes. The DD_ENV precedence over both is unchanged.
+        rtEnvironment (resolveTelemetry (attributesEnv "deployment.environment.name=stg"))
+            `shouldBe` Just "stg"
+        rtEnvironment
+            (resolveTelemetry (attributesEnv "deployment.environment=old,deployment.environment.name=stg"))
+            `shouldBe` Just "stg"
+        rtEnvironment
+            (resolveTelemetry (("DD_ENV", "prod") : attributesEnv "deployment.environment.name=stg"))
+            `shouldBe` Just "prod"
+
     it "leaves the environment unset but falls the version back to the build version" $ do
         -- The process cannot know its deployment environment, so that field stays optional. The
         -- version is a fact about the running binary, so every trace and log line carries one.
@@ -195,6 +207,16 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
         lookup "OTEL_EXPORTER_OTLP_ENDPOINT" overrides `shouldBe` Just "http://10.0.0.9:4318"
         lookup "OTEL_EXPORTER_OTLP_PROTOCOL" overrides `shouldBe` Just "http/protobuf"
 
+    it "exports the deployment environment under the current key alone" $ do
+        -- The deprecated deployment.environment is read but never emitted. A backend still keyed
+        -- on it renames the attribute at the collector.
+        detected <- detectedResourceAttributes [("DD_ENV", "prod")]
+        detected
+            `shouldBe` [ ("deployment.environment.name", "prod")
+                       , ("service.version", buildVersion)
+                       ]
+        map fst detected `shouldNotContain` ["deployment.environment"]
+
     it "overlays the resolved attributes onto operator-set resource attributes, preserving extras" $
         detectedResourceAttributes
             [ ("DD_SERVICE", "api")
@@ -202,7 +224,7 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
             , ("DD_VERSION", "1.2.3")
             , ("OTEL_RESOURCE_ATTRIBUTES", "team=core")
             ]
-            `shouldReturn` [ ("deployment.environment", "prod")
+            `shouldReturn` [ ("deployment.environment.name", "prod")
                            , ("service.version", "1.2.3")
                            , ("team", "core")
                            ]
