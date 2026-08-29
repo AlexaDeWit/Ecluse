@@ -17,6 +17,7 @@ import UnliftIO.Exception (impureThrow, throwString)
 
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Package (PackageDetails)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
 import Ecluse.Core.Rules (PreparedRule (..), Resilience (..))
 import Ecluse.Core.Rules.Effectful (EffectfulConfig (..), defaultEffectfulConfig, newBreaker)
 import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleVerdict (..))
@@ -127,10 +128,11 @@ newtype AssembleBottom = AssembleBottom Text
 
 instance Exception AssembleBottom
 
--- A deps transform that breaks the pdAssemble never-throws contract on purpose, for
+-- A deps transform that breaks the metadataAssemble never-throws contract on purpose, for
 -- the request-perimeter case: the assembled render bottoms when forced.
 withBottomingAssemble :: PackumentDeps -> PackumentDeps
-withBottomingAssemble d = d{pdAssemble = \_ _ _ _ -> impureThrow (AssembleBottom "simulated render invariant break")}
+withBottomingAssemble d =
+    d{pdMetadata = (pdMetadata d){metadataAssemble = \_ _ _ _ -> impureThrow (AssembleBottom "simulated render invariant break")}}
 
 oversizedPackument :: Text -> LByteString
 oversizedPackument v =

@@ -50,6 +50,7 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Package.Merge (Provenance)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewClient))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
@@ -180,8 +181,8 @@ withMetadataClient ::
 withMetadataClient rt deps upstream caching origin k =
     withRunInIO $ \runInIO ->
         k $
-            pdNewMetadataClient
-                deps
+            metadataNewClient
+                (pdMetadata deps)
                 (srTracing rt)
                 (srMetrics rt)
                 upstream
@@ -204,8 +205,9 @@ withPublicMetadataClient rt deps baseUrl =
   where
     caching = Cached (srMetadataCache rt) (Source (registryUrlText baseUrl))
 
-{- One origin's coordinates for this mount: the mount's own response bound, the leg's
-manager, and the credential posture the caller decided. -}
-originAt :: PackumentDeps -> Manager -> RegistryUrl -> Maybe Secret -> OriginClient
+{- | One origin's coordinates for this mount: its own response bound, the leg's manager, and
+the credential posture the caller decided. The artifact path forms its request through it too.
+-}
+mountOrigin :: PackumentDeps -> Manager -> RegistryUrl -> Maybe Secret -> OriginClient
 mountOrigin deps manager baseUrl token =
     OriginClient{ocBaseUrl = baseUrl, ocManager = manager, ocToken = token, ocLimits = pdLimits deps}

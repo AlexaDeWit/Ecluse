@@ -140,6 +140,7 @@ import Ecluse.Core.Security (
  )
 import UnliftIO (withRunInIO)
 
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByFile, artifactByUrl))
 import Ecluse.Core.Server.Conditional (forwardValidators)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -316,7 +317,7 @@ streamPrivateArtifact mode replies rt deps token validators name file respond =
         Just privateBase
             | tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort ->
                 withValidators validators . withMethod mode
-                    <$> rightToMaybe (pdBuildArtifactRequestByFile deps (mountOrigin deps (srPrivateManager rt) privateBase token) name (unFilename file))
+                    <$> rightToMaybe (artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateManager rt) privateBase token) name (unFilename file))
             | otherwise -> Nothing
       where
         -- The precomputed private authority. The constructed URL is on the private base, so the
@@ -474,7 +475,7 @@ streamPublicArtifact mode replies rt deps validators name version file artifact 
   where
     hostHonoured = tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps)) (hostPortAddress (artUrl artifact))
 
-    publicRequest = withValidators validators . withMethod mode <$> pdBuildArtifactRequestByUrl deps Nothing (artUrl artifact)
+    publicRequest = withValidators validators . withMethod mode <$> artifactByUrl (pdArtifact deps) Nothing (artUrl artifact)
 
 -- Adapt the route's typed response constructors to the streaming helper's callback. The
 -- upstream connection stays open until the selected response completes.

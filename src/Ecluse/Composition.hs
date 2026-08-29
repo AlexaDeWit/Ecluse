@@ -78,15 +78,7 @@ import Ecluse.Core.Registry.Adapter (
     adapterFor,
     adapterMetadata,
     adapterPublish,
-    artifactByFile,
-    artifactByUrl,
     artifactHosts,
-    metadataAssemble,
-    metadataNewClient,
-    metadataSerialise,
-    publishCanonicaliseName,
-    publishDeclaredNames,
-    publishRelay,
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
@@ -157,8 +149,8 @@ planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget confi
       where
         eco = mountEcosystem mount
 
-    {- The ecosystem-shaped fields carry over the adapter's capabilities unchanged, and
-    the rest is the mount's configuration. @mountBaseUrl@ owns the @dist.tarball@ base. -}
+    {- The ecosystem-shaped fields are the adapter's own records, carried whole, and the
+    rest is the mount's configuration. @mountBaseUrl@ owns the @dist.tarball@ base. -}
     packumentDepsFor :: RegistryAdapter -> Mount -> MountConfig -> IO PackumentDeps
     packumentDepsFor adapter mount mcfg = do
         -- 'prepare' allocates an effectful rule's resilience policy and breaker once per mount.
@@ -198,11 +190,8 @@ planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget confi
                 , -- The cross-upstream divergence policy: the global default
                   -- (warn), refined per mount for the same reason.
                   pdDivergencePolicy = fromMaybe (intDivergencePolicy (cfgIntegrity app)) (mntDivergencePolicy mcfg)
-                , pdNewMetadataClient = metadataNewClient (adapterMetadata adapter)
-                , pdBuildArtifactRequestByFile = artifactByFile (adapterArtifact adapter)
-                , pdBuildArtifactRequestByUrl = artifactByUrl (adapterArtifact adapter)
-                , pdAssemble = metadataAssemble (adapterMetadata adapter)
-                , pdSerialise = metadataSerialise (adapterMetadata adapter)
+                , pdMetadata = adapterMetadata adapter
+                , pdArtifact = adapterArtifact adapter
                 , pdEgressUrl = mkRegistryUrl
                 }
 
@@ -262,9 +251,7 @@ publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
             , pubBodyBudget = pbBodyBudget budget
             , pubMaxRequestBytes = pbMaxRequestBytes budget
             , pubHelp = helpMessage
-            , pubRelayPublish = publishRelay (adapterPublish adapter)
-            , pubCanonicaliseName = publishCanonicaliseName (adapterPublish adapter)
-            , pubDeclaredNames = publishDeclaredNames (adapterPublish adapter)
+            , pubAdapter = adapterPublish adapter
             }
   where
     inboundToken :: Maybe Secret

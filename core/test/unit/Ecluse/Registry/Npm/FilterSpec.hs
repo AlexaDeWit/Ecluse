@@ -303,7 +303,7 @@ propertiesSpec = describe "properties" $ do
                         Just l -> assert (Set.member l survivingKeys)
                         Nothing -> annotateShow out >> failure
 
-    it "the assembled document forces deeply without bottoming (the pdAssemble never-throws contract)" $
+    it "the assembled document forces deeply without bottoming (the metadataAssemble never-throws contract)" $
         -- The serve tail feeds the assembled document straight into the encoder, so a lurking
         -- bottom in any branch would escape the request perimeter at serve time. Force the whole
         -- 'Value' here.

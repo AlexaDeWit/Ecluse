@@ -30,6 +30,7 @@ import Network.Wai (Request, RequestBodyLength (ChunkedBody, KnownLength), Respo
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), PublishRelayResponse (PublishRelayResponse))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCanonicaliseName, publishDeclaredNames, publishRelay))
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
@@ -100,13 +101,13 @@ publishWithDeps replies deps clientToken name request respond
                 Left _ -> pure (publishTooLarge replies deps)
                 -- The body-name agreement leg of the anti-shadowing guard. A crafted body could
                 -- otherwise write a name the guard never saw. Refuse before the relay.
-                Right body -> case bodyNameDisagreement (pubDeclaredNames deps) (pubCanonicaliseName deps) name (LBS.fromStrict body) of
+                Right body -> case bodyNameDisagreement (publishDeclaredNames (pubAdapter deps)) (publishCanonicaliseName (pubAdapter deps)) name (LBS.fromStrict body) of
                     Just declared -> pure (bodyNameMismatch replies deps name declared)
                     -- The relay reports failures as the typed 'FetchFault' value, so the
                     -- render below is total and nothing is caught here.
                     Nothing ->
                         renderRelay replies deps
-                            <$> liftIO (pubRelayPublish deps (publicationTarget rt) name body)
+                            <$> liftIO (publishRelay (pubAdapter deps) (publicationTarget rt) name body)
         liftIO (respond (fromMaybe (bodyBudgetShed replies deps) outcome))
   where
     -- The publication target as one origin. The posture is passthrough: the publisher's own

@@ -7,10 +7,9 @@
 The module name follows this support library's @Ecluse.X -> Ecluse.Test.X@ convention.
 
 'npmServeDeps' is the one shared builder for an npm mount's 'PackumentDeps'. It fills the
-standard production wiring once: the metadata-client, artifact-request, and assembly
-capabilities, the derived tarball-host gate, and the policy defaults. Each call site
-passes only its own axes: the two upstream base URLs, the mirror plan, the prepared
-rules, and the clock. A call site also record-updates the few fields unique to it: the
+standard production wiring once: npm's own metadata and artifact capability records, the
+derived tarball-host gate, and the policy defaults. Each call site passes only its own
+axes: the two upstream base URLs, the mirror plan, the prepared rules, and the clock. A call site also record-updates the few fields unique to it: the
 mount base URL, the egress former, an inbound token. Every affected suite and the load
 bench build their deps through it, so a 'PackumentDeps' schema change lands in one place.
 
@@ -43,11 +42,7 @@ module Ecluse.Test.Server.Mount (
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
-import Ecluse.Core.Registry.Adapter.Types (
-    AdapterArtifact (artifactByFile, artifactByUrl),
-    AdapterMetadata (metadataAssemble, metadataNewClient, metadataSerialise),
-    RegistryAdapter (adapterArtifact, adapterMetadata),
- )
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (defaultLimits)
@@ -62,8 +57,8 @@ upstream base URLs, the mirror plan, the rules, and the clock as parameters. A '
 base URL gives a pure public gate, and the builder derives the tarball-host gate from these URLs
 so the two cannot disagree. The remaining fields carry defaults that a site record-updates,
 including the production https-only egress former 'mkRegistryUrl'. The ecosystem-shaped fields
-come straight off 'Ecluse.Core.Registry.Npm.Adapter.npmAdapter', so a fixture spells no npm
-capability of its own.
+are the records 'Ecluse.Core.Registry.Npm.Adapter.npmAdapter' carries, so a fixture spells no
+npm capability of its own.
 -}
 npmServeDeps :: Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
 npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
@@ -80,11 +75,8 @@ npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
         , pdMinIntegrity = defaultMinIntegrity
         , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
         , pdDivergencePolicy = Warn
-        , pdNewMetadataClient = metadataNewClient (adapterMetadata npmAdapter)
-        , pdBuildArtifactRequestByFile = artifactByFile (adapterArtifact npmAdapter)
-        , pdBuildArtifactRequestByUrl = artifactByUrl (adapterArtifact npmAdapter)
-        , pdAssemble = metadataAssemble (adapterMetadata npmAdapter)
-        , pdSerialise = metadataSerialise (adapterMetadata npmAdapter)
+        , pdMetadata = adapterMetadata npmAdapter
+        , pdArtifact = adapterArtifact npmAdapter
         , pdEgressUrl = mkRegistryUrl
         }
 

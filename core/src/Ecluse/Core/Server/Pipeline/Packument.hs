@@ -113,6 +113,7 @@ import Ecluse.Core.Package.Merge (
     applyDivergencePolicy,
     mergePackuments,
  )
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
@@ -446,17 +447,17 @@ servedBytes rt deps sources plan etag =
     resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag etag) $
         markRenderEscape $
             pure $!
-                LBS.toStrict (pdSerialise deps (servedDoc (renderServedBody deps sources plan)))
+                LBS.toStrict (metadataSerialise (pdMetadata deps) (servedDoc (renderServedBody deps sources plan)))
   where
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)
 
 {- Assemble the served packument by replaying the 'MergePlan' onto the sources' raw
-documents through the mount's injected 'pdAssemble'. The merge decides over the typed
+documents through the mount adapter's own 'metadataAssemble'. The merge decides over the typed
 'PackageInfo', but the body is built from the raw documents so unmodeled keys survive. -}
 renderServedBody :: PackumentDeps -> [Contribution] -> MergePlan -> ServedBody
 renderServedBody deps sources plan =
-    ServedBody (pdAssemble deps (pdMountBaseUrl deps) bySource plan (baseDocument sources))
+    ServedBody (metadataAssemble (pdMetadata deps) (pdMountBaseUrl deps) bySource plan (baseDocument sources))
   where
     bySource :: Map SourceId CachedDoc
     bySource = Map.fromList (zip [0 ..] (map srcValue sources))

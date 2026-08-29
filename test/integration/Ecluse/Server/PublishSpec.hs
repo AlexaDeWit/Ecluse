@@ -30,8 +30,8 @@ import Ecluse (mountBindingFor)
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Registry.Npm (relayPublishDocument)
-import Ecluse.Core.Registry.Npm.Project qualified as Project
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterPublish))
+import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -69,9 +69,7 @@ publishDepsAt targetPort staticToken bodyBudget =
         , pubBodyBudget = bodyBudget
         , pubMaxRequestBytes = 26214400
         , pubHelp = Nothing
-        , pubRelayPublish = relayPublishDocument
-        , pubCanonicaliseName = rightToMaybe . Project.projectName
-        , pubDeclaredNames = NpmPublish.declaredNames
+        , pubAdapter = adapterPublish npmAdapter
         }
 
 {- | A proxy 'Application' over a single @\/npm@ mount carrying the given publish deps.

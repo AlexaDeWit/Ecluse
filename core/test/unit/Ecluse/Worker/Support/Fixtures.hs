@@ -86,6 +86,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Queue (MirrorJob (..))
 import Ecluse.Core.Registry (ParseError (ParseError), UrlFormationError)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (PreparedRule)
@@ -101,7 +102,7 @@ import Ecluse.Core.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
     JobOutcome (Dropped, Retried),
     WorkerPolicies,
-    WorkerPolicy (wpArtifactHostHonoured, wpArtifactLimits, wpBuildArtifactRequest, wpPublish),
+    WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpPublish),
  )
 import Ecluse.Test.Package (
     unsafeFilename,
@@ -302,7 +303,7 @@ withHostGate gate = Map.map (\p -> p{wpArtifactHostHonoured = gate})
 proves which bundle's formation a job rides.
 -}
 withArtifactRequest :: (Maybe Secret -> Text -> Either UrlFormationError Request) -> WorkerPolicies -> WorkerPolicies
-withArtifactRequest builder = Map.map (\p -> p{wpBuildArtifactRequest = builder})
+withArtifactRequest builder = Map.map (\p -> p{wpArtifact = (wpArtifact p){artifactByUrl = builder}})
 
 -- | Set every bundle's artifact fetch cap, so a test drives an over-cap fetch.
 withArtifactCap :: Int -> WorkerPolicies -> WorkerPolicies

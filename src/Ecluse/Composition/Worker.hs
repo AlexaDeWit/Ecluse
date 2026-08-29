@@ -33,6 +33,7 @@ import Ecluse.Composition (PublishTarget (ptCredentials, ptEcosystem, ptMirrorUr
 import Ecluse.Core.Credential (AuthToken (authSecret), currentToken)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish, publishCodec)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewClient))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Registry.Publish (
@@ -45,10 +46,10 @@ import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
     PackumentDeps,
-    pdBuildArtifactRequestByUrl,
+    pdArtifact,
     pdLimits,
+    pdMetadata,
     pdMinIntegrity,
-    pdNewMetadataClient,
     pdNow,
     pdPublicBaseUrl,
     pdRules,
@@ -116,10 +117,9 @@ workerPolicyFor env deps publish artifactMaxBytes =
             -- The same host gate the serve path applies before its public artifact fetch, closed
             -- against the public upstream authority.
             tarballHostHonoured UntrustedOrigin deps (thgPublicHostPort (pdTarballHostGate deps))
-        , -- The mount's own request formation (the adapter's artifact capability,
-          -- projected onto these deps at the composition root), so the worker fetches
-          -- a job's bytes exactly as the serve path would.
-          wpBuildArtifactRequest = pdBuildArtifactRequestByUrl deps
+        , -- The mount's own artifact capability, the adapter record the serve deps
+          -- carry, so the worker fetches a job's bytes exactly as the serve path would.
+          wpArtifact = pdArtifact deps
         , wpPublish = publish
         , -- The artifact fetch cap comes from the memory plan's mirror-artifact tenant,
           -- not the metadata-path default, because a tarball far exceeds the packument cap. The
@@ -129,8 +129,8 @@ workerPolicyFor env deps publish artifactMaxBytes =
         }
   where
     client =
-        pdNewMetadataClient
-            deps
+        metadataNewClient
+            (pdMetadata deps)
             (tracingPortOf (envTelemetry env))
             (metricsPortOf (envMetrics env))
             Public
