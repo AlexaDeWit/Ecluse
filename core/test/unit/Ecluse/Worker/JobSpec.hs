@@ -17,6 +17,7 @@ import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
     HashAlg (Blake2b, SHA1, SHA256, SRI),
  )
+import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionUndecidable))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), MirrorQueue (deliveryBudget), QueueMessage (msgReceipt, msgReceiveCount))
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
@@ -31,6 +32,7 @@ import Ecluse.Core.Registry.Metadata (
     fetchVersionDetails,
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
+import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Discarded, Failed, Published))
 import Ecluse.Core.Worker (
@@ -39,7 +41,7 @@ import Ecluse.Core.Worker (
     processBatch,
     processJob,
  )
-import Ecluse.Core.Worker.Job (outcomeOfFetchFault)
+import Ecluse.Core.Worker.Job (ReevalOutcome (ReevalDrop, ReevalRetry), outcomeOfAdmission, outcomeOfFetchFault)
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, recordingWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -63,6 +65,21 @@ spec = do
         it "retries a transport fault (a redelivery may succeed)" $
             outcomeOfFetchFault renderFault (FetchTransport (transportFault TransportUnreachable "connection reset"))
                 `shouldBe` Retried "transport failed"
+
+    describe "outcomeOfAdmission (the shared admission verdict, split on the shared transience)" $ do
+        -- 'Ecluse.Core.Package.Admission.admissionTransience' is the one input to the split, and
+        -- the serve gate reads it to choose a 503 over a 500. The two cannot disagree.
+        it "retries an inability the evaluator expects to clear (an advisory source briefly down)" $
+            case outcomeOfAdmission (jobWith unreachableUrl) (undecided (WillResolve Nothing) "no advisory database is loaded") of
+                ReevalRetry reason -> reason `shouldSatisfy` T.isInfixOf "no advisory database is loaded"
+                other -> expectationFailure ("expected a retry for a clearing inability, got " <> show other)
+
+        it "drops an inability no retry can clear, rather than redelivering until the budget retires it" $
+            -- WontResolve is the rule engine's own statement that no redelivery changes the
+            -- verdict. A repaired advisory source rides the next request's enqueue instead.
+            case outcomeOfAdmission (jobWith unreachableUrl) (undecided WontResolve "the advisory index is corrupt") of
+                ReevalDrop reason -> reason `shouldSatisfy` T.isInfixOf "the advisory index is corrupt"
+                other -> expectationFailure ("expected a drop for an unclearable inability, got " <> show other)
 
     describe "npmPublishDocument" $ do
         it "assembles a PUT document with the version, dist integrity, and base64 attachment" $ do
@@ -570,6 +587,10 @@ spec = do
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     readResults >>= (`shouldBe` [Failed])
+
+-- An admission verdict no rule could decide, with the given transience.
+undecided :: Transience -> Text -> ArtifactAdmission
+undecided transience reason = AdmissionUndecidable (Undecidable transience reason)
 
 -- A stand-in reason renderer. The unit pins the verdict and that the reason is rendered from
 -- the very fault being judged, never the wording each worker leg chooses.

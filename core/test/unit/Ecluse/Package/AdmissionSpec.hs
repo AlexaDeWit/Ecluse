@@ -42,6 +42,7 @@ import Ecluse.Core.Package.Admission (
         AdmissionIntegrityMissing,
         AdmissionUndecidable
     ),
+    admissionTransience,
     admitArtifact,
  )
 import Ecluse.Core.Package.Integrity (
@@ -56,6 +57,7 @@ import Ecluse.Core.Rules.Types (
     EvalContext (EvalContext),
     FailureAlignment (FailDeny),
     RuleVerdict (Allow, CannotVet, Deny),
+    Transience (WillResolve, WontResolve),
  )
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityMismatch, IntegrityVerified), verifyIntegrity)
@@ -194,6 +196,27 @@ spec = do
             case admission of
                 AdmissionDenied Blocked{} -> pass
                 other -> expectationFailure ("expected the rule denial to win, got " <> show other)
+
+    describe "admissionTransience -- the retry projection the serve gate and the worker share" $ do
+        it "reads out the transience of an inability the evaluator expects to clear" $ do
+            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
+            admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity "thing-1.0.0.tgz" details
+            admissionTransience admission `shouldBe` Just (WillResolve Nothing)
+
+        it "carries a WontResolve inability through, so serve renders a 500 and the worker drops" $
+            -- No rule set reaches this today. The projection states the disposition anyway, so the
+            -- two consumers cannot answer it differently the day one does.
+            admissionTransience (AdmissionUndecidable (Undecidable WontResolve "an internal fault"))
+                `shouldBe` Just WontResolve
+
+        it "reports no transience for a settled verdict, so no consumer waits on one" $ do
+            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
+            admitted <- admitArtifact ctx [admitRule] defaultMinIntegrity "thing-1.0.0.tgz" details
+            admissionTransience admitted `shouldBe` Nothing
+            admissionTransience (AdmissionDenied (Blocked "test-deny" "denied by current policy")) `shouldBe` Nothing
+            admissionTransience AdmissionFileAbsent `shouldBe` Nothing
+            admissionTransience AdmissionBelowFloor `shouldBe` Nothing
+            admissionTransience AdmissionIntegrityMissing `shouldBe` Nothing
 
     describe "the closed divergences, replayed (golden corpus)" $ do
         it "#738: a multi-component SRI is admitted at the floor AND verified by the worker" $ do

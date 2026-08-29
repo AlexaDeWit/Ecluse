@@ -16,12 +16,13 @@ re-evaluation both call the one 'admitArtifact' here. The two contexts therefore
 cannot drift. A version the worker would freeze into the rule-exempt mirror is exactly
 a version the serve gate would admit. A tightened policy refuses it in both places for
 the same reason: a new deny rule, a raised floor, or a withdrawn file. Each context
-projects the shared 'ArtifactAdmission' onto its own surface, an HTTP status or a queue
-ack/redeliver. Those projections are total, so neither consumer can silently ignore a
-new admission outcome.
+renders the shared 'ArtifactAdmission' on its own surface, an HTTP status or a queue
+ack/redeliver, but neither decides for itself whether a retry could change the verdict.
+That is 'admissionTransience', read by both.
 -}
 module Ecluse.Core.Package.Admission (
     ArtifactAdmission (..),
+    admissionTransience,
     admitArtifact,
     artifactFor,
 ) where
@@ -36,6 +37,7 @@ import Ecluse.Core.Rules (PreparedRule, evalRules)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext,
+    Transience (WontResolve),
  )
 
 {- | The admission verdict for one requested artifact of one public version, shared by the
@@ -43,7 +45,7 @@ serve gate and the worker's ingest re-evaluation.
 
 A deliberate refusal and an inability to decide ('AdmissionUndecidable') stay separate:
 serve renders a denial @403@ and an inability @503@\/@500@, and the worker acks a denied job
-but leaves an undecidable one to redeliver.
+but leaves an inability a retry could clear to redeliver ('admissionTransience').
 -}
 data ArtifactAdmission
     = {- | The rules admitted the version, the requested filename selected an
@@ -62,8 +64,8 @@ data ArtifactAdmission
       AdmissionDenied Decision
     | {- | The version could not be decided: a fail-closed rule whose evaluation was
       unavailable. Carries the 'Undecidable' 'Decision' with its
-      'Ecluse.Core.Rules.Types.Transience', so serve can choose @503@ vs @500@ and
-      the worker can leave the job to redeliver.
+      'Ecluse.Core.Rules.Types.Transience', which 'admissionTransience' reads out for
+      both consumers.
       -}
       AdmissionUndecidable Decision
     | {- | The rules admitted the version but no artifact carries the requested
@@ -84,13 +86,8 @@ data ArtifactAdmission
       AdmissionBelowFloor
     deriving stock (Show)
 
-{- | Decide one requested artifact of one public version under current policy. The rules
-decide the version first, then the requested filename selects the artifact, then the
-integrity floor judges that selected artifact.
-
-Both the serve pipeline and the mirror worker call this with the same prepared rules, clock,
-and floor, so the enqueue to process window can only ever /narrow/ what the worker mirrors.
-It never admits past the serve gate.
+{- | Decide one requested artifact under current policy: the rules, then the filename, then the
+integrity floor. Serve and worker pass the same inputs, so re-evaluation can only /narrow/.
 -}
 admitArtifact ::
     EvalContext ->
@@ -115,6 +112,21 @@ admitArtifact ctx rules minIntegrity file details = do
         Blocked{} -> AdmissionDenied decision
         BlockedByDefault{} -> AdmissionDenied decision
         Undecidable{} -> AdmissionUndecidable decision
+
+{- | The transience of a verdict no rule could decide, and 'Nothing' for a settled one. The
+serve gate renders it as a @503@ or a @500@, and the mirror worker redelivers or drops on it.
+-}
+admissionTransience :: ArtifactAdmission -> Maybe Transience
+admissionTransience = \case
+    AdmissionUndecidable (Undecidable transience _) -> Just transience
+    -- 'admitArtifact' carries only an 'Undecidable' here, so another decision is a
+    -- construction fault. Fail closed: an inability no retry clears.
+    AdmissionUndecidable _ -> Just WontResolve
+    AdmissionAdmit{} -> Nothing
+    AdmissionDenied{} -> Nothing
+    AdmissionFileAbsent -> Nothing
+    AdmissionIntegrityMissing -> Nothing
+    AdmissionBelowFloor -> Nothing
 
 {- | Select the artifact a request's filename names from a version's distribution files.
 'Nothing' when no artifact carries that filename: a forwarded miss, never a fabricated

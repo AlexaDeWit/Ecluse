@@ -41,6 +41,7 @@ import Ecluse.Core.Server.Response (
     longestRetry,
     mkHelpMessage,
     packumentStatus,
+    rejectUnavailable,
     serveDecisionOf,
  )
 import Ecluse.Core.Version (mkVersion)
@@ -126,6 +127,16 @@ spec = do
                 `shouldBe` 503
             artifactStatusCode (artifactStatus (Reject (Rejection (Unavailable WontResolve) "x")))
                 `shouldBe` 500
+
+    describe "rejectUnavailable -- the one refusal for a verdict nothing could decide" $ do
+        -- Its transience comes from the projection the mirror worker also reads
+        -- ('Ecluse.Core.Package.Admission.admissionTransience'). This is the status half of it.
+        it "renders a clearing inability as a 503 carrying the suggested delay" $
+            artifactStatus (rejectUnavailable (WillResolve (Just (RetryAfter 20))) "advisory source down")
+                `shouldBe` Unavailable' (Just (RetryAfter 20))
+
+        it "renders an inability no retry can clear as a 500, the status the worker's drop pairs with" $
+            artifactStatus (rejectUnavailable WontResolve "an internal fault") `shouldBe` ServerError
 
     describe "packumentStatus -- status over the merged survivor set" $ do
         let denied = Reject (Rejection (ByPolicy (RuleName "DenyInstallTimeExecution")) "no")

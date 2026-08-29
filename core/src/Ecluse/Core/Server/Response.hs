@@ -51,6 +51,7 @@ module Ecluse.Core.Server.Response (
     Transience (..),
     RetryAfter (..),
     RuleName (..),
+    rejectUnavailable,
     serveDecisionOf,
 
     -- * Concrete-artifact status
@@ -162,10 +163,16 @@ serveDecisionOf pd decision = case decision of
     Admitted{} -> Admit
     Blocked name _ -> Reject (rejectAs (ByPolicy (RuleName name)))
     BlockedByDefault{} -> Reject (rejectAs (ByPolicy (RuleName "BlockedByDefault")))
-    Undecidable transience _ -> Reject (rejectAs (Unavailable transience))
+    Undecidable transience _ -> rejectUnavailable transience (renderDecision pd decision)
   where
     rejectAs :: RejectReason -> Rejection
     rejectAs reason = Rejection reason (renderDecision pd decision)
+
+{- | Refuse a request that could not be decided. The 'Transience' it carries is what
+'artifactStatus' renders as a @503@ or a @500@, so a caller states that rather than a status.
+-}
+rejectUnavailable :: Transience -> Text -> ServeDecision
+rejectUnavailable transience message = Reject (Rejection (Unavailable transience) message)
 
 {- | The HTTP status a __concrete-artifact__ request renders to. A packument request has no
 single status, because the pipeline filters its versions and chooses one over the survivors, so
