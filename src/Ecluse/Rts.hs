@@ -2,62 +2,62 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Resolving and applying the process's runtime posture: how many capabilities
-Écluse claims, and what heap ceiling it runs under. Both come from first-class
-configuration with a cgroup-derived fallback, logged at boot with each decision's
-provenance.
+{- | Resolving and applying the process's runtime posture: how many capabilities Écluse
+claims, and what heap ceiling it runs under.
 
-The GHC RTS sizes itself from what the /machine/ looks like. Bare @-N@ claims a
-capability per visible processor, and the heap is unbounded unless @-M@ says
-otherwise. In a container neither default matches the pod. A CPU __limit__ is a
-cgroup quota that does not shrink the visible processor count. The RTS therefore
-claims a whole node's worth of capabilities under a two-CPU quota. The only memory
-backstop is then the kernel OOM killer. This module closes that gap the way Go's
-@automaxprocs@ does, but config-first:
+The GHC RTS sizes itself from what the /machine/ looks like. Bare @-N@ claims a capability
+per visible processor, and the heap is unbounded unless @-M@ says otherwise. In a container
+neither default matches the pod. A CPU limit is a cgroup quota that does not shrink the
+visible processor count, so the RTS claims a whole node's worth of capabilities under a
+two-CPU quota, and the kernel OOM killer is the only memory backstop.
 
-1. __Explicit configuration wins__: @cores@ (@ECLUSE_RUNTIME__CORES@) and @maxHeapBytes@
-   (@ECLUSE_RUNTIME__MAX_HEAP_BYTES@).
-2. __Omitted values fall back to the cgroup__ (v2): @cpu.max@'s quota, __floored__
-   (at least one) and clamped to the visible processors, and @memory.max@ less the
-   nursery budget and slack ('deriveMaxHeapBytes'). Flooring follows Go's
-   @automaxprocs@: a capability count above the budget lets a stop-the-world
-   collection outrun the CFS quota and freeze mid-pause. A fractional entitlement
-   is therefore stranded rather than borrowed against.
-3. __No limit found either way__: the posture the RTS already resolved (its baked
-   defaults plus any @GHCRTS@ the operator set) stands, and the log says so.
+== The capability ladder
 
-The standard boot log carries every decision with its provenance
-('renderEffectivePosture'). An operator reads what the boot decided or interpreted
-straight from the start-up lines.
+Capabilities resolve down four rungs, best first, and the boot line names the rung that
+fired. Every rung below the first clamps to the visible processors.
 
-This resolution is __role-agnostic on purpose, and only the resolution__. Cores and
-the heap ceiling derive from the container's limits, which bind every role (proxy,
-Pilot, Dredger) alike. This module deliberately does not model workload-shaped
-tuning per role: the allocation area, for one, is sized for the proxy's serve path.
-Tune a role whose profile diverges per deployment through @GHCRTS@, until its shape
-earns a default of its own.
+1. @cores@ (@ECLUSE_RUNTIME__CORES@), the explicit operator lever, is obeyed absolutely.
+2. A cgroup CPU quota, __floored__ as Go's @automaxprocs@ floors it: a stop-the-world
+   collection claiming above the CFS quota would freeze mid-pause, so a fractional
+   entitlement is stranded rather than borrowed against.
+3. No quota but a cgroup memory limit: the count that budget can feed
+   ('nurseryFittedCapabilities'). The nursery charge is capabilities x the allocation
+   area, so a count the memory limit cannot feed is the traffic-surge shape that ends in
+   an OOM kill.
+4. Nothing binds: @coresCeiling@, default 8. A whole node's worth of capabilities buys
+   nothing on the serve path and costs a nursery each.
+
+Rungs 3 and 4 warn ('renderPostureWarnings'), because neither reads an entitlement: the
+process cannot tell an unlimited Kubernetes pod from bare metal, and only @cores@ can.
+
+The heap ceiling resolves over @maxHeapBytes@ (@ECLUSE_RUNTIME__MAX_HEAP_BYTES@), else
+@memory.max@ less the nursery budget and slack ('deriveMaxHeapBytes'), else the ceiling the
+RTS already resolved (its baked defaults plus any operator @GHCRTS@).
+
+The resolution is __role-agnostic on purpose, and only the resolution__: the limits it reads
+bind every role (proxy, Pilot, Dredger) alike. Workload-shaped tuning per role is absent
+because the allocation area, for one, is sized for the proxy's serve path. Tune a role whose
+profile diverges through @GHCRTS@, until its shape earns a default of its own.
 
 == Applying the plan: 'setNumCapabilities', or one exec-in-place
 
-The boot applies a capability change in-process ('GHC.Conc.setNumCapabilities'). The
-heap ceiling has no in-process setter, because the RTS fixes @-M@ when it starts. So
-when the plan requires one, the boot __re-executes its own binary once__, with the
-resolved flags appended to @GHCRTS@. Later flags win, verified against GHC 9.10.
-The exec replaces the program image in the same process. The PID never exits, so a
-container supervisor sees an uninterrupted process, exactly as an @exec@-ing
-entrypoint script behaves.
+The boot applies a capability change in-process ('GHC.Conc.setNumCapabilities'). The heap
+ceiling has no in-process setter, because the RTS fixes @-M@ when it starts. So when the plan
+requires one, the boot __re-executes its own binary once__, with the resolved flags appended
+to @GHCRTS@. Later flags win, verified against GHC 9.10. The exec replaces the program image
+in the same process, so the PID never exits and a container supervisor sees one uninterrupted
+process.
 
-A marker variable ('reexecMarker') guards against loops. The re-launched process
-sees it, skips any further exec, and only logs. It warns if the RTS still diverges
-from the plan: an operator's @GHCRTS@ fighting the config, or a flag the RTS
-rejected. A failure of the exec call itself degrades to a warning and an unenforced
-posture too. Tuning never loops the boot and never takes the service down.
+A marker variable ('reexecMarker') guards against loops. The re-launched process sees it,
+skips any further exec, and only logs. It warns if the RTS still diverges from the plan: an
+operator's @GHCRTS@ fighting the config, or a flag the RTS rejected. A failure of the exec
+call itself degrades to a warning and an unenforced posture too. Tuning never loops the boot
+and never takes the service down.
 
-The pure resolution ('resolveRuntimePlan'), the cgroup parsing ('parseCpuMax',
-'parseMemoryMax'), and the rendering sit apart from the thin IO shell
-('applyRuntimePosture'). A unit test therefore exercises the precedence and
-arithmetic without a cgroup in sight. Sizes are bytes everywhere here. The RTS flag fields
-count 4 KiB blocks, and the read boundary converts them ('rtsBlockBytes').
+The pure resolution ('resolveRuntimePlan'), the cgroup parsing, and the rendering sit apart
+from the thin IO shell ('applyRuntimePosture'), so a unit test exercises the ladder without a
+cgroup in sight. Sizes are bytes everywhere here, and the read boundary converts the RTS flag
+fields' 4 KiB blocks ('rtsBlockBytes').
 -}
 module Ecluse.Rts (
     -- * Applying the resolved posture at boot
@@ -66,6 +66,7 @@ module Ecluse.Rts (
     -- * The pure resolution core
     RtsPosture (..),
     CgroupLimits (..),
+    RuntimeOverrides (..),
     Provenance (..),
     RuntimePlan (..),
     provenanceClause,
@@ -73,6 +74,7 @@ module Ecluse.Rts (
     currentRtsPosture,
     readCgroupLimits,
     deriveMaxHeapBytes,
+    nurseryFittedCapabilities,
     requiredRtsFlags,
 
     -- * The effective plan (desired reconciled with observed)
@@ -84,6 +86,7 @@ module Ecluse.Rts (
     effectiveCapabilities,
     effectiveHeapCeiling,
     renderEffectivePosture,
+    renderPostureWarnings,
 
     -- * Cgroup v2 parsing
     parseCpuMax,
@@ -125,12 +128,26 @@ data CgroupLimits = CgroupLimits
     }
     deriving stock (Eq, Show)
 
+{- | The @runtime@ configuration the resolution reads. Each unset field falls to the next rung,
+and 'roCoresCeiling' bounds the last rung alone.
+-}
+data RuntimeOverrides = RuntimeOverrides
+    { roCores :: Maybe Int
+    , roCoresCeiling :: Maybe Int
+    , roMaxHeapBytes :: Maybe Int
+    }
+    deriving stock (Eq, Show)
+
 -- | Where a resolved value came from, for the boot log's provenance clause.
 data Provenance
     = -- | Explicit Écluse configuration (@cores@ \/ @maxHeapBytes@).
       FromConfig
-    | -- | Derived from the cgroup limits.
+    | -- | Derived from the cgroup CPU quota, or from @memory.max@ on the heap axis.
       FromCgroup
+    | -- | Bounded by what the cgroup memory limit can feed, for want of a CPU quota.
+      FromCgroupMemory
+    | -- | Capped at @coresCeiling@, with no cgroup limit of either kind in force.
+      FromCoresCeiling
     | -- | Left as the RTS resolved it (baked defaults plus any operator @GHCRTS@).
       FromRts
     deriving stock (Eq, Show)
@@ -144,31 +161,49 @@ data RuntimePlan = RuntimePlan
     }
     deriving stock (Eq, Show)
 
-{- | Resolve the runtime plan from the three layers, strongest first: explicit config (@cores@,
-@maxHeapBytes@), then the cgroup, then the live RTS posture. Derivation never overrides an
-operator's @GHCRTS -M@.
+{- | Resolve the runtime plan: capabilities down the four-rung ladder, and the heap ceiling from
+@maxHeapBytes@, else the cgroup memory limit, else the live RTS posture. Derivation never
+overrides an operator's @GHCRTS -M@.
 -}
-resolveRuntimePlan :: Maybe Int -> Maybe Int -> CgroupLimits -> RtsPosture -> RuntimePlan
-resolveRuntimePlan cfgCores cfgMaxHeap cgroup rts =
+resolveRuntimePlan :: RuntimeOverrides -> CgroupLimits -> RtsPosture -> RuntimePlan
+resolveRuntimePlan overrides cgroup rts =
     RuntimePlan
         { planCapabilities = capabilities
         , planMaxHeapBytes = maxHeap
         }
   where
-    capabilities = case (cfgCores, cgCpuCores cgroup) of
-        (Just n, _) -> (max 1 n, FromConfig)
-        -- Floored, as Go's automaxprocs does: a stop-the-world collection claiming above
-        -- the CFS quota would freeze mid-pause. The clamp's floor of one covers sub-1 quotas.
-        (Nothing, Just quota) -> (clamp (floor quota), FromCgroup)
-        (Nothing, Nothing) -> (rpCapabilities rts, FromRts)
+    capabilities = case (roCores overrides, cgCpuCores cgroup, cgMemoryMaxBytes cgroup) of
+        (Just n, _, _) -> (max 1 n, FromConfig)
+        (Nothing, Just quota, _) -> (clamp (floor quota), FromCgroup)
+        (Nothing, Nothing, Just memMax) ->
+            (clamp (nurseryFittedCapabilities memMax (rpAllocAreaBytes rts)), FromCgroupMemory)
+        (Nothing, Nothing, Nothing) ->
+            (clamp (fromMaybe defaultCoresCeiling (roCoresCeiling overrides)), FromCoresCeiling)
 
     clamp n = max 1 (min (rpProcessors rts) n)
 
-    maxHeap = case (cfgMaxHeap, cgMemoryMaxBytes cgroup) of
+    maxHeap = case (roMaxHeapBytes overrides, cgMemoryMaxBytes cgroup) of
         (Just bytes, _) -> (Just (alignToBlock bytes), FromConfig)
         (Nothing, Just memMax) ->
             (Just (deriveMaxHeapBytes memMax (fst capabilities) (rpAllocAreaBytes rts)), FromCgroup)
         (Nothing, Nothing) -> (rpMaxHeapBytes rts, FromRts)
+
+-- The last rung's cap, when no cgroup limit says anything. It is a policy stance, not a machine
+-- property, so @runtime.coresCeiling@ overrides it rather than any derivation.
+defaultCoresCeiling :: Int
+defaultCoresCeiling = 8
+
+{- | The capability count a memory budget can feed: the nursery charge is capabilities x the
+allocation area, and it may claim at most the @nurseryCeilingShareDiv@ share of the budget.
+-}
+nurseryFittedCapabilities :: Int -> Int -> Int
+nurseryFittedCapabilities budgetBytes allocAreaBytes =
+    max 1 (budgetBytes `div` nurseryCeilingShareDiv `div` max 1 allocAreaBytes)
+
+-- The share of a memory budget the nursery may hold before the capability count is what has
+-- to give. The memory-plan shed ladder bounds the same charge against the heap ceiling.
+nurseryCeilingShareDiv :: Int
+nurseryCeilingShareDiv = 4
 
 {- | The heap ceiling derived from a cgroup memory limit. The nursery sits outside the heap, so
 it comes off the limit, and the half-limit floor keeps a tiny pod's ceiling from vanishing.
@@ -308,6 +343,30 @@ renderEffectivePosture p =
   where
     (capabilities, capsProvenance) = effectiveCapabilities p
 
+{- | The boot log's posture warnings: an axis the RTS is not enforcing, and a capability count
+no entitlement backs.
+-}
+renderPostureWarnings :: EffectiveRuntimePlan -> [Text]
+renderPostureWarnings p = unenforcedWarnings p <> capabilityAdvice p
+
+{- The last two rungs bound the count without reading an entitlement, so the advice is
+conditional in form: the process cannot tell an unlimited pod from bare metal. -}
+capabilityAdvice :: EffectiveRuntimePlan -> [Text]
+capabilityAdvice p = case effectiveCapabilities p of
+    (n, FromCgroupMemory) ->
+        [advice ("no cgroup CPU quota binds this process, so capabilities are bounded at " <> show n <> " by what the cgroup memory limit can feed")]
+    (n, FromCoresCeiling) ->
+        [advice ("no cgroup CPU or memory limit binds this process, so capabilities are capped at " <> show n <> " by runtime.coresCeiling")]
+    -- Listed rather than wildcarded, so a new rung has to decide whether it warns.
+    (_, FromConfig) -> []
+    (_, FromCgroup) -> []
+    (_, FromRts) -> []
+  where
+    advice reason =
+        "runtime: "
+            <> reason
+            <> ". If this container has a CPU request but no limit, set runtime.cores (ECLUSE_RUNTIME__CORES) to the whole cores requested."
+
 {- One warning per axis the RTS is not enforcing. The budgets size from the effective value, so a
 divergence must be legible in the boot log rather than silently absorbed. -}
 unenforcedWarnings :: EffectiveRuntimePlan -> [Text]
@@ -339,6 +398,8 @@ provenanceClause :: Provenance -> Text
 provenanceClause = \case
     FromConfig -> "from config"
     FromCgroup -> "derived from the cgroup limit"
+    FromCgroupMemory -> "bounded by the cgroup memory limit, no CPU quota set"
+    FromCoresCeiling -> "no cgroup CPU or memory limit found, capped at runtime.coresCeiling"
     FromRts -> "as the RTS resolved it"
 
 -- A byte count in MiB: whole when exact, else to one decimal place.
@@ -377,11 +438,11 @@ parseMemoryMax body = do
 this binary in place, once, guarded by 'reexecMarker', and never aborts the boot. The returned
 plan is the effective one, so downstream sizing computes from what the RTS actually runs with.
 -}
-applyRuntimePosture :: (Text -> IO ()) -> (Text -> IO ()) -> Maybe Int -> Maybe Int -> IO EffectiveRuntimePlan
-applyRuntimePosture logInfo logWarning cfgCores cfgMaxHeap = do
+applyRuntimePosture :: (Text -> IO ()) -> (Text -> IO ()) -> RuntimeOverrides -> IO EffectiveRuntimePlan
+applyRuntimePosture logInfo logWarning overrides = do
     rts <- currentRtsPosture
     cgroup <- readCgroupLimits
-    let plan = resolveRuntimePlan cfgCores cfgMaxHeap cgroup rts
+    let plan = resolveRuntimePlan overrides cgroup rts
         flags = requiredRtsFlags rts plan
     alreadyApplied <- isJust <$> lookupEnv reexecMarker
     case flags of
@@ -395,7 +456,7 @@ applyRuntimePosture logInfo logWarning cfgCores cfgMaxHeap = do
     applied <- currentRtsPosture
     let effective = reconcileRuntimePlan cgroup plan applied
     traverse_ logInfo (renderEffectivePosture effective)
-    traverse_ logWarning (unenforcedWarnings effective)
+    traverse_ logWarning (renderPostureWarnings effective)
     pure effective
 
 -- The already-re-launched process found its plan still unapplied: warn and

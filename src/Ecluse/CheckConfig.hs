@@ -22,15 +22,17 @@ import Ecluse.Composition.Sizing (openFileSoftLimit)
 import Ecluse.Config (
     AppConfig (cfgRuntime),
     Config (configApp),
-    RuntimeSettings (rtCores, rtMaxHeapBytes),
+    RuntimeSettings (rtCores, rtCoresCeiling, rtMaxHeapBytes),
     loadConfig,
     renderConfigError,
  )
 import Ecluse.Rts (
+    RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes),
     appliedRuntimePlan,
     currentRtsPosture,
     readCgroupLimits,
     renderEffectivePosture,
+    renderPostureWarnings,
     resolveRuntimePlan,
  )
 
@@ -47,12 +49,19 @@ runCheckConfig = do
     cgroup <- readCgroupLimits
     fdLimit <- openFileSoftLimit
     let runtimeSettings = cfgRuntime (configApp config)
-        runtimePlan = resolveRuntimePlan (rtCores runtimeSettings) (rtMaxHeapBytes runtimeSettings) cgroup rts
+        overrides =
+            RuntimeOverrides
+                { roCores = rtCores runtimeSettings
+                , roCoresCeiling = rtCoresCeiling runtimeSettings
+                , roMaxHeapBytes = rtMaxHeapBytes runtimeSettings
+                }
+        runtimePlan = resolveRuntimePlan overrides cgroup rts
         effective = appliedRuntimePlan cgroup runtimePlan rts
     let (preamble, planE) = resolveBootPlan envVars docBlob config effective fdLimit
-    -- The boot logs these posture lines from 'Ecluse.Rts.applyRuntimePosture', which the
-    -- checker never runs. They stand in that position here.
+    -- The boot logs these posture lines and warnings from 'Ecluse.Rts.applyRuntimePosture',
+    -- which the checker never runs. They stand in that position here.
     traverse_ TIO.putStrLn (renderEffectivePosture effective)
+    traverse_ (TIO.putStrLn . ("warning: " <>)) (renderPostureWarnings effective)
     -- Printed ahead of every refusable phase, exactly where the boot logs it.
     traverse_ TIO.putStrLn preamble
     bootPlan <- orRefuse (T.unlines . map renderBootError) planE

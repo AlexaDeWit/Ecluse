@@ -110,10 +110,16 @@ advisories:
 # limits, the RTS posture, and the file-descriptor budget. The boot log records each
 # decision with its provenance. Set a key only to override the computed value.
 # runtime:
-#   # Cores the process claims: the cgroup CPU quota floored, at least 1, clamped to
-#   # the visible processors. The memory plan may shed some on a small pod. Give the
-#   # container whole cores.
+#   # Cores the process claims. Unset, they resolve down a ladder: the cgroup CPU quota
+#   # floored, else the count the cgroup memory limit can feed, else coresCeiling, each
+#   # clamped to the visible processors. The boot log names the rung that fired, and the
+#   # memory plan may shed some on a small pod. Give the container whole cores.
 #   cores: 4
+#   # The cap on the last rung of that ladder, which fires only when no cgroup CPU quota
+#   # and no cgroup memory limit bind this process (bare metal, or a pod with neither
+#   # limit set). It never caps an explicit cores, a CPU quota, or the memory-derived
+#   # count. Prefer setting cores over raising this.
+#   coresCeiling: 8
 #   # Heap ceiling in bytes: the cgroup memory limit less the nursery budget and 10%
 #   # slack, floored at half the limit. Enforcing it re-executes the binary once. A
 #   # breach is a clean heap-overflow error, not a kernel OOM kill.

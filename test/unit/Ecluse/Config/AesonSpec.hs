@@ -280,23 +280,31 @@ spec = describe "decodeDocument" $ do
         loadConfig [("ECLUSE_INTEGRITY__DIVERGENCE_POLICY", "drop")] Nothing
             `shouldSatisfy` decodeErrorMentions "divergencePolicy"
 
-    it "leaves the runtime posture unset when cores and maxHeapBytes are omitted" $ do
+    it "leaves the runtime posture unset when the shipped defaults are all that apply" $ do
+        -- Every runtime key unset: the boot resolves cores down its ladder, and the ladder's
+        -- last rung takes its own default ceiling rather than one this layer supplies.
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
                 rtCores (cfgRuntime (configApp doc)) `shouldBe` Nothing
+                rtCoresCeiling (cfgRuntime (configApp doc)) `shouldBe` Nothing
                 rtMaxHeapBytes (cfgRuntime (configApp doc)) `shouldBe` Nothing
 
-    it "parses cores and maxHeapBytes from the environment layer" $ do
-        case loadConfig [("ECLUSE_RUNTIME__CORES", "2"), ("ECLUSE_RUNTIME__MAX_HEAP_BYTES", "419430400")] Nothing of
+    it "parses cores, coresCeiling, and maxHeapBytes from the environment layer" $ do
+        case loadConfig [("ECLUSE_RUNTIME__CORES", "2"), ("ECLUSE_RUNTIME__CORES_CEILING", "16"), ("ECLUSE_RUNTIME__MAX_HEAP_BYTES", "419430400")] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
                 rtCores (cfgRuntime (configApp doc)) `shouldBe` Just 2
+                rtCoresCeiling (cfgRuntime (configApp doc)) `shouldBe` Just 16
                 rtMaxHeapBytes (cfgRuntime (configApp doc)) `shouldBe` Just 419430400
 
-    it "rejects non-positive cores and maxHeapBytes" $ do
+    it "rejects non-positive cores, coresCeiling, and maxHeapBytes" $ do
         loadConfig [("ECLUSE_RUNTIME__CORES", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "cores must be a positive integer"
+        loadConfig [("ECLUSE_RUNTIME__CORES_CEILING", "0")] Nothing
+            `shouldSatisfy` decodeErrorMentions "coresCeiling must be a positive integer"
+        loadConfig [("ECLUSE_RUNTIME__CORES_CEILING", "-4")] Nothing
+            `shouldSatisfy` decodeErrorMentions "coresCeiling must be a positive integer"
         loadConfig [("ECLUSE_RUNTIME__MAX_HEAP_BYTES", "-1")] Nothing
             `shouldSatisfy` decodeErrorMentions "maxHeapBytes must be a positive integer"
 

@@ -200,6 +200,7 @@ posture (cgroups, RTS, file-descriptor limit), with its provenance boot-logged.
 -}
 data RuntimeSettings = RuntimeSettings
     { rtCores :: Maybe Int
+    , rtCoresCeiling :: Maybe Int
     , rtMaxHeapBytes :: Maybe Int
     , rtServeMaxInFlight :: Maybe Int
     , rtPublicConnectionsPerHost :: Maybe Int

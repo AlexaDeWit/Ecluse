@@ -59,7 +59,7 @@ import Ecluse.Composition.Sizing (mirrorEnqueueBufferDepth, renderSized, resolve
 import Ecluse.Config (CacheSettings (..), LimitsSettings (..), QueueSettings (..))
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
 import Ecluse.Core.Server.MemoryModel (contractResidentBytes, expandWireBytes, mirrorJobEstimatedBytes, packumentOriginFanout)
-import Ecluse.Rts (EffectiveRuntimePlan (erpAllocAreaBytes), effectiveCapabilities, effectiveHeapCeiling, provenanceClause)
+import Ecluse.Rts (EffectiveRuntimePlan (erpAllocAreaBytes), effectiveCapabilities, effectiveHeapCeiling, nurseryFittedCapabilities, provenanceClause)
 
 {- | Whether the memory plan owes the in-memory queue a tenant, projected from the
 backend selection ('Ecluse.Composition.MirrorQueue.planMirrorRuntime').
@@ -534,12 +534,10 @@ shedToFit d =
 -- ceiling, shed the capability count so it fits. 'Nothing' keeps the live count.
 shedCapabilityCount :: PlanInputs -> Int -> Maybe Int
 shedCapabilityCount inputs h
-    | piCapabilities inputs * piAllocAreaBytes inputs > nurseryShare =
-        let fitted = max 1 (nurseryShare `div` piAllocAreaBytes inputs)
-         in if fitted < piCapabilities inputs then Just fitted else Nothing
+    | fitted < piCapabilities inputs = Just fitted
     | otherwise = Nothing
   where
-    nurseryShare = h `div` nurseryCeilingShareDiv
+    fitted = nurseryFittedCapabilities h (piAllocAreaBytes inputs)
 
 -- The cache entry bound: an explicit count, or the surviving aggregate divided by the
 -- expected footprint of one cached packument.
@@ -804,11 +802,6 @@ runtimeReserveShareDiv = 5
 
 runtimeReserveFloorBytes :: Int
 runtimeReserveFloorBytes = 33554432
-
--- The nursery (capabilities x allocation area) may hold at most this share of
--- the ceiling before the capability count itself is the tenant to shed.
-nurseryCeilingShareDiv :: Int
-nurseryCeilingShareDiv = 4
 
 -- Real-world packuments reach multiple MiB, so a small pod must never compute a response
 -- cap below this floor. 'responseBytesCap' stops one hostile document monopolising the heap.
