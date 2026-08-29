@@ -29,7 +29,7 @@ module Ecluse.Core.Security.Authority (
 
 import Data.Text qualified as T
 
-import Ecluse.Core.Security.IpLiteral (isDecimal)
+import Ecluse.Core.Text (readDecimalText)
 
 {- | The authority an outbound fetch dials: a bare host with its effective port. The gate
 authorises the pair, so an allowlisted host at an attacker-chosen port is not authorised.
@@ -100,11 +100,11 @@ effectivePort portless authority rest = case T.stripPrefix ":" rest of
         | otherwise -> Just portless
 
 {- A dialled port in the one spelling the gate accepts: decimal digits, no leading zero, 1..65535.
-No crafted spelling may alias a canonical port, so the digit check bars a sign and a hex literal. -}
+No crafted spelling may alias a canonical port, so 'readDecimalText' bars the other spellings. -}
 parsePort :: Text -> Maybe Word16
 parsePort t = do
-    guard (isDecimal t && T.take 1 t /= "0")
-    n <- readMaybe (toString t) :: Maybe Integer
+    guard (T.take 1 t /= "0")
+    n <- readDecimalText t :: Maybe Integer
     guard (n >= 1 && n <= 65535)
     pure (fromInteger n)
 

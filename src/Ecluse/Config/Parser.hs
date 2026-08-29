@@ -47,9 +47,10 @@ import Data.Aeson.Types (Parser)
 import Data.Text qualified as T
 
 import Ecluse.Config.Types (Url, mkUrl)
+import Ecluse.Core.Json.Lenient (valueKind)
 import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkConfiguredRegistryUrl)
-import Ecluse.Core.Text (nonBlank)
+import Ecluse.Core.Text (nonBlank, readDecimalText)
 
 -- The object a group decodes, with the prefix its value refusals write before each key.
 data GroupInput = GroupInput
@@ -179,15 +180,6 @@ commaSeparated :: String -> (Text -> Parser a) -> Value -> Parser [a]
 commaSeparated field parseEntry =
     expectString field (maybe (pure []) (traverse (parseEntry . T.strip) . T.splitOn ",") . nonBlank)
 
-valueKind :: Value -> String
-valueKind = \case
-    Object{} -> "an object"
-    Array{} -> "an array"
-    Number{} -> "a number"
-    Bool{} -> "a boolean"
-    Null -> "null"
-    String{} -> "a string"
-
 -- mkConfiguredRegistryUrl runs first, because the refusal below it quotes the value. An authority
 -- the egress gate cannot extract could only build a mount that refuses every fetch.
 parseRegistryUrl :: String -> Value -> Parser RegistryUrl
@@ -263,7 +255,7 @@ out-of-range value would otherwise fail at the first mint, with the queue alread
 parseCodeArtifactDuration :: String -> Value -> Parser Natural
 parseCodeArtifactDuration field v = do
     n <- case v of
-        String t -> case readMaybe (T.unpack t) :: Maybe Natural of
+        String t -> case readDecimalText t :: Maybe Natural of
             Just parsed -> pure parsed
             Nothing -> fail (field <> ": invalid duration: " <> T.unpack t)
         other -> parseJSON other

@@ -12,11 +12,12 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Text (joinUrlPath, lastPathSegment, nonBlank, renderIso8601Utc, stripTrailingSlash)
+import Ecluse.Core.Text (joinUrlPath, lastPathSegment, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash)
 
 {- | Tests for the shared text helpers. They pin the promises callers depend on: absence and
 trimming in 'nonBlank', every trailing slash dropped from a URL base, 'lastPathSegment'
-after the final slash, and 'renderIso8601Utc' byte-for-byte equal to 'iso8601Show'.
+after the final slash, the one accepted spelling of a digit run, and 'renderIso8601Utc'
+byte-for-byte equal to 'iso8601Show'.
 -}
 spec :: Spec
 spec = do
@@ -24,7 +25,58 @@ spec = do
     trailingSlashSpec
     joinUrlPathSpec
     lastPathSegmentSpec
+    readDecimalTextSpec
+    readHexTextSpec
     renderIso8601Spec
+
+readDecimalTextSpec :: Spec
+readDecimalTextSpec = describe "readDecimalText" $ do
+    it "reads a bare decimal run, leading zeros included" $ do
+        readDecimalText "1234567890" `shouldBe` Just (1234567890 :: Integer)
+        readDecimalText "0" `shouldBe` Just (0 :: Integer)
+        readDecimalText "007" `shouldBe` Just (7 :: Integer)
+
+    it "refuses an empty run, a sign, and a fractional value" $ do
+        readDecimalText @Integer "" `shouldBe` Nothing
+        readDecimalText @Integer "-123" `shouldBe` Nothing
+        readDecimalText @Integer "+123" `shouldBe` Nothing
+        readDecimalText @Integer "123.456" `shouldBe` Nothing
+
+    it "refuses trailing or interior text" $ do
+        readDecimalText @Integer "123a456" `shouldBe` Nothing
+        readDecimalText @Integer "123 456" `shouldBe` Nothing
+        readDecimalText @Integer "12s" `shouldBe` Nothing
+
+    -- The forms 'readMaybe' accepts and this refuses. A config numeric and a network
+    -- literal take one spelling of a number, so 0x10 is not 16 and (5) is not 5.
+    it "refuses the base prefixes, padding, and brackets that readMaybe accepts" $ do
+        readDecimalText @Integer "0x10" `shouldBe` Nothing
+        readDecimalText @Integer "0o10" `shouldBe` Nothing
+        readDecimalText @Integer "  5" `shouldBe` Nothing
+        readDecimalText @Integer "5  " `shouldBe` Nothing
+        readDecimalText @Integer "(5)" `shouldBe` Nothing
+
+readHexTextSpec :: Spec
+readHexTextSpec = describe "readHexText" $ do
+    it "reads a bare hex run in either case" $ do
+        readHexText "0123456789abcdef" `shouldBe` Just (81985529216486895 :: Integer)
+        readHexText "ABCDEF" `shouldBe` Just (11259375 :: Integer)
+        readHexText "aBcDeF" `shouldBe` Just (11259375 :: Integer)
+        readHexText "f" `shouldBe` Just (15 :: Integer)
+
+    it "refuses an empty run, a sign, and a non-hex character" $ do
+        readHexText @Integer "" `shouldBe` Nothing
+        readHexText @Integer "-1a" `shouldBe` Nothing
+        readHexText @Integer "g" `shouldBe` Nothing
+        readHexText @Integer "abc-def" `shouldBe` Nothing
+        readHexText @Integer "abc def" `shouldBe` Nothing
+        readHexText @Integer "0123456789abcdefg" `shouldBe` Nothing
+
+    -- Data.Text.Read.hexadecimal takes the prefix. A caller that read one strips it and
+    -- decides for itself, so an IPv6 group spelled 0x1a stays malformed.
+    it "refuses the 0x prefix in either case" $ do
+        readHexText @Integer "0x1a" `shouldBe` Nothing
+        readHexText @Integer "0X1a" `shouldBe` Nothing
 
 nonBlankSpec :: Spec
 nonBlankSpec = describe "nonBlank" $ do

@@ -31,6 +31,7 @@ module Ecluse.Composition.Sizing (
     mirrorEnqueueReportInterval,
 ) where
 
+import Data.Ord (clamp)
 import Network.HTTP.Client (ManagerSettings (managerConnCount))
 import System.Posix.Resource (Resource (ResourceOpenFiles), ResourceLimit (ResourceLimit, ResourceLimitInfinity, ResourceLimitUnknown), ResourceLimits (softLimit), getResourceLimit)
 
@@ -81,7 +82,7 @@ serveAdmissionFloor :: Int
 serveAdmissionFloor = 8
 
 {- | The effective private-upstream connection-pool size and its boot-log line: the
-explicit @privateConnectionsPerHost@, else @clamp 64 4096 (nofile \/ 4)@. It is not tied
+explicit @privateConnectionsPerHost@, else @clamp (64, 4096) (nofile \/ 4)@. It is not tied
 to @serveMaxInFlight@, because private-hit tarball streams run outside serve admission
 and their concurrency is the inbound fan-out. 'Network.HTTP.Client.managerConnCount'
 caps retention, not concurrency, so sizing up retains more idle connections for reuse
@@ -98,7 +99,7 @@ resolvePrivateConnections explicit fdLimit =
 -- The floor keeps a small file-descriptor limit reusing a useful number of connections.
 -- The cap stops an enormous limit retaining an absurd idle cache to one upstream.
 clampPrivateConnections :: Int -> Int
-clampPrivateConnections = max privateConnectionsFloor . min privateConnectionsCap
+clampPrivateConnections = clamp (privateConnectionsFloor, privateConnectionsCap)
 
 -- One descriptor per pooled connection. The private pool takes a quarter of the budget
 -- and leaves the rest to the listener, the public pool, telemetry, the worker, and the runtime.
@@ -112,7 +113,7 @@ privateConnectionsCap :: Int
 privateConnectionsCap = 4096
 
 {- | The effective public-upstream connection-pool size and its boot-log line: the
-explicit @publicConnectionsPerHost@, else @clamp 32 1024 (nofile \/ 8)@, half the private
+explicit @publicConnectionsPerHost@, else @clamp (32, 1024) (nofile \/ 8)@, half the private
 share. The pool is not metadata-only: onboarding fail-over artifact streams and the
 worker's back-fill fetches ride the same manager and do not coalesce, so an onboarding
 burst tracks the inbound fan-out. Sizing up is safe for the reason
@@ -132,7 +133,7 @@ fdLimitClause fdLimit = "computed from file-descriptor limit " <> show fdLimit
 -- The floor keeps a small limit reusing connections across an onboarding burst. The cap
 -- and the reasoning match 'clampPrivateConnections'.
 clampPublicConnections :: Int -> Int
-clampPublicConnections = max publicConnectionsFloor . min publicConnectionsCap
+clampPublicConnections = clamp (publicConnectionsFloor, publicConnectionsCap)
 
 -- An eighth of the file-descriptor budget, drawn from the reserve the private sizing
 -- leaves. The public leg is the transient onboarding ramp, not the steady-state load.

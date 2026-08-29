@@ -3,7 +3,8 @@
 # document < environment. ECLUSE_CACHE__TTL spells cache.ttl. A commented key is
 # INACTIVE: it documents the schema, and names the computed or derived default that
 # applies while it stays unset. Put secrets in environment variables, never here. An
-# integer key takes a positive integer unless its comment says otherwise.
+# integer key takes a positive integer unless its comment says otherwise, written as
+# plain digits: a hexadecimal, octal, padded, or bracketed spelling is refused.
 
 server:
   # TCP port, 0 to 65535. 0 binds an OS-assigned ephemeral port.
@@ -129,7 +130,7 @@ advisories:
 #   # then gets 503 with Retry-After: 1. That 503 is backpressure: exclude it from
 #   # alerts. A real upstream failure returns 503 without the header.
 #   serveMaxInFlight: 128
-#   # Pooled connections per public upstream host: clamp(32, 1024, nofile / 8).
+#   # Pooled connections per public upstream host: clamp (32, 1024) (nofile / 8).
 #   # Connections beyond the pool still open, but re-handshake TLS each time.
 #   publicConnectionsPerHost: 64
 #   # Pooled connections to the private upstream host: nofile / 4, clamped to 64..4096.

@@ -36,7 +36,7 @@ It uses that vendor's reserved log attributes ('jsonLine'):
 
 * @dd.trace_id@ and @dd.span_id@ when a span is in scope. The formatter reads them
   from the log site's own @dd@ payload ('ddField'), in the id format Datadog
-  correlates on ('formatDdTraceId').
+  correlates on (see "Ecluse.Runtime.Telemetry.Correlation").
 
 * @data@: the per-call structured payload, unchanged.
 
@@ -84,15 +84,12 @@ module Ecluse.Runtime.Log (
     DdSpan (..),
     ddField,
     ddObject,
-    formatDdTraceId,
-    formatDdSpanId,
 ) where
 
 import Data.Aeson (Value (Object, String), object, toJSON, (.=))
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Text (encodeToLazyText)
-import Data.ByteString qualified as BS
 import Data.Text.Lazy.Builder qualified as TB
 import Data.Universe.Class (Universe (..))
 import Data.Universe.Generic (universeGeneric)
@@ -344,8 +341,8 @@ data DdContext = DdContext
     }
     deriving stock (Eq, Show)
 
-{- | The active span's ids, already in the Datadog form ('formatDdTraceId', 'formatDdSpanId').
-They are rendered 'Text' so this type needs no OpenTelemetry dependency.
+{- | The active span's ids, rendered in the Datadog form by
+"Ecluse.Runtime.Telemetry.Correlation". They are 'Text', so this type needs no OTel dependency.
 -}
 data DdSpan = DdSpan
     { ddTraceId :: Text
@@ -372,23 +369,3 @@ context of a request or worker scope so every line there carries that scope's ac
 -}
 ddField :: DdContext -> SimpleLogPayload
 ddField = sl "dd" . ddObject
-
-{- | Render a raw 16-byte trace id into the form Datadog correlates on: the unsigned decimal of
-the low 64 bits, big-endian. A short id is read whole and a long one truncates to its low 64 bits.
--}
-formatDdTraceId :: ByteString -> Text
-formatDdTraceId = show . low64Bits
-
-{- | Render a raw 8-byte span id into the Datadog form: the __unsigned decimal__ of the
-64-bit id (read big-endian), matching @dd.span_id@.
--}
-formatDdSpanId :: ByteString -> Text
-formatDdSpanId = show . low64Bits
-
--- The unsigned 64-bit value of the last (up to) eight bytes, big-endian. Shared by the
--- trace-id low-64 truncation and the span-id read so both decode identically.
-low64Bits :: ByteString -> Word64
-low64Bits = BS.foldl' (\acc byte -> acc * 256 + fromIntegral byte) 0 . lastBytes 8
-  where
-    lastBytes :: Int -> ByteString -> ByteString
-    lastBytes n bytes = BS.drop (max 0 (BS.length bytes - n)) bytes

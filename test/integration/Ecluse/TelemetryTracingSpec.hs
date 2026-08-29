@@ -81,7 +81,7 @@ spec =
                 accepted `shouldBe` False
 
             -- Proves the active-span to log-line correlation: a log item built inside a real span
-            -- carries a non-zero dd.trace_id and dd.span_id. Ecluse.LogSpec pins the id format.
+            -- carries a non-zero dd.trace_id and dd.span_id. The propagator owns the id format.
             it "stamps a non-zero dd.trace_id on a log line emitted within a span" $ \collector -> do
                 ctx <- ddContextWithinSpan collector
                 case ddSpan ctx of

@@ -30,9 +30,8 @@ import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
-    FaultDisposition (Transient),
-    SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
     superviseLoop,
+    transientPolicy,
  )
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Log (moduleContext)
@@ -71,11 +70,7 @@ runExportLoop telemetry s3Endpoint config = do
             metrics <- liftIO (newMetrics telemetry)
             void
                 $ superviseLoop
-                    SupervisionPolicy
-                        { spLabel = "pilot-export"
-                        , spClassify = const Transient
-                        , spBackoff = BackoffSchedule{bsBaseMicros = intervalMicros, bsCapMicros = intervalMicros}
-                        }
+                    (transientPolicy "pilot-export" BackoffSchedule{bsBaseMicros = intervalMicros, bsCapMicros = intervalMicros})
                 $ do
                     runResourceT (exportEcosystem metrics Npm telemetry s3Endpoint appCfg bucketName)
                     threadDelay intervalMicros

@@ -4,7 +4,7 @@
 
 {- | The shipped numbers the memory plan resolves against, and the byte charge a tenant's demand
 turns into. The shares carve up the application heap, the floors and caps bracket every computed
-bound through 'clamp', and the fallbacks stand in for a pod with no heap-ceiling datapoint. A
+bound through @clamp@, and the fallbacks stand in for a pod with no heap-ceiling datapoint. A
 configured value overrides a bound. These are what is left when none is configured.
 -}
 module Ecluse.Composition.MemoryPlan.Bounds (
@@ -43,7 +43,6 @@ module Ecluse.Composition.MemoryPlan.Bounds (
     fixedBufferBytes,
     anyMountMirrors,
     memoryQueueCharged,
-    clamp,
 ) where
 
 import Ecluse.Composition.MemoryPlan.Types (QueueTenantDemand (MemoryQueueTenant, NoQueueTenant))
@@ -189,7 +188,3 @@ anyMountMirrors = (/= NoQueueTenant)
 -- | Whether the in-memory queue runs, so its depth charges the heap.
 memoryQueueCharged :: QueueTenantDemand -> Bool
 memoryQueueCharged = (== MemoryQueueTenant)
-
--- | Hold a value between an inclusive floor and cap.
-clamp :: (Ord a) => a -> a -> a -> a
-clamp lo hi = max lo . min hi

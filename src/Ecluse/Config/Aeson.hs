@@ -28,6 +28,7 @@ import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrit
 import Ecluse.Core.Package.Merge (parseDivergencePolicy)
 import Ecluse.Core.Registry.Npm.Project (projectScope)
 import Ecluse.Core.Security (parseBlockedRange)
+import Ecluse.Core.Text (readDecimalText)
 import Ecluse.Runtime.Log (parseLogFormat, parseLogLevel)
 import Ecluse.Runtime.Telemetry (parseTelemetrySwitch)
 
@@ -191,7 +192,7 @@ parseBlockedRangeEntry entry =
 
 parseSeconds :: String -> Value -> Parser NominalDiffTime
 parseSeconds field = \case
-    String t -> case readMaybe (T.unpack t) :: Maybe Integer of
+    String t -> case readDecimalText t :: Maybe Integer of
         Just n -> boundedSeconds field n
         Nothing -> secondsFailure field (show t)
     -- 'toBoundedInteger' refuses a fractional or out-of-'Int64' value, and its exponent guard

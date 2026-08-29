@@ -111,7 +111,7 @@ import Ecluse.Core.Server.Response (
     ServeDecision (Admit, Reject),
  )
 import Ecluse.Core.Telemetry.Metrics (AdvisorySyncResult, advisorySyncResultName)
-import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (..), JobSpanOutcome (..), TracingPort (..), WorkerTracingPort (..))
+import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (..), JobSpanOutcome (..), TracingPort (..), WorkerTracingPort (..), ecluseScope)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Runtime.Telemetry (
     Telemetry,
@@ -376,8 +376,3 @@ coordinateFields name version =
     [ ("ecluse.package", renderPackageName name)
     , ("ecluse.version", renderVersion version)
     ]
-
--- The instrumentation scope the hand-added spans and the WAI meter are created under, so
--- they are attributed to Écluse rather than to a third-party instrumentation library.
-ecluseScope :: (IsString s) => s
-ecluseScope = "ecluse"

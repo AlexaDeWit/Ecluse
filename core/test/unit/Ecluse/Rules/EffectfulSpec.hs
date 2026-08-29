@@ -4,7 +4,6 @@
 
 module Ecluse.Rules.EffectfulSpec (spec) where
 
-import Control.Retry (simulatePolicy)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import UnliftIO.Concurrent (threadDelay)
@@ -31,7 +30,6 @@ import Ecluse.Core.Rules.Effectful (
     EffectfulConfig (..),
     FaultReporter (..),
     Resilience (..),
-    backoffPolicy,
     defaultEffectfulConfig,
     newBreaker,
  )
@@ -165,17 +163,6 @@ spec = do
             ecBreakerThreshold defaultEffectfulConfig `shouldBe` 5
             ecBreakerCooldown defaultEffectfulConfig `shouldBe` 30
             ecRetryAfter defaultEffectfulConfig `shouldBe` Nothing
-
-    describe "backoffPolicy -- the compiled retry schedule" $ do
-        -- 'simulatePolicy' walks the policy without sleeping. The 'ecBackoff' list length
-        -- is the retry budget, and the policy yields 'Nothing' once it runs out.
-        it "the default schedule retries twice, at 100ms then 250ms, then stops" $ do
-            delays <- simulatePolicy 2 (backoffPolicy [100_000, 250_000])
-            map snd delays `shouldBe` [Just 100_000, Just 250_000, Nothing]
-
-        it "an empty schedule admits no retry (the single initial attempt only)" $ do
-            delays <- simulatePolicy 0 (backoffPolicy [])
-            map snd delays `shouldBe` [Nothing]
 
     describe "evalRules -- one engine over pure and effectful rules" $ do
         it "an effectful rule below a pure decisive prefix is never launched (short-circuit)" $ do

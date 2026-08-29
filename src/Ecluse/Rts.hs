@@ -93,6 +93,7 @@ module Ecluse.Rts (
     parseMemoryMax,
 ) where
 
+import Data.Ord (clamp)
 import Data.Text qualified as T
 import GHC.Conc (getNumCapabilities, getNumProcessors, setNumCapabilities)
 import GHC.RTS.Flags (GCFlags (maxHeapSize, minAllocAreaSize, nurseryChunkSize), getGCFlags)
@@ -172,13 +173,14 @@ resolveRuntimePlan overrides cgroup rts =
   where
     capabilities = case (roCores overrides, cgCpuCores cgroup, cgMemoryMaxBytes cgroup) of
         (Just n, _, _) -> (max 1 n, FromConfig)
-        (Nothing, Just quota, _) -> (clamp (floor quota), FromCgroup)
+        (Nothing, Just quota, _) -> (visible (floor quota), FromCgroup)
         (Nothing, Nothing, Just memMax) ->
-            (clamp (nurseryFittedCapabilities memMax (rpAllocAreaBytes rts)), FromCgroupMemory)
+            (visible (nurseryFittedCapabilities memMax (rpAllocAreaBytes rts)), FromCgroupMemory)
         (Nothing, Nothing, Nothing) ->
-            (clamp (fromMaybe defaultCoresCeiling (roCoresCeiling overrides)), FromCoresCeiling)
+            (visible (fromMaybe defaultCoresCeiling (roCoresCeiling overrides)), FromCoresCeiling)
 
-    clamp n = max 1 (min (rpProcessors rts) n)
+    -- Every derived rung floors at one capability and ceilings at the visible processors.
+    visible = clamp (1, rpProcessors rts)
 
     maxHeap = case (roMaxHeapBytes overrides, cgMemoryMaxBytes cgroup) of
         (Just bytes, _) -> (Just (alignToBlock bytes), FromConfig)

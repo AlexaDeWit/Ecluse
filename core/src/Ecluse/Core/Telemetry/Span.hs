@@ -3,26 +3,15 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE RankNTypes #-}
 
-{- | The domain-span tracing ports, decoupled from any tracing backend. The core serve
-path, the mirror worker, and the advisory sync task open their hand-added spans through
-these abstract interfaces.
+{- | The domain-span tracing ports, and the bracket Pilot opens its own spans through.
 
-The serve path brackets two domain spans an operator cares about: the per-version rule
-verdict, and the synchronous-to-asynchronous mirror hand-off. The mirror worker brackets
-one, the per-job fetch → verify → publish. The advisory sync task brackets one span per
-sync attempt.
-
-This module defines those bracket operations as records of functions (the Handle
-pattern). Each is parametric in the bracketed action's result, so the span wraps the real
-work without seeing its shape. A consumer records through its port and never names an
-OpenTelemetry tracer. The application supplies the OTel-backed implementations behind
-them (see @Ecluse.Runtime.Telemetry.Tracing@), and a test supplies a pass-through double
-that simply runs the body.
-
-There are three ports. 'TracingPort' carries the serve path's two spans,
-'WorkerTracingPort' the worker's mirror-job span, and 'AdvisorySyncTracingPort' the
-advisory sync task's per-attempt span. Each port carries exactly the spans its consumer
-opens.
+The serve path, the mirror worker, and the advisory sync task reach their hand-added spans
+through a port: bracket operations as a record (the Handle pattern), parametric in the
+bracketed action's result and naming no OpenTelemetry tracer. The application supplies the
+OTel-backed implementations (see @Ecluse.Runtime.Telemetry.Tracing@), a test a pass-through
+double. Pilot's compile, stream, and export passes run outside a request and hold the
+'TracerProvider' themselves, so they bracket through 'withOptionalSpan' instead. Both
+consumers create their tracer under 'ecluseScope'.
 -}
 module Ecluse.Core.Telemetry.Span (
     -- * The serve-path tracing port
@@ -34,7 +23,27 @@ module Ecluse.Core.Telemetry.Span (
 
     -- * The advisory sync tracing port
     AdvisorySyncTracingPort (..),
+
+    -- * Bracketing a span against an optional tracer
+    ecluseScope,
+    withOptionalSpan,
+    openOptionalSpan,
+    closeOptionalSpan,
 ) where
+
+import OpenTelemetry.Context qualified as Ctx
+import OpenTelemetry.Trace.Core (
+    Span,
+    SpanKind,
+    TracerProvider,
+    createSpan,
+    defaultSpanArguments,
+    endSpan,
+    kind,
+    makeTracer,
+    tracerOptions,
+ )
+import UnliftIO (MonadUnliftIO, bracket)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
@@ -126,3 +135,30 @@ newtype AdvisorySyncTracingPort = AdvisorySyncTracingPort
         IO a
     -- ^ Bracket one advisory sync attempt for an ecosystem, recording the projected result.
     }
+
+{- | The instrumentation scope the hand-added spans and the WAI meter are created under, so they
+are attributed to Écluse rather than to a third-party instrumentation library.
+-}
+ecluseScope :: (IsString s) => s
+ecluseScope = "ecluse"
+
+{- | Run @body@ against a span opened on @mTracerProvider@, or against 'Nothing' when there is
+none, which opens no span. The span roots its own trace: no ambient context is consulted.
+-}
+withOptionalSpan :: (MonadUnliftIO m) => Maybe TracerProvider -> SpanKind -> Text -> (Maybe Span -> m a) -> m a
+withOptionalSpan mTracerProvider spanKind name =
+    bracket (openOptionalSpan mTracerProvider spanKind name) closeOptionalSpan
+
+{- | The acquire half of 'withOptionalSpan', for a @conduit@ pass that brackets through
+@bracketP@ rather than 'bracket'.
+-}
+openOptionalSpan :: (MonadIO m) => Maybe TracerProvider -> SpanKind -> Text -> m (Maybe Span)
+openOptionalSpan mTracerProvider spanKind name = case mTracerProvider of
+    Nothing -> pure Nothing
+    Just tracerProvider ->
+        let tracer = makeTracer tracerProvider ecluseScope tracerOptions
+         in Just <$> createSpan tracer Ctx.empty name defaultSpanArguments{kind = spanKind}
+
+-- | The release half of 'withOptionalSpan'. Ending at the current instant, as 'Nothing' asks.
+closeOptionalSpan :: (MonadIO m) => Maybe Span -> m ()
+closeOptionalSpan mSpan = whenJust mSpan (`endSpan` Nothing)

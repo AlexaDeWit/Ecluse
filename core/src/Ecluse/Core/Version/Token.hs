@@ -22,6 +22,8 @@ module Ecluse.Core.Version.Token (
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Text qualified as T
 
+import Ecluse.Core.Text (readDecimalText)
+
 {- | A version token: a numeric run or a textual run. Its 'Ord' is the RubyGems
 \/ PEP 440-local rule: numeric tokens outrank textual ones, numerics compare
 numerically, and text compares lexically. Semver prerelease ordering is the
@@ -49,13 +51,11 @@ withinVersionLength raw = T.compareLength raw maxVersionLength /= GT
 
 -- | Parse a non-empty, all-digit segment as an integer.
 parseNumSeg :: Text -> Maybe Integer
-parseNumSeg t
-    | not (T.null t) && T.all isDigit t = readMaybe (toString t)
-    | otherwise = Nothing
+parseNumSeg = readDecimalText
 
 -- | Read an all-digit (already validated) run as an integer, defaulting to 0.
 numOr0 :: Text -> Integer
-numOr0 t = if T.null t then 0 else fromMaybe 0 (readMaybe (toString t))
+numOr0 = fromMaybe 0 . readDecimalText
 
 {- | An ASCII letter or ASCII digit. The PEP 440 and @Gem::Version@ grammars gate \"alphanumeric\"
 with this, not the Unicode-aware 'Data.Char.isAlphaNum'. Python's @packaging@ and Ruby's

@@ -3,8 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Small pure text helpers shared across the codebase, so the blank-value,
-URL-path-join, and last-path-segment idioms have a single definition rather than
-several near-identical re-spellings. It also holds the hot-path ISO-8601 instant
+URL-path-join, last-path-segment, and digit-run idioms have a single definition rather
+than several near-identical re-spellings. It also holds the hot-path ISO-8601 instant
 renderer the serve path uses ('renderIso8601Utc'). This module depends on nothing else
 in @Ecluse@, so any module may import it without risking an import cycle.
 -}
@@ -13,6 +13,8 @@ module Ecluse.Core.Text (
     stripTrailingSlash,
     joinUrlPath,
     lastPathSegment,
+    readDecimalText,
+    readHexText,
     renderIso8601Utc,
     displayExceptionT,
 ) where
@@ -21,6 +23,7 @@ import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Text.Lazy.Builder qualified as TB
 import Data.Text.Lazy.Builder.Int qualified as TBI
+import Data.Text.Read qualified as TR
 import Data.Time (UTCTime (UTCTime), diffTimeToPicoseconds, toGregorian)
 import Data.Time.Format.ISO8601 (iso8601Show)
 
@@ -49,6 +52,27 @@ lastPathSegment :: Text -> Maybe Text
 lastPathSegment url =
     let afterLastSlash = snd (T.breakOnEnd "/" url)
      in if T.null afterLastSlash then Nothing else Just afterLastSlash
+
+{- | The non-negative integer a bare decimal digit run spells, 'Nothing' for anything else.
+Stricter than 'readMaybe', which also takes a sign, @0x10@, @0o10@, @  5@, and @(5)@.
+-}
+readDecimalText :: (Integral a) => Text -> Maybe a
+readDecimalText = readWholly TR.decimal
+
+{- | The non-negative integer a bare hexadecimal digit run spells. The @0x@ prefix that
+@Data.Text.Read.hexadecimal@ takes is refused, so a caller strips and judges the prefix itself.
+-}
+readHexText :: (Integral a) => Text -> Maybe a
+readHexText t
+    | T.toLower (T.take 2 t) == "0x" = Nothing
+    | otherwise = readWholly TR.hexadecimal t
+
+-- The value a reader produced, only when it consumed the whole input. Trailing text is a
+-- refusal rather than a silent prefix parse.
+readWholly :: TR.Reader a -> Text -> Maybe a
+readWholly textReader t = case textReader t of
+    Right (n, rest) | T.null rest -> Just n
+    _ -> Nothing
 
 {- | Render a 'UTCTime' byte for byte as 'iso8601Show' does, at a fraction of the
 allocation cost. The packument serve path renders one instant per surviving version per

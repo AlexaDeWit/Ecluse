@@ -38,11 +38,9 @@ module Ecluse.Core.Security (
     -- The IP-literal recogniser: only the surface consumers reach today. The
     -- 'IpAddr' constructors stay internal to the parser and the policy layer.
     parseIpLiteral,
-    isDecimal,
-    isHex,
 ) where
 
 import Ecluse.Core.Security.Authority
 import Ecluse.Core.Security.Host
-import Ecluse.Core.Security.IpLiteral (isDecimal, isHex, parseIpLiteral)
+import Ecluse.Core.Security.IpLiteral (parseIpLiteral)
 import Ecluse.Core.Security.Limits

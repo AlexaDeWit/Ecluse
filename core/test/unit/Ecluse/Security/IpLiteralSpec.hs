@@ -6,58 +6,10 @@ module Ecluse.Security.IpLiteralSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Core.Security (isDecimal, isHex, parseIpLiteral)
+import Ecluse.Core.Security (parseIpLiteral)
 
 spec :: Spec
-spec = do
-    isDecimalSpec
-    isHexSpec
-    parseIpLiteralSpec
-
-isDecimalSpec :: Spec
-isDecimalSpec = describe "isDecimal" $ do
-    it "returns True for a string with only decimal digits" $
-        isDecimal "1234567890" `shouldBe` True
-    it "returns False for an empty string" $
-        isDecimal "" `shouldBe` False
-    it "returns False for a string with spaces" $
-        isDecimal "123 456" `shouldBe` False
-    it "returns False for a string with letters" $
-        isDecimal "123a456" `shouldBe` False
-    it "returns False for a string with a sign" $
-        isDecimal "-123" `shouldBe` False
-    it "returns False for a string with a decimal point" $
-        isDecimal "123.456" `shouldBe` False
-    it "returns True for a single digit" $
-        isDecimal "0" `shouldBe` True
-
-isHexSpec :: Spec
-isHexSpec = describe "isHex" $ do
-    it "accepts valid lowercase hex strings" $ do
-        isHex "0123456789abcdef" `shouldBe` True
-        isHex "a" `shouldBe` True
-        isHex "f" `shouldBe` True
-
-    it "accepts valid uppercase hex strings" $ do
-        isHex "0123456789ABCDEF" `shouldBe` True
-        isHex "A" `shouldBe` True
-        isHex "F" `shouldBe` True
-
-    it "accepts mixed case hex strings" $ do
-        isHex "aBcDeF" `shouldBe` True
-        isHex "1a2B3c" `shouldBe` True
-
-    it "rejects empty strings" $ do
-        isHex "" `shouldBe` False
-
-    it "rejects strings with non-hex characters" $ do
-        isHex "g" `shouldBe` False
-        isHex "G" `shouldBe` False
-        isHex "0123456789abcdefg" `shouldBe` False
-        isHex "abc def" `shouldBe` False
-        isHex "abc-def" `shouldBe` False
-        isHex "-1a" `shouldBe` False
-        isHex "0x1a" `shouldBe` False
+spec = parseIpLiteralSpec
 
 parseIpLiteralSpec :: Spec
 parseIpLiteralSpec = describe "parseIpLiteral" $ do

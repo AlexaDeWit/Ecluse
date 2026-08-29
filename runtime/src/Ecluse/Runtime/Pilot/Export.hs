@@ -18,19 +18,19 @@ module Ecluse.Runtime.Pilot.Export (
 
 import Conduit (MonadResource)
 import Control.Monad.Catch (MonadThrow)
-import GHC.Clock (getMonotonicTime)
 import Katip (KatipContext, Severity (..), katipAddContext, logFM, ls, sl)
 import System.Directory (getFileSize)
 import System.FilePath (takeFileName)
 import UnliftIO (MonadUnliftIO)
-import UnliftIO.Exception (bracket, withException)
+import UnliftIO.Exception (withException)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
+import Ecluse.Core.Telemetry.Record (timedSeconds)
+import Ecluse.Core.Telemetry.Span (withOptionalSpan)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
-import OpenTelemetry.Context qualified as Ctx
-import OpenTelemetry.Trace.Core (SpanKind (Client), SpanStatus (Error), TracerProvider, addAttribute, createSpan, defaultSpanArguments, endSpan, kind, makeTracer, setStatus, tracerOptions)
+import OpenTelemetry.Trace.Core (SpanKind (Client), SpanStatus (Error), TracerProvider, addAttribute, setStatus)
 
 {- | Upload an OSV artifact to @bucketName@, over the optional endpoint override. A failed upload
 logs and marks its span errored, so the export loop's supervisor sees more than a restart.
@@ -38,13 +38,10 @@ logs and marks its span errored, so the export loop's supervisor sees more than 
 exportToS3 :: (MonadResource m, MonadUnliftIO m, MonadThrow m, KatipContext m) => Maybe TracerProvider -> Maybe AwsEndpoint -> Text -> FilePath -> m ()
 exportToS3 mTracerProvider mEndpoint bucketName dbPath = do
     let keyText = toText (takeFileName dbPath)
-        mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> mTracerProvider
     size <- liftIO $ getFileSize dbPath
 
-    bracket
-        (traverse (\t -> createSpan t Ctx.empty "ecluse.pilot.osv.upload" defaultSpanArguments{kind = Client}) mTracer)
-        (mapM_ (`endSpan` Nothing))
-        $ \mSpan -> do
+    withOptionalSpan mTracerProvider Client "ecluse.pilot.osv.upload" $
+        \mSpan -> do
             forM_ mSpan $ \sp -> do
                 addAttribute sp "ecluse.osv.bucket" bucketName
                 addAttribute sp "ecluse.osv.object_key" keyText
@@ -56,14 +53,14 @@ exportToS3 mTracerProvider mEndpoint bucketName dbPath = do
             body <- liftIO $ AWS.chunkedFile 1048576 dbPath
             let req = S3.newPutObject (S3.BucketName bucketName) (S3.ObjectKey keyText) body
 
-            start <- liftIO getMonotonicTime
-            withException
-                (void $ AWS.send env req)
-                ( \(e :: SomeException) -> do
-                    forM_ mSpan $ \sp -> setStatus sp (Error ("S3 upload failed: " <> show e))
-                    logFM ErrorS (ls ("S3 upload failed for " <> keyText <> " to bucket " <> bucketName <> ": " <> show e))
-                )
-            elapsed <- liftIO getMonotonicTime
+            (_, elapsed) <-
+                timedSeconds $
+                    withException
+                        (void $ AWS.send env req)
+                        ( \(e :: SomeException) -> do
+                            forM_ mSpan $ \sp -> setStatus sp (Error ("S3 upload failed: " <> show e))
+                            logFM ErrorS (ls ("S3 upload failed for " <> keyText <> " to bucket " <> bucketName <> ": " <> show e))
+                        )
 
-            katipAddContext (sl "bucket" bucketName <> sl "bytes" size <> sl "duration_s" (elapsed - start)) $
+            katipAddContext (sl "bucket" bucketName <> sl "bytes" size <> sl "duration_s" elapsed) $
                 logFM InfoS "S3 upload complete"

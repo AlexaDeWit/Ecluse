@@ -259,6 +259,14 @@ spec = do
             deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\",\"maxReceiveCount\":4}")
                 `shouldBe` TerminusAttached (Just (DeliveryBudget 4))
 
+        it "refuses a hex or padded capture count rather than reading a number nobody wrote" $ do
+            -- AWS renders the count as a bare decimal run. Anything else loses only the
+            -- count, and the configured floor stands.
+            deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\",\"maxReceiveCount\":\"0x10\"}")
+                `shouldBe` TerminusAttached Nothing
+            deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\",\"maxReceiveCount\":\" 10\"}")
+                `shouldBe` TerminusAttached Nothing
+
         it "still reports a terminus when the policy's count cannot be read" $ do
             -- The boot warning must never fire for an operator who has a dead-letter
             -- queue. Only the capture count is lost, so the configured floor stands.

@@ -2,20 +2,21 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The __lenient-decode__ primitives every ecosystem's aeson wire decoder shares.
-They are pure aeson support with no registry or package concept. They therefore sit
-beside the bounded selective-decode engine in "Ecluse.Core.Json.Selective", not in any
-one ecosystem's wire module.
+{- | The __lenient-decode__ primitives every ecosystem's aeson wire decoder shares. They are
+pure aeson support with no registry or package concept, so they sit beside the bounded
+selective-decode engine in "Ecluse.Core.Json.Selective", not in any one ecosystem's wire module.
 
 * 'lenientOptional' reads an optional field. It degrades a present-but-undecodable
   value to 'Nothing' instead of failing the whole decode, so one poisoned advisory
   value cannot deny a whole document.
 * 'typeMismatchOneOf' fails a permissive string-or-object decoder with a message that
-  names the accepted shapes and the JSON kind it found.
+  names the accepted shapes and the JSON kind it found, over 'valueKind'.
+* 'valueKind' names a JSON value's kind, the one vocabulary a shape refusal phrases it in.
 -}
 module Ecluse.Core.Json.Lenient (
     lenientOptional,
     typeMismatchOneOf,
+    valueKind,
 ) where
 
 import Data.Aeson (
@@ -43,7 +44,7 @@ typeMismatchOneOf :: String -> Value -> Parser a
 typeMismatchOneOf expected actual =
     fail ("expected " <> expected <> ", but encountered " <> valueKind actual)
 
--- A short description of a JSON value's kind, for parse-error messages.
+-- | A short description of a JSON value's kind, for parse-error messages.
 valueKind :: Value -> String
 valueKind = \case
     Object{} -> "an object"

@@ -34,14 +34,9 @@ module Ecluse.Core.Rules.Effectful (
 
     -- * Running an evaluation through it
     runResilient,
-    backoffPolicy,
 ) where
 
-import Control.Retry (
-    RetryPolicyM (RetryPolicyM),
-    RetryStatus (rsIterNumber),
-    retrying,
- )
+import Control.Retry (retrying)
 import Data.Time (NominalDiffTime, UTCTime)
 import UnliftIO (timeout, tryAny)
 
@@ -56,6 +51,7 @@ import Ecluse.Core.Breaker (
  )
 import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Rules.Types
+import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Text (displayExceptionT)
 
 {- | The resilience policy wrapped around one effectful rule's IO. The prepared rule carries
@@ -127,15 +123,9 @@ settleOutcome res name now = \case
 Only a 'Left' fault retries, so a deterministic verdict never enters the retry loop. -}
 attemptWithRetry :: Resilience -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO (Either (Transience, Text) RuleVerdict)
 attemptWithRetry res evalAt pd =
-    retrying (backoffPolicy (ecBackoff (resConfig res))) shouldRetry (\_ -> attemptOnce res evalAt pd)
+    retrying (delayListPolicy (ecBackoff (resConfig res))) shouldRetry (\_ -> attemptOnce res evalAt pd)
   where
     shouldRetry _ = pure . isLeft
-
-{- | An 'ecBackoff' schedule compiled to a "Control.Retry" policy. The retry at iteration n
-waits the n-th delay in microseconds. The list's length is the retry budget, so @[]@ admits none.
--}
-backoffPolicy :: [Int] -> RetryPolicyM IO
-backoffPolicy backoffs = RetryPolicyM (\rs -> pure (backoffs !!? rsIterNumber rs))
 
 {- One attempt under the timeout. A 'RuleVerdict', a deterministic 'CannotVet' included, is
 taken at face value, so only a throw or a timeout retries and feeds the breaker. -}

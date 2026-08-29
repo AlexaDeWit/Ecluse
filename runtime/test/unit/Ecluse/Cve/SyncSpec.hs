@@ -340,7 +340,7 @@ spec = do
                     -- A short burst that finds nothing published, then a fast poll
                     -- that finds the artifact once it exists.
                     schedule = SyncSchedule{schedBootBackoff = [5_000, 5_000], schedPollDelay = 25_000}
-                    -- Mirrors bootBurstPolicy in Ecluse.Runtime.Cve.Sync: one attempt per delay, plus the first.
+                    -- Mirrors the boot burst in Ecluse.Runtime.Cve.Sync: one attempt per delay, plus the first.
                     burstAttempts = length (schedBootBackoff schedule) + 1
                 withAsync (runQuietKatip (runUnobserved (envWith lateFetch) schedule onSwap)) $ \_ -> do
                     -- Each attempt reads the flag in one transaction with the counter, so

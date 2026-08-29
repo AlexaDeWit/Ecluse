@@ -4,6 +4,7 @@
 
 module Ecluse.SupervisionSpec (spec) where
 
+import Control.Retry (simulatePolicy)
 import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Async (asyncWithUnmask, cancel, waitCatch)
@@ -15,7 +16,9 @@ import Ecluse.Core.Supervision (
     FaultDisposition (Permanent, Transient),
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
     backoffMicros,
+    delayListPolicy,
     superviseLoop,
+    transientPolicy,
  )
 import Ecluse.Test.Log (runQuietKatip)
 
@@ -49,6 +52,25 @@ spec = do
             let schedule = BackoffSchedule{bsBaseMicros = 100, bsCapMicros = 30_000_000}
             backoffMicros schedule 10_000 `shouldBe` backoffMicros schedule 12
             backoffMicros schedule 10_000 `shouldSatisfy` (> 0)
+
+    describe "delayListPolicy -- a delay list as a retry policy" $ do
+        -- 'simulatePolicy' walks the policy without sleeping. The list's length is the
+        -- retry budget, and the policy yields 'Nothing' once it runs out.
+        it "waits the nth delay at the nth retry, then stops" $ do
+            delays <- simulatePolicy 2 (delayListPolicy [100_000, 250_000])
+            map snd delays `shouldBe` [Just 100_000, Just 250_000, Nothing]
+
+        it "an empty list admits no retry (the single initial attempt only)" $ do
+            delays <- simulatePolicy 0 (delayListPolicy [])
+            map snd delays `shouldBe` [Nothing]
+
+    describe "transientPolicy" $
+        it "classifies every synchronous fault as transient, at the given pace" $ do
+            let schedule = BackoffSchedule{bsBaseMicros = 100, bsCapMicros = 1_000}
+                policy = transientPolicy "shell-loop" schedule
+            spLabel policy `shouldBe` "shell-loop"
+            spBackoff policy `shouldBe` schedule
+            spClassify policy (toException (StepFault "residue")) `shouldBe` Transient
 
     describe "superviseLoop" $ do
         it "reruns the step after a transient fault (log, back off, continue)" $ do

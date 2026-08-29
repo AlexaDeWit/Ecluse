@@ -266,6 +266,13 @@ spec = describe "decodeDocument" $ do
         loadConfig [] (Just "{\"cache\":{\"ttl\":true}}")
             `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
 
+    -- A quoted count has one spelling: a bare decimal run. The base prefixes, padding, and
+    -- brackets that Haskell's `Read` took now fail the load instead.
+    it "rejects a quoted cache.ttl written as hex, octal, padded, bracketed, or signed" $
+        for_ (["0x10", " 120", "120 ", "(120)", "+120", "0o10"] :: [Text]) $ \spelling ->
+            loadConfig [] (Just (encodeUtf8 @Text @ByteString ("{\"cache\":{\"ttl\":\"" <> spelling <> "\"}}")))
+                `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
+
     it "rejects a non-positive advisories.maxDatabaseBytes" $
         loadConfig [] (Just "{\"advisories\":{\"maxDatabaseBytes\":0}}")
             `shouldSatisfy` decodeErrorMentions "advisories.maxDatabaseBytes"
@@ -584,6 +591,11 @@ spec = describe "decodeDocument" $ do
                 `shouldSatisfy` decodeErrorMentions "mirrorCodeArtifactTokenDuration must be a duration in seconds within 900..43200"
             loadConfig [("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION", "43201")] Nothing
                 `shouldSatisfy` decodeErrorMentions "mirrorCodeArtifactTokenDuration must be a duration in seconds within 900..43200"
+
+        it "rejects a quoted CodeArtifact token duration written as hex or padded" $
+            for_ (["0x1000", " 3600", "(3600)"] :: [Text]) $ \spelling ->
+                loadConfig [] (Just (encodeUtf8 @Text @ByteString ("{\"mounts\":{\"npm\":{\"mirrorCodeArtifactTokenDuration\":\"" <> spelling <> "\"}}}")))
+                    `shouldSatisfy` decodeErrorMentions "mirrorCodeArtifactTokenDuration: invalid duration"
 
     describe "secret environment values (taken verbatim, never JSON-coerced)" $ do
         it "round-trips a JSON-looking authToken exactly" $
