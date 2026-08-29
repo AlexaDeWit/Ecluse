@@ -30,10 +30,12 @@ Every registry endpoint must be an `https://` URL: the private and public upstre
 target, and the publication target. A plain-HTTP endpoint fails closed at boot with an error naming
 the URL.
 
-Certificate validation is the endpoint-authentication boundary. To use a private registry on an
-internal CA, add your cert chain to the image's system trust store. The proxy pre-bakes no custom
-CA trust. It upgrades a plaintext `dist.tarball` to https when the legacy upstream advertises it on
-its own host. It drops a plaintext tarball on any other host and skips that version.
+Certificate validation is the endpoint-authentication boundary. The shipped image is distroless
+and has no system trust store: it pins `SSL_CERT_FILE` to a bundle of public roots in the Nix
+store. To use a private registry on an internal CA, mount a bundle that holds your chain beside
+those public roots and point `SSL_CERT_FILE` at it. The proxy pre-bakes no custom CA trust. It
+upgrades a plaintext `dist.tarball` to https when the legacy upstream advertises it on its own
+host. It drops a plaintext tarball on any other host and skips that version.
 
 ### Upstream composition (optional)
 
@@ -74,9 +76,9 @@ dialled host. Network egress is still a shared responsibility: the deployment mu
 egress at the platform layer, with security groups, `NetworkPolicy`, or Istio egress policy. See
 [Securing network egress](https://ecluse-proxy.com/docs/deployment/#network-egress).
 
-Two application-level knobs adjust threat tolerance. One relaxes *which allowlisted host* may serve
-a tarball, never whether the allowlist or the internal-range block applies. The other widens the
-fixed internal-range set with operator-supplied CIDRs. See the
+One application-level knob adjusts threat tolerance, and it only tightens: it widens the fixed
+internal-range set with operator-supplied CIDRs. The tarball-host gate derives from the mount's own
+endpoints and takes no operator setting. See the
 [configuration reference](https://ecluse-proxy.com/docs/configuration/#the-configuration-reference)
 for the names and values.
 

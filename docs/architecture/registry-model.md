@@ -241,7 +241,7 @@ sequenceDiagram
     Rules-->>E: verdicts (allow / deny / unavailable)
     Note over E: filter gated (public) versions, trust private,<br/>merge (private wins, flag integrity divergence),<br/>repoint latest, recompute ETag over merged body
     alt no survivors in merge
-        E-->>Client: 403 policy / 503 transient or upstream-unavailable
+        E-->>Client: 403 policy / 503 transient / 502 upstream-invalid / 500 permanent
     else some admitted
         E-->>Client: merged + filtered packument
     end
@@ -273,8 +273,9 @@ re-serialises the body from the lossy typed model, which is why the API surface
 ### Graceful degradation: per-version, not per-package
 
 Decoding into the decision surface is lenient at version granularity, with a fail-closed boundary.
-Non-decisive `dist` sub-fields (`unpackedSize`, `fileCount`, `signatures`) read as absent and the
-version survives. The decoder drops a version broken in a required field (no `dist` or `tarball`,
+An undecodable `dist.unpackedSize` reads as absent and the version survives. `fileCount` and
+`signatures` have no reader at all: nothing decides on them, and they relay unmodelled with the
+rest of the body. The decoder drops a version broken in a required field (no `dist` or `tarball`,
 an unusable `version`) rather than serve it unverifiable. Its healthy siblings keep serving. Only
 an unusable top-level document (not an object, absent `name`, non-object `versions`) denies the
 package wholesale. The decoder tracks dropped entries as `InvalidEntry`
