@@ -5,16 +5,18 @@
 {- | The katip plumbing every tier's specs share.
 
 A spec either wants no log output at all ('newTestLogEnv', 'runQuietKatip') or wants to
-read back exactly what a scribe serialised ('jsonLogEnv' with 'captureStdout').
+read back exactly what a scribe serialised ('jsonLogEnv' with 'captureStdout'), or what a
+refusal reported ('captureStderr').
 -}
 module Ecluse.Test.Log (
     newTestLogEnv,
     runQuietKatip,
     jsonLogEnv,
     captureStdout,
+    captureStderr,
 ) where
 
-import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
+import GHC.IO.Handle (Handle, hClose, hDuplicate, hDuplicateTo)
 import Katip (
     ColorStrategy (ColorLog),
     Environment (Environment),
@@ -57,17 +59,26 @@ jsonLogEnv = do
 'stdout' is restored on every exit path, so scribe output never leaks into the run.
 -}
 captureStdout :: IO () -> IO Text
-captureStdout act =
+captureStdout = captureHandle stdout
+
+-- | 'captureStdout' over 'stderr', the stream a boot refusal reports on.
+captureStderr :: IO () -> IO Text
+captureStderr = captureHandle stderr
+
+-- Redirect one stream to a temporary file for the action and read back what it wrote.
+-- The stream is restored on every exit path, so output never leaks into the run.
+captureHandle :: Handle -> IO () -> IO Text
+captureHandle stream act =
     withSystemTempFile "ecluse-log-capture.txt" $ \path tmpHandle ->
-        bracket (hDuplicate stdout) restore $ \_saved -> do
-            hFlush stdout
-            hDuplicateTo tmpHandle stdout
+        bracket (hDuplicate stream) restore $ \_saved -> do
+            hFlush stream
+            hDuplicateTo tmpHandle stream
             act
-            hFlush stdout
+            hFlush stream
             hClose tmpHandle
             decodeUtf8 <$> readFileBS path
   where
     restore saved = do
-        hFlush stdout
-        hDuplicateTo saved stdout
+        hFlush stream
+        hDuplicateTo saved stream
         hClose saved
