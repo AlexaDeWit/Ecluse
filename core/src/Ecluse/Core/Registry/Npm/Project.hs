@@ -97,6 +97,13 @@ present-but-different name.
 the publish guard, and the queue decode all read a name through it, so one spelling has one
 verdict everywhere. A scope or bare name that is not a usable path component is a
 'ParseError', and a bare @\@foo@ is a malformed scoped name, never an unscoped one.
+
+The grammar adopts two of npm's own name rules. A Unicode __format__ character (U+200B,
+U+202E, and the rest of the @Cf@ class) never parses. An invisible or direction-reversing
+character makes two distinct names render identically, which is how a name-based rule gets
+dodged and how a log line gets forged. A name over 214 characters never parses, counted over
+the whole name including any scope prefix, which is how npm counts it. npm applies its length
+rule to new packages, so a publisher refused here had nothing it could publish upstream.
 -}
 module Ecluse.Core.Registry.Npm.Project (
     -- * Projection
@@ -112,7 +119,7 @@ module Ecluse.Core.Registry.Npm.Project (
 
 import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, withObject, (.!=), (.:?))
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
-import Data.Char (isSpace)
+import Data.Char (GeneralCategory (Format), generalCategory, isSpace)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -375,9 +382,11 @@ projectDistTags = Map.map (mkVersion Npm) . wpDistTags
 point reads a name through. A bare @\@foo@ is a malformed scoped name, never an unscoped one.
 -}
 projectName :: Text -> Either ParseError PackageName
-projectName raw
-    | T.isPrefixOf "@" raw = scopedName raw
-    | otherwise = mkPackageName Npm Nothing <$> nameComponent raw
+projectName raw = do
+    withinNameLimit raw
+    if T.isPrefixOf "@" raw
+        then scopedName raw
+        else mkPackageName Npm Nothing <$> nameComponent raw
 
 {- Split a scoped @\@scope\/name@ at its one separator. A scope with nothing after it is a
 malformed scoped name, so the whole string never falls back to an unscoped reading. -}
@@ -394,17 +403,38 @@ scopedName raw = case T.stripPrefix "/" afterScope of
 scope @myorg@).
 -}
 projectScope :: Text -> Either ParseError Scope
-projectScope raw = mkScope <$> nameComponent (fromMaybe raw (T.stripPrefix "@" raw))
+projectScope raw = do
+    -- Measure after the strip, so @myorg and myorg stay one scope at the cap as well as below it.
+    withinNameLimit bare
+    mkScope <$> nameComponent bare
+  where
+    bare = fromMaybe raw (T.stripPrefix "@" raw)
 
 {- One component of an npm name, the scope or the bare name. It reaches an interpolated upstream
-URL, so an unsafe spelling must never parse. -}
+URL, so an unsafe spelling must never parse. 'projectName' and 'projectScope' own the length cap. -}
 nameComponent :: Text -> Either ParseError Text
 nameComponent component
     | T.null component = Left (ParseError "empty npm name component")
     | isSafeComponent component && T.all usable component = Right component
     | otherwise = Left (ParseError ("unusable npm name component: " <> show component))
   where
-    usable ch = ch /= '@' && not (isSpace ch)
+    -- A format character is invisible or reverses how the text renders, so it makes two distinct
+    -- names look like one in a log, a terminal, or a name-based rule.
+    usable ch = ch /= '@' && not (isSpace ch) && generalCategory ch /= Format
+
+{- Refuse a name over npm's own cap. 'projectName' measures the whole name including any scope
+prefix, and 'projectScope' measures a bare scope. 'T.compareLength' stops at the cap. -}
+withinNameLimit :: Text -> Either ParseError ()
+withinNameLimit raw
+    | T.compareLength raw npmNameLimit == GT = Left (ParseError overLong)
+    | otherwise = Right ()
+  where
+    overLong :: Text
+    overLong = "npm name over " <> show npmNameLimit <> " characters, starting " <> show (T.take 24 raw)
+
+-- npm's own cap on a package name, the one its validator applies to a new package.
+npmNameLimit :: Int
+npmNameLimit = 214
 
 -- Project a wire 'Wire.Person' into the domain 'Person' (a structural copy).
 projectPerson :: Wire.Person -> Person
