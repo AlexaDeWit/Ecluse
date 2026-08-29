@@ -57,7 +57,8 @@ only after explicit architect kickoff. The team lead never merges or pushes to `
 - Follow [`docs/style.md`](docs/style.md) for Haskell and [`docs/haddock.md`](docs/haddock.md) for
   Haddock. Organise vertically by capability. Keep effects at the application edge.
 - Write prose, comments, commits, and PRs in Canadian English (`behaviour`, `colour`, `licence` as a
-  noun, `-ise` endings). Do not rewrite a human contributor's spelling.
+  noun, `-ise` endings). Do not rewrite a human contributor's spelling. The prose register and its
+  structure rules are in [`docs/prose.md`](docs/prose.md).
 - **Workspace hygiene:** keep temporary scratch files in `scratchpad/`, never loose in the tree.
   Review staged files before committing, rather than running `git add -A`.
 
