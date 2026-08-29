@@ -81,12 +81,13 @@ compileOsvToSqlite metrics mTracerProvider outDir ecosystem sources = do
                 addAttribute sp "ecluse.osv.ecosystem" ecosystem
                 addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText (csOsvExportUrl sources)))
 
+            -- The join needs the whole score table before the first advisory row lands, and a
+            -- feed the retry budget cannot fetch fails the pass rather than shipping without.
+            epss <- withOsvRetry defaultOsvRetryPolicy (fetchEpssScores maxEpssFeedBytes (csEpssFeedUrl sources))
+            ingest <- newOsvIngest defaultIngestLimits epss
+
             bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
                 liftIO $ initSchema conn
-                -- The join needs the whole score table before the first advisory row lands, and
-                -- a feed the retry budget cannot fetch fails the pass rather than shipping without.
-                epss <- withOsvRetry defaultOsvRetryPolicy (fetchEpssScores maxEpssFeedBytes (csEpssFeedUrl sources))
-                ingest <- newOsvIngest defaultIngestLimits epss
 
                 -- Batches commit incrementally, so a failed attempt leaves a partial table
                 -- that INSERT OR IGNORE cannot dedup, because the unique index treats a

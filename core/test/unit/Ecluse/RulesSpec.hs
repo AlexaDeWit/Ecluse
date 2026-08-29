@@ -108,7 +108,7 @@ denyCveAt :: Double -> Rule
 denyCveAt threshold = DenyIfCve (DenyIfCveParams threshold FailDeny)
 
 denyEpssAt :: Double -> Rule
-denyEpssAt threshold = DenyIfEpssExceeds (DenyIfEpssParams threshold FailDeny)
+denyEpssAt threshold = DenyIfEpss (DenyIfEpssParams threshold FailDeny)
 
 genScope :: Gen Text
 genScope = Gen.text (Range.linear 1 12) Gen.alpha
@@ -237,7 +237,7 @@ spec = do
             decideWith inertRuleDeps [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 8.0 FailNoDecision))] (pkg Nothing 0)
                 >>= (`shouldSatisfy` isBlockedByDefault)
 
-    describe "evalRule (DenyIfEpssExceeds)" $ do
+    describe "evalRule (DenyIfEpss)" $ do
         it "denies an affected version whose advisory meets the threshold, naming it" $
             evalRule (depsWith (affecting Nothing (Just 0.75))) ctx (denyEpssAt 0.5) (pkg Nothing 0)
                 >>= (`shouldBe` Deny "affected by GHSA-affect-0001 (EPSS >= 0.5)")
@@ -260,15 +260,15 @@ spec = do
             decideWith inertRuleDeps [atDefaultPrecedence (denyEpssAt 0.5)] (pkg Nothing 0)
                 >>= (`shouldSatisfy` isUndecidable)
         it "fails open (skips) when configured onUnavailable=skip and no database is loaded" $
-            decideWith inertRuleDeps [atDefaultPrecedence (DenyIfEpssExceeds (DenyIfEpssParams 0.5 FailNoDecision))] (pkg Nothing 0)
+            decideWith inertRuleDeps [atDefaultPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision))] (pkg Nothing 0)
                 >>= (`shouldSatisfy` isBlockedByDefault)
 
-    describe "deny precedence (DenyIfEpssExceeds)" $ do
+    describe "deny precedence (DenyIfEpss)" $ do
         it "overrides the quarantine allow at default precedences, whatever the order" $ do
             let rs = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay)), atDefaultPrecedence (denyEpssAt 0.5)]
                 deps = depsWith (affecting Nothing (Just 0.75))
-            decideWith deps rs (pkg Nothing 99) >>= \d -> blockedBy d `shouldBe` Just "DenyIfEpssExceeds"
-            decideWith deps (reverse rs) (pkg Nothing 99) >>= \d -> blockedBy d `shouldBe` Just "DenyIfEpssExceeds"
+            decideWith deps rs (pkg Nothing 99) >>= \d -> blockedBy d `shouldBe` Just "DenyIfEpss"
+            decideWith deps (reverse rs) (pkg Nothing 99) >>= \d -> blockedBy d `shouldBe` Just "DenyIfEpss"
         it "yields to an operator's identity pin, the documented escape hatch" $
             -- AllowByIdentity (250) outranks the advisory deny band (225), as it does for
             -- DenyIfCve: an operator who pins a version has decided it must ship.
@@ -298,7 +298,7 @@ spec = do
         let denyReason = "affected by GHSA-affect-0001 (CVSS >= 8.0)"
         it "recovers the id a DenyIfCve denial named" $
             cveIdsInReason denyReason `shouldBe` ["GHSA-affect-0001"]
-        it "recovers the id a DenyIfEpssExceeds denial named" $
+        it "recovers the id a DenyIfEpss denial named" $
             cveIdsInReason "affected by GHSA-affect-0001 (EPSS >= 0.5)" `shouldBe` ["GHSA-affect-0001"]
         it "recovers several ids" $
             cveIdsInReason "affected by CVE-2026-0001, GHSA-aaaa-bbbb-cccc (CVSS >= 7.0)"

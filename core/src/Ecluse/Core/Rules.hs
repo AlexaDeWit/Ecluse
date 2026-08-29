@@ -177,9 +177,9 @@ evalRule deps _ (DenyIfCve params) pd =
     rdWithCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfCve" (dicOnUnavailable params))
         Just cve -> advisoryDenyVerdict "CVSS" (dicMinSeverity params) arSeverity cve pd
-evalRule deps _ (DenyIfEpssExceeds params) pd =
+evalRule deps _ (DenyIfEpss params) pd =
     rdWithCveLookup deps $ \case
-        Nothing -> pure (noAdvisoryDbVerdict "DenyIfEpssExceeds" (dieOnUnavailable params))
+        Nothing -> pure (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))
         Just cve -> advisoryDenyVerdict "EPSS" (dieMinEpss params) arEpss cve pd
 
 {- The verdict when no advisory database is loaded. It is a 'CannotVet' verdict and not a
@@ -312,7 +312,7 @@ resilienceFor deps = \case
     -- A deny rule aligns per its config. The same alignment governs a lookup that throws or
     -- times out (here) and a database that is not loaded ('noAdvisoryDbVerdict').
     DenyIfCve params -> effectful (dicOnUnavailable params)
-    DenyIfEpssExceeds params -> effectful (dieOnUnavailable params)
+    DenyIfEpss params -> effectful (dieOnUnavailable params)
     _ -> pure Nothing
   where
     effectful alignment = do

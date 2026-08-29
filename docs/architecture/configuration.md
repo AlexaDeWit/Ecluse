@@ -146,7 +146,7 @@ and dependency confusion. `remediation-fast-track` (`AllowIfRemediatesCve`) rank
 [Rules engine](rules-engine.md#allowifremediatescve-remediation-fast-track)).
 
 Every other built-in rule is off and opts in by name. The advisory denies (`DenyIfCve` and
-`DenyIfEpssExceeds`) in particular can deny historical versions an existing build depends on, if an
+`DenyIfEpss`) in particular can deny historical versions an existing build depends on, if an
 operator enables them before the mirror is warm. Read their
 [onboarding steps](https://ecluse-proxy.com/docs/configuration/#onboarding-the-advisory-denies) first.
 

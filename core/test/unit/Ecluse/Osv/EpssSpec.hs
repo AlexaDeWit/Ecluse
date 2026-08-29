@@ -11,6 +11,7 @@ import Network.HTTP.Types.Status (status200)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldThrow)
 
 import Ecluse.Core.Osv.Epss (
+    EpssFeedEmpty (..),
     EpssFeedTooLarge (..),
     epssForIds,
     epssScoreCount,
@@ -86,4 +87,17 @@ spec = do
             -- A compression bomb: a truncated table would read downstream as unscored, which
             -- denies every affected version under an EPSS rule.
             fetchServed 4096 (toLazy (BS.replicate 65536 0x78))
-                `shouldThrow` (\(EpssFeedTooLarge refused) -> refused == 4096)
+                `shouldThrow` (\case DecompressedTooLarge cap seen -> cap == 4096 && seen > 4096; _ -> False)
+
+        it "refuses a served stream past the cap before decompressing it" $
+            -- The bound upstream of gzip. Without it an endless stream of empty gzip members
+            -- never grows the decompressed count, and the pass never terminates.
+            fetchServed 32 (feedPreamble <> "CVE-2026-10001,0.875,0.995\n")
+                `shouldThrow` (\case CompressedTooLarge cap seen -> cap == 32 && seen > 32; _ -> False)
+
+        it "refuses a feed that decodes to no scores at all" $ do
+            -- A 200 carrying an error page, and a feed whose rows the decode no longer reads.
+            -- Either would publish an all-unscored artifact, which denies every affected version.
+            fetchServed maxEpssFeedBytes "<html><body>service unavailable</body></html>"
+                `shouldThrow` (== EpssFeedEmpty)
+            fetchServed maxEpssFeedBytes feedPreamble `shouldThrow` (== EpssFeedEmpty)

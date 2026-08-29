@@ -27,7 +27,7 @@ module Ecluse.Core.Rules.Types (
     defaultAllowIfRemediatesCvePrecedence,
     defaultAllowScopePrecedence,
     defaultDenyIfCvePrecedence,
-    defaultDenyIfEpssExceedsPrecedence,
+    defaultDenyIfEpssPrecedence,
     defaultAllowByIdentityPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
 
@@ -106,7 +106,7 @@ data Rule
       advisory with no EPSS score counts as above every threshold, which on the npm feed is
       most of them: malware advisories carry no CVE alias for the feed to key on. Opt-in.
       -}
-      DenyIfEpssExceeds DenyIfEpssParams
+      DenyIfEpss DenyIfEpssParams
     deriving stock (Eq, Show)
 
 {- | 'DenyIfCve''s configured behaviour: a separate record rather than fields on
@@ -127,7 +127,7 @@ data DenyIfCveParams = DenyIfCveParams
     }
     deriving stock (Eq, Show)
 
--- | 'DenyIfEpssExceeds''s configured behaviour, the EPSS twin of 'DenyIfCveParams'.
+-- | 'DenyIfEpss''s configured behaviour, the EPSS twin of 'DenyIfCveParams'.
 data DenyIfEpssParams = DenyIfEpssParams
     { dieMinEpss :: Double
     {- ^ The EPSS probability (0 to 1) at or above which an affecting advisory denies. An
@@ -151,7 +151,7 @@ ruleName = \case
     AllowByIdentity{} -> "AllowByIdentity"
     AllowIfRemediatesCve -> "AllowIfRemediatesCve"
     DenyIfCve{} -> "DenyIfCve"
-    DenyIfEpssExceeds{} -> "DenyIfEpssExceeds"
+    DenyIfEpss{} -> "DenyIfEpss"
 
 {- | A 'Rule' paired with the integer precedence at which it competes, higher first.
 'Ecluse.Core.Rules.bootOrder' turns precedence, and at equal precedence the rule name,
@@ -174,7 +174,7 @@ precedence.
 The ladder climbs most-passive to most-decisive:
 
 @AllowIfOlderThan@ (100) < @AllowIfRemediatesCve@ (150) < @AllowScope@ (200) <
-@DenyIfCve@ = @DenyIfEpssExceeds@ (225) < @AllowByIdentity@ (250) <
+@DenyIfCve@ = @DenyIfEpss@ (225) < @AllowByIdentity@ (250) <
 @DenyInstallTimeExecution@ (300) < @DenyByIdentity@ (400)
 
 The two advisory denies are the only ones below an allow, so an operator's exact-identity
@@ -186,7 +186,7 @@ defaultPrecedence = \case
     AllowIfRemediatesCve -> defaultAllowIfRemediatesCvePrecedence
     AllowScope{} -> defaultAllowScopePrecedence
     DenyIfCve{} -> defaultDenyIfCvePrecedence
-    DenyIfEpssExceeds{} -> defaultDenyIfEpssExceedsPrecedence
+    DenyIfEpss{} -> defaultDenyIfEpssPrecedence
     AllowByIdentity{} -> defaultAllowByIdentityPrecedence
     DenyInstallTimeExecution -> defaultDenyInstallTimeExecutionPrecedence
     DenyByIdentity{} -> defaultDenyByIdentityPrecedence
@@ -217,11 +217,11 @@ can override an advisory deny. It is the one deny type not strictly above every 
 defaultDenyIfCvePrecedence :: Int
 defaultDenyIfCvePrecedence = 225
 
-{- | Default precedence of 'DenyIfEpssExceeds': the same rung as 'DenyIfCve', which reads the
+{- | Default precedence of 'DenyIfEpss': the same rung as 'DenyIfCve', which reads the
 same database and answers to the same identity-pin override. A tie resolves by name.
 -}
-defaultDenyIfEpssExceedsPrecedence :: Int
-defaultDenyIfEpssExceedsPrecedence = defaultDenyIfCvePrecedence
+defaultDenyIfEpssPrecedence :: Int
+defaultDenyIfEpssPrecedence = defaultDenyIfCvePrecedence
 
 {- | Default precedence of 'AllowByIdentity': the top of the allow band, above both advisory
 denies so an identity pin overrides them, and below 'DenyInstallTimeExecution' and

@@ -115,7 +115,7 @@ The **default precedence ladder** climbs from most-passive to most-decisive:
 
 ```text
 AllowIfOlderThan (100) < AllowIfRemediatesCve (150) < AllowScope (200) <
-DenyIfCve = DenyIfEpssExceeds (225) < AllowByIdentity (250) <
+DenyIfCve = DenyIfEpss (225) < AllowByIdentity (250) <
 DenyInstallTimeExecution (300) < DenyByIdentity (400)
 ```
 
@@ -187,12 +187,12 @@ ships off. Warm the mirror first, as
 [Onboarding the advisory denies](https://ecluse-proxy.com/docs/configuration/#onboarding-the-advisory-denies)
 sets out.
 
-### `DenyIfEpssExceeds`, the exploitability direction
+### `DenyIfEpss`, the exploitability direction
 
 Severity states how bad a vulnerability would be. It does not state whether anyone is exploiting it.
 FIRST.org's Exploit Prediction Scoring System (EPSS) estimates the probability that a vulnerability
 is exploited in the wild within the next 30 days, and a moderate CVE under active exploitation is a
-worse risk to a build than a critical one nobody has weaponised. `DenyIfEpssExceeds` denies version
+worse risk to a build than a critical one nobody has weaponised. `DenyIfEpss` denies version
 *V* of *P* when an advisory affects *V* and its EPSS score is at or above the configured `minEpss`.
 
 It is the twin of `DenyIfCve`: the same lookup, the same verdict vocabulary, the same failure
@@ -206,9 +206,12 @@ exploitability cannot be established", and enable it alongside `DenyIfCve` rathe
 
 Pilot supplies the score. It fetches the EPSS daily feed each compile pass, joins it onto the
 advisories through their aliases, and writes the result to the artifact's `epss_score` column
-([`Ecluse.Core.Osv.Epss`](../../core/src/Ecluse/Core/Osv/Epss.hs)). The feed download is bounded and
-decompressed on the way in, and a pass that cannot fetch it fails rather than publishing an artifact
-whose scores all read as absent, which every EPSS rule would then read as a deny.
+([`Ecluse.Core.Osv.Epss`](../../core/src/Ecluse/Core/Osv/Epss.hs)). The download is bounded twice, on
+the served stream and again on its gzip expansion, so neither an endless stream nor a compression
+bomb can hang or exhaust the pass. A feed past either bound is refused whole rather than truncated,
+because a short table is indistinguishable from a complete one downstream. A pass that cannot fetch
+the feed, or that decodes no scores from it at all, fails rather than publishing an artifact whose
+scores all read as absent, which every EPSS rule would then read as a deny.
 
 ### Local polling, decoupled ingestion
 
@@ -252,7 +255,10 @@ the artifact as SQLite's `user_version`. A mismatch keeps the last-good database
 The artifact is **immutable and rebuilt from scratch** on every compilation, so there are no
 migrations, only a read-compatibility contract. The epoch moves only for a breaking change. An
 additive change (a new column or table) does not bump it, because readers select explicit
-columns. Pilot filters rows to the target ecosystem, so an advisory spanning two ecosystems does
+columns. What the reader requires is a separate question from what the epoch names: within epoch 3
+the reader requires `severity` and `epss_score` on `package_vulnerability_ranges`, so an artifact
+carrying neither the column nor its declared type fails schema conformance
+(`CveDbSchemaNonConformant`) and the last-good database keeps serving. Pilot filters rows to the target ecosystem, so an advisory spanning two ecosystems does
 not leak foreign package rows. Each denial's audit log records the advisory database ETag live
 at emit (`active_advisory_db_etag`). That is deliberately the ETag live at emit rather than the
 one the rule evaluated against, since a shadow-swap can land mid-request.

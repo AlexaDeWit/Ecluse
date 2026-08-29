@@ -18,7 +18,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (metaTableDdl, osvSchemaEpoch, rangesTableDdl)
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithLaxSchema, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithLaxSchema, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch, mkDbWithoutEpssColumn)
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
 -- CorpusV1's rows in the fake's vocabulary. Keep them in lockstep with the corpus pins in
@@ -106,6 +106,14 @@ spec = do
                 -- The reader cannot trust decodes under affinity-hinted (non-STRICT) declarations,
                 -- so schema conformance must refuse the artifact as a value.
                 mkDbWithLaxSchema path
+                openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
+
+        it "rejects an artifact whose ranges table lacks a column the reader decodes" $
+            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
+                let path = dir </> "no-epss-column.db"
+                -- Reading a pre-column artifact would present every advisory as unscored, which
+                -- an EPSS deny rule reads as a denial. Conformance refuses it instead.
+                mkDbWithoutEpssColumn path
                 openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
 
         it "rejects an artifact compiled for a different ecosystem" $

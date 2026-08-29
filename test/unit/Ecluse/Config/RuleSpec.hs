@@ -24,7 +24,7 @@ import Ecluse.Core.Rules.Types (
     defaultAllowIfOlderThanPrecedence,
     defaultAllowIfRemediatesCvePrecedence,
     defaultDenyIfCvePrecedence,
-    defaultDenyIfEpssExceedsPrecedence,
+    defaultDenyIfEpssPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
     ruleName,
  )
@@ -157,28 +157,28 @@ spec = describe "rulePolicySpec" $ do
             resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"minSeverity\":50}}}"
                 `shouldBe` Left [MalformedRule "deny-cve" "\"minSeverity\" must be a CVSS score between 0 and 10"]
 
-    describe "DenyIfEpssExceeds (add, patch, and validation)" $ do
-        it "adds a DenyIfEpssExceeds from a minEpss, defaulting onUnavailable to fail-closed" $
-            resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpssExceeds\",\"minEpss\":0.5}}}"
-                `shouldSatisfy` hasRuleAtPrec defaultDenyIfEpssExceedsPrecedence (DenyIfEpssExceeds (DenyIfEpssParams 0.5 FailDeny))
+    describe "DenyIfEpss (add, patch, and validation)" $ do
+        it "adds a DenyIfEpss from a minEpss, defaulting onUnavailable to fail-closed" $
+            resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}}"
+                `shouldSatisfy` hasRuleAtPrec defaultDenyIfEpssPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 FailDeny))
 
         it "reads onUnavailable:skip as fail-open" $
-            resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpssExceeds\",\"minEpss\":0.5,\"onUnavailable\":\"skip\"}}}"
-                `shouldSatisfy` hasRuleAtPrec defaultDenyIfEpssExceedsPrecedence (DenyIfEpssExceeds (DenyIfEpssParams 0.5 FailNoDecision))
+            resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5,\"onUnavailable\":\"skip\"}}}"
+                `shouldSatisfy` hasRuleAtPrec defaultDenyIfEpssPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision))
 
         it "rejects an add missing its minEpss" $
-            resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpssExceeds\"}}}"
-                `shouldBe` Left [MalformedRule "deny-epss" "\"DenyIfEpssExceeds\" requires \"minEpss\""]
+            resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpss\"}}}"
+                `shouldBe` Left [MalformedRule "deny-epss" "\"DenyIfEpss\" requires \"minEpss\""]
 
         it "rejects a minEpss outside the probability range" $ do
-            resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpssExceeds\",\"minEpss\":1.5}}}"
+            resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpss\",\"minEpss\":1.5}}}"
                 `shouldBe` Left [MalformedRule "deny-epss" "\"minEpss\" must be an EPSS probability between 0 and 1"]
-            resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpssExceeds\",\"minEpss\":-0.1}}}"
+            resolveJson "{\"rules\":{\"deny-epss\":{\"type\":\"DenyIfEpss\",\"minEpss\":-0.1}}}"
                 `shouldBe` Left [MalformedRule "deny-epss" "\"minEpss\" must be an EPSS probability between 0 and 1"]
 
         it "patches an existing rule's threshold, keeping its alignment" $
             resolveJsonOver epssBase "{\"rules\":{\"deny-epss\":{\"minEpss\":0.9}}}"
-                `shouldSatisfy` hasRuleAtPrec defaultDenyIfEpssExceedsPrecedence (DenyIfEpssExceeds (DenyIfEpssParams 0.9 FailDeny))
+                `shouldSatisfy` hasRuleAtPrec defaultDenyIfEpssPrecedence (DenyIfEpss (DenyIfEpssParams 0.9 FailDeny))
 
         it "validates minEpss on the patch path too, not only on add" $
             resolveJsonOver epssBase "{\"rules\":{\"deny-epss\":{\"minEpss\":2}}}"
@@ -311,7 +311,7 @@ cveBase =
 epssBase :: RulePolicy
 epssBase =
     RulePolicy
-        (Map.fromList [("deny-epss", PrecededRule defaultDenyIfEpssExceedsPrecedence (DenyIfEpssExceeds (DenyIfEpssParams 0.5 FailDeny)))])
+        (Map.fromList [("deny-epss", PrecededRule defaultDenyIfEpssPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)))])
 
 containsAllowScope :: Either [PolicyError] [PrecededRule] -> Bool
 containsAllowScope (Right rs) = any isAllowScope rs
@@ -334,7 +334,7 @@ knownRuleAdds =
     , ("AllowByIdentity", "{\"rules\":{\"r\":{\"type\":\"AllowByIdentity\",\"identity\":\"left-pad@1.3.0\"}}}")
     , ("AllowIfRemediatesCve", "{\"rules\":{\"r\":{\"type\":\"AllowIfRemediatesCve\"}}}")
     , ("DenyIfCve", "{\"rules\":{\"r\":{\"type\":\"DenyIfCve\",\"minSeverity\":8}}}")
-    , ("DenyIfEpssExceeds", "{\"rules\":{\"r\":{\"type\":\"DenyIfEpssExceeds\",\"minEpss\":0.5}}}")
+    , ("DenyIfEpss", "{\"rules\":{\"r\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}}")
     , ("DenyInstallTimeExecution", "{\"rules\":{\"r\":{\"type\":\"DenyInstallTimeExecution\"}}}")
     , ("DenyByIdentity", "{\"rules\":{\"r\":{\"type\":\"DenyByIdentity\",\"identity\":\"left-pad\"}}}")
     ]

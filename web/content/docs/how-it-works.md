@@ -82,7 +82,7 @@ above every allow by default.
 | `DenyByIdentity` | Deny | Off | Revokes a package or version |
 | `DenyInstallTimeExecution` | Deny | Off | Denies packages that run code at install time |
 | `DenyIfCve` | Deny | Off | Denies versions with a known vulnerability above a severity you choose |
-| `DenyIfEpssExceeds` | Deny | Off | Denies versions with a known vulnerability whose exploitation probability (EPSS) is at or above a threshold you choose |
+| `DenyIfEpss` | Deny | Off | Denies versions with a known vulnerability whose exploitation probability (EPSS) is at or above a threshold you choose |
 
 `remediation-fast-track` abstains until a first advisory database syncs, so without one only the
 quarantine governs. The off rules opt in by name, and

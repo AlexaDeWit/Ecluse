@@ -9,8 +9,9 @@
 EPSS is the probability that a vulnerability is exploited in the wild within 30 days, keyed
 by CVE id. The OSV payload carries no such score, so Pilot fetches the daily feed itself and
 joins it through an advisory's aliases ("Ecluse.Core.Osv.Advisory"). The feed is a gzipped
-CSV. The fetch refuses an over-large one whole rather than truncating it, because a partial
-table reads downstream as unscored, which a deny-on-EPSS rule counts as exceeding.
+CSV, bounded on both sides of decompression and refused whole rather than truncated, and a
+feed that yields no scores at all is refused too. A partial or empty table reads downstream
+as unscored, which a deny-on-EPSS rule counts as exceeding every threshold.
 -}
 module Ecluse.Core.Osv.Epss (
     -- * The feed
@@ -18,6 +19,7 @@ module Ecluse.Core.Osv.Epss (
     maxEpssFeedBytes,
     fetchEpssScores,
     EpssFeedTooLarge (..),
+    EpssFeedEmpty (..),
 
     -- * The score table
     EpssScores,
@@ -46,19 +48,31 @@ allowlists for Pilot's egress, and it redirects only within itself, to the dated
 epssFeedUrl :: String
 epssFeedUrl = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 
-{- | The decompressed ceiling Pilot fetches under, 64 MiB. The feed is one short row per
-scored CVE, so this leaves several times the headroom the CVE catalogue's growth needs.
+{- | The byte ceiling Pilot fetches under, 64 MiB, applied to the served stream and again to its
+expansion. The feed is one short row per scored CVE, so the headroom is several times over.
 -}
 maxEpssFeedBytes :: Int
 maxEpssFeedBytes = 64 * 1024 * 1024
 
-{- | The feed decompressed past the fetch's ceiling (carried), so the fetch refused it. A
-compression bomb inflates no further than that ceiling before this stops it.
+{- | The feed passed a byte ceiling, so the fetch refused it whole. Each carries that ceiling
+and the bytes seen when it tripped, which is the ceiling plus at most one chunk.
 -}
-newtype EpssFeedTooLarge = EpssFeedTooLarge Int
+data EpssFeedTooLarge
+    = -- | The compressed stream the host served, so an endless one cannot hang the pass.
+      CompressedTooLarge Int Int
+    | -- | Its expansion under gzip, which is what a compression bomb inflates.
+      DecompressedTooLarge Int Int
     deriving stock (Eq, Show)
 
 instance Exception EpssFeedTooLarge
+
+{- | The feed decoded to no scores at all: an error page served as 200, or a column order the row
+decode no longer reads. An all-unscored artifact denies every affected version, so the pass fails.
+-}
+data EpssFeedEmpty = EpssFeedEmpty
+    deriving stock (Eq, Show)
+
+instance Exception EpssFeedEmpty
 
 {- | The scores from one fetch of the feed. Keys are upper-cased CVE ids, so a case
 difference between the feed and an advisory's aliases cannot silently miss the join.
@@ -103,9 +117,8 @@ parseEpssLine raw = case T.splitOn "," (decodeUtf8 raw) of
         guard (p >= 0 && p <= 1)
         pure p
 
-{- | Fetch the feed and decode it into a score table, bounded by @cap@ decompressed bytes. A
-non-2xx response, an undecodable archive, and an over-large feed all throw, because a pass that
-cannot score its advisories must fail rather than publish one whose scores all read as absent.
+{- | Fetch the feed and decode it into a score table, bounded by @cap@ bytes on each side of
+decompression. A non-2xx, undecodable, over-large, or scoreless feed throws: the pass must fail.
 -}
 fetchEpssScores :: (MonadResource m, MonadThrow m, KatipContext m) => Int -> String -> m EpssScores
 fetchEpssScores cap urlStr = do
@@ -113,24 +126,26 @@ fetchEpssScores cap urlStr = do
     -- backoff as a retryable fault instead of feeding an error page to the decompressor.
     req <- liftIO (setRequestCheckStatus <$> parseRequest urlStr)
     scores <- runConduit (httpSource req (\res -> getResponseBody res .| decodeEpssFeed cap))
+    when (epssScoreCount scores == 0) (throwM EpssFeedEmpty)
     logFM InfoS (ls ("Ingested " <> show (epssScoreCount scores) <> " EPSS scores from " <> authorityLabel (toText urlStr)))
     pure scores
 
--- The feed's wire form: gzip, then CSV rows. The byte bound sits before the line split, so
--- a bomb cannot build one unbounded line either.
+-- The feed's wire form: gzip, then CSV rows. Bounding the served stream keeps an endless one
+-- from hanging the pass, and bounding its expansion keeps a bomb from exhausting the heap.
 decodeEpssFeed :: (MonadIO m, MonadThrow m) => Int -> ConduitT ByteString o m EpssScores
 decodeEpssFeed cap =
-    transPipe liftIO ungzip
-        .| boundDecompressed cap
+    boundBytes CompressedTooLarge cap
+        .| transPipe liftIO ungzip
+        .| boundBytes DecompressedTooLarge cap
         .| C.linesUnboundedAscii
-        .| C.foldl addRow (EpssScores Map.empty)
+        .| C.foldl addRow (mkEpssScores [])
   where
     addRow acc line = maybe acc (`addScore` acc) (parseEpssLine line)
 
--- Pass the stream through until it breaches the ceiling, then refuse the feed. It never
+-- Pass the stream through until it breaches the ceiling, then refuse the feed whole. It never
 -- truncates, because a short table is indistinguishable downstream from a complete one.
-boundDecompressed :: (MonadThrow m) => Int -> ConduitT ByteString ByteString m ()
-boundDecompressed cap = go 0
+boundBytes :: (MonadThrow m) => (Int -> Int -> EpssFeedTooLarge) -> Int -> ConduitT ByteString ByteString m ()
+boundBytes refuse cap = go 0
   where
     go !seen =
         await >>= \case
@@ -138,5 +153,5 @@ boundDecompressed cap = go 0
             Just chunk ->
                 let seen' = seen + BS.length chunk
                  in if seen' > cap
-                        then throwM (EpssFeedTooLarge cap)
+                        then throwM (refuse cap seen')
                         else yield chunk >> go seen'

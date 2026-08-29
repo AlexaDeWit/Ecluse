@@ -122,7 +122,7 @@ buildRule name ty entry = case ty of
         AllowByIdentity <$> requireField name "AllowByIdentity" "identity" Right (entryIdentity entry)
     "AllowIfRemediatesCve" -> Right AllowIfRemediatesCve
     "DenyIfCve" -> DenyIfCve <$> buildDenyIfCveParams name entry
-    "DenyIfEpssExceeds" -> DenyIfEpssExceeds <$> buildDenyIfEpssParams name entry
+    "DenyIfEpss" -> DenyIfEpss <$> buildDenyIfEpssParams name entry
     "DenyInstallTimeExecution" -> Right DenyInstallTimeExecution
     _ -> Left [UnknownRuleType name ty]
 
@@ -160,11 +160,11 @@ buildDenyIfCveParams name entry =
         <$> requireField name "DenyIfCve" "minSeverity" (validateMinSeverity name) (entryMinSeverity entry)
         <*> parseOnUnavailable name (entryOnUnavailable entry)
 
--- | Decode 'DenyIfEpssExceeds''s parameters, on the same terms as 'buildDenyIfCveParams'.
+-- | Decode 'DenyIfEpss''s parameters, on the same terms as 'buildDenyIfCveParams'.
 buildDenyIfEpssParams :: Text -> RuleEntry -> Either [PolicyError] DenyIfEpssParams
 buildDenyIfEpssParams name entry =
     DenyIfEpssParams
-        <$> requireField name "DenyIfEpssExceeds" "minEpss" (validateMinEpss name) (entryMinEpss entry)
+        <$> requireField name "DenyIfEpss" "minEpss" (validateMinEpss name) (entryMinEpss entry)
         <*> parseOnUnavailable name (entryOnUnavailable entry)
 
 -- Decode the @onUnavailable@ policy: how the rule resolves when the advisory
@@ -191,8 +191,8 @@ patchRuleValue name entry rule = do
                 DenyIfCveParams
                     <$> maybe (Right (dicMinSeverity params)) (validateMinSeverity name) (entryMinSeverity entry)
                     <*> maybe (Right (dicOnUnavailable params)) (parseOnUnavailable name . Just) (entryOnUnavailable entry)
-        DenyIfEpssExceeds params ->
-            fmap DenyIfEpssExceeds $
+        DenyIfEpss params ->
+            fmap DenyIfEpss $
                 DenyIfEpssParams
                     <$> maybe (Right (dieMinEpss params)) (validateMinEpss name) (entryMinEpss entry)
                     <*> maybe (Right (dieOnUnavailable params)) (parseOnUnavailable name . Just) (entryOnUnavailable entry)
@@ -216,7 +216,7 @@ knownRuleTypes =
     , "AllowByIdentity"
     , "AllowIfRemediatesCve"
     , "DenyIfCve"
-    , "DenyIfEpssExceeds"
+    , "DenyIfEpss"
     , "DenyInstallTimeExecution"
     , "DenyByIdentity"
     ]

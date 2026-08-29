@@ -144,9 +144,9 @@ stays the reviewable home for a real policy.
 | yours to add | `DenyByIdentity` | No | Hard-denies a specific package or `package@version` (the `revoke` shape). | `identity` |
 | yours to add | `DenyInstallTimeExecution` | No, because many legitimate packages ship install scripts | Denies install-time code execution. | (none) |
 | yours to add | `DenyIfCve` | No | Blocks a version a synced advisory records as affected at or above the CVSS threshold. The npm malware feed carries no score and counts as above every threshold, so enabling it also blocks known-malicious packages. Sits just below `AllowByIdentity`, so an identity pin overrides it. | `minSeverity` (0-10). `onUnavailable` (`deny` by default, or `skip`) decides what happens when the advisory database cannot answer. |
-| yours to add | `DenyIfEpssExceeds` | No | Blocks a version a synced advisory records as affected when that advisory's EPSS score is at or above the threshold. EPSS is FIRST.org's estimate of the probability a vulnerability is exploited in the wild within 30 days, so this gates on likelihood where `DenyIfCve` gates on severity. An advisory with no EPSS score counts as above every threshold. Shares `DenyIfCve`'s precedence. | `minEpss` (0-1). `onUnavailable` as for `DenyIfCve`. |
+| yours to add | `DenyIfEpss` | No | Blocks a version a synced advisory records as affected when that advisory's EPSS score is at or above the threshold. EPSS is FIRST.org's estimate of the probability a vulnerability is exploited in the wild within 30 days, so this gates on likelihood where `DenyIfCve` gates on severity. An advisory with no EPSS score counts as above every threshold. Shares `DenyIfCve`'s precedence. | `minEpss` (0-1). `onUnavailable` as for `DenyIfCve`. |
 
-Before you enable `DenyIfCve` or `DenyIfEpssExceeds`, read
+Before you enable `DenyIfCve` or `DenyIfEpss`, read
 [Onboarding the advisory denies](@/docs/configuration.md#onboarding-the-advisory-denies).
 
 Precedence defaults per type, and an integer `precedence` overrides it. The policy below patches
@@ -170,7 +170,7 @@ rules:
     type: DenyIfCve
     minSeverity: 8
   deny-exploitable-cves:
-    type: DenyIfEpssExceeds
+    type: DenyIfEpss
     minEpss: 0.5
 ```
 
@@ -180,7 +180,7 @@ The precedence values, the patch/add/suppress merge model, and the strict valida
 
 ## Onboarding the advisory denies
 
-`DenyIfCve` and `DenyIfEpssExceeds` can break a cold deployment, because a freshly stood-up mirror
+`DenyIfCve` and `DenyIfEpss` can break a cold deployment, because a freshly stood-up mirror
 still needs historical versions your existing builds depend on, and an advisory may since have
 covered them. Enable them *after* you warm your private mirror:
 
@@ -193,7 +193,7 @@ covered them. Enable them *after* you warm your private mirror:
 3. If Écluse then denies a specific version you must keep, pin it with an `AllowByIdentity` rule,
    which outranks both. That covers a false positive or a risk you accept.
 
-Add `DenyIfEpssExceeds` alongside `DenyIfCve`, not instead of it. It reads the same advisory
+Add `DenyIfEpss` alongside `DenyIfCve`, not instead of it. It reads the same advisory
 database and denies on exploitability rather than severity, so it catches a merely moderate CVE
 that attackers are actually using. Because an advisory with no EPSS score counts as above every
 threshold, and most npm advisories carry no CVE alias for EPSS to key on, a low `minEpss` is not a

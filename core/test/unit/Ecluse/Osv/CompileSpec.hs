@@ -15,7 +15,7 @@ import Paths_ecluse (version)
 import System.Directory (removeFile)
 import System.FilePath (takeFileName)
 import System.IO.Error (catchIOError)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite, osvToRow)
@@ -30,7 +30,7 @@ import Ecluse.Test.Osv (osvZipOf, runOsvTestM)
 import Ecluse.Test.OsvDb (epssFixtureFile)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
 import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub)
-import Network.HTTP.Types.Status (status200)
+import Network.HTTP.Types.Status (status200, status404)
 
 spec :: Spec
 spec = describe "SQLite OSV Compilation" $ do
@@ -103,6 +103,17 @@ spec = describe "SQLite OSV Compilation" $ do
         -- operator alarms on a feed that keeps failing to compile.
         recorded <- readRecorded
         recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 20)] [CompileAborted]
+
+    it "fails the pass when the EPSS feed answers non-2xx, so nothing reaches the export" $ do
+        -- A 404 is permanent, so the fetch gives up at once rather than spending the backoff
+        -- budget. The compile throws before it writes meta, and the caller's upload never runs.
+        zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+        (metrics, _) <- recordingAdvisoryCompileMetricsPort
+        let action =
+                withStub status200 zipData $ \stub ->
+                    withStub status404 LBS.empty $ \epssStub ->
+                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" "npm" (sourcesOf stub epssStub "/all.zip"))
+        action `shouldThrow` anyException
 
     describe "osvToRow" $ do
         let rowFor upper = osvToRow (ExtractedOsv "pkg" "npm" "GHSA-row" (Just "1.0.0") upper (Just 5.9) (Just 0.25))

@@ -229,6 +229,6 @@ rules:
   # cheaper substitute, and warm the mirror first as for that rule. It shares
   # `DenyIfCve`'s precedence, so an identity pin overrides it too.
   # deny-exploitable-cves:
-  #   type: DenyIfEpssExceeds
+  #   type: DenyIfEpss
   #   minEpss: 0.5            # EPSS >= 0.5. Unscored advisories always block
   #   onUnavailable: deny     # as for DenyIfCve: "skip" fails open instead

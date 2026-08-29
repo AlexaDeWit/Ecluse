@@ -24,6 +24,7 @@ module Ecluse.Test.Osv (
     mkDbWithMaliciousTrigger,
     mkDbWithMalformedProvenance,
     mkDbWithLaxSchema,
+    mkDbWithoutEpssColumn,
     mkDbWithCorruptPage,
     mkMinimalValidDb,
 
@@ -190,6 +191,25 @@ mkDbWithLaxSchema path = withConnection path $ \conn -> do
         \  epss_score REAL\
         \)"
     execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
+    execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
+    setEpoch conn osvSchemaEpoch
+
+{- | A right-epoch, @STRICT@, otherwise conformant artifact whose ranges table carries no
+@epss_score@ column. Conformance must refuse it as a value rather than let the decode fail.
+-}
+mkDbWithoutEpssColumn :: FilePath -> IO ()
+mkDbWithoutEpssColumn path = withConnection path $ \conn -> do
+    execute_
+        conn
+        "CREATE TABLE package_vulnerability_ranges (\
+        \  package_name TEXT NOT NULL,\
+        \  cve_id TEXT NOT NULL,\
+        \  introduced_version TEXT,\
+        \  fixed_version TEXT,\
+        \  last_affected_version TEXT,\
+        \  severity REAL\
+        \) STRICT"
+    createMetaTable conn
     execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
     setEpoch conn osvSchemaEpoch
 
