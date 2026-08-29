@@ -80,8 +80,10 @@ import Ecluse.Runtime.Telemetry.Resolve (prepareTelemetry)
 heavier serve- and worker-side handles later (see "Ecluse.Proxy").
 -}
 data BootEnv = BootEnv
-    { beConfig :: AppConfig
-    -- ^ The application-level configuration slice the subcommands read.
+    { beConfig :: Config
+    {- ^ The whole loaded configuration document. A subcommand that wants only the
+    application slice projects it with 'configApp'.
+    -}
     , beS3Endpoint :: Maybe AwsEndpoint
     {- ^ The @AWS_ENDPOINT_URL@ override the S3 advisory client dials, read from the
     process environment beside the config and resolved once here. 'Nothing' is no
@@ -91,10 +93,6 @@ data BootEnv = BootEnv
     -- ^ The process structured-logging environment.
     , beTelemetry :: Telemetry
     -- ^ The telemetry handle, inert unless @ECLUSE_OBSERVABILITY__TELEMETRY@ enabled it.
-    , beConfigFull :: Config
-    {- ^ The whole loaded configuration document, for subcommands that need more than
-    'beConfig' (the serve path's mount and rule wiring, for one).
-    -}
     , beBootPlan :: BootPlan
     {- ^ Every decision the boot resolved: the mirror runtime, the memory plan, and the
     connection-pool sizes. 'withBootEnv' has already logged the plan's lines.
@@ -212,11 +210,10 @@ withBootEnv action = do
     withTelemetry (obsTelemetry observability) logEnv $ \telemetry ->
         action
             BootEnv
-                { beConfig = env
+                { beConfig = config
                 , beS3Endpoint = s3Endpoint
                 , beLogEnv = logEnv
                 , beTelemetry = telemetry
-                , beConfigFull = config
                 , beBootPlan = bootPlan
                 }
 

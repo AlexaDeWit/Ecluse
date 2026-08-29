@@ -46,7 +46,7 @@ import Ecluse.Core.Registry.Npm.Project (
     projectName,
     projectScope,
  )
-import Ecluse.Core.Version (Version, mkVersion, renderVersion, unVersion)
+import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Json (genJsonText, genKey, genValue)
 import Ecluse.Test.Package (unsafeHash, unscopedNpm)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
@@ -350,11 +350,11 @@ versionListSpec :: Spec
 versionListSpec = describe "parseVersionList" $ do
     it "lists the packument's versions, preserving the raw strings (is-odd)" $ do
         body <- readFixture "is-odd.full.json"
-        fmap (map unVersion) (parseVersionList (RegistryResponse body)) `shouldBe` Right ["3.0.1"]
+        fmap (map renderVersion) (parseVersionList (RegistryResponse body)) `shouldBe` Right ["3.0.1"]
 
     it "lists every key for a multi-version inline packument, in key order" $ do
         vs <- expectRight (parseVersionList (RegistryResponse multiVersionPackument))
-        map unVersion vs `shouldBe` ["1.0.0", "1.2.0", "2.0.0"]
+        map renderVersion vs `shouldBe` ["1.0.0", "1.2.0", "2.0.0"]
 
 {- | One version broken in a required or security-decisive field is dropped from the decision
 surface, never denying the whole package. Dropping it fails closed for that version while every
@@ -379,7 +379,7 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
         Map.keys (infoVersions info) `shouldBe` []
 
     it "lists only the versions that decode (parseVersionList)" $
-        fmap (map unVersion) (parseVersionList (RegistryResponse mixedHealthAndBrokenPackument))
+        fmap (map renderVersion) (parseVersionList (RegistryResponse mixedHealthAndBrokenPackument))
             `shouldBe` Right ["1.0.0"]
 
     it "resolves a surviving version's details while a broken sibling is absent" $ do

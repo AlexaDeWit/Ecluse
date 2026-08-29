@@ -81,7 +81,6 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
-import Data.Time (UTCTime)
 
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpSurvivors, mpTime), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
@@ -185,7 +184,7 @@ assembleMergedPackument mountBase bySource plan base =
     reconciledTime =
         bookkeepingTime
             <> KeyMap.fromList
-                [ (Key.fromText version, String (renderTime t))
+                [ (Key.fromText version, String (renderIso8601Utc t))
                 | (version, t) <- Map.toList (mpTime plan)
                 ]
 
@@ -233,11 +232,6 @@ versionsObjectOf = \case
 -- unchanged.
 timeBookkeepingKeys :: [Text]
 timeBookkeepingKeys = ["created", "modified"]
-
--- The @time@ map renders once per surviving version per request, so it goes through the
--- hot-path renderer, which holds byte-for-byte 'iso8601Show' parity.
-renderTime :: UTCTime -> Text
-renderTime = renderIso8601Utc
 
 {- | Apply a function to the value at @key@, only when the object already carries that key.
 A missing key stays absent, never fabricated, so passthrough stays lossless.

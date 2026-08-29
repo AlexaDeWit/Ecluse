@@ -83,7 +83,7 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Rules.Types (Decision (Admitted))
 import Ecluse.Core.Security (authorityLabel, hostAddress)
 import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
-import Ecluse.Core.Version (Version, renderVersion, selectLatest, unVersion)
+import Ecluse.Core.Version (Version, renderVersion, selectLatest)
 
 {- | The filtering decisions for one public packument, for the adapter to replay onto the raw
 upstream @Value@. It carries only decisions, never a finished, re-serialisable document.
@@ -134,7 +134,7 @@ filterPlanFromDecisions decisions info =
     -- The upstream @latest@ tag's target. 'selectLatest' decides survival itself, so this version
     -- need only be present, not surviving.
     chosen :: Maybe Version
-    chosen = Map.lookup "latest" (infoDistTags info) >>= versionOf . unVersion
+    chosen = Map.lookup "latest" (infoDistTags info) >>= versionOf . renderVersion
 
     -- 'selectLatest'\'s @survivors@: the surviving versions' parsed 'Version's.
     survivingVersions :: [Version]

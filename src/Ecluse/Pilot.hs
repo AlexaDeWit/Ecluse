@@ -46,12 +46,12 @@ server's graceful return on shutdown must cancel it, resuming from the remote ar
 -}
 runPilot :: BootEnv -> IO ()
 runPilot bootEnv = do
-    let cfg = probeServerConfig (beConfig bootEnv)
+    let cfg = probeServerConfig (configApp (beConfig bootEnv))
     moduleContext (beLogEnv bootEnv) "Ecluse.Pilot" $ do
         logFM InfoS (ls ("Pilot mode starting up on port " <> show (scPort cfg) :: String))
         raceServerAgainstLoop
             (liftIO $ runWarp cfg probeOnlyApplication)
-            (runExportLoop (beTelemetry bootEnv) (beS3Endpoint bootEnv) (beConfigFull bootEnv))
+            (runExportLoop (beTelemetry bootEnv) (beS3Endpoint bootEnv) (beConfig bootEnv))
 
 {- | Compile and upload one OSV artifact per sync interval, or idle with no bucket configured.
 Every fault is transient, because a cycle has no wiring fault to fail up on.

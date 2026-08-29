@@ -50,6 +50,7 @@ import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (
     AppConfig (cfgCache, cfgLimits, cfgServer),
+    Config (configApp),
     LimitsSettings (limMaxNestingDepth, limMaxVersionCount),
     ServerSettings (srvPort, srvShutdownDrainTimeout),
  )
@@ -79,8 +80,8 @@ import Ecluse.Core.Supervision (
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Core.Worker (WorkerPolicies, heartbeatHealthyNow, runWorkerM, workerLoop)
-import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady, csSlot), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
-import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem), SyncSchedule, runCveSync)
+import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
+import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem, syncSlot), SyncSchedule, runCveSync)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..), ServerConfig (scCheckLive, scCheckReady, scDrainTimeout, scOnException, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Runtime.Server qualified as Server
@@ -100,8 +101,8 @@ or incomplete wiring before it opens the listener.
 -}
 runProxy :: BootEnv -> IO ()
 runProxy bootEnv = do
-    let env = beConfig bootEnv
-    let config = beConfigFull bootEnv
+    let config = beConfig bootEnv
+    let env = configApp config
     let logEnv = beLogEnv bootEnv
     let telemetry = beTelemetry bootEnv
     -- Every decision below comes from the plan "Ecluse.Boot" resolved and logged. This
@@ -225,7 +226,7 @@ callback reads the slot, which outlives the sync tasks, so the age survives a ta
 registerAdvisoryAges :: Env -> Map.Map Ecosystem CveSyncHandle -> IO ()
 registerAdvisoryAges builtEnv plan =
     for_ (Map.toList plan) $ \(eco, handle) ->
-        registerAdvisoryDatabaseAge (envMetrics builtEnv) eco (generationInstalledAt (csSlot handle))
+        registerAdvisoryDatabaseAge (envMetrics builtEnv) eco (generationInstalledAt (syncSlot (csEnv handle)))
 
 -- One supervised sync task per configured ecosystem. Each flips its ecosystem's one-way
 -- readiness flag once its first sync lands, and a restart resumes from the remote artifact.

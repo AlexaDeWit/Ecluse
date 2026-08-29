@@ -136,6 +136,12 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
         projectNpmVersion (defaultLimits{maxNestingDepth = 2}) (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0"])
             `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 2))
 
+    it "reports the name mismatch, not the count breach, for a document that breaches both" $
+        -- The self-reported name is the validation authority, so it is decided first.
+        -- Reordering the two checks would surface the bound breach here instead.
+        projectNpmVersion (defaultLimits{maxVersionCount = 1}) (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-even" ["1.0.0", "2.0.0"])
+            `shouldBe` Left (MetadataNameMismatch "is-even")
+
     duplicateKeyParity
 
 {- | A hostile upstream can repeat a top-level key. The @aeson@ whole-document decode keeps the

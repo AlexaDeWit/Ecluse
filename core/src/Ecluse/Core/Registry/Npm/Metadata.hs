@@ -20,9 +20,9 @@ cross-cutting caching policy belongs there.
     It is a total 'Either', so the serve path maps each cause onto a response rather
     than catching a typed throw.
 
-  * 'fetchNpmVersion' \/ 'projectNpmVersion' back the single-version operation. It still
-    fetches the full bytes, because npm carries @time@ only in the full form, but it
-    parses them __selectively__ ("Ecluse.Core.Registry.Npm.SelectiveDecode"). It
+  * 'projectNpmVersion' backs the single-version operation. Its fetch still reads the full
+    bytes, because npm carries @time@ only in the full form, but it parses them
+    __selectively__ ("Ecluse.Core.Registry.Npm.SelectiveDecode"). It
     materialises only the requested version's object and @time@ entry, and skips the
     others unallocated. A cold tarball gate therefore does not pay a whole-packument
     decode to consult one version. It projects the selected version through the /same/
@@ -35,8 +35,6 @@ module Ecluse.Core.Registry.Npm.Metadata (
 
     -- * npm full-manifest fetch
     fetchNpmManifest,
-
-    -- * npm single-version fetch
 
     -- * Pure projection
     projectNpmManifest,
@@ -53,7 +51,6 @@ import Ecluse.Core.Package (
     PackageDetails,
     PackageInfo,
     PackageName,
-    renderPackageName,
  )
 import Ecluse.Core.Package.Filter (enforceArtifactScheme, enforceArtifactSchemeDetails)
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
@@ -81,13 +78,14 @@ import Ecluse.Core.Registry.Npm.SelectiveDecode (
     selectVersionFromPackument,
  )
 import Ecluse.Core.Registry.Request (noValidators)
+import Ecluse.Core.Registry.WireSupport (NameAgreement (NameAgrees, NameDisagrees), checkNameAgreement)
 import Ecluse.Core.Security (
-    LimitError (TooDeeplyNested, TooManyVersions),
+    LimitError (TooDeeplyNested),
     Limits,
     checkNestingDepth,
     checkVersionCount,
+    checkVersionCountOf,
     maxNestingDepth,
-    maxVersionCount,
  )
 import Ecluse.Core.Server.Metadata (ManifestCaching, newMetadataClient)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -112,6 +110,19 @@ newNpmMetadataClient ::
 newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch config =
     newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchNpmManifest tracing config) (fetchNpmVersion tracing config)
 
+{- Fetch a package's full packument once under the fetch span, then run a pure projection over
+the wire bytes under the decode span. Both npm read operations differ only in that projection. -}
+fetchThenProject ::
+    TracingPort ->
+    NpmClientConfig ->
+    PackageName ->
+    (ByteString -> Either MetadataError a) ->
+    IO (Either MetadataError a)
+fetchThenProject tracing config name project =
+    spanMetadataFetch tracing name (fetchMetadataFormBounded config Full noValidators name) >>= \case
+        Left fault -> pure (Left (MetadataFetch fault))
+        Right response -> spanMetadataDecode tracing name (pure (project (responseBody response)))
+
 {- | Fetch a package's full packument and project it into a 'Manifest': the typed view, the
 raw document, and the wire bytes' 'ContentDigest'.
 
@@ -121,15 +132,9 @@ strict body that read produced, the one place the wire bytes exist.
 -}
 fetchNpmManifest :: TracingPort -> NpmClientConfig -> PackageName -> IO (Either MetadataError Manifest)
 fetchNpmManifest tracing config name =
-    spanMetadataFetch tracing name (fetchMetadataFormBounded config Full noValidators name) >>= \case
-        Left fault -> pure (Left (MetadataFetch fault))
-        Right response ->
-            let body = responseBody response
-             in spanMetadataDecode tracing name $
-                    pure
-                        ( manifestOf (digestOf body) . first (enforceArtifactScheme (npmBaseUrl config))
-                            <$> projectNpmManifest (npmLimits config) name body
-                        )
+    fetchThenProject tracing config name $ \body ->
+        manifestOf (digestOf body) . first (enforceArtifactScheme (npmBaseUrl config))
+            <$> projectNpmManifest (npmLimits config) name body
   where
     -- Inject npm's raw packument 'Value' into the opaque served-document carrier at the
     -- fetch boundary: the neutral pipeline and cache thread it without reading it.
@@ -164,11 +169,8 @@ a forwarded miss.
 -}
 fetchNpmVersion :: TracingPort -> NpmClientConfig -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
 fetchNpmVersion tracing config name version =
-    spanMetadataFetch tracing name (fetchMetadataFormBounded config Full noValidators name) >>= \case
-        Left fault -> pure (Left (MetadataFetch fault))
-        Right response ->
-            spanMetadataDecode tracing name $
-                pure ((>>= enforceArtifactSchemeDetails (npmBaseUrl config)) <$> projectNpmVersion (npmLimits config) name version (responseBody response))
+    fetchThenProject tracing config name $
+        fmap (>>= enforceArtifactSchemeDetails (npmBaseUrl config)) . projectNpmVersion (npmLimits config) name version
 
 {- | Project a fetched packument's bytes into __one version's__ 'PackageDetails', without
 decoding the other versions. Pure and total.
@@ -176,8 +178,8 @@ decoding the other versions. Pure and total.
 The outcome matches the one the whole-document path reaches for that version. An
 absent\/undecodable @name@ is 'MetadataUndecodable' and a self-reported /different/ name is
 'MetadataNameMismatch', the anti-shadowing distinction. A breach of 'maxNestingDepth' or of
-the 'maxVersionCount' backstop is 'MetadataBoundExceeded'. An absent or unprojectable
-version yields 'Nothing'.
+the version-count backstop ('checkVersionCountOf') is 'MetadataBoundExceeded'. An absent or
+unprojectable version yields 'Nothing'.
 -}
 projectNpmVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
 projectNpmVersion limits name version body = do
@@ -185,10 +187,10 @@ projectNpmVersion limits name version body = do
     -- The self-reported name is the validation authority (anti-shadowing), checked before the
     -- version-count backstop, as 'projectNpmManifest' does.
     reported <- validateReportedName (svName selected)
-    when (reported /= name) (Left (MetadataNameMismatch (renderPackageName reported)))
-    when
-        (svVersionCount selected > maxVersionCount limits)
-        (Left (MetadataBoundExceeded (TooManyVersions (svVersionCount selected) (maxVersionCount limits))))
+    case checkNameAgreement name reported of
+        NameDisagrees other -> Left (MetadataNameMismatch other)
+        NameAgrees -> pass
+    first MetadataBoundExceeded (checkVersionCountOf limits (svVersionCount selected))
     publishedAt <- parsePublishTime (svTime selected)
     -- 'mkVersion' over the requested version's rendered key matches the whole-document path,
     -- which keys 'projectVersions' by that same string and so projects the version under it.

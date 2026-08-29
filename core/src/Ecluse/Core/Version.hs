@@ -27,7 +27,6 @@ module Ecluse.Core.Version (
     Version,
     versionKey,
     mkVersion,
-    unVersion,
     renderVersion,
     compareVersions,
 
@@ -76,11 +75,7 @@ rejected. A proxy therefore never drops a version over a parser gap.
 mkVersion :: Ecosystem -> Text -> Version
 mkVersion eco raw = Version raw (rightToMaybe (parseVersionKey eco raw))
 
--- | The raw version text.
-unVersion :: Version -> Text
-unVersion = versionRaw
-
--- | Render a version in wire form (the raw text).
+-- | Render a version in wire form: the raw text, verbatim as published.
 renderVersion :: Version -> Text
 renderVersion = versionRaw
 
@@ -123,7 +118,7 @@ displaces a maintainer's stable @latest@.
 * Repoint: among survivors with a parseable key, take the greatest stable one, else the
 greatest prerelease one.
 * No parseable survivor: fall back to the lexicographically smallest survivor by
-'unVersion', so the result still names a present version.
+'renderVersion', so the result still names a present version.
 -}
 selectLatest :: Maybe Version -> [Version] -> Maybe Version
 selectLatest chosen survivors = case nonEmpty survivors of
@@ -132,7 +127,7 @@ selectLatest chosen survivors = case nonEmpty survivors of
         | Just v <- chosen, survives v -> Just v
         | otherwise -> Just (repointLatest survivors1)
   where
-    survives v = any ((== unVersion v) . unVersion) survivors
+    survives v = any ((== renderVersion v) . renderVersion) survivors
 
 -- The repoint arm of 'selectLatest', whose Haddock documents the resolution order.
 repointLatest :: NonEmpty Version -> Version
@@ -144,7 +139,7 @@ repointLatest survivors =
             Nothing -> case nonEmpty keyed of
                 Just ks -> fst (maxByKey ks)
                 -- No parseable survivor: deterministic, present fallback.
-                Nothing -> NE.head (NE.sortWith unVersion survivors)
+                Nothing -> NE.head (NE.sortWith renderVersion survivors)
   where
     -- Greatest by canonical key. Total, because every element carries a key.
     maxByKey :: NonEmpty (Version, VersionKey) -> (Version, VersionKey)

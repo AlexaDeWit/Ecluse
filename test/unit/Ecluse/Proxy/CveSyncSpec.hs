@@ -60,7 +60,7 @@ spec = do
                     syncDbPath (csEnv handle) `shouldBe` dataDir </> "npm-osv-schema3.db"
                     -- Not ready and serving nothing until the first sync.
                     readTVarIO (csReady handle) `shouldReturn` False
-                    withSlotLookup (csSlot handle) (pure . isJust) `shouldReturn` False
+                    withSlotLookup (syncSlot (csEnv handle)) (pure . isJust) `shouldReturn` False
                 doesFileExist (dataDir </> "npm-osv-schema3.db.tmp") `shouldReturn` False
                 doesFileExist (dataDir </> "npm-osv-schema3.db") `shouldReturn` True
 
@@ -96,13 +96,13 @@ spec = do
     describe "cveRuleDepsFor -- per-ecosystem capability dispatch" $ do
         it "borrows through the mount ecosystem's own slot" $ do
             handle <- stubSyncHandle
-            swapIn (csSlot handle) (DbEtag "e1") fakeDb
+            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") fakeDb
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
             rdWithCveLookup (deps Npm) (pure . isJust) `shouldReturn` True
 
         it "abstains for an ecosystem the plan does not carry" $ do
             handle <- stubSyncHandle
-            swapIn (csSlot handle) (DbEtag "e1") fakeDb
+            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") fakeDb
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
             rdWithCveLookup (deps PyPI) (pure . isJust) `shouldReturn` False
 
@@ -142,8 +142,7 @@ stubSyncHandle = do
     ready <- newTVarIO False
     pure
         CveSyncHandle
-            { csSlot = slot
-            , csReady = ready
+            { csReady = ready
             , csEnv =
                 SyncEnv
                     { syncFetch = refusingFetch

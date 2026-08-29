@@ -25,7 +25,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Merge
-import Ecluse.Core.Version (mkVersion, unVersion)
+import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash)
 import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.WireVocab (wireRoundTrips)
@@ -148,7 +148,7 @@ winnerOf key = Map.lookup key . mpSurvivors
 
 -- The resolved @latest@ tag's raw text, if present.
 latestKey :: MergePlan -> Maybe Text
-latestKey p = unVersion <$> Map.lookup "latest" (mpDistTags p)
+latestKey p = renderVersion <$> Map.lookup "latest" (mpDistTags p)
 
 {- | The winning provenance per surviving version key, the order-independent decision
 beneath the order-dependent 'SourceId'. A 'SourceId' is a list index, so this maps each
@@ -593,7 +593,7 @@ spec = do
                 sources <- forAll genSources
                 plan <- H.evalMaybe (mergePackuments sources)
                 let keys = Map.keys (mpSurvivors plan)
-                    targets = map unVersion (Map.elems (mpDistTags plan))
+                    targets = map renderVersion (Map.elems (mpDistTags plan))
                 H.assert (all (`elem` keys) targets)
 
         it "latest, when present, is a surviving key" $

@@ -20,6 +20,7 @@ module Ecluse.Core.Security.Limits (
     LimitError (..),
     boundedRead,
     checkVersionCount,
+    checkVersionCountOf,
     checkNestingDepth,
     withinNestingBudget,
 ) where
@@ -110,13 +111,17 @@ It runs after projection to 'Ecluse.Core.Package.PackageInfo' and before per-ver
 evaluation, so configuration bounds that cost rather than whatever an upstream returns.
 -}
 checkVersionCount :: Limits -> PackageInfo -> Either LimitError PackageInfo
-checkVersionCount limits info =
-    if count > cap
-        then Left (TooManyVersions count cap)
-        else Right info
+checkVersionCount limits info = info <$ checkVersionCountOf limits (Map.size (infoVersions info))
+
+{- | The same ceiling over a bare count, for a caller that knows how many versions a document
+carries without projecting it. The npm selective decoder counts entries as it skips them.
+-}
+checkVersionCountOf :: Limits -> Int -> Either LimitError ()
+checkVersionCountOf limits count
+    | count > cap = Left (TooManyVersions count cap)
+    | otherwise = Right ()
   where
     cap = maxVersionCount limits
-    count = Map.size (infoVersions info)
 
 {- | Reject a decoded JSON document nested deeper than 'maxNestingDepth', returning it
 unchanged when within budget.
