@@ -72,8 +72,13 @@ Signed-off-by: Your Name <you@example.com>
 - **We squash-merge, so sign off every commit**. The DCO check verifies each branch commit, and
   GitHub assembles the squash message from those commits. Editing the PR description does not sign
   your commits.
+- **Let `-s` write the trailer.** It derives the name and email from your git identity, and the
+  DCO check compares the trailer against the commit author. A hand-written line drifts.
 - **Forgot one?** `git commit --amend -s --no-edit` fixes the last commit.
-  `git rebase --signoff main` signs off a whole branch.
+  `git rebase --signoff main` signs off a whole branch. Without interactive rebase (agent
+  harnesses), re-create each branch commit with `git commit-tree -S`, keeping its tree and
+  correcting the trailers, and move the branch ref to the new tip. Confirm `git diff` against the
+  old tip is empty, then force-push the feature branch. Never force-push `main`.
 
 ## Pull requests
 
@@ -81,6 +86,11 @@ Open as a draft while work or review is moving, and mark it ready when it is not
 [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md): Summary, Checklist,
 Sign-off, AI assistance. Fill every section, and tick a checklist item only when it is true.
 Otherwise say "not applicable" and why. An untrue tick costs a reviewer more than an honest gap.
+
+Pipe the body through stdin (`gh pr create --draft --body-file -`, and `gh pr edit --body-file -`
+to update it), or use a gitignored scratch file with a branch-scoped name
+(`scratchpad/pr-body-<branch>.md`). Never a file at the repository root: concurrent agents and
+worktrees collide on it, and it gets staged by accident.
 
 The Summary is the part worth effort. A reviewer reads it before the diff, so write it so someone
 who has not opened the diff understands the change on its own. Two to five sentences: what changed

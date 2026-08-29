@@ -6,8 +6,8 @@ development workflow and CI in [`../CONTRIBUTING.md`](../CONTRIBUTING.md), Haske
 [`../docs/style.md`](../docs/style.md), and the agent-facing essentials in
 [`../AGENTS.md`](../AGENTS.md).
 
-This document is the reference. The `orchestrate-implementation` skill is the procedure a team lead
-runs. It carries the per-PR loop and the hand-off gate, and links back here for depth.
+This document is the reference and the procedure both. The sections below carry what a team lead
+runs: the per-PR loop, verification, evaluation, the hand-off gate, and the guardrails.
 
 ## Roles
 
@@ -294,7 +294,9 @@ formatting, and the PR's CI run is the whole verification loop:
   at PR-open and exits, per [the per-PR loop](#the-per-pr-loop).
 - On a red, the team lead resumes the implementer with the failing run's log
   (`gh run view <run-id> --log-failed`). The fix lands as a distinct commit, and the lead restarts
-  the watch on the new head. An agent supersedes only its own branch's runs. A terminal report
+  the watch on the new head. An agent supersedes only its own branch's runs: a push cancels that
+  branch's in-flight run, so run `gh run list --branch <branch>` before every push and push only
+  when no run you still need is live. A terminal report
   from an implementer that stayed alive is a secondary signal, never the awaited one.
 - The invariant that makes the width safe: disjoint hunks across every open PR. Two PRs may touch
   one file when their hunks do not overlap, and the later PR owns the rebase when the earlier one
@@ -309,16 +311,19 @@ that one target, never the whole gate. The canonical tier and gate semantics liv
 [`../docs/testing.md`](../docs/testing.md). The gating jobs are the `needs` of the terminal `gate`
 job in [`../.github/workflows/ci.yml`](../.github/workflows/ci.yml), and they map:
 
-| Gating CI job | Local command |
-| --- | --- |
-| `build-test` (build, unit, integration) | `task check` (build + unit); `task test-integration` (Docker integration) |
-| `static-checks` (format, lint, Semgrep, workflows, site) | included in `task check` |
-| `docs` (Haddock) | `task docs-check` |
-| `e2e` (whole-system, real npm) | `task test-e2e` |
-| `weeder` (dead code) | `task weeder` (also in `task check`) |
-| `stan` (static analysis) | `task stan` (also in `task check`) |
-| `gate` | green exactly when every job above passes |
-| `smoke` (live registries) | `task test-smoke`, **non-gating, never blocks** |
+| Gating CI job | Display name (`gh pr checks`) | Local command |
+| --- | --- | --- |
+| `build-test` | Build & tests | `task check` (build + unit); `task test-integration` (Docker integration) |
+| `static-checks` | Static checks (format, lint, Semgrep, workflows, site) | included in `task check` |
+| `docs` | Haddock builds | `task docs-check` |
+| `e2e` | End-to-end tests (whole-system, real npm) | `task test-e2e` |
+| `weeder` | Dead-code check (weeder) | `task weeder` (also in `task check`) |
+| `stan` | Haskell static analysis (stan) | `task stan` (also in `task check`) |
+| `gate` | CI gate | green exactly when every job above passes |
+| `smoke` | Smoke tests (live registries) | `task test-smoke`, **non-gating, never blocks** |
+
+Verify a PR's gate with `gh pr checks`, which prints the display names above. Do not trust
+`gh run watch`'s exit code: it can exit 0 on a failed run.
 
 `task nix-check` is worth a _proactive_ local run after you touch the flake or add a module. It
 catches `-Werror` warnings and the _flakes only see git-tracked files_ trap. A new module needs
@@ -364,8 +369,8 @@ A PR reaches the architect only when **all** hold:
       keyword does not close the issue here (auto-close is off), so the team lead closes it by hand
       after the merge, in the inter-wave pass.
 - [ ] Commits GPG-signed and DCO `Signed-off-by` (`git commit -s`), Conventional Commits, AI help
-      disclosed with `Assisted-by:`. The
-      [`open-pull-request`](skills/open-pull-request/SKILL.md) skill is the recipe.
+      disclosed with `Assisted-by:`. The commands are in
+      [CONTRIBUTING, DCO](../CONTRIBUTING.md#developer-certificate-of-origin-dco).
 - [ ] PR taken out of draft and marked **ready for review**, the hand-off itself, done only once
       every box above holds.
 

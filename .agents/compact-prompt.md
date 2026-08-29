@@ -17,5 +17,6 @@ hypotheses, or old status. Repository files stay authoritative and you can retri
 Mark every volatile git, GitHub, CI, or slice status as needing live verification on resume.
 
 For a team-lead orchestration thread, also keep the active slices, the assigned worktrees or
-agents, the review state, and the next dispatchable work. End that checkpoint with: "Resume with
-the resume-orchestration skill and verify volatile state before acting."
+agents, the review state, and the next dispatchable work. End that checkpoint with: "Resume per
+the startup procedure in .agents/context-management.md: verify volatile state against git and
+GitHub and restart the CI watches before acting."

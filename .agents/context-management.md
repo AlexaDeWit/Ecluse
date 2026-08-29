@@ -15,9 +15,18 @@ Layers 2-4 are replaceable. Do not copy layer 1 or a whole design document into 
 
 ## Startup procedure
 
-The `orientation` skill is the procedure. Do not read `AGENTS.md` again in a session: the harness
-injects it at startup. Do not read `CONTRIBUTING.md`, all of `docs/style.md`, every architecture
-document, or every memory file just because it exists.
+For a cold task session: read `README.md`, classify the task, and identify its authoritative
+contract (the request, issue, or PR). Route by the table in `AGENTS.md` and read only what the
+next decision needs. Verify the live state that matters (branch, working tree, relevant PRs and
+issues), then report the working picture before acting.
+
+For a team-lead seat after compaction or restart: treat the checkpoint as provisional. Verify the
+branches, worktrees, open PRs, and check states it names against git and GitHub, restart the CI
+watches, and retrieve only the sections the next orchestration action needs.
+
+In either mode, do not read `AGENTS.md` again in a session: the harness injects it at startup. Do
+not read `CONTRIBUTING.md`, all of `docs/style.md`, every architecture document, or every memory
+file just because it exists.
 
 ## Phase-specific retrieval
 
