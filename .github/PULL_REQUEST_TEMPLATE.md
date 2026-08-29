@@ -5,7 +5,14 @@ For a security fix, coordinate privately first. See SECURITY.md.
 
 ## Summary
 
-<!-- What changed and why. Closes #123 -->
+<!--
+What changed and why, in two to five sentences, for a reader who has not opened the diff.
+Lead with what a reviewer or operator gains or is protected from. For a security or behaviour
+change, say who could do what before and what holds now. No play-by-play of files: the diff
+already lists them. Closes #123
+
+CONTRIBUTING.md -> "Pull requests" has the rules and the same change written verbose and concise.
+-->
 
 ## Checklist
 
@@ -14,6 +21,8 @@ For a security fix, coordinate privately first. See SECURITY.md.
 - [ ] Conventional Commit subjects, and every commit GPG-signed
 - [ ] Every commit signed off under the DCO (`git commit -s`)
 - [ ] Tests added or updated for the change
+- [ ] Haddock meets the `docs/haddock.md` checklist (§12): the why rather than the what, one or two
+      lines per export, no restated signatures, no project or PR narration
 
 ## Sign-off (DCO)
 
