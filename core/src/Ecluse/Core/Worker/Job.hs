@@ -23,7 +23,7 @@ import Katip (Severity (DebugS, ErrorS, InfoS), katipAddNamespace, logFM, ls)
 import UnliftIO (withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
-import Ecluse.Core.Fault (tfCause, tfDetail)
+import Ecluse.Core.Fault (tfCause)
 import Ecluse.Core.Package (Artifact (artFilename, artSize), Hash, pkgEcosystem)
 import Ecluse.Core.Package.Admission (
     ArtifactAdmission (
