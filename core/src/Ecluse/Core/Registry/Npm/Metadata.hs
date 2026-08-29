@@ -169,8 +169,8 @@ a forwarded miss.
 -}
 fetchNpmVersion :: TracingPort -> NpmClientConfig -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
 fetchNpmVersion tracing config name version =
-    fetchThenProject tracing config name $ \body ->
-        (>>= enforceArtifactSchemeDetails (npmBaseUrl config)) <$> projectNpmVersion (npmLimits config) name version body
+    fetchThenProject tracing config name $
+        fmap (>>= enforceArtifactSchemeDetails (npmBaseUrl config)) . projectNpmVersion (npmLimits config) name version
 
 {- | Project a fetched packument's bytes into __one version's__ 'PackageDetails', without
 decoding the other versions. Pure and total.
