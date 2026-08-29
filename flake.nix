@@ -127,6 +127,16 @@
               ver = "1.0.0.0";
               sha256 = "sha256-rHgsisH2d45CI9woEDb/j0WnTzllxaE2Mkx5/OmWn0c=";
             } { };
+          # The pull-side metrics transport. The pinned SDK resolves
+          # OTEL_METRICS_EXPORTER=prometheus to a no-op push exporter and leaves the
+          # endpoint to the application, so renderPrometheusText has to come from
+          # here. Same monorepo and same 1.0 line as the OTLP exporter above.
+          hs-opentelemetry-exporter-prometheus =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-exporter-prometheus";
+              ver = "1.0.0.0";
+              sha256 = "sha256-6yCjTQ/1hriFD2n3zprJDHKBsjLAD5jzlSfOuN/3ej0=";
+            } { };
           # Request-lifecycle instrumentation: the WAI server span and the
           # http-client data-plane child spans. The http-client instrumentation pulls
           # the conduit instrumentation as a 1.0 dependency, so it travels on the line

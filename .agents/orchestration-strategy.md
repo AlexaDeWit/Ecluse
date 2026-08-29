@@ -144,11 +144,14 @@ alignment work, over-specify. The design-checkpoint is a backstop for a genuine 
 for a thin brief. In it the implementer proposes its design and the team lead confirms before deep
 work. Every brief also carries the comment budget as a numbered acceptance criterion: a function
 comment is one or two lines, a new module header is at most eight, and the implementer reports
-each comment block the diff adds with its line count ([`../docs/haddock.md`](../docs/haddock.md)
-§3 and §5). The brief also restates the owner's boy-scout rule, which every agent loads from
-`CLAUDE.md`: a file the slice edits leaves with its existing comments at the cap, trimmed in the
-same change, scoped to that file and behaviour-preserving, and the PR body names what was trimmed.
-Without that sentence an implementer reads "stay in scope" as "touch nothing beside your hunk" and
+each comment block the diff adds, with its line count, in its report to the team lead
+([`../docs/haddock.md`](../docs/haddock.md) §3 and §5). The brief also restates the owner's
+boy-scout rule, which every agent loads from `CLAUDE.md`: a file the slice edits leaves with its
+existing comments at the cap, trimmed in the same change, scoped to that file and
+behaviour-preserving. The commit message names the trims and carries any justification for a
+block left over cap. The PR body carries none of this: it is the goal, the motivation, and the
+consequence, per [CONTRIBUTING, Pull requests](../CONTRIBUTING.md#pull-requests). Without the
+boy-scout sentence an implementer reads "stay in scope" as "touch nothing beside your hunk" and
 leaves the comment wall standing.
 
 **Pin the model**. There is no effort dial. Left unset, the Agent tool's `model` argument takes the
@@ -199,7 +202,7 @@ does. A green CI gate does not stand in for this pass.
   the reviewer lists every comment block the diff adds, and a function comment over two lines or a
   new header over eight (§3, §5) is a finding that blocks. The reviewer also lists every
   pre-existing block over the cap in each file the PR edits, and an untrimmed one is a finding
-  unless the PR body says why it stayed.
+  unless the commit message that touched the file says why it stayed.
 
 A critical finding blocks. Route the fix per **Fix routing** above, then re-verify it.
 
@@ -377,10 +380,11 @@ A PR reaches the architect only when **all** hold:
 - [ ] CI `gate` (and every job it needs) green on the PR.
 - [ ] Docs updated in the same PR. Changes limited to the slice's file scope (another file only with
       strong justification).
-- [ ] The slice-completing PR names the issue it resolves (`Closes #N`). It folds the as-built delta
-      (design decisions, discoveries, deviations from the acceptance criteria) into the same PR. The
-      keyword does not close the issue here (auto-close is off), so the team lead closes it by hand
-      after the merge, in the inter-wave pass.
+- [ ] The slice-completing PR names the issue it resolves (`Closes #N`). Its body is the goal, the
+      motivation, and the consequence, with a deviation from the acceptance criteria stated in one
+      sentence; the detail behind a deviation lives in the commit message that made it. The keyword
+      does not close the issue here (auto-close is off), so the team lead closes it by hand after
+      the merge, in the inter-wave pass.
 - [ ] Commits GPG-signed and DCO `Signed-off-by` (`git commit -s`), Conventional Commits, AI help
       disclosed with `Assisted-by:`. The commands are in
       [CONTRIBUTING, DCO](../CONTRIBUTING.md#developer-certificate-of-origin-dco).

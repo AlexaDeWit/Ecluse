@@ -12,6 +12,7 @@ module Ecluse.Test.Wai (
     -- * Addressing an in-process stub
     localhost,
     selfBaseUrl,
+    freePort,
 
     -- * Reading a request
     lookupAuth,
@@ -37,9 +38,12 @@ import Data.CaseInsensitive qualified as CI
 import Data.List (lookup)
 import Network.HTTP.Types (Header, hAuthorization, statusCode, statusMessage)
 import Network.HTTP.Types.Header (hHost, hIfNoneMatch)
+import Network.Socket (close)
 import Network.Wai (Request (requestHeaders))
+import Network.Wai.Handler.Warp (Port, openFreePort)
 import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
 import Test.Hspec.Wai.Matcher (MatchBody (MatchBody))
+import UnliftIO (bracket)
 
 -- | The base URL of a loopback stub on the given port, by the @localhost@ DNS name.
 localhost :: Int -> Text
@@ -50,6 +54,12 @@ harness's ephemeral port appears. An absent header falls back to @http:\/\/local
 -}
 selfBaseUrl :: Request -> Text
 selfBaseUrl req = "http://" <> maybe "localhost" decodeUtf8 (lookup hHost (requestHeaders req))
+
+{- | A TCP port nothing holds, released as soon as it is found so the listener under test binds
+it itself. A brief race with another process is tolerable on loopback.
+-}
+freePort :: IO Port
+freePort = bracket openFreePort (close . snd) (pure . fst)
 
 -- | The @Authorization@ header value a request carried, if any.
 lookupAuth :: [Header] -> Maybe ByteString

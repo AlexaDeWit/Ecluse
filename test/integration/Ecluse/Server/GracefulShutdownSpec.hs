@@ -15,12 +15,10 @@ import Network.HTTP.Client (
     responseStatus,
  )
 import Network.HTTP.Types (hConnection, status200, statusCode)
-import Network.Socket (close)
 import Network.Wai (Application, responseLBS)
 import Network.Wai.Handler.Warp (
     Port,
     defaultSettings,
-    openFreePort,
     runSettings,
     setGracefulShutdownTimeout,
     setInstallShutdownHandler,
@@ -31,6 +29,8 @@ import UnliftIO.Async (Async, async, poll, wait)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 import UnliftIO.Timeout (timeout)
+
+import Ecluse.Test.Wai (freePort)
 
 {- | The graceful-shutdown drain, driven against a real Warp listener on loopback. Closing
 the listen socket stops new connections, but Warp still waits for an in-flight request to
@@ -118,14 +118,6 @@ withListener app drainTimeoutSeconds k = do
     closeSocket <- takeMVar closeSocketVar
     threadDelay 200_000
     k port closeSocket serverThread
-
--- Open a free port and release it at once, leaving the number for Warp to bind. A brief
--- race with another process is tolerable for a loopback test.
-freePort :: IO Port
-freePort = do
-    (port, sock) <- openFreePort
-    close sock
-    pure port
 
 {- Issue a GET to the loopback listener. The request carries @Connection: close@, as a
 response from a draining instance does, so no keep-alive socket holds the drain open.
