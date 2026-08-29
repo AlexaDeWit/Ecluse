@@ -70,7 +70,7 @@ readHexText t
 -- The value a reader produced, only when it consumed the whole input. Trailing text is a
 -- refusal rather than a silent prefix parse.
 readWholly :: TR.Reader a -> Text -> Maybe a
-readWholly reader t = case reader t of
+readWholly textReader t = case textReader t of
     Right (n, rest) | T.null rest -> Just n
     _ -> Nothing
 
