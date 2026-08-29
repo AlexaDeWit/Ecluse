@@ -257,8 +257,10 @@ migrations, only a read-compatibility contract. The epoch moves only for a break
 additive change (a new column or table) does not bump it, because readers select explicit
 columns. What the reader requires is a separate question from what the epoch names: within epoch 3
 the reader requires `severity` and `epss_score` on `package_vulnerability_ranges`, so an artifact
-carrying neither the column nor its declared type fails schema conformance
-(`CveDbSchemaNonConformant`) and the last-good database keeps serving. Pilot filters rows to the target ecosystem, so an advisory spanning two ecosystems does
+missing a required column, or carrying it under a different declared type, fails schema
+conformance (`CveDbSchemaNonConformant`) and the last-good database keeps serving.
+
+Pilot filters rows to the target ecosystem, so an advisory spanning two ecosystems does
 not leak foreign package rows. Each denial's audit log records the advisory database ETag live
 at emit (`active_advisory_db_etag`). That is deliberately the ETag live at emit rather than the
 one the rule evaluated against, since a shadow-swap can land mid-request.
