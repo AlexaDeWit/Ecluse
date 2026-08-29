@@ -115,17 +115,17 @@ The **default precedence ladder** climbs from most-passive to most-decisive:
 
 ```text
 AllowIfOlderThan (100) < AllowIfRemediatesCve (150) < AllowScope (200) <
-DenyIfCve (225) < AllowByIdentity (250) < DenyInstallTimeExecution (300) <
-DenyByIdentity (400)
+DenyIfCve = DenyIfEpssExceeds (225) < AllowByIdentity (250) <
+DenyInstallTimeExecution (300) < DenyByIdentity (400)
 ```
 
 `DenyInstallTimeExecution` and `DenyByIdentity` default strictly above every allow, so "any deny
-overrides any allow" holds for them out of the box. `DenyIfCve` is the deliberate exception. It
-sits **below** `AllowByIdentity` (225 against 250), so an operator's exact-identity allow
-overrides an advisory deny. That is the explicit "I have decided this version must ship" escape
-hatch. `DenyIfCve` still sits above the passive age gate, the remediation lane, and a scope
-allow-list. An operator may raise a specific allow above a specific deny, or the reverse, with
-an explicit precedence.
+overrides any allow" holds for them out of the box. The two advisory denies are the deliberate
+exception. They share a rung **below** `AllowByIdentity` (225 against 250), so an operator's
+exact-identity allow overrides either. That is the explicit "I have decided this version must ship"
+escape hatch. Both still sit above the passive age gate, the remediation lane, and a scope
+allow-list, and configured together they tie, which the boot order resolves by name. An operator may
+raise a specific allow above a specific deny, or the reverse, with an explicit precedence.
 
 The [default policy](configuration.md#the-default-policy) records which rules ship enabled: the
 pure `AllowIfOlderThan` quarantine (`min-age`) and the `AllowIfRemediatesCve` fast lane. The
@@ -138,8 +138,9 @@ The advisory subsystem reads a synced local copy rather than calling an advisory
 evaluation. The `CveLookup` handle ([`Ecluse.Core.Cve`](../../core/src/Ecluse/Core/Cve.hs))
 reads the synced `osv.db` SQLite artifact on local disk, never the network, on the hot path. It
 models an advisory's affected set faithfully: range bounds (inclusive `introduced`, exclusive
-`fixed` or inclusive `last_affected`) and exactly-enumerated versions as points. Each advisory
-also carries a numeric CVSS base score. Each evaluation brackets its own acquisition, so the
+`fixed` or inclusive `last_affected`) and exactly-enumerated versions as points. Each advisory also
+carries a numeric CVSS base score and, where the EPSS feed scores one of its identifiers, an EPSS
+probability. Each evaluation brackets its own acquisition, so the
 [shadow-swap](#local-polling-decoupled-ingestion) can retire a superseded artifact the moment no
 evaluation still reads it. Two rules read it in opposite directions.
 
@@ -183,7 +184,31 @@ every threshold**, so the rule always denies malware while `minSeverity` governs
 
 Enabling it on a cold mirror can deny historical versions an existing build depends on, so it
 ships off. Warm the mirror first, as
-[Onboarding DenyIfCve](https://ecluse-proxy.com/docs/configuration/#onboarding-denyifcve) sets out.
+[Onboarding the advisory denies](https://ecluse-proxy.com/docs/configuration/#onboarding-the-advisory-denies)
+sets out.
+
+### `DenyIfEpssExceeds`, the exploitability direction
+
+Severity states how bad a vulnerability would be. It does not state whether anyone is exploiting it.
+FIRST.org's Exploit Prediction Scoring System (EPSS) estimates the probability that a vulnerability
+is exploited in the wild within the next 30 days, and a moderate CVE under active exploitation is a
+worse risk to a build than a critical one nobody has weaponised. `DenyIfEpssExceeds` denies version
+*V* of *P* when an advisory affects *V* and its EPSS score is at or above the configured `minEpss`.
+
+It is the twin of `DenyIfCve`: the same lookup, the same verdict vocabulary, the same failure
+alignment, and the same precedence rung. Only the score it compares differs. An advisory the
+artifact carries no EPSS score for counts as **above every threshold**, the same fail-closed
+direction as an unscored CVSS advisory. That is not a rare case on the npm feed. EPSS keys on CVE
+ids, the artifact's rows key on the advisory id, and the join runs through the advisory's `aliases`
+array, so an advisory with no CVE alias, which includes the whole `MAL-*` malware feed, arrives
+unscored. An operator should read the rule as "deny on exploitability, and on anything whose
+exploitability cannot be established", and enable it alongside `DenyIfCve` rather than instead of it.
+
+Pilot supplies the score. It fetches the EPSS daily feed each compile pass, joins it onto the
+advisories through their aliases, and writes the result to the artifact's `epss_score` column
+([`Ecluse.Core.Osv.Epss`](../../core/src/Ecluse/Core/Osv/Epss.hs)). The feed download is bounded and
+decompressed on the way in, and a pass that cannot fetch it fails rather than publishing an artifact
+whose scores all read as absent, which every EPSS rule would then read as a deny.
 
 ### Local polling, decoupled ingestion
 

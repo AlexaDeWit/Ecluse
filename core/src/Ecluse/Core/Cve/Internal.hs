@@ -27,14 +27,16 @@ import Ecluse.Core.Osv.Schema (ColumnSpec (..), MetaKey (MetaEcosystem), TableSp
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
 
 {- | One advisory segment recorded against a package. 'arSeverity' is the CVSS base score
-from 0 to 10, or 'Nothing' when unscored. The bounds are verbatim version text: 'arIntroduced'
-is inclusive and 'Nothing' means from the beginning, and 'arUpperBound' closes the segment.
+from 0 to 10 and 'arEpss' the EPSS probability from 0 to 1, each 'Nothing' when the artifact
+carries no such score. The bounds are verbatim version text: 'arIntroduced' is inclusive and
+'Nothing' means from the beginning, and 'arUpperBound' closes the segment.
 -}
 data AdvisoryRange = AdvisoryRange
     { arCveId :: Text
     , arSeverity :: Maybe Double
     , arIntroduced :: Maybe Text
     , arUpperBound :: UpperBound
+    , arEpss :: Maybe Double
     }
     deriving stock (Eq, Show)
 
@@ -186,19 +188,20 @@ probeQuery conn name version = do
 -- | Every advisory segment recorded against a package name.
 advisoriesQuery :: Connection -> Text -> IO [AdvisoryRange]
 advisoriesQuery conn name = do
-    rows <- query conn "SELECT cve_id, introduced_version, fixed_version, last_affected_version, severity FROM package_vulnerability_ranges WHERE package_name = ?" (Only name)
+    rows <- query conn "SELECT cve_id, introduced_version, fixed_version, last_affected_version, severity, epss_score FROM package_vulnerability_ranges WHERE package_name = ?" (Only name)
     pure (map toRange rows)
 
 {- | One artifact row as an advisory segment, decoding the two nullable bound columns
 into the segment's single upper bound.
 -}
-toRange :: (Text, Maybe Text, Maybe Text, Maybe Text, Maybe Double) -> AdvisoryRange
-toRange (cveId, intro, fixed, lastAffected, severity) =
+toRange :: (Text, Maybe Text, Maybe Text, Maybe Text, Maybe Double, Maybe Double) -> AdvisoryRange
+toRange (cveId, intro, fixed, lastAffected, severity, epss) =
     AdvisoryRange
         { arCveId = cveId
         , arSeverity = severity
         , arIntroduced = intro
         , arUpperBound = upper
+        , arEpss = epss
         }
   where
     -- The writer fills at most one bound column. A row carrying both resolves as the fix.

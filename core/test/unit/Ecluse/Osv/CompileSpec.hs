@@ -18,7 +18,7 @@ import System.IO.Error (catchIOError)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
-import Ecluse.Core.Osv.Compile (compileOsvToSqlite, osvToRow)
+import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite, osvToRow)
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
 import Ecluse.Core.Osv.Types (UpperBound (..))
@@ -27,20 +27,23 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisoryDropCause (DropMalformed, DropOversize),
  )
 import Ecluse.Test.Osv (osvZipOf, runOsvTestM)
+import Ecluse.Test.OsvDb (epssFixtureFile)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
-import Ecluse.Test.Stub (stubBaseUrl, withStub)
+import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub)
 import Network.HTTP.Types.Status (status200)
 
 spec :: Spec
 spec = describe "SQLite OSV Compilation" $ do
     it "fetches an OSV zip and compiles it into a named, stamped SQLite artifact" $ do
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+        epssData <- LBS.readFile epssFixtureFile
         (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
         dbFile <- withStub status200 zipData $ \stub ->
-            runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" "npm" (unpack (stubBaseUrl stub) <> "/sample.zip"))
+            withStub status200 epssData $ \epssStub ->
+                runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" "npm" (sourcesOf stub epssStub "/sample.zip"))
 
         conn <- open dbFile
-        rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Double)]
+        rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity, epss_score FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Double, Maybe Double)]
         stamped <- query_ conn "PRAGMA user_version" :: IO [Only Int]
         metaRows <- query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)]
         indexes <- query_ conn "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'package_vulnerability_ranges' AND name LIKE 'idx_%' ORDER BY name" :: IO [Only Text]
@@ -53,8 +56,9 @@ spec = describe "SQLite OSV Compilation" $ do
         -- a reader depends on, not the constants that produced them.
         takeFileName dbFile `shouldBe` "npm-osv-schema3.db"
         -- The sample carries a CVSS 3.1 vector (5.9). The writer stores the computed
-        -- base score in preference to the "MODERATE" label.
-        rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5", Just 5.9)]
+        -- base score in preference to the "MODERATE" label. Its EPSS score arrives through
+        -- the CVE-2024-48913 alias, since the feed keys on CVE ids and the row on the GHSA id.
+        rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5", Just 5.9, Just 0.75)]
         map fromOnly stamped `shouldBe` [osvSchemaEpoch]
         -- The reader's lookups ride these: by-package fetch and the exact
         -- (name, fixed) remediation probe.
@@ -66,11 +70,12 @@ spec = describe "SQLite OSV Compilation" $ do
         map fromOnly dedupIndexes `shouldBe` ["uq_ranges_segment"]
 
         let meta = Map.fromList metaRows
-        Map.keys meta `shouldBe` ["built_at", "ecosystem", "pilot_version", "row_count", "source_url"]
+        Map.keys meta `shouldBe` ["built_at", "ecosystem", "epss_source_url", "pilot_version", "row_count", "source_url"]
         Map.lookup "ecosystem" meta `shouldBe` Just "npm"
         Map.lookup "row_count" meta `shouldBe` Just "1"
         Map.lookup "pilot_version" meta `shouldBe` Just (toText (showVersion version))
         Map.lookup "source_url" meta `shouldSatisfy` maybe False (T.isSuffixOf "/sample.zip")
+        Map.lookup "epss_source_url" meta `shouldSatisfy` maybe False (T.isSuffixOf "/epss.csv.gz")
         Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)
 
         -- The sample holds one advisory and no bad entries, so the pass records one accepted
@@ -86,10 +91,12 @@ spec = describe "SQLite OSV Compilation" $ do
                 ( [("mal-" <> show i <> ".json", "this is not valid json") | i <- [1 .. 20 :: Int]]
                     <> [("good.json", "{\"id\":\"GHSA-ok\",\"affected\":[{\"package\":{\"name\":\"ok\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\"]}]}")]
                 )
+        epssData <- LBS.readFile epssFixtureFile
         (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
         let action =
                 withStub status200 zipData $ \stub ->
-                    runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" "npm" (unpack (stubBaseUrl stub) <> "/all.zip"))
+                    withStub status200 epssData $ \epssStub ->
+                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" "npm" (sourcesOf stub epssStub "/all.zip"))
         action `shouldThrow` (\(PilotIngestAborted _) -> True)
 
         -- The abandoned pass still records its tally, and its run reads as aborted, so an
@@ -98,13 +105,25 @@ spec = describe "SQLite OSV Compilation" $ do
         recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 20)] [CompileAborted]
 
     describe "osvToRow" $ do
-        let rowFor upper = osvToRow (ExtractedOsv "pkg" "npm" "GHSA-row" (Just "1.0.0") upper (Just 5.9))
+        let rowFor upper = osvToRow (ExtractedOsv "pkg" "npm" "GHSA-row" (Just "1.0.0") upper (Just 5.9) (Just 0.25))
 
         it "writes an exclusive bound to fixed_version and leaves last_affected_version null" $
-            rowFor (FixedBefore "2.0.0") `shouldBe` ("pkg", "GHSA-row", Just "1.0.0", Just "2.0.0", Nothing, Just 5.9)
+            rowFor (FixedBefore "2.0.0") `shouldBe` ("pkg", "GHSA-row", Just "1.0.0", Just "2.0.0", Nothing, Just 5.9, Just 0.25)
 
         it "writes an inclusive bound to last_affected_version and leaves fixed_version null" $
-            rowFor (LastAffected "2.0.0") `shouldBe` ("pkg", "GHSA-row", Just "1.0.0", Nothing, Just "2.0.0", Just 5.9)
+            rowFor (LastAffected "2.0.0") `shouldBe` ("pkg", "GHSA-row", Just "1.0.0", Nothing, Just "2.0.0", Just 5.9, Just 0.25)
 
         it "leaves both bound columns null for a segment with no upper bound" $
-            rowFor Unbounded `shouldBe` ("pkg", "GHSA-row", Just "1.0.0", Nothing, Nothing, Just 5.9)
+            rowFor Unbounded `shouldBe` ("pkg", "GHSA-row", Just "1.0.0", Nothing, Nothing, Just 5.9, Just 0.25)
+
+        it "carries an unscored segment's null epss_score through" $
+            osvToRow (ExtractedOsv "pkg" "npm" "GHSA-row" Nothing Unbounded Nothing Nothing)
+                `shouldBe` ("pkg", "GHSA-row", Nothing, Nothing, Nothing, Nothing, Nothing)
+
+-- The two upstreams one compile reads, each served by its own stub on an ephemeral port.
+sourcesOf :: Stub -> Stub -> String -> CompileSources
+sourcesOf osvStub epssStub osvPath =
+    CompileSources
+        { csOsvExportUrl = unpack (stubBaseUrl osvStub) <> osvPath
+        , csEpssFeedUrl = unpack (stubBaseUrl epssStub) <> "/epss.csv.gz"
+        }

@@ -55,6 +55,7 @@ import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip)
+import Ecluse.Test.OsvDb (epssFixtureFile)
 import Ecluse.Test.Package (hexSha1Of, sriSha512Of)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
@@ -162,21 +163,24 @@ createBucketWithRetry awsEnv bucket attempts =
 publishViaPilot :: Maybe AwsEndpoint -> AppConfig -> CorpusVersion -> IO ()
 publishViaPilot s3Endpoint appCfg v = do
     zipBytes <- osvCorpusZip v
+    epssBytes <- readFileLBS epssFixtureFile
     logEnv <- quietLogEnv
     withStub status200 zipBytes $ \stub ->
-        withSystemTempDirectory "ecluse-pilot-out" $ \pilotDir ->
-            void $
-                runPilotCompile
-                    logEnv
-                    telemetryDisabled
-                    s3Endpoint
-                    appCfg
-                    PilotCompileOptions
-                        { pcoEcosystem = "npm"
-                        , pcoSource = Just (toString (stubBaseUrl stub) <> "/all.zip")
-                        , pcoOutDir = pilotDir
-                        , pcoUpload = True
-                        }
+        withStub status200 epssBytes $ \epssStub ->
+            withSystemTempDirectory "ecluse-pilot-out" $ \pilotDir ->
+                void $
+                    runPilotCompile
+                        logEnv
+                        telemetryDisabled
+                        s3Endpoint
+                        appCfg
+                        PilotCompileOptions
+                            { pcoEcosystem = "npm"
+                            , pcoSource = Just (toString (stubBaseUrl stub) <> "/all.zip")
+                            , pcoEpssSource = Just (toString (stubBaseUrl epssStub) <> "/epss.csv.gz")
+                            , pcoOutDir = pilotDir
+                            , pcoUpload = True
+                            }
 
 -- The real serve application over the shipped fast-lane policy: the quarantine plus
 -- AllowIfRemediatesCve, with the packument stub as the public origin.

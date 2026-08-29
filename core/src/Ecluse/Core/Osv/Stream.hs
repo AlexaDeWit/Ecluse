@@ -63,6 +63,7 @@ import Network.HTTP.Simple (getResponseBody, httpSource, parseRequest, setReques
 import OpenTelemetry.Trace.Core (SpanKind (Internal), TracerProvider, addAttribute)
 
 import Ecluse.Core.Osv.Advisory (ExtractedOsv, OsvAdvisory, extractFromAdvisory, osvId)
+import Ecluse.Core.Osv.Epss (EpssScores)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Telemetry.Span (closeOptionalSpan, openOptionalSpan)
 
@@ -110,27 +111,31 @@ emptyIngestStats :: IngestStats
 emptyIngestStats = IngestStats 0 0 0
 
 -- The mutable drop tally for one ingest pass. Opaque: read it with 'readIngestStats'.
-newtype IngestCounter = IngestCounter (IORef IngestStats)
+newtype IngestCounter = IngestCounter {counterRef :: IORef IngestStats}
 
 -- | The context one ingest pass threads through the stream.
 data OsvIngest = OsvIngest
     { ingestLimits :: IngestLimits
     , ingestCounter :: IngestCounter
+    , ingestEpss :: EpssScores
+    -- ^ The pass's EPSS table, joined onto each advisory as it is extracted.
     }
 
--- | A fresh ingest context with the given bounds and a zeroed tally.
-newOsvIngest :: (MonadIO m) => IngestLimits -> m OsvIngest
-newOsvIngest limits = OsvIngest limits . IngestCounter <$> newIORef emptyIngestStats
+-- | A fresh ingest context with the given bounds and EPSS table, and a zeroed tally.
+newOsvIngest :: (MonadIO m) => IngestLimits -> EpssScores -> m OsvIngest
+newOsvIngest limits scores = do
+    counter <- IngestCounter <$> newIORef emptyIngestStats
+    pure (OsvIngest limits counter scores)
 
 -- | Read the current drop tally.
 readIngestStats :: (MonadIO m) => OsvIngest -> m IngestStats
-readIngestStats (OsvIngest _ (IngestCounter ref)) = readIORef ref
+readIngestStats ingest = readIORef (counterRef (ingestCounter ingest))
 
 {- | Zero the tally. The compiler re-streams from a clean slate on each retry attempt
 and zeroes the tally alongside it, so the tally reflects only the final attempt.
 -}
 resetIngestStats :: (MonadIO m) => OsvIngest -> m ()
-resetIngestStats (OsvIngest _ (IngestCounter ref)) = writeIORef ref emptyIngestStats
+resetIngestStats ingest = writeIORef (counterRef (ingestCounter ingest)) emptyIngestStats
 
 {- | Whether a run's drop tally signals systemic corruption, a hostile or broken feed,
 rather than a few poisoned records. Pilot must not publish a systemically corrupt run's
@@ -215,7 +220,7 @@ handleEntry ingest entry = \case
             logFM WarningS (ls ("Failed to parse OSV advisory JSON from entry: " <> zipEntryNameText entry))
         Just adv -> do
             lift $ bumpAccepted (ingestCounter ingest)
-            let extracted = extractFromAdvisory adv
+            let extracted = extractFromAdvisory (ingestEpss ingest) adv
             lift $ warnOnFanOut ingest adv extracted
             yieldMany extracted
   where

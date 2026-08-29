@@ -145,14 +145,15 @@ and dependency confusion. `remediation-fast-track` (`AllowIfRemediatesCve`) rank
 Écluse admits a release fixing a known CVE at once rather than waiting out the quarantine (see
 [Rules engine](rules-engine.md#allowifremediatescve-remediation-fast-track)).
 
-Every other built-in rule is off and opts in by name. `DenyIfCve` in particular can deny historical
-versions an existing build depends on, if an operator enables it before the mirror is warm. Read
-its [onboarding steps](https://ecluse-proxy.com/docs/configuration/#onboarding-denyifcve) first.
+Every other built-in rule is off and opts in by name. The advisory denies (`DenyIfCve` and
+`DenyIfEpssExceeds`) in particular can deny historical versions an existing build depends on, if an
+operator enables them before the mirror is warm. Read their
+[onboarding steps](https://ecluse-proxy.com/docs/configuration/#onboarding-the-advisory-denies) first.
 
 ### Advisory database sync
 
-The remediation fast lane and `DenyIfCve` read a synced local advisory database, not an API per
-request. The compilation, ETag polling, and atomic shadow-swap are under [Rules engine → CVE
+The remediation fast lane and the two advisory denies read a synced local advisory database, not an
+API per request. The compilation, ETag polling, and atomic shadow-swap are under [Rules engine → CVE
 subsystem](rules-engine.md#cve-subsystem). The operator knobs (bucket, poll interval, OSV export
 source, download size cap) are in the
 [configuration reference](https://ecluse-proxy.com/docs/configuration/#the-configuration-reference).

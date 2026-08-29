@@ -17,6 +17,7 @@ import Ecluse.Composition.Support (expectAppConfig)
 import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), runPilotCompile)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Test.Log (newTestLogEnv)
+import Ecluse.Test.OsvDb (epssFixtureFile)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
 spec :: Spec
@@ -26,41 +27,48 @@ spec = do
             le <- newTestLogEnv
             appCfg <- expectAppConfig [] Nothing
             zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            epssData <- LBS.readFile epssFixtureFile
             withSystemTempDirectory "ecluse-pilot-compile" $ \outDir -> do
                 dbFile <- withStub status200 zipData $ \stub ->
-                    runPilotCompile
-                        le
-                        telemetryDisabled
-                        Nothing
-                        appCfg
-                        (compileOptions (stubBaseUrl stub) outDir)
-                takeDirectory dbFile `shouldBe` outDir
-                exists <- doesFileExist dbFile
-                exists `shouldBe` True
-                conn <- open dbFile
-                rows <- query_ conn "SELECT package_name FROM package_vulnerability_ranges" :: IO [Only Text]
-                close conn
-                map fromOnly rows `shouldBe` ["hono"]
-
-        it "fails loudly when an upload is requested without a configured bucket" $ do
-            le <- newTestLogEnv
-            appCfg <- expectAppConfig [] Nothing
-            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
-            withSystemTempDirectory "ecluse-pilot-compile" $ \outDir -> do
-                let action = withStub status200 zipData $ \stub ->
+                    withStub status200 epssData $ \epssStub ->
                         runPilotCompile
                             le
                             telemetryDisabled
                             Nothing
                             appCfg
-                            (compileOptions (stubBaseUrl stub) outDir){pcoUpload = True}
+                            (compileOptions (stubBaseUrl stub) (stubBaseUrl epssStub) outDir)
+                takeDirectory dbFile `shouldBe` outDir
+                exists <- doesFileExist dbFile
+                exists `shouldBe` True
+                conn <- open dbFile
+                rows <- query_ conn "SELECT package_name, epss_score FROM package_vulnerability_ranges" :: IO [(Text, Maybe Double)]
+                close conn
+                -- The one-shot mode joins the EPSS feed too, so the row carries the score
+                -- the fixture feed holds for the advisory's CVE alias.
+                rows `shouldBe` [("hono", Just 0.75)]
+
+        it "fails loudly when an upload is requested without a configured bucket" $ do
+            le <- newTestLogEnv
+            appCfg <- expectAppConfig [] Nothing
+            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            epssData <- LBS.readFile epssFixtureFile
+            withSystemTempDirectory "ecluse-pilot-compile" $ \outDir -> do
+                let action = withStub status200 zipData $ \stub ->
+                        withStub status200 epssData $ \epssStub ->
+                            runPilotCompile
+                                le
+                                telemetryDisabled
+                                Nothing
+                                appCfg
+                                (compileOptions (stubBaseUrl stub) (stubBaseUrl epssStub) outDir){pcoUpload = True}
                 action `shouldThrow` (== PilotUploadUnconfigured)
 
-compileOptions :: Text -> FilePath -> PilotCompileOptions
-compileOptions baseUrl outDir =
+compileOptions :: Text -> Text -> FilePath -> PilotCompileOptions
+compileOptions baseUrl epssBaseUrl outDir =
     PilotCompileOptions
         { pcoEcosystem = "npm"
         , pcoSource = Just (unpack baseUrl <> "/all.zip")
+        , pcoEpssSource = Just (unpack epssBaseUrl <> "/epss.csv.gz")
         , pcoOutDir = outDir
         , pcoUpload = False
         }

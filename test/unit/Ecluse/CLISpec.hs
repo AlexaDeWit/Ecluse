@@ -60,19 +60,21 @@ spec = do
                             PilotCompileOptions
                                 { pcoEcosystem = "npm"
                                 , pcoSource = Nothing
+                                , pcoEpssSource = Nothing
                                 , pcoOutDir = "/tmp/osv"
                                 , pcoUpload = False
                                 }
                 _ -> expectationFailure "expected Success RunPilotCompile"
 
-        it "parses 'pilot compile' with ecosystem, source, and upload overrides" $ do
-            case parseCLI ["pilot", "compile", "--ecosystem", "npm", "--source", "http://127.0.0.1:9/all.zip", "--out", "out", "--upload"] of
+        it "parses 'pilot compile' with ecosystem, both source overrides, and upload" $ do
+            case parseCLI ["pilot", "compile", "--ecosystem", "npm", "--source", "http://127.0.0.1:9/all.zip", "--epss-source", "http://127.0.0.1:9/epss.csv.gz", "--out", "out", "--upload"] of
                 Success cmd ->
                     cmd
                         `shouldBe` RunPilotCompile
                             PilotCompileOptions
                                 { pcoEcosystem = "npm"
                                 , pcoSource = Just "http://127.0.0.1:9/all.zip"
+                                , pcoEpssSource = Just "http://127.0.0.1:9/epss.csv.gz"
                                 , pcoOutDir = "out"
                                 , pcoUpload = True
                                 }

@@ -41,6 +41,7 @@ spec = describe "osv.dev npm export (live oracle)" $
                         PilotCompileOptions
                             { pcoEcosystem = "npm"
                             , pcoSource = Nothing
+                            , pcoEpssSource = Nothing
                             , pcoOutDir = outDir
                             , pcoUpload = False
                             }
@@ -51,11 +52,15 @@ spec = describe "osv.dev npm export (live oracle)" $
                     conn <- open dbFile
                     total <- query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges" :: IO [Only Int]
                     lodash <- query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges WHERE package_name = 'lodash'" :: IO [Only Int]
+                    scored <- query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges WHERE epss_score IS NOT NULL" :: IO [Only Int]
                     close conn
                     -- Floors, not exact counts: the live dataset only grows. Dropping below
                     -- either floor means the parser and the feed no longer agree.
                     map fromOnly total `shouldSatisfy` any (>= 1000)
                     map fromOnly lodash `shouldSatisfy` any (>= 1)
+                    -- The live EPSS join: the npm feed always carries CVE-aliased advisories,
+                    -- so a zero here means the feed's shape and our parse no longer agree.
+                    map fromOnly scored `shouldSatisfy` any (>= 1)
 
 defaultAppConfig :: IO AppConfig
 defaultAppConfig = case loadConfig [] Nothing of

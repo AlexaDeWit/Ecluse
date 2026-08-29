@@ -21,6 +21,7 @@ import Data.Aeson (FromJSON (..), withObject, (.:), (.:?))
 import Data.Text qualified as T
 import Security.CVSS (cvssScore, parseCVSS)
 
+import Ecluse.Core.Osv.Epss (EpssScores, epssForIds)
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Text (joinUrlPath)
 
@@ -37,6 +38,10 @@ osvExportUrl baseUrl ecosystem = toString (joinUrlPath baseUrl (ecosystem <> "/a
 -- | Exact model of what osv.dev makes available
 data OsvAdvisory = OsvAdvisory
     { osvId :: Text
+    , osvAliases :: Maybe [Text]
+    {- ^ The same vulnerability's identifiers in other databases. An npm advisory is
+    GHSA-keyed, so its CVE ids live here, and they are what the EPSS feed keys on.
+    -}
     , osvAffected :: Maybe [OsvAffected]
     , osvSeverity :: Maybe [OsvSeverityEntry]
     , osvDatabaseSpecific :: Maybe OsvDatabaseSpecific
@@ -47,6 +52,7 @@ instance FromJSON OsvAdvisory where
     parseJSON = withObject "OsvAdvisory" $ \v ->
         OsvAdvisory
             <$> v .: "id"
+            <*> v .:? "aliases"
             <*> v .:? "affected"
             <*> v .:? "severity"
             <*> v .:? "database_specific"
@@ -152,6 +158,10 @@ data ExtractedOsv = ExtractedOsv
     {- ^ The advisory's CVSS base score (0 to 10), carried onto each of its segments.
     'Nothing' when the advisory is unscored, as much of the npm malware feed is.
     -}
+    , extEpss :: Maybe Double
+    {- ^ The advisory's EPSS probability (0 to 1), carried onto each of its segments.
+    'Nothing' when the feed scores none of its identifiers.
+    -}
     }
     deriving stock (Show, Eq)
 
@@ -194,8 +204,8 @@ ghsaSeverityCeiling label = case T.toUpper (T.strip label) of
 range segment of every affected package, plus each exactly-enumerated version as
 a point. An advisory with neither ranges nor versions yields nothing.
 -}
-extractFromAdvisory :: OsvAdvisory -> [ExtractedOsv]
-extractFromAdvisory adv = do
+extractFromAdvisory :: EpssScores -> OsvAdvisory -> [ExtractedOsv]
+extractFromAdvisory scores adv = do
     aff <- fromMaybe [] (osvAffected adv)
     let pkg = affectedPackage aff
     Segment intro upper <- affectedSegments aff
@@ -207,11 +217,15 @@ extractFromAdvisory adv = do
             , extIntroduced = intro
             , extUpperBound = upper
             , extSeverity = severity
+            , extEpss = epss
             }
   where
-    -- Shared across every segment the advisory yields: the score is a property of
+    -- Shared across every segment the advisory yields: both scores are a property of
     -- the advisory, not of a segment.
     severity = advisorySeverity adv
+    -- The feed keys on CVE ids, and an npm row keys on the GHSA id, so the join runs
+    -- over the advisory's own id and its aliases together.
+    epss = epssForIds scores (osvId adv : fromMaybe [] (osvAliases adv))
 
 -- One affected interval: an inclusive lower bound and where it closes.
 data Segment = Segment (Maybe Text) UpperBound

@@ -214,9 +214,21 @@ rules:
   # enabling this also blocks known malware. It sits just below `AllowByIdentity`, so
   # an identity pin still overrides it. On a cold mirror it can deny historical
   # versions your builds depend on. Warm the mirror first:
-  # https://ecluse-proxy.com/docs/configuration/#onboarding-denyifcve
+  # https://ecluse-proxy.com/docs/configuration/#onboarding-the-advisory-denies
   # deny-known-cves:
   #   type: DenyIfCve
   #   minSeverity: 8          # CVSS >= 8.0 (high/critical). Unscored malware always blocks
   #   onUnavailable: deny     # fail-closed if the advisory database cannot answer.
   #                           # Set to "skip" to fail-open (availability over the gate)
+  # Opt-in exploitability deny gate, also absent from this shipped policy. It denies a
+  # version a synced advisory records as affected when that advisory's EPSS score (the
+  # probability of exploitation in the wild within 30 days, 0-1) is at or above `minEpss`.
+  # An advisory the artifact carries no EPSS score for counts as above every threshold,
+  # and on the npm feed that is most of them: EPSS keys on CVE ids, and the malware
+  # advisories carry no CVE alias. Enable it as a companion to `deny-known-cves`, not as a
+  # cheaper substitute, and warm the mirror first as for that rule. It shares
+  # `DenyIfCve`'s precedence, so an identity pin overrides it too.
+  # deny-exploitable-cves:
+  #   type: DenyIfEpssExceeds
+  #   minEpss: 0.5            # EPSS >= 0.5. Unscored advisories always block
+  #   onUnavailable: deny     # as for DenyIfCve: "skip" fails open instead

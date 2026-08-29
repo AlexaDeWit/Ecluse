@@ -30,6 +30,8 @@ build-type:    Simple
 -- read by the Node capture script and Ecluse.Test.RegistryCapture.
 -- `acceptance/criteria.json` is the version-controlled acceptance budget for the live
 -- performance-acceptance harness (Ecluse.Acceptance and the perf-acceptance executable).
+-- `test/unit/fixtures/epss/*.gz` is a gzipped slice of the EPSS feed, keyed to the CVE
+-- aliases the OSV corpus carries, so the compile-time join has a deterministic input.
 extra-source-files:
   acceptance/criteria.json
   bench/corpus/npm/*.json
@@ -38,6 +40,7 @@ extra-source-files:
   core/test/unit/fixtures/version-ordering.txt
   test/fixtures/osv/v1/*.json
   test/fixtures/osv/v2/*.json
+  test/unit/fixtures/epss/*.gz
   test/unit/fixtures/osv/*.zip
 
 source-repository head
@@ -109,6 +112,7 @@ library ecluse-core
     Ecluse.Core.Json.Selective
     Ecluse.Core.Osv.Advisory
     Ecluse.Core.Osv.Compile
+    Ecluse.Core.Osv.Epss
     Ecluse.Core.Osv.Retry
     Ecluse.Core.Osv.Schema
     Ecluse.Core.Osv.Stream
@@ -228,6 +232,10 @@ library ecluse-core
     , clock                 ^>=0.8
     , containers            ^>=0.7
     , conduit               ^>=1.3
+    -- The EPSS feed ships as gzip, so Pilot's fetch needs an ungzip conduit
+    -- (Ecluse.Core.Osv.Epss). `conduit-extra` is already in the resolved build plan, as
+    -- a transitive dependency of http-conduit, so this adds no new resolution.
+    , conduit-extra         ^>=1.3
     , directory             ^>=1.3
     , filepath              ^>=1.4 || ^>=1.5
     , crypton               >=1.0 && <1.2
@@ -649,6 +657,7 @@ test-suite ecluse-core-unit
     Ecluse.Package.MergeSpec
     Ecluse.Osv.AdvisorySpec
     Ecluse.Osv.CompileSpec
+    Ecluse.Osv.EpssSpec
     Ecluse.Osv.RetrySpec
     Ecluse.Osv.SchemaSpec
     Ecluse.Package.HashSpec

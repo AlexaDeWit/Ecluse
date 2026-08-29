@@ -133,7 +133,7 @@ The policy is a named map of rules over the deny-by-default gate described in
 `ECLUSE_RULES` carries the same object as JSON, which suits a one-rule tweak, and the document
 stays the reviewable home for a real policy.
 
-Écluse ships six built-in rule types, catalogued below. A shipped name patches the rule it names,
+Écluse ships seven built-in rule types, catalogued below. A shipped name patches the rule it names,
 `enabled: false` suppresses it, and a new name with a `type` adds a rule:
 
 | Name | Type | On by default | What it decides | Key knobs |
@@ -144,9 +144,10 @@ stays the reviewable home for a real policy.
 | yours to add | `DenyByIdentity` | No | Hard-denies a specific package or `package@version` (the `revoke` shape). | `identity` |
 | yours to add | `DenyInstallTimeExecution` | No, because many legitimate packages ship install scripts | Denies install-time code execution. | (none) |
 | yours to add | `DenyIfCve` | No | Blocks a version a synced advisory records as affected at or above the CVSS threshold. The npm malware feed carries no score and counts as above every threshold, so enabling it also blocks known-malicious packages. Sits just below `AllowByIdentity`, so an identity pin overrides it. | `minSeverity` (0-10). `onUnavailable` (`deny` by default, or `skip`) decides what happens when the advisory database cannot answer. |
+| yours to add | `DenyIfEpssExceeds` | No | Blocks a version a synced advisory records as affected when that advisory's EPSS score is at or above the threshold. EPSS is FIRST.org's estimate of the probability a vulnerability is exploited in the wild within 30 days, so this gates on likelihood where `DenyIfCve` gates on severity. An advisory with no EPSS score counts as above every threshold. Shares `DenyIfCve`'s precedence. | `minEpss` (0-1). `onUnavailable` as for `DenyIfCve`. |
 
-Before you enable `DenyIfCve`, read
-[Onboarding DenyIfCve](@/docs/configuration.md#onboarding-denyifcve).
+Before you enable `DenyIfCve` or `DenyIfEpssExceeds`, read
+[Onboarding the advisory denies](@/docs/configuration.md#onboarding-the-advisory-denies).
 
 Precedence defaults per type, and an integer `precedence` overrides it. The policy below patches
 `min-age`, suppresses the fast-track, and adds the other four by name:
@@ -168,26 +169,35 @@ rules:
   deny-known-cves:
     type: DenyIfCve
     minSeverity: 8
+  deny-exploitable-cves:
+    type: DenyIfEpssExceeds
+    minEpss: 0.5
 ```
 
 The precedence values, the patch/add/suppress merge model, and the strict validation are in
 [Rule policy](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md#rule-policy) and
 [Rules engine](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/rules-engine.md#evaluation-model).
 
-## Onboarding DenyIfCve
+## Onboarding the advisory denies
 
-`DenyIfCve` can break a cold deployment, because a freshly stood-up mirror still needs historical
-versions your existing builds depend on, and an advisory may since have covered them. Enable it
-*after* you warm your private mirror:
+`DenyIfCve` and `DenyIfEpssExceeds` can break a cold deployment, because a freshly stood-up mirror
+still needs historical versions your existing builds depend on, and an advisory may since have
+covered them. Enable them *after* you warm your private mirror:
 
-1. Leave `DenyIfCve` out of your policy and run Écluse normally, so your CI and developers pull the
+1. Leave both out of your policy and run Écluse normally, so your CI and developers pull the
    versions you depend on. Each lands in the trusted store, which the rules never re-gate once the
    version is there.
 2. Once your must-have builds have mirrored, add `DenyIfCve` with a `minSeverity` you are
    comfortable with. A threshold of 8 blocks high and critical CVEs, and malware blocks regardless
    of the threshold.
 3. If Écluse then denies a specific version you must keep, pin it with an `AllowByIdentity` rule,
-   which outranks `DenyIfCve`. That covers a false positive or a risk you accept.
+   which outranks both. That covers a false positive or a risk you accept.
 
-Set `onUnavailable: skip` if you would rather the gate fail open (skip itself, logging loudly) than
+Add `DenyIfEpssExceeds` alongside `DenyIfCve`, not instead of it. It reads the same advisory
+database and denies on exploitability rather than severity, so it catches a merely moderate CVE
+that attackers are actually using. Because an advisory with no EPSS score counts as above every
+threshold, and most npm advisories carry no CVE alias for EPSS to key on, a low `minEpss` is not a
+gentler gate than `DenyIfCve`: expect it to deny about as much.
+
+Set `onUnavailable: skip` if you would rather a gate fail open (skip itself, logging loudly) than
 refuse traffic when the advisory database is briefly unavailable. The default `deny` fails closed.

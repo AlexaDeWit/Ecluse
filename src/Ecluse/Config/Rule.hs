@@ -23,6 +23,7 @@ import Validation (eitherToValidation, validationToEither)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (..),
+    DenyIfEpssParams (..),
     FailureAlignment (..),
     PrecededRule (..),
     Rule (..),
@@ -70,6 +71,7 @@ data RuleEntry = RuleEntry
     , entryScope :: Maybe Text
     , entryIdentity :: Maybe Text
     , entryMinSeverity :: Maybe Double
+    , entryMinEpss :: Maybe Double
     , entryOnUnavailable :: Maybe Text
     }
     deriving stock (Eq, Show)
@@ -120,6 +122,7 @@ buildRule name ty entry = case ty of
         AllowByIdentity <$> requireField name "AllowByIdentity" "identity" Right (entryIdentity entry)
     "AllowIfRemediatesCve" -> Right AllowIfRemediatesCve
     "DenyIfCve" -> DenyIfCve <$> buildDenyIfCveParams name entry
+    "DenyIfEpssExceeds" -> DenyIfEpssExceeds <$> buildDenyIfEpssParams name entry
     "DenyInstallTimeExecution" -> Right DenyInstallTimeExecution
     _ -> Left [UnknownRuleType name ty]
 
@@ -142,6 +145,12 @@ validateMinSeverity name s
     | s >= 0 && s <= 10 = Right s
     | otherwise = Left [MalformedRule name "\"minSeverity\" must be a CVSS score between 0 and 10"]
 
+-- Validate an EPSS threshold: a probability in the range [0, 1].
+validateMinEpss :: Text -> Double -> Either [PolicyError] Double
+validateMinEpss name s
+    | s >= 0 && s <= 1 = Right s
+    | otherwise = Left [MalformedRule name "\"minEpss\" must be an EPSS probability between 0 and 1"]
+
 {- | Decode 'DenyIfCve''s parameters. @minSeverity@ is required, so an operator states the CVSS
 threshold consciously. @onUnavailable@ defaults to @deny@, which fails closed.
 -}
@@ -149,6 +158,13 @@ buildDenyIfCveParams :: Text -> RuleEntry -> Either [PolicyError] DenyIfCveParam
 buildDenyIfCveParams name entry =
     DenyIfCveParams
         <$> requireField name "DenyIfCve" "minSeverity" (validateMinSeverity name) (entryMinSeverity entry)
+        <*> parseOnUnavailable name (entryOnUnavailable entry)
+
+-- | Decode 'DenyIfEpssExceeds''s parameters, on the same terms as 'buildDenyIfCveParams'.
+buildDenyIfEpssParams :: Text -> RuleEntry -> Either [PolicyError] DenyIfEpssParams
+buildDenyIfEpssParams name entry =
+    DenyIfEpssParams
+        <$> requireField name "DenyIfEpssExceeds" "minEpss" (validateMinEpss name) (entryMinEpss entry)
         <*> parseOnUnavailable name (entryOnUnavailable entry)
 
 -- Decode the @onUnavailable@ policy: how the rule resolves when the advisory
@@ -175,6 +191,11 @@ patchRuleValue name entry rule = do
                 DenyIfCveParams
                     <$> maybe (Right (dicMinSeverity params)) (validateMinSeverity name) (entryMinSeverity entry)
                     <*> maybe (Right (dicOnUnavailable params)) (parseOnUnavailable name . Just) (entryOnUnavailable entry)
+        DenyIfEpssExceeds params ->
+            fmap DenyIfEpssExceeds $
+                DenyIfEpssParams
+                    <$> maybe (Right (dieMinEpss params)) (validateMinEpss name) (entryMinEpss entry)
+                    <*> maybe (Right (dieOnUnavailable params)) (parseOnUnavailable name . Just) (entryOnUnavailable entry)
         DenyInstallTimeExecution -> Right DenyInstallTimeExecution
 
 checkRestatedType :: Text -> RuleEntry -> Rule -> Either [PolicyError] ()
@@ -195,6 +216,7 @@ knownRuleTypes =
     , "AllowByIdentity"
     , "AllowIfRemediatesCve"
     , "DenyIfCve"
+    , "DenyIfEpssExceeds"
     , "DenyInstallTimeExecution"
     , "DenyByIdentity"
     ]
