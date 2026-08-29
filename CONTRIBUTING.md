@@ -84,9 +84,11 @@ Signed-off-by: Your Name <you@example.com>
 ## Pull requests
 
 Open as a draft while work or review is moving, and mark it ready when it is not. The template is
-[`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md): the body is the goal, the
-motivation, and the consequence, readable in seconds, plus a one-line AI-assistance disclosure.
-The old checklist is gone on purpose: CI enforces its items, and a body should not restate a gate.
+[`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md): three headings, **What**
+(the goal), **Why** (the motivation), and **Consequences** (operator-visible changes, deviations,
+trade-offs, one sentence each; the section goes when there are none), plus a one-line
+AI-assistance disclosure. Readable in seconds. There is no checklist on purpose: CI enforces
+its items, and a body should not restate a gate.
 
 Pipe the body through stdin (`gh pr create --draft --body-file -`, and `gh pr edit --body-file -`
 to update it), or use a gitignored scratch file with a branch-scoped name
