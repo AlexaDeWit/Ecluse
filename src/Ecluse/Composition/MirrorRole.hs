@@ -42,10 +42,8 @@ runsWorker = \case
     ServeOnly -> False
     MirrorOnly -> True
 
-{- | Whether this process runs the mirror worker: its role wants one and a mount declares a
-mirror target. Under 'NoMirroring' there is no queue and no job, so a spawned loop would
-poll an inert queue with nothing to pace it. The composition root derives this once, and
-both the spawn decision and the @\/livez@ arm read that one value.
+{- | Whether this process runs the mirror worker: the role wants one and a mount declares a
+mirror target. Under 'NoMirroring' a spawned loop would poll an inert queue with nothing to pace it.
 -}
 spawnsWorker :: MirrorRole -> MirrorRuntimePlan -> Bool
 spawnsWorker role = \case

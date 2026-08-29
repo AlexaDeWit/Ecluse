@@ -8,7 +8,7 @@ staleness rule read against it, and the 'Liveness' verdict a probe renders.
 A process runs the worker or it does not ("Ecluse.Composition.MirrorRole" decides), so the
 verdict has two sources: 'heartbeatLivenessNow' where a loop runs, 'alwaysLive' where none
 does. Both carry the last recorded progress, so a probe can report staleness as well as
-pass or fail. This is the worker's own signal, kept apart from HTTP readiness.
+pass or fail.
 -}
 module Ecluse.Core.Worker.Liveness (
     WorkerHeartbeat,
