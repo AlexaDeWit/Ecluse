@@ -41,8 +41,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 
 {- | The ecosystem's metadata capability: reading a package's metadata from an origin,
-assembling the served document, and encoding it. 'Ecluse.Core.Server.Context.pdMetadata'
-carries this record itself, so the serve path reads the adapter's own fields.
+assembling the served document, and encoding it ('Ecluse.Core.Server.Context.pdMetadata').
 -}
 data AdapterMetadata = AdapterMetadata
     { metadataNewClient ::
@@ -67,11 +66,8 @@ data AdapterMetadata = AdapterMetadata
     -- ^ Encode an assembled served document ('CachedDoc') to its wire bytes.
     }
 
-{- | The ecosystem's artifact request formation: by conventional filename under a registry base,
-or at the artifact's authoritative upstream URL. Both the serve path
-('Ecluse.Core.Server.Context.pdArtifact') and the mirror worker
-('Ecluse.Core.Worker.Types.wpArtifact') carry this record, so a job's bytes come back through
-the formation the serve path streams with.
+{- | The ecosystem's artifact request formation, by conventional filename or authoritative URL.
+The serve deps and the worker bundle share it ('Ecluse.Core.Server.Context.pdArtifact').
 -}
 data AdapterArtifact = AdapterArtifact
     { artifactByFile :: OriginClient -> PackageName -> Text -> Either UrlFormationError Request
