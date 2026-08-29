@@ -261,9 +261,16 @@ library ecluse-core
     , zip-stream            ^>=0.2
 
 library
-  import:          shared
-  hs-source-dirs:  src
-  other-modules:   Paths_ecluse
+  import:         shared
+  hs-source-dirs: src
+
+  -- Queue.Internal holds the raw QueueUrl constructor. It is an other-module, so only
+  -- code inside this library reaches it, and every other caller sees the abstract type
+  -- with its selectors through Ecluse.Config.Types.
+  other-modules:
+    Ecluse.Config.Queue.Internal
+    Paths_ecluse
+
   autogen-modules: Paths_ecluse
   exposed-modules:
     Ecluse

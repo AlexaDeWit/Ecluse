@@ -2,17 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition root's mirror-queue backend selection: the pure decision of
-which queue this binary builds and the boot warnings the choice warrants.
+{- | The composition root's mirror-queue backend selection: the pure decision of which queue
+this binary builds and the boot warnings the choice warrants.
 
-'planMirrorQueue' is the single place that knows which backends this binary can
-build. The composition root pattern-matches its 'MirrorQueuePlan' to make the one
-constructor call, and 'mirrorQueuePlanWarning' tells it whether a boot warning is
-due. Once the queue exists, 'deadLetterTerminusWarning' turns the dead-letter probe
-result into the second boot warning. The decision stays here, and only the call sits
-at the effectful build. Failures aggregate as
-'Ecluse.Composition.BootError.BootError's, so one run reports every missing input.
-The shared 'Ecluse.Config.Ambient.parseEndpointUrl' parses the SQS endpoint override.
+'planMirrorQueue' is the single place that knows which backends this binary can build. The
+composition root pattern-matches its 'MirrorQueuePlan' to make the one constructor call, and
+the warning functions turn the plan and the dead-letter probe into the boot's warning lines.
+Failures aggregate as 'Ecluse.Composition.BootError.BootError's, so one run reports every
+missing input.
 -}
 module Ecluse.Composition.MirrorQueue (
     MirrorRuntimePlan (..),
@@ -31,11 +28,12 @@ import Ecluse.Config (
     Config (..),
     Mount (mountRegistries),
     QueueSettings (qsMaxReceiveCount, qsUrl),
+    QueueTarget (..),
+    queueUrlTarget,
+    queueUrlText,
     regMirrorTarget,
-    unUrl,
  )
 import Ecluse.Config.Ambient (AmbientAws (..), parseEndpointUrl)
-import Ecluse.Config.QueueTarget (QueueTarget (..), parseQueueTarget)
 import Ecluse.Core.Fault (TransportFault, tfDetail)
 import Ecluse.Core.Queue (
     DeadLetterTerminus (TerminusAbsent, TerminusAttached),
@@ -78,12 +76,8 @@ data MirrorQueuePlan
       MemoryBackend
     deriving stock (Eq, Show)
 
-{- | Select the mirror-queue backend from @ECLUSE_QUEUE__URL@'s shape and the ambient
-SDK environment. There is no backend selector, so a backend that disagrees with the URL
-is unrepresentable. An @AWS_ENDPOINT_URL_SQS@ override forces the SQS reading whatever
-the URL's shape, because an emulator or VPC endpoint URL matches no public shape. The
-generic @AWS_ENDPOINT_URL@ is deliberately not consulted: it is the S3 advisory client's
-override, and honouring it here would let an S3-only override redirect queue traffic.
+{- | Select the mirror-queue backend from @ECLUSE_QUEUE__URL@'s derived shape, which an @AWS_ENDPOINT_URL_SQS@ override overrules.
+The generic @AWS_ENDPOINT_URL@ is the S3 advisory client's, and honouring it here would redirect queue traffic.
 -}
 planMirrorQueue :: AmbientAws -> AppConfig -> Either [BootError] MirrorQueuePlan
 planMirrorQueue ambient env = case qsUrl (cfgQueue env) of
@@ -92,13 +86,13 @@ planMirrorQueue ambient env = case qsUrl (cfgQueue env) of
     -- demand: the rollover costs durability, not safety.
     Nothing -> Right MemoryBackend
     Just queueUrl ->
-        let url = unUrl queueUrl
+        let url = queueUrlText queueUrl
          in case nonBlank =<< ambientAwsEndpointUrlSqs ambient of
                 Just override -> case (regionE, endpointE override) of
                     (Right region, Right endpoint) ->
                         Right (SqsBackend (sqsConfigFor url region){sqsEndpoint = Just endpoint})
                     (r, e) -> Left (lefts [void r, void e])
-                Nothing -> case parseQueueTarget url of
+                Nothing -> case queueUrlTarget queueUrl of
                     Just (SqsTarget region) -> Right (SqsBackend (sqsConfigFor url region))
                     Just (PubSubTarget _project _topic) -> Left [QueueProviderUnavailable "pubsub"]
                     Nothing -> Left [QueueUrlUnrecognised url]
@@ -135,10 +129,8 @@ memoryQueueBootWarning =
         <> "demand (no data loss, only deferred mirroring). Point ECLUSE_QUEUE__URL at a durable queue (SQS) "
         <> "for a production mirror that must not shed under load."
 
-{- | The boot warning a built queue's dead-letter probe warrants, or 'Nothing' when none
-is due. Pass the built handle's budget, not the plan's configured floor, so the warning
-states what the worker will do. The memory backend stays silent because
-'memoryQueueBootWarning' already says the mirror sheds jobs.
+{- | The warning a built queue's dead-letter probe warrants, or 'Nothing': the memory backend is silent, 'memoryQueueBootWarning' covering it.
+Pass the built handle's budget, not the plan's configured floor, so the warning states what the worker will do.
 -}
 deadLetterTerminusWarning :: MirrorQueuePlan -> DeliveryBudget -> Either TransportFault DeadLetterTerminus -> Maybe Text
 deadLetterTerminusWarning plan budget probed = case plan of

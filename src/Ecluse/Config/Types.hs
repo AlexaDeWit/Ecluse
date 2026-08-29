@@ -4,15 +4,28 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings #-}
 
+{- | The configuration vocabulary: the settings records a load resolves to, the refusals their
+URL-valued keys carry, and the errors a refused load reports.
+
+Every type here is shared between the decoders ("Ecluse.Config.Parser", "Ecluse.Config.Aeson") and
+the composition root that reads them, so neither side imports the other. "Ecluse.Config" assembles
+them into a 'Config'.
+-}
 module Ecluse.Config.Types (
-    Url (..),
+    Url,
     mkUrl,
     unUrl,
+    HttpScheme (..),
+    splitHttpScheme,
     MirrorCredential (..),
     PublishAllow (..),
     MountConfig (..),
     AppConfig (..),
     ServerSettings (..),
+    QueueTarget (..),
+    QueueUrl,
+    queueUrlText,
+    queueUrlTarget,
     QueueSettings (..),
     LimitsSettings (..),
     CacheSettings (..),
@@ -38,6 +51,7 @@ import Data.IP (IPRange)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 
+import Ecluse.Config.Queue.Internal (QueueTarget (..), QueueUrl, queueUrlTarget, queueUrlText)
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Config.Rule (PolicyError, RulePatch, renderPolicyError)
 import Ecluse.Core.Credential (Secret)
@@ -46,27 +60,54 @@ import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Rules.Types (PrecededRule)
+import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig)
 import Ecluse.Runtime.Log (LogFormat, LogLevel)
 import Ecluse.Runtime.Telemetry (TelemetrySwitch)
 
+{- | An operator-configured @http(s)@ URL, whitespace-trimmed. 'mkUrl' is the only builder, so no
+value exists carrying credential material, another scheme, or an authority the egress gate misses.
+-}
 newtype Url = Url Text
     deriving stock (Eq, Ord, Show)
 
-mkUrl :: Text -> Either Text Url
-mkUrl raw =
-    let trimmed = T.strip raw
-     in if T.null trimmed
-            then Left "expected a non-empty URL"
-            else Right (Url trimmed)
+{- | Build a 'Url' from a configuration key and the value written under it, the key naming every
+refusal. The credential refusal runs first, because the two refusals below it quote the value.
+-}
+mkUrl :: Text -> Text -> Either Text Url
+mkUrl key raw
+    | Left reason <- refuseCredentialMaterial key trimmed = Left reason
+    | isNothing (splitHttpScheme trimmed) =
+        Left (key <> " must be an http:// or https:// URL (got " <> trimmed <> ")")
+    | isNothing (hostPortAddress trimmed) =
+        Left
+            ( key
+                <> " must carry a host and, when a port is written, a decimal port in 1..65535 (got "
+                <> trimmed
+                <> ")"
+            )
+    | otherwise = Right (Url trimmed)
+  where
+    trimmed = T.strip raw
 
+-- | The stored URL text.
 unUrl :: Url -> Text
 unUrl (Url u) = u
 
+-- | The scheme a configured @http(s)@ URL writes.
+data HttpScheme = Http | Https
+    deriving stock (Eq, Show)
+
+{- | Split a URL into the scheme it writes and the text after the separator, or 'Nothing' for
+neither @http@ nor @https@. It is the one scheme check the configuration layer shares.
+-}
+splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
+splitHttpScheme raw =
+    ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)
+
 {- | The mirror-write credential, __derived from the mirror-target URL__ so a token can never pair
-with an endpoint it was not minted for. Config load resolves it once
-('Ecluse.Config.MirrorCredential.resolveMirrorCredential').
+with an endpoint it was not minted for. Load resolves it once ("Ecluse.Config.MirrorCredential").
 -}
 data MirrorCredential
     = -- | A CodeArtifact mirror target: the mint identity parsed from its host.
@@ -88,9 +129,8 @@ data PublishAllow
 
 data MountConfig = MountConfig
     { mntEnabled :: Maybe Bool
-    {- ^ The mount's explicit on\/off switch. Any operator-declared key under the mount already
-    activates it, so @enabled: true@ serves the pure public gate that declares no other key, and
-    @enabled: false@ switches off a mount whose other keys stay in place.
+    {- ^ The mount's on\/off switch. Any operator-declared key already activates the mount, so
+    @true@ serves the public gate that declares no other key and @false@ switches one off in place.
     -}
     , mntPrivateUpstream :: Maybe RegistryUrl
     , mntPublicUpstream :: RegistryUrl
@@ -141,16 +181,15 @@ data ServerSettings = ServerSettings
     deriving stock (Eq, Show)
 
 {- | The @queue@ group: the mirror queue's destination, depth cap, and redelivery budget. The
-URL's shape decides the backend ("Ecluse.Config.QueueTarget"), which this type never names.
+URL's shape decides the backend, and the load derives it once ("Ecluse.Config.QueueTarget").
 -}
 data QueueSettings = QueueSettings
-    { qsUrl :: Maybe Url
+    { qsUrl :: Maybe QueueUrl
     , qsMemoryMaxDepth :: Maybe Int
     -- ^ Computed from the runtime posture when unset. A configured value wins.
     , qsMaxReceiveCount :: Int
-    {- ^ How many deliveries one message gets before the worker retires it outright.
-    It is a __floor__: a queue with a dead-letter terminus runs one delivery above that terminus's
-    capture count, so the dead-letter queue always captures first ("Ecluse.Core.Queue").
+    {- ^ Deliveries one message gets before the worker retires it. A __floor__: a queue with a
+    dead-letter terminus runs one above its capture count, so it captures first ("Ecluse.Core.Queue").
     -}
     }
     deriving stock (Eq, Show)
@@ -235,8 +274,7 @@ data MountRegistries = MountRegistries
     deriving stock (Eq, Show)
 
 {- | Whether a mount mirrors, derived from its declared endpoints. A declared @mirrorTarget@ makes
-the mount 'Mirrored' and demands a private upstream to read the mirror back, so a mirrored mount
-without a readable private leg is unrepresentable.
+it 'Mirrored', which carries the private upstream the mirror is read back through, never without.
 -}
 data MountMode
     = -- | The mount mirrors admitted public artifacts, and it needs both legs.

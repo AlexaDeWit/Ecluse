@@ -6,10 +6,15 @@ module Ecluse.Config.QueueTargetSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Config.QueueTarget (QueueTarget (..), parseQueueTarget)
+import Ecluse.Config.QueueTarget (QueueTarget (..), mkQueueUrl, parseQueueTarget, queueUrlTarget, queueUrlText)
 
 spec :: Spec
-spec = describe "parseQueueTarget" $ do
+spec = do
+    parseQueueTargetSpec
+    mkQueueUrlSpec
+
+parseQueueTargetSpec :: Spec
+parseQueueTargetSpec = describe "parseQueueTarget" $ do
     it "parses a real SQS queue URL, taking the region from the host" $ do
         parseQueueTarget "https://sqs.us-east-1.amazonaws.com/123456789012/mirror"
             `shouldBe` Just (SqsTarget "us-east-1")
@@ -74,3 +79,34 @@ spec = describe "parseQueueTarget" $ do
 
     it "recognises no other shape" $
         parseQueueTarget "https://queue.example.test/q" `shouldBe` Nothing
+
+-- The type is abstract, so an example projects the two selectors off what 'mkQueueUrl' built.
+mkQueueUrlSpec :: Spec
+mkQueueUrlSpec = describe "mkQueueUrl" $ do
+    it "derives the backend once, keeping the value as written" $ do
+        built "  https://sqs.us-east-1.amazonaws.com/123456789012/mirror  "
+            `shouldBe` Right
+                ("https://sqs.us-east-1.amazonaws.com/123456789012/mirror", Just (SqsTarget "us-east-1"))
+        built "projects/acme/topics/mirror"
+            `shouldBe` Right ("projects/acme/topics/mirror", Just (PubSubTarget "acme" "mirror"))
+
+    it "carries a shape that names no backend, which only the endpoint override dials" $
+        -- An emulator queue URL matches no public shape, so the load cannot refuse one:
+        -- "Ecluse.Composition.MirrorQueue" decides against the ambient AWS_ENDPOINT_URL_SQS.
+        built "http://ministack:4566/000000000000/mirror"
+            `shouldBe` Right ("http://ministack:4566/000000000000/mirror", Nothing)
+
+    it "refuses credential material, naming the key and never the value" $ do
+        mkQueueUrl "queue.url" "https://deploy:hunter2@sqs.us-east-1.amazonaws.com/123456789012/mirror"
+            `shouldBe` Left
+                "queue.url must not carry userinfo (a credential belongs in its own configuration key)"
+        mkQueueUrl "queue.url" "https://sqs.us-east-1.amazonaws.com/123456789012/mirror?attr=1"
+            `shouldBe` Left "queue.url must not carry a query string"
+        mkQueueUrl "queue.url" "https://sqs.us-east-1.amazonaws.com/123456789012/mirror#frag"
+            `shouldBe` Left "queue.url must not carry a fragment"
+
+    it "refuses a blank value, which names no queue at all" $
+        mkQueueUrl "queue.url" "   " `shouldBe` Left "queue.url must be a non-empty URL"
+  where
+    built :: Text -> Either Text (Text, Maybe QueueTarget)
+    built raw = (\u -> (queueUrlText u, queueUrlTarget u)) <$> mkQueueUrl "queue.url" raw
