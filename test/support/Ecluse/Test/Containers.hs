@@ -6,7 +6,7 @@
 end-to-end suites spin up.
 
 Both harnesses stamp every container with @com.ecluse.test@ (the suite) and
-@com.ecluse.test.scope@ (a per-worktree id from @ECLUSE_TEST_SCOPE@, which the
+@com.ecluse.test.scope@ (a per-worktree id from @ECL_TEST_SCOPE@, which the
 container-running @task@ targets pin). A scoped reap therefore removes only this
 worktree's containers, never a sibling's. @scripts\/test-containers.sh@ is the matching
 reader, so the two cannot drift on the spelling. See @docs\/testing.md@.
@@ -18,12 +18,12 @@ module Ecluse.Test.Containers (
 
 -- 'lookupEnv', 'Text', 'toText', 'toString', and '<&>' all come from the relude prelude.
 
-{- | The reaping scope for the current run. It is @ECLUSE_TEST_SCOPE@ when a container-running
+{- | The reaping scope for the current run. It is @ECL_TEST_SCOPE@ when a container-running
 @task@ target pins that variable to this worktree's id, and @local@ otherwise.
 -}
 testScope :: IO Text
 testScope =
-    lookupEnv "ECLUSE_TEST_SCOPE" <&> \case
+    lookupEnv "ECL_TEST_SCOPE" <&> \case
         Just s | not (null s) -> toText s
         _ -> "local"
 

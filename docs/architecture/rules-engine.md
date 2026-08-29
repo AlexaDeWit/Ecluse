@@ -168,10 +168,10 @@ counts as affected, so the lane only opens on evidence.
 ### `DenyIfCve`, the deny direction
 
 `DenyIfCve` reads the same lookup to block version *V* of *P* when an advisory affects *V* at or
-above a configured CVSS `minSeverity`. It is **opt-in** and does two jobs against the npm feed.
+above a configured CVSS `minCvss`. It is **opt-in** and does two jobs against the npm feed.
 Most of that feed is the malware feed: `MAL-*` advisories that carry no CVSS score and name the
 bad version exactly. A smaller share is CVSS-scored CVEs. An unscored advisory counts as **above
-every threshold**, so the rule always denies malware while `minSeverity` governs the scored CVEs.
+every threshold**, so the rule always denies malware while `minCvss` governs the scored CVEs.
 
 - **`Deny`** when some advisory affects *V* and clears the threshold. The reason names the
   deciding advisories.
@@ -218,18 +218,18 @@ scores all read as absent, which every EPSS rule would then read as a deny.
 Parsing raw JSON advisory dumps on the proxy costs heavy GC pressure and memory spikes. So
 Écluse decouples that work into **Écluse Pilot**, a standalone service. Pilot pulls OSV's
 per-ecosystem exports, compiles them into a read-only SQLite database (`osv.db`), and pushes it
-to a private S3/GCS bucket. `advisories.bucket` names that bucket. Unset, the advisory stack is
-off.
+to a private object store. `advisories.url` names that store as `s3://bucket[/prefix]`, its
+scheme picking the provider the way `queue.url` does. Unset, the advisory stack is off.
 
 The proxy runs one supervised sync task per configured mount ecosystem
 ([`Ecluse.Runtime.Cve.Sync`](../../runtime/src/Ecluse/Runtime/Cve/Sync.hs)). Each task polls the
-bucket's stable per-ecosystem key for ETag changes at `advisories.pollInterval`. That interval
+store's stable per-ecosystem key for ETag changes at `advisories.pollInterval`. That interval
 is deliberately shorter than Pilot's compile interval, since matching them would nearly double
 the worst-case advisory age. The tasks are independent, so one ecosystem's missing artifact
 never holds back another's.
 
 The proxy downloads a newly detected `osv.db` to a temp file, byte-bounded by
-`advisories.maxDatabaseBytes`. It treats the file as untrusted even behind the bucket's access
+`limits.maxAdvisoryDatabaseBytes`. It treats the file as untrusted even behind the store's access
 controls. It accepts the file only after a cheapest-first verification: epoch stamp, integrity
 scan, the required tables' strict-schema conformance, ecosystem. It then renames the accepted
 file atomically and shadow-swaps it into the read path

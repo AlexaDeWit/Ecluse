@@ -19,19 +19,19 @@ import Ecluse.Test.Credential (noCredentialReporters)
 @GetAuthorizationToken@. It makes a __live__ AWS call, so it is allowed to fail and never gates a
 merge. It runs only when the environment configures a sandbox domain, and otherwise __pends__:
 
-> ECLUSE_SMOKE_CODEARTIFACT_REGION=us-east-1 \
-> ECLUSE_SMOKE_CODEARTIFACT_DOMAIN=my-sandbox-domain \
+> ECL_SMOKE_CODEARTIFACT_REGION=us-east-1 \
+> ECL_SMOKE_CODEARTIFACT_DOMAIN=my-sandbox-domain \
 > cabal test ecluse-smoke
 
-The optional @ECLUSE_SMOKE_CODEARTIFACT_DOMAIN_OWNER@ overrides the owning account when the
+The optional @ECL_SMOKE_CODEARTIFACT_DOMAIN_OWNER@ overrides the owning account when the
 domain is cross-account.
 -}
 spec :: Spec
 spec = describe "live CodeArtifact GetAuthorizationToken" $
     it "mints a non-empty bearer token with an expiry" $ do
-        mRegion <- lookupEnv "ECLUSE_SMOKE_CODEARTIFACT_REGION"
-        mDomain <- lookupEnv "ECLUSE_SMOKE_CODEARTIFACT_DOMAIN"
-        mOwner <- lookupEnv "ECLUSE_SMOKE_CODEARTIFACT_DOMAIN_OWNER"
+        mRegion <- lookupEnv "ECL_SMOKE_CODEARTIFACT_REGION"
+        mDomain <- lookupEnv "ECL_SMOKE_CODEARTIFACT_DOMAIN"
+        mOwner <- lookupEnv "ECL_SMOKE_CODEARTIFACT_DOMAIN_OWNER"
         case (mRegion, mDomain) of
             (Just region, Just domain) -> do
                 let config =
@@ -53,4 +53,4 @@ spec = describe "live CodeArtifact GetAuthorizationToken" $
             _ ->
                 pendingWith
                     "CodeArtifact sandbox not configured \
-                    \(set ECLUSE_SMOKE_CODEARTIFACT_REGION + _DOMAIN); smoke test skipped"
+                    \(set ECL_SMOKE_CODEARTIFACT_REGION + _DOMAIN); smoke test skipped"

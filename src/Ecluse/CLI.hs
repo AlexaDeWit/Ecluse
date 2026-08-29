@@ -59,9 +59,9 @@ pilotCompileOptionsParser =
     PilotCompileOptions
         <$> strOption (long "ecosystem" <> metavar "ECOSYSTEM" <> value "npm" <> showDefault <> help "Ecosystem whose OSV export to compile")
         <*> optional (strOption (long "source" <> metavar "URL" <> help "OSV export URL (defaults to the configured osvExportBaseUrl for ECOSYSTEM)"))
-        <*> optional (strOption (long "epss-source" <> metavar "URL" <> help "EPSS feed URL (defaults to the FIRST.org daily feed)"))
+        <*> optional (strOption (long "epss-source" <> metavar "URL" <> help "EPSS feed URL (defaults to the configured epssFeedUrl)"))
         <*> strOption (long "out" <> metavar "DIR" <> help "Directory the artifact is written into")
-        <*> switch (long "upload" <> help "After compiling, upload the artifact to the configured vulnerability-database bucket (one full sync cycle)")
+        <*> switch (long "upload" <> help "After compiling, upload the artifact to the configured advisory store (one full sync cycle)")
 
 execCLI :: IO AppCommand
 execCLI =

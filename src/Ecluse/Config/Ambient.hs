@@ -30,8 +30,8 @@ field is 'Nothing' when its variable is unset, and each consumer handles a blank
 -}
 data AmbientAws = AmbientAws
     { ambientAwsRegion :: Maybe Text
-    {- ^ @AWS_REGION@: scopes the SQS mirror queue. (CodeArtifact's mint region
-    comes from the mirror-target host, not from here.)
+    {- ^ @AWS_REGION@: read here only to scope SQS under an @AWS_ENDPOINT_URL_SQS@ override,
+    because a real SQS URL carries its own. The SDK reads it itself to region every other client.
     -}
     , ambientAwsEndpointUrlSqs :: Maybe Text
     {- ^ @AWS_ENDPOINT_URL_SQS@: the SQS endpoint override (a local emulator or a

@@ -131,11 +131,11 @@ spec = do
                     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM", "https://public.example.com")
                     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.com")
                     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
-                    , ("ECLUSE_QUEUE__MEMORY_MAX_DEPTH", "50000")
+                    , ("ECLUSE_QUEUE__MAX_MEMORY_DEPTH", "50000")
                     , ("ECLUSE_QUEUE__MAX_RECEIVE_COUNT", "5")
                     , ("ECLUSE_SERVER__AUTH_TOKEN", "secret-token")
                     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-token")
-                    , ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION", "43200")
+                    , ("ECLUSE_MOUNTS__NPM__MIRROR_TOKEN_DURATION", "43200")
                     , ("ECLUSE_SERVER__HELP_MESSAGE", "contact support")
                     , ("ECLUSE_ADVISORIES__COMPILE_INTERVAL", "3600")
                     , ("ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "30")
@@ -155,7 +155,7 @@ spec = do
                     , ("ECLUSE_INTEGRITY__MIN_TRUSTED", "sha256")
                     , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.com")
                     , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-token")
-                    , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@test")
+                    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@test")
                     ]
 
             let expected =
@@ -184,10 +184,10 @@ spec = do
                                                     , ("publicUpstream", String "https://public.example.com")
                                                     , ("mirrorTarget", String "https://mirror.example.com")
                                                     , ("mirrorTargetToken", String "mirror-token")
-                                                    , ("mirrorCodeArtifactTokenDuration", Number 43200)
+                                                    , ("mirrorTokenDuration", Number 43200)
                                                     , ("publicationTarget", String "https://publish.example.com")
                                                     , ("publicationTargetToken", String "publish-token")
-                                                    , ("publishAllow", String "@test")
+                                                    , ("publicationAllow", String "@test")
                                                     ]
                                             )
                                         ]
@@ -197,7 +197,7 @@ spec = do
                                 , Object $
                                     KeyMap.fromList
                                         [ ("url", String "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
-                                        , ("memoryMaxDepth", Number 50000)
+                                        , ("maxMemoryDepth", Number 50000)
                                         , ("maxReceiveCount", Number 5)
                                         ]
                                 )

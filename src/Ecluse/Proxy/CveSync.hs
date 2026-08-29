@@ -26,8 +26,12 @@ import System.FilePath (isExtensionOf, (</>))
 import System.IO.Error (IOError, catchIOError)
 
 import Ecluse.Config (
-    AdvisoriesSettings (advBucket, advDataDir, advMaxDatabaseBytes, advPollInterval),
-    AppConfig (cfgAdvisories, cfgMounts),
+    AdvisoriesSettings (advDataDir, advPollInterval, advUrl),
+    AdvisoryStoreUrl,
+    AppConfig (cfgAdvisories, cfgLimits, cfgMounts),
+    LimitsSettings (limMaxAdvisoryDatabaseBytes),
+    advisoryObjectKey,
+    advisoryStoreBucket,
  )
 import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
@@ -90,31 +94,37 @@ data CveSyncHandle = CveSyncHandle
     }
 
 {- | Build the advisory-sync plan from config, one 'CveSyncHandle' per mount ecosystem, or nothing
-when no vulnerability-database bucket is configured. An operator who mounts an ecosystem the build
-does not ship declares an artifact that never arrives, so the pod never reports ready.
+when no advisory store is configured. An operator who mounts an ecosystem the build does not ship
+declares an artifact that never arrives, so the pod never reports ready.
 -}
 planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
-planCveSync logEnv s3Endpoint appCfg = case advBucket (cfgAdvisories appCfg) of
+planCveSync logEnv s3Endpoint appCfg = case advUrl (cfgAdvisories appCfg) of
     Nothing -> pure Map.empty
-    Just bucket -> do
+    Just store -> do
         let dataDir = advDataDir (cfgAdvisories appCfg)
         createDirectoryIfMissing True dataDir
         sweepStaleTemps logEnv dataDir
         cveSource <- newS3CveSource s3Endpoint
-        Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource bucket) (Map.keys (cfgMounts appCfg))
+        Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource store) (Map.keys (cfgMounts appCfg))
 
 -- 'cveSource' captures the S3 environment once, so every ecosystem's transport shares one
--- credential discovery.
-cveSyncHandleFor :: AppConfig -> S3CveSource -> Text -> Ecosystem -> IO (Ecosystem, CveSyncHandle)
-cveSyncHandleFor appCfg cveSource bucket eco = do
+-- credential discovery. The store addresses the remote object, the local copy its bare file name.
+cveSyncHandleFor :: AppConfig -> S3CveSource -> AdvisoryStoreUrl -> Ecosystem -> IO (Ecosystem, CveSyncHandle)
+cveSyncHandleFor appCfg cveSource store eco = do
     slot <- newCveSlot
     ready <- newTVarIO False
-    let key = osvDbFileName (ecosystemName eco)
+    let fileName = osvDbFileName (ecosystemName eco)
+        maxBytes = limMaxAdvisoryDatabaseBytes (cfgLimits appCfg)
         syncEnv =
             SyncEnv
-                { syncFetch = s3CveFetchFor cveSource bucket (toText key) (advMaxDatabaseBytes (cfgAdvisories appCfg))
+                { syncFetch =
+                    s3CveFetchFor
+                        cveSource
+                        (advisoryStoreBucket store)
+                        (advisoryObjectKey store fileName)
+                        maxBytes
                 , syncEcosystem = eco
-                , syncDbPath = advDataDir (cfgAdvisories appCfg) </> key
+                , syncDbPath = advDataDir (cfgAdvisories appCfg) </> fileName
                 , syncSlot = slot
                 }
     pure (eco, CveSyncHandle{csReady = ready, csEnv = syncEnv})

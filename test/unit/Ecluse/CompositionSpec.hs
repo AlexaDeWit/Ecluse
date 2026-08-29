@@ -261,8 +261,8 @@ planMountsSpec = describe "planMounts (config-driven serving)" $ do
         -- global default stands elsewhere.
         sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
         let env =
-                ("ECLUSE_MOUNTS__NPM__MIN_TRUSTED_INTEGRITY", "sha1")
-                    : ("ECLUSE_MOUNTS__NPM__DIVERGENCE_POLICY", "fail-closed")
+                ("ECLUSE_MOUNTS__NPM__INTEGRITY__MIN_TRUSTED", "sha1")
+                    : ("ECLUSE_MOUNTS__NPM__INTEGRITY__DIVERGENCE_POLICY", "fail-closed")
                     : staticEnvVars
         planFrom env Nothing >>= \case
             Right [binding] -> do
@@ -326,12 +326,12 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "fails when a publication target is set without a publish allow-list" $ do
-        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW absent
+        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW absent
         -- leaves the anti-shadowing guard nothing to enforce, so the boot refuses rather than defaulting.
         _ <- expectEnv (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars)
         planFrom (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars) Nothing >>= \case
-            Left errs -> errs `shouldBe` [PublishAllowMissing Npm]
-            Right _ -> expectationFailure "expected a publish-allow-missing boot error"
+            Left errs -> errs `shouldBe` [PublicationAllowMissing Npm]
+            Right _ -> expectationFailure "expected a publication-allow-missing boot error"
 
     it "fails when a static publish credential is set without a verifiable inbound edge" $ do
         -- ECLUSE_SERVER__AUTH_TOKEN unset is the default open edge. With
@@ -339,7 +339,7 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
         -- publish within scope under Ecluse's own write credential, so the boot refuses.
         let testEnvVars =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-                , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme")
+                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme")
                 , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-write-token")
                 ]
                     <> staticEnvVars
@@ -358,7 +358,7 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
                     <> staticEnvVars
         _ <- expectEnv testEnvVars
         planFrom testEnvVars Nothing >>= \case
-            Left errs -> errs `shouldMatchList` [PublishAllowMissing Npm, PublishStaticCredentialNeedsEdge Npm]
+            Left errs -> errs `shouldMatchList` [PublicationAllowMissing Npm, PublishStaticCredentialNeedsEdge Npm]
             Right _ -> expectationFailure "expected both publish boot errors, accumulated"
 
 -- An npm name under the given scope, for the publish allow-list predicate.
@@ -374,7 +374,7 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
     it "wires the publication target and scope allow-list onto the mount when configured" $ do
         let testEnv =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-                , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme, @beta")
+                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme, @beta")
                 ]
                     <> staticEnvVars
         _ <- expectEnv testEnv
@@ -394,7 +394,7 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
         -- credential boots once ECLUSE_SERVER__AUTH_TOKEN gates the edge.
         let testEnv =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-                , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme")
+                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme")
                 , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-write-token")
                 , ("ECLUSE_SERVER__AUTH_TOKEN", "edge-token")
                 ]

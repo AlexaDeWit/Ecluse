@@ -24,7 +24,8 @@ module Ecluse.Config (
     regMirrorTarget,
     MirrorTarget (..),
     MirrorCredential (..),
-    PublishAllow (..),
+    PublicationAllow (..),
+    MountIntegrity (..),
     MountConfig (..),
     Url,
     mkUrl,
@@ -33,6 +34,12 @@ module Ecluse.Config (
     QueueUrl,
     queueUrlText,
     queueUrlTarget,
+    AdvisoryStoreTarget (..),
+    AdvisoryStoreUrl,
+    advisoryStoreUrlText,
+    advisoryStoreTarget,
+    advisoryStoreBucket,
+    advisoryObjectKey,
     RulePatch (..),
     RuleEntry (..),
     RulePolicy (..),
@@ -58,6 +65,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Yaml (decodeEither')
 
+import Ecluse.Config.AdvisoryStore (advisoryObjectKey, advisoryStoreBucket)
 import Ecluse.Config.Aeson ()
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.MirrorCredential (resolveMirrorCredential)
@@ -174,7 +182,7 @@ resolveMounts globalPolicy appConfig =
 
     writeOnlySettings mcfg =
         ["mirrorTargetToken" | isJust (mntMirrorTargetToken mcfg)]
-            <> ["mirrorCodeArtifactTokenDuration" | isJust (mntMirrorCodeArtifactTokenDuration mcfg)]
+            <> ["mirrorTokenDuration" | isJust (mntMirrorTokenDuration mcfg)]
 
 {- | Project a mirrored mount onto its served form. 'resolveMirrorCredential' derives the
 mirror-write credential from the mirror-target URL, so the resolved 'MirrorTarget' never pairs
@@ -185,7 +193,7 @@ resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
     policy <- resolveMountPolicy globalPolicy mcfg
     credential <-
         first (: []) $
-            resolveMirrorCredential eco mirrorTarget (mntMirrorTargetToken mcfg) (mntMirrorCodeArtifactTokenDuration mcfg)
+            resolveMirrorCredential eco mirrorTarget (mntMirrorTargetToken mcfg) (mntMirrorTokenDuration mcfg)
     Right $
         mountOf eco mcfg policy $
             Mirrored

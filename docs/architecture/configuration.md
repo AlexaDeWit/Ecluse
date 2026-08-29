@@ -154,10 +154,10 @@ operator enables them before the mirror is warm. Read their
 
 The remediation fast lane and the two advisory denies read a synced local advisory database, not an
 API per request. The compilation, ETag polling, and atomic shadow-swap are under [Rules engine → CVE
-subsystem](rules-engine.md#cve-subsystem). The operator knobs (bucket, poll interval, OSV export
-source, download size cap) are in the
+subsystem](rules-engine.md#cve-subsystem). The operator knobs (the store URL, the poll interval, the
+OSV export and EPSS feed sources, and the download size cap) are in the
 [configuration reference](https://ecluse-proxy.com/docs/configuration/#the-configuration-reference).
-With no bucket configured, the fast lane abstains and the age quarantine governs alone.
+With no store configured, the fast lane abstains and the age quarantine governs alone.
 
 ### Validation: fail fast, reject the unknown
 
@@ -167,7 +167,10 @@ error, not a silent skip:
 
 - Écluse rejects an unknown rule `type`, and an unknown field or key. An operator authors the
   config alongside the binary, and deny-by-default protects you only if the policy you wrote is the
-  policy that loaded. A typo must fail the load rather than silently stop blocking.
+  policy that loaded. A typo must fail the load rather than silently stop blocking. The same
+  reasoning reaches inside a rule: a rule reads only its own type's parameters, so a threshold or
+  an `onUnavailable` written under a type that does not read it is refused rather than ignored.
+  Ignoring it would leave an operator believing they set a gate's failure direction.
 - Malformed values (bad URL, non-integer precedence, unparseable JSON) fail the same way.
 - Merge references must resolve. Écluse rejects a `rules` entry that neither names a known default
   nor supplies a complete new rule.

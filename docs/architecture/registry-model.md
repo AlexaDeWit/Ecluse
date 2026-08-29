@@ -68,7 +68,7 @@ The publication target adds the one client-driven write path. Écluse accepts a 
 trigger, content, and credential from the mirror write.
 
 - **Anti-shadowing guard (the load-bearing control).** Écluse refuses a publish whose name falls
-  outside the operator's `publishAllow` list (for npm, scopes such as `@acme`). That stops a client
+  outside the operator's `publicationAllow` list (for npm, scopes such as `@acme`). That stops a client
   publishing a name that shadows an existing public package, a dependency-confusion vector. The
   guard holds a **guard-name ≡ URL-path name ≡ every declared body name** invariant. The scope
   check keys on the URL-path name. An npm publish document declares its own identity (`_id`,

@@ -42,13 +42,19 @@ mountDecoder eco =
         <*> requiredKey "publicUpstream" parseRegistryUrl
         <*> optionalKey "mirrorTarget" parseRegistryUrl
         <*> optionalKey "mirrorTargetToken" parseSecret
-        <*> optionalKey "mirrorCodeArtifactTokenDuration" parseCodeArtifactDuration
+        <*> optionalKey "mirrorTokenDuration" parseCodeArtifactDuration
         <*> optionalKey "publicationTarget" parseRegistryUrl
         <*> optionalKey "publicationTargetToken" parseSecret
-        <*> optionalKey "publishAllow" (parsePublishAllow eco)
-        <*> optionalKey "minTrustedIntegrity" (parseEnum parseMinTrustedIntegrity)
-        <*> optionalKey "divergencePolicy" (parseEnum parseDivergencePolicy)
+        <*> optionalKey "publicationAllow" (parsePublicationAllow eco)
+        <*> nestedKey "integrity" (decodeGroup "integrity" mountIntegrityDecoder)
         <*> optionalPlainKeyOr "rules" (RulePatch Map.empty)
+
+-- Both keys are optional, so a mount that writes no @integrity@ object decodes the empty one.
+mountIntegrityDecoder :: GroupDecoder MountIntegrity
+mountIntegrityDecoder =
+    MountIntegrity
+        <$> optionalKey "minTrusted" (parseEnum parseMinTrustedIntegrity)
+        <*> optionalKey "divergencePolicy" (parseEnum parseDivergencePolicy)
 
 instance FromJSON AppConfig where
     parseJSON = withObject "AppConfig" (decodeGroup "document" documentDecoder)
@@ -83,7 +89,7 @@ queueDecoder :: GroupDecoder QueueSettings
 queueDecoder =
     QueueSettings
         <$> optionalKey "url" parseQueueUrl
-        <*> optionalKey "memoryMaxDepth" parsePositiveInt
+        <*> optionalKey "maxMemoryDepth" parsePositiveInt
         <*> requiredKey "maxReceiveCount" parsePositiveInt
 
 limitsDecoder :: GroupDecoder LimitsSettings
@@ -92,6 +98,7 @@ limitsDecoder =
         <$> optionalKey "maxResponseBytes" parsePositiveInt
         <*> requiredKey "maxVersionCount" parsePositiveInt
         <*> requiredKey "maxNestingDepth" parsePositiveInt
+        <*> requiredKey "maxAdvisoryDatabaseBytes" parsePositiveInt
         <*> optionalKey "maxRequestBytes" parsePositiveInt
         <*> optionalKey "maxArtifactBytes" parsePositiveInt
 
@@ -117,12 +124,12 @@ egressDecoder =
 advisoriesDecoder :: GroupDecoder AdvisoriesSettings
 advisoriesDecoder =
     AdvisoriesSettings
-        <$> optionalPlainKey "bucket"
+        <$> optionalKey "url" parseAdvisoryStoreUrl
         <*> requiredKey "pollInterval" parseDelaySeconds
         <*> requiredKey "compileInterval" parseDelaySeconds
         <*> plainKey "dataDir"
         <*> requiredKey "osvExportBaseUrl" parseHttpUrl
-        <*> requiredKey "maxDatabaseBytes" parsePositiveInt
+        <*> requiredKey "epssFeedUrl" parseHttpUrl
 
 runtimeDecoder :: GroupDecoder RuntimeSettings
 runtimeDecoder =
@@ -160,13 +167,13 @@ parseSecret field = expectString field (pure . mkSecret)
 
 -- Every arm is explicit, so an added 'Ecosystem' surfaces here as a compiler error. One with no
 -- allow-list shape yet refuses the key rather than parsing it as another ecosystem's.
-parsePublishAllow :: Ecosystem -> String -> Value -> Parser PublishAllow
-parsePublishAllow eco field v = case eco of
-    Npm -> PublishAllowNpmScopes <$> parseNpmScopes field v
+parsePublicationAllow :: Ecosystem -> String -> Value -> Parser PublicationAllow
+parsePublicationAllow eco field v = case eco of
+    Npm -> PublicationAllowNpmScopes <$> parseNpmScopes field v
     PyPI -> unsupported
     RubyGems -> unsupported
   where
-    unsupported :: Parser PublishAllow
+    unsupported :: Parser PublicationAllow
     unsupported = fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
 
 -- A configured list that admits nothing refuses every publish, so it fails the load instead.
@@ -175,11 +182,11 @@ parseNpmScopes field v = do
     scopes <- commaSeparated field parseScopeEntry v
     maybe (fail (field <> " must name at least one scope")) pure (nonEmpty scopes)
 
--- Reject a publishAllow segment no scope can equal, an empty one or a wrong separator, so a
+-- Reject a publicationAllow segment no scope can equal, an empty one or a wrong separator, so a
 -- typo fails the load instead of seeding an allow-list that refuses every publish.
 parseScopeEntry :: Text -> Parser Scope
 parseScopeEntry entry =
-    either (const (fail ("invalid scope in publishAllow: " <> show entry))) pure (projectScope entry)
+    either (const (fail ("invalid scope in publicationAllow: " <> show entry))) pure (projectScope entry)
 
 parseBlockedRanges :: String -> Value -> Parser [IPRange]
 parseBlockedRanges field = commaSeparated field parseBlockedRangeEntry
@@ -249,6 +256,6 @@ ruleEntryDecoder =
         <*> optionalPlainKey "ageSeconds"
         <*> optionalPlainKey "scope"
         <*> optionalPlainKey "identity"
-        <*> optionalPlainKey "minSeverity"
+        <*> optionalPlainKey "minCvss"
         <*> optionalPlainKey "minEpss"
         <*> optionalPlainKey "onUnavailable"

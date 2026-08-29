@@ -27,13 +27,13 @@ set -euo pipefail
 readonly LABEL_KEY="com.ecluse.test"
 readonly SCOPE_KEY="com.ecluse.test.scope"
 
-# The reaping scope for the current worktree. Honours ECLUSE_TEST_SCOPE when the caller
+# The reaping scope for the current worktree. Honours ECL_TEST_SCOPE when the caller
 # has pinned it: a container-running `task` target, the `test-*` suites or the `coverage`
 # and `check` path. Otherwise it derives a stable id from the worktree root path, so each
 # checkout owns a distinct scope.
 scope_id() {
-  if [ -n "${ECLUSE_TEST_SCOPE:-}" ]; then
-    printf '%s\n' "$ECLUSE_TEST_SCOPE"
+  if [ -n "${ECL_TEST_SCOPE:-}" ]; then
+    printf '%s\n' "$ECL_TEST_SCOPE"
     return
   fi
   local root

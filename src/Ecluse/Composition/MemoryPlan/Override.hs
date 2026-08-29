@@ -34,7 +34,7 @@ import Ecluse.Composition.MemoryPlan.Internal (
     ShedOutcomes (soResidualOvershoot),
     TenantDemands (..),
  )
-import Ecluse.Config (CacheSettings (csMaxBytes), LimitsSettings (limMaxArtifactBytes, limMaxRequestBytes, limMaxResponseBytes), QueueSettings (qsMemoryMaxDepth))
+import Ecluse.Config (CacheSettings (csMaxBytes), LimitsSettings (limMaxArtifactBytes, limMaxRequestBytes, limMaxResponseBytes), QueueSettings (qsMaxMemoryDepth))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes, mirrorJobEstimatedBytes, packumentOriginFanout)
 
 -- | Every override substituted out: the pin set the override-free minimum resolves from.
@@ -57,7 +57,7 @@ configuredPins inputs =
         , opAdmission = piExplicitAdmission inputs
         , opResponse = limMaxResponseBytes limits
         , opRequest = limMaxRequestBytes limits
-        , opDepth = qsMemoryMaxDepth (piQueue inputs)
+        , opDepth = qsMaxMemoryDepth (piQueue inputs)
         , opArtifact = limMaxArtifactBytes limits
         }
   where
@@ -88,7 +88,7 @@ overrideSubstitutions pins =
         , ("runtime.serveMaxInFlight", pins{opAdmission = Nothing}) <$ opAdmission pins
         , ("limits.maxResponseBytes", pins{opResponse = Nothing}) <$ opResponse pins
         , ("limits.maxRequestBytes", pins{opRequest = Nothing}) <$ opRequest pins
-        , ("queue.memoryMaxDepth", pins{opDepth = Nothing}) <$ opDepth pins
+        , ("queue.maxMemoryDepth", pins{opDepth = Nothing}) <$ opDepth pins
         , ("limits.maxArtifactBytes", pins{opArtifact = Nothing}) <$ opArtifact pins
         ]
 

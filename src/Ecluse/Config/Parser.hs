@@ -7,8 +7,9 @@ enumerations, ports, durations, and the URL shapes.
 
 A malformed key fails at load with the key named, never at its first use. A group accepts exactly
 the keys its 'GroupDecoder' declares. A URL-valued key is refined by the smart constructor of the
-type it resolves to: 'parseHttpUrl' and 'parseQueueUrl' pass it the key so the refusal names it,
-while 'parseRegistryUrl' prefixes the key itself and adds the host refusal 'RegistryUrl' omits.
+type it resolves to: 'parseHttpUrl', 'parseQueueUrl', and 'parseAdvisoryStoreUrl' pass it the key
+so the refusal names it, while 'parseRegistryUrl' prefixes the key itself and adds the host
+refusal 'RegistryUrl' omits.
 -}
 module Ecluse.Config.Parser (
     -- * Group decoding
@@ -35,6 +36,7 @@ module Ecluse.Config.Parser (
     parseEnum,
     parseHttpUrl,
     parseQueueUrl,
+    parseAdvisoryStoreUrl,
     parsePort,
     parseCodeArtifactDuration,
 ) where
@@ -45,8 +47,9 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
 import Data.Text qualified as T
 
+import Ecluse.Config.AdvisoryStore (mkAdvisoryStoreUrl)
 import Ecluse.Config.QueueTarget (mkQueueUrl)
-import Ecluse.Config.Types (QueueUrl, Url, mkUrl)
+import Ecluse.Config.Types (AdvisoryStoreUrl, QueueUrl, Url, mkUrl)
 import Ecluse.Core.Json.Lenient (valueKind)
 import Ecluse.Core.Security (hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkConfiguredRegistryUrl)
@@ -210,6 +213,12 @@ its provider's shape, so 'mkQueueUrl' derives the backend instead of checking a 
 -}
 parseQueueUrl :: String -> Value -> Parser QueueUrl
 parseQueueUrl field = expectString field (refined (mkQueueUrl (T.pack field)))
+
+{- | The object store the compiled advisory databases sync from. Its scheme names the provider,
+so 'mkAdvisoryStoreUrl' derives it rather than reading a separate selector.
+-}
+parseAdvisoryStoreUrl :: String -> Value -> Parser AdvisoryStoreUrl
+parseAdvisoryStoreUrl field = expectString field (refined (mkAdvisoryStoreUrl (T.pack field)))
 
 -- A smart constructor's refusal, which already names the key, raised as the key's parse failure.
 refined :: (Text -> Either Text a) -> Text -> Parser a

@@ -54,7 +54,7 @@ data CompileSources = CompileSources
     { csOsvExportUrl :: String
     -- ^ The ecosystem's OSV export archive ('Ecluse.Core.Osv.Advisory.osvExportUrl').
     , csEpssFeedUrl :: String
-    -- ^ The EPSS daily feed ('Ecluse.Core.Osv.Epss.epssFeedUrl').
+    -- ^ The EPSS daily feed, from the configured @advisories.epssFeedUrl@.
     }
     deriving stock (Eq, Show)
 

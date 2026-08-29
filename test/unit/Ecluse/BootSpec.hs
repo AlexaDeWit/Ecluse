@@ -48,7 +48,6 @@ spec = do
         it "boots from the environment layer alone (no document, no AWS_REGION) and serves" $ do
             -- The queue URL's own host carries the region, so a real SQS
             -- deployment needs no AWS_REGION.
-            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             unsetEnv "AWS_REGION"
             traverse_ (uncurry setEnv) runEnv
             outcome <- timeout 100000 (withArgs ["proxy"] run)
@@ -58,7 +57,6 @@ spec = do
         it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $ do
             -- ECLUSE_MOUNTS__NPM__ENABLED and ECLUSE_SERVER__PUBLIC_URL are the whole start for a
             -- real install. No mount mirrors, so the shipped sqs default is never consulted.
-            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             unsetEnv "AWS_REGION"
             unsetEnv "ECLUSE_QUEUE__URL"
             setEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true"
@@ -71,7 +69,6 @@ spec = do
             outcome `shouldBe` Nothing
 
         it "boots with a config document at the ECLUSE_CONFIG override path and serves" $ do
-            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
                 let path = dir </> "config.yaml"
                 writeFileText path "server:\n  helpMessage: booted from the override document\n"
@@ -139,7 +136,6 @@ spec = do
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "boots on the in-memory mirror queue when no ECLUSE_QUEUE__URL is set (graceful rollover) and serves" $ do
-            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             unsetEnv "AWS_REGION"
             unsetEnv "ECLUSE_QUEUE__URL"
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_QUEUE__URL") . fst) runEnv)
@@ -190,7 +186,6 @@ spec = do
 
     describe "the *_FILE secret indirection" $ do
         it "resolves a secret through *_FILE and serves" $ do
-            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
                 let secretPath = dir </> "mirror-token"
                 writeFileText secretPath "mirror-write-token\n"
@@ -274,7 +269,7 @@ spec = do
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "refuses a publication target without a publish allow-list with exit 2 (the boot's own refusal)" $ do
+        it "refuses a publication target without a publication allow-list with exit 2 (the boot's own refusal)" $ do
             traverse_ (uncurry setEnv) runEnv
             setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://publish.example.test"
             outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
@@ -285,11 +280,11 @@ spec = do
         it "refuses a static publication token without an inbound edge with exit 2" $ do
             traverse_ (uncurry setEnv) runEnv
             setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://publish.example.test"
-            setEnv "ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW" "@acme"
+            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW" "@acme"
             setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN" "publish-write-token"
             outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
             unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET"
-            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW"
+            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW"
             unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left (ExitFailure 2)
@@ -316,7 +311,6 @@ spec = do
     describe "the ambient AWS_ENDPOINT_URL refusal (one verdict for both entry points)" $ do
         it "refuses one malformed override in the boot and in check-config alike" $ do
             -- The pre-flight tool must never pass a value the real boot then refuses.
-            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             traverse_ (uncurry setEnv) runEnv
             setEnv "AWS_ENDPOINT_URL" malformedEndpoint
             -- Each outcome leaves its capture through a ref, so every assertion waits for

@@ -47,7 +47,7 @@ spec = do
                 -- the fixture feed holds for the advisory's CVE alias.
                 rows `shouldBe` [("hono", Just 0.75)]
 
-        it "fails loudly when an upload is requested without a configured bucket" $ do
+        it "fails loudly when an upload is requested without a configured advisory store" $ do
             le <- newTestLogEnv
             appCfg <- expectAppConfig [] Nothing
             zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"

@@ -5,11 +5,19 @@
 # applies while it stays unset. Put secrets in environment variables, never here. An
 # integer key takes a positive integer unless its comment says otherwise, written as
 # plain digits: a hexadecimal, octal, padded, or bracketed spelling is refused.
+#
+# The loader owns the whole ECLUSE_ prefix: every ECLUSE_* variable but ECLUSE_CONFIG
+# is read as a key of this schema, and one that names no key aborts the boot. Never put
+# an unrelated setting under the prefix. Écluse also reads the standard AWS_* and OTEL_*
+# variables of the SDKs it embeds, which are not keys here and are documented in the
+# operator manual.
 
 server:
   # TCP port, 0 to 65535. 0 binds an OS-assigned ephemeral port. Every role listens
   # here: the proxy serves its mounts and its probes, and the worker roles (mirror,
-  # pilot, dredger) serve /livez and /readyz alone.
+  # pilot, dredger) serve /livez and /readyz alone. Telemetry adds a second listener on
+  # its own port, addressed by OTEL_EXPORTER_PROMETHEUS_HOST and
+  # OTEL_EXPORTER_PROMETHEUS_PORT rather than by a key here.
   port: 8080
   # The proxy's own externally-reachable base URL. The proxy rewrites served tarball
   # URLs against it. http(s) with a dialable authority, and http stays legal for
@@ -44,13 +52,17 @@ queue:
   # url: https://sqs.us-east-1.amazonaws.com/123456789012/ecluse-mirror
   # In-memory queue only. Past the cap an enqueue is dropped (drop-newest) and the
   # package re-mirrors on next demand. Unset, the memory plan computes it.
-  # memoryMaxDepth: 50000
+  # maxMemoryDepth: 50000
 
 limits:
-  # Structural hostile-input bounds. They bound document shape, not bytes, so they are
-  # a pinned policy stance rather than a machine property.
+  # The bounds the memory plan does not size, so they stay a pinned policy stance rather
+  # than a machine property. The first two bound document shape, not bytes.
   maxVersionCount: 100000
   maxNestingDepth: 64
+  # Refuse to download an advisory database larger than this many bytes (512 MiB). The
+  # declared length fails fast and the streaming download enforces the cap. It bounds a
+  # stream to disk rather than a heap tenant, which is why the plan does not size it.
+  maxAdvisoryDatabaseBytes: 536870912
   # The memory plan computes the byte-valued caps at boot, as named tenants of the
   # effective heap ceiling, and the boot log names each decision. Set either one only
   # to override it. maxResponseBytes bounds an upstream metadata body, floored at
@@ -77,13 +89,13 @@ cache:
 
 integrity:
   minPublic: sha256
-  minTrusted: sha256 # refinable per mount: mounts.<ecosystem>.minTrustedIntegrity
+  minTrusted: sha256 # refinable per mount: mounts.<ecosystem>.integrity.minTrusted
   # What to do when the public and private copies of a version contradict on a shared
   # integrity algorithm (threat #11). Both policies log a WARNING and increment the
   # ecluse.registry.merge.divergence counter. The trusted copy always wins the bytes.
   #   warn        - serve the trusted copy and rely on the alarm (default)
   #   fail-closed - additionally withhold the contested version from the served listing
-  divergencePolicy: warn # refinable per mount: mounts.<ecosystem>.divergencePolicy
+  divergencePolicy: warn # refinable per mount: mounts.<ecosystem>.integrity.divergencePolicy
 
 # Extra CIDR ranges denied registry egress, on top of the built-in internal-range
 # blocklist (comma-separated). Extends the block only. A malformed entry fails closed
@@ -99,18 +111,25 @@ advisories:
   # Pilot only: how often it recompiles and re-exports the advisory artifacts.
   compileInterval: 3600
   # Where Pilot compiles the advisory databases and where the proxy lands synced ones.
-  dataDir: "data/osv"
+  # It must be writable by the container's user, which in the shipped image is uid
+  # 65532, so mount a volume here. The default path is absolute on purpose: the image
+  # sets no working directory, and a relative one would land in an unwritable root.
+  dataDir: "/var/lib/ecluse/advisories"
   # Base URL of the per-ecosystem OSV advisory exports Pilot compiles from
   # (<base>/<ecosystem>/all.zip). Override it if the upstream moves or you mirror it.
   # A new URL must never require a new Écluse binary. Allowlist this host for Pilot's
   # egress, not osv.dev.
   osvExportBaseUrl: "https://osv-vulnerabilities.storage.googleapis.com"
-  # Refuse to download an advisory database larger than this many bytes (512 MiB).
-  # The declared length fails fast and the streaming download enforces the cap.
-  maxDatabaseBytes: 536870912
-  # The object-storage bucket the compiled advisory database syncs from. Unset, the
-  # advisory stack is off and the advisory-dependent rules abstain.
-  # bucket: my-advisory-bucket
+  # The EPSS daily feed Pilot joins onto the advisories by CVE id, on the same terms:
+  # override it if the upstream moves or you mirror it, and allowlist this host for
+  # Pilot's egress. The DenyIfEpss rule reads the scores it supplies.
+  epssFeedUrl: "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+  # The object store the compiled advisory databases sync from, as
+  # s3://<bucket>[/<prefix>]. The scheme picks the provider, the way queue.url does, and
+  # a scheme this build does not know is refused at load. AWS_ENDPOINT_URL still points
+  # the S3 client at an emulator or a VPC endpoint. Unset, the advisory stack is off and
+  # the advisory-dependent rules abstain.
+  # url: s3://my-advisory-bucket/ecluse
 
 # Process sizing. Écluse computes every key at boot from the container's cgroup
 # limits, the RTS posture, and the file-descriptor budget. The boot log records each
@@ -149,7 +168,8 @@ observability:
   # verbose under load.
   logLevel: info
   # The OpenTelemetry master switch, on or off. Off, Écluse emits no telemetry. Logs
-  # go to stdout either way.
+  # go to stdout either way. Quote the value: YAML reads a bare off as the boolean
+  # false, which the load then refuses as the wrong type.
   telemetry: "off"
 
 mounts:
@@ -157,6 +177,9 @@ mounts:
   # environment declares any key under it. `enabled: true` alone is enough for the
   # serve-only pure public gate, and declaring `mirrorTarget` is what makes a mount
   # mirror.
+  # Every registry endpoint below must be an https:// URL carrying a dialable host, and
+  # none may carry userinfo, a query, or a fragment: a credential belongs in its own
+  # key. The boot refuses anything else, naming the key.
   npm:
     publicUpstream: https://registry.npmjs.org
     # The only key the serve-only pure public gate needs. false switches off a mount
@@ -172,10 +195,12 @@ mounts:
     # Set via ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN (a secret). Required for a
     # non-CodeArtifact mirror target, forbidden for a CodeArtifact one or a serve-only mount.
     # mirrorTargetToken:
-    # Lifetime in seconds of the minted CodeArtifact token, 900 to 43200. Unset,
-    # CodeArtifact defaults it to the caller's role-credential expiry. The refresh
-    # policy adapts to the minted token's actual expiry, so this is a preference.
-    # mirrorCodeArtifactTokenDuration: 3600
+    # Lifetime in seconds of a minted mirror-write token. The mint provider comes from
+    # the mirror target, so this key names none: for a CodeArtifact target the bound is
+    # 900 to 43200, and unset CodeArtifact defaults it to the caller's role-credential
+    # expiry. The refresh policy adapts to the minted token's actual expiry, so this is
+    # a preference.
+    # mirrorTokenDuration: 3600
     # Where a client `npm publish` is relayed. Opt-in: unset, PUT /{pkg} is 405.
     # publicationTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
     # Set via ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN (a secret). Forwarded only
@@ -185,18 +210,24 @@ mounts:
     # Names a client may publish. Required with a publication target. The shape is
     # per-ecosystem, and npm reads it as a comma-separated list of scopes. It limits
     # names, not callers, and an empty or malformed list is refused at load.
-    # publishAllow: "@acme,@beta"
-    # Per-mount refinements of integrity.minTrusted and integrity.divergencePolicy.
-    # minTrustedIntegrity: sha256
-    # divergencePolicy: warn
+    # publicationAllow: "@acme,@beta"
+    # Per-mount refinements of the integrity group above, under the same key names.
+    # integrity:
+    #   minTrusted: sha256
+    #   divergencePolicy: warn
     # Per-mount rule refinement, merged over the shared policy with the same schema
     # as the top-level rules.
     # rules: {}
+  # No adapter ships for these two yet, so activating either refuses the boot. The
+  # public upstream is here so the key is settled before the ecosystem lands.
   pypi:
     publicUpstream: https://pypi.org
   rubygems:
     publicUpstream: https://rubygems.org
 
+# The rule policy. A shipped name below patches that rule, `enabled: false` suppresses
+# it, and a new name with a `type` adds one. A rule reads only its own type's parameters,
+# and a parameter written under a type that does not read it is refused at load.
 rules:
   min-age:
     type: AllowIfOlderThan
@@ -204,12 +235,18 @@ rules:
     ageSeconds: 604800
   # The remediation fast lane. Écluse admits a version a synced advisory names as its
   # exact fix ahead of the min-age quarantine. With no advisory database configured
-  # (no advisories.bucket) the rule abstains, and only the quarantine governs.
+  # (no advisories.url) the rule abstains, and only the quarantine governs.
   remediation-fast-track:
     type: AllowIfRemediatesCve
     precedence: 150
+  # Opt-in scope allow-list, absent from this shipped policy. It admits every version
+  # under an npm scope you already trust, past the quarantine, without reaching the
+  # advisory database. It sits above min-age and below every deny.
+  # trust-our-scope:
+  #   type: AllowScope
+  #   scope: acme            # the scope without its leading @
   # Opt-in CVE deny gate, absent from this shipped policy. It denies a version a
-  # synced advisory records as affected at or above `minSeverity` (a CVSS base score,
+  # synced advisory records as affected at or above `minCvss` (a CVSS base score,
   # 0-10). Unscored npm malware advisories count as above every threshold, so
   # enabling this also blocks known malware. It sits just below `AllowByIdentity`, so
   # an identity pin still overrides it. On a cold mirror it can deny historical
@@ -217,7 +254,7 @@ rules:
   # https://ecluse-proxy.com/docs/configuration/#onboarding-the-advisory-denies
   # deny-known-cves:
   #   type: DenyIfCve
-  #   minSeverity: 8          # CVSS >= 8.0 (high/critical). Unscored malware always blocks
+  #   minCvss: 8              # CVSS >= 8.0 (high/critical). Unscored malware always blocks
   #   onUnavailable: deny     # fail-closed if the advisory database cannot answer.
   #                           # Set to "skip" to fail-open (availability over the gate)
   # Opt-in exploitability deny gate, also absent from this shipped policy. It denies a

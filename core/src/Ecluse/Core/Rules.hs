@@ -176,7 +176,7 @@ evalRule deps _ AllowIfRemediatesCve pd =
 evalRule deps _ (DenyIfCve params) pd =
     rdWithCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfCve" (dicOnUnavailable params))
-        Just cve -> advisoryDenyVerdict "CVSS" (dicMinSeverity params) arSeverity cve pd
+        Just cve -> advisoryDenyVerdict "CVSS" (dicMinCvss params) arSeverity cve pd
 evalRule deps _ (DenyIfEpss params) pd =
     rdWithCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))

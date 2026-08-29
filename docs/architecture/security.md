@@ -108,7 +108,7 @@ reaches the mirror.
 
 The [first-party publish path](registry-model.md#publishing-first-party-packages-the-publication-target)
 relays a client `npm publish` to the publication target. Its scope allow-list
-(`ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW`) constrains which package names a client may publish. It
+(`ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW`) constrains which package names a client may publish. It
 is not authentication and does not verify who is publishing. A deployment may set
 `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN`, substituting Écluse's own credential for a
 publisher who forwards none. If it does, the composition root refuses to boot without a

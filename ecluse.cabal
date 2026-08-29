@@ -272,10 +272,11 @@ library
   import:         shared
   hs-source-dirs: src
 
-  -- Queue.Internal holds the raw QueueUrl constructor. It is an other-module, so only
-  -- code inside this library reaches it, and every other caller sees the abstract type
-  -- with its selectors through Ecluse.Config.Types.
+  -- These two hold the raw QueueUrl and AdvisoryStoreUrl constructors. They are
+  -- other-modules, so only code inside this library reaches them, and every other caller
+  -- sees the abstract type with its selectors through Ecluse.Config.Types.
   other-modules:
+    Ecluse.Config.Advisory.Internal
     Ecluse.Config.Queue.Internal
     Paths_ecluse
 
@@ -309,6 +310,7 @@ library
     Ecluse.CLI
     Ecluse.CheckConfig
     Ecluse.Config.Aeson
+    Ecluse.Config.AdvisoryStore
     Ecluse.Config.Ambient
     Ecluse.Config.DefaultConfig
     Ecluse.Config.MirrorCredential
@@ -800,6 +802,7 @@ test-suite ecluse-unit
     Ecluse.Composition.Support
     Ecluse.Composition.WorkerSpec
     Ecluse.CompositionSpec
+    Ecluse.Config.AdvisoryStoreSpec
     Ecluse.Config.AesonSpec
     Ecluse.Config.AmbientSpec
     Ecluse.Config.DocCoverageSpec
@@ -1099,7 +1102,7 @@ test-suite ecluse-smoke
 -- across real containers. NON-GATING, for pre-merge visibility and the nightly run.
 -- It needs a Docker daemon, the npm CLI, and the `.#dockerImage` build, so it is far
 -- heavier than the gate. It COMPILES in the normal build, and RUNS only when
--- ECLUSE_E2E_IMAGE names a loaded image. Without that variable every case is
+-- ECL_E2E_IMAGE names a loaded image. Without that variable every case is
 -- `pending`, so a bare `cabal test` never fails on a machine without the setup.
 test-suite ecluse-e2e
   import:             shared

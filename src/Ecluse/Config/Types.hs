@@ -18,7 +18,8 @@ module Ecluse.Config.Types (
     HttpScheme (..),
     splitHttpScheme,
     MirrorCredential (..),
-    PublishAllow (..),
+    PublicationAllow (..),
+    MountIntegrity (..),
     MountConfig (..),
     AppConfig (..),
     ServerSettings (..),
@@ -27,6 +28,10 @@ module Ecluse.Config.Types (
     queueUrlText,
     queueUrlTarget,
     QueueSettings (..),
+    AdvisoryStoreTarget (..),
+    AdvisoryStoreUrl,
+    advisoryStoreUrlText,
+    advisoryStoreTarget,
     LimitsSettings (..),
     CacheSettings (..),
     IntegritySettings (..),
@@ -51,6 +56,12 @@ import Data.IP (IPRange)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 
+import Ecluse.Config.Advisory.Internal (
+    AdvisoryStoreTarget (..),
+    AdvisoryStoreUrl,
+    advisoryStoreTarget,
+    advisoryStoreUrlText,
+ )
 import Ecluse.Config.Queue.Internal (QueueTarget (..), QueueUrl, queueUrlTarget, queueUrlText)
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Config.Rule (PolicyError, RulePatch, renderPolicyError)
@@ -117,14 +128,27 @@ data MirrorCredential
     deriving stock (Eq, Show)
 
 -- The sum is closed and grows one arm per ecosystem, so it stays a data declaration.
-{- HLINT ignore PublishAllow "Use newtype instead of data" -}
+{- HLINT ignore PublicationAllow "Use newtype instead of data" -}
 
-{- | A mount's publish allow-list, one arm per ecosystem. An allow-list is read only in the shape
-its own registry names packages with, so a mount can never carry another ecosystem's.
+{- | A mount's publication allow-list, one arm per ecosystem. An allow-list is read only in the
+shape its own registry names packages with, so a mount can never carry another ecosystem's.
 -}
-data PublishAllow
+data PublicationAllow
     = -- | The npm scopes a client may publish under, at least one.
-      PublishAllowNpmScopes (NonEmpty Scope)
+      PublicationAllowNpmScopes (NonEmpty Scope)
+    deriving stock (Eq, Show)
+
+{- | A mount's refinements of the global @integrity@ group, under its own @integrity@ key so the
+mount groups them exactly as the top level does. Each is 'Nothing' at the global setting.
+-}
+data MountIntegrity = MountIntegrity
+    { miMinTrusted :: Maybe MinTrustedIntegrity
+    {- ^ A per-mount refinement of the global trusted-integrity floor, for the one
+    legacy private registry whose loosening must not leak onto other mounts.
+    -}
+    , miDivergencePolicy :: Maybe DivergencePolicy
+    -- ^ A per-mount refinement of the global cross-upstream divergence policy.
+    }
     deriving stock (Eq, Show)
 
 data MountConfig = MountConfig
@@ -136,16 +160,11 @@ data MountConfig = MountConfig
     , mntPublicUpstream :: RegistryUrl
     , mntMirrorTarget :: Maybe RegistryUrl
     , mntMirrorTargetToken :: Maybe Secret
-    , mntMirrorCodeArtifactTokenDuration :: Maybe Natural
+    , mntMirrorTokenDuration :: Maybe Natural
     , mntPublicationTarget :: Maybe RegistryUrl
     , mntPublicationTargetToken :: Maybe Secret
-    , mntPublishAllow :: Maybe PublishAllow
-    , mntMinTrustedIntegrity :: Maybe MinTrustedIntegrity
-    {- ^ A per-mount refinement of the global trusted-integrity floor, for the one
-    legacy private registry whose loosening must not leak onto other mounts.
-    -}
-    , mntDivergencePolicy :: Maybe DivergencePolicy
-    -- ^ A per-mount refinement of the global cross-upstream divergence policy.
+    , mntPublicationAllow :: Maybe PublicationAllow
+    , mntIntegrity :: MountIntegrity
     , mntAdditionalRules :: RulePatch
     }
     deriving stock (Eq, Show)
@@ -185,7 +204,7 @@ URL's shape decides the backend, and the load derives it once ("Ecluse.Config.Qu
 -}
 data QueueSettings = QueueSettings
     { qsUrl :: Maybe QueueUrl
-    , qsMemoryMaxDepth :: Maybe Int
+    , qsMaxMemoryDepth :: Maybe Int
     -- ^ Computed from the runtime posture when unset. A configured value wins.
     , qsMaxReceiveCount :: Int
     {- ^ Deliveries one message gets before the worker retires it. A __floor__: a queue with a
@@ -194,13 +213,18 @@ data QueueSettings = QueueSettings
     }
     deriving stock (Eq, Show)
 
-{- | The @limits@ group: the hostile-input bounds. The memory plan computes the byte-valued caps
-when unset ("Ecluse.Composition.MemoryPlan"), a configured value always winning.
+{- | The @limits@ group: the hostile-input bounds. The memory plan computes the tenant-sized caps
+when unset ("Ecluse.Composition.MemoryPlan"), a configured value always winning. The bounds it
+does not size stay pinned policy.
 -}
 data LimitsSettings = LimitsSettings
     { limMaxResponseBytes :: Maybe Int
     , limMaxVersionCount :: Int
     , limMaxNestingDepth :: Int
+    , limMaxAdvisoryDatabaseBytes :: Int
+    {- ^ The advisory-database download cap. It bounds a stream to disk rather than a heap
+    tenant, so the memory plan does not size it and it stays pinned.
+    -}
     , limMaxRequestBytes :: Maybe Int
     , limMaxArtifactBytes :: Maybe Int
     {- ^ The mirror worker's per-artifact fetch byte cap. Computed from the memory
@@ -219,8 +243,8 @@ data CacheSettings = CacheSettings
     }
     deriving stock (Eq, Show)
 
-{- | The @integrity@ group: the global integrity floors and divergence policy
-(@minTrusted@ and @divergencePolicy@ refinable per mount).
+{- | The @integrity@ group: the global integrity floors and divergence policy. A mount refines
+@minTrusted@ and @divergencePolicy@ under its own @integrity@ key ('MountIntegrity').
 -}
 data IntegritySettings = IntegritySettings
     { intMinPublic :: MinIntegrity
@@ -235,14 +259,17 @@ newtype EgressSettings = EgressSettings
     }
     deriving stock (Eq, Show)
 
--- | The @advisories@ group: the OSV/CVE pipeline's bucket, cadences, and bounds.
+-- | The @advisories@ group: the OSV/CVE pipeline's store, cadences, and upstream feeds.
 data AdvisoriesSettings = AdvisoriesSettings
-    { advBucket :: Maybe Text
+    { advUrl :: Maybe AdvisoryStoreUrl
+    {- ^ The object store the compiled databases sync from, its provider derived from the URL's
+    scheme ("Ecluse.Config.AdvisoryStore"). 'Nothing' leaves the advisory stack off.
+    -}
     , advPollInterval :: NominalDiffTime
     , advCompileInterval :: NominalDiffTime
     , advDataDir :: FilePath
     , advOsvExportBaseUrl :: Url
-    , advMaxDatabaseBytes :: Int
+    , advEpssFeedUrl :: Url
     }
     deriving stock (Eq, Show)
 

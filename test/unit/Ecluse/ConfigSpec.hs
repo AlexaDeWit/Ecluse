@@ -84,10 +84,10 @@ spec = do
         it "refuses each leftover mirror-write setting on a serve-only mount, aggregated" $
             loadConfig
                 pubUrlEnv
-                (Just "{\"mounts\":{\"npm\":{\"mirrorTargetToken\":\"t\",\"mirrorCodeArtifactTokenDuration\":3600}}}")
+                (Just "{\"mounts\":{\"npm\":{\"mirrorTargetToken\":\"t\",\"mirrorTokenDuration\":3600}}}")
                 `shouldBe` Left
                     [ MirrorSettingWithoutWrite Npm "mirrorTargetToken"
-                    , MirrorSettingWithoutWrite Npm "mirrorCodeArtifactTokenDuration"
+                    , MirrorSettingWithoutWrite Npm "mirrorTokenDuration"
                     ]
 
     describe "resolvedKeyProvenance" $ do
@@ -137,7 +137,7 @@ spec = do
                     [ ("privateUpstream", "https://priv.example.test")
                     , ("mirrorTarget", "https://mirror.example.test")
                     , ("publicationTarget", "https://mirror.example.test")
-                    , ("publishAllow", "@acme")
+                    , ("publicationAllow", "@acme")
                     ]
                 )
                 ["mirrorTarget", "publicationTarget"]
@@ -149,7 +149,7 @@ spec = do
                         [ ("privateUpstream", "https://priv.example.test")
                         , ("mirrorTarget", "https://mirror.example.test")
                         , ("publicationTarget", "https://priv.example.test")
-                        , ("publishAllow", "@acme")
+                        , ("publicationAllow", "@acme")
                         ]
                     )
             mountCollisionWarnings cfg `shouldBe` []
