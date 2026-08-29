@@ -6,7 +6,7 @@ module Ecluse.PilotSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text (unpack)
-import Database.SQLite.Simple (Only (..), close, open, query_)
+import Database.SQLite.Simple (close, open, query_)
 import Network.HTTP.Types.Status (status200)
 import System.Directory (doesFileExist)
 import System.FilePath (takeDirectory)
