@@ -206,9 +206,8 @@ projectPackageInfo pkmt = do
             , infoInvalidEntries = wpInvalidEntries pkmt
             }
 
-{- | Project one @versions@ entry into its 'PackageDetails', or 'Nothing' when the version object
-lacks a required field. "Ecluse.Core.Registry.Npm.SelectiveDecode" reuses this, so a single-version
-decode matches the whole-packument projection exactly.
+{- | Project one @versions@ entry into 'PackageDetails', or 'Nothing' on a missing required field.
+"Ecluse.Core.Registry.Npm.SelectiveDecode" reuses this, so both decode paths project identically.
 -}
 projectVersionEntry :: PackageName -> Version -> Maybe UTCTime -> Value -> Maybe PackageDetails
 projectVersionEntry name version publishedAt value =
