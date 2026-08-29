@@ -19,7 +19,7 @@ module Ecluse.Config.Ambient (
 import Data.List (lookup)
 import Data.Text qualified as T
 
-import Ecluse.Config.Parser (HttpScheme (..), splitHttpScheme)
+import Ecluse.Config.Types (HttpScheme (..), splitHttpScheme)
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Security (HostPort (..), hostPortAddressWithDefault, refuseCredentialMaterial)
 import Ecluse.Core.Text (nonBlank)

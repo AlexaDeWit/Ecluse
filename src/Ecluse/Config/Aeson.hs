@@ -82,7 +82,7 @@ serverDecoder =
 queueDecoder :: GroupDecoder QueueSettings
 queueDecoder =
     QueueSettings
-        <$> optionalKey "url" parseUrl
+        <$> optionalKey "url" parseQueueUrl
         <*> optionalKey "memoryMaxDepth" parsePositiveInt
         <*> requiredKey "maxReceiveCount" parsePositiveInt
 

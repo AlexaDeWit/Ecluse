@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Derive the mirror-queue backend from the queue URL's own shape.
+{- | Derive the mirror-queue backend from the queue URL's own shape, once at load ('mkQueueUrl').
 
 The queue URL is the single source of truth for which backend carries the mirror jobs, the same
 derivation the mirror-write credential follows ("Ecluse.Config.MirrorCredential"). An SQS queue URL
@@ -12,23 +12,28 @@ separate backend selector exists to disagree with the URL.
 -}
 module Ecluse.Config.QueueTarget (
     QueueTarget (..),
+    QueueUrl (..),
+    mkQueueUrl,
     parseQueueTarget,
 ) where
 
 import Data.Text qualified as T
 
 import Ecluse.Config.MirrorCredential (isAccountId)
-import Ecluse.Config.Parser (HttpScheme (Https), splitHttpScheme)
-import Ecluse.Core.Security (splitHostPort)
+import Ecluse.Config.Types (HttpScheme (Https), QueueTarget (..), QueueUrl (..), splitHttpScheme)
+import Ecluse.Core.Security (refuseCredentialMaterial, splitHostPort)
 import Ecluse.Core.Text (nonBlank)
 
--- | A recognised mirror-queue destination, parsed from the queue URL's shape.
-data QueueTarget
-    = -- | An SQS queue URL, carrying the region parsed from its host.
-      SqsTarget Text
-    | -- | A Pub\/Sub topic resource, carrying its project and topic.
-      PubSubTarget Text Text
-    deriving stock (Eq, Show)
+{- | Build the 'QueueUrl' a @queue.url@ key resolves to, the key naming every refusal. A shape
+naming no backend is carried, not refused: the SQS endpoint override dials one that matches none.
+-}
+mkQueueUrl :: Text -> Text -> Either Text QueueUrl
+mkQueueUrl key raw
+    | Left reason <- refuseCredentialMaterial key trimmed = Left reason
+    | T.null trimmed = Left (key <> " must be a non-empty URL")
+    | otherwise = Right (QueueUrl{queueUrlText = trimmed, queueUrlTarget = parseQueueTarget trimmed})
+  where
+    trimmed = T.strip raw
 
 {- | Parse a queue URL into the backend it names, or 'Nothing' when it names neither. The SQS form
 is exact, and a nearly-but-not SQS URL is a transcription error to surface, never to repair.

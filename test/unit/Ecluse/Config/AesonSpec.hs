@@ -20,6 +20,8 @@ import Ecluse.Config (
     IntegritySettings (..),
     ObservabilitySettings (..),
     QueueSettings (..),
+    QueueTarget (..),
+    QueueUrl (..),
     RuntimeSettings (..),
     ServerSettings (..),
     loadConfig,
@@ -502,22 +504,35 @@ spec = describe "decodeDocument" $ do
             loadConfig [] (Just "{\"queue\":{\"url\":\"https://sqs.us-east-1.amazonaws.com/123456789012/mirror#frag\"}}")
                 `shouldSatisfy` decodeErrorMentions "queue.url must not carry a fragment"
 
-        it "accepts a plain queue.url through both layers" $ do
-            case loadConfig [("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")] Nothing of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc ->
-                    fmap unUrl (qsUrl (cfgQueue (configApp doc)))
-                        `shouldBe` Just "https://sqs.us-east-1.amazonaws.com/123456789012/mirror"
-            case loadConfig [] (Just "{\"queue\":{\"url\":\"projects/acme/topics/mirror\"}}") of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc ->
-                    fmap unUrl (qsUrl (cfgQueue (configApp doc)))
-                        `shouldBe` Just "projects/acme/topics/mirror"
+        it "accepts a plain queue.url through both layers, deriving its backend at load" $ do
+            loadedQueueUrl [("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")] Nothing
+                `shouldBe` Right
+                    ( Just
+                        ( QueueUrl
+                            { queueUrlText = "https://sqs.us-east-1.amazonaws.com/123456789012/mirror"
+                            , queueUrlTarget = Just (SqsTarget "us-east-1")
+                            }
+                        )
+                    )
+            loadedQueueUrl [] (Just "{\"queue\":{\"url\":\"projects/acme/topics/mirror\"}}")
+                `shouldBe` Right
+                    ( Just
+                        ( QueueUrl
+                            { queueUrlText = "projects/acme/topics/mirror"
+                            , queueUrlTarget = Just (PubSubTarget "acme" "mirror")
+                            }
+                        )
+                    )
+
+        it "loads a queue.url whose shape names no backend, for the endpoint-override path" $
+            -- The emulator URL matches no public shape. Refusing it at load would take the
+            -- AWS_ENDPOINT_URL_SQS deployment with it, so the derived target is simply absent.
+            loadedQueueUrl [("ECLUSE_QUEUE__URL", "http://ministack:4566/000000000000/mirror")] Nothing
+                `shouldBe` Right
+                    (Just (QueueUrl{queueUrlText = "http://ministack:4566/000000000000/mirror", queueUrlTarget = Nothing}))
 
         it "leaves queue.url unset, which is the in-memory rollover" $
-            case loadConfig [] Nothing of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc -> qsUrl (cfgQueue (configApp doc)) `shouldBe` Nothing
+            loadedQueueUrl [] Nothing `shouldBe` Right Nothing
 
     describe "field invariants (document and environment enforce the same bounds)" $ do
         it "accepts the listener-port range ends: 0 (OS-assigned) and 65535" $ do
@@ -697,4 +712,13 @@ loadedLogLevel envVars doc =
     bimap
         (T.unlines . map renderConfigError)
         (obsLogLevel . cfgObservability . configApp)
+        (loadConfig envVars doc)
+
+{- The resolved queue.url, flattened the same way. It carries the backend its shape names, so an
+assertion sees what the load derived rather than re-deriving it. -}
+loadedQueueUrl :: [(String, String)] -> Maybe ByteString -> Either Text (Maybe QueueUrl)
+loadedQueueUrl envVars doc =
+    bimap
+        (T.unlines . map renderConfigError)
+        (qsUrl . cfgQueue . configApp)
         (loadConfig envVars doc)

@@ -3,11 +3,11 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The shared refusals every configuration key is decoded through: secret and unknown keys,
-enumerations, ports, durations, the @http(s)@ scheme check, and the URL shapes.
+enumerations, ports, durations, and the URL shapes.
 
 A malformed key fails at load with the key named, never at its first use. A group accepts
-exactly the keys its 'GroupDecoder' declares. The URL parsers run 'refuseCredentialMaterial'
-ahead of any refusal that quotes the value, because boot echoes every resolved key as written.
+exactly the keys its 'GroupDecoder' declares. Each URL-valued key is refined by the smart
+constructor of the type it resolves to, which names the key in the refusal it returns.
 -}
 module Ecluse.Config.Parser (
     -- * Group decoding
@@ -32,10 +32,8 @@ module Ecluse.Config.Parser (
     -- * Leaf parsers
     parseRegistryUrl,
     parseEnum,
-    parseUrl,
     parseHttpUrl,
-    HttpScheme (..),
-    splitHttpScheme,
+    parseQueueUrl,
     parsePort,
     parseCodeArtifactDuration,
 ) where
@@ -46,9 +44,10 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
 import Data.Text qualified as T
 
-import Ecluse.Config.Types (Url, mkUrl)
+import Ecluse.Config.QueueTarget (mkQueueUrl)
+import Ecluse.Config.Types (QueueUrl, Url, mkUrl)
 import Ecluse.Core.Json.Lenient (valueKind)
-import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
+import Ecluse.Core.Security (hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkConfiguredRegistryUrl)
 import Ecluse.Core.Text (nonBlank, readDecimalText)
 
@@ -199,49 +198,21 @@ parseEnum :: (Text -> Either Text a) -> String -> Value -> Parser a
 parseEnum parser field =
     expectString field (either (\e -> fail (field <> ": " <> T.unpack e)) pure . parser)
 
-{- | An operator-configured URL Écluse hands to a cloud SDK rather than dialling itself, such as the
-mirror-queue target. It keeps its provider's shape, and carries the shared credential refusal.
--}
-parseUrl :: String -> Value -> Parser Url
-parseUrl field = expectString field (plainUrlOf field . T.strip)
-
--- The credential refusal runs first, because the refusal under it quotes the value.
-plainUrlOf :: String -> Text -> Parser Url
-plainUrlOf field trimmed
-    | Left reason <- refuseCredentialMaterial (T.pack field) trimmed = fail (T.unpack reason)
-    | otherwise = either (fail . T.unpack) pure (mkUrl trimmed)
-
 {- | An @http(s)@ URL Écluse serves, rewrites against, or fetches from. Plain http stays legal for
-loopback, the authority must be one the egress gate can extract, and a credential is refused.
+loopback, and 'mkUrl' carries the scheme, authority, and credential refusals.
 -}
 parseHttpUrl :: String -> Value -> Parser Url
-parseHttpUrl field = expectString field (httpUrlOf field . T.strip)
+parseHttpUrl field = expectString field (refined (mkUrl (T.pack field)))
 
--- | The scheme a configured @http(s)@ URL writes.
-data HttpScheme = Http | Https
-    deriving stock (Eq, Show)
-
-{- | Split a URL into the scheme it writes and the text after the separator, or 'Nothing' for
-neither @http@ nor @https@. It is the one scheme check the configuration layer shares.
+{- | The mirror-queue destination Écluse hands to a cloud SDK rather than dialling itself. It keeps
+its provider's shape, so 'mkQueueUrl' derives the backend instead of checking a scheme or a host.
 -}
-splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
-splitHttpScheme raw =
-    ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)
+parseQueueUrl :: String -> Value -> Parser QueueUrl
+parseQueueUrl field = expectString field (refined (mkQueueUrl (T.pack field)))
 
--- The credential refusal runs first, because the two refusals under it quote the value.
-httpUrlOf :: String -> Text -> Parser Url
-httpUrlOf field trimmed
-    | Left reason <- refuseCredentialMaterial (T.pack field) trimmed = fail (T.unpack reason)
-    | isNothing (splitHttpScheme trimmed) =
-        fail (field <> " must be an http:// or https:// URL (got " <> T.unpack trimmed <> ")")
-    | isNothing (hostPortAddress trimmed) =
-        fail
-            ( field
-                <> " must carry a host and, when a port is written, a decimal port in 1..65535 (got "
-                <> T.unpack trimmed
-                <> ")"
-            )
-    | otherwise = either (fail . T.unpack) pure (mkUrl trimmed)
+-- A smart constructor's refusal, which already names the key, raised as the key's parse failure.
+refined :: (Text -> Either Text a) -> Text -> Parser a
+refined parse = either (fail . T.unpack) pure . parse
 
 -- | A listener port: 0..65535, where 0 asks the OS for an ephemeral port.
 parsePort :: String -> Int -> Parser Int

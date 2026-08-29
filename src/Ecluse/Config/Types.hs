@@ -4,15 +4,26 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings #-}
 
+{- | The configuration vocabulary: the settings records a load resolves to, the refusals their
+URL-valued keys carry, and the errors a refused load reports.
+
+Every type here is shared between the decoders ("Ecluse.Config.Parser", "Ecluse.Config.Aeson") and
+the composition root that reads them, so neither side imports the other. "Ecluse.Config" assembles
+them into a 'Config'.
+-}
 module Ecluse.Config.Types (
-    Url (..),
+    Url,
     mkUrl,
     unUrl,
+    HttpScheme (..),
+    splitHttpScheme,
     MirrorCredential (..),
     PublishAllow (..),
     MountConfig (..),
     AppConfig (..),
     ServerSettings (..),
+    QueueTarget (..),
+    QueueUrl (..),
     QueueSettings (..),
     LimitsSettings (..),
     CacheSettings (..),
@@ -46,23 +57,51 @@ import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Rules.Types (PrecededRule)
+import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig)
 import Ecluse.Runtime.Log (LogFormat, LogLevel)
 import Ecluse.Runtime.Telemetry (TelemetrySwitch)
 
+{- | An operator-configured @http(s)@ URL, whitespace-trimmed. 'mkUrl' is the only builder, so no
+value exists carrying credential material, another scheme, or an authority the egress gate misses.
+-}
 newtype Url = Url Text
     deriving stock (Eq, Ord, Show)
 
-mkUrl :: Text -> Either Text Url
-mkUrl raw =
-    let trimmed = T.strip raw
-     in if T.null trimmed
-            then Left "expected a non-empty URL"
-            else Right (Url trimmed)
+{- | Build a 'Url' from a configuration key and the value written under it, the key naming every
+refusal. The credential refusal runs first, because the two refusals below it quote the value.
+-}
+mkUrl :: Text -> Text -> Either Text Url
+mkUrl key raw
+    | Left reason <- refuseCredentialMaterial key trimmed = Left reason
+    | isNothing (splitHttpScheme trimmed) =
+        Left (key <> " must be an http:// or https:// URL (got " <> trimmed <> ")")
+    | isNothing (hostPortAddress trimmed) =
+        Left
+            ( key
+                <> " must carry a host and, when a port is written, a decimal port in 1..65535 (got "
+                <> trimmed
+                <> ")"
+            )
+    | otherwise = Right (Url trimmed)
+  where
+    trimmed = T.strip raw
 
+-- | The stored URL text.
 unUrl :: Url -> Text
 unUrl (Url u) = u
+
+-- | The scheme a configured @http(s)@ URL writes.
+data HttpScheme = Http | Https
+    deriving stock (Eq, Show)
+
+{- | Split a URL into the scheme it writes and the text after the separator, or 'Nothing' for
+neither @http@ nor @https@. It is the one scheme check the configuration layer shares.
+-}
+splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
+splitHttpScheme raw =
+    ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)
 
 {- | The mirror-write credential, __derived from the mirror-target URL__ so a token can never pair
 with an endpoint it was not minted for. Config load resolves it once
@@ -140,11 +179,28 @@ data ServerSettings = ServerSettings
     }
     deriving stock (Eq, Show)
 
+-- | A recognised mirror-queue destination, parsed from the queue URL's shape.
+data QueueTarget
+    = -- | An SQS queue URL, carrying the region parsed from its host.
+      SqsTarget Text
+    | -- | A Pub\/Sub topic resource, carrying its project and topic.
+      PubSubTarget Text Text
+    deriving stock (Eq, Show)
+
+{- | @queue.url@ as parsed at load ('Ecluse.Config.QueueTarget.mkQueueUrl'): the value as written,
+with the backend its shape names, or no backend when only the SQS endpoint override can dial it.
+-}
+data QueueUrl = QueueUrl
+    { queueUrlText :: Text
+    , queueUrlTarget :: Maybe QueueTarget
+    }
+    deriving stock (Eq, Show)
+
 {- | The @queue@ group: the mirror queue's destination, depth cap, and redelivery budget. The
-URL's shape decides the backend ("Ecluse.Config.QueueTarget"), which this type never names.
+URL's shape decides the backend, and the load derives it once ("Ecluse.Config.QueueTarget").
 -}
 data QueueSettings = QueueSettings
-    { qsUrl :: Maybe Url
+    { qsUrl :: Maybe QueueUrl
     , qsMemoryMaxDepth :: Maybe Int
     -- ^ Computed from the runtime posture when unset. A configured value wins.
     , qsMaxReceiveCount :: Int
