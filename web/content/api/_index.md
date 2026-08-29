@@ -28,6 +28,7 @@ thin composition shell. Each publishes its own Haddock, generated from `main`.
   <a class="card" href="/docs/protocol-support/">
     <h2>Protocol support</h2>
     <p>Which registry protocols this server speaks, and exactly what is supported and what is
-    not, per ecosystem. A statement for humans, not a client-integration contract.</p>
+    not, per ecosystem. The page renders from the OpenAPI document the server publishes. A
+    statement for humans, not a client-integration contract.</p>
   </a>
 </div>
