@@ -8,7 +8,8 @@
 
   > pre,
   > table,
-  > .cards {
+  > .cards,
+  > figure.diagram {
     max-width: 100%;
   }
 }
@@ -17,6 +18,7 @@ h1,
 h2,
 h3,
 h4 {
+  color: var(--head);
   line-height: 1.25;
   scroll-margin-top: 1.5rem;
 }
@@ -31,21 +33,21 @@ h2 {
   margin: 2.9rem 0 0.85rem;
   padding-top: 0.9rem;
   border-top: 1px solid var(--border);
-  font-size: 1.4rem;
+  font-size: 1.5rem;
 }
 
 h3 {
   margin: 2.2rem 0 0.6rem;
-  font-size: 1.15rem;
+  font-size: 1.2rem;
 }
 
 h4 {
   margin: 1.6rem 0 0.4rem;
-  font-size: 1rem;
+  font-size: 1.05rem;
 }
 
 p {
-  margin: 0 0 1rem;
+  margin: 0 0 1.1em;
 }
 
 ul,
@@ -105,6 +107,29 @@ pre {
   max-height: min(70vh, 48rem);
 
   > code {
+    font-size: 0.875em;
+  }
+}
+
+// Diagram SVGs are drawn in parchment ink, so the enclosure keeps fixed light
+// literals in both schemes rather than the theme tokens.
+figure.diagram {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  background: #f4efe3;
+  border: 1px solid #cbbfa2;
+  border-radius: 10px;
+  overflow-x: auto;
+
+  svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+
+  > figcaption {
+    margin-top: 0.6rem;
+    color: #4f4b43;
     font-size: 0.85rem;
   }
 }
@@ -153,7 +178,7 @@ tr > :last-child {
 thead th {
   border-bottom: 2px solid var(--border-strong);
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }

@@ -1,0 +1,28 @@
+...@theme
+
+# Down keeps the board near the column width, so labels render close to full
+# size instead of scaling down with a wide board.
+direction: down
+
+# The publish leg stays out of the picture: it is off until a publication
+# target is configured.
+
+client: npm client { class: node }
+ecluse: Écluse { class: node }
+private: "Private upstream\n(trusted)" { class: node }
+public: "Public registry\n(gated by policy)" { class: node }
+queue: Queue { class: node }
+mirror: Mirror target { class: node }
+
+client -> ecluse: "listing,\nthen tarball" { class: edge }
+ecluse -> client: "merged listing,\nadmitted stream" { class: edge }
+ecluse -> private: parallel fetch { class: edge }
+ecluse -> public: parallel fetch { class: edge }
+ecluse -> queue: mirror job {
+  class: edge
+  style.stroke-dash: 3
+}
+queue -> mirror: write {
+  class: edge
+  style.stroke-dash: 3
+}
