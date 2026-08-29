@@ -17,7 +17,7 @@ import Hedgehog (PropertyT, annotateShow, forAll)
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
-import Test.Hspec (Spec, describe, it, shouldBe, shouldNotSatisfy, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldNotSatisfy, shouldSatisfy)
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -44,6 +44,7 @@ import Ecluse.Core.Registry.Npm.Project (
     parsePackageInfoFromValue,
     parseVersionList,
     projectName,
+    projectScope,
  )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion, unVersion)
 import Ecluse.Test.Json (genJsonText, genKey, genValue)
@@ -57,6 +58,7 @@ They drive 'parsePackageInfoFromValue', the same projection the serve path runs 
 spec :: Spec
 spec = do
     nameGrammarSpec
+    npmValidatorRefusalSpec
     nameValidationSpec
     signalMappingSpec
     integritySpec
@@ -80,6 +82,45 @@ nameGrammarSpec = describe "projectName -- the one npm name grammar" $ do
 
     it "reads an unscoped name whole" $
         projectName "left-pad" `shouldBe` Right (mkPackageName Npm Nothing "left-pad")
+
+{- | The two refusals the splitter shares with npm's own validator. A refused name is one the
+public registry can never serve, so legitimate traffic loses nothing.
+-}
+npmValidatorRefusalSpec :: Spec
+npmValidatorRefusalSpec = describe "projectName -- npm's own name refusals" $ do
+    it "refuses a zero-width space, so an invisible twin cannot shadow a real name" $ do
+        -- Two distinct names that render identically. Admitting the second one would let an
+        -- invisible character dodge a rule written against the first.
+        invisibleTwin `shouldNotBe` realName
+        projectName realName `shouldSatisfy` isRight
+        projectName invisibleTwin `shouldSatisfy` isLeft
+
+    it "refuses a right-to-left override, which reverses how a name renders" $
+        projectName "left-\x202E\&pad" `shouldSatisfy` isLeft
+
+    it "refuses a format character in the scope, not only in the bare name" $
+        projectName "@sco\x200B\&pe/pkg" `shouldSatisfy` isLeft
+
+    it "refuses a soft hyphen, so the rule covers the class and not two examples" $
+        projectName "left-\xAD\&pad" `shouldSatisfy` isLeft
+
+    it "accepts a name of exactly 214 characters" $
+        projectName (T.replicate 214 "a") `shouldSatisfy` isRight
+
+    it "refuses a name of 215 characters" $
+        projectName (T.replicate 215 "a") `shouldSatisfy` isLeft
+
+    it "counts the scope prefix against the cap, as npm does" $ do
+        -- "@scope/" is 7 characters, so 207 is the longest base name that still fits in 214.
+        projectName ("@scope/" <> T.replicate 207 "a") `shouldSatisfy` isRight
+        projectName ("@scope/" <> T.replicate 208 "a") `shouldSatisfy` isLeft
+
+    it "refuses an over-long scope on its own, the publish allow-list entry point" $
+        projectScope (T.replicate 215 "a") `shouldSatisfy` isLeft
+  where
+    realName, invisibleTwin :: Text
+    realName = "left-pad"
+    invisibleTwin = "left-\x200B\&pad"
 
 nameValidationSpec :: Spec
 nameValidationSpec = describe "name validation against the requested name" $ do

@@ -97,6 +97,13 @@ present-but-different name.
 the publish guard, and the queue decode all read a name through it, so one spelling has one
 verdict everywhere. A scope or bare name that is not a usable path component is a
 'ParseError', and a bare @\@foo@ is a malformed scoped name, never an unscoped one.
+
+The grammar carries two further refusals, both taken from npm's own validator, so a name this
+splitter admits is a name a registry can serve. A Unicode __format__ character (U+200B,
+U+202E, and the rest of the @Cf@ class) never parses. An invisible or direction-reversing
+character makes two distinct names render identically, which is how a name-based rule gets
+dodged and how a log line gets forged. A name over 214 characters never parses, counted over
+the whole name including any scope prefix, which is what npm counts.
 -}
 module Ecluse.Core.Registry.Npm.Project (
     -- * Projection
@@ -112,7 +119,7 @@ module Ecluse.Core.Registry.Npm.Project (
 
 import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, withObject, (.!=), (.:?))
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
-import Data.Char (isSpace)
+import Data.Char (GeneralCategory (Format), generalCategory, isSpace)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -375,9 +382,11 @@ projectDistTags = Map.map (mkVersion Npm) . wpDistTags
 point reads a name through. A bare @\@foo@ is a malformed scoped name, never an unscoped one.
 -}
 projectName :: Text -> Either ParseError PackageName
-projectName raw
-    | T.isPrefixOf "@" raw = scopedName raw
-    | otherwise = mkPackageName Npm Nothing <$> nameComponent raw
+projectName raw = do
+    withinNameLimit raw
+    if T.isPrefixOf "@" raw
+        then scopedName raw
+        else mkPackageName Npm Nothing <$> nameComponent raw
 
 {- Split a scoped @\@scope\/name@ at its one separator. A scope with nothing after it is a
 malformed scoped name, so the whole string never falls back to an unscoped reading. -}
@@ -394,7 +403,9 @@ scopedName raw = case T.stripPrefix "/" afterScope of
 scope @myorg@).
 -}
 projectScope :: Text -> Either ParseError Scope
-projectScope raw = mkScope <$> nameComponent (fromMaybe raw (T.stripPrefix "@" raw))
+projectScope raw = do
+    withinNameLimit raw
+    mkScope <$> nameComponent (fromMaybe raw (T.stripPrefix "@" raw))
 
 {- One component of an npm name, the scope or the bare name. It reaches an interpolated upstream
 URL, so an unsafe spelling must never parse. -}
@@ -404,7 +415,21 @@ nameComponent component
     | isSafeComponent component && T.all usable component = Right component
     | otherwise = Left (ParseError ("unusable npm name component: " <> show component))
   where
-    usable ch = ch /= '@' && not (isSpace ch)
+    -- A format character is invisible or reverses how the text renders, so it makes two distinct
+    -- names look like one in a log, a terminal, or a name-based rule.
+    usable ch = ch /= '@' && not (isSpace ch) && generalCategory ch /= Format
+
+{- Refuse a name over npm's own length cap. 'projectName' measures the whole name, scope prefix
+included, because that is what npm's validator measures. -}
+withinNameLimit :: Text -> Either ParseError ()
+withinNameLimit raw
+    | T.length raw > npmNameLimit =
+        Left (ParseError ("npm name over " <> show npmNameLimit <> " characters: " <> show (T.length raw)))
+    | otherwise = Right ()
+
+-- npm's own cap on a package name, the one its validate-npm-package-name validator applies.
+npmNameLimit :: Int
+npmNameLimit = 214
 
 -- Project a wire 'Wire.Person' into the domain 'Person' (a structural copy).
 projectPerson :: Wire.Person -> Person
