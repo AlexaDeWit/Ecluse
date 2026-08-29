@@ -84,7 +84,9 @@ contributor never looks.
 
   `gh pr edit --body-file -` updates it the same way. If the body must exist as a file, put it under
   the gitignored `scratchpad/` with a branch-scoped name (`scratchpad/pr-body-<branch>.md`). Your
-  harness scratchpad outside the repo works too. Never commit it.
+  harness scratchpad outside the repo works too, but concurrent agents share it, so the
+  branch-scoped basename applies there just as much: a bare `body.md` once put one PR's body on
+  another, and `gh pr edit` reported success. Never commit it.
 - **Flip to ready only when independent review passes (reviewer APPROVE plus a team-lead diff-read)
   and the gating CI is green**. Nothing else gates the flip. The instant both hold, run
   `gh pr ready`.
