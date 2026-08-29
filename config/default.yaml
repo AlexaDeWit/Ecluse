@@ -176,8 +176,9 @@ mounts:
     # when the publishing client sends none. Requires server.authToken, or the boot
     # refuses (PublishStaticCredentialNeedsEdge).
     # publicationTargetToken:
-    # Names a client may publish, as npm scopes. Required with a publication target.
-    # It limits names, not callers, and an empty or malformed list is a boot error.
+    # Names a client may publish. Required with a publication target. The shape is
+    # per-ecosystem, and npm reads it as a comma-separated list of scopes. It limits
+    # names, not callers, and an empty or malformed list is refused at load.
     # publishAllow: "@acme,@beta"
     # Per-mount refinements of integrity.minTrusted and integrity.divergencePolicy.
     # minTrustedIntegrity: sha256
