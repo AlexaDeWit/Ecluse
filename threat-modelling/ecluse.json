@@ -1601,7 +1601,7 @@
                   "severity": "Medium",
                   "title": "Package-name spoofing via invisible characters",
                   "type": "Spoofing",
-                  "description": "A requested or published package name can impersonate another package to a human reader. Unicode format characters (zero-width and bidirectional controls) render invisibly or reorder glyphs, so two distinct names look identical in a lockfile, a log line, or a review diff. The upstream npm namespace carries legacy names from before upstream validation tightened, so such names arrive from outside as well as from first-party publishes.",
+                  "description": "A requested or published package name can impersonate another package to a human reader. Unicode format characters (zero-width and bidirectional controls) render invisibly or reorder glyphs, so two distinct names look identical in a lockfile, a log line, or a review diff. A name can arrive from an upstream fetch as well as from a first-party publish, so the boundary applies to both directions.",
                   "mitigation": "Every package-name component parses against an explicit ASCII allowlist before routing, caching, queueing, or publish admission. For npm the allowlist is the validator's own hard boundary: letters, digits, and - _ . ! ~ * ' ( ), with @ and / as scope structure and no leading period, hyphen, or underscore. A codepoint outside the set, non-ASCII or control, cannot enter by construction, on the serve path or the publish path.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000123"
