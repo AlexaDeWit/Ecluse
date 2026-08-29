@@ -58,6 +58,7 @@ They drive 'parsePackageInfoFromValue', the same projection the serve path runs 
 spec :: Spec
 spec = do
     nameGrammarSpec
+    asciiBoundarySpec
     npmValidatorRefusalSpec
     nameValidationSpec
     signalMappingSpec
@@ -83,26 +84,73 @@ nameGrammarSpec = describe "projectName -- the one npm name grammar" $ do
     it "reads an unscoped name whole" $
         projectName "left-pad" `shouldBe` Right (mkPackageName Npm Nothing "left-pad")
 
-{- | The two npm rules the splitter adopts: no Unicode format character, and no name over 214
-characters. npm applies its length rule to new packages, so a publisher loses nothing here.
+{- | The charset boundary under the grammar: no codepoint above U+007F and no ASCII control
+character parses, whatever Unicode class it belongs to.
 -}
-npmValidatorRefusalSpec :: Spec
-npmValidatorRefusalSpec = describe "projectName -- the npm rules the splitter adopts" $ do
-    it "refuses a zero-width space, so an invisible twin cannot shadow a real name" $ do
+asciiBoundarySpec :: Spec
+asciiBoundarySpec = describe "projectName -- the ASCII boundary" $ do
+    it "refuses a Hangul filler, an invisible that is no format character" $ do
         -- Two distinct names that render identically. Admitting the second one would let an
         -- invisible character dodge a rule written against the first.
         invisibleTwin `shouldNotBe` realName
         projectName realName `shouldSatisfy` isRight
         projectName invisibleTwin `shouldSatisfy` isLeft
 
-    it "refuses a right-to-left override, which reverses how a name renders" $
+    it "refuses a blank braille cell, the other invisible outside the format class" $
+        projectName "left-\x2800\&pad" `shouldSatisfy` isLeft
+
+    it "refuses a variation selector, which changes how the glyph before it renders" $
+        projectName "left-pad\xFE0F" `shouldSatisfy` isLeft
+
+    it "refuses an accented letter, so the boundary is the charset and not a blocklist" $
+        projectName "caf\xE9" `shouldSatisfy` isLeft
+
+    it "refuses an ASCII control character, at the low end and at DEL" $ do
+        projectName "left\x01\&pad" `shouldSatisfy` isLeft
+        projectName "left-pad\x7F" `shouldSatisfy` isLeft
+
+    it "refuses a zero-width space, a right-to-left override, and a soft hyphen" $ do
+        projectName "left-\x200B\&pad" `shouldSatisfy` isLeft
         projectName "left-\x202E\&pad" `shouldSatisfy` isLeft
-
-    it "refuses a format character in the scope, not only in the bare name" $
-        projectName "@sco\x200B\&pe/pkg" `shouldSatisfy` isLeft
-
-    it "refuses a soft hyphen, so the rule covers the class and not two examples" $
         projectName "left-\xAD\&pad" `shouldSatisfy` isLeft
+
+    it "refuses the boundary breach in the scope, not only in the bare name" $
+        projectName "@sco\x3164\&pe/pkg" `shouldSatisfy` isLeft
+  where
+    realName, invisibleTwin :: Text
+    realName = "left-pad"
+    invisibleTwin = "left-\x3164\&pad"
+
+{- | npm's own validator, both tiers: the error tier is enforced exactly, and the warning tier
+still parses because real legacy names carry it.
+-}
+npmValidatorRefusalSpec :: Spec
+npmValidatorRefusalSpec = describe "projectName -- npm's own validator tiers" $ do
+    it "refuses a character encodeURIComponent would escape" $
+        for_ ["left%pad", "left+pad", "left pad", "left,pad", "left$pad"] $ \raw ->
+            projectName raw `shouldSatisfy` isLeft
+
+    it "refuses a leading period, hyphen, or underscore on the bare name" $
+        for_ [".pad", "-pad", "_pad"] $ \raw ->
+            projectName raw `shouldSatisfy` isLeft
+
+    it "refuses the same three leading characters on the scope" $
+        for_ ["@.scope/pkg", "@-scope/pkg", "@_scope/pkg"] $ \raw ->
+            projectName raw `shouldSatisfy` isLeft
+
+    it "refuses node_modules and favicon.ico, in whatever case they are written" $
+        for_ ["node_modules", "Node_Modules", "favicon.ico", "FAVICON.ICO"] $ \raw ->
+            projectName raw `shouldSatisfy` isLeft
+
+    it "parses a capitalised legacy name, so JSONStream still resolves" $
+        projectName "JSONStream" `shouldBe` Right (mkPackageName Npm Nothing "JSONStream")
+
+    it "parses the warning tier's specials, which legacy names carry" $
+        for_ ["a~b", "a'b", "a!b", "a(b)", "a*b"] $ \raw ->
+            projectName raw `shouldSatisfy` isRight
+
+    it "parses an interior period, hyphen, and underscore" $
+        projectName "lodash.merge_x-1" `shouldSatisfy` isRight
 
     it "accepts a name of exactly 214 characters" $
         projectName (T.replicate 214 "a") `shouldSatisfy` isRight
@@ -124,10 +172,6 @@ npmValidatorRefusalSpec = describe "projectName -- the npm rules the splitter ad
         projectScope (T.replicate 214 "a") `shouldSatisfy` isRight
         projectScope ("@" <> T.replicate 214 "a") `shouldSatisfy` isRight
         projectScope ("@" <> T.replicate 215 "a") `shouldSatisfy` isLeft
-  where
-    realName, invisibleTwin :: Text
-    realName = "left-pad"
-    invisibleTwin = "left-\x200B\&pad"
 
 nameValidationSpec :: Spec
 nameValidationSpec = describe "name validation against the requested name" $ do
