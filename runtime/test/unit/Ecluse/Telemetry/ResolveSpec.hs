@@ -181,10 +181,10 @@ baggageLimitSpec = describe "W3C baggage limits" $ do
     it "names every key past the member-count limit" $ do
         -- The grammar accepts 180 members and the resolved identity adds two, so the two last
         -- operator keys in admission order lose their place.
-        let keys = ["k" <> show n | n <- [100 .. 279 :: Int]]
+        let memberKeys = ["k" <> show n | n <- [100 .. 279 :: Int]]
             environment =
-                ("DD_ENV", "prod") : attributesEnv (T.intercalate "," (map (<> "=1") keys))
-        raDropped (resourceAttributes environment) `shouldBe` drop 178 keys
+                ("DD_ENV", "prod") : attributesEnv (T.intercalate "," (map (<> "=1") memberKeys))
+        raDropped (resourceAttributes environment) `shouldBe` drop 178 memberKeys
         telemetryWarnings environment `shouldSatisfy` any (T.isInfixOf "Dropping k278, k279 from")
 
 overridesSpec :: Spec

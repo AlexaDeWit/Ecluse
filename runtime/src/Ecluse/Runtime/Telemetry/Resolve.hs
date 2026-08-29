@@ -295,11 +295,11 @@ resourceAttributes environment = carry (admitMembers 0 0 (admissionOrder resolve
 admissionOrder :: ResolvedTelemetry -> Baggage -> [(Token, Element)]
 admissionOrder resolved bag = sortOn (rank . memberKey . fst) (Exts.toList (Baggage.values bag))
   where
-    identity :: [Text]
-    identity = map fst (resolvedAttributes resolved)
+    identityKeys :: [Text]
+    identityKeys = map fst (resolvedAttributes resolved)
 
     rank :: Text -> (Int, Text)
-    rank key = (if key `elem` identity then 0 else 1, key)
+    rank key = (if key `elem` identityKeys then 0 else 1, key)
 
 {- Take members while the W3C limits allow and name the rest. An excluded member is skipped rather
 than ending the scan, so a small attribute still lands after a large one is left out. -}
