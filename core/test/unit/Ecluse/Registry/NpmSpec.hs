@@ -43,7 +43,7 @@ import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full))
 import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Security (defaultLimits, maxBodyBytes)
-import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, isOdd, publicRegistryBaseUrl)
 
@@ -67,7 +67,7 @@ boundedBodySpec :: Spec
 boundedBodySpec = describe "bounded metadata body read" $ do
     it "refuses an over-cap body fail-closed as a FetchBoundExceeded value" $
         withStub status200 (toLazy oversizedBody) $ \stub -> do
-            base <- stubConfig stub
+            base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxBodyBytes = 64}}
             outcome <- fetchMetadataFormBounded config Full noValidators isOdd
             outcome `shouldSatisfy` isBoundExceeded
@@ -75,7 +75,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
     it "returns a body that is within maxBodyBytes verbatim" $
         -- The read returns a body within the cap whole and unchanged: no false refusal.
         withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
-            base <- stubConfig stub
+            base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxBodyBytes = 64}}
             resp <- fetchMetadataFormBounded config Full noValidators isOdd
             fmap responseBody resp `shouldBe` Right "{\"name\":\"is-odd\"}"
@@ -85,7 +85,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
         -- transparently, so the cap must bound the inflated bytes, not the wire size. A cap on
         -- compressed bytes would let a gzip bomb straight through.
         withStubHeaders status200 [(hContentEncoding, "gzip")] (toLazy gzippedOversizedBody) $ \stub -> do
-            base <- stubConfig stub
+            base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxBodyBytes = 1024}}
             -- Sanity: the compressed body is under the cap, so only the
             -- decompressed-size bound can explain a refusal.
@@ -97,7 +97,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
         -- The read-path URL-formation fault is a value (mirroring the write path's
         -- PublishFetch), not a thrown UrlFormationError laundered by a broad catch.
         manager <- newManager defaultManagerSettings
-        let config = (defaultNpmConfig manager){ocBaseUrl = loopbackRegistryUrl ""}
+        let config = defaultNpmConfig (loopbackRegistryUrl "") manager
         outcome <- fetchMetadataFormBounded config Full noValidators isOdd
         outcome `shouldBe` Left (FetchUrlUnformable EmptyBaseUrl)
 
@@ -137,7 +137,7 @@ transportFaultSpec = describe "transport faults as values" $ do
         -- Port 1 on the loopback is privileged and unbound, so the kernel refuses the
         -- connect. It is the one live-transport case a unit test can drive determinately.
         manager <- newManager defaultManagerSettings
-        let config = (defaultNpmConfig manager){ocBaseUrl = loopbackRegistryUrl "http://127.0.0.1:1"}
+        let config = defaultNpmConfig (loopbackRegistryUrl "http://127.0.0.1:1") manager
         outcome <- fetchMetadataFormBounded config Full noValidators isOdd
         outcome `shouldSatisfy` isTransportFault
   where
@@ -147,7 +147,10 @@ configAndWiringSpec :: Spec
 configAndWiringSpec = describe "config wiring" $ do
     it "defaultNpmConfig targets the public registry anonymously over the given manager" $ do
         manager <- newManager defaultManagerSettings
-        let config = defaultNpmConfig manager
+        -- The production https-only former accepts the public registry, so this fixture needs
+        -- no loopback opt-in to reach it.
+        base <- either (fail . toString) pure (mkRegistryUrl publicRegistryBaseUrl)
+        let config = defaultNpmConfig base manager
         registryUrlText (ocBaseUrl config) `shouldBe` publicRegistryBaseUrl
         isJust (ocToken config) `shouldBe` False
         -- The secure-default bounds apply to an anonymous public fetch out of the box. A

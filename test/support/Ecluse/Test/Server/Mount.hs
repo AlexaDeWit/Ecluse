@@ -46,7 +46,7 @@ import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, ada
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl, registryUrlText)
+import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..), pdMirror, pdPrivateBaseUrl, pdPublicBaseUrl)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit), mountUpstreams)
@@ -104,12 +104,11 @@ ecosystem artifact hosts, so a fixture that wants both applies 'withEcosystemHos
 withPrivateBaseUrl :: Maybe RegistryUrl -> PackumentDeps -> PackumentDeps
 withPrivateBaseUrl privateBaseUrl = rebind [] (const privateBaseUrl) id
 
-{- | 'withPrivateBaseUrl' for a fixture that rewrites the old private base URL's characters. A
+{- | 'withPrivateBaseUrl' for a fixture that derives the new private base URL from the old one. A
 mount with no private upstream stays without one, and declared ecosystem artifact hosts are dropped.
-The rewritten URL re-enters as a loopback witness, because a fixture dials plain HTTP.
 -}
-overPrivateBaseUrl :: (Text -> Text) -> PackumentDeps -> PackumentDeps
-overPrivateBaseUrl f = rebind [] (fmap (loopbackRegistryUrl . f . registryUrlText)) id
+overPrivateBaseUrl :: (RegistryUrl -> RegistryUrl) -> PackumentDeps -> PackumentDeps
+overPrivateBaseUrl f = rebind [] (fmap f) id
 
 {- | Rebind a fixture's upstreams with the mirror serve plan replaced. It drops any
 declared ecosystem artifact hosts, as 'withPrivateBaseUrl' does.

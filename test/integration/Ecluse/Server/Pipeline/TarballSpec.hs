@@ -341,7 +341,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
     it "serves a same-host private dist.tarball on an internal-IP private origin (trusted-origin exempt from the internal-range block)" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        let internalIpPrivate = overPrivateBaseUrl (T.replace "localhost" "127.0.0.1")
+        let internalIpPrivate = overPrivateBaseUrl (loopbackRegistryUrl . T.replace "localhost" "127.0.0.1" . registryUrlText)
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing internalIpPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" (Just "client-token") app

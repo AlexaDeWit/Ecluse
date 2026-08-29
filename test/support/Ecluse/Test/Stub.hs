@@ -33,7 +33,7 @@ import Network.Wai.Handler.Warp (Port, testWithApplication)
 
 import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Test.Wai (localhost)
 
 {- | What the stub captured from one request it served: enough to assert the method,
@@ -102,13 +102,15 @@ withStubHeaders status extraHeaders body action = do
     testWithApplication (pure app) $ \port ->
         action Stub{stubPort = port, stubCaptured = captured}
 
--- | An origin pointed at a stub, anonymous, sharing a no-TLS manager.
-stubConfig :: Stub -> IO OriginClient
-stubConfig stub = do
+{- | An origin pointed at a stub, anonymous, sharing a no-TLS manager. The caller supplies the
+egress former: a stub speaks plain HTTP, and only a @dev-http-egress@ build can witness one.
+-}
+stubConfig :: (Text -> RegistryUrl) -> Stub -> IO OriginClient
+stubConfig egressUrl stub = do
     manager <- newManager defaultManagerSettings
     pure
         OriginClient
-            { ocBaseUrl = loopbackRegistryUrl (stubBaseUrl stub)
+            { ocBaseUrl = egressUrl (stubBaseUrl stub)
             , ocManager = manager
             , ocToken = Nothing
             , ocLimits = defaultLimits

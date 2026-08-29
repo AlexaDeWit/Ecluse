@@ -11,7 +11,6 @@ readers live here rather than inside one suite's fixture module.
 module Ecluse.Test.Wai (
     -- * Addressing an in-process stub
     localhost,
-    localhostUrl,
     selfBaseUrl,
 
     -- * Reading a request
@@ -37,18 +36,9 @@ import Network.HTTP.Types.Header (hHost, hIfNoneMatch)
 import Network.Wai (Request (requestHeaders))
 import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
 
-import Ecluse.Core.Security.Egress (RegistryUrl)
-import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-
 -- | The base URL of a loopback stub on the given port, by the @localhost@ DNS name.
 localhost :: Int -> Text
 localhost port = "http://localhost:" <> show port
-
-{- | 'localhost' as the egress witness a mount's upstream is bound with, through the
-test-only plain-HTTP former a release build does not carry.
--}
-localhostUrl :: Int -> RegistryUrl
-localhostUrl = loopbackRegistryUrl . localhost
 
 {- | The base URL a request reached a stub at, from its @Host@ header: the only place the
 harness's ephemeral port appears. An absent header falls back to @http:\/\/localhost@.

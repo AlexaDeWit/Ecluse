@@ -546,7 +546,6 @@ library ecluse-test-support
     Ecluse.Test.RegistryCapture
     Ecluse.Test.Rules
     Ecluse.Test.Server.Cache
-    Ecluse.Test.Server.Mount
     Ecluse.Test.Server.Transform
     Ecluse.Test.Stub
     Ecluse.Test.Support
@@ -554,6 +553,13 @@ library ecluse-test-support
     Ecluse.Test.Wai
     Ecluse.Test.WireVocab
     Ecluse.Test.Worker
+
+  -- The mount fixture binds a mount's upstreams to in-process plain-http stubs, so it needs
+  -- the flag-gated loopback former (Ecluse.Core.Security.Egress.DevHttp). A release-posture
+  -- build has the flag off and still builds this sublibrary for `executable perf-acceptance`,
+  -- which does not use this module. Every consumer is a test suite or `bench-load`.
+  if flag(dev-http-egress)
+    exposed-modules: Ecluse.Test.Server.Mount
 
   build-depends:
     , ecluse:ecluse-core

@@ -147,7 +147,7 @@ import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, 
 import Ecluse.Test.Registry.Npm qualified as NpmFixture (publishedDaysAgo)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (npmServeDeps, withEcosystemHosts)
-import Ecluse.Test.Wai (decodedBody, localhostUrl, lookupAuth, lookupIfNoneMatch, selfBaseUrl)
+import Ecluse.Test.Wai (decodedBody, localhost, lookupAuth, lookupIfNoneMatch, selfBaseUrl)
 
 -- | A fixed "now" so the age-based admit/deny axis is deterministic under test.
 now :: UTCTime
@@ -566,8 +566,8 @@ deps privatePort publicPort inbound = do
     prepared <- prepare inertRuleDeps policy
     pure
         ( npmServeDeps
-            (Just (localhostUrl privatePort))
-            (localhostUrl publicPort)
+            (Just (loopbackRegistryUrl (localhost privatePort)))
+            (loopbackRegistryUrl (localhost publicPort))
             (MirrorOnAdmit (loopbackRegistryUrl "https://mirror.test"))
             prepared
             (pure now)
