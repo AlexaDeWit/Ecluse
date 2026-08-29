@@ -31,6 +31,7 @@ module Ecluse.Composition.Sizing (
     mirrorEnqueueReportInterval,
 ) where
 
+import Data.Ord (clamp)
 import Network.HTTP.Client (ManagerSettings (managerConnCount))
 import System.Posix.Resource (Resource (ResourceOpenFiles), ResourceLimit (ResourceLimit, ResourceLimitInfinity, ResourceLimitUnknown), ResourceLimits (softLimit), getResourceLimit)
 
@@ -98,7 +99,7 @@ resolvePrivateConnections explicit fdLimit =
 -- The floor keeps a small file-descriptor limit reusing a useful number of connections.
 -- The cap stops an enormous limit retaining an absurd idle cache to one upstream.
 clampPrivateConnections :: Int -> Int
-clampPrivateConnections = max privateConnectionsFloor . min privateConnectionsCap
+clampPrivateConnections = clamp (privateConnectionsFloor, privateConnectionsCap)
 
 -- One descriptor per pooled connection. The private pool takes a quarter of the budget
 -- and leaves the rest to the listener, the public pool, telemetry, the worker, and the runtime.
@@ -132,7 +133,7 @@ fdLimitClause fdLimit = "computed from file-descriptor limit " <> show fdLimit
 -- The floor keeps a small limit reusing connections across an onboarding burst. The cap
 -- and the reasoning match 'clampPrivateConnections'.
 clampPublicConnections :: Int -> Int
-clampPublicConnections = max publicConnectionsFloor . min publicConnectionsCap
+clampPublicConnections = clamp (publicConnectionsFloor, publicConnectionsCap)
 
 -- An eighth of the file-descriptor budget, drawn from the reserve the private sizing
 -- leaves. The public leg is the transient onboarding ramp, not the steady-state load.

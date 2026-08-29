@@ -12,12 +12,13 @@ module Ecluse.Composition.MemoryPlan.Demands (
     tenantDemands,
 ) where
 
+import Data.Ord (clamp)
+
 import Ecluse.Composition.MemoryPlan.Bounds (
     anyMountMirrors,
     cacheBytesCap,
     cacheBytesFloor,
     cacheSharePercent,
-    clamp,
     envelope,
     fixedBufferBytes,
     materialSharePercent,
@@ -53,7 +54,7 @@ tenantDemands inputs h =
         , tdReserve = reserve
         , tdFixedBuffers = fixedBufferBytes demand
         , tdPins = pins
-        , tdCacheDesired = fromMaybe (clamp cacheBytesFloor cacheBytesCap (appHeap * cacheSharePercent `div` 100)) (opCache pins)
+        , tdCacheDesired = fromMaybe (clamp (cacheBytesFloor, cacheBytesCap) (appHeap * cacheSharePercent `div` 100)) (opCache pins)
         , tdCacheEntriesExplicit = csMaxEntries (piCache inputs)
         , tdMaterialDesired = mdDesired material
         , tdMaterialMinimum = mdMinimum material
@@ -62,7 +63,7 @@ tenantDemands inputs h =
         , tdPublishDesired = max requestFinal (appHeap * publishSharePercent `div` 100)
         , tdRequestFinal = requestFinal
         , tdRequestComputed = requestComputed
-        , tdDepthDesired = fromMaybe (clamp queueDepthFloor queueDepthCap ((appHeap * queueSharePercent `div` 100) `div` mirrorJobEstimatedBytes)) (opDepth pins)
+        , tdDepthDesired = fromMaybe (clamp (queueDepthFloor, queueDepthCap) ((appHeap * queueSharePercent `div` 100) `div` mirrorJobEstimatedBytes)) (opDepth pins)
         , tdMemoryBacked = memoryQueueCharged demand
         , tdMirrors = anyMountMirrors demand
         , tdArtifactCapDesired = artifactCapDesired
@@ -74,7 +75,7 @@ tenantDemands inputs h =
     reserve = max runtimeReserveFloorBytes (h `div` runtimeReserveShareDiv)
     appHeap = max 0 (h - reserve)
     material = materialDemand inputs appHeap
-    requestComputed = clamp requestBytesFloor requestBytesCap (appHeap * publishSharePercent `div` 100)
+    requestComputed = clamp (requestBytesFloor, requestBytesCap) (appHeap * publishSharePercent `div` 100)
     requestFinal = fromMaybe requestComputed (opRequest pins)
     -- The charged envelope is the cap times the envelope multiplier, so dividing the
     -- share back down keeps the mirror tenant a bounded share of the heap.
@@ -107,7 +108,7 @@ materialDemand inputs appHeap =
     admissionDesired = fromMaybe (max 1 (min (piCpuAdmission inputs) memBound)) explicitAdmission
     responseDesired =
         fromMaybe
-            (clamp responseBytesFloor responseBytesCap (contractResidentBytes (shareBytes `div` max 1 (admissionDesired * packumentOriginFanout))))
+            (clamp (responseBytesFloor, responseBytesCap) (contractResidentBytes (shareBytes `div` max 1 (admissionDesired * packumentOriginFanout))))
             responseExplicit
 
 materialOf :: Int -> Int -> Int

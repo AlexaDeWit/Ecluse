@@ -38,6 +38,7 @@ module Ecluse.Core.Credential.Refresh.Internal (
 ) where
 
 import Control.Concurrent.STM (retry)
+import Data.Ord (clamp)
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import UnliftIO (asyncWithUnmask, throwIO, try)
 import UnliftIO.Exception (mask)
@@ -399,4 +400,4 @@ refreshDueAt cfg issuedAt token = case authExpiresAt token of
         pure (Just due)
   where
     clamp01 :: Double -> Double
-    clamp01 = max 0 . min 1
+    clamp01 = clamp (0, 1)

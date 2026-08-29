@@ -17,11 +17,12 @@ module Ecluse.Composition.MemoryPlan.Shed (
     cacheEntryBound,
 ) where
 
+import Data.Ord (clamp)
+
 import Ecluse.Composition.MemoryPlan.Bounds (
     cacheEntriesCap,
     cacheEntriesFloor,
     cacheEntryExpectedBytes,
-    clamp,
     envelope,
     mirrorArtifactEnvelopeMultiplier,
     queueCharge,
@@ -134,7 +135,7 @@ shedMaterialStep d overshoot =
         Nothing -> max 1 (min (tdAdmissionDesired d) (materialFinal `div` envelope (fromMaybe responseBytesFloor responseExplicit)))
     responseFinal = case responseExplicit of
         Just r -> r
-        Nothing -> clamp responseBytesFloor responseBytesCap (contractResidentBytes (materialFinal `div` max 1 (admissionFinal * packumentOriginFanout)))
+        Nothing -> clamp (responseBytesFloor, responseBytesCap) (contractResidentBytes (materialFinal `div` max 1 (admissionFinal * packumentOriginFanout)))
 
 -- Step 3: the publish aggregate shrinks to one maximum request.
 shedPublishStep :: TenantDemands -> Int -> ShedStep
@@ -180,7 +181,7 @@ expected footprint of one cached packument.
 -}
 cacheEntryBound :: TenantDemands -> ShedOutcomes -> Int
 cacheEntryBound d o =
-    fromMaybe (clamp cacheEntriesFloor cacheEntriesCap (soCacheFinal o `div` cacheEntryExpectedBytes)) (tdCacheEntriesExplicit d)
+    fromMaybe (clamp (cacheEntriesFloor, cacheEntriesCap) (soCacheFinal o `div` cacheEntryExpectedBytes)) (tdCacheEntriesExplicit d)
 
 {- | Where the nursery (capabilities x allocation area) exceeds a bounded share of the
 ceiling, shed the capability count so it fits. 'Nothing' keeps the live count.

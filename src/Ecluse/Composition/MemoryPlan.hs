@@ -26,13 +26,14 @@ module Ecluse.Composition.MemoryPlan (
     mirrorArtifactBytesCap,
 ) where
 
+import Data.Ord (clamp)
+
 import Ecluse.Composition.MemoryPlan.Bounds (
     anyMountMirrors,
     cacheBytesFallback,
     cacheEntriesCap,
     cacheEntriesFloor,
     cacheEntryExpectedBytes,
-    clamp,
     fixedBufferBytes,
     memoryQueueCharged,
     mirrorArtifactBytesCap,
@@ -154,7 +155,7 @@ fallbackPlan inputs =
     (responseBytes, responseLine) = fallbackOr "response byte cap" (opResponse pins) responseBytesFallback
     (requestBytes, requestLine) = fallbackOr "request byte cap" (opRequest pins) requestBytesFallback
     (cacheBytes, cacheBytesLine) = fallbackOr "cache byte bound" (opCache pins) cacheBytesFallback
-    (cacheEntries, cacheEntriesLine) = fallbackOr "cache entry bound" (csMaxEntries (piCache inputs)) (clamp cacheEntriesFloor cacheEntriesCap (cacheBytes `div` cacheEntryExpectedBytes))
+    (cacheEntries, cacheEntriesLine) = fallbackOr "cache entry bound" (csMaxEntries (piCache inputs)) (clamp (cacheEntriesFloor, cacheEntriesCap) (cacheBytes `div` cacheEntryExpectedBytes))
     (queueDepth, queueDepthLine) = fallbackOr "memory-queue depth" (opDepth pins) queueDepthFallback
     (artifactBytes, artifactLine) = fallbackOr "mirror artifact byte cap" (opArtifact pins) mirrorArtifactBytesCap
     publishTenant = listToMaybe [PublishTenant{ptAggregateBytes = publishAggregateFallbackRequests * requestBytes} | piPublishConfigured inputs]
