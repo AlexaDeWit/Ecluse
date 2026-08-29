@@ -14,13 +14,12 @@ configuration model and the signal catalogue.
 == The handle
 
 'telemetryDisabled' holds no providers. An enabled handle carries the SDK's providers, built
-from the standard @OTEL_*@ variables the SDK reads directly, plus a 'MetricScrape' where the
-operator chose the pull transport ("Ecluse.Runtime.Telemetry.Scrape").
-'withTelemetry' is the lifecycle bracket the composition root ("Ecluse.Runtime.Env") runs the
-proxy within, tearing the providers down along every exit path and flushing what they hold. It
-also wraps the OTLP exporters, because @hs-opentelemetry 1.0.0.0@ drops a failed export
-silently. The wrappers only observe, routing the failure through the shared @katip@ throttle
-("Ecluse.Runtime.Telemetry.Resolve"), so export semantics stay untouched.
+from the standard @OTEL_*@ variables the SDK reads directly. 'withTelemetry' is the lifecycle
+bracket the composition root ("Ecluse.Runtime.Env") runs the proxy within, tearing the providers
+down along every exit path and flushing what they hold. It also runs the Prometheus scrape
+listener ("Ecluse.Runtime.Telemetry.Scrape") for that same span, and wraps the OTLP exporters,
+because @hs-opentelemetry 1.0.0.0@ drops a failed export silently. The wrappers only observe,
+routing the failure through the shared @katip@ throttle ("Ecluse.Runtime.Telemetry.Resolve").
 -}
 module Ecluse.Runtime.Telemetry (
     -- * Master switch
@@ -34,7 +33,6 @@ module Ecluse.Runtime.Telemetry (
     telemetryEnabled,
     telemetryTracerProvider,
     telemetryMeterProvider,
-    telemetryMetricScrape,
 
     -- * Lifecycle
     withTelemetry,
@@ -76,7 +74,7 @@ import Ecluse.Runtime.Telemetry.Resolve (
     installExportErrorHandler,
     observeExportResult,
  )
-import Ecluse.Runtime.Telemetry.Scrape (MetricScrape, metricScrapeFor)
+import Ecluse.Runtime.Telemetry.Scrape (MetricScrape, metricScrapeFor, withScrapeListener)
 
 import Data.Universe.Class (Universe (..))
 import Data.Universe.Generic (universeGeneric)
@@ -139,8 +137,6 @@ data TelemetryProviders = TelemetryProviders
     -- ^ The SDK tracer provider the proxy hangs spans on.
     , tpMeterProvider :: MeterProvider
     -- ^ The SDK meter provider the proxy hangs metric instruments on.
-    , tpMetricScrape :: Maybe MetricScrape
-    -- ^ The pull-side collection, present only under @OTEL_METRICS_EXPORTER=prometheus@.
     }
 
 {- | The disabled telemetry handle: the off-by-default no-op that holds no providers
@@ -150,13 +146,12 @@ telemetryDisabled :: Telemetry
 telemetryDisabled = TelemetryDisabled
 
 -- | Build an enabled telemetry handle from the SDK signals 'withTelemetry' brackets.
-telemetryEnabled :: Maybe MetricScrape -> OTelSignals -> Telemetry
-telemetryEnabled scrape signals =
+telemetryEnabled :: OTelSignals -> Telemetry
+telemetryEnabled signals =
     TelemetryEnabled
         TelemetryProviders
             { tpTracerProvider = otelTracerProvider signals
             , tpMeterProvider = otelMeterProvider signals
-            , tpMetricScrape = scrape
             }
 
 {- | The tracer provider a 'Telemetry' handle exposes, 'Nothing' when telemetry is disabled.
@@ -175,17 +170,8 @@ telemetryMeterProvider = \case
     TelemetryDisabled -> Nothing
     TelemetryEnabled providers -> Just (tpMeterProvider providers)
 
-{- | The scrape collection a 'Telemetry' handle exposes, 'Nothing' when telemetry is off or the
-operator left the metrics transport on OTLP push. The front door mounts no route on 'Nothing'.
--}
-telemetryMetricScrape :: Telemetry -> Maybe MetricScrape
-telemetryMetricScrape = \case
-    TelemetryDisabled -> Nothing
-    TelemetryEnabled providers -> tpMetricScrape providers
-
 {- | Run an action with a 'Telemetry' handle bracketed by the 'TelemetrySwitch'. 'TelemetryOff'
-never initialises the SDK, so no exporter opens. 'TelemetryOn' builds the providers from the
-@OTEL_*@ environment and tears them down on every exit path, flushing spans and metrics.
+opens nothing. 'TelemetryOn' builds the providers, runs the scrape listener, and tears both down.
 -}
 withTelemetry :: TelemetrySwitch -> LogEnv -> (Telemetry -> IO a) -> IO a
 withTelemetry switch logEnv use = case switch of
@@ -195,7 +181,7 @@ withTelemetry switch logEnv use = case switch of
         installExportErrorHandler sink
         registerObservedSpanExporter sink
         bracket (initializeObservedOpenTelemetry sink) (otelShutdown . fst) $ \(signals, scrape) ->
-            use (telemetryEnabled scrape signals)
+            withScrapeListener logEnv scrape (use (telemetryEnabled signals))
 
 {- Wrap the OTLP span exporter so a failed export is observed: @hs-opentelemetry@ 1.0.0.0
 discards the 'ExportResult' in the batch processor, so the failure is otherwise invisible. -}

@@ -10,6 +10,7 @@ import Test.Hspec
 
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (
+    HttpException,
     defaultManagerSettings,
     httpLbs,
     newManager,
@@ -19,6 +20,7 @@ import Network.HTTP.Client (
  )
 import Network.HTTP.Types (hContentType, statusCode)
 import Network.Wai.Handler.Warp qualified as Warp
+import UnliftIO (try)
 
 import Ecluse.Core.Telemetry.Metrics (
     Decision (Admit, Deny),
@@ -28,7 +30,7 @@ import Ecluse.Core.Telemetry.Metrics (
 import Ecluse.Integration.Collector (withSdkEnv)
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Server (mkServerConfig, tracedApplication)
-import Ecluse.Runtime.Telemetry (Telemetry, TelemetrySwitch (TelemetryOn), withTelemetry)
+import Ecluse.Runtime.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
 import Ecluse.Runtime.Telemetry.Instruments (
     newMetrics,
     recordMirrorJobProcessed,
@@ -39,73 +41,135 @@ import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Test.Metrics (highCardinalityKeys)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Support (parseRequestOrFail)
+import Ecluse.Test.Wai (freePort)
 
-{- | Scrape the front door's @\/metrics@ route over a real listener and assert what the
-exposition carries. The transport is pull-based and in-process, so no backend takes part.
+-- | One fetched response, reduced to the parts the assertions read.
+data Fetched = Fetched
+    { fStatus :: Int
+    , fContentType :: Maybe Text
+    , fBody :: Text
+    }
+    deriving stock (Eq, Show)
+
+{- | What one telemetry-on session under the scrape transport served, from both listeners, so
+every assertion below reads one run rather than standing the SDK up per example.
+-}
+data ScrapeRun = ScrapeRun
+    { runExposition :: Fetched
+    , runListenerOther :: Fetched
+    , runProxyMetrics :: Fetched
+    , runProxyUnknown :: Fetched
+    }
+
+{- | Scrape the dedicated Prometheus listener and assert what it carries, and that the proxy's own
+port never answers @\/metrics@. Pull-based and in-process, so no backend takes part.
 -}
 spec :: Spec
-spec = describe "Prometheus /metrics scrape" $ do
-    beforeAll (scrape "prometheus") $ do
-        it "renders the recorded ecluse.* series as Prometheus text exposition" $ \(status, contentType, body) -> do
-            status `shouldBe` 200
-            contentType `shouldBe` Just "text/plain; version=0.0.4; charset=utf-8"
-            body `shouldSatisfy` T.isInfixOf "# TYPE ecluse_serve_decision counter"
-            body `shouldSatisfy` T.isInfixOf "decision=\"admit\""
-            body `shouldSatisfy` T.isInfixOf "decision=\"deny\""
-            body `shouldSatisfy` T.isInfixOf "# TYPE ecluse_rule_denials counter"
-            body `shouldSatisfy` T.isInfixOf "rule=\"min-age\""
-            body `shouldSatisfy` T.isInfixOf "# TYPE ecluse_mirror_jobs_processed counter"
-            body `shouldSatisfy` T.isInfixOf "result=\"published\""
+spec = describe "Prometheus scrape listener" $ do
+    beforeAll driveScrapeRun $ do
+        it "renders the recorded ecluse.* series as Prometheus text exposition" $ \run -> do
+            let served = runExposition run
+            fStatus served `shouldBe` 200
+            fContentType served `shouldBe` Just "text/plain; version=0.0.4; charset=utf-8"
+            fBody served `shouldSatisfy` T.isInfixOf "# TYPE ecluse_serve_decision counter"
+            fBody served `shouldSatisfy` T.isInfixOf "decision=\"admit\""
+            fBody served `shouldSatisfy` T.isInfixOf "decision=\"deny\""
+            fBody served `shouldSatisfy` T.isInfixOf "# TYPE ecluse_rule_denials counter"
+            fBody served `shouldSatisfy` T.isInfixOf "rule=\"min-age\""
+            fBody served `shouldSatisfy` T.isInfixOf "# TYPE ecluse_mirror_jobs_processed counter"
+            fBody served `shouldSatisfy` T.isInfixOf "result=\"published\""
 
-        it "labels every series from the bounded vocabulary alone" $ \(_, _, body) ->
-            -- The catalogue keeps package, version, scope, and a denial message off labels, so a
-            -- scrape cannot explode into a series per package. A label key follows '{' or ','.
+        it "labels every series from the bounded vocabulary alone" $ \run ->
+            -- Bounded labels answer cardinality, not exposure: they are what stops the exposition
+            -- growing a series per package. A label key follows '{' or ','.
             forM_ highCardinalityKeys $ \key -> do
-                body `shouldNotSatisfy` T.isInfixOf ("{" <> key <> "=\"")
-                body `shouldNotSatisfy` T.isInfixOf ("," <> key <> "=\"")
+                fBody (runExposition run) `shouldNotSatisfy` T.isInfixOf ("{" <> key <> "=\"")
+                fBody (runExposition run) `shouldNotSatisfy` T.isInfixOf ("," <> key <> "=\"")
 
-    it "mounts no route while the metrics transport is OTLP push" $ do
-        (status, _, _) <- scrape "otlp"
-        status `shouldBe` 404
+        it "serves one path only, so the listener answers nothing else" $ \run ->
+            fStatus (runListenerOther run) `shouldBe` 404
 
-{- Record a spread of @ecluse.*@ signals through a live telemetry handle, then scrape the front
-door over its own listener. @exporter@ is the @OTEL_METRICS_EXPORTER@ value under test. -}
-scrape :: String -> IO (Int, Maybe Text, Text)
-scrape exporter =
-    withSdkEnv unusedEndpoint [("OTEL_METRICS_EXPORTER", exporter)] $ do
+        it "leaves the proxy port with no /metrics to find, even under the scrape transport" $ \run ->
+            -- Identical triples, so a client on the data port cannot tell the path apart from any
+            -- other unmounted one and learn that an exposition exists.
+            runProxyMetrics run `shouldBe` runProxyUnknown run
+
+    it "starts no listener while telemetry is off, whatever the transport selects" $ do
+        reached <- scrapeReachableWith TelemetryOff
+        reached `shouldBe` False
+
+    it "starts one while telemetry is on, which is what makes that a real difference" $ do
+        reached <- scrapeReachableWith TelemetryOn
+        reached `shouldBe` True
+
+{- Record a spread of @ecluse.*@ signals through a live telemetry handle, then read both the
+dedicated listener and the proxy's own port inside that one session. -}
+driveScrapeRun :: IO ScrapeRun
+driveScrapeRun = do
+    scrapePort <- freePort
+    withScrapeEnv scrapePort $ do
         logEnv <- initLogEnv (Namespace ["itest"]) (Environment "test")
         withTelemetry TelemetryOn logEnv $ \telemetry -> do
-            metrics <- newMetrics telemetry
-            recordServeDecision metrics Admit
-            recordServeDecision metrics Deny
-            recordRuleDenial metrics (Just "min-age") ReasonPolicy
-            recordMirrorJobProcessed metrics Published
+            recordSpread telemetry
             env <- buildEnv telemetry
             app <- tracedApplication (mkServerConfig []) env
-            Warp.testWithApplication (pure app) (getMetrics . scrapeUrl)
+            Warp.testWithApplication (pure app) $ \proxyPort ->
+                ScrapeRun
+                    <$> fetch (urlOn scrapePort "/metrics")
+                    <*> fetch (urlOn scrapePort "/not-the-metrics-path")
+                    <*> fetch (urlOn proxyPort "/metrics")
+                    <*> fetch (urlOn proxyPort "/not-a-mount")
 
--- Fetch one scrape and project the parts the assertions read.
-getMetrics :: Text -> IO (Int, Maybe Text, Text)
-getMetrics url = do
+{- Whether the scrape listener answers under the given switch, with the scrape transport selected
+either way. That is the composed join: the selection alone must not open a port. -}
+scrapeReachableWith :: TelemetrySwitch -> IO Bool
+scrapeReachableWith switch = do
+    scrapePort <- freePort
+    withScrapeEnv scrapePort $ do
+        logEnv <- initLogEnv (Namespace ["itest"]) (Environment "test")
+        withTelemetry switch logEnv $ \_telemetry -> do
+            attempt <- try (fetch (urlOn scrapePort "/metrics"))
+            pure $ case attempt of
+                Left (_ :: HttpException) -> False
+                Right served -> fStatus served == 200
+
+recordSpread :: Telemetry -> IO ()
+recordSpread telemetry = do
+    metrics <- newMetrics telemetry
+    recordServeDecision metrics Admit
+    recordServeDecision metrics Deny
+    recordRuleDenial metrics (Just "min-age") ReasonPolicy
+    recordMirrorJobProcessed metrics Published
+
+{- Point the SDK at the scrape transport on a port this run owns. 'withSdkEnv' restores every key
+it sets, and the OTLP endpoint stays unused because no push exporter is selected. -}
+withScrapeEnv :: Int -> IO a -> IO a
+withScrapeEnv scrapePort =
+    withSdkEnv
+        "http://127.0.0.1:1"
+        [ ("OTEL_METRICS_EXPORTER", "prometheus")
+        , ("OTEL_EXPORTER_PROMETHEUS_HOST", "127.0.0.1")
+        , ("OTEL_EXPORTER_PROMETHEUS_PORT", show scrapePort)
+        ]
+
+-- Fetch one URL and reduce the response to what the assertions read.
+fetch :: Text -> IO Fetched
+fetch url = do
     manager <- newManager defaultManagerSettings
     request <- parseRequestOrFail url
     response <- httpLbs request manager
     pure
-        ( statusCode (responseStatus response)
-        , decodeUtf8 <$> lookup hContentType (responseHeaders response)
-        , decodeUtf8 (responseBody response)
-        )
+        Fetched
+            { fStatus = statusCode (responseStatus response)
+            , fContentType = decodeUtf8 <$> lookup hContentType (responseHeaders response)
+            , fBody = decodeUtf8 (responseBody response)
+            }
 
-scrapeUrl :: Warp.Port -> Text
-scrapeUrl port = "http://127.0.0.1:" <> show port <> "/metrics"
+urlOn :: Int -> Text -> Text
+urlOn port path = "http://127.0.0.1:" <> show port <> path
 
-{- 'withSdkEnv' pins every exporter, and neither transport under test dials the OTLP endpoint
-from this suite, so the value only has to parse. -}
-unusedEndpoint :: Text
-unusedEndpoint = "http://127.0.0.1:1"
-
--- A minimal composition root for the front door. The scrape route sits above dispatch, so no
--- mount, registry, or cache handle is ever reached.
+-- A minimal composition root for the front door. No mount is configured, so every path on the
+-- proxy port falls through to the health probes.
 buildEnv :: Telemetry -> IO Env
 buildEnv telemetry = do
     manager <- newManager defaultManagerSettings

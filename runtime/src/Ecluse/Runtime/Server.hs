@@ -138,9 +138,7 @@ import Ecluse.Runtime.Server.Middleware (
     probeApplication,
     timeoutSeconds,
  )
-import Ecluse.Runtime.Telemetry (telemetryMetricScrape)
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
-import Ecluse.Runtime.Telemetry.Scrape (scrapeMiddleware)
 import Ecluse.Runtime.Telemetry.Tracing (telemetryWaiMiddleware)
 
 {- | The settings the web layer needs to serve that the composition-root 'Env' does not
@@ -210,14 +208,13 @@ probeOnlyApplication :: ServerConfig -> IO Application
 probeOnlyApplication cfg =
     pure (serverMiddleware cfg (probeApplication (scDrain cfg) (scCheckReady cfg) (scCheckLive cfg)))
 
-{- | 'application' under the telemetry middlewares: the Prometheus scrape route above the
-server-span wrapper, so a scrape opens no span, and that wrapper above all else.
+{- | 'application' with the OpenTelemetry server-span middleware wrapped __outermost__, so
+one server span covers the whole request. The wrapper is 'id' when telemetry is off.
 -}
 tracedApplication :: ServerConfig -> Env -> IO Application
 tracedApplication cfg env = do
     traceMiddleware <- telemetryWaiMiddleware (envTelemetry env)
-    let scrapeRoute = scrapeMiddleware (telemetryMetricScrape (envTelemetry env))
-    pure (scrapeRoute (traceMiddleware (application cfg env)))
+    pure (traceMiddleware (application cfg env))
 
 {- Route a request: the first matching mount wins, and every other path falls to the
 health probes, which answer @\/livez@ and @\/readyz@ and give the rest the neutral @404@.

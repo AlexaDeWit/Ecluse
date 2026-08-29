@@ -138,13 +138,17 @@ Telemetry is off until an operator sets `ECLUSE_OBSERVABILITY__TELEMETRY`. The o
 [Telemetry section](https://ecluse-proxy.com/docs/operations/#telemetry-opt-in) owns the variables
 and the wiring. Five design facts hold regardless:
 
-- **Metrics push or pull, traces always push.** OTLP push is the default and shares the traces'
-  pipeline, which suits the Datadog Agent and any Collector. A shop that scrapes sets
-  `OTEL_METRICS_EXPORTER=prometheus` instead, and the proxy answers `GET /metrics` with the
-  Prometheus text exposition of the same instruments. The SDK resolves that value to a no-op push
-  exporter, so the endpoint is the whole transport, and the bounded-label discipline above is what
-  keeps a scrape's series count finite. The route sits above the request stack, so a scrape opens
-  no span and never counts itself into the `http.server.*` series it reports.
+- **Metrics push or pull, and the pull side gets its own port.** OTLP push is the default and
+  shares the traces' pipeline, which suits the Datadog Agent and any Collector. A shop that
+  scrapes sets `OTEL_METRICS_EXPORTER=prometheus` instead, and Écluse answers `GET /metrics` on a
+  dedicated listener, addressed by `OTEL_EXPORTER_PROMETHEUS_HOST` (default `localhost`) and
+  `OTEL_EXPORTER_PROMETHEUS_PORT` (default 9464). The SDK resolves that value to a no-op push
+  exporter, so the endpoint is the whole transport. It is never mounted on the proxy's data port,
+  because the exposition carries the entire OpenTelemetry resource: host, process, and cloud or
+  cluster identity, none of which belongs on the port untrusted clients reach. The bounded labels
+  above answer cardinality, not exposure, so the loopback default is what makes reaching the
+  exposition off the host a deliberate act. A scrape never enters the request path, so it does not
+  appear in the `http.server.*` series it reports.
 - **No agentless export.** Écluse never reads `DD_API_KEY` or `DD_SITE`. It exports to a node-local
   Collector or Agent, never to a vendor's cloud. The OTLP endpoint is an operator-declared
   destination, so it is deliberately not SSRF-classified.

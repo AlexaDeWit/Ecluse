@@ -7,8 +7,6 @@ module Ecluse.Telemetry.ScrapeSpec (spec) where
 import Prelude hiding (get)
 
 import Data.Vector qualified as V
-import Network.HTTP.Types (status200)
-import Network.Wai (Application, responseLBS)
 import System.Environment (setEnv, unsetEnv)
 import Test.Hspec
 import Test.Hspec.Wai
@@ -19,19 +17,22 @@ import OpenTelemetry.Resource (emptyMaterializedResources)
 
 import Ecluse.Runtime.Telemetry.Scrape (
     MetricScrape (MetricScrape, runMetricScrape),
+    ScrapeListener (ScrapeListener),
     metricScrapeFor,
-    scrapeMiddleware,
+    scrapeApplication,
+    scrapeListenerFrom,
     scrapeSelected,
  )
 
-{- | The scrape transport's selection and its routing. What the exposition /says/ needs the live
-instruments, so the rendered series belong to the integration tier.
+{- | The scrape transport's selection, where its listener binds, and what that listener serves.
+Driving it through a live meter belongs to the integration tier.
 -}
 spec :: Spec
 spec = do
     selectionSpec
+    listenerSpec
     handleSpec
-    routeSpec
+    applicationSpec
 
 selectionSpec :: Spec
 selectionSpec = describe "scrapeSelected" $ do
@@ -53,6 +54,27 @@ selectionSpec = describe "scrapeSelected" $ do
         withExporter Nothing scrapeSelected `shouldReturn` False
         withExporter (Just "") scrapeSelected `shouldReturn` False
 
+listenerSpec :: Spec
+listenerSpec = describe "scrapeListenerFrom" $ do
+    it "reaches the loopback alone on 9464 when neither variable is declared" $
+        -- The exposition names the host and the process, so the default must not be routable.
+        scrapeListenerFrom [] `shouldBe` ScrapeListener "localhost" 9464
+
+    it "takes the host and port the operator declared" $
+        scrapeListenerFrom
+            [ ("OTEL_EXPORTER_PROMETHEUS_HOST", "0.0.0.0")
+            , ("OTEL_EXPORTER_PROMETHEUS_PORT", "19464")
+            ]
+            `shouldBe` ScrapeListener "0.0.0.0" 19464
+
+    it "counts a blank host as unset, so an empty variable cannot widen the bind" $
+        scrapeListenerFrom [("OTEL_EXPORTER_PROMETHEUS_HOST", "   ")]
+            `shouldBe` ScrapeListener "localhost" 9464
+
+    it "keeps the default port when the declared one is not a number" $
+        scrapeListenerFrom [("OTEL_EXPORTER_PROMETHEUS_PORT", "nine-thousand")]
+            `shouldBe` ScrapeListener "localhost" 9464
+
 handleSpec :: Spec
 handleSpec = describe "metricScrapeFor" $ do
     it "builds no handle while the transport is OTLP push" $ do
@@ -69,29 +91,22 @@ handleSpec = describe "metricScrapeFor" $ do
                 batches <- runMetricScrape handle
                 V.length batches `shouldBe` 1
 
-routeSpec :: Spec
-routeSpec = describe "scrapeMiddleware" $ do
-    with (pure (scrapeMiddleware (Just emptyScrape) innerApplication)) $ do
-        it "answers /metrics as Prometheus text exposition" $
-            get "/metrics"
-                `shouldRespondWith` 200
-                    { matchHeaders = ["Content-Type" <:> "text/plain; version=0.0.4; charset=utf-8"]
-                    }
+applicationSpec :: Spec
+applicationSpec =
+    describe "scrapeApplication" $
+        with (pure (scrapeApplication emptyScrape)) $ do
+            it "answers /metrics as Prometheus text exposition" $
+                get "/metrics"
+                    `shouldRespondWith` 200
+                        { matchHeaders = ["Content-Type" <:> "text/plain; version=0.0.4; charset=utf-8"]
+                        }
 
-        it "passes every other path through to the inner application" $
-            get "/livez" `shouldRespondWith` "inner"
+            it "answers every other path with a 404, so the listener serves one path only" $
+                get "/livez" `shouldRespondWith` 404
 
-    with (pure (scrapeMiddleware Nothing innerApplication)) $
-        it "mounts no route without a handle, so /metrics reaches the inner application" $
-            get "/metrics" `shouldRespondWith` "inner"
-
--- A handle over no series at all: the route's shape is the assertion here, not its content.
+-- A handle over no series at all: the listener's surface is the assertion here, not its content.
 emptyScrape :: MetricScrape
 emptyScrape = MetricScrape (pure V.empty)
-
--- The application under the middleware, answering any path with a body the assertions recognise.
-innerApplication :: Application
-innerApplication _request respond = respond (responseLBS status200 [] "inner")
 
 {- @OTEL_METRICS_EXPORTER@ is process-global and the suite runs every spec in one process, so
 each case puts back whatever it found. -}

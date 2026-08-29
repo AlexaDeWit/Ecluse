@@ -102,13 +102,24 @@ wherever `DD_AGENT_HOST`/`OTEL_EXPORTER_OTLP_ENDPOINT` points. That is why `DD_A
 `OTEL_EXPORTER_OTLP_HEADERS`.
 
 Metrics travel either way. They push over OTLP beside the traces by default. Set
-`OTEL_METRICS_EXPORTER=prometheus` and the proxy serves them for a scraper to pull instead, at
-`GET /metrics` on `ECLUSE_SERVER__PORT`, in Prometheus text exposition format. That endpoint
-reads the instruments at the moment of the scrape, so `OTEL_METRIC_EXPORT_INTERVAL` does not
-apply to it, and it is never traced, so a scrape adds nothing to the `http.server.*` series it
-reports. It answers on the proxy alone, and only while telemetry is on: with the push transport
-selected, or with telemetry off, `GET /metrics` is a `404`. Traces push over OTLP either way, so
-the endpoint variables still matter on a scraped deployment.
+`OTEL_METRICS_EXPORTER=prometheus` and Écluse serves them for a scraper to pull instead, in
+Prometheus text exposition format, at `GET /metrics` on a listener of its own. It is never on the
+proxy port your npm clients reach: that port answers `/metrics` with the same `404` it gives any
+other unmounted path, whatever the transport. `OTEL_EXPORTER_PROMETHEUS_HOST` (default
+`localhost`) and `OTEL_EXPORTER_PROMETHEUS_PORT` (default `9464`) address the listener. It reads
+the instruments at the moment of the scrape, so `OTEL_METRIC_EXPORT_INTERVAL` does not apply to
+it, and a scrape never enters the proxy's request path, so it adds nothing to the
+`http.server.*` series. The listener runs only while telemetry is on, and a port it cannot bind
+is an error in the log rather than a failed start.
+
+**Keep that port inside your network.** The exposition carries the whole OpenTelemetry resource,
+so it names your host and its machine id, the process owner, executable path, working directory
+and container id, and whatever cloud or Kubernetes identity the SDK detected, next to your own
+rule names. The `localhost` default reaches nothing off the host. Widening it with
+`OTEL_EXPORTER_PROMETHEUS_HOST` publishes that inventory to whoever can reach the port, so pair
+the change with something that decides who can.
+
+Traces push over OTLP either way, so the endpoint variables still matter on a scraped deployment.
 
 The W3C baggage limits cap `OTEL_RESOURCE_ATTRIBUTES` at 8192 bytes in total, 4096 bytes per
 attribute, and 180 attributes. Écluse admits its own identity first, then your attributes in key
