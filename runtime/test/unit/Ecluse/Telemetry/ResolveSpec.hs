@@ -22,6 +22,7 @@ import Ecluse.Core.Security (hostAddress)
 import Ecluse.Runtime.Telemetry.Resolve (
     EndpointSource (..),
     ResolvedTelemetry (..),
+    ResourceAttributes (..),
     TelemetryEndpoint (..),
     ThrottleEmit (..),
     ThrottleState (..),
@@ -29,19 +30,21 @@ import Ecluse.Runtime.Telemetry.Resolve (
     otelEnvironmentOverrides,
     prepareTelemetry,
     resolveTelemetry,
+    resourceAttributes,
     telemetryWarnings,
     throttleStep,
  )
 
 {- | Tests the telemetry config resolver and the export-failure throttle. Precedence is the
 Datadog value, then vanilla OpenTelemetry, then the default. One W3C baggage grammar reads
-@OTEL_RESOURCE_ATTRIBUTES@ for both the log identity and the span resource. Export errors
-coalesce.
+@OTEL_RESOURCE_ATTRIBUTES@ for both the log identity and the span resource, and the same
+limits that grammar carries decide what the exported header keeps. Export errors coalesce.
 -}
 spec :: Spec
 spec = do
     resolveSpec
     resourceAttributeSpec
+    baggageLimitSpec
     overridesSpec
     prepareSpec
     throttleSpec
@@ -132,28 +135,57 @@ resourceAttributeSpec = describe "OTEL_RESOURCE_ATTRIBUTES" $ do
         rtEnvironment (resolveTelemetry environment) `shouldBe` Nothing
         telemetryWarnings environment
             `shouldSatisfy` any (T.isInfixOf "OTEL_RESOURCE_ATTRIBUTES is not valid W3C baggage")
-        detectedResourceAttributes environment
-            `shouldReturn` [("service.name", "ecluse"), ("service.version", buildVersion)]
+        detectedResourceAttributes environment `shouldReturn` [("service.version", buildVersion)]
 
-    it "raises no warning for a value the grammar accepts" $
-        telemetryWarnings
-            [ ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
-            , ("OTEL_RESOURCE_ATTRIBUTES", "service.name=api,")
-            ]
-            `shouldBe` []
+    it "raises no warning and sheds nothing for a value the grammar accepts" $ do
+        let environment = attributesEnv "service.name=api,"
+        telemetryWarnings environment `shouldBe` []
+        raDropped (resourceAttributes environment) `shouldBe` []
 
-    it "lands a percent-encoded value identically on the log identity and the span resource" $ do
+    it "lands a percent-decoded service name on OTEL_SERVICE_NAME, never on the header" $ do
+        -- OTEL_SERVICE_NAME is the one carrier, so the header spends no budget on a key the
+        -- SDK reads from elsewhere. The log identity and the span resource still agree.
         let environment = [("OTEL_RESOURCE_ATTRIBUTES", "service.name=a%20b")]
-        detected <- detectedResourceAttributes environment
-        lookup "service.name" detected `shouldBe` Just (rtServiceName (resolveTelemetry environment))
-        lookup "service.name" detected `shouldBe` Just "a b"
+            serviceName = lookup "OTEL_SERVICE_NAME" (otelEnvironmentOverrides environment)
+        serviceName `shouldBe` Just (toString (rtServiceName (resolveTelemetry environment)))
+        serviceName `shouldBe` Just "a b"
+        (map fst <$> detectedResourceAttributes environment) `shouldReturn` ["service.version"]
 
     it "round-trips a value carrying an encoded comma through the SDK's own codec" $
         detectedResourceAttributes [("OTEL_RESOURCE_ATTRIBUTES", "team=core%2Cplatform")]
-            `shouldReturn` [ ("service.name", "ecluse")
-                           , ("service.version", buildVersion)
+            `shouldReturn` [ ("service.version", buildVersion)
                            , ("team", "core,platform")
                            ]
+
+{- | The W3C baggage limits the SDK's encoder enforces. That encoder sheds the overflow in hash
+order, so the resolver decides first and the boot warning names every key it left out.
+-}
+baggageLimitSpec :: Spec
+baggageLimitSpec = describe "W3C baggage limits" $ do
+    it "sheds a member over the per-member size limit and names it at boot" $ do
+        let environment = attributesEnv ("big=" <> T.replicate 5000 "x" <> ",team=core")
+        raDropped (resourceAttributes environment) `shouldBe` ["big"]
+        telemetryWarnings environment `shouldSatisfy` any (T.isInfixOf "Dropping big from")
+        detectedResourceAttributes environment
+            `shouldReturn` [("service.version", buildVersion), ("team", "core")]
+
+    it "sheds the member past the total size limit, keeping the resolved identity" $ do
+        -- The two members fit the incoming 8192-byte header but leave no room for
+        -- service.version. The identity is admitted first, so the later key is the one to go.
+        let filler = T.replicate 4090 "x"
+            environment = attributesEnv ("a=" <> filler <> ",b=" <> filler)
+        raDropped (resourceAttributes environment) `shouldBe` ["b"]
+        telemetryWarnings environment `shouldSatisfy` any (T.isInfixOf "Dropping b from")
+        (map fst <$> detectedResourceAttributes environment) `shouldReturn` ["a", "service.version"]
+
+    it "names every key past the member-count limit" $ do
+        -- The grammar accepts 180 members and the resolved identity adds two, so the two last
+        -- operator keys in admission order lose their place.
+        let keys = ["k" <> show n | n <- [100 .. 279 :: Int]]
+            environment =
+                ("DD_ENV", "prod") : attributesEnv (T.intercalate "," (map (<> "=1") keys))
+        raDropped (resourceAttributes environment) `shouldBe` drop 178 keys
+        telemetryWarnings environment `shouldSatisfy` any (T.isInfixOf "Dropping k278, k279 from")
 
 overridesSpec :: Spec
 overridesSpec = describe "otelEnvironmentOverrides" $ do
@@ -171,7 +203,6 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
             , ("OTEL_RESOURCE_ATTRIBUTES", "team=core")
             ]
             `shouldReturn` [ ("deployment.environment", "prod")
-                           , ("service.name", "api")
                            , ("service.version", "1.2.3")
                            , ("team", "core")
                            ]
@@ -180,11 +211,17 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
         -- The resolved attributes are inserted over the inherited baggage, so a stale
         -- operator-set value of the same key never overrides the resolution.
         detectedResourceAttributes
-            [("DD_SERVICE", "api"), ("OTEL_RESOURCE_ATTRIBUTES", "service.name=stale,team=core")]
-            `shouldReturn` [ ("service.name", "api")
-                           , ("service.version", buildVersion)
-                           , ("team", "core")
-                           ]
+            [("DD_VERSION", "1.2.3"), ("OTEL_RESOURCE_ATTRIBUTES", "service.version=stale,team=core")]
+            `shouldReturn` [("service.version", "1.2.3"), ("team", "core")]
+
+    it "keeps an inherited service.name out of the header, where it would fight OTEL_SERVICE_NAME" $ do
+        -- The metric and log resources let the header win over the service detector, so a stale
+        -- operator-set copy would override the resolution on two of the three signals.
+        let environment =
+                [("DD_SERVICE", "api"), ("OTEL_RESOURCE_ATTRIBUTES", "service.name=stale,team=core")]
+        lookup "OTEL_SERVICE_NAME" (otelEnvironmentOverrides environment) `shouldBe` Just "api"
+        detectedResourceAttributes environment
+            `shouldReturn` [("service.version", buildVersion), ("team", "core")]
 
 prepareSpec :: Spec
 prepareSpec = describe "prepareTelemetry" $ do
@@ -202,9 +239,17 @@ prepareSpec = describe "prepareTelemetry" $ do
             lookupEnv "OTEL_EXPORTER_OTLP_ENDPOINT"
         endpoint `shouldBe` Just "http://localhost:4318"
 
+-- An environment carrying only a declared endpoint and the operator's raw resource attributes,
+-- so a warning assertion sees no defaulted-endpoint line.
+attributesEnv :: Text -> [(String, String)]
+attributesEnv raw =
+    [ ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+    , ("OTEL_RESOURCE_ATTRIBUTES", toString raw)
+    ]
+
 {- The resource attributes the OpenTelemetry SDK detects from the environment the projection
 writes, sorted by key. This is the span-resource half of the identity, read through the SDK's
-own detector. The encoder emits members in hash order, so only the decoded set is stable. -}
+own detector. -}
 detectedResourceAttributes :: [(String, String)] -> IO [(Text, Text)]
 detectedResourceAttributes environment = do
     logEnv <- newTestLogEnv
