@@ -191,14 +191,13 @@ baggageLimitSpec = describe "W3C baggage limits" $ do
         (map fst <$> detectedResourceAttributes environment) `shouldReturn` ["a", "service.version"]
 
     it "names every key past the member-count limit" $ do
-        -- The grammar accepts 180 members and the resolved identity adds three, so the three
-        -- last operator keys in admission order lose their place.
+        -- The grammar accepts 180 members and the resolved identity adds two, so the two last
+        -- operator keys in admission order lose their place.
         let memberKeys = ["k" <> show n | n <- [100 .. 279 :: Int]]
             environment =
                 ("DD_ENV", "prod") : attributesEnv (T.intercalate "," (map (<> "=1") memberKeys))
-        raDropped (resourceAttributes environment) `shouldBe` drop 177 memberKeys
-        telemetryWarnings environment
-            `shouldSatisfy` any (T.isInfixOf "Dropping k277, k278, k279 from")
+        raDropped (resourceAttributes environment) `shouldBe` drop 178 memberKeys
+        telemetryWarnings environment `shouldSatisfy` any (T.isInfixOf "Dropping k278, k279 from")
 
 overridesSpec :: Spec
 overridesSpec = describe "otelEnvironmentOverrides" $ do
@@ -208,14 +207,15 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
         lookup "OTEL_EXPORTER_OTLP_ENDPOINT" overrides `shouldBe` Just "http://10.0.0.9:4318"
         lookup "OTEL_EXPORTER_OTLP_PROTOCOL" overrides `shouldBe` Just "http/protobuf"
 
-    it "exports the deployment environment under both the current and the deprecated key" $
-        -- One resolved value, two keys, so a dashboard joining on either spelling keeps working
-        -- across the SDK's deprecation window.
-        detectedResourceAttributes [("DD_ENV", "prod")]
-            `shouldReturn` [ ("deployment.environment", "prod")
-                           , ("deployment.environment.name", "prod")
-                           , ("service.version", buildVersion)
-                           ]
+    it "exports the deployment environment under the current key alone" $ do
+        -- The deprecated deployment.environment is read but never emitted. A backend still keyed
+        -- on it renames the attribute at the collector.
+        detected <- detectedResourceAttributes [("DD_ENV", "prod")]
+        detected
+            `shouldBe` [ ("deployment.environment.name", "prod")
+                       , ("service.version", buildVersion)
+                       ]
+        map fst detected `shouldNotContain` ["deployment.environment"]
 
     it "overlays the resolved attributes onto operator-set resource attributes, preserving extras" $
         detectedResourceAttributes
@@ -224,8 +224,7 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
             , ("DD_VERSION", "1.2.3")
             , ("OTEL_RESOURCE_ATTRIBUTES", "team=core")
             ]
-            `shouldReturn` [ ("deployment.environment", "prod")
-                           , ("deployment.environment.name", "prod")
+            `shouldReturn` [ ("deployment.environment.name", "prod")
                            , ("service.version", "1.2.3")
                            , ("team", "core")
                            ]

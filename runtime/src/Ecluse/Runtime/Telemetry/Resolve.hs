@@ -31,13 +31,13 @@ projection then overwrites the variable with the resolved identity alone. Both t
 @dd@ log object and the span resource carry that identity, and in that rejected case
 neither carries the operator's attributes.
 
-The exported header carries the operator's own attributes plus @service.version@ and the
-deployment environment under both @deployment.environment.name@ and @deployment.environment@.
-It never carries @service.name@, because @OTEL_SERVICE_NAME@ in the same projection already
-does and every SDK signal path prefers that variable. The W3C baggage limits cap the header,
-and the SDK's encoder sheds whatever overflows them in hash order. 'resourceAttributes'
-therefore makes the choice first: the resolved identity is admitted ahead of the operator's
-own keys, and a key the limits exclude warns once at boot, by name.
+The exported header carries the operator's own attributes plus @deployment.environment.name@
+and @service.version@. It never carries @service.name@, because @OTEL_SERVICE_NAME@ in
+the same projection already does and every SDK signal path prefers that variable. The
+W3C baggage limits cap the header, and the SDK's encoder sheds whatever overflows them in
+hash order. 'resourceAttributes' therefore makes the choice first: the resolved identity
+is admitted ahead of the operator's own keys, and a key the limits exclude warns once at
+boot, by name.
 
 The resolved 'ResolvedTelemetry' is the __single source of truth__ for both halves of
 the telemetry stack. 'otelEnvironmentOverrides' projects it back to the canonical
@@ -137,7 +137,7 @@ data ResolvedTelemetry = ResolvedTelemetry
     { rtServiceName :: Text
     -- ^ @service.name@ \/ @dd.service@ (defaults to @ecluse@).
     , rtEnvironment :: Maybe Text
-    -- ^ @deployment.environment.name@ and the deprecated @deployment.environment@ \/ @dd.env@.
+    -- ^ @deployment.environment.name@ \/ @dd.env@, when configured.
     , rtVersion :: Maybe Text
     -- ^ @service.version@ \/ @dd.version@ (defaults to the build version).
     , rtEndpoint :: TelemetryEndpoint
@@ -186,8 +186,8 @@ resolveTelemetry environment =
     serviceName :: Maybe Text
     serviceName = lk "DD_SERVICE" <|> lk "OTEL_SERVICE_NAME" <|> attr "service.name"
 
-    -- The SDK deprecates deployment.environment for deployment.environment.name, so the newer
-    -- spelling wins between the two attribute keys.
+    -- The SDK deprecates deployment.environment for deployment.environment.name. Both spellings
+    -- are read, so an operator on either one resolves, and only the current spelling is emitted.
     deploymentEnvironment :: Maybe Text
     deploymentEnvironment =
         lk "DD_ENV" <|> attr "deployment.environment.name" <|> attr "deployment.environment"
@@ -254,14 +254,11 @@ mergedResourceAttributes resolved environment =
     withoutServiceName :: Baggage
     withoutServiceName = maybe inherited (`Baggage.delete` inherited) (Baggage.mkToken "service.name")
 
--- The resolved environment carries both spellings, because the SDK deprecates
--- deployment.environment and the dashboards that join on it have yet to migrate.
 resolvedAttributes :: ResolvedTelemetry -> [(Text, Text)]
 resolvedAttributes resolved =
     [ (key, value)
     | (key, Just value) <-
         [ ("deployment.environment.name", rtEnvironment resolved)
-        , ("deployment.environment", rtEnvironment resolved)
         , ("service.version", rtVersion resolved)
         ]
     ]
