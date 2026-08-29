@@ -19,6 +19,7 @@
   --surface-sunk: #e3d9c3;
   --header-bg: var(--tan);
   --fg: var(--charcoal);
+  --head: var(--charcoal);
   --muted: var(--slate);
   --border: var(--tan);
   --border-strong: #cbbfa2;
@@ -59,7 +60,7 @@
 
   // Prose keeps the reading measure. Code, tables, and card grids reclaim the
   // full column, and the shell bounds header, footer, and the docs grid alike.
-  --measure: 44rem;
+  --measure: 62ch;
   --column: 62rem;
   --shell: 78rem;
   --gutter: 1.25rem;
@@ -67,18 +68,19 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #171614;
-    --surface: #211f1c;
-    --surface-sunk: #1c1b18;
-    --header-bg: #1c1b18;
-    --fg: var(--cream);
-    --muted: #b3a992;
-    --border: #3b3630;
-    --border-strong: #55504a;
+    --bg: #211d17;
+    --surface: #2a251e;
+    --surface-sunk: #262017;
+    --header-bg: #2e2820;
+    --fg: var(--tan);
+    --head: var(--sand);
+    --muted: #a89b80;
+    --border: #453d2f;
+    --border-strong: #5c5240;
     --accent: #8fb3aa;
     --accent-strong: #b0cdc5;
-    --code-bg: #1c1b18;
-    --brand-edge: #55504a;
+    --code-bg: #262017;
+    --brand-edge: #5c5240;
     --shadow: 0 10px 26px rgb(0 0 0 / 45%);
 
     --code-comment: #9a9182;

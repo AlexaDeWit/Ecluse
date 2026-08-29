@@ -1,82 +1,91 @@
 +++
 title = "Deploying Écluse"
-description = "The container image and its roles, the registry topology to aim for, edge authentication, and network egress."
+description = "Which roles of the one container image to run, which stores to put behind them, and how to fence the edge and the network so builds cannot step around the gate."
 weight = 3
 +++
 
-This page covers the container image, the deployment topology to aim for, and the network
-controls around it.
+You reach this page when the quick start has proven the gate and you want a deployment your builds
+can depend on. Most of the work is not in the container: it is in the stores behind it, the edge in
+front of it, and the network around it.
 
 ## The image and its roles
 
-Écluse ships as one reproducible container image, a multicall executable selected by the container
-command:
+Écluse ships as one reproducible container image, a multicall executable, so the container command
+selects the role:
 
 - **`ecluse proxy`** (default): the HTTP proxy on `ECLUSE_SERVER__PORT` (default `8080`) plus the
   mirror worker. It scales horizontally behind a load balancer.
-- **`ecluse pilot`**: the OSV advisory ingestion pipeline. Run one instance.
-- **`ecluse dredger`**: the registry cleanup worker. Run one instance.
+- **`ecluse pilot`**: the OSV advisory ingestion pipeline.
+- **`ecluse dredger`**: the registry cleanup worker.
 - **`ecluse check-config`**: validates the shared configuration exactly as a boot would and prints
   the resolved posture without starting anything (exit `0` valid, `2` refused). Run it in CI or
   before a rollout.
 
-All roles share one configuration. Multiple Pilot or Dredger instances race, duplicate API calls,
-and overlap registry deletions.
+All roles share one configuration. Only the proxy scales: run Pilot and Dredger as singletons,
+because multiple instances race, duplicate API calls, and overlap registry deletions.
 
-`ecluse pilot compile --out DIR` runs one OSV compilation and exits. It fetches an ecosystem's
-advisory export (`--ecosystem`, default `npm`, with `--source URL` overriding the configured
-`advisories.osvExportBaseUrl`). It writes `<ecosystem>-osv-schema<N>.db` (e.g.
-`npm-osv-schema3.db`) into `DIR` and exits non-zero on failure. `--upload` also publishes the
-artifact to the advisory bucket, a full sync cycle in one invocation, and aborts at once without a
-configured bucket. A corrupt or truncated export aborts the compile without publishing, so a
-running proxy keeps its last-good database. To avoid an idling Pilot pod, run the one-shot as a
-Kubernetes `CronJob` with `concurrencyPolicy: Forbid`, which keeps it a singleton. Give the pod
-`s3:PutObject` through IRSA or workload identity rather than mounted keys, and schedule it less
-often than the proxy polls.
+A Pilot pod does not need to idle between syncs. `ecluse pilot compile --out DIR` runs one OSV
+compilation and exits: it fetches an ecosystem's advisory export, writes
+`<ecosystem>-osv-schema<N>.db` (e.g. `npm-osv-schema3.db`) into `DIR`, and exits non-zero on
+failure. Three flags shape the run:
+
+- `--ecosystem` selects the export (default `npm`).
+- `--source URL` overrides the configured `advisories.osvExportBaseUrl`.
+- `--upload` also publishes the artifact to the advisory bucket, a full sync cycle in one
+  invocation. Without a configured bucket it aborts at once.
+
+A corrupt or truncated export aborts the compile without publishing, so a running proxy keeps its
+last-good database. Run the one-shot as a Kubernetes `CronJob` with `concurrencyPolicy: Forbid`,
+which keeps it a singleton, and schedule it less often than the proxy polls. Give the pod
+`s3:PutObject` through IRSA or workload identity rather than mounted keys.
 
 Pin the image by digest and verify its provenance and SBOM attestations before you run it. The
 recipe is in [Verifying the image](https://github.com/AlexaDeWit/Ecluse/blob/main/README.md#verifying-the-image).
 
 ## The recommended topology
 
-This is the posture the [threat model](@/docs/threat-model.md) treats as
-canonical. Aim for it unless you have a specific reason to diverge.
+{{ diagram(name="topology", alt="Clients and CI call the Écluse proxy, which reads the private upstream union of the publication and mirror stores, fetches gated content from the public registry, and queues admitted versions for the mirror worker to write to the mirror target.", caption="Only gated public content enters the union: the mirror write is the single path public packages take into the trusted stores, and no edge runs from the public registry into them.") }}
 
-1. **Run three registries, not one.** Give the three roles distinct backends. The publication
+This is the posture the [threat model](@/docs/threat-model.md) treats as canonical. Aim for it
+unless you have a specific reason to diverge.
+
+1. **Run three registries, not one.** Give the three roles distinct backends: the publication
    target is a first-party store, the mirror target is a public-derived store, and
    `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` is a pull-through read endpoint that unions both.
-   Separating provenance keeps the mirror auditable. **The one hard rule:** the aggregating
-   endpoint must union **trusted** stores only, never a direct public upstream. Otherwise raw
-   ungated packages reach clients as trusted and bypass the gate. See
+   Separating provenance keeps the mirror auditable. One rule is hard: the aggregating endpoint
+   unions **trusted** stores only, never a direct public upstream, because raw ungated packages
+   would otherwise reach clients as trusted and bypass the gate. See
    [registry-level composition](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/registry-model.md#registry-level-composition-the-recommended-topology).
 2. **Let callers use their own identity.** The default forwards each caller's credential to the
-   private upstream and publication target. Access then matches your registry IAM exactly, and
-   Écluse holds no standing read credential. Nothing to set. See
+   private upstream and publication target, with nothing to set: access then matches your registry
+   IAM exactly, and Écluse holds no standing read credential. See
    [Credential flow and authority](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/registry-model.md#credential-flow-and-authority).
 3. **Mint the mirror-write token from the container role.** Point
-   `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` at a CodeArtifact endpoint. The worker then mints a
+   `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` at a CodeArtifact endpoint, and the worker mints a
    short-lived token under the task or instance role instead of carrying a static secret. Scope
-   that role **write-only** to the mirror store and keep
-   `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION` short: it is Écluse's only standing
-   credential and it writes the trusted store. Scope the mirror queue the same way. Grant only the
-   serve role `SendMessage`, and only the worker
-   `ReceiveMessage`/`DeleteMessage`/`ChangeMessageVisibility`. Anyone who can write the queue can
-   force a write to the trusted store. `ChangeMessageVisibility` is load-bearing, not optional. The
-   worker uses it to hold a long publish. It also backs a **dead-lettered** poison message off so
-   the message rides your redrive policy to the DLQ. Without the grant an over-cap artifact
-   silently churns on the ordinary visibility cadence instead.
+   that role **write-only** to the mirror store, and keep
+   `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION` short, because this is Écluse's only
+   standing credential and it writes the trusted store. Scope the mirror queue the same way.
+   Anyone who can write the queue can force a write to the trusted store, so grant only the serve
+   role `SendMessage`, and only the worker
+   `ReceiveMessage`/`DeleteMessage`/`ChangeMessageVisibility`. `ChangeMessageVisibility` is
+   load-bearing, not optional: the worker uses it to hold a long publish and to back a
+   **dead-lettered** poison message off so the message rides your redrive policy to the DLQ.
+   Without the grant an over-cap artifact silently churns on the ordinary visibility cadence
+   instead.
 4. **Let the edge own access, and leave `ECLUSE_SERVER__AUTH_TOKEN` off.** Écluse is not your
    access boundary. Front it with a gateway, mesh, or IAP, and restrict reachability **both**
-   north-south and east-west (pod-to-pod). An ingress-only allow-list that leaves the pod reachable
-   inside the cluster is a common vulnerability. See
+   north-south and east-west (pod-to-pod), because an ingress-only allow-list that leaves the pod
+   reachable inside the cluster is a common vulnerability. See
    [Edge authentication](@/docs/deployment.md#edge-authentication-and-client-credentials).
-5. **Fence egress, keep metadata reachable.** Default-deny outbound. Allow only your upstreams, the
-   mirror target, the metadata endpoint, and the advisory bucket when `ECLUSE_ADVISORIES__BUCKET`
-   is set (the proxy needs `s3:GetObject` to sync it). Require IMDSv2 with hop limit 1. Do not
-   block the metadata endpoint: Écluse needs it to mint credentials. See
-   [Network egress](@/docs/deployment.md#network-egress).
+5. **Fence egress, keep metadata reachable.** Default-deny outbound, then allow only your
+   upstreams, the mirror target, the metadata endpoint, and the advisory bucket when
+   `ECLUSE_ADVISORIES__BUCKET` is set (the proxy needs `s3:GetObject` to sync it). Require IMDSv2
+   with hop limit 1, and do not block the metadata endpoint, because Écluse needs it to mint
+   credentials. See [Network egress](@/docs/deployment.md#network-egress).
 6. **Make the proxy unbypassable.** Deny CI runners (and, where practical, workstations) outbound
-   access to the public registries. See [Locking down CI egress](@/docs/deployment.md#locking-down-ci-egress).
+   access to the public registries. See
+   [Locking down CI egress](@/docs/deployment.md#locking-down-ci-egress).
 7. **Verify what you run.** Pin the image by digest and verify its attestations
    ([Verifying the image](https://github.com/AlexaDeWit/Ecluse/blob/main/README.md#verifying-the-image)).
 
@@ -86,33 +95,27 @@ The reasoning behind each choice, and the residual risks it accepts, is in the
 
 ## What a deviation costs
 
-Écluse still runs if you diverge, but each deviation trades away a protection, and one is
-**silent** (Écluse cannot detect it, so nothing warns you):
+Écluse still runs if you diverge, but every deviation trades away a protection, and one of them is
+**silent**: Écluse cannot detect it, so nothing warns you.
 
-- **Collapsing the registries onto one store** (declaring `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` equal
-  to the private upstream, or `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` onto either). The perimeter
-  holds, but first-party and public-derived packages share one store, so you lose provenance
-  separation and clean post-incident scoping. The proxy logs a boot warning for each pair of a
-  mount's endpoints that resolve to the same registry. In addition, **Dredger refuses to boot** if
-  `MIRROR_TARGET` equals `PUBLICATION_TARGET`, since automated pruning on a shared store risks
-  first-party data loss.
-- **Pointing the private upstream at a registry that itself draws from public** (say a CodeArtifact
-  repo with the stock `npm-store` upstream to npmjs). This is the **dangerous one**, and Écluse
-  **cannot detect it**. Raw ungated packages reach clients through the trusted read path, behind
-  the gate instead of through it. That nullifies the rules, integrity floor, and freshness
-  quarantine. Aggregate **trusted stores only** into the private upstream, and let the gated mirror
-  be the only way public content enters.
+| Deviation | What you lose | Does anything warn you? |
+|---|---|---|
+| One store for two roles: `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` equal to the private upstream, or `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` onto either | Provenance separation and clean post-incident scoping. The perimeter holds, but first-party and public-derived packages share one store | Yes. The proxy logs a boot warning for each pair of a mount's endpoints that resolve to the same registry, and Dredger refuses to boot when `MIRROR_TARGET` equals `PUBLICATION_TARGET`, because automated pruning on a shared store risks first-party data loss |
+| A private upstream that itself draws from public, say a CodeArtifact repo with the stock `npm-store` upstream to npmjs | The rules, integrity floor, and freshness quarantine, all nullified. Raw ungated packages reach clients through the trusted read path, behind the gate instead of through it | **No. Écluse cannot detect this one.** |
+| An open edge: `ECLUSE_SERVER__AUTH_TOKEN` unset | Écluse's own authentication layer. Access control leans entirely on your network boundary | Nothing fires, but the posture is your own explicit setting |
+| A static publish credential without an edge token | Nothing at runtime, because it never boots | Yes. The boot fails closed |
+| A static mirror-write secret | The short-lived token minted from the container role | Nothing fires. The secret is visible in the configuration you wrote |
 
-The [threat model](@/docs/threat-model.md) records both. The other deviations
-self-announce. An open edge leans on your network boundary. A static publish credential fails
-closed at boot without that edge, and a static mirror-write secret forgoes the minted token.
+The silent row deserves its own sentence: aggregate **trusted stores only** into the private
+upstream, and let the gated mirror be the only way public content enters. The
+[threat model](@/docs/threat-model.md) records both store-level deviations.
 
 ## Edge authentication and client credentials
 
-Edge authentication to the proxy has two shipped modes:
+Edge authentication to the proxy ships in two modes:
 
-1. **Open**: `ECLUSE_SERVER__AUTH_TOKEN` unset, so the network layer (VPC, service mesh) owns
-   access control. Appropriate only on a closed network.
+1. **Open**: `ECLUSE_SERVER__AUTH_TOKEN` unset. The network layer (VPC, service mesh) owns access
+   control, so this is appropriate only on a closed network.
 2. **Static token**: `ECLUSE_SERVER__AUTH_TOKEN` set. Clients send it as
    `Authorization: Bearer <token>`. For an npm-protocol client that is the `_authToken` line, keyed
    by the mount's host and path:
@@ -125,44 +128,48 @@ Edge authentication to the proxy has two shipped modes:
 
 The edge token never becomes the upstream one. Reads run **passthrough**: Écluse forwards the
 caller's own credential to the private upstream, which stays the authority on what that caller may
-see. It strips that credential before the anonymous public fetch, so a client token never leaves
-for a public registry. It never caches the private origin across callers, so one caller's read can
-never answer another's. By default the only credential of Écluse's own is a mirrored mount's write
-to the mirror target, derived from the mirror-target URL.
+see. Before the anonymous public fetch it strips that credential, so a client token never leaves
+for a public registry, and it never caches the private origin across callers, so one caller's read
+can never answer another's. By default the only credential of Écluse's own is a mirrored mount's
+write to the mirror target, derived from the mirror-target URL.
 
 A `publish` forwards the publisher's own token the same way. Opt into a static
-`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` and Écluse publishes as itself instead. That needs
-`ECLUSE_SERVER__AUTH_TOKEN`, or the boot refuses (`PublishStaticCredentialNeedsEdge`), because the
-pairing would let any unauthenticated client publish under it. `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW`
-limits which package names a client may publish. It authorises _names_, not _callers_, and it is
-not authentication. The reasoning is in
+`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` and Écluse publishes as itself instead. That opt-in
+needs `ECLUSE_SERVER__AUTH_TOKEN` in place, or the boot refuses
+(`PublishStaticCredentialNeedsEdge`), because the pairing would let any unauthenticated client
+publish under it. `ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW` limits which package names a client may
+publish. It authorises _names_, not _callers_, so it is not authentication. The reasoning is in
 [security posture](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md#a-static-publish-credential-is-fail-closed) and
 [Publishing first-party packages](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
 
 ## Network egress
 
 Écluse fetches from the registries you point it at, and some URLs it follows (a version's
-`dist.tarball`) come from upstream responses. Apply least-privilege egress in two layers. Écluse
-provides the first in the application, with an origin-aware trust model:
+`dist.tarball`) come from upstream responses. Egress control therefore runs in two layers: Écluse
+provides the first in the application, with an origin-aware trust model, and your platform provides
+the second.
 
-- **Untrusted origins** are the public upstream and every `dist.tarball`. A host+port **allowlist**
-  gates them, Écluse fetches them **HTTPS-only** with TLS certificate validation, and response-size
-  limits bound them. An upstream URL with no explicit port authorises port 443 alone. Write a
-  nonstandard port out (`https://repo.internal:8443`) to authorise exactly that `host:port`. A
-  non-HTTPS upstream, or a port outside `1..65535`, fails closed at boot. Certificate validation is
-  the guarantor against the resolve-to-internal and DNS-rebinding SSRF class. No address a name
-  steers to can present a CA-trusted certificate for the host. A **literal internal-range block**
-  adds defence in depth: loopback, link-local including the `169.254.169.254` metadata endpoint,
-  RFC1918, CGNAT, and IPv6 ULA. It refuses a `dist.tarball` whose host is an internal-address
-  literal. Extend that block with `ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES`.
-- **The trusted private origin** (`ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`) is deliberately **not**
-  subject to the internal-range block: a private registry legitimately lives on your internal
-  network.
+**Untrusted origins** are the public upstream and every `dist.tarball`. Three application controls
+gate them:
+
+- A host+port **allowlist**. An upstream URL with no explicit port authorises port 443 alone, so
+  write a nonstandard port out (`https://repo.internal:8443`) to authorise exactly that
+  `host:port`. A non-HTTPS upstream, or a port outside `1..65535`, fails closed at boot.
+- **HTTPS-only fetching with TLS certificate validation.** Certificate validation is the guarantor
+  against the resolve-to-internal and DNS-rebinding SSRF class, because no address a name steers to
+  can present a CA-trusted certificate for the host.
+- **Response-size limits**, which bound every untrusted fetch.
+
+A **literal internal-range block** adds defence in depth: loopback, link-local including the
+`169.254.169.254` metadata endpoint, RFC1918, CGNAT, and IPv6 ULA. Écluse refuses a `dist.tarball`
+whose host is an internal-address literal, and `ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES` extends
+the block. The trusted private origin (`ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`) is deliberately
+**not** subject to it, because a private registry legitimately lives on your internal network.
 
 **The `dist.tarball` host gate.** Upstream chooses `dist.tarball`, so Écluse fetches a tarball only
-from the same allowlisted host that served the listing. It compares host **and port** as a pair.
-Écluse upgrades a plaintext `dist.tarball` to https on its own host. On any other host it drops the
-tarball and skips the version. There is no widening knob.
+from the same allowlisted host that served the listing, comparing host **and port** as a pair. It
+upgrades a plaintext `dist.tarball` to https on its own host. On any other host it drops the
+tarball and skips the version, and no configuration widens that.
 
 Provide the second layer at the platform, default-denying egress and allowing only your registries,
 mirror target, and the metadata endpoint:
@@ -176,34 +183,34 @@ mirror target, and the metadata endpoint:
 - **Service mesh (Istio/Linkerd)**: sidecar outbound policy `REGISTRY_ONLY`, each upstream a
   `ServiceEntry`, constrained by a `Sidecar` egress listener and an egress `AuthorizationPolicy`.
 
+Each role needs a different slice of that allowance, and only the proxy needs ingress at all:
+
+| Role | Ingress | Egress allowlist | Credentials held |
+|---|---|---|---|
+| `ecluse proxy` | Client traffic, behind the edge you front it with | The upstreams, the mirror target, the metadata endpoint, and the advisory bucket when `ECLUSE_ADVISORIES__BUCKET` is set | The mirror-write credential, plus the advisory-bucket read (`s3:GetObject`) when that bucket is set. Nothing more |
+| `ecluse pilot` | None public | The OSV export host in `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` (default `osv-vulnerabilities.storage.googleapis.com`), the metadata endpoint, and your object store | `s3:PutObject` to upload the advisory database |
+| `ecluse dredger` | None public | Your private mirror, for delete requests, and the metadata endpoint, for credentials | A standing high-privilege delete on the mirror |
+
 **Do not block the metadata endpoint or internal ranges for the proxy itself.** Écluse reaches
-metadata through the AWS SDK to mint its instance-role credentials. Denying it breaks those
-credentials. IMDSv2 hop limit 1 keeps the minting working while stopping a neighbour or forwarded
-request from reaching metadata through extra hops. Grant the proxy only the cloud permissions it
-needs: the mirror-write credential and the advisory-bucket read (`s3:GetObject`) when
-`ECLUSE_ADVISORIES__BUCKET` is set, nothing more. The trust assumptions behind this are in
+metadata through the AWS SDK to mint its instance-role credentials, so denying it breaks those
+credentials. IMDSv2 with hop limit 1 keeps the minting working while stopping a neighbour or
+forwarded request from reaching metadata through extra hops. The trust assumptions behind the
+credential split are in
 [Security posture](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md#trust-assumptions--credential-posture).
 
-Pilot and Dredger need distinct, tightly scoped egress:
-
-- **Pilot**: no public ingress. Egress to the OSV export host in
-  `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` (default `osv-vulnerabilities.storage.googleapis.com`),
-  the metadata endpoint, and your object store (`s3:PutObject` to upload the advisory database).
-  Pilot names the object `<ecosystem>-osv-schema<N>.db` (e.g. `npm-osv-schema3.db`). The key is
-  stable per ecosystem, so bucket policies and the proxy's ETag polling can target it. On an
-  export-host `5xx`/`408`/`429`, Pilot retries with capped, jittered backoff, so a transient outage
-  cannot get your NAT address rate-limited.
-- **Dredger**: no public ingress. Egress only to your private mirror for delete requests and to
-  the metadata endpoint for credentials. It holds a standing high-privilege delete capability, so
-  isolate it from all untrusted networks.
+Two Pilot details matter to the platform. It names the uploaded object
+`<ecosystem>-osv-schema<N>.db`, a key stable per ecosystem, so bucket policies and the proxy's ETag
+polling can target it. On an export-host `5xx`/`408`/`429` it retries with capped, jittered
+backoff, so a transient outage cannot get your NAT address rate-limited. Because Dredger holds that
+standing delete capability, isolate it from all untrusted networks.
 
 ## Locking down CI egress
 
 The controls above secure Écluse's own egress. This one secures your consumers'. If you control CI,
 **deny runners outbound access to the public registries** (`registry.npmjs.org` and the equivalents
 for other ecosystems), and let them reach only Écluse and your internal services. A misconfigured
-job then fails instead of pulling an unvetted package. A stray `--registry` flag, a committed
-`.npmrc`, or a tool that ignores your settings cannot route around a network that only reaches
-Écluse. That makes the policy _unbypassable_ rather than merely _default_
+job then fails instead of pulling an unvetted package, because a stray `--registry` flag, a
+committed `.npmrc`, or a tool that ignores your settings cannot route around a network that only
+reaches Écluse. That makes the policy _unbypassable_ rather than merely _default_
 ([MOTIVATION, The bar](https://github.com/AlexaDeWit/Ecluse/blob/main/MOTIVATION.md#the-bar-a-chokepoint-you-cant-step-around)). The same idea
 extends to developer workstations, a softer control than CI.

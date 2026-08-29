@@ -1,0 +1,48 @@
+# The recommended three-store topology from web/content/docs/deployment.md.
+...@theme
+
+# Down keeps the board near the column width, so labels render close to full
+# size instead of scaling down with a wide board.
+direction: down
+
+clients: Clients and CI { class: node }
+
+ecluse: Écluse {
+  class: box
+  proxy: Proxy { class: node }
+  worker: Mirror worker { class: node }
+}
+
+queue: Mirror queue { class: node }
+
+public: Public registry { class: node }
+
+union: "Private upstream\n(pull-through union)" { class: node }
+
+trusted: Trusted stores {
+  class: box
+  publication: "Publication target\n(first-party)" { class: node }
+  mirror: "Mirror target\n(public-derived)" { class: node }
+}
+
+clients -> ecluse.proxy: install and publish { class: edge }
+ecluse.proxy -> public: gated fetch { class: edge }
+ecluse.proxy -> union: trusted reads { class: edge }
+ecluse.proxy -> trusted.publication: forwards publish { class: edge }
+union -> trusted.publication: pulls { class: edge }
+union -> trusted.mirror: pulls { class: edge }
+ecluse.proxy -> queue: mirror job {
+  class: edge
+  style.stroke-dash: 3
+}
+queue -> ecluse.worker: consumes {
+  class: edge
+  style.stroke-dash: 3
+}
+ecluse.worker -> trusted.mirror: writes admitted versions {
+  class: edge
+  style.stroke-dash: 3
+}
+
+# No edge runs from the public registry to the union on purpose: the page's
+# caption carries that prohibition, and a drawn arrow would read as a flow.

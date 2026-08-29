@@ -1,0 +1,5 @@
+{%- set svg = load_data(path="generated/diagrams/" ~ name ~ ".svg", format="plain") -%}
+<figure class="diagram">
+  <div role="img" aria-label="{{ alt }}">{{ svg | safe }}</div>
+  {%- if caption is defined %}<figcaption>{{ caption }}</figcaption>{% endif -%}
+</figure>

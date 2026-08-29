@@ -22,5 +22,5 @@ Everything else is deny by default and opt-in by name.
 
 If you run a private registry, Écluse reads it first and passes your own packages through
 untouched. It can also mirror each admitted public version into that registry, so a mirrored
-version survives a public outage or yank. AWS CodeArtifact is supported today. Écluse hosts
-no packages itself.
+version survives a public outage or yank. AWS CodeArtifact is the private registry supported
+today, and Écluse hosts no packages itself.

@@ -1,0 +1,32 @@
+# Shared parchment classes. A diagram pulls them in with a spread import
+# (`...@theme`) and tags shapes `class: node`, containers `class: box`, and
+# edges `class: edge`.
+
+# The figure.diagram enclosure paints the parchment ground, so the board
+# itself stays transparent.
+style.fill: transparent
+
+classes: {
+  node: {
+    style: {
+      fill: "#f4efe3"
+      stroke: "#211f1c"
+      font-color: "#211f1c"
+      border-radius: 6
+    }
+  }
+  box: {
+    style: {
+      fill: "#ece4d2"
+      stroke: "#211f1c"
+      font-color: "#211f1c"
+      border-radius: 6
+    }
+  }
+  edge: {
+    style: {
+      stroke: "#3f6058"
+      font-color: "#211f1c"
+    }
+  }
+}

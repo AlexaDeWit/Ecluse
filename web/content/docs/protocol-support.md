@@ -4,9 +4,9 @@ description = "Which registry protocols an Écluse server speaks, and what each 
 weight = 6
 +++
 
-Écluse renders this page from the OpenAPI document it publishes as JSON, so the page and
-the document always agree. The reference below lists every endpoint an Écluse server
-answers, with the responses each one returns.
+The reference below is what an Écluse server speaks: every endpoint it answers, per
+ecosystem, with the responses each one returns. Écluse renders the page from the OpenAPI
+document it publishes as JSON, so the page and the document always agree.
 
 {{ openapi_reference() }}
 

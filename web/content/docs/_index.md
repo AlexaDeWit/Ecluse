@@ -6,15 +6,15 @@ template = "docs-section.html"
 page_template = "docs-page.html"
 +++
 
-Écluse's documentation lives here: how to run the proxy, the threats it defends against,
-and the registry protocol it speaks. The sidebar lists every page in this section.
+This section is the operator manual: how to run the proxy, the threats it defends against,
+and the registry protocol it speaks. The sidebar lists every page.
 
-The [API reference](@/api/_index.md) holds the Haddock for each library, for anyone reading
-or extending the code.
+If you are reading or extending the code instead, the [API reference](@/api/_index.md)
+holds the Haddock for each library.
 
 ## Learn more
 
-The internal design, for when you need the _why_:
+When you need the _why_, the internal design documents carry it:
 
 - [Architecture overview](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture.md)
 - [Configuration and authentication](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md)
