@@ -2,6 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
+{- | The Pilot role's front door. Every decision it acts on is planned in
+"Ecluse.Pilot.Plan", so what is left here is the effect each plan names.
+-}
 module Ecluse.Pilot (
     runPilot,
 
@@ -19,25 +22,32 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Boot (BootEnv (..), probeServerConfig)
-import System.FilePath (takeFileName)
-
 import Ecluse.Config (
-    AdvisoriesSettings (advCompileInterval, advDataDir, advEpssFeedUrl, advOsvExportBaseUrl, advUrl),
+    AdvisoriesSettings (advDataDir, advUrl),
     AdvisoryStoreUrl,
     AppConfig (cfgAdvisories),
     Config (configApp),
-    advisoryObjectKey,
-    advisoryStoreBucket,
     advisoryStoreUrlText,
-    unUrl,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, parseEcosystem)
-import Ecluse.Core.Osv.Advisory (osvExportUrl)
-import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite)
+import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
     superviseLoop,
     transientPolicy,
+ )
+import Ecluse.Pilot.Plan (
+    ExportLoopPlan (ExportIdle, ExportTo),
+    PilotCompileOptions (..),
+    PilotUploadUnconfigured (..),
+    UploadPlan (UploadSkipped, UploadTo),
+    compileSources,
+    configuredSources,
+    exportCadenceMicros,
+    exportLoopPlan,
+    idleCadenceMicros,
+    uploadPlan,
+    uploadTarget,
  )
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Log (moduleContext)
@@ -58,107 +68,76 @@ runPilot bootEnv = do
             (liftIO $ runWarp cfg probeOnlyApplication)
             (runExportLoop (beTelemetry bootEnv) (beS3Endpoint bootEnv) (beConfig bootEnv))
 
-{- | Compile and upload one OSV artifact per sync interval, or idle with no advisory store
-configured. Every fault is transient, because a cycle has no wiring fault to fail up on.
--}
+-- Run the loop 'exportLoopPlan' names. Every fault inside it is transient, because a cycle
+-- has no wiring fault to fail up on.
 runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> Maybe AwsEndpoint -> Config -> m ()
-runExportLoop telemetry s3Endpoint config = do
-    let appCfg = configApp config
-        intervalMicros = (round (advCompileInterval (cfgAdvisories appCfg)) :: Int) * 1000000
-    case advUrl (cfgAdvisories appCfg) of
-        Nothing -> do
-            logFM InfoS "No advisory store configured for OSV database export; export loop disabled."
-            forever $ threadDelay (24 * 60 * 60 * 1000000)
-        Just store -> do
-            logFM InfoS (ls ("Export loop starting up. Target store: " <> advisoryStoreUrlText store))
-            -- One instrument set for the whole loop. Rebuilding it per cycle would register
-            -- the catalogue again and split each signal across two streams.
-            metrics <- liftIO (newMetrics telemetry)
-            void
-                $ superviseLoop
-                    (transientPolicy "pilot-export" BackoffSchedule{bsBaseMicros = intervalMicros, bsCapMicros = intervalMicros})
-                $ do
-                    runResourceT (exportEcosystem metrics Npm telemetry s3Endpoint appCfg store)
-                    threadDelay intervalMicros
+runExportLoop telemetry s3Endpoint config = case exportLoopPlan advisories of
+    ExportIdle -> do
+        logFM InfoS "No advisory store configured for OSV database export; export loop disabled."
+        forever (threadDelay idleCadenceMicros)
+    ExportTo store -> do
+        logFM InfoS (ls ("Export loop starting up. Target store: " <> advisoryStoreUrlText store))
+        -- One instrument set for the whole loop. Rebuilding it per cycle would register
+        -- the catalogue again and split each signal across two streams.
+        metrics <- liftIO (newMetrics telemetry)
+        void $ superviseLoop (transientPolicy "pilot-export" schedule) $ do
+            runResourceT (exportEcosystem metrics Npm telemetry s3Endpoint advisories store)
+            threadDelay cadence
+  where
+    advisories = cfgAdvisories (configApp config)
+    cadence = exportCadenceMicros advisories
+    schedule = BackoffSchedule{bsBaseMicros = cadence, bsCapMicros = cadence}
 
-{- | One full cycle for one ecosystem: compile its OSV artifact and upload it. osv.dev spells
-@npm@ as 'ecosystemName' does, so an ecosystem it spells differently needs its own spelling.
--}
-exportEcosystem :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Metrics -> Ecosystem -> Telemetry -> Maybe AwsEndpoint -> AppConfig -> AdvisoryStoreUrl -> m ()
-exportEcosystem metrics eco telemetry s3Endpoint appCfg store = do
+-- One full cycle for one ecosystem: compile its OSV artifact and upload it. osv.dev spells
+-- @npm@ as 'ecosystemName' does, so an ecosystem it spells differently needs its own spelling.
+exportEcosystem :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Metrics -> Ecosystem -> Telemetry -> Maybe AwsEndpoint -> AdvisoriesSettings -> AdvisoryStoreUrl -> m ()
+exportEcosystem metrics eco telemetry s3Endpoint advisories store = do
     logFM InfoS (ls ("Starting " <> ecosystemName eco <> " OSV database compilation"))
     dbPath <-
         compileOsvToSqlite
             (advisoryCompileMetricsPortOf metrics (Just eco))
             (telemetryTracerProvider telemetry)
-            (advDataDir (cfgAdvisories appCfg))
+            (advDataDir advisories)
             (ecosystemName eco)
-            (compileSourcesFor appCfg (ecosystemName eco))
+            (configuredSources advisories (ecosystemName eco))
     uploadToStore telemetry s3Endpoint store dbPath
 
--- The two upstream feeds one compile pass reads, both configured keys so a moved or mirrored
--- upstream never needs a new binary.
-compileSourcesFor :: AppConfig -> Text -> CompileSources
-compileSourcesFor appCfg ecosystem =
-    CompileSources
-        { csOsvExportUrl = osvExportUrl (unUrl (advOsvExportBaseUrl (cfgAdvisories appCfg))) ecosystem
-        , csEpssFeedUrl = toString (unUrl (advEpssFeedUrl (cfgAdvisories appCfg)))
-        }
-
--- The store decides both halves of the object's address, so the upload lands where the proxy's
--- sync reads.
+-- Upload one artifact to the address 'uploadTarget' derives, so it lands where the sync reads.
 uploadToStore :: (MonadResource m, MonadUnliftIO m, MonadMask m, KatipContext m) => Telemetry -> Maybe AwsEndpoint -> AdvisoryStoreUrl -> FilePath -> m ()
 uploadToStore telemetry s3Endpoint store dbPath =
-    exportToS3
-        (telemetryTracerProvider telemetry)
-        s3Endpoint
-        (advisoryStoreBucket store)
-        (advisoryObjectKey store (takeFileName dbPath))
-        dbPath
+    exportToS3 (telemetryTracerProvider telemetry) s3Endpoint bucket key dbPath
+  where
+    (bucket, key) = uploadTarget store dbPath
 
--- | Options for the one-shot 'runPilotCompile' mode.
-data PilotCompileOptions = PilotCompileOptions
-    { pcoEcosystem :: Text
-    , pcoSource :: Maybe String
-    {- ^ Overrides the export URL. 'Nothing' selects the configured export
-    base for the ecosystem ('osvExportUrl' under @osvExportBaseUrl@).
-    -}
-    , pcoEpssSource :: Maybe String
-    -- ^ Overrides the EPSS feed URL. 'Nothing' selects the configured @epssFeedUrl@.
-    , pcoOutDir :: FilePath
-    , pcoUpload :: Bool
-    -- ^ Upload the compiled artifact to the configured advisory store.
-    }
-    deriving stock (Eq, Show)
-
-{- | Requesting an upload without a configured advisory store. It is a wiring fault at the
-composition root, so it throws rather than returning a value the caller could only re-raise.
--}
-data PilotUploadUnconfigured = PilotUploadUnconfigured
-    deriving stock (Eq, Show)
-
-instance Exception PilotUploadUnconfigured
+-- Act on a planned upload. A skipped one is the caller's success path, not an error.
+runUploadPlan :: (MonadResource m, MonadUnliftIO m, MonadMask m, KatipContext m) => Telemetry -> Maybe AwsEndpoint -> UploadPlan -> FilePath -> m ()
+runUploadPlan telemetry s3Endpoint plan dbPath = case plan of
+    UploadSkipped -> pass
+    UploadTo store -> uploadToStore telemetry s3Endpoint store dbPath
 
 {- | Run a single OSV compilation, optionally upload the artifact, and return its path. An
 unfetchable or unparseable source propagates, so the command exits non-zero and stays scriptable.
 -}
 runPilotCompile :: LogEnv -> Telemetry -> Maybe AwsEndpoint -> AppConfig -> PilotCompileOptions -> IO FilePath
 runPilotCompile logEnv telemetry s3Endpoint appCfg opts = do
-    let configured = compileSourcesFor appCfg (pcoEcosystem opts)
-        sources =
-            CompileSources
-                { csOsvExportUrl = fromMaybe (csOsvExportUrl configured) (pcoSource opts)
-                , csEpssFeedUrl = fromMaybe (csEpssFeedUrl configured) (pcoEpssSource opts)
-                }
     metrics <- newMetrics telemetry
     -- The metric label domain is the closed 'Ecosystem' enum. A one-shot compile of a name
     -- outside it still writes its artifact, and records no series.
     let compileMetrics = advisoryCompileMetricsPortOf metrics (parseEcosystem (pcoEcosystem opts))
     moduleContext logEnv "Ecluse.Pilot" $
         runResourceT $ do
-            dbFile <- compileOsvToSqlite compileMetrics (telemetryTracerProvider telemetry) (pcoOutDir opts) (pcoEcosystem opts) sources
-            when (pcoUpload opts) $
-                case advUrl (cfgAdvisories appCfg) of
-                    Nothing -> throwIO PilotUploadUnconfigured
-                    Just store -> uploadToStore telemetry s3Endpoint store dbFile
+            dbFile <-
+                compileOsvToSqlite
+                    compileMetrics
+                    (telemetryTracerProvider telemetry)
+                    (pcoOutDir opts)
+                    (pcoEcosystem opts)
+                    (compileSources advisories opts)
+            -- Planned before the compile and raised after it, so an unconfigured upload
+            -- still leaves the artifact it would have published.
+            plan <- either throwIO pure planned
+            runUploadPlan telemetry s3Endpoint plan dbFile
             pure dbFile
+  where
+    advisories = cfgAdvisories appCfg
+    planned = uploadPlan opts (advUrl advisories)
