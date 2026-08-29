@@ -45,6 +45,20 @@ spec = do
         it "treats PyPI names equal up to normalisation" $
             mkPackageName PyPI Nothing "Flask" `shouldBe` mkPackageName PyPI Nothing "flask"
 
+    describe "isAsciiNameComponent" $ do
+        it "accepts an ordinary ASCII component" $
+            isAsciiNameComponent "left-pad" `shouldBe` True
+        it "refuses a codepoint above U+007F, whatever its Unicode class" $
+            -- A Hangul filler (Lo), a blank braille cell (So), and a variation selector (Mn).
+            -- None is a format character, so a deny-list on that class admits all three.
+            for_ ["left-\x3164\&pad", "left-\x2800\&pad", "left-pad\xFE0F"] $ \component ->
+                isAsciiNameComponent component `shouldBe` False
+        it "refuses an ASCII control character, at the low end and at DEL" $
+            for_ ["left\x01\&pad", "left-pad\x7F"] $ \component ->
+                isAsciiNameComponent component `shouldBe` False
+        it "says nothing about an empty component, which each grammar refuses on its own" $
+            isAsciiNameComponent "" `shouldBe` True
+
     describe "unscopedName / pkgBaseName" $ do
         it "drops the @scope/ prefix of a scoped name" $
             unscopedName (mkPackageName Npm (Just (mkScope "babel")) "code-frame")

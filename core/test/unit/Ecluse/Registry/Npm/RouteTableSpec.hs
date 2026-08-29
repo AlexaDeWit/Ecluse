@@ -33,7 +33,6 @@ below:
 -}
 module Ecluse.Registry.Npm.RouteTableSpec (spec) where
 
-import Data.Char (isSpace)
 import Data.Text qualified as T
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -197,12 +196,19 @@ refScopedName scope base
         Just (mkPackageName Npm (Just (mkScope scope)) base)
     | otherwise = Nothing
 
--- One usable npm name component, restated here: a safe path component carrying no '@' and no
--- whitespace, so one identity has exactly one spelling.
+-- One usable npm name component, restated here: npm's error tier, so one identity has exactly one
+-- spelling and no codepoint outside the allowlist reaches an upstream URL.
 refComponent :: Text -> Bool
-refComponent c = isSafeComponent c && T.all usable c
-  where
-    usable ch = ch /= '@' && not (isSpace ch)
+refComponent c =
+    isSafeComponent c
+        && T.all (`elem` refNameChars) c
+        && T.take 1 c `notElem` [".", "-", "_"]
+        && T.toLower c `notElem` ["node_modules", "favicon.ico"]
+
+-- The allowlist written out rather than classified, so the reference restates the grammar
+-- instead of sharing a character predicate with it.
+refNameChars :: [Char]
+refNameChars = ['a' .. 'z'] <> ['A' .. 'Z'] <> ['0' .. '9'] <> "-_.!~*'()"
 
 -- The artifact route claims a request only when the file name parses for that package.
 refTarball :: PackageName -> Text -> Maybe RouteName

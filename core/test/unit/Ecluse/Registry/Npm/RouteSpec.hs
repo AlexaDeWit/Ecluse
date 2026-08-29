@@ -173,6 +173,10 @@ spec = do
             publish ["foo/bar"] `shouldBe` Denied
         it "denies a PUT of a bare scope with no package name" $
             publish ["@acme"] `shouldBe` Denied
+        it "denies a PUT of a name outside the ASCII boundary -- the same grammar as reads" $
+            -- The publish handler is reachable only through this capture, so a name the
+            -- grammar refuses never becomes a write.
+            publish ["@acme/wid\x3164\&get"] `shouldBe` Denied
         it "does not publish a GET of the same package (a GET /{pkg} is a Packument)" $
             -- The method decides as much as the path: the same /{pkg} reads under GET
             -- and publishes under PUT.

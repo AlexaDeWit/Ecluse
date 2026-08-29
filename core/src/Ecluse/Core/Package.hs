@@ -2,34 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The package domain model: the ecosystem-agnostic vocabulary for the rules
-engine.
+{- | The package domain model: the ecosystem-agnostic vocabulary the rules engine reasons
+over. A registry adapter (npm, PyPI, RubyGems) projects its wire responses into these types,
+so nothing above the registry layer sees a registry-specific structure. Three pieces live in
+sibling modules and are only named here: 'Ecosystem' in "Ecluse.Core.Ecosystem", 'Version' in
+"Ecluse.Core.Version", and the integrity-digest vocabulary in "Ecluse.Core.Package.Hash",
+re-exported in full.
 
-These types capture everything the proxy needs to reason about a package version
-while staying decoupled from any registry's wire format. A registry adapter (npm,
-PyPI, RubyGems) projects its responses into these types, so nothing above the
-registry layer sees a registry-specific structure.
+== Design principles
 
-Three pieces of this vocabulary earn their own sibling module. The 'Ecosystem' tag
-lives in "Ecluse.Core.Ecosystem", shared with the version engine and the registry
-adapters. Version identity and ordering live in "Ecluse.Core.Version", and
-'PackageDetails' embeds a 'Version' here. The integrity-digest vocabulary ('Hash',
-'HashAlg', and the Subresource-Integrity forms) lives in
-"Ecluse.Core.Package.Hash", re-exported here in full. Import those modules directly
-when you need to name or build their types.
-
-The design follows two principles synthesised from the protocol research (see
-@docs\/research\/synthesis.md@):
-
-* __Rules consume normalised signals, not raw fields__. The risky behaviours
-  differ on the wire (npm install scripts, PyPI sdist builds, RubyGems native
-  extensions) but collapse to one signal, 'CodeExecSignal'. Trust likewise
-  collapses to 'Trust'. A rule never learns which ecosystem it is looking at.
-
-* __Signal availability is explicit__. A signal the adapter has not determined, or
-  cannot determine cheaply, is 'CodeExecUnknown' \/ 'TrustUnknown' \/ 'Nothing'. A
-  pure rule then abstains rather than guessing, and the effectful tier can resolve
-  it later (see @docs\/architecture.md@ → "Rules Engine").
+The protocol research (@docs\/research\/synthesis.md@) settled two. Rules consume normalised
+signals, not raw fields: npm install scripts, PyPI sdist builds, and RubyGems native
+extensions differ on the wire and collapse to one 'CodeExecSignal', so a rule never learns
+which ecosystem it is looking at. Signal availability is explicit: what an adapter has not
+determined, or cannot determine cheaply, is 'CodeExecUnknown', 'TrustUnknown', or 'Nothing',
+so a pure rule abstains rather than guessing and the effectful tier resolves it later
+(the "Rules Engine" section of @docs\/architecture.md@).
 -}
 module Ecluse.Core.Package (
     -- * Scopes
@@ -48,6 +36,9 @@ module Ecluse.Core.Package (
     pkgBaseName,
     renderPackageName,
     unscopedName,
+
+    -- * The name charset boundary
+    isAsciiNameComponent,
 
     -- * Normalised signals
     CodeExecSignal (..),
@@ -91,6 +82,7 @@ module Ecluse.Core.Package (
 ) where
 
 import Data.Aeson (Value)
+import Data.Char (isAscii, isControl)
 import Data.Text qualified as T
 import Data.Text.Short (ShortText)
 import Data.Text.Short qualified as TS
@@ -211,6 +203,12 @@ renderPackageName = TS.toText . pkgDisplay
 -- | The unscoped (base) name as 'Text' (@\@babel\/code-frame@ → @code-frame@).
 unscopedName :: PackageName -> Text
 unscopedName = TS.toText . pkgBaseName
+
+{- | Whether one component of a package name is ASCII with no control character: the boundary
+every ecosystem's grammar rests on, because an invisible codepoint renders two names as one.
+-}
+isAsciiNameComponent :: Text -> Bool
+isAsciiNameComponent = T.all (\ch -> isAscii ch && not (isControl ch))
 
 {- | Whether installing a version executes code (the cross-ecosystem unification
 of npm install scripts, PyPI sdist builds, and RubyGems native extensions).

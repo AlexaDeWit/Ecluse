@@ -301,6 +301,11 @@ spec = do
             it "refuses an in-scope publish whose body versions[].name disagrees with the URL with 403, before any relay" $
                 request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@victim/target\",\"version\":\"1.0.0\"}}}" `shouldRespondWith` 403
 
+            -- The wire manifest is the publish path's other name. A declared name the npm grammar
+            -- refuses canonicalises to nothing, which is a disagreement, so it never reaches a write.
+            it "refuses an in-scope publish whose body declares a non-ASCII name with 403, before any relay" $
+                request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@acme/widget\",\"name\":\"@acme/wid\\u3164get\",\"versions\":{}}" `shouldRespondWith` 403
+
             it "lets an in-scope publish whose body _id / name / versions[].name all agree with the URL through to the relay (502 when unreachable)" $
                 -- The guard does not over-refuse a body whose every declared name matches
                 -- the URL. It reaches the relay (502 to the unconnectable target), not a 403.

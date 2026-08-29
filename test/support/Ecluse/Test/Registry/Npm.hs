@@ -67,6 +67,25 @@ npmNameVerdicts =
     , ("", False)
     , ("@scope/p@g", False)
     , ("a b", False)
+    , -- Outside the ASCII boundary: a Hangul filler, a blank braille cell, a variation selector,
+      -- and a DEL. None is a format character, so a deny-list on that class admits every one.
+      ("pkg\x3164", False)
+    , ("pkg\x2800", False)
+    , ("pkg\xFE0F", False)
+    , ("pkg\x7F", False)
+    , ("@sco\x3164\&pe/pkg", False)
+    , -- Inside the boundary and outside npm's error tier: a leading separator, a reserved name,
+      -- and a character @encodeURIComponent@ would escape.
+      (".pkg", False)
+    , ("-pkg", False)
+    , ("_pkg", False)
+    , ("node_modules", False)
+    , ("favicon.ico", False)
+    , ("@node_modules/pkg", False)
+    , ("100%", False)
+    , -- npm's warning tier is legacy-valid, so a real name built from it still parses.
+      ("JSONStream", True)
+    , ("vue~cli!(1)*'", True)
     ]
 
 -- | The example name for one 'npmNameVerdicts' row, so a failure names the input and its verdict.
