@@ -25,6 +25,9 @@ retrievable from repository files.
    - the issues of PRs merged since the checkpoint. GitHub auto-close is not configured on this
      repository, so a merged PR's issue stays open until the team lead closes it by hand.
    - the `status:` and acceptance criteria of active or next-dispatchable slice files
+
+   Then restart the detached background watch on every open draft the loop owns. A gap kills
+   watches.
 3. **Retrieve by decision:** read only the sections the next orchestration action needs:
    - per-PR loop, fix routing, evaluation, gate, or guardrails from
      `.agents/orchestration-strategy.md`

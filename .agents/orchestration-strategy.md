@@ -67,7 +67,7 @@ decision vs served surface](../docs/architecture/registry-model.md#decision-surf
 flowchart TD
     P["Pick a DAG node<br/>(dependencies merged)"] --> B["BUILD<br/>implementer · own worktree · TDD<br/>the draft PR opens at the first push"]
     B --> E["EVALUATE (mandatory)<br/>fresh-context reviewer · Stage A + Stage B<br/>pinned to the head SHA · team lead reads the diff"]
-    B --> G["GATE<br/>watch the CI gate to green<br/>runs beside the evaluation"]
+    B --> G["GATE<br/>the team lead watches CI to green<br/>(detached background watch)"]
     E -->|findings| F["FIX<br/>one follow-up commit<br/>re-verify both on the new head"]
     G -->|red| F
     F --> E
@@ -82,9 +82,10 @@ flowchart TD
 > build and test. It does not judge requirements, quality, or security, which the evaluation covers.
 > Neither substitutes for the other. A green gate never flips a PR ready on its own.
 
-**Evaluate beside the gate, not after it**. The implementer opens the draft PR at its first push
-and reports the head SHA at once. The team lead dispatches the reviewer at that moment, pinned to
-that head, while CI runs. Findings from the review and reds from CI land as one follow-up commit,
+**Evaluate beside the gate, not after it**. The implementer opens the draft PR at its first push,
+reports the PR number and the head SHA at once, and exits. It does not idle in a watch loop
+([watch ownership](#verification-fast-local-ci-gates-build-and-test)). The team lead dispatches
+the reviewer at that moment, pinned to that head, while CI runs. Findings from the review and reds from CI land as one follow-up commit,
 and both re-verify on the new head. A review that starts only after a green gate costs a second
 full CI cycle on every PR with a finding.
 
@@ -252,6 +253,14 @@ evaluation](#evaluation-two-independent-passes), a separate required step. A gre
 a PR ready on its own. The evaluation must also pass with no open critical findings. Neither
 substitutes for the other.
 
+In every mode the team lead owns the CI watch. At each PR-open report it starts one detached
+background watch per PR (`gh pr checks <pr> --watch` in a background shell). The watch returns
+once, at the terminal state, and is the authoritative signal. A foreground watch inside a subagent
+dies invisibly: the shell call times out before a cold run finishes, an API drop kills the agent
+silently, and a host suspend kills every watcher on the machine. An invisible death fails open.
+After any gap (a host suspend, a session restart) the team lead sweeps `gh pr checks` across every
+open PR and restarts the watches.
+
 Every CI job just calls `task`, and CI runs the tiers in parallel. Running the slow parallel tiers
 (Docker integration, `nix-check`, Haddock) one after another on one contended host wastes work.
 Reproducing the whole gate before you push runs it twice.
@@ -266,8 +275,9 @@ task check
 `task check` runs build, unit tests, doctest, fourmolu/hlint, Semgrep, `cabal check`, workflow-lint,
 and dead-code (`weeder`) plus Haskell static analysis (`stan`). The hard stops within it are Semgrep
 clean (zero findings, no new ignores without the architect's approval) and a clean weeder/stan
-floor. Then push early, let CI parallelise the Docker and Haddock tiers, and watch the real run to
-green (`gh pr checks --watch`). Root-cause a red gate. Do not patch over it.
+floor. Then push early and let CI parallelise the Docker and Haddock tiers. The team lead watches
+the run to green, per the [watch ownership](#verification-fast-local-ci-gates-build-and-test)
+above. Root-cause a red gate. Do not patch over it.
 
 ### CI-verified batches: the wide parallel mode
 
@@ -279,11 +289,13 @@ formatting, and the PR's CI run is the whole verification loop:
   run as the last edit before every commit (CI gates on format-check).
 - No local `task check`, builds, test tiers, Docker, or HLS. Agents navigate by grep and read, in a
   plain worktree (see [Subagents and isolation](#subagents-and-isolation)).
-- Verification is watching the PR: `gh pr checks <pr> --watch`. On a red, run
-  `gh run view <run-id> --log-failed`, fix, format, commit, push, and re-watch. An agent supersedes
-  only its own branch's runs.
-- The implementer reports twice and never in between: once when the draft PR opens, with the head
-  SHA, so the reviewer starts at once, and once at the terminal state (green, stuck, or a fork).
+- The team lead watches the PR's CI run
+  ([watch ownership](#verification-fast-local-ci-gates-build-and-test)). The implementer reports
+  at PR-open and exits, per [the per-PR loop](#the-per-pr-loop).
+- On a red, the team lead resumes the implementer with the failing run's log
+  (`gh run view <run-id> --log-failed`). The fix lands as a distinct commit, and the lead restarts
+  the watch on the new head. An agent supersedes only its own branch's runs. A terminal report
+  from an implementer that stayed alive is a secondary signal, never the awaited one.
 - The invariant that makes the width safe: disjoint hunks across every open PR. Two PRs may touch
   one file when their hunks do not overlap, and the later PR owns the rebase when the earlier one
   merges. An issue whose hunks collide with an in-flight branch waits for that merge and starts

@@ -35,16 +35,21 @@ Run this for each DAG node once its dependencies merge
    ([Verification](../../orchestration-strategy.md#verification-fast-local-ci-gates-build-and-test)):
    an idle host runs `task check` before pushing, a shared host runs `task format` only and lets
    the PR's CI verify. Disjoint hunks across every open PR, and the later PR owns the rebase. The
-   implementer opens the draft PR at its first push and reports the head SHA at once.
+   implementer opens the draft PR at its first push, reports the PR number and head SHA at once,
+   and exits. It does not idle in a watch loop.
 3. **Evaluate (mandatory)**. At that first push, dispatch a fresh-context reviewer pinned to the
    head SHA, with no exposure to the implementer's reasoning. It runs beside CI and covers Stage A
    (requirements, gating-test evidence, scope) and Stage B (quality, security, and the comment
    count) ([Evaluation](../../orchestration-strategy.md#evaluation-two-independent-passes)).
    Critical findings block. Route the fix as a distinct commit: resume the implementer, apply a
    small reviewer-specified fix directly, or brief a fresh agent. Then re-evaluate.
-4. **Gate**. Watch the CI `gate` to green beside the evaluation. Review findings and CI reds land
-   as one follow-up commit, and both re-verify on the new head. Before every push, run
-   `gh run list --branch <branch>`: a push cancels an in-flight run.
+4. **Gate**. Own the watch: at the PR-open report, start one detached background watch on the PR
+   (`gh pr checks <pr> --watch` in a background shell), and act on its terminal result
+   ([watch ownership](../../orchestration-strategy.md#verification-fast-local-ci-gates-build-and-test)).
+   On a red, resume the implementer with the failing run's log. Review findings and CI reds land
+   as one follow-up commit, both re-verify on the new head, and the watch restarts on it. Before
+   every push, run `gh run list --branch <branch>`: a push cancels an in-flight run. After any
+   gap, sweep `gh pr checks` on every open PR and restart the watches.
 5. **Hand off**. Flip the PR ready only when the evaluation passed and the gate is green on the
    same head commit, and every required context passes (`gh pr checks`). Then `gh pr ready`, then
    report. A draft is never reported as done. `codecov/patch` is informational
