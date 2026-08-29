@@ -18,13 +18,11 @@ module Ecluse.Core.Security.IpLiteral (
     -- * IP literals
     IpAddr (..),
     parseIpLiteral,
-
-    -- * Lexical predicates (internal for testing)
-    isDecimal,
-    isHex,
 ) where
 
 import Data.Text qualified as T
+
+import Ecluse.Core.Text (readDecimalText, readHexText)
 
 {- | An IP literal recognised from a host, for the internal-range block. The constructors
 are exported so "Ecluse.Core.Security.Host" can convert one to an @iproute@ @IP@ value.
@@ -75,20 +73,17 @@ octetInetAton tok = do
     value :: Maybe Integer
     value = case T.uncons tok of
         Just ('0', rest)
-            | T.toLower (T.take 1 rest) == "x" ->
-                let hex = T.drop 1 rest
-                 in if isHex hex then readMaybe ("0x" <> toString hex) else Nothing
+            | T.toLower (T.take 1 rest) == "x" -> readHexText (T.drop 1 rest)
             | not (T.null rest) ->
                 if isOctal tok then readMaybe ("0o" <> toString tok) else Nothing
-        _ -> if isDecimal tok then readMaybe (toString tok) else Nothing
+        _ -> readDecimalText tok
 
 {- An IPv4 octet as a strict decimal run in @0..255@: the spelling inside an IPv4-in-IPv6
-literal, where @inet_aton@'s base coercion does not apply. The digit check also keeps
-'readMaybe' from accepting a sign, so the parsed value is >= 0.
+literal, where @inet_aton@'s base coercion does not apply, so the value is >= 0.
 -}
 octetDecimal :: Text -> Maybe Word8
 octetDecimal t = do
-    n <- if isDecimal t then readMaybe (toString t) else Nothing :: Maybe Integer
+    n <- readDecimalText t :: Maybe Integer
     if n <= 255 then Just (fromInteger n) else Nothing
 
 {- Parse an IPv6 literal into its eight 16-bit groups: the full eight-group form, or a
@@ -129,12 +124,12 @@ parseEmbeddedV4 t = case parseIPv4 octetDecimal t of
   where
     pair hi lo = fromIntegral hi * 256 + fromIntegral lo
 
-{- A group is a non-empty all-hex run that fits in 16 bits. The hex check
-keeps 'readMaybe' from accepting signs, so a parsed value is >= 0.
+{- A group is a non-empty all-hex run that fits in 16 bits. 'readHexText' takes no sign and
+no @0x@ prefix, so a parsed value is >= 0 and @0x1@ is not a group.
 -}
 parseV6Group :: Text -> Maybe Word16
 parseV6Group t = do
-    n <- if isHex t then readMaybe ("0x" <> toString t) else Nothing :: Maybe Integer
+    n <- readHexText t :: Maybe Integer
     if n <= 0xFFFF then Just (fromInteger n) else Nothing
 
 {- Fill the compressed form's zero run. "::" stands for at least one all-zero group.
@@ -153,16 +148,7 @@ exactlyEightGroups :: [Word16] -> Maybe IpAddr
 exactlyEightGroups gs@[_, _, _, _, _, _, _, _] = Just (IpV6 gs)
 exactlyEightGroups _ = Nothing
 
--- Whether @t@ is a non-empty run of decimal digits (no sign or whitespace).
-isDecimal :: Text -> Bool
-isDecimal t = not (T.null t) && T.all (`elem` ['0' .. '9']) t
-
--- Whether @t@ is a non-empty run of octal digits (0..7).
+-- Whether @t@ is a non-empty run of octal digits (0..7). @Data.Text.Read@ ships no octal
+-- reader, so the leading-zero @inet_aton@ octal octet keeps its own gate.
 isOctal :: Text -> Bool
 isOctal t = not (T.null t) && T.all (`elem` ['0' .. '7']) t
-
--- Whether @t@ is a non-empty run of hexadecimal digits.
-isHex :: Text -> Bool
-isHex t = not (T.null t) && T.all isHexDigit t
-  where
-    isHexDigit c = c `elem` (['0' .. '9'] <> ['a' .. 'f'] <> ['A' .. 'F'])

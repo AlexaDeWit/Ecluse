@@ -107,7 +107,7 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Registry (parseErrorMessage)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Security.Egress (RegistryUrl)
-import Ecluse.Core.Text (nonBlank)
+import Ecluse.Core.Text (nonBlank, readDecimalText)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint, newAwsEnv)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 import Ecluse.Runtime.Log (logLine, moduleField)
@@ -254,7 +254,7 @@ captureCountOf policy = do
 
 countOf :: Aeson.Value -> Maybe Int
 countOf = \case
-    Aeson.String text -> readMaybe (toString text)
+    Aeson.String text -> readDecimalText text
     other -> case Aeson.fromJSON other of
         Aeson.Success count -> Just count
         Aeson.Error _ -> Nothing
@@ -313,7 +313,7 @@ toQueueMessage egressUrl received = do
 -- The delivery count SQS reported, or a first delivery when it reported none, an
 -- unreadable one, or a count below one. Only evidence ever puts a message past its budget.
 receiveCountOf :: Maybe Text -> Int
-receiveCountOf raw = max 1 (fromMaybe 1 (readMaybe . toString =<< raw))
+receiveCountOf raw = max 1 (fromMaybe 1 (readDecimalText =<< raw))
 
 {- | Lift a received batch into deliverable 'QueueMessage's. A drop is logged, omitted, and
 left un-'ack'ed, so redelivery and dead-letter behaviour are unchanged.

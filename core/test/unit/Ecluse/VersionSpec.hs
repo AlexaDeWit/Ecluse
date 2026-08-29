@@ -103,10 +103,8 @@ spec = do
             mustReject RubyGems "１.２.３" -- fullwidth digits
             mustReject RubyGems "١.٢.٣" -- Arabic-Indic digits
         describe "numeric run length bound (DoS)" $ do
-            -- 'readMaybe' reads a numeric segment into an 'Integer', which is quadratic in the
-            -- digit count, so an unbounded run in hostile registry metadata is an algorithmic-
-            -- complexity DoS. The parser refuses an over-long version and it is served raw, without
-            -- an ordering key.
+            -- Reading a numeric segment into an 'Integer' is quadratic in the digit count, so an
+            -- unbounded run is a DoS. An over-long version is refused and served raw, unkeyed.
             mustReject PyPI ("1." <> T.replicate 5000 "9")
             mustReject RubyGems ("1." <> T.replicate 5000 "9")
             mustParse PyPI ("1." <> T.replicate 100 "9")
