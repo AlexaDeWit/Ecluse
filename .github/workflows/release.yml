@@ -87,6 +87,12 @@ jobs:
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          # Determinate Nix offers the job's OIDC token to FlakeHub, which this project
+          # has no account with. Keep the release token inside the repository, and the
+          # installer's diagnostics off. Same settings as .github/actions/setup-toolchain.
+          determinate: false
+          diagnostic-endpoint: ""
 
       - name: Build image
         run: nix develop .#ci --command task docker-build
@@ -140,8 +146,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # This job holds id-token: write, so an unowned FlakeHub login here would be
+      # offering a signing-capable OIDC token to a third party.
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+        with:
+          determinate: false
+          diagnostic-endpoint: ""
 
       # Untrusted refs flow through env, never interpolated into the run script.
       - name: Resolve image tag
