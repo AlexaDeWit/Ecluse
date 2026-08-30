@@ -108,10 +108,10 @@ vetMirrorStores mounts = case endpointRefusals MirrorPruner mounts of
 
 -- | A registry endpoint of a mount, named by the key the configuration declares it under.
 data EndpointKey
-    = PublicUpstream
-    | PrivateUpstream
-    | MirrorTarget
-    | PublicationTarget
+    = KeyPublicUpstream
+    | KeyPrivateUpstream
+    | KeyMirrorTarget
+    | KeyPublicationTarget
     deriving stock (Eq, Show)
 
 -- | Which mounts a rule compares: one mount's own endpoints, its neighbours', or both.
@@ -157,43 +157,43 @@ mount's publication target is the second rule's business, read from the publishi
 endpointRules :: [EndpointRule]
 endpointRules =
     [ EndpointRule
-        { erSubject = PublicationTarget
-        , erAgainst = [PublicUpstream]
+        { erSubject = KeyPublicationTarget
+        , erAgainst = [KeyPublicUpstream]
         , erScope = AnyMount
         , erMatch = ByHost
         , erVerdict = const (Refuse publicationOnPublicUpstream)
         }
     , EndpointRule
-        { erSubject = PublicationTarget
-        , erAgainst = [PrivateUpstream, MirrorTarget, PublicationTarget]
+        { erSubject = KeyPublicationTarget
+        , erAgainst = [KeyPrivateUpstream, KeyMirrorTarget, KeyPublicationTarget]
         , erScope = OtherMount
         , erMatch = ByRegistry
         , erVerdict = const (Refuse publicationOnMountEndpoint)
         }
     , EndpointRule
-        { erSubject = MirrorTarget
-        , erAgainst = [PublicUpstream]
+        { erSubject = KeyMirrorTarget
+        , erAgainst = [KeyPublicUpstream]
         , erScope = AnyMount
         , erMatch = ByHost
         , erVerdict = const (Refuse mirrorOnPublicUpstream)
         }
     , EndpointRule
-        { erSubject = MirrorTarget
-        , erAgainst = [PrivateUpstream]
+        { erSubject = KeyMirrorTarget
+        , erAgainst = [KeyPrivateUpstream]
         , erScope = AnyMount
         , erMatch = ByRegistry
         , erVerdict = mirrorCollapseVerdict
         }
     , EndpointRule
-        { erSubject = MirrorTarget
-        , erAgainst = [PublicationTarget]
+        { erSubject = KeyMirrorTarget
+        , erAgainst = [KeyPublicationTarget]
         , erScope = SameMount
         , erMatch = ByRegistry
         , erVerdict = mirrorCollapseVerdict
         }
     , EndpointRule
-        { erSubject = PrivateUpstream
-        , erAgainst = [PublicUpstream]
+        { erSubject = KeyPrivateUpstream
+        , erAgainst = [KeyPublicUpstream]
         , erScope = SameMount
         , erMatch = ByRegistry
         , erVerdict = const (Warn "the merge trusts the private leg, so this registry's versions are admitted unfiltered")
@@ -250,10 +250,10 @@ matchedRules mounts =
 -- The URL a mount declares under one key. A mount declares no endpoint it does not hold.
 endpointOf :: EndpointKey -> MountConfig -> Maybe RegistryUrl
 endpointOf key mcfg = case key of
-    PublicUpstream -> Just (mntPublicUpstream mcfg)
-    PrivateUpstream -> mntPrivateUpstream mcfg
-    MirrorTarget -> mntMirrorTarget mcfg
-    PublicationTarget -> mntPublicationTarget mcfg
+    KeyPublicUpstream -> Just (mntPublicUpstream mcfg)
+    KeyPrivateUpstream -> mntPrivateUpstream mcfg
+    KeyMirrorTarget -> mntMirrorTarget mcfg
+    KeyPublicationTarget -> mntPublicationTarget mcfg
 
 -- Whether a rule compares this pair of mounts.
 withinScope :: MountScope -> Ecosystem -> Ecosystem -> Bool
@@ -278,10 +278,10 @@ sameHost a b = hostOf a == hostOf b
 -- The configuration key a mount declares an endpoint under.
 endpointKeyName :: EndpointKey -> Text
 endpointKeyName = \case
-    PublicUpstream -> "publicUpstream"
-    PrivateUpstream -> "privateUpstream"
-    MirrorTarget -> "mirrorTarget"
-    PublicationTarget -> "publicationTarget"
+    KeyPublicUpstream -> "publicUpstream"
+    KeyPrivateUpstream -> "privateUpstream"
+    KeyMirrorTarget -> "mirrorTarget"
+    KeyPublicationTarget -> "publicationTarget"
 
 -- One advisory line: the collapsed pair, the registry they share, and the consequence.
 advisoryLine :: EndpointCollision -> Text -> Text
