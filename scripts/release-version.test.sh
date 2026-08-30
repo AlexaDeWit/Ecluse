@@ -31,8 +31,12 @@ accepts() {
 # Assert a refusal. $1 input, $2 why it must not parse.
 rejects() {
   local input="$1" why="$2"
+  release_tag="stale" release_cabal_version="stale"
   if release_version_parse "$input" 2>/dev/null; then
     printf 'FAIL - %-16s accepted, expected reject (%s)\n' "$input" "$why"
+    fail=1
+  elif [ -n "$release_tag" ] || [ -n "$release_cabal_version" ]; then
+    printf 'FAIL - %-16s rejected but left stale outputs\n' "$input"
     fail=1
   else
     printf 'ok   - %-16s rejected (%s)\n' "$input" "$why"
@@ -59,5 +63,11 @@ rejects "0.2.0 " "trailing space"
 rejects "1.0.0-rc.1-rc.2" "two rc suffixes"
 rejects "a.b.c" "non-numeric"
 rejects "0.2.0;whoami" "shell metacharacter"
+rejects "01.02.03" "leading zeros"
+rejects "V0.2.0" "uppercase prefix"
+rejects " 0.2.0" "leading space"
+# The classic anchor bypass: bash's $ can match before a trailing newline, so a second
+# line could ride along into a tag string.
+rejects "$(printf '0.2.0\nrm -rf /')" "embedded newline"
 
 exit "$fail"

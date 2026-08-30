@@ -40,10 +40,12 @@ env -u IN_NIX_SHELL nix develop --command task init-release VERSION=v0.2.0
 
 It refuses unless the version matches `ecluse.cabal`, the working tree is clean, `HEAD` is
 `origin/main`, the `CI gate` check is green on that commit, and the tag exists neither locally
-nor on origin. Then it cuts the signed tag, verifies the signature, prints the target commit,
-and asks you to type the tag back before it pushes.
+nor on origin. It prints that commit, then cuts the signed tag pinned to it, verifies the
+signature, and asks you to type the tag back before it pushes. `DRY_RUN=1` stops after the
+checks, creating nothing.
 
-The ruleset refuses an unsigned tag, and after the push neither the tag nor its target can
+The tag is pinned to the commit the checks cleared, so `HEAD` moving under you cannot retarget
+it. The ruleset refuses an unsigned tag, and after the push neither the tag nor its target can
 change. That confirmation is the last point where stopping costs nothing.
 
 ## 3. What fires, and where it stops

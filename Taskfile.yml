@@ -18,28 +18,39 @@ tasks:
         v="$(cabal info ./ecluse.cabal 2>/dev/null | sed -n -E 's/^\* ecluse-([0-9.]+).*/\1/p' | head -n1)"
         [ -n "$v" ] && echo "$v" || { echo "task version: could not read from 'cabal info'" >&2; exit 1; }
   tag:
-    desc: Create signed tag v<version> from the cabal version (TAG= overrides, for a candidate)
+    desc: Create the signed tag from the cabal version (RELEASE_TAG=/RELEASE_COMMIT= override it)
     silent: true
+    # go-task also resolves a template variable from the ambient environment, so these
+    # carry a RELEASE_ prefix. A bare TAG= would let a stray exported TAG retag a release.
+    env:
+      RELEASE_TAG: '{{.RELEASE_TAG}}'
+      RELEASE_COMMIT: '{{.RELEASE_COMMIT}}'
     cmds:
       - |
         # A candidate tags vX.Y.Z-rc.N while the cabal field stays X.Y.Z, so the tag
-        # string cannot always be derived. TAG= carries it; bare `task tag` is unchanged.
-        v="{{.TAG}}"
+        # cannot always be derived from the field.
+        v="${RELEASE_TAG:-}"
         [ -n "$v" ] || v="v$(task version)"
-        git tag -s -m "Release $v" "$v"
+        git tag -s -m "Release $v" "$v" ${RELEASE_COMMIT:+"$RELEASE_COMMIT"}
         echo "created $v. Push to release:  git push origin $v"
   init-release:
     desc: Cut and push the signed release tag for VERSION, guardrails first (DRY_RUN=1 rehearses)
     requires:
       vars: [VERSION]
+    # Through the environment, never spliced into the command, so a version carrying
+    # shell metacharacters reaches the script's parser as one argument and is refused.
+    env:
+      VERSION: '{{.VERSION}}'
     cmds:
-      - bash scripts/init-release.sh "{{.VERSION}}"
+      - bash scripts/init-release.sh "$VERSION"
   verify-release:
-    desc: Verify a published release for VERSION the way an anonymous reader sees it
+    desc: Verify a published release for VERSION, including the path with no credential
     requires:
       vars: [VERSION]
+    env:
+      VERSION: '{{.VERSION}}'
     cmds:
-      - bash scripts/verify-release.sh "{{.VERSION}}"
+      - bash scripts/verify-release.sh "$VERSION"
   update:
     desc: Refresh the cabal package index
     cmds:

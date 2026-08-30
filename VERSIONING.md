@@ -51,9 +51,9 @@ version `X.Y.Z`.
 1. Bump `version:` in [`ecluse.cabal`](ecluse.cabal) in a pull request, following the rules above.
 2. Once it merges, run `task init-release VERSION=vX.Y.Z`. It refuses unless the version matches
    the cabal field, the working tree is clean, `HEAD` is `origin/main`, the `CI gate` check is
-   green on that commit, and the tag is free. It then cuts the signed tag and asks you to type the
-   tag back before pushing, since cutting a release is deliberate. `DRY_RUN=1` rehearses every
-   check without creating anything.
+   green on that commit, and the tag is free. It then cuts the signed tag, pinned to the commit it
+   checked, and asks you to type the tag back before pushing, since cutting a release is
+   deliberate. `DRY_RUN=1` rehearses every check without creating anything.
 3. The release workflow re-asserts the tag matches the cabal version. It then builds the
    multi-arch image, attaches the provenance and SBOM attestations, and publishes the GitHub
    Release.
