@@ -145,8 +145,7 @@ The reasoning behind each choice, and the residual risks it accepts, is in the
 | A static publish credential without an edge token | Nothing at runtime, because it never boots | Yes. The boot fails closed |
 | A static mirror-write secret | The short-lived token minted from the container role | Nothing fires. The secret is visible in the configuration you wrote |
 
-The silent row deserves its own sentence: aggregate **trusted stores only** into the private
-upstream, and let the gated mirror be the only way public content enters. The
+The silent row has one remedy: aggregate **trusted stores only** into the private upstream. The
 [threat model](@/docs/threat-model.md) records both store-level deviations.
 
 ## Edge authentication and client credentials
@@ -165,12 +164,13 @@ Edge authentication to the proxy ships in two modes:
    //ecluse.example.internal/npm/:_authToken=${NPM_EDGE_TOKEN}
    ```
 
-The edge token never becomes the upstream one. Reads run **passthrough**: Écluse forwards the
+Écluse holds no read credential of its own. Reads run **passthrough**: Écluse forwards the
 caller's own credential to the private upstream, which stays the authority on what that caller may
-see. Before the anonymous public fetch it strips that credential, so a client token never leaves
-for a public registry, and it never caches the private origin across callers, so one caller's read
-can never answer another's. By default the only credential of Écluse's own is a mirrored mount's
-write to the mirror target, derived from the mirror-target URL.
+see. With `ECLUSE_SERVER__AUTH_TOKEN` set, the value a client presents both satisfies the edge
+gate and travels upstream. A deployment therefore cannot combine the static-token recipe above
+with the passthrough recipes below. Before the anonymous public fetch Écluse strips the
+credential, so a client token never leaves for a public registry, and it never caches the private
+origin across callers, so one caller's read can never answer another's.
 
 A `publish` forwards the publisher's own token the same way. Opt into a static
 `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` and Écluse publishes as itself instead. That opt-in
@@ -180,6 +180,76 @@ publish under it. `ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW` limits which package n
 publish. It authorises _names_, not _callers_, so it is not authentication. The reasoning is in
 [security posture](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md#a-static-publish-credential-is-fail-closed) and
 [Publishing first-party packages](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
+
+### What a client configures
+
+Écluse serves one endpoint per mount, and installs and publishes both go to it. The client's whole
+obligation is to supply a credential the private registry accepts, keyed to the proxy's URL in
+whatever per-registry auth configuration that client keeps. Écluse forwards it to the private
+upstream, which authorises the caller, so what someone reaches through the proxy is what your
+registry already grants them. A caller holding no credential still installs public packages through
+the gate. The private set is what the credential unlocks.
+
+Two rules hold whatever ecosystem the client speaks:
+
+- **Key the credential to the proxy's URL.** A client resolves a credential from the URL it is
+  about to call, so a URL-keyed entry stays with the proxy. An unkeyed global credential travels
+  to whichever host the client reaches next.
+- **Bind no name to another registry.** A client pointed at Écluse needs no per-scope or
+  per-package registry override, because the one endpoint already covers every name. An override
+  takes its names around the gate, and in some clients it decides where a publish goes as well
+  ([Keeping publishes on the proxy](@/docs/deployment.md#keeping-publishes-on-the-proxy)).
+
+For an npm-protocol client those two rules are a default registry line and a URL-keyed token line.
+The recipes here assume the open edge that the
+[recommended topology](@/docs/deployment.md#the-recommended-topology) sets:
+
+```ini
+# .npmrc
+registry=https://ecluse.example.internal/npm/
+//ecluse.example.internal/npm/:_authToken=${NPM_TOKEN}
+```
+
+### Where the client credential comes from
+
+The credential belongs to the private registry, so issuing it is that registry's business rather
+than Écluse's. A long-lived credential goes into the client's auth configuration once. Prefer a
+short-lived one minted from an identity the caller already holds: a developer mints against their
+own cloud identity, and a CI job mints against a role it assumes through its platform's OIDC
+federation, so no static registry secret sits in the job's settings.
+
+Both write the same URL-keyed line, and only the minting command differs by registry. AWS
+CodeArtifact is one example of the pattern:
+
+```bash
+export NPM_TOKEN="$(aws codeartifact get-authorization-token \
+  --domain acme --domain-owner 123456789012 --region us-east-1 \
+  --query authorizationToken --output text)"
+```
+
+Google Artifact Registry and other backends slot into the same shape with their own command.
+Whatever issues it, a minted credential expires, so put the refresh in a shell hook or a job step
+rather than in a developer's memory.
+
+**Mint the credential and write the auth line yourself.** A registry vendor's login helper rewrites
+the client's default registry to point at that vendor, and some also write per-name bindings.
+Either one routes traffic around the proxy, which is what the two rules above exist to prevent.
+
+### Keeping publishes on the proxy
+
+Écluse accepts a publish on the same mount endpoint it serves installs from and relays it to the
+publication target under the publisher's own credential. Two failures can take a publish off that
+path, and they are not alike.
+
+A publish that reaches Écluse when the mount declares no publication target is refused with
+`405 Method Not Allowed`. The failure is loud and immediate. Écluse relays a publish only to a
+destination you declared, so a misconfigured client cannot mis-publish through the proxy.
+
+A publish that never reaches Écluse is the quiet one. A client that resolves its publish
+destination from some other part of its configuration sends it straight to that registry, and the
+proxy sees nothing to refuse. Name-to-registry bindings are the usual cause, because in some
+clients such a binding outranks the per-package publish setting as well as the install route. Keep
+them off a client pointed at Écluse and let the one endpoint carry both directions.
 
 ## Network egress
 
