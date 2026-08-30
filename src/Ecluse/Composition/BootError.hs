@@ -7,8 +7,8 @@ its operator-facing rendering.
 
 Each case is a __fail-loud__ boot failure, and the root aggregates them, so a single run reports
 every problem an operator must fix (see @docs\/architecture\/configuration.md@ → "Validation").
-This module is the shared spine of the three modules that produce them, so it holds no policy of
-its own beyond the rendering.
+This module is the shared spine of the composition-root modules that produce them, so it holds
+no policy of its own beyond the rendering.
 -}
 module Ecluse.Composition.BootError (
     BootError (..),
@@ -83,6 +83,10 @@ data BootError
       own mirror-write credential would reach a public registry.
       -}
       MirrorTargetOnPublicUpstream Ecosystem Ecosystem
+    | {- | A mount's mirror target is also the named mount's endpoint under the named key, at the
+      carried registry. A sweep of that store would delete data the other role owns.
+      -}
+      MirrorTargetOnMountEndpoint Ecosystem Ecosystem Text Text
     | {- | An explicit memory override breaks the combined memory-plan invariant even after every
       tenant shed to its minimum. A computed plan degrades and boots, an operator claim does not.
       -}
@@ -146,6 +150,13 @@ renderBootError = \case
             <> " shares a host with "
             <> mountKeyRef other "publicUpstream"
             <> ": the mirror write carries this proxy's own credential, which must never reach a public upstream"
+    MirrorTargetOnMountEndpoint eco other key url ->
+        mountKeyRef eco "mirrorTarget"
+            <> " is also "
+            <> mountKeyRef other key
+            <> " ("
+            <> url
+            <> "): the Dredger permanently deletes from the mirror target, so point it at a registry that holds no other role, or run no Dredger against this configuration"
     MemoryPlanOverrideUnsafe details ->
         "memory plan refused: " <> T.intercalate "; " details
     SplitRoleNeedsDurableQueue invocation ->

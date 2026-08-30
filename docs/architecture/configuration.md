@@ -186,6 +186,16 @@ error, not a silent skip:
   `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` without `ECLUSE_SERVER__AUTH_TOKEN` fails the load
   as `PublishStaticCredentialNeedsEdge`. That pairing would let any unauthenticated client publish
   under Écluse's own identity.
+- Endpoints that hold different registry roles must not name one registry. Every role refuses a
+  `publicationTarget` on any mount's `publicUpstream` host, a `publicationTarget` equal to another
+  mount's `privateUpstream`, `mirrorTarget`, or `publicationTarget`, and a `mirrorTarget` on any
+  mount's `publicUpstream` host. `ecluse dredger` deletes from each mount's `mirrorTarget`, so it
+  also refuses a `mirrorTarget` equal to any mount's `privateUpstream` or to its own mount's
+  `publicationTarget`. `ecluse proxy` and `ecluse mirror` boot on those three and warn once per
+  collapsed pair, and the operator prunes that mirror by hand. One rule table carries every pair
+  and its severity per role, so a refusal and a warning cannot describe different rules. The
+  comparison is by full registry URL, not by host, because repositories of one CodeArtifact domain
+  differ only in path, and a repository's per-format endpoints are separate stores.
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the

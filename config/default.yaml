@@ -197,6 +197,9 @@ mounts:
     # URL: a CodeArtifact host mints a short-lived token scoped to its domain, and any
     # other host needs mirrorTargetToken. The boot refuses a target on any mount's
     # publicUpstream host, which the write credential must never reach.
+    # `ecluse dredger` deletes from this store, so it refuses a target that is also any
+    # mount's privateUpstream or this mount's publicationTarget. `ecluse proxy` and
+    # `ecluse mirror` boot on those and warn once per pair, and pruning stays manual.
     # mirrorTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/mirror/
     # Set via ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN (a secret). Required for a
     # non-CodeArtifact mirror target, forbidden for a CodeArtifact one or a serve-only mount.

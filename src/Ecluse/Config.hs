@@ -50,7 +50,6 @@ module Ecluse.Config (
     ConfigError (..),
     renderConfigError,
     loadConfig,
-    mountCollisionWarnings,
     sameRegistry,
     mountPostureLines,
     resolvedKeyProvenance,
@@ -233,43 +232,6 @@ mountOf eco mcfg policy mode =
 
 rulesOf :: RulePolicy -> [PrecededRule]
 rulesOf = Map.elems . policyRules
-
-{- | Boot-time advisory: one warning per pair of a mount's resolved endpoints that point at the
-same registry. The pairs the boot refuses outright live in "Ecluse.Composition.Endpoints".
--}
-mountCollisionWarnings :: Config -> [Text]
-mountCollisionWarnings config =
-    concatMap (mountCollisions (configApp config)) (Map.toAscList (configMounts config))
-
-mountCollisions :: AppConfig -> (Ecosystem, Mount) -> [Text]
-mountCollisions app (eco, mount) = mapMaybe (collisionWarning eco) pairs
-  where
-    regs = mountRegistries mount
-    mirror = mtUrl <$> regMirrorTarget regs
-    private = regPrivateUpstream regs
-    publication = Map.lookup eco (cfgMounts app) >>= mntPublicationTarget
-    -- A serve-only mount has no mirror rows (and the pure gate no private row):
-    -- absent endpoints cannot collide.
-    pairs =
-        [("mirrorTarget", m, "privateUpstream", private) | Just m <- [mirror]]
-            <> [("mirrorTarget", m, "publicationTarget", publication) | Just m <- [mirror]]
-            <> [("privateUpstream", p, "publicUpstream", Just (regPublicUpstream regs)) | Just p <- [private]]
-
-collisionWarning :: Ecosystem -> (Text, RegistryUrl, Text, Maybe RegistryUrl) -> Maybe Text
-collisionWarning eco (aName, a, bName, mb) = do
-    b <- mb
-    guard (sameRegistry a b)
-    pure
-        ( "mount \""
-            <> ecosystemName eco
-            <> "\": "
-            <> aName
-            <> " and "
-            <> bName
-            <> " resolve to the same registry ("
-            <> registryUrlText a
-            <> "); a distinct registry per endpoint is strongly recommended"
-        )
 
 -- | Whether two configured endpoints name the same registry, a trailing slash aside.
 sameRegistry :: RegistryUrl -> RegistryUrl -> Bool

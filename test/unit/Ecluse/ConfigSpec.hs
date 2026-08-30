@@ -21,7 +21,6 @@ import Ecluse.Config (
     RulePolicy (..),
     defaultPolicy,
     loadConfig,
-    mountCollisionWarnings,
     mountPostureLines,
     resolvedKeyProvenance,
  )
@@ -105,55 +104,6 @@ spec = do
             provenance `shouldSatisfy` elem "config: server.authToken = <redacted> (environment)"
             provenance `shouldSatisfy` (not . any (T.isInfixOf "hunter2"))
 
-    describe "mountCollisionWarnings" $ do
-        it "is silent when every registry endpoint is distinct" $ do
-            cfg <-
-                configFor
-                    (npmMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://mirror.example.test")])
-            mountCollisionWarnings cfg `shouldBe` []
-
-        it "warns when the mirror target is declared equal to the private upstream" $
-            shouldWarnOnce
-                ( npmMountDoc
-                    [ ("privateUpstream", "https://priv.example.test")
-                    , ("mirrorTarget", "https://priv.example.test")
-                    ]
-                )
-                ["mirrorTarget", "privateUpstream", "https://priv.example.test"]
-
-        it "warns when the private and public upstreams collide" $
-            shouldWarnOnce
-                (npmMountDoc [("privateUpstream", "https://registry.npmjs.org"), ("mirrorTarget", "https://mirror.example.test")])
-                ["privateUpstream", "publicUpstream"]
-
-        it "warns when the mirror target equals the publication target" $
-            shouldWarnOnce
-                ( npmMountDoc
-                    [ ("privateUpstream", "https://priv.example.test")
-                    , ("mirrorTarget", "https://mirror.example.test")
-                    , ("publicationTarget", "https://mirror.example.test")
-                    , ("publicationAllow", "@acme")
-                    ]
-                )
-                ["mirrorTarget", "publicationTarget"]
-
-        it "does not warn the documented publication-onto-private arrangement" $ do
-            cfg <-
-                configFor
-                    ( npmMountDoc
-                        [ ("privateUpstream", "https://priv.example.test")
-                        , ("mirrorTarget", "https://mirror.example.test")
-                        , ("publicationTarget", "https://priv.example.test")
-                        , ("publicationAllow", "@acme")
-                        ]
-                    )
-            mountCollisionWarnings cfg `shouldBe` []
-
-        it "ignores a trailing-slash difference when comparing endpoints" $
-            shouldWarnOnce
-                (npmMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://priv.example.test/")])
-                ["mirrorTarget", "privateUpstream"]
-
 -- | The client-facing base URL every active-mount load needs (server.publicUrl).
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
@@ -161,14 +111,6 @@ pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 -- | Load a config document under the client-facing base URL every active mount needs.
 configFor :: ByteString -> IO Config
 configFor doc = expectConfig pubUrlEnv (Just doc)
-
--- | Assert exactly one collision warning whose text carries every phrase.
-shouldWarnOnce :: ByteString -> [Text] -> Expectation
-shouldWarnOnce doc phrases = do
-    cfg <- configFor doc
-    case mountCollisionWarnings cfg of
-        [warning] -> traverse_ (\phrase -> warning `shouldSatisfy` T.isInfixOf phrase) phrases
-        warnings -> expectationFailure ("expected exactly one collision warning, got " <> show warnings)
 
 {- | An npm mount document with the given string fields, over the shipped npm template. It carries
 a static @mirrorTargetToken@, so a non-CodeArtifact mirror target derives a valid write credential.

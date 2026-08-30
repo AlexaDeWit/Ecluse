@@ -50,6 +50,12 @@ spec = describe "renderBootError" $
             `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET is also ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM"
         renderBootError (MirrorTargetOnPublicUpstream Npm Npm)
             `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__MIRROR_TARGET shares a host with ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM"
+        -- The mirror-store refusal adds the shared registry, which the operator needs to see
+        -- because two keys can name one store under different spellings.
+        renderBootError (MirrorTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://store.example.test")
+            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__MIRROR_TARGET is also ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM (https://store.example.test)"
+        renderBootError (MirrorTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://store.example.test")
+            `shouldSatisfy` infixed "the Dredger permanently deletes from the mirror target"
         -- A split-role refusal names the invocation the operator typed and the key that fixes it.
         renderBootError (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")
             `shouldSatisfy` infixed "ecluse proxy --no-worker"

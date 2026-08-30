@@ -23,6 +23,7 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition (validateComposition)
 import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe))
+import Ecluse.Composition.Endpoints (RegistryRole (MirrorWriter), endpointAdvisories)
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpDegradations, mpOverrideViolations, mpQueueMemoryMaxDepth),
     queueTenantDemand,
@@ -40,7 +41,6 @@ import Ecluse.Config (
     Config (configApp),
     MountConfig (mntPublicationTarget),
     RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
-    mountCollisionWarnings,
     mountPostureLines,
     resolvedKeyProvenance,
  )
@@ -115,7 +115,9 @@ planDecisions ambient config effective fdLimit = do
                 concat
                     [ mpDegradations memoryPlan
                     , mirrorRuntimeWarnings mirrorRuntime
-                    , mountCollisionWarnings config
+                    , -- The plan carries no role, so it reports the writing roles' advisories.
+                      -- The Dredger applies its own stricter verdicts at its composition root.
+                      endpointAdvisories MirrorWriter (cfgMounts appConfig)
                     ]
             }
   where
