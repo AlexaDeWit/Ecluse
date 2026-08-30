@@ -31,9 +31,9 @@ registry=http://127.0.0.1:8080/npm/
 ```
 
 One line is the whole client configuration here, because a public-only gate asks for no credential.
-Put a private registry behind Écluse and each caller adds its own token beside that line:
-[What a client configures](@/docs/deployment.md#what-a-client-configures) carries the laptop and CI
-recipes, and the publish-routing traps that come with them.
+Put a private registry behind Écluse and each caller adds its own credential beside that line:
+[What a client configures](@/docs/deployment.md#what-a-client-configures) covers what a client
+supplies, where that credential comes from, and the settings that route traffic around the gate.
 
 Every rule, advisory gate, integrity floor, and egress control behaves exactly as it does on a
 mirrored deployment. The only thing you give up is the mirror write, and it costs you three

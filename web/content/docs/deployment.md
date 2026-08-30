@@ -183,10 +183,26 @@ publish. It authorises _names_, not _callers_, so it is not authentication. The 
 
 ### What a client configures
 
-Your developers and your CI each need two lines in `.npmrc`, and the recipes below assume the open
-edge that the [recommended topology](@/docs/deployment.md#the-recommended-topology) sets. One line
-names the registry, and the other carries the caller's own private-registry credential, keyed to
-the Écluse URL:
+Écluse serves one endpoint per mount, and installs and publishes both go to it. The client's whole
+obligation is to supply a credential the private registry accepts, keyed to the proxy's URL in
+whatever per-registry auth configuration that client keeps. Écluse forwards it to the private
+upstream, which authorises the caller, so what someone reaches through the proxy is what your
+registry already grants them. A caller holding no credential still installs public packages through
+the gate. The private set is what the credential unlocks.
+
+Two rules hold whatever ecosystem the client speaks:
+
+- **Key the credential to the proxy's URL.** A client resolves a credential from the URL it is
+  about to call, so a URL-keyed entry stays with the proxy. An unkeyed global credential travels
+  to whichever host the client reaches next.
+- **Bind no name to another registry.** A client pointed at Écluse needs no per-scope or
+  per-package registry override, because the one endpoint already covers every name. An override
+  takes its names around the gate, and in some clients it decides where a publish goes as well
+  ([Keeping publishes on the proxy](@/docs/deployment.md#keeping-publishes-on-the-proxy)).
+
+For an npm-protocol client those two rules are a default registry line and a URL-keyed token line.
+The recipes here assume the open edge that the
+[recommended topology](@/docs/deployment.md#the-recommended-topology) sets:
 
 ```ini
 # .npmrc
@@ -194,26 +210,16 @@ registry=https://ecluse.example.internal/npm/
 //ecluse.example.internal/npm/:_authToken=${NPM_TOKEN}
 ```
 
-Installs travel that path under that token, and so does a publish once the mount has a publication
-target. What someone reaches through Écluse is therefore what your registry IAM already grants
-them. A caller holding no credential still installs public packages through the gate, and the
-private set is what the token unlocks.
+### Where the client credential comes from
 
-Key every token line to a URL. npm resolves a credential from the final target URL, and that keying
-is what stops a token reaching a host it was not minted for, so never write a bare global `_auth`
-or `_authToken`.
+The credential belongs to the private registry, so issuing it is that registry's business rather
+than Écluse's. A long-lived credential goes into the client's auth configuration once. Prefer a
+short-lived one minted from an identity the caller already holds: a developer mints against their
+own cloud identity, and a CI job mints against a role it assumes through its platform's OIDC
+federation, so no static registry secret sits in the job's settings.
 
-Write no `@scope:registry` lines either. A client that installs and publishes through Écluse needs
-none, because the `registry=` line already covers every name. What a stray one costs is under
-[Scope bindings defeat publish routing](@/docs/deployment.md#scope-bindings-defeat-publish-routing).
-
-### Minting the client token
-
-The token is whatever your private upstream issues, and with AWS CodeArtifact behind Écluse the
-same command mints it on a laptop and in a job.
-
-**On a laptop**, the developer mints against their own AWS identity and exports it for the
-`.npmrc` line above:
+Both write the same URL-keyed line, and only the minting command differs by registry. AWS
+CodeArtifact is one example of the pattern:
 
 ```bash
 export NPM_TOKEN="$(aws codeartifact get-authorization-token \
@@ -221,63 +227,29 @@ export NPM_TOKEN="$(aws codeartifact get-authorization-token \
   --query authorizationToken --output text)"
 ```
 
-A CodeArtifact token lasts 12 hours at the most, and a request may ask for anything from 900
-seconds up to that ceiling, so the refresh is a daily event. Put the command in a shell function or
-a login hook rather than asking each developer to remember it.
+Google Artifact Registry and other backends slot into the same shape with their own command.
+Whatever issues it, a minted credential expires, so put the refresh in a shell hook or a job step
+rather than in a developer's memory.
 
-**Do not run `aws codeartifact login --tool npm` on a client that installs through Écluse.** It
-rewrites the client's default `registry=` to the CodeArtifact endpoint, so every install then goes
-straight to CodeArtifact and never reaches the gate. Its `--namespace` variant is the same problem
-in narrower form: it writes an `@scope:registry` binding, which takes that one scope around Écluse
-and leaves the rest coming through.
+**Mint the credential and write the auth line yourself.** A registry vendor's login helper rewrites
+the client's default registry to point at that vendor, and some also write per-name bindings.
+Either one routes traffic around the proxy, which is what the two rules above exist to prevent.
 
-**In CI**, no static npm secret exists in the job's settings. The job assumes a cloud role through
-your CI platform's OIDC federation, mints the token with the same call, and holds it only for the
-run:
+### Keeping publishes on the proxy
 
-```bash
-# after the role assumption your CI platform's OIDC integration performs
-export NPM_TOKEN="$(aws codeartifact get-authorization-token \
-  --domain acme --domain-owner 123456789012 --region us-east-1 \
-  --query authorizationToken --output text)"
-```
+Écluse accepts a publish on the same mount endpoint it serves installs from and relays it to the
+publication target under the publisher's own credential. Two failures can take a publish off that
+path, and they are not alike.
 
-npm expands `${NPM_TOKEN}` in `.npmrc` from the environment, so one committed `.npmrc` serves the
-laptop and the runner without a second file.
+A publish that reaches Écluse when the mount declares no publication target is refused with
+`405 Method Not Allowed`. The failure is loud and immediate. Écluse relays a publish only to a
+destination you declared, so a misconfigured client cannot mis-publish through the proxy.
 
-### Scope bindings defeat publish routing
-
-An `@scope:registry` line does more than route that scope's installs. On `npm publish` it also
-outranks `publishConfig.registry` in `package.json` **and** a `--registry` flag on the command,
-because any scope-keyed source beats any plain-registry source. That holds on npm 10.9.8 and
-11.17.0. So an inherited binding sends your publishes to the bound registry, and no publish-time
-flag takes them back.
-
-Own no bindings and the problem never arises. When you inherit one you cannot delete yet,
-`npm publish --@yourscope:registry=https://ecluse.example.internal/npm/` overrides it for that one
-invocation. Treat that as a repair rather than a design: it works in npm alone, and it rides a
-surface npm does not document.
-
-### Publishing without a publication target
-
-A mount with no publication target answers `npm publish` with `405 Method Not Allowed`, so a team
-that publishes has to reach its publication registry directly while its installs still run through
-Écluse. Four rules keep that arrangement portable:
-
-1. No `@scope:registry` bindings, per the section above.
-2. `registry=` points at the Écluse mount, so every install goes through the gate.
-3. Each publishable package carries `publishConfig.registry` naming where its publish goes.
-4. The publish step passes no bare `--registry` flag. A bare flag outranks
-   `publishConfig.registry` and redirects the publish. The `npm_config_registry` environment
-   variable does not, so a job may set its default registry that way and `publishConfig.registry`
-   still wins.
-
-Two clients diverge from that:
-
-- **bun** (1.3.13) ignores `publishConfig.registry`, and it offers no other way to aim a publish
-  at a second registry. Publish those packages with npm.
-- **Yarn Berry** ignores `.npmrc` altogether. Set `npmRegistryServer` and `npmPublishRegistry` in
-  `.yarnrc.yml`, and key each token by its registry URL under `npmRegistries`.
+A publish that never reaches Écluse is the quiet one. A client that resolves its publish
+destination from some other part of its configuration sends it straight to that registry, and the
+proxy sees nothing to refuse. Name-to-registry bindings are the usual cause, because in some
+clients such a binding outranks the per-package publish setting as well as the install route. Keep
+them off a client pointed at Écluse and let the one endpoint carry both directions.
 
 ## Network egress
 
