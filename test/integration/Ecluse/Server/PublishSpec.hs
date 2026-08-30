@@ -241,11 +241,11 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             app <- proxyWith Nothing
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
             status resp `shouldBe` 405
-            -- The refusal carries the publisher's way forward: the per-invocation registry
-            -- override, or dropping the .npmrc scope binding that defeats every other one.
+            -- The refusal names the missing setting and the publisher's way forward, in
+            -- terms no one ecosystem's client owns.
             let body = decodeUtf8 (LBS.toStrict (simpleBody resp)) :: Text
-            body `shouldSatisfy` T.isInfixOf "npm publish --@yourscope:registry=<url>"
-            body `shouldSatisfy` T.isInfixOf "publishConfig.registry"
+            body `shouldSatisfy` T.isInfixOf "no publication target is configured"
+            body `shouldSatisfy` T.isInfixOf "publish directly to the registry you intend to publish to"
             targetSaw target `shouldReturn` []
 
     it "relays the publication target's own error status (e.g. a 409 the registry returns) to the client" $

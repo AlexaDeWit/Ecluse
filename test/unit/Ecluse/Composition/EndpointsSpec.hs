@@ -59,6 +59,18 @@ otherMountSpec = describe "publicationTarget against another mount's endpoints" 
         collisionsFor (withPyPI (publishingTo "https://pypi-mirror.example.test"))
             `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "mirrorTarget"]
 
+    it "refuses two mounts that publish to one registry" $ do
+        -- Each mount relays a different publisher's credential, so one shared publication
+        -- target crosses the two tenancies. Both mounts report it.
+        let env =
+                overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET" "https://shared-publish.example.test" $
+                    withPyPI (publishingTo "https://shared-publish.example.test")
+        collisions <- collisionsFor env
+        collisions
+            `shouldMatchList` [ PublicationTargetOnMountEndpoint Npm PyPI "publicationTarget"
+                              , PublicationTargetOnMountEndpoint PyPI Npm "publicationTarget"
+                              ]
+
     it "boots a publication target equal to its own mount's private upstream" $
         -- The recommended read-back topology: the publisher writes where the mount reads.
         collisionsFor (publishingTo "https://private.example.test") `shouldReturn` []

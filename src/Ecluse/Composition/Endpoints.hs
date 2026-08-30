@@ -61,8 +61,7 @@ endpointCollisions mounts =
         <> concatMap (mirrorCollisions mounts) (Map.toAscList mounts)
 
 {- One publication target's collisions: any mount's public upstream by host, and any other
-mount's endpoints by URL. Its own mount's private upstream and mirror target are the documented
-read-back topology, so they stay legal. -}
+mount's endpoints by URL. Its own mount's endpoints are the documented read-back topology. -}
 publicationCollisions :: Map Ecosystem MountConfig -> (Ecosystem, RegistryUrl) -> [BootError]
 publicationCollisions mounts (eco, target) =
     [ PublicationTargetOnPublicUpstream eco other
@@ -98,8 +97,8 @@ declaredEndpoints mcfg =
     , Just url <- [mUrl]
     ]
 
-{- Whether two endpoints dial the same host, compared case-insensitively. Two values that carry
-no readable authority compare equal, so an unreadable one refuses rather than admits. -}
+{- Whether two endpoints dial the same host, compared case-insensitively. An unreadable authority
+yields the empty host, which matches no real one, so that endpoint fails later at the relay. -}
 sameHost :: RegistryUrl -> RegistryUrl -> Bool
 sameHost a b = hostOf a == hostOf b
   where

@@ -221,8 +221,7 @@ mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
 
 {- | The pure structural validation a boot enforces beyond 'Ecluse.Config.loadConfig': the
-adapter, publish-policy, and cross-mount endpoint refusals. It leaves provider initialisation
-('UnresolvedCredential') to 'planMounts'.
+adapter, publish-policy, and cross-mount endpoint refusals. 'planMounts' owns 'UnresolvedCredential'.
 -}
 validateComposition :: Config -> [BootError]
 validateComposition config = missingAdapters <> publishPolicyErrors <> endpointCollisions (cfgMounts app)

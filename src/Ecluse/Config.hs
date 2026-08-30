@@ -234,11 +234,8 @@ mountOf eco mcfg policy mode =
 rulesOf :: RulePolicy -> [PrecededRule]
 rulesOf = Map.elems . policyRules
 
-{- | Boot-time advisory: one warning per pair of a mount's resolved endpoints that point at
-the same registry. Each collapse here is supported, and a distinct registry per endpoint stays
-the recommended posture. A publication target equal to the private upstream is the documented
-publish arrangement, so that pair raises no warning. The pairs the boot refuses outright live in
-"Ecluse.Composition.Endpoints".
+{- | Boot-time advisory: one warning per pair of a mount's resolved endpoints that point at the
+same registry. The pairs the boot refuses outright live in "Ecluse.Composition.Endpoints".
 -}
 mountCollisionWarnings :: Config -> [Text]
 mountCollisionWarnings config =

@@ -164,19 +164,18 @@ publishTooLarge :: PublishReplies response -> PublishDeps -> response
 publishTooLarge replies deps =
     publishError replies status413 [] (appendHelp (pubHelp deps) "the publish body exceeds the maximum accepted request size")
 
--- A @405@ for a publish on a mount with no publication target configured. The @Allow@ header
--- advertises the read methods, and the body carries the two ways a publisher reaches its registry.
+-- A @405@ for a publish on a mount with no publication target configured. The @Allow@
+-- header advertises the read methods the package route does serve.
 publishDisabled :: PublishReplies response -> response
 publishDisabled replies =
     publishError replies status405 [("Allow", "GET, HEAD")] message
   where
-    -- An @scope:registry line in .npmrc overrides publishConfig.registry and --registry
-    -- alike, so the per-invocation override is the one that works while it stands.
+    -- The remediation stays ecosystem-neutral, because this pipeline serves every
+    -- ecosystem: it names no client's own commands or configuration keys.
     message :: Text
     message =
         "publishing is not enabled on this proxy (no publication target is configured); \
-        \publish straight to your registry with npm publish --@yourscope:registry=<url>, \
-        \or drop the @scope:registry line from .npmrc so publishConfig.registry applies"
+        \publish directly to the registry you intend to publish to"
 
 -- A @403@ for a publish whose name is outside the configured publish-scope allow-list:
 -- the anti-shadowing guard, refused before any upstream write.
