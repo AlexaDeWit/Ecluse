@@ -66,8 +66,9 @@ server speaks, and what each ecosystem does and does not support. That stops bei
 Écluse documents its coverage of each protocol, not the protocol itself:
 
 - **The spec models owned and synthesised responses in full**: the error/denial envelope, the
-  health and meta routes, and the packument Écluse synthesises (see
-  [Packument merge](registry-model.md#packument-merge-across-upstreams)).
+  meta routes (`/-/ping`, `/-/v1/search`), and the packument Écluse synthesises (see
+  [Packument merge](registry-model.md#packument-merge-across-upstreams)). `/livez` and `/readyz`
+  are middleware above the mounts, so they sit outside the spec.
 - **It describes opaque pass-through instead of re-specifying it**: tarball and artifact responses
   stream verbatim (see [Streaming](#streaming-and-resource-lifetime)). Upstream controls their
   status, media type, and body, so the operation carries a wildcard binary `default` response rather

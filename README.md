@@ -14,11 +14,11 @@ controlled passage every dependency clears before it reaches your build.
 trusting it: the keyless provenance and SBOM attestations, and the bit-for-bit reproducible
 rebuild.
 
-> **Status: pre-launch, no GA release yet.** The npm packument, tarball, and publish paths
-> run today. An AWS-backed deployment is wired end to end: an SQS mirror queue, a
-> demand-driven worker, and writes under a container-role credential. The GCP backends and
-> the deployment runbook are still to come. The release workflow publishes and attests
-> release candidates. Expect breaking changes before `v1.0.0`. The
+> **Status: generally available, pre-1.0.0.** The npm packument, tarball, and publish paths
+> run today and are ready for use. An AWS-backed deployment is wired end to end: an SQS
+> mirror queue, a demand-driven worker, and writes under a container-role credential. The
+> GCP backends and the deployment runbook are still to come. Configuration can still change
+> before `v1.0.0`, though repeated future-proofing passes aim to keep changes additive. The
 > [operator manual](https://ecluse-proxy.com/docs/) is the deployment contract.
 
 [Haddock API docs](https://ecluse-proxy.com/api/) auto-publish from `main`.
@@ -38,8 +38,10 @@ the exact fix for a vulnerability skips the wait, so the quarantine never delays
 Everything else is deny by default and opt-in by name.
 
 If you run a private registry, Écluse reads it first and passes your own packages through untouched.
-It can also mirror each admitted public version into that registry, so a mirrored version survives a
-public outage or yank. AWS CodeArtifact is supported today. Écluse hosts no packages itself.
+Any https registry that speaks the ecosystem's protocol serves in that role. Écluse can also mirror
+each admitted public version into a registry you nominate, so a mirrored version survives a public
+outage or yank. For an AWS CodeArtifact mirror target Écluse mints the short-lived write token
+itself, and any other host takes a static token you supply. Écluse hosts no packages itself.
 
 The [operator manual](https://ecluse-proxy.com/docs/) covers running Écluse.
 [`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules
@@ -62,9 +64,8 @@ covers the publish flow.
 
 ## Verifying the image
 
-> **Pre-release.** No GA release yet. The release workflow publishes release candidates
-> (e.g. `0.1.0-rc.2`) to GitHub Container Registry (`ghcr.io/alexadewit/ecluse`). They
-> already carry the attestations below.
+> **Releases.** The release workflow publishes every version to GitHub Container Registry
+> (`ghcr.io/alexadewit/ecluse`).
 
 Each tag is a single multi-arch image (`linux/amd64` + `linux/arm64`) carrying keyless
 (Sigstore) provenance and SBOM attestations in the public Rekor log. Each

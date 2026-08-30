@@ -88,16 +88,13 @@ There is no cosign signature, by design, so never write "signed image".
 
 ## 6. Release notes
 
-With no earlier tag, the generated body enumerates every merged PR in the repository's history.
-`gh release create` still succeeds (the body cap is generous), so the cheap fix is to publish
-and then replace the body, keeping the digest and the verify recipe at the top:
+With no earlier tag, the generated body can come back sparse or over-inclusive, so do not rely on
+it for the first release. `gh release create` succeeds either way, so publish and then replace the
+body, keeping the digest and the verify recipe at the top:
 
 ```bash
 gh release edit v0.1.0 --notes-file <handwritten.md>
 ```
-
-A `.github/release.yml` categorisation config groups future bodies, and must exist before the
-tag to apply.
 
 ## 7. Rollback
 

@@ -39,10 +39,11 @@ configuration, including a minor bump. Pin an exact version, preferably
 
 ## Release candidates
 
-A release candidate carries the tag `vX.Y.Z-rc.N`, for example `v0.1.0-rc.2`. Flagged as a
-prerelease, it ships the same provenance and SBOM attestations as a final release, and it cuts no
-GitHub Release. The tag-match guard compares only the base version, so a candidate for `X.Y.Z`
-carries `ecluse.cabal` version `X.Y.Z`.
+A release candidate carries the tag `vX.Y.Z-rc.N`, for example `v0.1.0-rc.2`. Pushing that tag
+ships the same provenance and SBOM attestations as a final release and cuts a GitHub Release
+flagged as a prerelease. Only the `workflow_dispatch` rehearsal path skips the Release. The
+tag-match guard compares only the base version, so a candidate for `X.Y.Z` carries `ecluse.cabal`
+version `X.Y.Z`.
 
 ## Cutting a release
 

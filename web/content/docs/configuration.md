@@ -31,8 +31,10 @@ Mounts are off until you declare them. Mentioning one anywhere, whether through 
 `ECLUSE_MOUNTS__<ECOSYSTEM>__*` variable or a key under `mounts.<ecosystem>` in the document,
 switches it on. Declaring `mirrorTarget` then makes the active mount **mirror**, and a mirrored
 mount requires its private upstream, so the mirror reads back. Omit `mirrorTarget` and the mount is
-serve-only. Each boot logs one posture line per mount and warns on any pair of a mount's endpoints
-that resolve to the same registry. The design rationale is in
+serve-only. Each boot logs one posture line per mount. It warns when a mount's mirror target
+resolves to the same registry as its private upstream, its public upstream, or its publication
+target, and when its private upstream resolves to the same registry as its public upstream. The
+design rationale is in
 [Configuration and authentication](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md#configuration).
 
 Écluse also reads three ordinary AWS-SDK variables from the process environment. They are not
@@ -148,7 +150,7 @@ type's knobs, and a knob written under a type that does not read it fails the lo
 | `min-age` | `AllowIfOlderThan` | Yes | Admits public versions older than the quarantine window, the core defence against race-to-publish typosquatting and dependency confusion. | `ageSeconds` (7 days by default) |
 | `remediation-fast-track` | `AllowIfRemediatesCve` | Yes | Admits a release a synced advisory names as its exact fixed version ahead of the quarantine, provided no other advisory still affects it. Abstains until a first advisory database syncs (set `ECLUSE_ADVISORIES__URL` and run Pilot), so without one only the quarantine governs. | (none) |
 | yours to add | `AllowScope` | No | Admits every version under an npm scope you already trust, past the quarantine and without reaching the advisory database. Sits above `min-age` and below every deny. | `scope` (the scope without its leading `@`) |
-| yours to add | `AllowByIdentity` | No | Admits a specific package or `package@version` past the quarantine. Sits at the top of the allow band but still below every deny. | `identity` |
+| yours to add | `AllowByIdentity` | No | Admits a specific package or `package@version` past the quarantine. Sits above the two advisory denies, so an identity pin overrides either, and below `DenyInstallTimeExecution` and `DenyByIdentity`. | `identity` |
 | yours to add | `DenyByIdentity` | No | Hard-denies a specific package or `package@version` (the `revoke` shape). | `identity` |
 | yours to add | `DenyInstallTimeExecution` | No, because many legitimate packages ship install scripts | Denies install-time code execution. | (none) |
 | yours to add | `DenyIfCve` | No | Blocks a version a synced advisory records as affected at or above the CVSS threshold. The npm malware feed carries no score and counts as above every threshold, so enabling it also blocks known-malicious packages. Sits just below `AllowByIdentity`, so an identity pin overrides it. | `minCvss` (0-10). `onUnavailable` (`deny` by default, or `skip`) decides what happens when the advisory database cannot answer. |

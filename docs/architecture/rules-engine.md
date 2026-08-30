@@ -76,8 +76,8 @@ Already-approved versions serve from the private upstream with no rules. How a f
 failure surfaces depends on the request shape. On a packument the pipeline filters the version
 out like a denied one, with no error unless nothing survives. On a concrete artifact it
 surfaces through the [error model](web-layer.md#error-model) as `503` with `Retry-After` when
-transient, and `500` when not. Every fail-closed undecidable result and breaker trip emits an
-ERROR log and metric.
+transient, and `500` when not. A fail-closed undecidable result logs at WARNING with the denial
+audit fields. A breaker trip logs nothing and moves the `ecluse.rule.breaker.state` gauge instead.
 
 ### Applying verdicts to a packument
 
@@ -95,12 +95,13 @@ pipeline applies verdicts across it. For the cross-upstream merge, see
   repointing them. The rule never promotes a higher prerelease over a chosen stable `latest`.
   Repointing downward is a deliberate downgrade, so a withheld release does not silently remain
   the default install.
-- **No survivors → 403, 503, or 500.** If nothing survives, the status follows the most
-  recoverable cause. `403` with the collected denial reasons when every rejection is by policy.
-  `503` (with `Retry-After`) when any rejection was transient or a needed upstream was
-  unavailable. `500` when an exclusion is a permanent inability and none is retryable. Never
-  `404`: the package exists, and Écluse withheld its versions. The HTTP status mapping belongs
-  to the [error model](web-layer.md#error-model).
+- **No survivors → 503, 502, 500, or 403.** If nothing survives, the status follows the most
+  recoverable cause. `503` (with `Retry-After`) when any rejection was transient or a needed
+  upstream was unavailable. `502` when an upstream returned a document Écluse could not use.
+  `500` when an exclusion is a permanent inability and none is retryable. `403` with the
+  collected denial reasons when every rejection is by policy. Never `404`: the package exists,
+  and Écluse withheld its versions. The HTTP status mapping belongs to the
+  [error model](web-layer.md#error-model).
 
 Because the filtered body differs from upstream's, the proxy computes its own `ETag` over it
 (see [Web layer](web-layer.md#web-layer)).

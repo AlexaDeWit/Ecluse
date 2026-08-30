@@ -3,8 +3,9 @@
 # document < environment. ECLUSE_CACHE__TTL spells cache.ttl. A commented key is
 # INACTIVE: it documents the schema, and names the computed or derived default that
 # applies while it stays unset. Put secrets in environment variables, never here. An
-# integer key takes a positive integer unless its comment says otherwise, written as
-# plain digits: a hexadecimal, octal, padded, or bracketed spelling is refused.
+# integer key takes a positive integer unless its comment says otherwise. A quoted value
+# and an ECLUSE_* variable must spell it in plain digits: a hexadecimal, octal,
+# space-padded, or bracketed spelling is refused there.
 #
 # The loader owns the whole ECLUSE_ prefix: every ECLUSE_* variable is read as a key of
 # this schema, and one that names no key aborts the boot. Two families are consumed
@@ -16,9 +17,10 @@
 server:
   # TCP port, 0 to 65535. 0 binds an OS-assigned ephemeral port. Every role listens
   # here: the proxy serves its mounts and its probes, and the worker roles (mirror,
-  # pilot, dredger) serve /livez and /readyz alone. Telemetry adds a second listener on
-  # its own port, addressed by OTEL_EXPORTER_PROMETHEUS_HOST and
-  # OTEL_EXPORTER_PROMETHEUS_PORT rather than by a key here.
+  # pilot, dredger) serve /livez and /readyz alone. OTEL_METRICS_EXPORTER=prometheus
+  # selects the scrape transport and adds a second listener on its own port, addressed
+  # by OTEL_EXPORTER_PROMETHEUS_HOST and OTEL_EXPORTER_PROMETHEUS_PORT rather than by a
+  # key here.
   port: 8080
   # The proxy's own externally-reachable base URL. The proxy rewrites served tarball
   # URLs against it. http(s) with a dialable authority, and http stays legal for
@@ -85,7 +87,8 @@ cache:
   # override it.
   # maxEntries: 1024
   # One aggregate budget, split across the three stores (full packument 60%, single
-  # version 15%, assembled the rest). A pod too small for the plan sheds it first.
+  # version 15%, assembled the rest). A pod too small for the plan sheds the
+  # mirror-artifact cap first and this aggregate second.
   # maxBytes: 268435456
 
 integrity:
@@ -128,8 +131,9 @@ advisories:
   # The object store the compiled advisory databases sync from, as
   # s3://<bucket>[/<prefix>]. The scheme picks the provider, the way queue.url does, and
   # a scheme this build does not know is refused at load. AWS_ENDPOINT_URL still points
-  # the S3 client at an emulator or a VPC endpoint. Unset, the advisory stack is off and
-  # the advisory-dependent rules abstain.
+  # the S3 client at an emulator or a VPC endpoint. Unset, the advisory stack is off.
+  # AllowIfRemediatesCve then abstains. DenyIfCve and DenyIfEpss follow their own
+  # onUnavailable policy instead, and its default `deny` fails closed with a 503.
   # url: s3://my-advisory-bucket/ecluse
 
 # Process sizing. Écluse computes every key at boot from the container's cgroup
@@ -270,3 +274,24 @@ rules:
   #   type: DenyIfEpss
   #   minEpss: 0.5            # EPSS >= 0.5. Unscored advisories always block
   #   onUnavailable: deny     # as for DenyIfCve: "skip" fails open instead
+  # Opt-in identity pin, absent from this shipped policy. It admits one package, or one
+  # package@version, past the quarantine. `identity` matches the rendered package name
+  # exactly, or that name and version joined by an @: no prefix, glob, or range. It sits
+  # above both advisory denies, so a pin overrides either, and below
+  # DenyInstallTimeExecution and DenyByIdentity.
+  # pin-fix:
+  #   type: AllowByIdentity
+  #   identity: left-pad@1.3.0  # a bare name pins every version of that package
+  # Opt-in install-script deny, absent from this shipped policy. It denies a version
+  # whose manifest runs code at install time. It sits above every allow, so no pin
+  # admits a version it denies. Many legitimate packages ship install scripts, so
+  # enabling it breaks builds until you know which of yours do.
+  # deny-scripts:
+  #   type: DenyInstallTimeExecution
+  # Opt-in revoke, absent from this shipped policy. It denies one package, or one
+  # package@version, whatever else would admit it. `identity` matches on the same exact
+  # terms as AllowByIdentity. It carries the highest precedence of any shipped type, so
+  # it is the revoke of last resort.
+  # revoke-bad:
+  #   type: DenyByIdentity
+  #   identity: bad-package     # a bare name revokes every version of that package

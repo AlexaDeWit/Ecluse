@@ -28,9 +28,10 @@ A separate worker receives jobs and, for each one:
    `dist.integrity`, read from the current metadata. The queue payload carries no digest at all.
 5. Publishes to the mirror target and acknowledges the job.
 
-A hash mismatch fails the job. The worker publishes nothing, routes it to retry or the
-dead-letter path, and alarms. A corrupt or tampered artifact therefore never enters the private
-upstream, which Écluse later serves without rules. At-least-once delivery is safe because
+A hash mismatch fails the job. The worker publishes nothing, writes an ERROR log, and acknowledges
+the message so it stops cycling. The job is never retried and never dead-lettered, because no
+redelivery can make tampered bytes verify. A corrupt or tampered artifact therefore never enters
+the private upstream, which Écluse later serves without rules. At-least-once delivery is safe because
 publishing is idempotent: versions are immutable, so a redelivered job finds the version already
 present and succeeds.
 
@@ -74,7 +75,7 @@ sequenceDiagram
             Pub-->>W: bytes
             Note over W: verify bytes against dist.integrity
             alt hash mismatch
-                W-->>Queue: do not ack (retry / DLQ) + alarm
+                W->>Queue: ack + ERROR alarm (retired, never published)
             else verified
                 W->>Cred: currentToken
                 Cred-->>W: bearer token
@@ -94,9 +95,8 @@ sequenceDiagram
 
 A transient failure retries because the worker does not ack the message. That works only while
 something eventually stops the retrying. A job that can never succeed has to end somewhere. An
-artifact past the per-artifact byte cap and a payload that no longer decodes are both such jobs.
-Without a terminus the worker fetches and refuses the job on every redelivery, for as long as
-the queue holds it.
+artifact past the per-artifact byte cap is such a job. Without a terminus the worker fetches and
+refuses it on every redelivery, for as long as the queue holds it.
 
 The intended terminus is the operator's own **dead-letter queue**. Écluse returns such a message
 without deleting it. An attached SQS redrive policy then moves the message to the dead-letter
@@ -105,14 +105,19 @@ queue and keeps it for inspection. That is the only outcome that preserves a for
 earns a loud start-up warning, because the operator cannot see what their proxy could not mirror.
 
 A warning alone leaves the message cycling, so a second and weaker terminus sits beneath it: a
-**redelivery budget**. Every delivery carries its own count. The worker discards a message that
-has used up that budget. It writes an error log that names the job, and records a distinct
-`discarded` result on the mirror-job counter.
+**redelivery budget**. It reaches a decoded job alone. Every delivery carries its own count, and
+the worker discards a message that has used up that budget. It writes an error log that names the
+job, and records a distinct `discarded` result on the mirror-job counter.
 
-Discarding retains nothing, so it is deliberately the lesser outcome. Écluse holds the budget one
-delivery above an attached policy's own `maxReceiveCount`. A dead-letter queue therefore always
-captures the message first, and the budget fires only for a deployment that has none. Discarding
-is safe in the way the rest of mirroring is safe. Mirroring is demand-driven, so the job returns
+A payload that no longer decodes never becomes a job, so the budget cannot reach it. The poller
+logs the drop and leaves the message un-acked, which leaves the dead-letter queue, or the queue's
+own retention window, as the only terminus it has.
+
+Discarding retains nothing, so it is deliberately the lesser outcome. The configured count is a
+floor. When Écluse can read an attached policy's own `maxReceiveCount`, it holds the budget at
+least one delivery above that count, so the dead-letter queue captures the message first and the
+budget fires only for a deployment that has none. When the policy's count is unreadable, the
+configured floor stands alone. Discarding is safe in the way the rest of mirroring is safe. Mirroring is demand-driven, so the job returns
 on the next pull of that artifact and fails the same way until the cause is fixed.
 
 The worker checks the budget before it runs the job, not after. That check spares the repeated

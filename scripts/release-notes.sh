@@ -13,7 +13,8 @@ image="$2"
 digest="$3"
 repo="${GITHUB_REPOSITORY:-AlexaDeWit/Ecluse}"
 
-# Auto changelog (merged PRs since the previous tag). Empty on the first release.
+# Auto changelog (merged PRs since the previous tag). With no earlier tag the body can
+# come back sparse or over-inclusive, so the runbook replaces it after publish.
 changelog=$(gh api "repos/$repo/releases/generate-notes" -f tag_name="$tag" --jq '.body' 2>/dev/null || true)
 
 cat <<EOF
