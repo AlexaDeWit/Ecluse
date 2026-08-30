@@ -56,7 +56,8 @@ restore is mandatory, or the architecture document's description of the gate bec
 
 After approval, `publish` runs alone: it assembles and pushes one multi-arch index, attaches
 three provenance attestations (index, amd64, arm64) and two SBOM attestations, and creates the
-GitHub Release with the digest pinned in the body. The only credential anywhere is the
+GitHub Release with the digest pinned in the body. The Release also carries the five attestation
+bundles and both SPDX documents as assets. The only credential anywhere is the
 ephemeral `GITHUB_TOKEN`.
 
 ## 4. The package, on a first push to a namespace
@@ -75,12 +76,25 @@ authenticated): as the owner they pass even against a private package, which hid
 failure a reader would hit.
 
 ```bash
-gh release view v0.1.0                                        # digest pin present
+gh release view v<version>                                     # digest pin present
 docker pull ghcr.io/alexadewit/ecluse@sha256:<digest>          # anonymous pull works
 gh attestation verify "oci://ghcr.io/alexadewit/ecluse@sha256:<digest>" \
-  --repo AlexaDeWit/Ecluse                                     # attestations verify
-docker manifest inspect ghcr.io/alexadewit/ecluse:0.1.0 | grep architecture
+  --repo AlexaDeWit/Ecluse                                     # provenance verifies
+docker manifest inspect ghcr.io/alexadewit/ecluse:<version> | grep architecture
 # expect both amd64 and arm64
+
+gh release view v<version> --json assets --jq '.assets[].name'  # expect 7 assets
+gh release download v<version> -p 'ecluse-*-provenance.sigstore.json'
+gh attestation verify "oci://ghcr.io/alexadewit/ecluse@sha256:<digest>" \
+  --repo AlexaDeWit/Ecluse --bundle ecluse-<version>-provenance.sigstore.json
+```
+
+`verify` checks one predicate type per run, so neither command above touches the SBOM
+attestations. Check one against its own platform digest:
+
+```bash
+gh attestation verify "oci://ghcr.io/alexadewit/ecluse@sha256:<platform-digest>" \
+  --repo AlexaDeWit/Ecluse --predicate-type https://spdx.dev/Document/v2.3
 ```
 
 Announcement wording: the image carries attestations, verified with `gh attestation verify`.
@@ -93,7 +107,7 @@ it for the first release. `gh release create` succeeds either way, so publish an
 body, keeping the digest and the verify recipe at the top:
 
 ```bash
-gh release edit v0.1.0 --notes-file <handwritten.md>
+gh release edit v<version> --notes-file <handwritten.md>
 ```
 
 ## 7. Rollback
@@ -113,8 +127,8 @@ the usable retraction path.
 ## 8. Rehearsal
 
 `workflow_dispatch` on `release.yml` runs the whole pipeline except the Release creation, which
-is gated to tag pushes. It exercises the cold builds, the gate, the push, and all five
-attestations without cutting a release:
+is gated to tag pushes. It exercises the cold builds, the gate, the push, all five attestations,
+and the asset staging, without cutting a release. Only the upload itself goes unexercised:
 
 ```bash
 gh workflow run release.yml -f tag=<never-pushed-rc-tag>

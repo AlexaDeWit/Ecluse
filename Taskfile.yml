@@ -350,6 +350,7 @@ tasks:
       - 'flake.lock'
     cmds:
       - bash scripts/ci-gate-verdict.test.sh
+      - bash scripts/release-assets.test.sh
   analysis-build:
     desc: Build exe:ecluse with .hie output for weeder and stan
     # weeder and stan want the same artefact: exe:ecluse built with -fwrite-ide-info.

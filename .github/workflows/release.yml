@@ -204,6 +204,7 @@ jobs:
       # digest can then verify it too. Keyless (OIDC → Fulcio/Rekor), stored as
       # immutable OCI referrers, which suits the repo's immutable tags.
       - name: Attest provenance (index)
+        id: provenance-index
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
@@ -211,6 +212,7 @@ jobs:
           push-to-registry: true
 
       - name: Attest provenance (amd64)
+        id: provenance-amd64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
@@ -218,6 +220,7 @@ jobs:
           push-to-registry: true
 
       - name: Attest provenance (arm64)
+        id: provenance-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
@@ -228,6 +231,7 @@ jobs:
       # each arch's SBOM to that arch's platform digest, never to the index. The
       # index has no closure of its own.
       - name: Attest SBOM (amd64)
+        id: sbom-amd64
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ${{ env.IMAGE }}
@@ -236,6 +240,7 @@ jobs:
           push-to-registry: true
 
       - name: Attest SBOM (arm64)
+        id: sbom-arm64
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ${{ env.IMAGE }}
@@ -243,10 +248,27 @@ jobs:
           sbom-path: artifacts/sbom-arm64/ecluse.spdx.json
           push-to-registry: true
 
+      # The same attestations again, as files on the Release below: a copy pinned to
+      # the release object, and the only copy Scorecard's Signed-Releases check can
+      # see. Ungated on purpose: a rehearsal dispatch runs it too, so a bundle that
+      # never materialised fails there and not on a real tag. Step outputs flow
+      # through env, never into the run script.
+      - name: Stage release assets
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          PROVENANCE_INDEX: ${{ steps.provenance-index.outputs.bundle-path }}
+          PROVENANCE_AMD64: ${{ steps.provenance-amd64.outputs.bundle-path }}
+          PROVENANCE_ARM64: ${{ steps.provenance-arm64.outputs.bundle-path }}
+          SBOM_BUNDLE_AMD64: ${{ steps.sbom-amd64.outputs.bundle-path }}
+          SBOM_BUNDLE_ARM64: ${{ steps.sbom-arm64.outputs.bundle-path }}
+          SBOM_AMD64: artifacts/sbom-amd64/ecluse.spdx.json
+          SBOM_ARM64: artifacts/sbom-arm64/ecluse.spdx.json
+        run: bash scripts/release-assets.sh "$TAG" "$RUNNER_TEMP/assets" > "$RUNNER_TEMP/assets.txt"
+
       # On a real version tag (not an rc dispatch), publish a GitHub Release that
-      # pins the INDEX digest. The release gives the `gh attestation verify` recipe
-      # and carries the auto-generated changelog. Untrusted refs flow through env,
-      # never into the run script directly.
+      # pins the INDEX digest. The release gives the `gh attestation verify` recipe,
+      # the staged assets, and the auto-generated changelog. Untrusted refs flow
+      # through env, never into the run script directly.
       - name: Publish GitHub Release
         if: github.event_name == 'push'
         env:
@@ -255,5 +277,6 @@ jobs:
           DIGEST: ${{ steps.push.outputs.index-digest }}
         run: |
           bash scripts/release-notes.sh "$TAG" "$IMAGE" "$DIGEST" > "$RUNNER_TEMP/notes.md"
+          mapfile -t assets < "$RUNNER_TEMP/assets.txt"
           pre=""; case "$TAG" in *-*) pre="--prerelease" ;; esac
-          gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag $pre
+          gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag $pre "${assets[@]}"
