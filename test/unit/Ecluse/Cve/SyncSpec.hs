@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Proxy.CveSyncSpec (spec) where
+module Ecluse.Cve.SyncSpec (spec) where
 
 import Control.Retry (simulatePolicy)
 import Data.Map.Strict qualified as Map
@@ -22,7 +22,7 @@ import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup))
 import Ecluse.Core.Supervision (delayListPolicy)
-import Ecluse.Proxy.CveSync (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, planCveSync, sweepStaleTemps, sweepStep)
+import Ecluse.Cve.Sync (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, planCveSync, sweepStaleTemps, sweepStep)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
 import Ecluse.Runtime.Test.Cve (refusingFetch)
 import Ecluse.Test.Cve (fakeCveLookup)
@@ -39,7 +39,7 @@ spec = do
             Map.keys plan `shouldBe` []
 
         it "plans one handle per configured mount ecosystem and prepares the data dir" $
-            withSystemTempDirectory "ecluse-proxy-plan" $ \dir -> do
+            withSystemTempDirectory "ecluse-cve-sync-plan" $ \dir -> do
                 setDummyAwsCredentials
                 let dataDir = dir </> "osv"
                 -- A stale in-progress download and a canonical artifact from a
@@ -80,7 +80,7 @@ spec = do
                     sweepStep logEnv missing (removeFile missing)
                     void (closeScribes logEnv)
                 logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
-                logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Proxy.CveSync\""
+                logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Cve.Sync\""
                 logged `shouldSatisfy` T.isInfixOf "npm-osv-schema3.db.tmp"
                 logged `shouldSatisfy` T.isInfixOf "could not sweep"
 
@@ -92,7 +92,7 @@ spec = do
                     sweepStaleTemps logEnv (dir </> "missing")
                     void (closeScribes logEnv)
                 logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
-                logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Proxy.CveSync\""
+                logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Cve.Sync\""
 
     describe "cveRuleDepsFor -- per-ecosystem capability dispatch" $ do
         it "borrows through the mount ecosystem's own slot" $ do
