@@ -1548,7 +1548,7 @@
                   "title": "Malicious mirrored version persists and is served as trusted (no automatic post-ingestion revocation)",
                   "type": "Tampering",
                   "description": "\u00c9cluse mirrors approved public versions into Registry B and, by design, resists upstream yanks so a benign yank does not break installs. The cost is that a version later found malicious persists in B and is served as trusted. The merge serves the private origin unfiltered by the rules. Nothing removes it automatically: neither an upstream yank nor a rules change reaches an already-mirrored artifact.",
-                  "mitigation": "The freshness quarantine (`AllowIfOlderThan`) is the primary defence. It delays serving a new version until advisories have time to surface, so the rules deny most malicious versions at admission, before any mirroring. This threat is the residual for a version found bad after it cleared the quarantine and was mirrored. Detection is delegated: operator scanning of Registry B, upstream advisories, and security-holding signals decide what to revoke. Enforcement is layered across the version's lifecycle. The hard deny-by-identity rule (DenyByIdentity) halts re-admission on the serve path and re-mirroring at the worker's ingest re-check. That is the immediate, surgical stop, and it also breaks the re-mirror treadmill. An automated reaper, the \u00c9cluse Dredger, must continually prune already-mirrored versions that match an advisory or age condition, so recovery follows a public alert without an operator step. It is required to run as a separate service that shares the core rules engine and exposes only its liveness and readiness probes. The operator can also purge a version from Registry B directly. The rules never run on trusted content, so a purge is what removes the already-mirrored copy. Order the two as deny then purge, so demand does not re-mirror during the purge. A purge alone is a treadmill while the version is still live upstream. The typical pattern is the inverse. An upstream yank or security hold removes or changes the bytes first. Re-mirroring then cannot reproduce them, and a purge clears the stale copy. Irreducible residual: a malicious version with no public advisory cannot be reaped, because there is nothing to detect on. That is the bound the freshness quarantine exists to provide. A serve-only mount has no trusted store of mirrored versions at all. Every serve re-gates under current policy, so a rules change or a fresh advisory takes effect immediately. This threat's surface exists only where a mirrorTarget is declared.",
+                  "mitigation": "The freshness quarantine (`AllowIfOlderThan`) is the primary defence. It delays serving a new version until advisories have time to surface, so the rules deny most malicious versions at admission, before any mirroring. This threat is the residual for a version found bad after it cleared the quarantine and was mirrored. Detection is delegated: operator scanning of Registry B, upstream advisories, and security-holding signals decide what to revoke. Enforcement is layered across the version's lifecycle. The hard deny-by-identity rule (DenyByIdentity) halts re-admission on the serve path and re-mirroring at the worker's ingest re-check. That is the immediate, surgical stop, and it also breaks the re-mirror treadmill. An automated reaper, the \u00c9cluse Dredger, must continually prune already-mirrored versions that the shared rules engine now denies, on a named decisive deny that is advisory-driven or identity-driven and never an age condition, so recovery follows a public alert without an operator step. It is required to run as a separate service that shares the core rules engine and exposes only its liveness and readiness probes. The operator can also purge a version from Registry B directly. The rules never run on trusted content, so a purge is what removes the already-mirrored copy. Order the two as deny then purge, so demand does not re-mirror during the purge. A purge alone is a treadmill while the version is still live upstream. The typical pattern is the inverse. An upstream yank or security hold removes or changes the bytes first. Re-mirroring then cannot reproduce them, and a purge clears the stale copy. Irreducible residual: a malicious version with no public advisory cannot be reaped, because there is nothing to detect on. That is the bound the freshness quarantine exists to provide. Retained pull-through copies in the private upstream can outlive removal from the mirror, and their safe removal is future work pending verification against a real deployment. A serve-only mount has no trusted store of mirrored versions at all. Every serve re-gates under current policy, so a rules change or a fresh advisory takes effect immediately. This threat's surface exists only where a mirrorTarget is declared.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010d"
                 }
@@ -3060,7 +3060,7 @@
             "id": "f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff",
             "data": {
               "name": "\u00c9cluse Dredger",
-              "description": "A separate reaper service. It continually prunes the private mirror (Registry B) of cold inventory (AgeSinceMirror) or vulnerable versions (HasAdvisoryAboveThreshold). It takes zero ingress, shares ecluse-core for the rules, and deletes from the trusted store.",
+              "description": "The mirror-store pruning role of the multicall binary, run as `ecluse dredger`. It prunes already-mirrored versions that the shared rules engine now denies, on a named decisive deny that is advisory-driven or identity-driven, with no age condition. It deletes from the mirror store (Registry B) only, never the private upstream and never the publication target. It takes zero ingress and exposes only its liveness and readiness probes. It shares ecluse-core, so its rules cannot drift from the ones the serve and ingest gates run.",
               "type": "tm.Process",
               "isTrustBoundary": false,
               "outOfScope": false,
@@ -3074,7 +3074,7 @@
                   "title": "Dredger inappropriately purges valid packages",
                   "type": "Denial of service",
                   "description": "A misconfiguration in Dredger, or poisoned OSV data, could delete legitimate, needed packages from Registry B. That causes cache misses or upstream fetch failures.",
-                  "mitigation": "Dredger must delete only from the mirror. On the next request the proxy can re-mirror the version if it passes admission, so a delete then behaves as a cache eviction. A serve-only mount enqueues no back-fill jobs, so this surface does not exist there.",
+                  "mitigation": "Dredger must delete only from the mirror. It must delete a version only on a named decisive deny from the shared rules engine, never on deny-by-default and never while the advisory database is unavailable, because fail closed for a reaper means refusing to delete. A per-cycle deletion cap halts the cycle when a mass denial appears, which is the breaker against a poisoned advisory database. A dry-run mode rehearses a sweep and reports what it would remove without removing it. Deletion is the backend's plain delete rather than a tombstone, so a culled version whose deny later lifts is re-admittable through the normal admission gate and the mirror behaves as a cache. A serve-only mount enqueues no back-fill jobs, so this surface does not exist there.",
                   "modelType": "STRIDE",
                   "id": "43f60aec-7a7c-4450-8992-ae2b42d20b0f"
                 },
@@ -3085,7 +3085,7 @@
                   "title": "Dredger container-role privilege escalation",
                   "type": "Elevation of privilege",
                   "description": "Dredger holds a standing high privilege over Registry B: delete-only. An attacker who compromised Dredger could wipe the whole registry.",
-                  "mitigation": "Dredger exposes only the liveness and readiness probes. Least-privilege IAM scopes it delete-only on Registry B. It prefers container-role minting over static secrets.",
+                  "mitigation": "Dredger exposes only the liveness and readiness probes. Least-privilege IAM scopes it delete-only on Registry B. It prefers container-role minting over static secrets. The delete credential must be scoped by policy to the mirror repository alone, with no permission over the private upstream or the publication target. The operator consent marker is deliberately distinct from the credential's capability, so holding the credential is not by itself permission to delete.",
                   "modelType": "STRIDE",
                   "id": "c12bddfe-96d4-47c6-92e0-a961abadb5b2"
                 },
@@ -3096,7 +3096,7 @@
                   "title": "First-party data loss from collapsed registries",
                   "type": "Denial of service",
                   "description": "An operator can collapse the mirror target and the publication target onto a single registry. Dredger could then purge first-party packages, taking them for stale or vulnerable public ones.",
-                  "mitigation": "Dredger must refuse to boot when mounts.<eco>.mirrorTarget and mounts.<eco>.publicationTarget resolve to the same registry. The proxy's own boot warns on that pair and then proceeds. Collapsing the registries deliberately surrenders Dredger's automated pruning.",
+                  "mitigation": "The dredger role must refuse to boot when a mount's mirrorTarget matches any mount's publicationTarget or privateUpstream by full registry URL. A mirror target on a public upstream is already refused proxy-wide. The delete capability is only constructible from that disjointness proof, so an overlapping configuration cannot reach a delete at all. The proxy's own boot warns on the collapsed pair and then proceeds. Collapsing the registries deliberately surrenders Dredger's automated pruning.",
                   "modelType": "STRIDE",
                   "id": "e23cddfe-96d4-47c6-92e0-a961abadb5b3"
                 },
@@ -3107,7 +3107,7 @@
                   "title": "Accidental permanent deletion of registry data",
                   "type": "Elevation of privilege",
                   "description": "Dredger issues permanent hard deletions against the mirror registry. Misconfigured, or pointed at the wrong registry, it destroys data permanently.",
-                  "mitigation": "Dredger must verify explicit operator consent before it runs any destructive action. It is required to query the target CodeArtifact repository for a specific resource tag, for example `Dredger: PermanentDeletionAllowed`, and to fail closed without that tag. It must also refuse to boot when mounts.<eco>.mirrorTarget and mounts.<eco>.publicationTarget resolve to the same registry.",
+                  "mitigation": "Dredger must verify explicit operator consent before it runs any destructive action, and again at the start of every cycle. Consent is a marker the operator attaches to the store itself and Dredger reads through the registry adapter, for example a resource tag on a CodeArtifact repository. It must fail closed when the marker is absent or unreadable, and the refusal must log a backend-specific descriptor that tells the operator how to attach consent. The dredger role must also refuse to boot when a mount's mirrorTarget matches any mount's publicationTarget or privateUpstream by full registry URL. A hardcoded minimum pause between chunks, a per-cycle deletion cap, and a dry-run mode floor the damage a single cycle can do.",
                   "modelType": "STRIDE",
                   "id": "0b32b3e5-74f1-421c-8c9b-92a24fd2a00b"
                 },
@@ -3118,7 +3118,7 @@
                   "title": "Massive Purge DoS",
                   "type": "Denial of service",
                   "description": "A bug in Dredger, or a malicious rule configuration, could fire thousands of deletion requests at once. That exhausts the registry API limits and denies service to the private mirror.",
-                  "mitigation": "Not yet built. Dredger's deletion logic must be explicitly batched and rate-limited.",
+                  "mitigation": "Dredger's deletion logic must sweep in chunked batches under a request-budget ceiling. Pacing scales to the size of the store against a target cycle window, so a large store spreads its work instead of bursting, and a hardcoded minimum pause separates chunks. Backoff must honour the retry delays the registry asks for. A per-cycle deletion cap halts the cycle with an error, which bounds any single runaway sweep.",
                   "modelType": "STRIDE",
                   "id": "0c922ee5-3ac6-4a85-89de-91feecf0f9f7"
                 }
@@ -3137,7 +3137,7 @@
             },
             "data": {
               "name": "delete pruned versions",
-              "description": "Dredger issues delete requests to Registry B based on CVE advisories or age.",
+              "description": "Dredger issues delete requests to Registry B based on the versions the shared rules engine denies, advisory-driven or identity-driven.",
               "type": "tm.Flow",
               "isTrustBoundary": false,
               "outOfScope": false,
