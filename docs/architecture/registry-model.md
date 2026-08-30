@@ -47,7 +47,8 @@ reads the public upstream anonymously.
 - **Publication target (write)**: the client's own forwarded credential. Écluse mints no token.
 
 The non-negotiable invariant, under every strategy: **the client's credential is never sent to
-the public upstream.**
+the public upstream.** The boot enforces it on the one client-driven write: a `publicationTarget`
+on any mount's `publicUpstream` host, or equal to another mount's endpoint, refuses to start.
 
 The private upstream is the per-client authority for who may read what. The proxy reads its
 metadata per request and **never enters it into the shared cache**. A credential-blind key would

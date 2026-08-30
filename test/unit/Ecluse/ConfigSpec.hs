@@ -121,11 +121,6 @@ spec = do
                 )
                 ["mirrorTarget", "privateUpstream", "https://priv.example.test"]
 
-        it "warns when the mirror target equals the public upstream" $
-            shouldWarnOnce
-                (npmMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://registry.npmjs.org")])
-                ["mirrorTarget", "publicUpstream"]
-
         it "warns when the private and public upstreams collide" $
             shouldWarnOnce
                 (npmMountDoc [("privateUpstream", "https://registry.npmjs.org"), ("mirrorTarget", "https://mirror.example.test")])

@@ -406,6 +406,19 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
                 Nothing -> expectationFailure "expected the mount to carry publish deps"
             _ -> expectationFailure "expected a single wired binding"
 
+    it "refuses the boot, and wires no publish deps, when the publication target is a public upstream" $ do
+        -- The witness that reaches the relay comes only from the collision check, so a
+        -- refused target cannot be wired at all.
+        let testEnv =
+                [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://public.example.test/npm/")
+                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme")
+                ]
+                    <> staticEnvVars
+        _ <- expectEnv testEnv
+        planFrom testEnv Nothing >>= \case
+            Left errs -> errs `shouldBe` [PublicationTargetOnPublicUpstream Npm Npm]
+            Right _ -> expectationFailure "expected a publication-target collision boot error"
+
     it "leaves the publish path off (no publish deps) when no publication target is configured" $ do
         -- The opt-out: with no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET the mount carries no
         -- publish deps, so a PUT /{pkg} is 405. There is no implicit write path.

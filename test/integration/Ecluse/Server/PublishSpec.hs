@@ -5,6 +5,7 @@
 module Ecluse.Server.PublishSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
+import Data.Text qualified as T
 import Network.HTTP.Types (hAuthorization, hContentType, methodPut, mkStatus)
 import Network.Wai (
     Application,
@@ -240,6 +241,11 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             app <- proxyWith Nothing
             resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") publishBody app
             status resp `shouldBe` 405
+            -- The refusal carries the publisher's way forward: the per-invocation registry
+            -- override, or dropping the .npmrc scope binding that defeats every other one.
+            let body = decodeUtf8 (LBS.toStrict (simpleBody resp)) :: Text
+            body `shouldSatisfy` T.isInfixOf "npm publish --@yourscope:registry=<url>"
+            body `shouldSatisfy` T.isInfixOf "publishConfig.registry"
             targetSaw target `shouldReturn` []
 
     it "relays the publication target's own error status (e.g. a 409 the registry returns) to the client" $

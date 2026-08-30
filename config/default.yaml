@@ -195,7 +195,8 @@ mounts:
     # privateUpstream: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
     # Declaring it makes the mount mirrored. The write credential derives from this
     # URL: a CodeArtifact host mints a short-lived token scoped to its domain, and any
-    # other host needs mirrorTargetToken.
+    # other host needs mirrorTargetToken. The boot refuses a target on any mount's
+    # publicUpstream host, which the write credential must never reach.
     # mirrorTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/mirror/
     # Set via ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN (a secret). Required for a
     # non-CodeArtifact mirror target, forbidden for a CodeArtifact one or a serve-only mount.
@@ -207,6 +208,9 @@ mounts:
     # a preference.
     # mirrorTokenDuration: 3600
     # Where a client `npm publish` is relayed. Opt-in: unset, PUT /{pkg} is 405.
+    # It carries the publisher's own credential, so the boot refuses one on any mount's
+    # publicUpstream host, or equal to another mount's privateUpstream, mirrorTarget, or
+    # publicationTarget. Its own mount's privateUpstream or mirrorTarget stays legal.
     # publicationTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
     # Set via ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN (a secret). Forwarded only
     # when the publishing client sends none. Requires server.authToken, or the boot

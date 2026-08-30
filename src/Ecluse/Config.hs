@@ -51,6 +51,7 @@ module Ecluse.Config (
     renderConfigError,
     loadConfig,
     mountCollisionWarnings,
+    sameRegistry,
     mountPostureLines,
     resolvedKeyProvenance,
 ) where
@@ -234,9 +235,10 @@ rulesOf :: RulePolicy -> [PrecededRule]
 rulesOf = Map.elems . policyRules
 
 {- | Boot-time advisory: one warning per pair of a mount's resolved endpoints that point at
-the same registry. Each collapse is supported, and a distinct registry per endpoint stays the
-recommended posture. A publication target equal to the private upstream is the documented
-publish arrangement, so that pair raises no warning.
+the same registry. Each collapse here is supported, and a distinct registry per endpoint stays
+the recommended posture. A publication target equal to the private upstream is the documented
+publish arrangement, so that pair raises no warning. The pairs the boot refuses outright live in
+"Ecluse.Composition.Endpoints".
 -}
 mountCollisionWarnings :: Config -> [Text]
 mountCollisionWarnings config =
@@ -253,7 +255,6 @@ mountCollisions app (eco, mount) = mapMaybe (collisionWarning eco) pairs
     -- absent endpoints cannot collide.
     pairs =
         [("mirrorTarget", m, "privateUpstream", private) | Just m <- [mirror]]
-            <> [("mirrorTarget", m, "publicUpstream", Just (regPublicUpstream regs)) | Just m <- [mirror]]
             <> [("mirrorTarget", m, "publicationTarget", publication) | Just m <- [mirror]]
             <> [("privateUpstream", p, "publicUpstream", Just (regPublicUpstream regs)) | Just p <- [private]]
 
@@ -273,6 +274,7 @@ collisionWarning eco (aName, a, bName, mb) = do
             <> "); a distinct registry per endpoint is strongly recommended"
         )
 
+-- | Whether two configured endpoints name the same registry, a trailing slash aside.
 sameRegistry :: RegistryUrl -> RegistryUrl -> Bool
 sameRegistry a b = strip a == strip b
   where

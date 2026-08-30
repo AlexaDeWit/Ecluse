@@ -19,21 +19,14 @@ The composition root's other concerns live in the sibling modules:
 * "Ecluse.Composition.BootError" holds the boot-error vocabulary and its rendering.
 * "Ecluse.Composition.Credential" holds the credential providers and the
   mirror-target credential selection.
+* "Ecluse.Composition.Endpoints" holds the cross-mount registry-role refusals and the
+  vetted publication target they produce.
 * "Ecluse.Composition.MirrorQueue" holds the mirror-queue backend selection.
 * "Ecluse.Composition.Sizing" holds the config-derived runtime sizings.
 
-== Fail-fast at boot
-
-One report aggregates three boot failures, so a single run shows every problem:
-
-* A rule policy does not resolve ('PolicyBootError', surfaced by
-  'Ecluse.Config.loadConfig').
-* A configured mount's ecosystem has no adapter wired ('MissingAdapter').
-* A mount has no initialised mirror-write provider ('UnresolvedCredential').
-
-A bad configuration is a loud, immediate startup failure, never a quietly
-mis-enforced or half-wired state (see
-@docs\/architecture\/configuration.md@ → "Validation").
+One report aggregates every boot failure, so a single run shows every problem an operator must
+fix. A bad configuration is a loud, immediate startup failure, never a quietly mis-enforced or
+half-wired state (see @docs\/architecture\/configuration.md@ → "Validation").
 -}
 module Ecluse.Composition (
     -- * Boot-time wiring
@@ -53,6 +46,12 @@ import Data.Time (UTCTime)
 
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.Credential (CredentialProviders, initializedEcosystems, lookupProvider)
+import Ecluse.Composition.Endpoints (
+    PublicationTarget,
+    endpointCollisions,
+    publicationTargetUrl,
+    vetPublicationTargets,
+ )
 import Ecluse.Config (
     AppConfig (..),
     Config (..),
@@ -115,7 +114,7 @@ planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget confi
     -- 'Ecluse.Composition.Plan.resolveBootPlan' runs 'validateComposition' first on both
     -- entry points. This call keeps the structural errors in reach of a caller without a plan.
     let structuralErrs = validateComposition config
-        pubDepsMap = Map.mapWithKey (\eco mcfg -> publishDepsFor (adapterFor eco) app mcfg limits publishBudget helpMessage) (cfgMounts app)
+        pubDepsMap = Map.mapWithKey (\eco mcfg -> publishDepsFor (adapterFor eco) app mcfg (Map.lookup eco vettedTargets) limits publishBudget helpMessage) (cfgMounts app)
     -- 'Ecluse.Config.loadConfig' derives 'configMounts' from 'cfgMounts' entry for
     -- entry, so the two maps share a keyset and this pairing is total.
     let mounts = Map.elems (Map.intersectionWith (,) (configMounts config) (cfgMounts app))
@@ -126,6 +125,11 @@ planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget confi
   where
     app :: AppConfig
     app = configApp config
+
+    -- A refused vetting yields no target, so no mount is wired for publishing. That same
+    -- refusal is in 'structuralErrs', so the run reports it and builds nothing.
+    vettedTargets :: Map Ecosystem PublicationTarget
+    vettedTargets = fromRight Map.empty (vetPublicationTargets (cfgMounts app))
 
     -- The operator help message, derived from the environment layer like the
     -- inbound token, so every mount's denials carry it.
@@ -216,11 +220,12 @@ mountBaseUrl publicUrl eco =
 mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
 
-{- | The pure structural validation a boot enforces beyond 'Ecluse.Config.loadConfig'. It
-leaves provider initialisation ('UnresolvedCredential') to 'planMounts'.
+{- | The pure structural validation a boot enforces beyond 'Ecluse.Config.loadConfig': the
+adapter, publish-policy, and cross-mount endpoint refusals. It leaves provider initialisation
+('UnresolvedCredential') to 'planMounts'.
 -}
 validateComposition :: Config -> [BootError]
-validateComposition config = missingAdapters <> publishPolicyErrors
+validateComposition config = missingAdapters <> publishPolicyErrors <> endpointCollisions (cfgMounts app)
   where
     app = configApp config
     missingAdapters =
@@ -232,18 +237,18 @@ validateComposition config = missingAdapters <> publishPolicyErrors
             , isJust (mntPublicationTarget mcfg)
             ]
 
-{- | Build the first-party publish dependencies, shared across the mounts. 'Nothing' with no
-publication target configured, so the publish path is off and a @PUT \/{pkg}@ answers @405@.
+{- | Build the first-party publish dependencies, shared across the mounts. 'Nothing' without a
+vetted publication target, so the publish path is off and a @PUT \/{pkg}@ answers @405@.
 -}
-publishDepsFor :: Maybe RegistryAdapter -> AppConfig -> MountConfig -> Limits -> Maybe PublishBudget -> Maybe HelpMessage -> Maybe PublishDeps
-publishDepsFor mAdapter app mcfg limits publishBudget helpMessage = do
-    url <- mntPublicationTarget mcfg
+publishDepsFor :: Maybe RegistryAdapter -> AppConfig -> MountConfig -> Maybe PublicationTarget -> Limits -> Maybe PublishBudget -> Maybe HelpMessage -> Maybe PublishDeps
+publishDepsFor mAdapter app mcfg mTarget limits publishBudget helpMessage = do
+    target <- mTarget
     adapter <- mAdapter
     budget <- publishBudget
     allow <- mntPublicationAllow mcfg
     pure
         PublishDeps
-            { pubTargetUrl = url
+            { pubTargetUrl = publicationTargetUrl target
             , pubAllowed = publicationAllowedName allow
             , pubStaticToken = mntPublicationTargetToken mcfg
             , pubInboundToken = inboundToken
