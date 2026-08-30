@@ -61,6 +61,17 @@ one tag and the registry serves the right architecture. Each architecture builds
 own runner, and one publish job assembles the index
 ([`push-multiarch.sh`](../../scripts/push-multiarch.sh)).
 
+**The image builds take no cache.** Both build jobs install Nix with the plain installer and restore
+nothing from the GitHub Actions cache, unlike the rest of CI, which sets up through
+[`setup-toolchain`](../../.github/actions/setup-toolchain/action.yml). The Actions cache is
+repository-scoped, writable by any run with `main` scope, and carries no signature over its
+contents. A Nix store restored from it arrives already realised, which bypasses the substituter
+signature check that would otherwise reject a tampered store path, so a poisoned cache entry ships a
+poisoned image under an honest-looking provenance attestation. Building cold from
+`cache.nixos.org`, whose signatures Nix verifies against the trusted public key, and from the tagged
+source is what keeps the attestation worth something. A release pays for that in build minutes,
+which is affordable on a path that runs a few times a year.
+
 ## Supply-chain attestations
 
 Each release attaches keyless attestations (Sigstore / OIDC, no stored key) to the image by digest.

@@ -85,12 +85,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # Cold on purpose: no Actions-cache restore, because a store out of that unsigned
+      # cache skips substituter signature checks. See docs/architecture/release-supply-chain.md.
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
         with:
           # Determinate Nix offers the job's OIDC token to FlakeHub, which this project
-          # has no account with. Keep the release token inside the repository, and the
-          # installer's diagnostics off. Same settings as .github/actions/setup-toolchain.
+          # has no account with. The empty endpoint turns installer diagnostics off too.
           determinate: false
           diagnostic-endpoint: ""
 
