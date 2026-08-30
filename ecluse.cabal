@@ -294,6 +294,7 @@ library
     Ecluse.Composition
     Ecluse.Composition.BootError
     Ecluse.Composition.Credential
+    Ecluse.Composition.Endpoints
     Ecluse.Composition.MemoryPlan
     Ecluse.Composition.MemoryPlan.Bounds
     Ecluse.Composition.MemoryPlan.Demands
@@ -794,6 +795,7 @@ test-suite ecluse-unit
     Ecluse.CLISpec
     Ecluse.Composition.BootErrorSpec
     Ecluse.Composition.CredentialSpec
+    Ecluse.Composition.EndpointsSpec
     Ecluse.Composition.MemoryPlan.OverrideSpec
     Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec

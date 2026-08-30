@@ -168,7 +168,14 @@ publishTooLarge replies deps =
 -- header advertises the read methods the package route does serve.
 publishDisabled :: PublishReplies response -> response
 publishDisabled replies =
-    publishError replies status405 [("Allow", "GET, HEAD")] "publishing is not enabled on this proxy (no publication target is configured)"
+    publishError replies status405 [("Allow", "GET, HEAD")] message
+  where
+    -- The remediation stays ecosystem-neutral, because this pipeline serves every
+    -- ecosystem: it names no client's own commands or configuration keys.
+    message :: Text
+    message =
+        "publishing is not enabled on this proxy (no publication target is configured); \
+        \publish directly to the registry you intend to publish to"
 
 -- A @403@ for a publish whose name is outside the configured publish-scope allow-list:
 -- the anti-shadowing guard, refused before any upstream write.

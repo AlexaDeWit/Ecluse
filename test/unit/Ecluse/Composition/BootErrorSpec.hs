@@ -41,6 +41,15 @@ spec = describe "renderBootError" $
         renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
         renderBootError (PublicationAllowMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW"
         renderBootError (PublishStaticCredentialNeedsEdge Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
+        -- Each collision render names the offending key, the mount it collided with, and why.
+        renderBootError (PublicationTargetOnPublicUpstream Npm PyPI)
+            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET shares a host with ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM"
+        renderBootError (PublicationTargetOnPublicUpstream Npm PyPI)
+            `shouldSatisfy` infixed "publisher's own credential"
+        renderBootError (PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream")
+            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET is also ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM"
+        renderBootError (MirrorTargetOnPublicUpstream Npm Npm)
+            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__MIRROR_TARGET shares a host with ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM"
         -- A split-role refusal names the invocation the operator typed and the key that fixes it.
         renderBootError (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")
             `shouldSatisfy` infixed "ecluse proxy --no-worker"

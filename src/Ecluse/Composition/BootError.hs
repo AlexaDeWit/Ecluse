@@ -71,6 +71,18 @@ data BootError
       (@ECLUSE_SERVER__AUTH_TOKEN@). An unauthenticated request could otherwise publish as Écluse.
       -}
       PublishStaticCredentialNeedsEdge Ecosystem
+    | {- | A mount's publication target shares a host with the named mount's public upstream.
+      The publisher's relayed credential would reach a public registry.
+      -}
+      PublicationTargetOnPublicUpstream Ecosystem Ecosystem
+    | {- | A mount's publication target is also the named mount's endpoint under the named key,
+      so a publish would be relayed into a role the operator declared for something else.
+      -}
+      PublicationTargetOnMountEndpoint Ecosystem Ecosystem Text
+    | {- | A mount's mirror target shares a host with the named mount's public upstream. Écluse's
+      own mirror-write credential would reach a public registry.
+      -}
+      MirrorTargetOnPublicUpstream Ecosystem Ecosystem
     | {- | An explicit memory override breaks the combined memory-plan invariant even after every
       tenant shed to its minimum. A computed plan degrades and boots, an operator claim does not.
       -}
@@ -119,6 +131,21 @@ renderBootError = \case
         mountKeyRef eco "publicationTarget" <> " is set but " <> mountKeyRef eco "publicationAllow" <> " is not: a publication target needs a publication allow-list (for npm, scopes such as @acme) for the anti-shadowing guard."
     PublishStaticCredentialNeedsEdge eco ->
         mountKeyRef eco "publicationTargetToken" <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
+    PublicationTargetOnPublicUpstream eco other ->
+        mountKeyRef eco "publicationTarget"
+            <> " shares a host with "
+            <> mountKeyRef other "publicUpstream"
+            <> ": a publish carries the publisher's own credential, which must never reach a public upstream"
+    PublicationTargetOnMountEndpoint eco other key ->
+        mountKeyRef eco "publicationTarget"
+            <> " is also "
+            <> mountKeyRef other key
+            <> ": point it at a registry that holds no other role, so a publish is never relayed into one"
+    MirrorTargetOnPublicUpstream eco other ->
+        mountKeyRef eco "mirrorTarget"
+            <> " shares a host with "
+            <> mountKeyRef other "publicUpstream"
+            <> ": the mirror write carries this proxy's own credential, which must never reach a public upstream"
     MemoryPlanOverrideUnsafe details ->
         "memory plan refused: " <> T.intercalate "; " details
     SplitRoleNeedsDurableQueue invocation ->
