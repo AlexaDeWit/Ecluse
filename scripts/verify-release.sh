@@ -2,7 +2,8 @@
 #
 # Verify a published release: the digest pin in the release body, that the pin belongs
 # to this project and to this version's tag, an unauthenticated fetch of it, both
-# architectures, and the attestations. See runbooks/release.md step 5.
+# architectures, the seven release assets, and the provenance. The SBOM attestations
+# need a platform digest and stay manual. See runbooks/release.md step 5.
 #
 # Usage: scripts/verify-release.sh v0.2.0
 set -euo pipefail
@@ -28,7 +29,7 @@ repo="$(git remote get-url origin | sed -E 's#^(git@github\.com:|https://github\
 # Matches IMAGE in .github/workflows/release.yml, which lowercases the repository.
 image="ghcr.io/$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')"
 
-release="$(gh release view "$tag" --repo "$repo" --json body,isDraft)" || die "no GitHub Release for $tag"
+release="$(gh release view "$tag" --repo "$repo" --json body,isDraft,assets)" || die "no GitHub Release for $tag"
 [ "$(jq -r .isDraft <<<"$release")" = "false" ] ||
   die "the Release for $tag is still a draft, so no anonymous reader can see it"
 
@@ -55,8 +56,21 @@ for want in amd64 arm64; do
 done
 echo "ok   linux/amd64 and linux/arm64 both present"
 
+# Named here independently of release-assets.sh, which produces them. A verifier sharing
+# the producer's list would pass a release whose names the producer got wrong.
+for asset in provenance.sigstore.json amd64-provenance.sigstore.json \
+  arm64-provenance.sigstore.json amd64-sbom.sigstore.json arm64-sbom.sigstore.json \
+  amd64-sbom.spdx.json arm64-sbom.spdx.json; do
+  name="ecluse-${tag#v}-$asset"
+  jq -e --arg n "$name" 'any(.assets[]; .name == $n)' <<<"$release" >/dev/null ||
+    die "the Release carries no asset named $name"
+done
+echo "ok   all seven attestation and SBOM assets present"
+
+# Defaults to the SLSA provenance predicate and reads GitHub's attestations API, so this
+# reaches neither the SBOM attestations nor the registry's own copy. Both stay manual.
 gh attestation verify "oci://$pinned" --repo "$repo" >/dev/null 2>&1 ||
-  die "attestation verification failed for $pinned"
-echo "ok   attestations verify"
+  die "provenance verification failed for $pinned"
+echo "ok   provenance verifies"
 
 printf '\n%s verified. The image carries attestations, not a cosign signature, so never announce it as signed.\n' "$tag"
