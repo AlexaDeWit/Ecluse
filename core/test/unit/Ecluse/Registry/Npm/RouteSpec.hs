@@ -9,7 +9,7 @@ import Data.Text qualified as T
 import Hedgehog (forAll)
 import Hedgehog qualified as H
 import Test.Hspec
-import Test.Hspec.Hedgehog (hedgehog)
+import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
@@ -263,19 +263,22 @@ spec = do
         -- The invariant: no hostile path yields an accepted route with an unsafe component.
         -- The coverage classification below proves the generator reaches both arms.
         -- Each component is checked alone, because a scoped name renders with a structural '/'.
-        it "an accepted route never carries an unsafe component" $
-            hedgehog $ do
-                segs <- forAll NpmFixture.genPathSegments
-                let route = classify segs
-                -- Non-vacuity: the same generator must reach both arms often.
-                H.cover 5 "accepted (packument/artifact)" (isAccepted route)
-                H.cover 5 "denied or answered locally" (not (isAccepted route))
-                case route of
-                    ToPackument pn ->
-                        H.assert (all safe (nameComponents pn))
-                    ToTarball pn _ file ->
-                        H.assert (all safe (unFilename file : nameComponents pn))
-                    _ -> pure ()
+        -- 1000 rather than the default 100: the accepted arm runs at 13%, and 100 samples of
+        -- a 13% rate fall under the 5% floor once in 426 runs. At 1000 the floor is unreachable.
+        modifyMaxSuccess (const 1000) $
+            it "an accepted route never carries an unsafe component" $
+                hedgehog $ do
+                    segs <- forAll NpmFixture.genPathSegments
+                    let route = classify segs
+                    -- Non-vacuity: the same generator must reach both arms often.
+                    H.cover 5 "accepted (packument/artifact)" (isAccepted route)
+                    H.cover 5 "denied or answered locally" (not (isAccepted route))
+                    case route of
+                        ToPackument pn ->
+                            H.assert (all safe (nameComponents pn))
+                        ToTarball pn _ file ->
+                            H.assert (all safe (unFilename file : nameComponents pn))
+                        _ -> pure ()
 
 -- | Whether a route is an accepted package route (the arms the invariant binds).
 isAccepted :: Routed -> Bool
