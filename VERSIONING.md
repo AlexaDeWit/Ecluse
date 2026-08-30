@@ -11,6 +11,7 @@ downstream derives from it, so the image tag, git tag, and GitHub Release can't 
 
 - `task version` prints it (via `cabal info`).
 - `task tag` cuts a signed `vX.Y.Z` git tag from it, so nobody can mistype it.
+- `task init-release` checks the version you state against the field before it cuts or pushes.
 - the release workflow asserts the pushed tag matches before building, and fails on any drift.
 
 The mechanics are in [Release & Supply-Chain Operations](docs/architecture/release-supply-chain.md).
@@ -48,11 +49,14 @@ version `X.Y.Z`.
 ## Cutting a release
 
 1. Bump `version:` in [`ecluse.cabal`](ecluse.cabal) in a pull request, following the rules above.
-2. Once it merges, run `task tag`. It creates the signed `vX.Y.Z` tag from the cabal version but
-   doesn't push, since cutting a release is deliberate.
-3. Push the tag (`git push origin vX.Y.Z`). The release workflow re-asserts the tag matches the cabal
-   version. It then builds the multi-arch image, attaches the provenance and SBOM attestations, and
-   publishes the GitHub Release.
+2. Once it merges, run `task init-release VERSION=vX.Y.Z`. It refuses unless the version matches
+   the cabal field, the working tree is clean, `HEAD` is `origin/main`, the `CI gate` check is
+   green on that commit, and the tag is free. It then cuts the signed tag, pinned to the commit it
+   checked, and asks you to type the tag back before pushing, since cutting a release is
+   deliberate. `DRY_RUN=1` rehearses every check without creating anything.
+3. The release workflow re-asserts the tag matches the cabal version. It then builds the
+   multi-arch image, attaches the provenance and SBOM attestations, and publishes the GitHub
+   Release.
 
 For the pipeline and attestation contract, see
 [Release & Supply-Chain Operations](docs/architecture/release-supply-chain.md) and the CI notes in

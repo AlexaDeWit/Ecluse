@@ -25,6 +25,9 @@ env -u IN_NIX_SHELL nix develop .#ci --command task version
 git ls-remote --tags origin
 ```
 
+`task init-release` re-checks all three and refuses on any of them, so `DRY_RUN=1 task
+init-release VERSION=vX.Y.Z` rehearses this whole section without creating anything.
+
 Scope must be final before the tag: the `Tag Integrity` ruleset blocks tag deletion and update
 for everyone, administrators included, so a pushed tag cannot be moved. Decide what merges
 first.
@@ -32,14 +35,18 @@ first.
 ## 2. Cut and push the tag
 
 ```bash
-env -u IN_NIX_SHELL nix develop --command task tag   # signed tag, not pushed
-git tag -v "v$(env -u IN_NIX_SHELL nix develop .#ci --command task version)"
-git rev-parse --verify "v0.1.0^{commit}"             # the commit you intend
-git push origin v0.1.0                               # the point of no return
+env -u IN_NIX_SHELL nix develop --command task init-release VERSION=v0.2.0
 ```
 
-`task tag` signs the tag; the ruleset refuses an unsigned one. Verify the signature and the
-target commit before the push, because after the push neither can change.
+It refuses unless the version matches `ecluse.cabal`, the working tree is clean, `HEAD` is
+`origin/main`, the `CI gate` check is green on that commit, and the tag exists neither locally
+nor on origin. It prints that commit, then cuts the signed tag pinned to it, verifies the
+signature, and asks you to type the tag back before it pushes. `DRY_RUN=1` stops after the
+checks, creating nothing.
+
+The tag is pinned to the commit the checks cleared, so `HEAD` moving under you cannot retarget
+it. The ruleset refuses an unsigned tag, and after the push neither the tag nor its target can
+change. That confirmation is the last point where stopping costs nothing.
 
 ## 3. What fires, and where it stops
 
@@ -71,28 +78,29 @@ every published install and verify command fails for anonymous readers.
 
 ## 5. Verify
 
-Run the first three from a logged-out context (`docker logout ghcr.io`, or a machine that never
-authenticated): as the owner they pass even against a private package, which hides exactly the
-failure a reader would hit.
+```bash
+env -u IN_NIX_SHELL nix develop --command task verify-release VERSION=v<version>
+```
+
+It reads the digest pin out of the release body, checks the pin belongs to this project and that
+the version's own image tag resolves to it, fetches it, checks the index carries both amd64 and
+arm64, checks the Release carries all seven assets, and verifies the provenance.
+
+Authenticated as the owner, a registry read passes even against a private package, which hides
+exactly the failure an anonymous reader would hit. So the registry reads run through `skopeo
+--no-creds`, which sends no credential. That tests the reader's path without discarding your
+stored login, which `docker logout` would. The `gh` calls still run on your token, so the script
+checks outright that the Release is not a draft rather than inferring it.
+
+`gh attestation verify` checks one predicate type per run and defaults to SLSA provenance, so
+the script never reaches the SBOM attestations. Those are attested per platform, so one needs a
+platform digest. Verifying against a downloaded bundle is also manual:
 
 ```bash
-gh release view v<version>                                     # digest pin present
-docker pull ghcr.io/alexadewit/ecluse@sha256:<digest>          # anonymous pull works
-gh attestation verify "oci://ghcr.io/alexadewit/ecluse@sha256:<digest>" \
-  --repo AlexaDeWit/Ecluse                                     # provenance verifies
-docker manifest inspect ghcr.io/alexadewit/ecluse:<version> | grep architecture
-# expect both amd64 and arm64
-
-gh release view v<version> --json assets --jq '.assets[].name'  # expect 7 assets
 gh release download v<version> -p 'ecluse-*-provenance.sigstore.json'
 gh attestation verify "oci://ghcr.io/alexadewit/ecluse@sha256:<digest>" \
   --repo AlexaDeWit/Ecluse --bundle ecluse-<version>-provenance.sigstore.json
-```
 
-`verify` checks one predicate type per run, so neither command above touches the SBOM
-attestations. Check one against its own platform digest:
-
-```bash
 gh attestation verify "oci://ghcr.io/alexadewit/ecluse@sha256:<platform-digest>" \
   --repo AlexaDeWit/Ecluse --predicate-type https://spdx.dev/Document/v2.3
 ```
@@ -102,13 +110,15 @@ There is no cosign signature, by design, so never write "signed image".
 
 ## 6. Release notes
 
-With no earlier tag, the generated body can come back sparse or over-inclusive, so do not rely on
-it for the first release. `gh release create` succeeds either way, so publish and then replace the
-body, keeping the digest and the verify recipe at the top:
+The workflow generates the body from the pull requests merged since the previous tag. Replace it
+only when you want different wording:
 
 ```bash
 gh release edit v<version> --notes-file <handwritten.md>
 ```
+
+Keep the digest pin and the asset list at the top. `task verify-release` reads the pin out of the
+body, so a replacement that drops it fails verification.
 
 ## 7. Rollback
 
