@@ -96,9 +96,6 @@ body, keeping the digest and the verify recipe at the top:
 gh release edit v0.1.0 --notes-file <handwritten.md>
 ```
 
-A `.github/release.yml` categorisation config groups future bodies, and must exist before the
-tag to apply.
-
 ## 7. Rollback
 
 The tag is immutable to everyone (the ruleset's bypass list is empty, and rulesets give
