@@ -164,11 +164,13 @@ Edge authentication to the proxy ships in two modes:
    //ecluse.example.internal/npm/:_authToken=${NPM_EDGE_TOKEN}
    ```
 
-The edge token never becomes the upstream one. Reads run **passthrough**: Écluse forwards the
+Écluse holds no read credential of its own. Reads run **passthrough**: Écluse forwards the
 caller's own credential to the private upstream, which stays the authority on what that caller may
-see. Before the anonymous public fetch it strips that credential, so a client token never leaves
-for a public registry, and it never caches the private origin across callers, so one caller's read
-can never answer another's.
+see. With `ECLUSE_SERVER__AUTH_TOKEN` set, the value a client presents both satisfies the edge
+gate and travels upstream. A deployment therefore cannot combine the static-token recipe above
+with the passthrough recipes below. Before the anonymous public fetch Écluse strips the
+credential, so a client token never leaves for a public registry, and it never caches the private
+origin across callers, so one caller's read can never answer another's.
 
 A `publish` forwards the publisher's own token the same way. Opt into a static
 `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` and Écluse publishes as itself instead. That opt-in
