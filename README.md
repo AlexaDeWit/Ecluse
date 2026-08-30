@@ -70,22 +70,39 @@ covers the publish flow.
 Each tag is a single multi-arch image (`linux/amd64` + `linux/arm64`) carrying keyless
 (Sigstore) provenance and SBOM attestations in the public Rekor log. Each
 [GitHub Release](https://github.com/AlexaDeWit/Ecluse/releases) publishes the digest for its
-version. Verify with the GitHub CLI:
+version and attaches those attestations as assets. Verify with the GitHub CLI:
 
 ```bash
-IMAGE=ghcr.io/alexadewit/ecluse@sha256:…   # pin by digest
+IMAGE=ghcr.io/alexadewit/ecluse@sha256:…   # pin by digest, the index
 
-# Verify every attestation (provenance + SBOM) against the release identity + Rekor:
-gh attestation verify "oci://$IMAGE" --repo AlexaDeWit/Ecluse
-
-# …or just one, by predicate type:
+# Provenance on the index. `verify` checks one predicate type per run, and this is
+# its default, so the flag is optional:
 gh attestation verify "oci://$IMAGE" --repo AlexaDeWit/Ecluse \
   --predicate-type https://slsa.dev/provenance/v1
+
+# The SBOM is attested per platform, never on the index, so name a platform digest
+# (`docker manifest inspect` lists them) and the SPDX predicate type:
+gh attestation verify "oci://ghcr.io/alexadewit/ecluse@<platform-digest>" \
+  --repo AlexaDeWit/Ecluse --predicate-type https://spdx.dev/Document/v2.3
 ```
 
-The command checks each signature against the release workflow's identity and the Rekor
+The command checks the signature against the release workflow's identity and the Rekor
 log, and confirms the subject matches your digest. Add `--format json` to extract the
 documents.
+
+Both commands read GitHub's attestations API. Each release also attaches the same
+documents as assets, so you can verify a copy pinned to the release object instead:
+
+```bash
+gh release download v<version> -p 'ecluse-*-provenance.sigstore.json'
+gh attestation verify "oci://$IMAGE" --repo AlexaDeWit/Ecluse \
+  --bundle ecluse-<version>-provenance.sigstore.json
+```
+
+A `…-sbom.sigstore.json` bundle needs `--predicate-type` as well. The two
+`ecluse-<version>-<arch>-sbom.spdx.json` assets are the SPDX documents themselves, not
+bundles: read those directly, and pass `--bundle` the matching `…-sbom.sigstore.json` to
+check the signature over one.
 
 Stronger still, the image is bit-for-bit reproducible. Rebuild it from pinned source and
 compare, instead of trusting anyone.

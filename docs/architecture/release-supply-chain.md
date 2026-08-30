@@ -23,9 +23,9 @@ a match the workflow builds the image natively for `linux/amd64` and `linux/arm6
 
 The workflow assembles the two into one multi-arch index and pushes it to GitHub Container Registry
 under a single immutable tag. It attaches keyless provenance and SBOM attestations. It then
-publishes a GitHub Release carrying the image digest, the `gh attestation verify` recipe, and the
-generated changelog. A pre-release tag (`vX.Y.Z-rc.N`) publishes as a prerelease. GHCR is the only
-registry Écluse publishes to.
+publishes a GitHub Release carrying the image digest, the `gh attestation verify` recipe, the
+generated changelog, and every attestation and SBOM as a downloadable asset. A pre-release tag
+(`vX.Y.Z-rc.N`) publishes as a prerelease. GHCR is the only registry Écluse publishes to.
 
 **Immutable tags, no `latest`.** The target repo, `ghcr.io/alexadewit/ecluse`, enforces immutable
 tags, so every push is a fresh, never-reused tag. The release publishes `ecluse:X.Y.Z` and nothing
@@ -95,6 +95,21 @@ platform's digest rather than the index.
   Haskell dependencies link statically over a dynamic glibc, plus the platform runtime libraries.
   It carries no dynamic-build noise to trip CVE scanners, and anyone can derive it again because the
   image is reproducible.
+
+**Each attestation has two homes.** It goes to GHCR as an OCI referrer, and onto the GitHub Release
+as an asset ([`release-assets.sh`](../../scripts/release-assets.sh) stages them). `gh attestation
+verify` reads neither by default: it queries GitHub's attestations API, and takes the referrer only
+under `--bundle-from-oci`. The asset is the copy pinned to the release object, fetchable over plain
+HTTPS, and `--bundle` verifies it against the same digest. It is also the only copy OpenSSF
+Scorecard can see (see [Posture scoring](#posture-scoring-openssf-scorecard)). The release carries
+each platform's SPDX document unwrapped as well, because the attested copy only comes out through a
+verify tool. Asset names are `ecluse-<version>-provenance.sigstore.json` for the index, then
+`ecluse-<version>-<arch>-provenance.sigstore.json`, `ecluse-<version>-<arch>-sbom.sigstore.json`,
+and `ecluse-<version>-<arch>-sbom.spdx.json`.
+
+`gh attestation verify` checks one predicate type per run and defaults to SLSA provenance, so the
+SBOM needs `--predicate-type https://spdx.dev/Document/v2.3` and a platform digest. The index digest
+carries no SBOM attestation.
 
 The release uses the attest-actions rather than cosign, because cosign stores attestations under a
 single mutable `.att` tag, which the repo's immutable tags forbid. Each attestation is instead its
@@ -174,3 +189,7 @@ dependencies, signed and attested releases, SAST, token permissions, and dangero
 It uploads findings to the Security tab and publishes the score that backs the README badge. It is
 report-only and never gates a PR. For a supply-chain policy proxy this is dogfooding: the same
 hygiene it proxies for, measured on itself.
+
+Its `Signed-Releases` check reads the assets on a GitHub Release. It never looks at a registry, so
+attestations that live only as OCI referrers are invisible to it. That is one reason each release
+carries its bundles as assets too (see [Supply-chain attestations](#supply-chain-attestations)).
