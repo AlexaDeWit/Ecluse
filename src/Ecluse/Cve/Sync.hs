@@ -8,7 +8,7 @@ composition root reads off that plan: the per-ecosystem rule capabilities, the
 first-sync readiness gate, and the sync schedule. "Ecluse.Service" builds the plan at boot
 and hands every role one supervised sync task per handle.
 -}
-module Ecluse.Proxy.CveSync (
+module Ecluse.Cve.Sync (
     CveSyncHandle (..),
     planCveSync,
     sweepStaleTemps,
@@ -72,9 +72,8 @@ Each flag flips one way, so readiness never flaps. An empty plan is vacuously re
 cveSyncReady :: Map.Map Ecosystem CveSyncHandle -> IO Bool
 cveSyncReady plan = allM (readTVarIO . csReady) (Map.elems plan)
 
-{- | The sync tasks' timing: the shipped boot burst over the configured poll
-interval. The microsecond conversion cannot wrap: the config decoder bounds
-the interval to @[1, maxBound div 1_000_000]@ seconds.
+{- | The sync tasks' timing: the shipped boot burst over the configured poll interval. The microsecond
+conversion cannot wrap: the config decoder bounds the interval to @[1, maxBound div 1_000_000]@ seconds.
 -}
 cveSyncScheduleFor :: AppConfig -> SyncSchedule
 cveSyncScheduleFor env =
@@ -154,4 +153,4 @@ logSweepFailure :: LogEnv -> FilePath -> IOError -> IO ()
 logSweepFailure logEnv path err =
     logLine logEnv payload WarningS ("could not sweep stale advisory temp files: " <> show err)
   where
-    payload = moduleField "Ecluse.Proxy.CveSync" <> sl "path" (toText path)
+    payload = moduleField "Ecluse.Cve.Sync" <> sl "path" (toText path)

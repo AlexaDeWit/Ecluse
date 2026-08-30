@@ -285,12 +285,12 @@ library
     Ecluse
     Ecluse.Boot
     Ecluse.Proxy
-    Ecluse.Proxy.CveSync
     Ecluse.Mirror
     Ecluse.Service
     Ecluse.Pilot
     Ecluse.Pilot.Plan
     Ecluse.Dredger
+    Ecluse.Cve.Sync
     Ecluse.Composition
     Ecluse.Composition.BootError
     Ecluse.Composition.Credential
@@ -815,12 +815,12 @@ test-suite ecluse-unit
     Ecluse.Config.RuleSpec
     Ecluse.Config.TypesSpec
     Ecluse.ConfigSpec
+    Ecluse.Cve.SyncSpec
     Ecluse.EnvSpec
     Ecluse.ManifestSpec
     Ecluse.MirrorSpec
     Ecluse.Pilot.PlanSpec
     Ecluse.PilotSpec
-    Ecluse.Proxy.CveSyncSpec
     Ecluse.ProxySpec
     Ecluse.RuntimeSpec
     Ecluse.ServerSpec

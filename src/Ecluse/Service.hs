@@ -84,7 +84,7 @@ import Ecluse.Core.Supervision (
  )
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
-import Ecluse.Proxy.CveSync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
+import Ecluse.Cve.Sync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem, syncSlot), SyncSchedule, runCveSync)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..))
