@@ -145,8 +145,7 @@ The reasoning behind each choice, and the residual risks it accepts, is in the
 | A static publish credential without an edge token | Nothing at runtime, because it never boots | Yes. The boot fails closed |
 | A static mirror-write secret | The short-lived token minted from the container role | Nothing fires. The secret is visible in the configuration you wrote |
 
-The silent row deserves its own sentence: aggregate **trusted stores only** into the private
-upstream, and let the gated mirror be the only way public content enters. The
+The silent row has one remedy: aggregate **trusted stores only** into the private upstream. The
 [threat model](@/docs/threat-model.md) records both store-level deviations.
 
 ## Edge authentication and client credentials
@@ -169,8 +168,7 @@ The edge token never becomes the upstream one. Reads run **passthrough**: Éclus
 caller's own credential to the private upstream, which stays the authority on what that caller may
 see. Before the anonymous public fetch it strips that credential, so a client token never leaves
 for a public registry, and it never caches the private origin across callers, so one caller's read
-can never answer another's. By default the only credential of Écluse's own is a mirrored mount's
-write to the mirror target, derived from the mirror-target URL.
+can never answer another's.
 
 A `publish` forwards the publisher's own token the same way. Opt into a static
 `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` and Écluse publishes as itself instead. That opt-in
@@ -180,6 +178,104 @@ publish under it. `ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW` limits which package n
 publish. It authorises _names_, not _callers_, so it is not authentication. The reasoning is in
 [security posture](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md#a-static-publish-credential-is-fail-closed) and
 [Publishing first-party packages](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
+
+### What a client configures
+
+Your developers and your CI each need two lines in `.npmrc`, and the recipes below assume the open
+edge that the [recommended topology](@/docs/deployment.md#the-recommended-topology) sets. One line
+names the registry, and the other carries the caller's own private-registry credential, keyed to
+the Écluse URL:
+
+```ini
+# .npmrc
+registry=https://ecluse.example.internal/npm/
+//ecluse.example.internal/npm/:_authToken=${NPM_TOKEN}
+```
+
+Installs travel that path under that token, and so does a publish once the mount has a publication
+target. What someone reaches through Écluse is therefore what your registry IAM already grants
+them. A caller holding no credential still installs public packages through the gate, and the
+private set is what the token unlocks.
+
+Key every token line to a URL. npm resolves a credential from the final target URL, and that keying
+is what stops a token reaching a host it was not minted for, so never write a bare global `_auth`
+or `_authToken`.
+
+Write no `@scope:registry` lines either. A client that installs and publishes through Écluse needs
+none, because the `registry=` line already covers every name. What a stray one costs is under
+[Scope bindings defeat publish routing](@/docs/deployment.md#scope-bindings-defeat-publish-routing).
+
+### Minting the client token
+
+The token is whatever your private upstream issues, and with AWS CodeArtifact behind Écluse the
+same command mints it on a laptop and in a job.
+
+**On a laptop**, the developer mints against their own AWS identity and exports it for the
+`.npmrc` line above:
+
+```bash
+export NPM_TOKEN="$(aws codeartifact get-authorization-token \
+  --domain acme --domain-owner 123456789012 --region us-east-1 \
+  --query authorizationToken --output text)"
+```
+
+A CodeArtifact token lasts 12 hours at the most, and a request may ask for anything from 900
+seconds up to that ceiling, so the refresh is a daily event. Put the command in a shell function or
+a login hook rather than asking each developer to remember it.
+
+**Do not run `aws codeartifact login --tool npm` on a client that installs through Écluse.** It
+rewrites the client's default `registry=` to the CodeArtifact endpoint, so every install then goes
+straight to CodeArtifact and never reaches the gate. Its `--namespace` variant is the same problem
+in narrower form: it writes an `@scope:registry` binding, which takes that one scope around Écluse
+and leaves the rest coming through.
+
+**In CI**, no static npm secret exists in the job's settings. The job assumes a cloud role through
+your CI platform's OIDC federation, mints the token with the same call, and holds it only for the
+run:
+
+```bash
+# after the role assumption your CI platform's OIDC integration performs
+export NPM_TOKEN="$(aws codeartifact get-authorization-token \
+  --domain acme --domain-owner 123456789012 --region us-east-1 \
+  --query authorizationToken --output text)"
+```
+
+npm expands `${NPM_TOKEN}` in `.npmrc` from the environment, so one committed `.npmrc` serves the
+laptop and the runner without a second file.
+
+### Scope bindings defeat publish routing
+
+An `@scope:registry` line does more than route that scope's installs. On `npm publish` it also
+outranks `publishConfig.registry` in `package.json` **and** a `--registry` flag on the command,
+because any scope-keyed source beats any plain-registry source. That holds on npm 10.9.8 and
+11.17.0. So an inherited binding sends your publishes to the bound registry, and no publish-time
+flag takes them back.
+
+Own no bindings and the problem never arises. When you inherit one you cannot delete yet,
+`npm publish --@yourscope:registry=https://ecluse.example.internal/npm/` overrides it for that one
+invocation. Treat that as a repair rather than a design: it works in npm alone, and it rides a
+surface npm does not document.
+
+### Publishing without a publication target
+
+A mount with no publication target answers `npm publish` with `405 Method Not Allowed`, so a team
+that publishes has to reach its publication registry directly while its installs still run through
+Écluse. Four rules keep that arrangement portable:
+
+1. No `@scope:registry` bindings, per the section above.
+2. `registry=` points at the Écluse mount, so every install goes through the gate.
+3. Each publishable package carries `publishConfig.registry` naming where its publish goes.
+4. The publish step passes no bare `--registry` flag. A bare flag outranks
+   `publishConfig.registry` and redirects the publish. The `npm_config_registry` environment
+   variable does not, so a job may set its default registry that way and `publishConfig.registry`
+   still wins.
+
+Two clients diverge from that:
+
+- **bun** (1.3.13) ignores `publishConfig.registry`, and it offers no other way to aim a publish
+  at a second registry. Publish those packages with npm.
+- **Yarn Berry** ignores `.npmrc` altogether. Set `npmRegistryServer` and `npmPublishRegistry` in
+  `.yarnrc.yml`, and key each token by its registry URL under `npmRegistries`.
 
 ## Network egress
 
