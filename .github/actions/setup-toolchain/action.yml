@@ -8,6 +8,10 @@ description: >-
   restores main's entries through GitHub's base-branch fallback and never saves. That
   rule is what holds the repo under the 10 GB Actions-cache quota.
 
+  The release image builds never use this action, because a Nix store restored from the
+  unsigned Actions cache would undermine their provenance attestation. See
+  docs/architecture/release-supply-chain.md.
+
 inputs:
   cabal-cache:
     description: >-
