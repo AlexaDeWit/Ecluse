@@ -127,7 +127,7 @@ runPilotCompile logEnv telemetry s3Endpoint appCfg opts = do
     moduleContext logEnv "Ecluse.Pilot" $
         runResourceT $ do
             -- Raised before the compile, so an upload the wiring cannot satisfy fails
-            -- without first downloading the artifact it could never publish.
+            -- without first compiling the artifact it could never publish.
             plan <- either throwIO pure planned
             dbFile <-
                 compileOsvToSqlite

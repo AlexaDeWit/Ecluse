@@ -85,8 +85,8 @@ spec = do
             le <- newTestLogEnv
             appCfg <- expectAppConfig [] Nothing
             withSystemTempDirectory "ecluse-pilot-compile" $ \dir -> do
-                -- A file stands where the output directory's parent would be, so the
-                -- compile's own first step fails if the run ever reaches it.
+                -- A file stands where the output directory's parent would be, so
+                -- 'compileOsvToSqlite's createDirectoryIfMissing fails if the run reaches it.
                 writeFileText (dir </> "blocker") ""
                 let outDir = dir </> "blocker" </> "out"
                     opts = (compileOptions unreachable unreachable outDir){pcoUpload = True}
