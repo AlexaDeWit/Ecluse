@@ -29,9 +29,9 @@ distinguishes three kinds of surface:
   merged-and-filtered packument ('synthesizedPackumentSchema').
 * __Opaque pass-through__, the artifact bytes, is described as a streamed media
   type and links out rather than reproducing the upstream protocol.
-* __Unsupported__, @search@ and any unrecognised path, are first-class documented
-  boundaries (a @501@ and the deny-by-default @404@), so a reader learns the limit
-  from the manifest, not from an error reply.
+* __Unsupported__, @search@, the dist-tag routes, and any unrecognised path, are
+  first-class documented boundaries (a @501@ and the deny-by-default @404@), so a reader
+  learns the limit from the manifest, not from an error reply.
 
 == Determinism
 

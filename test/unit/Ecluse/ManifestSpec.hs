@@ -101,6 +101,9 @@ spec = do
     describe "documented statuses and boundaries" $ do
         it "Search carries 501" $
             (statusCodes <$> getOp "/npm/-/v1/search") `shouldBe` Just [501]
+        it "the dist-tag read and write both carry 501" $ do
+            (statusCodes <$> getOp "/npm/-/package/{package}/dist-tags") `shouldBe` Just [501]
+            (statusCodes <$> putOp "/npm/-/package/{package}/dist-tags/{tag}") `shouldBe` Just [501]
         it "the deny-by-default catch-all carries 404" $
             (statusCodes <$> getOp "/npm/{unsupportedPath}") `shouldBe` Just [404]
         it "the packument GET documents the gate statuses" $

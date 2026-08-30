@@ -144,7 +144,15 @@ npmNotFound =
 security-critical leaf parsing stays in 'takePackage' and 'tarballCoordinate'.
 -}
 npmRoutes :: [Route NpmCap]
-npmRoutes = [pingRoute, searchRoute, tarballRoute, packumentRoute, publishRoute]
+npmRoutes =
+    [ pingRoute
+    , searchRoute
+    , distTagListRoute
+    , distTagSetRoute
+    , tarballRoute
+    , packumentRoute
+    , publishRoute
+    ]
 
 -- @GET \/-\/ping@: a liveness probe, answered locally with @200 {}@.
 pingRoute :: Route NpmCap
@@ -173,6 +181,36 @@ searchRoute =
         \so Écluse returns `501` and points to the public registry's website."
         Nothing
         searchContract
+
+-- @GET \/-\/package\/{package}\/dist-tags@: a documented @501@ boundary.
+distTagListRoute :: Route NpmCap
+distTagListRoute =
+    Route
+        (RouteName "distTagList")
+        MethodRead
+        [SegLit "-", SegLit "package", SegCap capPackage, SegLit "dist-tags"]
+        (answering distTagAnswer)
+        "List a package's dist-tags (not supported)"
+        "A dist-tag is a mutable named pointer, which Écluse does not implement, so it returns \
+        \`501` rather than the `404` an unrouted path takes. The merged packument already carries \
+        \the reconciled `dist-tags` map, so a client reads a package's tags from its metadata."
+        Nothing
+        distTagContract
+
+-- @PUT \/-\/package\/{package}\/dist-tags\/{tag}@: a documented @501@ boundary.
+distTagSetRoute :: Route NpmCap
+distTagSetRoute =
+    Route
+        (RouteName "distTagSet")
+        MethodPut
+        [SegLit "-", SegLit "package", SegCap capPackage, SegLit "dist-tags", SegCap capTag]
+        (answering distTagAnswer)
+        "Set a package's dist-tag (not supported)"
+        "Écluse writes no mutable named pointer, so it returns `501` rather than the `404` an \
+        \unrouted path takes. The publication target owns a package's tags, and a publisher sets \
+        \them there."
+        Nothing
+        distTagContract
 
 -- @GET \/{package}\/-\/{filename}@: a package artifact, streamed.
 tarballRoute :: Route NpmCap
@@ -244,6 +282,10 @@ pingContract = jsonContract status200 "An empty object." emptyObjectCodec
 
 searchContract :: ResponseContract (ResponseValue NpmError)
 searchContract = jsonContract status501 "Not implemented: search is not supported." npmErrorCodec
+
+-- The read and the write share one contract: neither dist-tag operation is implemented.
+distTagContract :: ResponseContract (ResponseValue NpmError)
+distTagContract = jsonContract status501 "Not implemented: dist-tags are not supported." npmErrorCodec
 
 unsupportedContract :: ResponseContract (ResponseValue NpmError)
 unsupportedContract = jsonContract status404 "Unrecognised path; deny by default." npmErrorCodec
@@ -351,6 +393,11 @@ searchAnswer :: ResponseValue NpmError
 searchAnswer =
     responseValue [] (npmError Nothing "search is not supported by this proxy; use the public registry's website to discover packages")
 
+-- @\/-\/package\/{package}\/dist-tags@: a @501@ pointer, in npm's error surface.
+distTagAnswer :: ResponseValue NpmError
+distTagAnswer =
+    responseValue [] (npmError Nothing "dist-tags are not supported by this proxy; a package's tags are in the metadata document it serves, and a publisher sets them at the publication target")
+
 {- @GET \/{package}@: a bare package unit is a packument read. A @HEAD@ takes the
 head-mode handler, which runs the identical gating and merge but withholds the body. -}
 buildPackument :: Method -> [NpmCap] -> Maybe (ResponseAction NpmPackumentResponse)
@@ -392,12 +439,13 @@ buildTarball method = \case
 isHead :: Method -> Bool
 isHead = (== methodHead)
 
-{- | The captured values npm's routes produce: a parsed package unit, or a raw,
-safety-checked artifact file name. Each pattern's builder consumes these positionally.
+{- | The captured values npm's routes produce: a parsed package unit, or a raw
+safety-checked segment (an artifact file name, a dist-tag). Builders consume them positionally.
 -}
 data NpmCap
     = NpmPackage PackageName
     | NpmFilename Text
+    | NpmTag Text
 
 {- | The package capture: one npm package unit, both scoped wire encodings handled by
 'takePackage'. It refuses a bare leading @"-"@ on every method, because @\/-\/…@ is the reserved
@@ -422,10 +470,23 @@ capFilename =
     Capture
         "filename"
         "The artifact's on-the-wire file name, e.g. `lodash-4.17.21.tgz`."
-        ( \case
-            seg : rest | isSafeComponent seg -> Just (NpmFilename seg, rest)
-            _ -> Nothing
-        )
+        (safeSegment NpmFilename)
+
+{- | The dist-tag capture: one segment, accepted only when it is a safe component
+('isSafeComponent'). The route answers @501@, so nothing downstream reads the tag.
+-}
+capTag :: Capture NpmCap
+capTag =
+    Capture
+        "tag"
+        "The dist-tag name, e.g. `latest`."
+        (safeSegment NpmTag)
+
+-- Consume one leading segment as a capture value, only when it is a safe component.
+safeSegment :: (Text -> NpmCap) -> [Text] -> Maybe (NpmCap, [Text])
+safeSegment build = \case
+    seg : rest | isSafeComponent seg -> Just (build seg, rest)
+    _ -> Nothing
 
 {- Peel the leading package unit off a path, returning its 'PackageName' and the remaining
 segments. The route parses no name of its own: 'projectName' owns the npm name grammar. -}

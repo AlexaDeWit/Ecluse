@@ -79,6 +79,12 @@ spec = do
             matchedId methodGet ["-", "ping"] `shouldBe` Just (RouteName "ping")
         it "GET /-/v1/search is the (unsupported) search route" $
             matchedId methodGet ["-", "v1", "search"] `shouldBe` Just (RouteName "search")
+        it "GET /-/package/{pkg}/dist-tags is the (unsupported) dist-tag list route" $
+            matchedId methodGet ["-", "package", "lodash", "dist-tags"]
+                `shouldBe` Just (RouteName "distTagList")
+        it "PUT /-/package/{pkg}/dist-tags/{tag} is the (unsupported) dist-tag set route" $
+            matchedId methodPut ["-", "package", "lodash", "dist-tags", "latest"]
+                `shouldBe` Just (RouteName "distTagSet")
         it "GET /{package} is a packument read" $
             matchedId methodGet ["lodash"] `shouldBe` Just (RouteName "packument")
         it "GET /{package}/-/{file}.tgz is an artifact read" $
@@ -143,7 +149,7 @@ genMethod = Gen.element [methodGet, methodPut, methodHead, methodPost, methodDel
 -- | Which route the reference grammar says claims a request.
 referenceRouteId :: Method -> [Text] -> Maybe RouteName
 referenceRouteId method segments
-    | method == methodPut = refPublish segments
+    | method == methodPut = refWrite segments
     | method == methodGet || method == methodHead = refRead segments
     -- Any other method matches no route: deny by default.
     | otherwise = Nothing
@@ -152,10 +158,10 @@ refRead :: [Text] -> Maybe RouteName
 refRead ("-" : meta) = refMeta meta
 refRead segments = refPackage segments
 
-refPublish :: [Text] -> Maybe RouteName
--- A lone "-" is the reserved meta-route prefix, never a package name.
-refPublish ("-" : _) = Nothing
-refPublish segments = case refTakePackage segments of
+refWrite :: [Text] -> Maybe RouteName
+-- "-" is the reserved meta-route prefix, so a write under it is never a publish.
+refWrite ("-" : meta) = refMetaWrite meta
+refWrite segments = case refTakePackage segments of
     Just (_name, []) -> Just (RouteName "publish")
     _ -> Nothing
 
@@ -163,6 +169,19 @@ refMeta :: [Text] -> Maybe RouteName
 refMeta = \case
     ["ping"] -> Just (RouteName "ping")
     ["v1", "search"] -> Just (RouteName "search")
+    "package" : rest -> refDistTagList rest
+    _ -> Nothing
+
+-- The dist-tag set is the only write under the reserved prefix.
+refMetaWrite :: [Text] -> Maybe RouteName
+refMetaWrite ("package" : rest) = case refTakePackage rest of
+    Just (_name, ["dist-tags", tag]) | isSafeComponent tag -> Just (RouteName "distTagSet")
+    _ -> Nothing
+refMetaWrite _ = Nothing
+
+refDistTagList :: [Text] -> Maybe RouteName
+refDistTagList segments = case refTakePackage segments of
+    Just (_name, ["dist-tags"]) -> Just (RouteName "distTagList")
     _ -> Nothing
 
 refPackage :: [Text] -> Maybe RouteName

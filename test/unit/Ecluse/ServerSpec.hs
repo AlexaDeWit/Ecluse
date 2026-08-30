@@ -256,6 +256,15 @@ spec = do
             it "answers /npm/-/v1/search with 501 (search is not an install path)" $
                 get "/npm/-/v1/search" `shouldRespondWith` 501
 
+            it "answers a dist-tag read with 501, not the deny-by-default 404" $
+                -- A 404 would read as the package being absent. The 501 says the operation
+                -- is not implemented, which is what an operator needs to see.
+                get "/npm/-/package/is-odd/dist-tags" `shouldRespondWith` 501
+
+            it "answers a dist-tag write with 501, without reading the body" $
+                request methodPut "/npm/-/package/is-odd/dist-tags/latest" [] "\"1.0.0\""
+                    `shouldRespondWith` 501
+
     describe "dispatch -- /npm mount (prefix strip + npm grammar)" $
         with npmMountApp $ do
             it "accepts the bare mount prefix with a trailing slash (empty path → 404)" $

@@ -52,7 +52,9 @@ explicit configuration (`server.publicUrl` plus its derived prefix).
 Readiness means the config is loaded and the listener is serving. Readiness is deliberately lenient
 about public-upstream reachability. The proxy still serves private hits while public is down, so an
 upstream blip must not pull a healthy pod from rotation. `/-/ping` answers locally, and
-`/-/v1/search` returns `501`, a discovery convenience rather than an install path.
+`/-/v1/search` returns `501`, a discovery convenience rather than an install path. The dist-tag
+routes under `/-/package/{package}/dist-tags` return `501` too: a dist-tag is a mutable named
+pointer, and Écluse implements none.
 
 ## OpenAPI spec
 
@@ -73,8 +75,9 @@ server speaks, and what each ecosystem does and does not support. That stops bei
   stream verbatim (see [Streaming](#streaming-and-resource-lifetime)). Upstream controls their
   status, media type, and body, so the operation carries a wildcard binary `default` response rather
   than a false finite status set.
-- **Unsupported routes are a documented boundary**: `GET /-/v1/search` returns `501`. The manifest
-  states that, so a reader learns the limit there and not from an error response.
+- **Unsupported routes are a documented boundary**: `GET /-/v1/search` and the dist-tag routes
+  return `501`. The manifest states that, so a reader learns the limit there and not from an error
+  response.
 
 ### The synthesised-packument schema = the trust boundary
 

@@ -38,6 +38,8 @@ data Routed
     | ToPublish PackageName
     | ToPing
     | ToSearch
+    | ToDistTagList
+    | ToDistTagSet
     | Denied
     deriving stock (Eq, Show)
 
@@ -47,6 +49,8 @@ routed method segments =
         Nothing -> Denied
         Just (RouteName "ping") -> ToPing
         Just (RouteName "search") -> ToSearch
+        Just (RouteName "distTagList") -> ToDistTagList
+        Just (RouteName "distTagSet") -> ToDistTagSet
         Just (RouteName "packument") -> maybe Denied (ToPackument . fst) (takePackage segments)
         Just (RouteName "publish") -> maybe Denied (ToPublish . fst) (takePackage segments)
         Just (RouteName "tarball") -> fromMaybe Denied $ do
@@ -64,9 +68,9 @@ stands for every read method here.
 classify :: [Text] -> Routed
 classify = routed methodGet
 
--- | The publish classification (a @PUT@) of an npm path.
-publish :: [Text] -> Routed
-publish = routed methodPut
+-- | The write classification (a @PUT@) of an npm path.
+written :: [Text] -> Routed
+written = routed methodPut
 
 -- | A scoped npm package identity (scope, base name), for expected 'Route's.
 scoped :: Text -> Text -> PackageName
@@ -147,36 +151,54 @@ spec = do
             classify ["-", "v1", "search"] `shouldBe` ToSearch
         it "treats an unknown /-/… meta-route as Unsupported, never a package" $
             classify ["-", "whoami"] `shouldBe` Denied
-        it "treats the dist-tags meta-route as Unsupported" $
-            classify ["-", "package", "is-odd", "dist-tags"] `shouldBe` Denied
+
+    describe "classify -- dist-tags (claimed, then refused as unimplemented)" $ do
+        -- The route claims the path so the client is told the operation is not implemented,
+        -- rather than reading a deny-by-default 404 as the package being absent.
+        it "routes /-/package/{pkg}/dist-tags to the dist-tag list" $
+            classify ["-", "package", "is-odd", "dist-tags"] `shouldBe` ToDistTagList
+        it "routes a scoped package's dist-tags (two segments)" $
+            classify ["-", "package", "@babel", "code-frame", "dist-tags"] `shouldBe` ToDistTagList
+        it "routes a scoped package's dist-tags (one decoded segment)" $
+            classify ["-", "package", "@babel/code-frame", "dist-tags"] `shouldBe` ToDistTagList
+        it "routes a PUT of /-/package/{pkg}/dist-tags/{tag} to the dist-tag set" $
+            written ["-", "package", "is-odd", "dist-tags", "latest"] `shouldBe` ToDistTagSet
+        it "denies a dist-tag list with a trailing tag (the tag is the write path's)" $
+            classify ["-", "package", "is-odd", "dist-tags", "latest"] `shouldBe` Denied
+        it "denies a dist-tag set with no tag" $
+            written ["-", "package", "is-odd", "dist-tags"] `shouldBe` Denied
+        it "denies a dist-tag path whose package is unsafe" $
+            classify ["-", "package", "..", "dist-tags"] `shouldBe` Denied
+        it "denies a dist-tag set whose tag is unsafe" $
+            written ["-", "package", "is-odd", "dist-tags", "../evil"] `shouldBe` Denied
 
     describe "classify -- publish (PUT /{pkg}, the method-aware write route)" $ do
         it "routes a PUT of an unscoped package to Publish" $
-            publish ["is-odd"] `shouldBe` ToPublish (unscopedNpm "is-odd")
+            written ["is-odd"] `shouldBe` ToPublish (unscopedNpm "is-odd")
         it "routes a PUT of a scoped package (two segments) to Publish" $
-            publish ["@acme", "widget"] `shouldBe` ToPublish (scoped "acme" "widget")
+            written ["@acme", "widget"] `shouldBe` ToPublish (scoped "acme" "widget")
         it "routes a PUT of a scoped package (one decoded segment) to Publish" $
-            publish ["@acme/widget"] `shouldBe` ToPublish (scoped "acme" "widget")
+            written ["@acme/widget"] `shouldBe` ToPublish (scoped "acme" "widget")
         it "agrees on the same Publish route for both scoped encodings" $
-            publish ["@acme", "widget"] `shouldBe` publish ["@acme/widget"]
+            written ["@acme", "widget"] `shouldBe` written ["@acme/widget"]
         it "denies a PUT to a tarball slot (a publish is a bare-package path only)" $
             -- The version lives in the body, not the path. A PUT to /{pkg}/-/{file}.tgz
             -- is not a publish.
-            publish ["is-odd", "-", "is-odd-3.0.1.tgz"] `shouldBe` Denied
+            written ["is-odd", "-", "is-odd-3.0.1.tgz"] `shouldBe` Denied
         it "denies a PUT to a meta-route" $
-            publish ["-", "ping"] `shouldBe` Denied
+            written ["-", "ping"] `shouldBe` Denied
         it "denies a PUT with trailing junk after the package" $
-            publish ["is-odd", "extra"] `shouldBe` Denied
+            written ["is-odd", "extra"] `shouldBe` Denied
         it "denies a PUT to the empty path" $
-            publish [] `shouldBe` Denied
+            written [] `shouldBe` Denied
         it "denies a PUT of an unsafe name (embedded slash) -- the same component gate as reads" $
-            publish ["foo/bar"] `shouldBe` Denied
+            written ["foo/bar"] `shouldBe` Denied
         it "denies a PUT of a bare scope with no package name" $
-            publish ["@acme"] `shouldBe` Denied
+            written ["@acme"] `shouldBe` Denied
         it "denies a PUT of a name outside the ASCII boundary -- the same grammar as reads" $
             -- The publish handler is reachable only through this capture, so a name the
             -- grammar refuses never becomes a write.
-            publish ["@acme/wid\x3164\&get"] `shouldBe` Denied
+            written ["@acme/wid\x3164\&get"] `shouldBe` Denied
         it "does not publish a GET of the same package (a GET /{pkg} is a Packument)" $
             -- The method decides as much as the path: the same /{pkg} reads under GET
             -- and publishes under PUT.
