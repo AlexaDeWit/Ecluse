@@ -29,11 +29,6 @@ cleanup_tag() {
 }
 trap cleanup_tag EXIT
 
-# gh is not in the flake devshell, so a clear refusal beats a bare "command not found".
-for tool in git gh task; do
-  command -v "$tool" >/dev/null || die "$tool is not on PATH, and init-release needs it"
-done
-
 [ -n "$version" ] || die "pass a version, for example: task init-release VERSION=v0.2.0"
 release_version_parse "$version" ||
   die "'$version' is not X.Y.Z or X.Y.Z-rc.N (a leading 'v' is optional)"
