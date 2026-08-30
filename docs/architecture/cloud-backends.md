@@ -113,10 +113,11 @@ A payload that no longer decodes never becomes a job, so the budget cannot reach
 logs the drop and leaves the message un-acked, which leaves the dead-letter queue, or the queue's
 own retention window, as the only terminus it has.
 
-Discarding retains nothing, so it is deliberately the lesser outcome. Écluse holds the budget one
-delivery above an attached policy's own `maxReceiveCount`. A dead-letter queue therefore always
-captures the message first, and the budget fires only for a deployment that has none. Discarding
-is safe in the way the rest of mirroring is safe. Mirroring is demand-driven, so the job returns
+Discarding retains nothing, so it is deliberately the lesser outcome. The configured count is a
+floor. When Écluse can read an attached policy's own `maxReceiveCount`, it holds the budget at
+least one delivery above that count, so the dead-letter queue captures the message first and the
+budget fires only for a deployment that has none. When the policy's count is unreadable, the
+configured floor stands alone. Discarding is safe in the way the rest of mirroring is safe. Mirroring is demand-driven, so the job returns
 on the next pull of that artifact and fails the same way until the cause is fixed.
 
 The worker checks the budget before it runs the job, not after. That check spares the repeated

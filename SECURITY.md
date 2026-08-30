@@ -34,4 +34,4 @@ refusal against those before reporting it.
 
 ## Supported versions
 
-The project is pre-1.0 and under active development. I support only the latest `main` branch.
+The project is pre-1.0 and under active development. I support only the latest release.

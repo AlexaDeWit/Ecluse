@@ -4,8 +4,8 @@
 # INACTIVE: it documents the schema, and names the computed or derived default that
 # applies while it stays unset. Put secrets in environment variables, never here. An
 # integer key takes a positive integer unless its comment says otherwise. A quoted value
-# and an ECLUSE_* variable must spell it in plain digits: a hexadecimal, octal, padded,
-# or bracketed spelling is refused there.
+# and an ECLUSE_* variable must spell it in plain digits: a hexadecimal, octal,
+# space-padded, or bracketed spelling is refused there.
 #
 # The loader owns the whole ECLUSE_ prefix: every ECLUSE_* variable is read as a key of
 # this schema, and one that names no key aborts the boot. Two families are consumed

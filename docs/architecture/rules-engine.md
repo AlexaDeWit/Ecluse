@@ -95,7 +95,7 @@ pipeline applies verdicts across it. For the cross-upstream merge, see
   repointing them. The rule never promotes a higher prerelease over a chosen stable `latest`.
   Repointing downward is a deliberate downgrade, so a withheld release does not silently remain
   the default install.
-- **No survivors → 403, 503, 502, or 500.** If nothing survives, the status follows the most
+- **No survivors → 503, 502, 500, or 403.** If nothing survives, the status follows the most
   recoverable cause. `503` (with `Retry-After`) when any rejection was transient or a needed
   upstream was unavailable. `502` when an upstream returned a document Écluse could not use.
   `500` when an exclusion is a permanent inability and none is retryable. `403` with the
