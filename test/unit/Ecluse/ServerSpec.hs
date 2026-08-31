@@ -6,7 +6,7 @@ module Ecluse.ServerSpec (spec) where
 
 import Prelude hiding (get)
 
-import Network.HTTP.Types (hConnection, methodHead, methodPut, status200, status500, statusCode)
+import Network.HTTP.Types (hConnection, methodDelete, methodHead, methodPut, status200, status500, statusCode)
 import Network.Wai (
     Application,
     Response,
@@ -264,6 +264,15 @@ spec = do
             it "answers a dist-tag write with 501, without reading the body" $
                 request methodPut "/npm/-/package/is-odd/dist-tags/latest" [] "\"1.0.0\""
                     `shouldRespondWith` 501
+
+            it "answers a dist-tag removal with 501, the same boundary as the write" $
+                request methodDelete "/npm/-/package/is-odd/dist-tags/latest" [] ""
+                    `shouldRespondWith` 501
+
+            it "still denies a DELETE outside the dist-tag path with the 404" $
+                -- The method claims one route, not a class of paths, so a package path
+                -- under DELETE stays deny-by-default.
+                request methodDelete "/npm/is-odd" [] "" `shouldRespondWith` 404
 
     describe "dispatch -- /npm mount (prefix strip + npm grammar)" $
         with npmMountApp $ do

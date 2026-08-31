@@ -23,8 +23,8 @@ The meta-routes answer locally through their declared outcome.
 
 A @PUT \/{pkg}@ is the npm __publish__ request, so the method is part of the match. A
 @PUT@ over a bare-package path publishes. A __read__ (@GET@, or its bodiless @HEAD@) over
-the same path fetches the packument. Those three methods are the only ones the front
-door answers. Any other (@POST@, @DELETE@, …) matches no route and denies.
+the same path fetches the packument. A @DELETE@ reaches one route only, the dist-tag
+removal, and a @POST@ reaches none. A method no route claims denies.
 
 The model is __deny by default__. Three npm-specific facts shape the matching:
 
@@ -118,7 +118,7 @@ import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
 import Ecluse.Core.Server.Pipeline.Tarball (TarballReplies (..), headTarball, serveTarball)
 import Ecluse.Core.Server.Route (
     Capture (Capture),
-    MethodMatch (MethodPut, MethodRead),
+    MethodMatch (MethodDelete, MethodPut, MethodRead),
     PatternSeg (SegCap, SegLit),
     Route (Route),
     RouteName (RouteName),
@@ -149,6 +149,7 @@ npmRoutes =
     , searchRoute
     , distTagListRoute
     , distTagSetRoute
+    , distTagRemoveRoute
     , tarballRoute
     , packumentRoute
     , publishRoute
@@ -197,18 +198,37 @@ distTagListRoute =
         Nothing
         distTagContract
 
+-- One path template for the tagged dist-tag routes, so the write and the removal cannot drift.
+distTagTagSegs :: [PatternSeg NpmCap]
+distTagTagSegs = [SegLit "-", SegLit "package", SegCap capPackage, SegLit "dist-tags", SegCap capTag]
+
 -- @PUT \/-\/package\/{package}\/dist-tags\/{tag}@: a documented @501@ boundary.
 distTagSetRoute :: Route NpmCap
 distTagSetRoute =
     Route
         (RouteName "distTagSet")
         MethodPut
-        [SegLit "-", SegLit "package", SegCap capPackage, SegLit "dist-tags", SegCap capTag]
+        distTagTagSegs
         (answering distTagAnswer)
         "Set a package's dist-tag (not supported)"
         "Écluse writes no mutable named pointer, so it returns `501` rather than the `404` an \
         \unrouted path takes. The publication target owns a package's tags, and a publisher sets \
         \them there."
+        Nothing
+        distTagContract
+
+-- @DELETE \/-\/package\/{package}\/dist-tags\/{tag}@: a documented @501@ boundary.
+distTagRemoveRoute :: Route NpmCap
+distTagRemoveRoute =
+    Route
+        (RouteName "distTagRemove")
+        MethodDelete
+        distTagTagSegs
+        (answering distTagAnswer)
+        "Remove a package's dist-tag (not supported)"
+        "Écluse holds no mutable named pointer to remove, so it returns `501` rather than the `404` \
+        \an unrouted path takes. The publication target owns a package's tags, and a publisher \
+        \removes them there."
         Nothing
         distTagContract
 
@@ -283,7 +303,7 @@ pingContract = jsonContract status200 "An empty object." emptyObjectCodec
 searchContract :: ResponseContract (ResponseValue NpmError)
 searchContract = jsonContract status501 "Not implemented: search is not supported." npmErrorCodec
 
--- The read and the write share one contract: neither dist-tag operation is implemented.
+-- No dist-tag operation is implemented, so the read, the write, and the removal share one contract.
 distTagContract :: ResponseContract (ResponseValue NpmError)
 distTagContract = jsonContract status501 "Not implemented: dist-tags are not supported." npmErrorCodec
 
@@ -393,7 +413,7 @@ searchAnswer :: ResponseValue NpmError
 searchAnswer =
     responseValue [] (npmError Nothing "search is not supported by this proxy; use the public registry's website to discover packages")
 
--- @\/-\/package\/{package}\/dist-tags@: a @501@ pointer, in npm's error surface.
+-- The dist-tag routes' @501@ pointer, in npm's error surface.
 distTagAnswer :: ResponseValue NpmError
 distTagAnswer =
     responseValue [] (npmError Nothing "dist-tags are not supported by this proxy; a package's tags are in the metadata document it serves, and a publisher sets them at the publication target")
@@ -473,7 +493,7 @@ capFilename =
         (safeSegment NpmFilename)
 
 {- | The dist-tag capture: one segment, accepted only when it is a safe component
-('isSafeComponent'). The route answers @501@, so nothing downstream reads the tag.
+('isSafeComponent'). Both tagged routes answer @501@, so nothing downstream reads the tag.
 -}
 capTag :: Capture NpmCap
 capTag =

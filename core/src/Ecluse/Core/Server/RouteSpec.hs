@@ -4,10 +4,10 @@
 
 {- | The documented operation view of a route, as plain OpenAPI-free data.
 
-'specsOf' erases an "Ecluse.Core.Server.Route".'Route' into the operations the
-OpenAPI spec needs. A write route contributes @PUT@. A read route contributes
-both @GET@ and its derived bodiless @HEAD@ operation. The capture type, builder, and
-typed response value disappear. Each operation's 'ResponseDoc's still come from the same
+'specsOf' erases an "Ecluse.Core.Server.Route".'Route' into the operations the OpenAPI spec
+needs. A write route contributes @PUT@ and a removal route @DELETE@. A read route contributes
+both @GET@ and its derived bodiless @HEAD@ operation. The capture type, builder, and typed
+response value disappear. Each operation's 'ResponseDoc's still come from the same
 'Ecluse.Core.Server.Contract.ResponseContract' runtime dispatch uses.
 -}
 module Ecluse.Core.Server.RouteSpec (
@@ -20,12 +20,12 @@ module Ecluse.Core.Server.RouteSpec (
     specsOf,
 ) where
 
-import Network.HTTP.Types.Method (StdMethod (GET, HEAD, PUT))
+import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, PUT))
 
 import Ecluse.Core.Server.Contract (RequestSpec, ResponseDoc, bodilessContract, responseDocs)
 import Ecluse.Core.Server.Route (
     Capture (capDescription, capName),
-    MethodMatch (MethodPut, MethodRead),
+    MethodMatch (MethodDelete, MethodPut, MethodRead),
     PatternSeg (SegCap, SegLit),
     Route (Route, routeContract, routeDescription, routeMethod, routeName, routeRequest, routeSegs, routeSummary),
     RouteName (RouteName, unRouteName),
@@ -87,6 +87,7 @@ specsOf
         operations = case matchedMethod of
             MethodRead -> [(GET, name, contract), (HEAD, headName name, bodilessContract contract)]
             MethodPut -> [(PUT, name, contract)]
+            MethodDelete -> [(DELETE, name, contract)]
 
         operationSpec (method, operationName, operationContract) =
             RouteSpec
