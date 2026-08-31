@@ -74,7 +74,7 @@ import Ecluse.Config.Rule
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Rules.Types (PrecededRule)
-import Ecluse.Core.Security (HostPort, hostPortAddress)
+import Ecluse.Core.Security (HostPort, afterFirst, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (stripTrailingSlash)
 
@@ -247,12 +247,10 @@ registryKey url = (hostPortAddress raw, stripTrailingSlash (registryPath raw))
   where
     raw = registryUrlText url
 
-{- The path half of a registry URL, from the first slash past the scheme. A repository's
-per-format endpoints differ only here, so the fold must not reach it. -}
+{- The path half of a registry URL, split on the scheme with the extractor the authority half
+uses, so the two cannot drift. A repository's per-format endpoints differ only here. -}
 registryPath :: Text -> Text
-registryPath raw = T.dropWhile (/= '/') afterScheme
-  where
-    afterScheme = fromMaybe raw (T.stripPrefix "://" (snd (T.breakOn "://" raw)))
+registryPath raw = T.dropWhile (/= '/') (afterFirst "://" raw)
 
 {- | One line per resolved leaf of the merged configuration: the dotted path, the rendered
 value with secret-typed keys redacted, and the layer that supplied it. That layer is

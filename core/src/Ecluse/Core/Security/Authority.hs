@@ -19,6 +19,7 @@ module Ecluse.Core.Security.Authority (
     hostPortAddress,
     hostPortAddressWithDefault,
     splitHostPort,
+    afterFirst,
 
     -- * Configured-URL refusal
     refuseCredentialMaterial,
@@ -140,8 +141,9 @@ authoritySpan raw = T.takeWhile (`notElem` ['/', '?', '#']) (afterFirst "://" ra
 authorityOf :: Text -> Text
 authorityOf = afterLast "@" . authoritySpan
 
--- The text after @needle@'s first occurrence, or all of @hay@ if absent. The scheme separator must
--- match first, so a crafted "https://169.254.169.254/x?u=https://ok" gates on the host dialled.
+{- | The text after @needle@'s first occurrence, or all of @hay@ if absent. The scheme separator
+matches first, so a crafted "https://169.254.169.254/x?u=https://ok" gates on the host dialled.
+-}
 afterFirst :: Text -> Text -> Text
 afterFirst needle hay = fromMaybe hay (T.stripPrefix needle (snd (T.breakOn needle hay)))
 
