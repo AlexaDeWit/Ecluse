@@ -34,7 +34,7 @@ below:
 module Ecluse.Registry.Npm.RouteTableSpec (spec) where
 
 import Data.Text qualified as T
-import Hedgehog (Gen, forAll, (===))
+import Hedgehog (Gen, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodHead, methodPost, methodPut)
 import Test.Hspec
@@ -73,12 +73,30 @@ spec = do
                     segments <- forAll genPathSegments
                     takePackage segments === refTakePackage segments
 
+        -- 'genPathSegments' explores arbitrary paths, and a dist-tag path is four or five
+        -- specific segments, so it never reaches one. This generator shapes the request instead.
+        modifyMaxSuccess (const 2000) $
+            it "claims the same route as the reference, over generated dist-tag requests" $
+                hedgehog $ do
+                    (method, segments) <- forAll genDistTagRequest
+                    let claimed = matchedId method segments
+                    cover 5 "claims the dist-tag list" (claimed == Just (RouteName "distTagList"))
+                    cover 2 "claims the dist-tag set" (claimed == Just (RouteName "distTagSet"))
+                    cover 20 "falls through to the 404" (isNothing claimed)
+                    claimed === referenceRouteId method segments
+
     describe "the routes it claims" $ do
         -- Worked examples: also documentation of the grammar the table encodes.
         it "GET /-/ping is the liveness probe" $
             matchedId methodGet ["-", "ping"] `shouldBe` Just (RouteName "ping")
         it "GET /-/v1/search is the (unsupported) search route" $
             matchedId methodGet ["-", "v1", "search"] `shouldBe` Just (RouteName "search")
+        it "GET /-/package/{pkg}/dist-tags is the (unsupported) dist-tag list route" $
+            matchedId methodGet ["-", "package", "lodash", "dist-tags"]
+                `shouldBe` Just (RouteName "distTagList")
+        it "PUT /-/package/{pkg}/dist-tags/{tag} is the (unsupported) dist-tag set route" $
+            matchedId methodPut ["-", "package", "lodash", "dist-tags", "latest"]
+                `shouldBe` Just (RouteName "distTagSet")
         it "GET /{package} is a packument read" $
             matchedId methodGet ["lodash"] `shouldBe` Just (RouteName "packument")
         it "GET /{package}/-/{file}.tgz is an artifact read" $
@@ -134,6 +152,51 @@ spec = do
 genMethod :: Gen Method
 genMethod = Gen.element [methodGet, methodPut, methodHead, methodPost, methodDelete]
 
+{- | A request shaped like a dist-tag route, every part perturbed, so the property reaches
+both routes and the near misses that must deny. 'genPathSegments' reaches neither.
+-}
+genDistTagRequest :: Gen (Method, [Text])
+genDistTagRequest = do
+    method <- genDistTagMethod
+    prefix <- genLiteralSeg "-"
+    package <- genLiteralSeg "package"
+    name <- genPackageUnit
+    distTags <- genLiteralSeg "dist-tags"
+    tag <- Gen.frequency [(1, pure []), (1, (: []) <$> genTagSeg)]
+    pure (method, [prefix, package] <> name <> [distTags] <> tag)
+
+-- Weighted to the two methods the dist-tag routes answer, keeping the ones that must deny.
+genDistTagMethod :: Gen Method
+genDistTagMethod =
+    Gen.frequency
+        [ (3, pure methodGet)
+        , (1, pure methodHead)
+        , (3, pure methodPut)
+        , (1, Gen.element [methodPost, methodDelete])
+        ]
+
+-- A literal slot: mostly the segment the route requires, sometimes a near miss.
+genLiteralSeg :: Text -> Gen Text
+genLiteralSeg literal = Gen.frequency [(4, pure literal), (1, Gen.element nearMissSegs)]
+
+nearMissSegs :: [Text]
+nearMissSegs = ["", "..", "-", "package", "dist-tags", "v1", "lodash"]
+
+-- The package slot: an unscoped name, a scoped name in either wire encoding, or a segment that
+-- derails the match. Eight of the ten weights are a name the capture accepts.
+genPackageUnit :: Gen [Text]
+genPackageUnit =
+    Gen.frequency
+        [ (4, (: []) <$> Gen.element ["lodash", "is-odd", "pkg"])
+        , (2, (: []) <$> Gen.element ["@babel/code-frame", "@acme/widget"])
+        , (2, (\scope base -> [scope, base]) <$> Gen.element ["@babel", "@acme"] <*> Gen.element ["core", "widget"])
+        , (2, (: []) <$> Gen.element ["-", "..", "foo/bar", "@babel", ""])
+        ]
+
+-- The tag slot: four names the capture accepts, two components it must refuse.
+genTagSeg :: Gen Text
+genTagSeg = Gen.element ["latest", "next", "beta", "1.0.0", "..", "a/b"]
+
 -- The independent reference ---------------------------------------------------
 --
 -- A hand-written implementation of the npm grammar, structured as pattern matching. It
@@ -143,7 +206,7 @@ genMethod = Gen.element [methodGet, methodPut, methodHead, methodPost, methodDel
 -- | Which route the reference grammar says claims a request.
 referenceRouteId :: Method -> [Text] -> Maybe RouteName
 referenceRouteId method segments
-    | method == methodPut = refPublish segments
+    | method == methodPut = refWrite segments
     | method == methodGet || method == methodHead = refRead segments
     -- Any other method matches no route: deny by default.
     | otherwise = Nothing
@@ -152,10 +215,10 @@ refRead :: [Text] -> Maybe RouteName
 refRead ("-" : meta) = refMeta meta
 refRead segments = refPackage segments
 
-refPublish :: [Text] -> Maybe RouteName
--- A lone "-" is the reserved meta-route prefix, never a package name.
-refPublish ("-" : _) = Nothing
-refPublish segments = case refTakePackage segments of
+refWrite :: [Text] -> Maybe RouteName
+-- "-" is the reserved meta-route prefix, so a write under it is never a publish.
+refWrite ("-" : meta) = refMetaWrite meta
+refWrite segments = case refTakePackage segments of
     Just (_name, []) -> Just (RouteName "publish")
     _ -> Nothing
 
@@ -163,6 +226,19 @@ refMeta :: [Text] -> Maybe RouteName
 refMeta = \case
     ["ping"] -> Just (RouteName "ping")
     ["v1", "search"] -> Just (RouteName "search")
+    "package" : rest -> refDistTagList rest
+    _ -> Nothing
+
+-- The dist-tag set is the only write under the reserved prefix.
+refMetaWrite :: [Text] -> Maybe RouteName
+refMetaWrite ("package" : rest) = case refTakePackage rest of
+    Just (_name, ["dist-tags", tag]) | isSafeComponent tag -> Just (RouteName "distTagSet")
+    _ -> Nothing
+refMetaWrite _ = Nothing
+
+refDistTagList :: [Text] -> Maybe RouteName
+refDistTagList segments = case refTakePackage segments of
+    Just (_name, ["dist-tags"]) -> Just (RouteName "distTagList")
     _ -> Nothing
 
 refPackage :: [Text] -> Maybe RouteName
