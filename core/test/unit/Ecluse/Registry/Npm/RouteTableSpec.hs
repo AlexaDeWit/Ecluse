@@ -158,7 +158,7 @@ genMethod :: Gen Method
 genMethod = Gen.element [methodGet, methodPut, methodHead, methodPost, methodDelete]
 
 {- | A request shaped like a dist-tag route, every part perturbed, so the property reaches
-both routes and the near misses that must deny. 'genPathSegments' reaches neither.
+all three routes and the near misses that must deny. 'genPathSegments' reaches none of them.
 -}
 genDistTagRequest :: Gen (Method, [Text])
 genDistTagRequest = do
