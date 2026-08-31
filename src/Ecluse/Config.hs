@@ -74,9 +74,9 @@ import Ecluse.Config.Rule
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Rules.Types (PrecededRule)
-import Ecluse.Core.Security (HostPort, afterFirst, hostPortAddress)
+import Ecluse.Core.Security (HostPort, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
-import Ecluse.Core.Text (stripTrailingSlash)
+import Ecluse.Core.Text (afterFirst, stripTrailingSlash)
 
 {- HLINT ignore defaultPolicy "Avoid restricted function" -}
 defaultPolicy :: RulePolicy

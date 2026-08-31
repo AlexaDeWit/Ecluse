@@ -19,7 +19,6 @@ module Ecluse.Core.Security.Authority (
     hostPortAddress,
     hostPortAddressWithDefault,
     splitHostPort,
-    afterFirst,
 
     -- * Configured-URL refusal
     refuseCredentialMaterial,
@@ -30,7 +29,7 @@ module Ecluse.Core.Security.Authority (
 
 import Data.Text qualified as T
 
-import Ecluse.Core.Text (readDecimalText)
+import Ecluse.Core.Text (afterFirst, readDecimalText)
 
 {- | The authority an outbound fetch dials: a bare host with its effective port. The gate
 authorises the pair, so an allowlisted host at an attacker-chosen port is not authorised.
@@ -140,12 +139,6 @@ authoritySpan raw = T.takeWhile (`notElem` ['/', '?', '#']) (afterFirst "://" ra
 'hostPortAddress' share it, so the two extractions cannot drift on an authority edge case. -}
 authorityOf :: Text -> Text
 authorityOf = afterLast "@" . authoritySpan
-
-{- | The text after @needle@'s first occurrence, or all of @hay@ if absent. The scheme separator
-matches first, so a crafted "https://169.254.169.254/x?u=https://ok" gates on the host dialled.
--}
-afterFirst :: Text -> Text -> Text
-afterFirst needle hay = fromMaybe hay (T.stripPrefix needle (snd (T.breakOn needle hay)))
 
 -- The text after @needle@'s last occurrence, or all of @hay@ if absent. The last "@" is the
 -- userinfo boundary, matching what URL parsers do.

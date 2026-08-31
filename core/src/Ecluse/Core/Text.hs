@@ -3,16 +3,17 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Small pure text helpers shared across the codebase, so the blank-value,
-URL-path-join, last-path-segment, and digit-run idioms have a single definition rather
-than several near-identical re-spellings. It also holds the hot-path ISO-8601 instant
-renderer the serve path uses ('renderIso8601Utc'). This module depends on nothing else
-in @Ecluse@, so any module may import it without risking an import cycle.
+URL-path-join, last-path-segment, scheme-split, and digit-run idioms have a single
+definition rather than several near-identical re-spellings. It also holds the hot-path
+ISO-8601 instant renderer the serve path uses ('renderIso8601Utc'). This module depends
+on nothing else in @Ecluse@, so any module may import it without risking an import cycle.
 -}
 module Ecluse.Core.Text (
     nonBlank,
     stripTrailingSlash,
     joinUrlPath,
     lastPathSegment,
+    afterFirst,
     readDecimalText,
     readHexText,
     renderIso8601Utc,
@@ -52,6 +53,12 @@ lastPathSegment :: Text -> Maybe Text
 lastPathSegment url =
     let afterLastSlash = snd (T.breakOnEnd "/" url)
      in if T.null afterLastSlash then Nothing else Just afterLastSlash
+
+{- | The text after @needle@'s first occurrence, or all of @hay@ if absent. The scheme separator
+matches first, so a crafted "https://169.254.169.254/x?u=https://ok" gates on the host dialled.
+-}
+afterFirst :: Text -> Text -> Text
+afterFirst needle hay = fromMaybe hay (T.stripPrefix needle (snd (T.breakOn needle hay)))
 
 {- | The non-negative integer a bare decimal digit run spells, 'Nothing' for anything else.
 Stricter than 'readMaybe', which also takes a sign, @0x10@, @0o10@, @  5@, and @(5)@.

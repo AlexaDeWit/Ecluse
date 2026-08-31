@@ -198,7 +198,8 @@ error, not a silent skip:
   differ only in path, and a repository's per-format endpoints are separate stores. It folds the
   authority to lower case and applies the default port, so neither a capital letter nor an explicit
   `:443` defeats a refusal. Applying the default port keeps the port in the key rather than dropping
-  it, so `:8443` stays a separate store, and the path is compared exactly.
+  it, so `:8443` stays a separate store. The path is compared exactly, which is what keeps those
+  per-format endpoints apart.
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the
