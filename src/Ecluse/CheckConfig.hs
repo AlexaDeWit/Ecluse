@@ -2,13 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | @ecluse check-config@: validate the configuration exactly as a boot would and print
-the resolved posture, without starting anything. It hands the loaded config to
+{- | @ecluse check-config@: validate the configuration as a writing role's boot would and
+print the resolved posture, without starting anything. It hands the loaded config to
 'Ecluse.Composition.Plan.resolveBootPlan', takes its verdict through the boot's own
 'bootRefusals', and prints the plan's lines, applying none of it: no socket opens, no
 capability count changes, no re-exec, no cloud call. It predicts the posture from
 'appliedRuntimePlan', because the checker's own process posture is not the boot's. It
-exits @0@ on a valid configuration and @2@ on a refused one.
+exits @0@ on a valid configuration and @2@ on a refused one, where a collapse only
+@ecluse dredger@ refuses is a warning rather than a refusal.
 -}
 module Ecluse.CheckConfig (runCheckConfig) where
 

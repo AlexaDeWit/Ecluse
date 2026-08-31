@@ -106,7 +106,7 @@ vetMirrorStores mounts = case endpointRefusals MirrorPruner mounts of
     [] -> Right (Map.mapMaybe (fmap MirrorStore . mntMirrorTarget) mounts)
     errs -> Left errs
 
--- | A registry endpoint of a mount, named by the key the configuration declares it under.
+-- A registry endpoint of a mount, named by the key the configuration declares it under.
 data EndpointKey
     = KeyPublicUpstream
     | KeyPrivateUpstream
@@ -114,36 +114,34 @@ data EndpointKey
     | KeyPublicationTarget
     deriving stock (Eq, Show)
 
--- | Which mounts a rule compares: one mount's own endpoints, its neighbours', or both.
+-- Which mounts a rule compares: one mount's own endpoints, its neighbours', or both.
 data MountScope = SameMount | OtherMount | AnyMount
     deriving stock (Eq, Show)
 
-{- | How a rule compares two endpoints. Full-URL equality is what store identity needs, because
-CodeArtifact repositories share one domain and differ only in path.
--}
+{- How a rule compares two endpoints. Full-URL equality is what store identity needs, because
+CodeArtifact repositories share one domain and differ only in path. -}
 data RegistryMatch = ByHost | ByRegistry
     deriving stock (Eq, Show)
 
--- | What one role does about a collision a rule matched.
+-- What one role does about a collision a rule matched.
 data RuleVerdict
-    = -- | The role refuses to boot, reporting this refusal.
+    = -- The role refuses to boot, reporting this refusal.
       Refuse (EndpointCollision -> BootError)
-    | -- | The role boots and logs the collapse with this consequence.
+    | -- The role boots and logs the collapse with this consequence.
       Warn Text
 
--- | Two endpoints of the configured mounts that resolve to one registry.
+-- Two endpoints of the configured mounts that resolve to one registry.
 data EndpointCollision = EndpointCollision
     { ecMount :: Ecosystem
     , ecKey :: EndpointKey
     , ecOtherMount :: Ecosystem
     , ecOtherKey :: EndpointKey
-    , ecRegistry :: RegistryUrl
-    -- ^ The declared URL both keys resolve to.
+    , -- The declared URL both keys resolve to.
+      ecRegistry :: RegistryUrl
     }
 
-{- | One rule: the endpoint whose role is at stake, the endpoints it must not land on, how the
-two are compared, and what each boot role does when they collide.
--}
+{- One rule: the endpoint whose role is at stake, the endpoints it must not land on, how the
+two are compared, and what each boot role does when they collide. -}
 data EndpointRule = EndpointRule
     { erSubject :: EndpointKey
     , erAgainst :: [EndpointKey]

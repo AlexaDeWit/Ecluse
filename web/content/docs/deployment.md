@@ -22,9 +22,10 @@ selects the role:
   starts and answers its health probes, and it prunes nothing. It refuses to start when a mount's
   `mirrorTarget` is also any mount's `privateUpstream` or its own mount's `publicationTarget`,
   because it deletes from that store. The other roles start and warn instead.
-- **`ecluse check-config`**: validates the shared configuration exactly as a boot would and prints
-  the resolved posture without starting anything (exit `0` valid, `2` refused). Run it in CI or
-  before a rollout.
+- **`ecluse check-config`**: validates the shared configuration as `ecluse proxy` and
+  `ecluse mirror` would, and prints the resolved posture without starting anything (exit `0` valid,
+  `2` refused). A collapsed endpoint pair only `ecluse dredger` refuses prints here as a warning.
+  Run it in CI or before a rollout.
 
 All roles share one configuration. The proxy and the mirror worker scale. Run Pilot as a singleton,
 because multiple instances race and duplicate API calls.
