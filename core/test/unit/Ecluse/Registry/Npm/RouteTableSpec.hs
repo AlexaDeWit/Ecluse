@@ -28,8 +28,8 @@ below:
 
 * A lone @"-"@ is never a package name, on __any__ method, because it is the reserved
   meta-route prefix. A @PUT \/-@ denies rather than publishing a package called @"-"@.
-* The table answers only @GET@, @HEAD@, and @PUT@, so a @DELETE@ or @POST@ over a package
-  path denies rather than being served a packument.
+* A @DELETE@ reaches the dist-tag removal and nothing else, and a @POST@ reaches no route,
+  so either over a package path denies rather than being served a packument.
 -}
 module Ecluse.Registry.Npm.RouteTableSpec (spec) where
 
@@ -82,6 +82,7 @@ spec = do
                     let claimed = matchedId method segments
                     cover 5 "claims the dist-tag list" (claimed == Just (RouteName "distTagList"))
                     cover 2 "claims the dist-tag set" (claimed == Just (RouteName "distTagSet"))
+                    cover 2 "claims the dist-tag removal" (claimed == Just (RouteName "distTagRemove"))
                     cover 20 "falls through to the 404" (isNothing claimed)
                     claimed === referenceRouteId method segments
 
@@ -97,6 +98,9 @@ spec = do
         it "PUT /-/package/{pkg}/dist-tags/{tag} is the (unsupported) dist-tag set route" $
             matchedId methodPut ["-", "package", "lodash", "dist-tags", "latest"]
                 `shouldBe` Just (RouteName "distTagSet")
+        it "DELETE /-/package/{pkg}/dist-tags/{tag} is the (unsupported) dist-tag removal route" $
+            matchedId methodDelete ["-", "package", "lodash", "dist-tags", "latest"]
+                `shouldBe` Just (RouteName "distTagRemove")
         it "GET /{package} is a packument read" $
             matchedId methodGet ["lodash"] `shouldBe` Just (RouteName "packument")
         it "GET /{package}/-/{file}.tgz is an artifact read" $
@@ -118,12 +122,13 @@ spec = do
             matchedId methodPut ["-"] `shouldBe` Nothing
             matchedId methodGet ["-"] `shouldBe` Nothing
 
-        -- The table answers only GET, HEAD, and PUT. A DELETE or a POST over a package
-        -- path matches no route and denies rather than serving a packument.
+        -- A POST reaches no route, and a DELETE only the dist-tag removal, so either over a
+        -- package path matches nothing and denies rather than serving a packument.
         it "a method the front door does not answer denies" $ do
             matchedId methodDelete ["lodash"] `shouldBe` Nothing
             matchedId methodPost ["lodash"] `shouldBe` Nothing
             matchedId methodDelete ["lodash", "-", "lodash-1.0.0.tgz"] `shouldBe` Nothing
+            matchedId methodPost ["-", "package", "lodash", "dist-tags", "latest"] `shouldBe` Nothing
 
     describe "what its captures parse to" $ do
         it "normalises both scoped-name wire encodings to the same package" $
@@ -165,14 +170,16 @@ genDistTagRequest = do
     tag <- Gen.frequency [(1, pure []), (1, (: []) <$> genTagSeg)]
     pure (method, [prefix, package] <> name <> [distTags] <> tag)
 
--- Weighted to the two methods the dist-tag routes answer, keeping the ones that must deny.
+-- Weighted to the three methods the dist-tag routes answer, keeping the one that must deny.
+-- DELETE claims the removal route, so it carries PUT's weight instead of sharing POST's arm.
 genDistTagMethod :: Gen Method
 genDistTagMethod =
     Gen.frequency
         [ (3, pure methodGet)
         , (1, pure methodHead)
         , (3, pure methodPut)
-        , (1, Gen.element [methodPost, methodDelete])
+        , (3, pure methodDelete)
+        , (1, pure methodPost)
         ]
 
 -- A literal slot: mostly the segment the route requires, sometimes a near miss.
@@ -207,6 +214,7 @@ genTagSeg = Gen.element ["latest", "next", "beta", "1.0.0", "..", "a/b"]
 referenceRouteId :: Method -> [Text] -> Maybe RouteName
 referenceRouteId method segments
     | method == methodPut = refWrite segments
+    | method == methodDelete = refRemove segments
     | method == methodGet || method == methodHead = refRead segments
     -- Any other method matches no route: deny by default.
     | otherwise = Nothing
@@ -217,10 +225,15 @@ refRead segments = refPackage segments
 
 refWrite :: [Text] -> Maybe RouteName
 -- "-" is the reserved meta-route prefix, so a write under it is never a publish.
-refWrite ("-" : meta) = refMetaWrite meta
+refWrite ("-" : meta) = refMetaTagged (RouteName "distTagSet") meta
 refWrite segments = case refTakePackage segments of
     Just (_name, []) -> Just (RouteName "publish")
     _ -> Nothing
+
+-- The dist-tag removal is the only route a DELETE claims.
+refRemove :: [Text] -> Maybe RouteName
+refRemove ("-" : meta) = refMetaTagged (RouteName "distTagRemove") meta
+refRemove _ = Nothing
 
 refMeta :: [Text] -> Maybe RouteName
 refMeta = \case
@@ -229,12 +242,13 @@ refMeta = \case
     "package" : rest -> refDistTagList rest
     _ -> Nothing
 
--- The dist-tag set is the only write under the reserved prefix.
-refMetaWrite :: [Text] -> Maybe RouteName
-refMetaWrite ("package" : rest) = case refTakePackage rest of
-    Just (_name, ["dist-tags", tag]) | isSafeComponent tag -> Just (RouteName "distTagSet")
+-- The tagged dist-tag path, under the name its method claims: the set for a PUT, the removal
+-- for a DELETE. It is the only route either method reaches under the reserved prefix.
+refMetaTagged :: RouteName -> [Text] -> Maybe RouteName
+refMetaTagged claimed ("package" : rest) = case refTakePackage rest of
+    Just (_name, ["dist-tags", tag]) | isSafeComponent tag -> Just claimed
     _ -> Nothing
-refMetaWrite _ = Nothing
+refMetaTagged _ _ = Nothing
 
 refDistTagList :: [Text] -> Maybe RouteName
 refDistTagList segments = case refTakePackage segments of

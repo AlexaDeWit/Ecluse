@@ -20,11 +20,12 @@ import Data.OpenApi (
     Response (_responseContent),
     Responses (_responsesDefault, _responsesResponses),
     _infoTitle,
+    _pathItemDelete,
     _pathItemGet,
     _pathItemHead,
     _pathItemPut,
  )
-import Network.HTTP.Types.Method (StdMethod (GET, HEAD, PUT), renderStdMethod)
+import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, PUT), renderStdMethod)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), prefixFor)
@@ -101,9 +102,10 @@ spec = do
     describe "documented statuses and boundaries" $ do
         it "Search carries 501" $
             (statusCodes <$> getOp "/npm/-/v1/search") `shouldBe` Just [501]
-        it "the dist-tag read and write both carry 501" $ do
+        it "the dist-tag read, write, and removal all carry 501" $ do
             (statusCodes <$> getOp "/npm/-/package/{package}/dist-tags") `shouldBe` Just [501]
             (statusCodes <$> putOp "/npm/-/package/{package}/dist-tags/{tag}") `shouldBe` Just [501]
+            (statusCodes <$> deleteOp "/npm/-/package/{package}/dist-tags/{tag}") `shouldBe` Just [501]
         it "the deny-by-default catch-all carries 404" $
             (statusCodes <$> getOp "/npm/{unsupportedPath}") `shouldBe` Just [404]
         it "the packument GET documents the gate statuses" $
@@ -135,6 +137,9 @@ spec = do
     putOp :: FilePath -> Maybe Operation
     putOp p = InsOrd.lookup p (_openApiPaths doc) >>= _pathItemPut
 
+    deleteOp :: FilePath -> Maybe Operation
+    deleteOp p = InsOrd.lookup p (_openApiPaths doc) >>= _pathItemDelete
+
     -- The npm mount's declarative route grammar, resolved through the same adapter
     -- registry the composition root mounts and the manifest renders.
     npmSpecs :: [RouteSpec]
@@ -152,6 +157,7 @@ spec = do
         GET -> _pathItemGet
         HEAD -> _pathItemHead
         PUT -> _pathItemPut
+        DELETE -> _pathItemDelete
         _ -> const Nothing
 
     statusCodes :: Operation -> [Int]

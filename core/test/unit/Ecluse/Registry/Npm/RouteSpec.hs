@@ -20,7 +20,7 @@ import Ecluse.Core.Package (
     renderPackageName,
     unScope,
  )
-import Network.HTTP.Types.Method (Method, methodGet, methodPut)
+import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodPut)
 
 import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballCoordinate)
 import Ecluse.Core.Server.Path (Filename, unFilename)
@@ -40,6 +40,7 @@ data Routed
     | ToSearch
     | ToDistTagList
     | ToDistTagSet
+    | ToDistTagRemove
     | Denied
     deriving stock (Eq, Show)
 
@@ -51,6 +52,7 @@ routed method segments =
         Just (RouteName "search") -> ToSearch
         Just (RouteName "distTagList") -> ToDistTagList
         Just (RouteName "distTagSet") -> ToDistTagSet
+        Just (RouteName "distTagRemove") -> ToDistTagRemove
         Just (RouteName "packument") -> maybe Denied (ToPackument . fst) (takePackage segments)
         Just (RouteName "publish") -> maybe Denied (ToPublish . fst) (takePackage segments)
         Just (RouteName "tarball") -> fromMaybe Denied $ do
@@ -71,6 +73,10 @@ classify = routed methodGet
 -- | The write classification (a @PUT@) of an npm path.
 written :: [Text] -> Routed
 written = routed methodPut
+
+-- | The removal classification (a @DELETE@) of an npm path.
+removed :: [Text] -> Routed
+removed = routed methodDelete
 
 -- | A scoped npm package identity (scope, base name), for expected 'Route's.
 scoped :: Text -> Text -> PackageName
@@ -171,6 +177,22 @@ spec = do
             classify ["-", "package", "..", "dist-tags"] `shouldBe` Denied
         it "denies a dist-tag set whose tag is unsafe" $
             written ["-", "package", "is-odd", "dist-tags", "../evil"] `shouldBe` Denied
+        it "routes a DELETE of /-/package/{pkg}/dist-tags/{tag} to the dist-tag removal" $
+            removed ["-", "package", "is-odd", "dist-tags", "latest"] `shouldBe` ToDistTagRemove
+        it "routes a scoped package's dist-tag removal (both wire encodings)" $ do
+            removed ["-", "package", "@babel", "code-frame", "dist-tags", "latest"]
+                `shouldBe` ToDistTagRemove
+            removed ["-", "package", "@babel/code-frame", "dist-tags", "latest"]
+                `shouldBe` ToDistTagRemove
+        it "denies a dist-tag removal with no tag" $
+            removed ["-", "package", "is-odd", "dist-tags"] `shouldBe` Denied
+        it "denies a dist-tag removal whose tag is unsafe" $
+            removed ["-", "package", "is-odd", "dist-tags", "../evil"] `shouldBe` Denied
+        it "denies a DELETE outside the dist-tag path (the method claims nothing else)" $ do
+            -- The removal route is the only one a DELETE reaches. A package or artifact
+            -- path under DELETE still takes the deny-by-default 404.
+            removed ["is-odd"] `shouldBe` Denied
+            removed ["is-odd", "-", "is-odd-3.0.1.tgz"] `shouldBe` Denied
 
     describe "classify -- publish (PUT /{pkg}, the method-aware write route)" $ do
         it "routes a PUT of an unscoped package to Publish" $
