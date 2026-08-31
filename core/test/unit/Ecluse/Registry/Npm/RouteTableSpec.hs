@@ -34,7 +34,7 @@ below:
 module Ecluse.Registry.Npm.RouteTableSpec (spec) where
 
 import Data.Text qualified as T
-import Hedgehog (Gen, forAll, (===))
+import Hedgehog (Gen, cover, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodHead, methodPost, methodPut)
 import Test.Hspec
@@ -72,6 +72,18 @@ spec = do
                 hedgehog $ do
                     segments <- forAll genPathSegments
                     takePackage segments === refTakePackage segments
+
+        -- 'genPathSegments' explores arbitrary paths, and a dist-tag path is four or five
+        -- specific segments, so it never reaches one. This generator shapes the request instead.
+        modifyMaxSuccess (const 2000) $
+            it "claims the same route as the reference, over generated dist-tag requests" $
+                hedgehog $ do
+                    (method, segments) <- forAll genDistTagRequest
+                    let claimed = matchedId method segments
+                    cover 5 "claims the dist-tag list" (claimed == Just (RouteName "distTagList"))
+                    cover 2 "claims the dist-tag set" (claimed == Just (RouteName "distTagSet"))
+                    cover 20 "falls through to the 404" (isNothing claimed)
+                    claimed === referenceRouteId method segments
 
     describe "the routes it claims" $ do
         -- Worked examples: also documentation of the grammar the table encodes.
@@ -139,6 +151,51 @@ spec = do
 
 genMethod :: Gen Method
 genMethod = Gen.element [methodGet, methodPut, methodHead, methodPost, methodDelete]
+
+{- | A request shaped like a dist-tag route, every part perturbed, so the property reaches
+both routes and the near misses that must deny. 'genPathSegments' reaches neither.
+-}
+genDistTagRequest :: Gen (Method, [Text])
+genDistTagRequest = do
+    method <- genDistTagMethod
+    prefix <- genLiteralSeg "-"
+    package <- genLiteralSeg "package"
+    name <- genPackageUnit
+    distTags <- genLiteralSeg "dist-tags"
+    tag <- Gen.frequency [(1, pure []), (1, (: []) <$> genTagSeg)]
+    pure (method, [prefix, package] <> name <> [distTags] <> tag)
+
+-- Weighted to the two methods the dist-tag routes answer, keeping the ones that must deny.
+genDistTagMethod :: Gen Method
+genDistTagMethod =
+    Gen.frequency
+        [ (3, pure methodGet)
+        , (1, pure methodHead)
+        , (3, pure methodPut)
+        , (1, Gen.element [methodPost, methodDelete])
+        ]
+
+-- A literal slot: mostly the segment the route requires, sometimes a near miss.
+genLiteralSeg :: Text -> Gen Text
+genLiteralSeg literal = Gen.frequency [(4, pure literal), (1, Gen.element nearMissSegs)]
+
+nearMissSegs :: [Text]
+nearMissSegs = ["", "..", "-", "package", "dist-tags", "v1", "lodash"]
+
+-- The package slot: an unscoped name, a scoped name in either wire encoding, or a segment the
+-- name grammar refuses. Eight of the ten weights are a name the capture accepts.
+genPackageUnit :: Gen [Text]
+genPackageUnit =
+    Gen.frequency
+        [ (4, (: []) <$> Gen.element ["lodash", "is-odd", "pkg"])
+        , (2, (: []) <$> Gen.element ["@babel/code-frame", "@acme/widget"])
+        , (2, (\scope base -> [scope, base]) <$> Gen.element ["@babel", "@acme"] <*> Gen.element ["core", "widget"])
+        , (2, (: []) <$> Gen.element ["-", "..", "foo/bar", "@babel", ""])
+        ]
+
+-- The tag slot: four names the capture accepts, two components it must refuse.
+genTagSeg :: Gen Text
+genTagSeg = Gen.element ["latest", "next", "beta", "1.0.0", "..", "a/b"]
 
 -- The independent reference ---------------------------------------------------
 --

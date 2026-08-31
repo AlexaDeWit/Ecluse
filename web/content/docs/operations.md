@@ -31,14 +31,13 @@ Kubernetes `startupProbe`, or a readiness `failureThreshold` sized for it. Mount
 whose artifact Pilot never publishes leaves the pod never ready.
 
 The npm liveness probe `GET /npm/-/ping` answers locally with `200 {}`. `GET /npm/-/v1/search`
-returns `501` by design, because search is a discovery convenience, not an install path. The
-dist-tag routes `GET /npm/-/package/{package}/dist-tags` and
-`PUT /npm/-/package/{package}/dist-tags/{tag}` also return `501`, because Écluse implements no
-mutable named pointer. A package's tags are in the metadata document Écluse serves, and the
-publication target owns setting them. The
-mirror, Pilot, and Dredger roles export the same `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`,
-and nothing else. With telemetry on, every role also opens a metrics listener on a second port,
-which co-located roles must not share ([Telemetry](@/docs/operations.md#telemetry-opt-in)).
+returns `501` by design, because search is a discovery convenience, not an install path.
+`GET /npm/-/package/{package}/dist-tags` and `PUT /npm/-/package/{package}/dist-tags/{tag}` also
+return `501`, because Écluse implements no mutable named pointer. A package's tags are in the
+metadata document Écluse serves, and the publication target owns setting them. The mirror, Pilot,
+and Dredger roles export the same `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`, and nothing
+else. With telemetry on, every role also opens a metrics listener on a second port, which
+co-located roles must not share ([Telemetry](@/docs/operations.md#telemetry-opt-in)).
 
 ## Graceful shutdown and pod drain
 
