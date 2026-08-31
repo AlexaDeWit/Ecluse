@@ -131,10 +131,9 @@ does with a client's own token is under
 Écluse validates the configuration in full at startup and refuses to start on any problem. An
 unknown rule type, a bad URL, or an unresolved policy reference all stop the boot, so a
 misconfiguration is a loud, immediate failure rather than a quietly mis-enforced policy.
-`ecluse check-config` runs the same validation without starting anything, as `ecluse proxy` and
-`ecluse mirror` see it: a collapsed endpoint pair only `ecluse dredger` refuses prints as a
-warning. The validation model is
-in [Validation: fail fast, reject the unknown](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md#validation-fail-fast-reject-the-unknown).
+`ecluse check-config` runs the same validation without starting anything. It carries no role, so
+a collapsed endpoint pair that only `ecluse dredger` refuses prints as a warning. The validation
+model is in [Validation: fail fast, reject the unknown](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md#validation-fail-fast-reject-the-unknown).
 
 ## Rule policy
 

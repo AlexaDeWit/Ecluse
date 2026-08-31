@@ -82,8 +82,7 @@ otherMountSpec = describe "publicationTarget against another mount's endpoints" 
                               ]
 
     it "boots a publication target equal to its own mount's private upstream" $ do
-        -- The recommended read-back topology: the publisher writes where the mount reads, so it
-        -- earns neither a refusal nor an advisory.
+        -- The recommended read-back topology: the publisher writes where the mount reads.
         let env = publishingTo "https://private.example.test"
         refusalsFor MirrorWriter env `shouldReturn` []
         advisoriesFor env `shouldReturn` []
@@ -94,7 +93,7 @@ otherMountSpec = describe "publicationTarget against another mount's endpoints" 
 
 mirrorTargetSpec :: Spec
 mirrorTargetSpec = describe "mirrorTarget against a public upstream" $ do
-    it "refuses a mirror target on its own mount's public-upstream host" $ do
+    it "refuses every role a mirror target on its own mount's public-upstream host" $ do
         let env = mirroringTo "https://public.example.test/npm/" staticEnvVars
         refusalsFor MirrorWriter env `shouldReturn` [MirrorTargetOnPublicUpstream Npm Npm]
         refusalsFor MirrorPruner env `shouldReturn` [MirrorTargetOnPublicUpstream Npm Npm]

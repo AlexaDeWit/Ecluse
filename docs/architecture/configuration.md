@@ -203,8 +203,8 @@ ambient `AWS_ENDPOINT_URL` override the boot resolves beside the plan. It prints
 provenance line per resolved key, secrets redacted, precedence environment > document > default. It
 exits `0` on a valid configuration, and `2` with the same aggregated report a boot would log. The
 two entry points take that report from one function, so the checker's verdict and the boot's cannot
-drift. That report covers the roles that write, so a collapsed endpoint pair only `ecluse dredger`
-refuses prints as a warning rather than exit `2`.
+drift. That report covers the roles that write, so a collapsed endpoint pair that only
+`ecluse dredger` refuses prints as a warning rather than refusing with exit `2`.
 
 ## Client authentication
 
