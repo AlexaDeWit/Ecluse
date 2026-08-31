@@ -54,8 +54,9 @@ about public-upstream reachability. The proxy still serves private hits while pu
 upstream blip must not pull a healthy pod from rotation. `/-/ping` answers locally, and
 `/-/v1/search` returns `501`, a discovery convenience rather than an install path.
 `GET /-/package/{package}/dist-tags` and `PUT /-/package/{package}/dist-tags/{tag}` return `501`
-too: a dist-tag is a mutable named pointer, and Écluse implements none. No other dist-tag route
-exists, so every other method over those paths takes the deny-by-default `404`.
+too: a dist-tag is a mutable named pointer, and Écluse implements none. A `HEAD` reads like its
+`GET`, so it returns the same `501` with no body, while a `DELETE` or a `POST` over those paths
+takes the deny-by-default `404`.
 
 ## OpenAPI spec
 
@@ -78,8 +79,8 @@ server speaks, and what each ecosystem does and does not support. That stops bei
   than a false finite status set.
 - **Unsupported routes are a documented boundary**: `GET /-/v1/search`,
   `GET /-/package/{package}/dist-tags`, and `PUT /-/package/{package}/dist-tags/{tag}` return
-  `501`. The manifest states that, so a reader learns the limit there and not from an error
-  response.
+  `501`, and each read also contributes its bodiless `HEAD` operation. The manifest states that,
+  so a reader learns the limit there and not from an error response.
 
 ### The synthesised-packument schema = the trust boundary
 

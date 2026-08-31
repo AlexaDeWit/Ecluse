@@ -182,8 +182,8 @@ genLiteralSeg literal = Gen.frequency [(4, pure literal), (1, Gen.element nearMi
 nearMissSegs :: [Text]
 nearMissSegs = ["", "..", "-", "package", "dist-tags", "v1", "lodash"]
 
--- The package slot: an unscoped name, a scoped name in either wire encoding, or a segment the
--- name grammar refuses. Eight of the ten weights are a name the capture accepts.
+-- The package slot: an unscoped name, a scoped name in either wire encoding, or a segment that
+-- derails the match. Eight of the ten weights are a name the capture accepts.
 genPackageUnit :: Gen [Text]
 genPackageUnit =
     Gen.frequency
