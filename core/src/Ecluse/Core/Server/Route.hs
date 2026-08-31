@@ -110,12 +110,8 @@ data Capture v = Capture
     -- ^ Consume the leading segments this capture claims, yielding its value and the tail.
     }
 
-{- | The method condition on a route: the read methods (@GET@ and @HEAD@), the write (@PUT@),
-or the removal (@DELETE@). A closed vocabulary rather than a predicate, so the manifest can
-still name the documented method.
-
-A method outside the vocabulary matches no route and therefore denies. The proxy answers a
-@POST@ over a package path with a @404@, rather than reading it as a package request.
+{- | The method condition on a route: a closed vocabulary rather than a predicate, so the
+manifest can name the documented method. A method outside it matches no route and denies.
 -}
 data MethodMatch
     = -- | The write method (@PUT@).
