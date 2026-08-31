@@ -523,6 +523,7 @@ renderReports knobs capabilities ecosystem reports =
         , "- **Allocations / request is the machine-independent signal**, measured over the whole bench process: the HTTP scenarios also run their in-process stub upstreams (only oha, a subprocess, is excluded), so it is a consistent over-count -- right for trending, not a pure proxy per-request cost, and not comparable to the work-per-request micro-benches."
         , "- **Peak residency is a process high-water mark** spanning the warm-up as well as the measured window; the allocation and GC figures are before/after deltas over the measured window only."
         , "- **Each scenario runs in its own process**, so residency and GC figures are per scenario."
+        , "- **A low success rate is deliberate load shedding, not a broken run.** Success counts 2xx and 3xx only, so a shed `503` carrying `Retry-After` reads as a failure. A saturating scenario answers mostly `503`, so its allocations per request average over shed requests and are not a served request's cost."
         ]
 
 renderScenario :: ScenarioReport -> [Text]
