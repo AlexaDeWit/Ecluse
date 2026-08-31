@@ -41,7 +41,7 @@ module Ecluse.Core.Server.Route (
     matchRoute,
 ) where
 
-import Network.HTTP.Types.Method (Method, methodGet, methodHead, methodPut)
+import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodHead, methodPut)
 
 import Ecluse.Core.Server.Context (MountRouter, ResponseAction, RouteAction (RouteAction))
 import Ecluse.Core.Server.Contract (RequestSpec, ResponseContract, bodilessContract)
@@ -110,16 +110,18 @@ data Capture v = Capture
     -- ^ Consume the leading segments this capture claims, yielding its value and the tail.
     }
 
-{- | The method condition on a route: the read methods (@GET@ and @HEAD@), or the one client
-write (@PUT@). A closed vocabulary rather than a predicate, so the manifest can still name
-the documented method.
+{- | The method condition on a route: the read methods (@GET@ and @HEAD@), the write (@PUT@),
+or the removal (@DELETE@). A closed vocabulary rather than a predicate, so the manifest can
+still name the documented method.
 
-Any other method matches no route and therefore denies. The proxy answers a @DELETE@ or
+A method outside the vocabulary matches no route and therefore denies. The proxy answers a
 @POST@ over a package path with a @404@, rather than reading it as a package request.
 -}
 data MethodMatch
     = -- | The write method (@PUT@).
       MethodPut
+    | -- | The removal method (@DELETE@).
+      MethodDelete
     | -- | The read methods (@GET@ and @HEAD@).
       MethodRead
     deriving stock (Eq, Show)
@@ -127,6 +129,7 @@ data MethodMatch
 -- | Whether a request method satisfies a route's 'MethodMatch'.
 methodMatches :: MethodMatch -> Method -> Bool
 methodMatches MethodPut m = m == methodPut
+methodMatches MethodDelete m = m == methodDelete
 methodMatches MethodRead m = m == methodGet || m == methodHead
 
 {- | Fold an ecosystem's route table into its mount's router. The first route that claims the
