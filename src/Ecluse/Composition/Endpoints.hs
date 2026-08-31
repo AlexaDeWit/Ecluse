@@ -5,14 +5,13 @@
 {- | Endpoint disjointness: which registry roles may share one store, and what each boot role
 does when two of them land on the same one.
 
-One table holds every rule, and a rule's verdict per role produces both the boot refusals and
-the boot advisories, so no rule can be fatal on one path and missing on the other. The vetted
-'PublicationTarget' and 'MirrorStore' come only from a passing walk of that table, so a publish
-relay and a store sweep cannot reach an endpoint the table refused.
+Each rule names the endpoints it compares and its severity per role, and one 'Vet' pass over all
+of them yields both the boot refusals and the boot advisories, so no rule can be fatal on one
+path and missing on the other. The vetted 'PublicationTarget' and 'MirrorStore' issue only from
+a pass that refused nothing, so a publish relay and a store sweep cannot reach a refused endpoint.
 -}
 module Ecluse.Composition.Endpoints (
-    -- * The rule table
-    RegistryRole (..),
+    -- * The endpoint rules
     endpointRefusals,
     endpointAdvisories,
 
@@ -35,40 +34,29 @@ import Ecluse.Composition.BootError (
         PublicationTargetOnPublicUpstream
     ),
  )
+import Ecluse.Composition.Vet (
+    RegistryRole (MirrorPruner, MirrorWriter),
+    Severity (Advise, Refuse),
+    Vet,
+    rule,
+    runVet,
+ )
 import Ecluse.Config (MountConfig (..), sameRegistry)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 
-{- | The endpoint posture a boot role holds. The proxy and the mirror worker write to a mount's
-mirror target, and the Dredger deletes from it, which is what makes a shared store unsafe.
--}
-data RegistryRole
-    = -- | @ecluse proxy@ and @ecluse mirror@: they read and write, and delete nothing.
-      MirrorWriter
-    | -- | @ecluse dredger@: it permanently deletes from every mount's mirror target.
-      MirrorPruner
-    deriving stock (Eq, Show)
-
-{- | Every refusal a role earns from the table. 'Ecluse.Composition.validateComposition' folds
+{- | Every refusal a role earns from the rules. 'Ecluse.Composition.validateComposition' folds
 the writing roles' refusals into the aggregated boot report, and each role adds its own.
 -}
 endpointRefusals :: RegistryRole -> Map Ecosystem MountConfig -> [BootError]
-endpointRefusals role mounts =
-    [ refusal collision
-    | (rule, collision) <- matchedRules mounts
-    , Refuse refusal <- [erVerdict rule role]
-    ]
+endpointRefusals role mounts = fromLeft [] (snd (runVet role (vetEndpoints mounts)))
 
 {- | Every advisory a role logs: one line per collapse it tolerates, naming the two keys, the
 registry they share, and what the collapse costs.
 -}
 endpointAdvisories :: RegistryRole -> Map Ecosystem MountConfig -> [Text]
-endpointAdvisories role mounts =
-    [ advisoryLine collision advice
-    | (rule, collision) <- matchedRules mounts
-    , Warn advice <- [erVerdict rule role]
-    ]
+endpointAdvisories role mounts = fst (runVet role (vetEndpoints mounts))
 
 {- | A publication target that holds no other registry role. The publish path relays the
 publisher's own credential, so the relay takes this vetted value and never a configured URL.
@@ -84,9 +72,10 @@ publicationTargetUrl (PublicationTarget url) = url
 composition root builds a publish binding from this result, never from the raw configuration.
 -}
 vetPublicationTargets :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem PublicationTarget)
-vetPublicationTargets mounts = case endpointRefusals MirrorWriter mounts of
-    [] -> Right (Map.mapMaybe (fmap PublicationTarget . mntPublicationTarget) mounts)
-    errs -> Left errs
+vetPublicationTargets mounts =
+    snd (runVet MirrorWriter (targets <$ vetEndpoints mounts))
+  where
+    targets = Map.mapMaybe (fmap PublicationTarget . mntPublicationTarget) mounts
 
 {- | A mirror target no other configured endpoint holds. Deleting from it destroys nothing
 another role owns, which is what a store sweep needs before it may delete anything.
@@ -102,9 +91,94 @@ mirrorStoreUrl (MirrorStore url) = url
 maintenance capability is built from this result alone, so an overlap cannot reach a delete.
 -}
 vetMirrorStores :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem MirrorStore)
-vetMirrorStores mounts = case endpointRefusals MirrorPruner mounts of
-    [] -> Right (Map.mapMaybe (fmap MirrorStore . mntMirrorTarget) mounts)
-    errs -> Left errs
+vetMirrorStores mounts =
+    snd (runVet MirrorPruner (stores <$ vetEndpoints mounts))
+  where
+    stores = Map.mapMaybe (fmap MirrorStore . mntMirrorTarget) mounts
+
+{- Every endpoint rule, in the order a boot report lists them. A mirror target on another mount's
+publication target is caught below, read from the publishing side. -}
+vetEndpoints :: Map Ecosystem MountConfig -> Vet ()
+vetEndpoints mounts =
+    publicationOffPublicUpstreams mounts
+        *> publicationOffNeighbourEndpoints mounts
+        *> mirrorOffPublicUpstreams mounts
+        *> mirrorOffPrivateUpstreams mounts
+        *> mirrorOffOwnPublicationTarget mounts
+        *> privateOffPublicUpstream mounts
+
+-- A publish relays the publisher's own credential, which must never reach a public registry.
+publicationOffPublicUpstreams :: Map Ecosystem MountConfig -> Vet ()
+publicationOffPublicUpstreams =
+    vetCollisions (const (Refuse publicationOnPublicUpstream)) $
+        EndpointComparison KeyPublicationTarget [KeyPublicUpstream] AnyMount ByHost
+
+-- A publish must not be relayed into a role the operator declared for something else.
+publicationOffNeighbourEndpoints :: Map Ecosystem MountConfig -> Vet ()
+publicationOffNeighbourEndpoints =
+    vetCollisions (const (Refuse publicationOnMountEndpoint)) $
+        EndpointComparison
+            KeyPublicationTarget
+            [KeyPrivateUpstream, KeyMirrorTarget, KeyPublicationTarget]
+            OtherMount
+            ByRegistry
+
+-- The mirror write carries this proxy's own credential, which must never reach a public registry.
+mirrorOffPublicUpstreams :: Map Ecosystem MountConfig -> Vet ()
+mirrorOffPublicUpstreams =
+    vetCollisions (const (Refuse mirrorOnPublicUpstream)) $
+        EndpointComparison KeyMirrorTarget [KeyPublicUpstream] AnyMount ByHost
+
+mirrorOffPrivateUpstreams :: Map Ecosystem MountConfig -> Vet ()
+mirrorOffPrivateUpstreams =
+    vetCollisions mirrorCollapse $
+        EndpointComparison KeyMirrorTarget [KeyPrivateUpstream] AnyMount ByRegistry
+
+mirrorOffOwnPublicationTarget :: Map Ecosystem MountConfig -> Vet ()
+mirrorOffOwnPublicationTarget =
+    vetCollisions mirrorCollapse $
+        EndpointComparison KeyMirrorTarget [KeyPublicationTarget] SameMount ByRegistry
+
+privateOffPublicUpstream :: Map Ecosystem MountConfig -> Vet ()
+privateOffPublicUpstream =
+    vetCollisions (const (Advise (advisoryLine mergeTrustsPrivate))) $
+        EndpointComparison KeyPrivateUpstream [KeyPublicUpstream] SameMount ByRegistry
+  where
+    mergeTrustsPrivate =
+        "the merge trusts the private leg, so this registry's versions are admitted unfiltered"
+
+-- A mirror target on another declared endpoint: the deleting role refuses, the writing roles warn.
+mirrorCollapse :: RegistryRole -> Severity EndpointPair
+mirrorCollapse = \case
+    MirrorWriter -> Advise (advisoryLine pruningStaysManual)
+    MirrorPruner -> Refuse mirrorOnMountEndpoint
+  where
+    pruningStaysManual =
+        "the Dredger refuses this configuration, so pruning this mirror stays manual"
+
+publicationOnPublicUpstream :: EndpointPair -> BootError
+publicationOnPublicUpstream pair =
+    PublicationTargetOnPublicUpstream (epMount pair) (epOtherMount pair)
+
+publicationOnMountEndpoint :: EndpointPair -> BootError
+publicationOnMountEndpoint pair =
+    PublicationTargetOnMountEndpoint
+        (epMount pair)
+        (epOtherMount pair)
+        (endpointKeyName (epOtherKey pair))
+
+mirrorOnPublicUpstream :: EndpointPair -> BootError
+mirrorOnPublicUpstream pair =
+    MirrorTargetOnPublicUpstream (epMount pair) (epOtherMount pair)
+
+-- A sweep deletes from the mirror target, so a store another role holds loses that role's data.
+mirrorOnMountEndpoint :: EndpointPair -> BootError
+mirrorOnMountEndpoint pair =
+    MirrorTargetOnMountEndpoint
+        (epMount pair)
+        (epOtherMount pair)
+        (endpointKeyName (epOtherKey pair))
+        (registryUrlText (epUrl pair))
 
 -- A registry endpoint of a mount, named by the key the configuration declares it under.
 data EndpointKey
@@ -123,127 +197,47 @@ CodeArtifact repositories share one domain and differ only in path. -}
 data RegistryMatch = ByHost | ByRegistry
     deriving stock (Eq, Show)
 
--- What one role does about a collision a rule matched.
-data RuleVerdict
-    = -- The role refuses to boot, reporting this refusal.
-      Refuse (EndpointCollision -> BootError)
-    | -- The role boots and logs the collapse with this consequence.
-      Warn Text
-
--- Two endpoints of the configured mounts that resolve to one registry.
-data EndpointCollision = EndpointCollision
-    { ecMount :: Ecosystem
-    , ecKey :: EndpointKey
-    , ecOtherMount :: Ecosystem
-    , ecOtherKey :: EndpointKey
-    , -- The declared URL both keys resolve to.
-      ecRegistry :: RegistryUrl
+{- Which endpoints a rule puts against each other: the key whose role is at stake, the keys it
+must not land on, the mounts those keys are read from, and how the two are compared. -}
+data EndpointComparison = EndpointComparison
+    { cmpSubject :: EndpointKey
+    , cmpAgainst :: [EndpointKey]
+    , cmpScope :: MountScope
+    , cmpMatch :: RegistryMatch
     }
 
-{- One rule: the endpoint whose role is at stake, the endpoints it must not land on, how the
-two are compared, and what each boot role does when they collide. -}
-data EndpointRule = EndpointRule
-    { erSubject :: EndpointKey
-    , erAgainst :: [EndpointKey]
-    , erScope :: MountScope
-    , erMatch :: RegistryMatch
-    , erVerdict :: RegistryRole -> RuleVerdict
+-- Two declared endpoints a comparison reads side by side, each named by its mount and its key.
+data EndpointPair = EndpointPair
+    { epMount :: Ecosystem
+    , epKey :: EndpointKey
+    , epUrl :: RegistryUrl
+    , epOtherMount :: Ecosystem
+    , epOtherKey :: EndpointKey
+    , epOtherUrl :: RegistryUrl
     }
 
-{- The endpoint rules, in the order a boot report lists them. A mirror target on another
-mount's publication target is the second rule's business, read from the publishing side. -}
-endpointRules :: [EndpointRule]
-endpointRules =
-    [ EndpointRule
-        { erSubject = KeyPublicationTarget
-        , erAgainst = [KeyPublicUpstream]
-        , erScope = AnyMount
-        , erMatch = ByHost
-        , erVerdict = const (Refuse publicationOnPublicUpstream)
-        }
-    , EndpointRule
-        { erSubject = KeyPublicationTarget
-        , erAgainst = [KeyPrivateUpstream, KeyMirrorTarget, KeyPublicationTarget]
-        , erScope = OtherMount
-        , erMatch = ByRegistry
-        , erVerdict = const (Refuse publicationOnMountEndpoint)
-        }
-    , EndpointRule
-        { erSubject = KeyMirrorTarget
-        , erAgainst = [KeyPublicUpstream]
-        , erScope = AnyMount
-        , erMatch = ByHost
-        , erVerdict = const (Refuse mirrorOnPublicUpstream)
-        }
-    , EndpointRule
-        { erSubject = KeyMirrorTarget
-        , erAgainst = [KeyPrivateUpstream]
-        , erScope = AnyMount
-        , erMatch = ByRegistry
-        , erVerdict = mirrorCollapseVerdict
-        }
-    , EndpointRule
-        { erSubject = KeyMirrorTarget
-        , erAgainst = [KeyPublicationTarget]
-        , erScope = SameMount
-        , erMatch = ByRegistry
-        , erVerdict = mirrorCollapseVerdict
-        }
-    , EndpointRule
-        { erSubject = KeyPrivateUpstream
-        , erAgainst = [KeyPublicUpstream]
-        , erScope = SameMount
-        , erMatch = ByRegistry
-        , erVerdict = const (Warn "the merge trusts the private leg, so this registry's versions are admitted unfiltered")
-        }
-    ]
+-- One severity applied to every pair a comparison reads, one 'rule' per pair.
+vetCollisions :: (RegistryRole -> Severity EndpointPair) -> EndpointComparison -> Map Ecosystem MountConfig -> Vet ()
+vetCollisions severity cmp mounts =
+    traverse_ (rule severity (collidingPair (cmpMatch cmp))) (comparedPairs cmp mounts)
 
--- A mirror target on another declared endpoint: the deleting role refuses, the writing roles warn.
-mirrorCollapseVerdict :: RegistryRole -> RuleVerdict
-mirrorCollapseVerdict = \case
-    MirrorWriter -> Warn "the Dredger refuses this configuration, so pruning this mirror stays manual"
-    MirrorPruner -> Refuse mirrorOnMountEndpoint
-
--- A publish relays the publisher's own credential, which must never reach a public registry.
-publicationOnPublicUpstream :: EndpointCollision -> BootError
-publicationOnPublicUpstream collision =
-    PublicationTargetOnPublicUpstream (ecMount collision) (ecOtherMount collision)
-
--- A publish must not be relayed into a role the operator declared for something else.
-publicationOnMountEndpoint :: EndpointCollision -> BootError
-publicationOnMountEndpoint collision =
-    PublicationTargetOnMountEndpoint
-        (ecMount collision)
-        (ecOtherMount collision)
-        (endpointKeyName (ecOtherKey collision))
-
--- The mirror write carries this proxy's own credential, which must never reach a public registry.
-mirrorOnPublicUpstream :: EndpointCollision -> BootError
-mirrorOnPublicUpstream collision =
-    MirrorTargetOnPublicUpstream (ecMount collision) (ecOtherMount collision)
-
--- A sweep deletes from the mirror target, so a store another role holds loses that role's data.
-mirrorOnMountEndpoint :: EndpointCollision -> BootError
-mirrorOnMountEndpoint collision =
-    MirrorTargetOnMountEndpoint
-        (ecMount collision)
-        (ecOtherMount collision)
-        (endpointKeyName (ecOtherKey collision))
-        (registryUrlText (ecRegistry collision))
-
--- Every collision the configured mounts match, paired with the rule that matched it.
-matchedRules :: Map Ecosystem MountConfig -> [(EndpointRule, EndpointCollision)]
-matchedRules mounts =
-    [ (rule, EndpointCollision eco (erSubject rule) other otherKey url)
-    | rule <- endpointRules
-    , (eco, mcfg) <- Map.toAscList mounts
-    , Just url <- [endpointOf (erSubject rule) mcfg]
+-- Every pair of declared endpoints a comparison reads, mounts in ascending key order.
+comparedPairs :: EndpointComparison -> Map Ecosystem MountConfig -> [EndpointPair]
+comparedPairs cmp mounts =
+    [ EndpointPair eco (cmpSubject cmp) url other otherKey otherUrl
+    | (eco, mcfg) <- Map.toAscList mounts
+    , Just url <- [endpointOf (cmpSubject cmp) mcfg]
     , (other, otherCfg) <- Map.toAscList mounts
-    , withinScope (erScope rule) eco other
-    , otherKey <- erAgainst rule
+    , withinScope (cmpScope cmp) eco other
+    , otherKey <- cmpAgainst cmp
     , Just otherUrl <- [endpointOf otherKey otherCfg]
-    , sameStore (erMatch rule) url otherUrl
     ]
+
+-- The pair, when both of its endpoints name one store under the comparison.
+collidingPair :: RegistryMatch -> EndpointPair -> Maybe EndpointPair
+collidingPair match pair
+    | sameStore match (epUrl pair) (epOtherUrl pair) = Just pair
+    | otherwise = Nothing
 
 -- The URL a mount declares under one key. A mount declares no endpoint it does not hold.
 endpointOf :: EndpointKey -> MountConfig -> Maybe RegistryUrl
@@ -282,23 +276,23 @@ endpointKeyName = \case
     KeyPublicationTarget -> "publicationTarget"
 
 -- One advisory line: the collapsed pair, the registry they share, and the consequence.
-advisoryLine :: EndpointCollision -> Text -> Text
-advisoryLine collision advice =
+advisoryLine :: Text -> EndpointPair -> Text
+advisoryLine advice pair =
     "mount \""
-        <> ecosystemName (ecMount collision)
+        <> ecosystemName (epMount pair)
         <> "\": "
-        <> endpointKeyName (ecKey collision)
+        <> endpointKeyName (epKey pair)
         <> " and "
         <> otherRef
         <> " resolve to the same registry ("
-        <> registryUrlText (ecRegistry collision)
+        <> registryUrlText (epUrl pair)
         <> "); "
         <> advice
   where
     otherRef
-        | ecOtherMount collision == ecMount collision = endpointKeyName (ecOtherKey collision)
+        | epOtherMount pair == epMount pair = endpointKeyName (epOtherKey pair)
         | otherwise =
             "mount \""
-                <> ecosystemName (ecOtherMount collision)
+                <> ecosystemName (epOtherMount pair)
                 <> "\" "
-                <> endpointKeyName (ecOtherKey collision)
+                <> endpointKeyName (epOtherKey pair)

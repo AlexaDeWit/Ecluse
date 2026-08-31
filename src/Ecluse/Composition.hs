@@ -19,8 +19,10 @@ The composition root's other concerns live in the sibling modules:
 * "Ecluse.Composition.BootError" holds the boot-error vocabulary and its rendering.
 * "Ecluse.Composition.Credential" holds the credential providers and the
   mirror-target credential selection.
-* "Ecluse.Composition.Endpoints" holds the endpoint-collision rule table, and the vetted
-  publication target and mirror store a passing walk of it produces.
+* "Ecluse.Composition.Endpoints" holds the endpoint-collision rules, and the vetted
+  publication target and mirror store a vetting pass that refused nothing produces.
+* "Ecluse.Composition.Vet" holds the accumulating validation applicative those rules are
+  expressed in, and the severity a rule carries per boot role.
 * "Ecluse.Composition.MirrorQueue" holds the mirror-queue backend selection.
 * "Ecluse.Composition.Sizing" holds the config-derived runtime sizings.
 
@@ -48,11 +50,11 @@ import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.Credential (CredentialProviders, initializedEcosystems, lookupProvider)
 import Ecluse.Composition.Endpoints (
     PublicationTarget,
-    RegistryRole (MirrorWriter),
     endpointRefusals,
     publicationTargetUrl,
     vetPublicationTargets,
  )
+import Ecluse.Composition.Vet (RegistryRole (MirrorWriter))
 import Ecluse.Config (
     AppConfig (..),
     Config (..),

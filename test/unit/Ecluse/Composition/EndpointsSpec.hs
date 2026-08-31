@@ -9,7 +9,6 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.Endpoints (
-    RegistryRole (MirrorPruner, MirrorWriter),
     endpointAdvisories,
     endpointRefusals,
     mirrorStoreUrl,
@@ -18,6 +17,7 @@ import Ecluse.Composition.Endpoints (
     vetPublicationTargets,
  )
 import Ecluse.Composition.Support (expectConfig, overrideEnv, staticEnvVars)
+import Ecluse.Composition.Vet (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp), MountConfig)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Security.Egress (registryUrlText)

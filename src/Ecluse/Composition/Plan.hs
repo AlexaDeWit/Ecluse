@@ -23,7 +23,7 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition (validateComposition)
 import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe))
-import Ecluse.Composition.Endpoints (RegistryRole (MirrorWriter), endpointAdvisories)
+import Ecluse.Composition.Endpoints (endpointAdvisories)
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpDegradations, mpOverrideViolations, mpQueueMemoryMaxDepth),
     queueTenantDemand,
@@ -36,6 +36,7 @@ import Ecluse.Composition.MirrorQueue (
     planMirrorRuntime,
  )
 import Ecluse.Composition.Sizing (resolvePrivateConnections, resolvePublicConnections)
+import Ecluse.Composition.Vet (RegistryRole (MirrorWriter))
 import Ecluse.Config (
     AppConfig (cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
     Config (configApp),

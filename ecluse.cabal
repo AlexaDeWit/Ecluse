@@ -307,6 +307,7 @@ library
     Ecluse.Composition.MirrorRole
     Ecluse.Composition.Plan
     Ecluse.Composition.Sizing
+    Ecluse.Composition.Vet
     Ecluse.Composition.Worker
     Ecluse.Config
     Ecluse.CLI
@@ -803,6 +804,7 @@ test-suite ecluse-unit
     Ecluse.Composition.PlanSpec
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support
+    Ecluse.Composition.VetSpec
     Ecluse.Composition.WorkerSpec
     Ecluse.CompositionSpec
     Ecluse.Config.AdvisoryStoreSpec

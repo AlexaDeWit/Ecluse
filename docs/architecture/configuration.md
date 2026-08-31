@@ -192,8 +192,8 @@ error, not a silent skip:
   mount's `publicUpstream` host. `ecluse dredger` deletes from each mount's `mirrorTarget`, so it
   also refuses a `mirrorTarget` equal to any mount's `privateUpstream` or to its own mount's
   `publicationTarget`. `ecluse proxy` and `ecluse mirror` boot on those three and warn once per
-  collapsed pair, and the operator prunes that mirror by hand. One rule table carries every pair
-  and its severity per role, so a refusal and a warning cannot describe different rules. The
+  collapsed pair, and the operator prunes that mirror by hand. Each rule names the pairs it
+  compares and its severity per role, so a refusal and a warning cannot describe different rules. The
   comparison is by full registry URL, not by host, because repositories of one CodeArtifact domain
   differ only in path, and a repository's per-format endpoints are separate stores. It folds the
   authority to lower case and applies the default port, so neither a capital letter nor an explicit
