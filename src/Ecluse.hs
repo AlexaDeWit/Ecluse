@@ -109,7 +109,7 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
-import Ecluse.Composition.MirrorRole (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
+import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Config (Config (configApp))
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Dredger

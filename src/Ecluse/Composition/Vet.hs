@@ -11,12 +11,11 @@ another.
 Advisories ride the success path, so a check that passes can still advise.
 -}
 module Ecluse.Composition.Vet (
-    -- * The vetting role
-    RegistryRole (..),
-
     -- * The accumulating pass
     Vet,
     runVet,
+    vetRole,
+    decided,
 
     -- * Rules and their severity
     Severity (..),
@@ -26,16 +25,7 @@ module Ecluse.Composition.Vet (
 import Validation (Validation (Failure, Success), validationToEither)
 
 import Ecluse.Composition.BootError (BootError)
-
-{- | The boot role a pass vets for. The proxy and the mirror worker write to a mount's mirror
-target, and the Dredger deletes from it, which is what makes a shared store unsafe.
--}
-data RegistryRole
-    = -- | @ecluse proxy@ and @ecluse mirror@: they read and write, and delete nothing.
-      MirrorWriter
-    | -- | @ecluse dredger@: it permanently deletes from every mount's mirror target.
-      MirrorPruner
-    deriving stock (Eq, Show)
+import Ecluse.Composition.Types (RegistryRole)
 
 {- | A boot check awaiting its role: the advisories it logs, beside either every refusal it earned
 or the value it vetted.
@@ -60,6 +50,20 @@ instance Applicative Vet where
 -- | Run a pass for one role: every advisory it logs, and either every refusal or the vetted value.
 runVet :: RegistryRole -> Vet a -> ([Text], Either [BootError] a)
 runVet role (Vet run) = second validationToEither (run role)
+
+{- | The role the pass runs for. A witness one role alone may hold is built from this, so no other
+role's pass can issue one.
+-}
+vetRole :: Vet RegistryRole
+vetRole = Vet $ \role -> ([], Success role)
+
+{- | Carry an outcome a producer decided for itself into the pass, so its refusals join the rest.
+'rule' cannot express one, because there is no condition left to detect.
+-}
+decided :: Either [BootError] a -> Vet a
+decided outcome = Vet . const $ case outcome of
+    Left errs -> ([], Failure errs)
+    Right a -> ([], Success a)
 
 -- | What one role does about a finding a rule detected.
 data Severity finding

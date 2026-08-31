@@ -36,7 +36,7 @@ import Ecluse.Composition.MirrorQueue (
     planMirrorRuntime,
  )
 import Ecluse.Composition.Sizing (resolvePrivateConnections, resolvePublicConnections)
-import Ecluse.Composition.Vet (RegistryRole (MirrorWriter))
+import Ecluse.Composition.Types (RegistryRole (MirrorWriter))
 import Ecluse.Config (
     AppConfig (cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
     Config (configApp),

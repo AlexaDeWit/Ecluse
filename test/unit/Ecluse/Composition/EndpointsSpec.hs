@@ -17,7 +17,7 @@ import Ecluse.Composition.Endpoints (
     vetPublicationTargets,
  )
 import Ecluse.Composition.Support (expectConfig, overrideEnv, staticEnvVars)
-import Ecluse.Composition.Vet (RegistryRole (MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp), MountConfig)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Security.Egress (registryUrlText)

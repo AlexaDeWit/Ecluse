@@ -8,7 +8,7 @@ import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, hel
 import Test.Hspec
 
 import Ecluse.CLI (AppCommand (..), commandParser)
-import Ecluse.Composition.MirrorRole (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
+import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Pilot (PilotCompileOptions (..))
 
 parseCLI :: [String] -> ParserResult AppCommand

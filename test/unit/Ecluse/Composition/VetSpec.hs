@@ -16,8 +16,8 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Composition.BootError (BootError (QueueUrlUnrecognised))
+import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (
-    RegistryRole (MirrorPruner, MirrorWriter),
     Severity (Advise, Refuse),
     Vet,
     rule,

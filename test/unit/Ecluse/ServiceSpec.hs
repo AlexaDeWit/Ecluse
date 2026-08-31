@@ -8,7 +8,7 @@ import Data.Time (addUTCTime, getCurrentTime)
 import Test.Hspec
 
 import Ecluse.Boot (BootAborted (BootAborted), BootEnv (..))
-import Ecluse.Composition.MirrorRole (MirrorRole (ServeOnly))
+import Ecluse.Composition.Types (MirrorRole (ServeOnly))
 import Ecluse.Composition.Plan (resolveBootPlan)
 import Ecluse.Composition.Support (expectConfig, fdLimit, noCeiling, staticEnvVars, withoutQueueUrl)
 import Ecluse.Config (Config)

@@ -48,7 +48,8 @@ import Ecluse.Composition.MemoryPlan (
     planCacheConfig,
  )
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring))
-import Ecluse.Composition.MirrorRole (MirrorRole, enqueuesJobs, mirrorRoleRefusal, spawnsWorker)
+import Ecluse.Composition.MirrorRole (enqueuesJobs, mirrorRoleRefusal, spawnsWorker)
+import Ecluse.Composition.Types (MirrorRole)
 import Ecluse.Composition.Plan (BootPlan (bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections))
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition

@@ -54,7 +54,7 @@ import Ecluse.Composition.Endpoints (
     publicationTargetUrl,
     vetPublicationTargets,
  )
-import Ecluse.Composition.Vet (RegistryRole (MirrorWriter))
+import Ecluse.Composition.Types (RegistryRole (MirrorWriter))
 import Ecluse.Config (
     AppConfig (..),
     Config (..),

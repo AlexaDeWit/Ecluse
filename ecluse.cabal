@@ -307,6 +307,7 @@ library
     Ecluse.Composition.MirrorRole
     Ecluse.Composition.Plan
     Ecluse.Composition.Sizing
+    Ecluse.Composition.Types
     Ecluse.Composition.Vet
     Ecluse.Composition.Worker
     Ecluse.Config

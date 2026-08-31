@@ -13,13 +13,13 @@ import Ecluse.Composition.MirrorQueue (
     MirrorRuntimePlan (MirrorWith, NoMirroring),
  )
 import Ecluse.Composition.MirrorRole (
-    MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
     enqueuesJobs,
     mirrorRoleRefusal,
     roleInvocation,
     runsWorker,
     spawnsWorker,
  )
+import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Runtime.Queue.Sqs (SqsConfig, defaultSqsConfig)
 
 -- | A durable queue plan, the only backend a split deployment can hand jobs across.

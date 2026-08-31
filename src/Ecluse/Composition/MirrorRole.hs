@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Which halves of the demand-driven mirror pipeline one process runs, and the boot refusal
-a role earns against the resolved mirror runtime.
+{- | What each half of the demand-driven mirror pipeline needs of the process running it, and the
+boot refusal a role earns against the resolved mirror runtime.
 
 Mirroring has a producer half (the serve path enqueues a job for every artifact it admits) and
 a consumer half (the worker drains the queue and publishes). One process runs both, or a
@@ -11,7 +11,6 @@ split deployment runs each in its own fleet so the front door and the worker sca
 The split only works over a durable queue, which is what 'mirrorRoleRefusal' decides.
 -}
 module Ecluse.Composition.MirrorRole (
-    MirrorRole (..),
     runsWorker,
     spawnsWorker,
     enqueuesJobs,
@@ -24,16 +23,7 @@ import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     MirrorRuntimePlan (MirrorWith, NoMirroring),
  )
-
--- | The mirror-pipeline halves one process runs, selected by the command line.
-data MirrorRole
-    = -- | @ecluse proxy@: the front door and the mirror worker in one process.
-      ServeAndMirror
-    | -- | @ecluse proxy --no-worker@: the front door alone, still enqueueing.
-      ServeOnly
-    | -- | @ecluse mirror@: the worker alone, serving only its health probes.
-      MirrorOnly
-    deriving stock (Eq, Show)
+import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 
 -- | Whether this role would run the mirror worker, given a runtime that has one to run.
 runsWorker :: MirrorRole -> Bool
