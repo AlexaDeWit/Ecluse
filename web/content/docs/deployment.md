@@ -18,10 +18,13 @@ selects the role:
 - **`ecluse mirror`**: the mirror worker on its own, for a worker fleet you scale separately. See
   [Splitting the proxy from the mirror worker](#splitting-the-proxy-from-the-mirror-worker).
 - **`ecluse pilot`**: the OSV advisory ingestion pipeline.
-- **`ecluse dredger`**: the registry cleanup worker. Not yet implemented. The role starts and
-  answers its health probes, and it prunes nothing.
-- **`ecluse check-config`**: validates the shared configuration exactly as a boot would and prints
-  the resolved posture without starting anything (exit `0` valid, `2` refused). Run it in CI or
+- **`ecluse dredger`**: the registry cleanup worker. Pruning is not yet implemented. The role
+  starts and answers its health probes, and it prunes nothing. It refuses to start when a mount's
+  `mirrorTarget` is also any mount's `privateUpstream` or its own mount's `publicationTarget`,
+  because it deletes from that store. The other roles start and warn instead.
+- **`ecluse check-config`**: validates the shared configuration and prints the resolved posture
+  without starting anything (exit `0` valid, `2` refused). It carries no role, so a collapsed
+  endpoint pair that only `ecluse dredger` refuses prints here as a warning. Run it in CI or
   before a rollout.
 
 All roles share one configuration. The proxy and the mirror worker scale. Run Pilot as a singleton,

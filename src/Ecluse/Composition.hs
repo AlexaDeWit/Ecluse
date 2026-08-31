@@ -19,8 +19,8 @@ The composition root's other concerns live in the sibling modules:
 * "Ecluse.Composition.BootError" holds the boot-error vocabulary and its rendering.
 * "Ecluse.Composition.Credential" holds the credential providers and the
   mirror-target credential selection.
-* "Ecluse.Composition.Endpoints" holds the cross-mount registry-role refusals and the
-  vetted publication target they produce.
+* "Ecluse.Composition.Endpoints" holds the endpoint-collision rule table, and the vetted
+  publication target and mirror store a passing walk of it produces.
 * "Ecluse.Composition.MirrorQueue" holds the mirror-queue backend selection.
 * "Ecluse.Composition.Sizing" holds the config-derived runtime sizings.
 
@@ -48,7 +48,8 @@ import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.Credential (CredentialProviders, initializedEcosystems, lookupProvider)
 import Ecluse.Composition.Endpoints (
     PublicationTarget,
-    endpointCollisions,
+    RegistryRole (MirrorWriter),
+    endpointRefusals,
     publicationTargetUrl,
     vetPublicationTargets,
  )
@@ -221,10 +222,11 @@ mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
 
 {- | The pure structural validation a boot enforces beyond 'Ecluse.Config.loadConfig': the
-adapter, publish-policy, and cross-mount endpoint refusals. 'planMounts' owns 'UnresolvedCredential'.
+adapter, publish-policy, and writing-role endpoint refusals. 'planMounts' owns 'UnresolvedCredential'.
 -}
 validateComposition :: Config -> [BootError]
-validateComposition config = missingAdapters <> publishPolicyErrors <> endpointCollisions (cfgMounts app)
+validateComposition config =
+    missingAdapters <> publishPolicyErrors <> endpointRefusals MirrorWriter (cfgMounts app)
   where
     app = configApp config
     missingAdapters =

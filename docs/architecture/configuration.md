@@ -186,6 +186,20 @@ error, not a silent skip:
   `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` without `ECLUSE_SERVER__AUTH_TOKEN` fails the load
   as `PublishStaticCredentialNeedsEdge`. That pairing would let any unauthenticated client publish
   under Écluse's own identity.
+- Endpoints that hold different registry roles must not name one registry. Every role refuses a
+  `publicationTarget` on any mount's `publicUpstream` host, a `publicationTarget` equal to another
+  mount's `privateUpstream`, `mirrorTarget`, or `publicationTarget`, and a `mirrorTarget` on any
+  mount's `publicUpstream` host. `ecluse dredger` deletes from each mount's `mirrorTarget`, so it
+  also refuses a `mirrorTarget` equal to any mount's `privateUpstream` or to its own mount's
+  `publicationTarget`. `ecluse proxy` and `ecluse mirror` boot on those three and warn once per
+  collapsed pair, and the operator prunes that mirror by hand. One rule table carries every pair
+  and its severity per role, so a refusal and a warning cannot describe different rules. The
+  comparison is by full registry URL, not by host, because repositories of one CodeArtifact domain
+  differ only in path, and a repository's per-format endpoints are separate stores. It folds the
+  authority to lower case and applies the default port, so neither a capital letter nor an explicit
+  `:443` defeats a refusal. Applying the default port keeps the port in the key rather than dropping
+  it, so `:8443` stays a separate store. The path is compared exactly, which is what keeps those
+  per-format endpoints apart.
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the
@@ -193,7 +207,8 @@ ambient `AWS_ENDPOINT_URL` override the boot resolves beside the plan. It prints
 provenance line per resolved key, secrets redacted, precedence environment > document > default. It
 exits `0` on a valid configuration, and `2` with the same aggregated report a boot would log. The
 two entry points take that report from one function, so the checker's verdict and the boot's cannot
-drift.
+drift. That report covers the roles that write, so a collapsed endpoint pair that only
+`ecluse dredger` refuses prints as a warning rather than refusing with exit `2`.
 
 ## Client authentication
 

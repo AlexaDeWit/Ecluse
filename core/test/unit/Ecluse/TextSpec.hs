@@ -12,12 +12,12 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Text (joinUrlPath, lastPathSegment, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash)
+import Ecluse.Core.Text (afterFirst, joinUrlPath, lastPathSegment, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash)
 
 {- | Tests for the shared text helpers. They pin the promises callers depend on: absence and
 trimming in 'nonBlank', every trailing slash dropped from a URL base, 'lastPathSegment'
-after the final slash, the one accepted spelling of a digit run, and 'renderIso8601Utc'
-byte-for-byte equal to 'iso8601Show'.
+after the final slash, the text after a needle's first occurrence in 'afterFirst', the one
+accepted spelling of a digit run, and 'renderIso8601Utc' byte-for-byte equal to 'iso8601Show'.
 -}
 spec :: Spec
 spec = do
@@ -25,9 +25,19 @@ spec = do
     trailingSlashSpec
     joinUrlPathSpec
     lastPathSegmentSpec
+    afterFirstSpec
     readDecimalTextSpec
     readHexTextSpec
     renderIso8601Spec
+
+afterFirstSpec :: Spec
+afterFirstSpec = describe "afterFirst" $ do
+    it "returns the text after the needle's first occurrence, never a later one" $
+        afterFirst "://" "https://169.254.169.254/x?u=https://registry.npmjs.org"
+            `shouldBe` "169.254.169.254/x?u=https://registry.npmjs.org"
+
+    it "returns the whole input when the needle is absent" $
+        afterFirst "://" "registry.npmjs.org:443" `shouldBe` "registry.npmjs.org:443"
 
 readDecimalTextSpec :: Spec
 readDecimalTextSpec = describe "readDecimalText" $ do
