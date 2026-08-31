@@ -195,7 +195,9 @@ error, not a silent skip:
   collapsed pair, and the operator prunes that mirror by hand. One rule table carries every pair
   and its severity per role, so a refusal and a warning cannot describe different rules. The
   comparison is by full registry URL, not by host, because repositories of one CodeArtifact domain
-  differ only in path, and a repository's per-format endpoints are separate stores.
+  differ only in path, and a repository's per-format endpoints are separate stores. It folds the
+  authority to lower case and applies the default port, so neither a capital letter nor an explicit
+  `:443` defeats a refusal, and it compares the path exactly, so `:8443` stays a separate store.
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the

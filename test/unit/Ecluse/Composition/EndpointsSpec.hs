@@ -148,11 +148,28 @@ mirrorStoreSpec = describe "mirrorTarget against another declared endpoint" $ do
         refusalsFor MirrorPruner env `shouldReturn` [PublicationTargetOnMountEndpoint PyPI Npm "mirrorTarget"]
 
     it "treats two format endpoints of one repository as distinct stores" $ do
-        -- A repository's per-format endpoints share a host and differ by path, and deletion is
-        -- format-scoped, so full-URL comparison keeps a CodeArtifact domain's pairs apart.
-        let env =
-                overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM" "https://store.example.test/pypi/mirror/" $
-                    withPyPI (mirroringTo "https://store.example.test/npm/mirror/" staticEnvVars)
+        -- A repository's per-format endpoints share an authority and differ by path, and deletion
+        -- is format-scoped, so the path stays outside the fold that the authority goes through.
+        let env = mirrorAgainstPypiPrivate "https://store.example.test/npm/mirror/" "https://store.example.test/pypi/mirror/"
+        refusalsFor MirrorPruner env `shouldReturn` []
+        advisoriesFor env `shouldReturn` []
+
+    it "matches one store written with a different authority case" $ do
+        -- DNS and TLS resolve one store here. Compared as raw text it reads as two, and the
+        -- sweep would delete the neighbouring mount's first-party read path.
+        let env = mirrorAgainstPypiPrivate "https://Store.example.test/npm/mirror/" "https://store.example.test/npm/mirror/"
+        refusalsFor MirrorPruner env
+            `shouldReturn` [MirrorTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://Store.example.test/npm/mirror/"]
+
+    it "matches an explicit default port against a portless endpoint" $ do
+        let env = mirrorAgainstPypiPrivate "https://store.example.test:443/npm/mirror/" "https://store.example.test/npm/mirror/"
+        refusalsFor MirrorPruner env
+            `shouldReturn` [MirrorTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://store.example.test:443/npm/mirror/"]
+
+    it "keeps a non-default port a distinct store" $ do
+        -- The fold applies the default port, it does not drop the port. A host comparison would
+        -- drop it and trade this slice's fail-open for another one.
+        let env = mirrorAgainstPypiPrivate "https://store.example.test:8443/npm/mirror/" "https://store.example.test/npm/mirror/"
         refusalsFor MirrorPruner env `shouldReturn` []
         advisoriesFor env `shouldReturn` []
 
@@ -233,6 +250,13 @@ withPyPI env =
         overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM" "https://pypi-private.example.test" $
             overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET" "https://pypi-mirror.example.test" $
                 overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN" "pypi-write-token" env
+
+{- | The npm mount mirroring to one URL against a PyPI neighbour reading its private upstream
+from another: the pair the store comparison decides.
+-}
+mirrorAgainstPypiPrivate :: String -> String -> [(String, String)]
+mirrorAgainstPypiPrivate mirror private =
+    overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM" private (withPyPI (mirroringTo mirror staticEnvVars))
 
 -- The PyPI neighbour publishing to the given target. The endpoint rules read no allow-list.
 pypiPublishingTo :: String -> [(String, String)] -> [(String, String)]

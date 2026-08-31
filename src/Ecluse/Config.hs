@@ -74,6 +74,7 @@ import Ecluse.Config.Rule
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Rules.Types (PrecededRule)
+import Ecluse.Core.Security (HostPort, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (stripTrailingSlash)
 
@@ -233,11 +234,25 @@ mountOf eco mcfg policy mode =
 rulesOf :: RulePolicy -> [PrecededRule]
 rulesOf = Map.elems . policyRules
 
--- | Whether two configured endpoints name the same registry, a trailing slash aside.
+{- | Whether two configured endpoints name the same registry. The authority folds to lower case
+with its default port applied, and the path is compared exactly past a trailing slash.
+-}
 sameRegistry :: RegistryUrl -> RegistryUrl -> Bool
-sameRegistry a b = strip a == strip b
+sameRegistry a b = registryKey a == registryKey b
+
+{- The key two endpoints are equal on. A boot refusal gates permanent deletion on it, so the
+authority folds the way DNS and TLS resolve it, and two unreadable ones count as one store. -}
+registryKey :: RegistryUrl -> (Maybe HostPort, Text)
+registryKey url = (hostPortAddress raw, stripTrailingSlash (registryPath raw))
   where
-    strip = stripTrailingSlash . registryUrlText
+    raw = registryUrlText url
+
+{- The path half of a registry URL, from the first slash past the scheme. A repository's
+per-format endpoints differ only here, so the fold must not reach it. -}
+registryPath :: Text -> Text
+registryPath raw = T.dropWhile (/= '/') afterScheme
+  where
+    afterScheme = fromMaybe raw (T.stripPrefix "://" (snd (T.breakOn "://" raw)))
 
 {- | One line per resolved leaf of the merged configuration: the dotted path, the rendered
 value with secret-typed keys redacted, and the layer that supplied it. That layer is
