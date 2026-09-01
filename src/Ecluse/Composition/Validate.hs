@@ -11,12 +11,12 @@ decides stays on 'vpSettings', where reading it raw is honest rather than a hole
 -}
 module Ecluse.Composition.Validate (
     -- * The validate phase
-    ValidatedPlan (..),
+    ValidatedPlan (vpMounts, vpPublications, vpMirrorStores, vpSettings),
     vetBoot,
 
     -- * What it clears
-    VettedMount (..),
-    VettedPublication (..),
+    VettedMount (vmEcosystem, vmAdapter, vmMount, vmConfig),
+    VettedPublication (vpubTarget, vpubAllow, vpubStaticToken),
 ) where
 
 import Data.Map.Strict qualified as Map
