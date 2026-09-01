@@ -47,6 +47,7 @@ module Ecluse.Core.Rules.Types (
 
 import Data.Time (NominalDiffTime, UTCTime)
 import Ecluse.Core.Cve (DbEtag)
+import Ecluse.Core.Fault (RetryAfter (..))
 import Ecluse.Core.Package (Scope)
 
 {- | The closed, evaluation-agnostic vocabulary of __built-in__ rules an operator selects
@@ -362,9 +363,3 @@ data Transience
       -}
       WontResolve
     deriving stock (Eq, Show)
-
-{- | A @Retry-After@ delay, in whole seconds. A 'newtype' so a raw count of seconds
-is never confused with some other integer when it reaches the response header.
--}
-newtype RetryAfter = RetryAfter Int
-    deriving stock (Eq, Ord, Show)

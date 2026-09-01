@@ -81,7 +81,6 @@ import Amazonka.SQS.GetQueueAttributes qualified as SQS
 import Amazonka.SQS.ReceiveMessage qualified as SQS
 import Amazonka.SQS.SendMessage qualified as SQS
 import Amazonka.SQS.Types qualified as SQS
-import Control.Monad.Trans.Resource (runResourceT)
 import Data.Aeson (eitherDecodeStrict', withObject, (.:))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (parseMaybe)
@@ -109,7 +108,7 @@ import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Text (nonBlank, readDecimalText)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint, newAwsEnv)
-import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
+import Ecluse.Runtime.Aws.Fault (classifyAwsTransport, sendClassified)
 import Ecluse.Runtime.Log (logLine, moduleField)
 
 {- | What the SQS backend needs. The provider knobs take their defaults from
@@ -169,10 +168,10 @@ the returned handle's closures capture it.
 newSqsQueue :: LogEnv -> (Text -> Either Text RegistryUrl) -> SqsConfig -> IO MirrorQueue
 newSqsQueue logEnv egressUrl cfg = do
     env <- mkEnv cfg
-    -- 'AWS.sendEither' keeps the AWS error out of the exception channel, so every operation
-    -- reports its failure as the handle's 'TransportFault' value.
+    -- Every operation reports its failure as the handle's 'TransportFault' value, never
+    -- through the exception channel.
     let run :: (AWS.AWSRequest a) => a -> IO (Either TransportFault (AWS.AWSResponse a))
-        run = fmap (first classifyAwsTransport) . runResourceT . AWS.sendEither env
+        run = sendClassified classifyAwsTransport env
         queueUrl = sqsQueueUrl cfg
         Seconds terminalBackoffSecs = sqsTerminalBackoff cfg
     -- SQS keeps the redrive configuration on the queue, not on a message, so the backend

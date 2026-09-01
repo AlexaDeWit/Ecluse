@@ -200,6 +200,12 @@ error, not a silent skip:
   so neither a capital letter nor an explicit `:443` defeats a refusal. Applying the default port
   keeps the port in the key rather than dropping it, so `:8443` stays a separate store. The path is
   compared exactly, which is what keeps those per-format endpoints apart.
+- Every mount's `mirrorTarget` needs a store maintenance backend. `ecluse dredger` reads that URL as
+  CodeArtifact coordinates, so it refuses a host that is not a CodeArtifact endpoint, a path that is
+  not the repository's endpoint for the mount's own ecosystem (`/npm/{repository}/` for an npm
+  mount), and an ecosystem CodeArtifact carries no package format for. The refusal names the mount
+  key and the reason. Only the Dredger deletes, so only the Dredger reads this: the other roles boot
+  on a mirror target no maintenance backend covers.
 
 Most of those refusals are decided as the configuration loads. The publish-policy pairing and the
 endpoint-disjointness rules are decided after it, by one pure pass over the loaded configuration

@@ -111,6 +111,10 @@ data BootError
       tells a transient fault from a permanent one to fix.
       -}
       AdvisorySyncUnavailable Text
+    | {- | A vetted mirror store has no store maintenance backend the Dredger can sweep it
+      with, carrying why.
+      -}
+      StoreMaintenanceUnavailable Ecosystem Text
     deriving stock (Eq, Show)
 
 {- | Fold a thrown fault into the boot error the caller names, so a phase that dials a live
@@ -202,3 +206,8 @@ renderBootError = \case
         "the advisory sync named by ECLUSE_ADVISORIES__URL could not be prepared at boot: "
             <> detail
             <> " (a transient AWS or network error may clear on retry. A permanent one, such as unresolvable AWS credentials or an ECLUSE_ADVISORIES__DATA_DIR this process cannot create, must be fixed)"
+    StoreMaintenanceUnavailable eco reason ->
+        mountKeyRef eco "mirrorTarget"
+            <> " has no usable store maintenance backend: "
+            <> reason
+            <> " (the Dredger deletes from every mount's mirror target, so it refuses rather than starting against a store it cannot sweep)"

@@ -16,9 +16,11 @@ with the rendered error as detail. The wire worked, the service said no.
 -}
 module Ecluse.Runtime.Aws.Fault (
     classifyAwsTransport,
+    sendClassified,
 ) where
 
 import Amazonka qualified as AWS
+import Control.Monad.Trans.Resource (runResourceT)
 
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, transportFault)
 import Ecluse.Core.Fault.Http (classifyTransport)
@@ -29,3 +31,14 @@ classifyAwsTransport :: AWS.Error -> TransportFault
 classifyAwsTransport = \case
     AWS.TransportError httpErr -> classifyTransport httpErr
     err -> transportFault TransportProtocol (displayExceptionT err)
+
+{- | Send a request with the AWS error kept out of the exception channel and folded into the
+caller's own fault type, which is how every adapter here reports a failure as a value.
+-}
+sendClassified ::
+    (AWS.AWSRequest a) =>
+    (AWS.Error -> e) ->
+    AWS.Env ->
+    a ->
+    IO (Either e (AWS.AWSResponse a))
+sendClassified classify env = fmap (first classify) . runResourceT . AWS.sendEither env

@@ -99,6 +99,12 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "ECLUSE_ADVISORIES__DATA_DIR"
         renderBootError (AdvisorySyncUnavailable "CredentialChainExhausted")
             `shouldSatisfy` infixed "transient"
+        -- The maintenance refusal names the key, the reason, and why the Dredger will not
+        -- start without a backend for it.
+        renderBootError (StoreMaintenanceUnavailable Npm "its host is not a CodeArtifact endpoint")
+            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__MIRROR_TARGET has no usable store maintenance backend: its host is not a CodeArtifact endpoint"
+        renderBootError (StoreMaintenanceUnavailable Npm "x")
+            `shouldSatisfy` infixed "deletes from every mount's mirror target"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay
