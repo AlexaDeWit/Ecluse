@@ -20,14 +20,17 @@ import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (
     Severity (Advise, Refuse),
     Vet,
+    decided,
     rule,
     runVet,
+    vetRole,
  )
 
 spec :: Spec
 spec = do
     lawSpec
     accumulationSpec
+    inputSpec
 
 {- The four applicative laws. A hand-rolled instance can break any of them, and the accumulation
 every boot report depends on is only total while they hold. -}
@@ -61,14 +64,33 @@ accumulationSpec :: Spec
 accumulationSpec = describe "accumulation" $ do
     it "reports the refusals of both sides of an application, in order" $
         observe (probeVetFn (Probe Refused 1) <*> probeVet (Probe Refused 2))
-            `shouldBe` [ ([], Left [QueueUrlUnrecognised "refused", QueueUrlUnrecognised "refused"])
-                       , ([], Left [QueueUrlUnrecognised "refused", QueueUrlUnrecognised "refused"])
+            `shouldBe` [ ([], Left [QueueUrlUnrecognised "Refused 1", QueueUrlUnrecognised "Refused 2"])
+                       , ([], Left [QueueUrlUnrecognised "Refused 1", QueueUrlUnrecognised "Refused 2"])
+                       ]
+
+    it "logs the advisories of both sides of an application, in order" $
+        -- Both sides advise, so reversing the mappend that joins them fails here.
+        observe (probeVetFn (Probe Advised 1) <*> probeVet (Probe Advised 2))
+            `shouldBe` [ (["Advised 1", "Advised 2"], Right 3)
+                       , (["Advised 1", "Advised 2"], Right 3)
                        ]
 
     it "keeps the advisories of a refused pass, so a refusal never hides an advisory" $
         observe (probeVetFn (Probe Advised 1) <*> probeVet (Probe Refused 2))
-            `shouldBe` [ (["advised"], Left [QueueUrlUnrecognised "refused"])
-                       , (["advised"], Left [QueueUrlUnrecognised "refused"])
+            `shouldBe` [ (["Advised 1"], Left [QueueUrlUnrecognised "Refused 2"])
+                       , (["Advised 1"], Left [QueueUrlUnrecognised "Refused 2"])
+                       ]
+
+-- The two ways into a pass that are not a rule: the role it runs for, and a settled outcome.
+inputSpec :: Spec
+inputSpec = describe "the pass's own inputs" $ do
+    it "reads back the role it runs for, so a role-specific witness has a source" $
+        observe vetRole `shouldBe` [([], Right MirrorWriter), ([], Right MirrorPruner)]
+
+    it "accumulates an already-decided refusal after the rules preceding it" $
+        observe (probeVetFn (Probe Refused 1) <*> decided (Left [QueueUrlUnrecognised "settled"]))
+            `shouldBe` [ ([], Left [QueueUrlUnrecognised "Refused 1", QueueUrlUnrecognised "settled"])
+                       , ([], Left [QueueUrlUnrecognised "Refused 1", QueueUrlUnrecognised "settled"])
                        ]
 
 -- A vet is a function of its role, so the laws compare what it yields under every role.
@@ -90,18 +112,22 @@ genValue :: Gen Int
 genValue = Gen.int (Range.linear 0 9)
 
 probeVet :: Probe -> Vet Int
-probeVet (Probe finding n) = n <$ findingVet finding
+probeVet probe@(Probe _ n) = n <$ findingVet probe
 
 -- The same probe as a function-valued vet, which the composition and interchange laws need.
 probeVetFn :: Probe -> Vet (Int -> Int)
-probeVetFn (Probe finding n) = (n +) <$ findingVet finding
+probeVetFn probe@(Probe _ n) = (n +) <$ findingVet probe
 
-findingVet :: Finding -> Vet ()
-findingVet = \case
-    Undetected -> rule (const (Refuse QueueUrlUnrecognised)) (const Nothing) ()
-    Refused -> rule (const (Refuse QueueUrlUnrecognised)) Just "refused"
-    Advised -> rule (const (Advise id)) Just "advised"
-    RoleSplit -> rule roleSplit Just "split"
+{- Each finding carries its own probe's value, so the two sides of an application are
+distinguishable and an assertion on their order fails when they are swapped. -}
+findingVet :: Probe -> Vet ()
+findingVet (Probe finding n) = case finding of
+    Undetected -> rule (const (Refuse QueueUrlUnrecognised)) (const Nothing) label
+    Refused -> rule (const (Refuse QueueUrlUnrecognised)) Just label
+    Advised -> rule (const (Advise id)) Just label
+    RoleSplit -> rule roleSplit Just label
+  where
+    label = show finding <> " " <> show n
 
 roleSplit :: RegistryRole -> Severity Text
 roleSplit = \case
