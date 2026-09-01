@@ -124,6 +124,16 @@ spec = describe "resolveBootPlan" $ do
                     violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
                 other -> expectationFailure ("expected a refused override, got: " <> show other)
 
+        it "names both groups of a configuration wrong in two independent ways" $ do
+            -- A mount with no adapter and a queue URL naming no backend are decided by different
+            -- groups. One run reports both, so an operator fixes both before the next boot.
+            let envVars =
+                    overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" $
+                        overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars
+            config <- expectConfig envVars Nothing
+            refusalsOf (resolveBootPlan BootWithoutPipeline envVars Nothing config noCeiling fdLimit)
+                `shouldBe` Left [MissingAdapter PyPI, QueueUrlUnrecognised "https://queue.example.test/q"]
+
         it "refuses --no-worker over the in-memory queue rather than planning the role" $ do
             -- The config is otherwise complete, so nothing else would refuse: dropping the role
             -- guard would let this plan, and then boot, a runtime whose jobs nothing consumes.

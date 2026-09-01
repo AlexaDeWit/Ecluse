@@ -41,7 +41,7 @@ import Ecluse.Composition.MirrorRole (mirrorRoleRefusal)
 import Ecluse.Composition.Sizing (resolvePrivateConnections, resolvePublicConnections)
 import Ecluse.Composition.Types (BootRole, pipelineRoleOf, registryRoleOf)
 import Ecluse.Composition.Validate (ValidatedPlan, vetBoot)
-import Ecluse.Composition.Vet (runVet)
+import Ecluse.Composition.Vet (decided, runVet)
 import Ecluse.Config (
     AppConfig (cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
     Config (configApp),
@@ -91,17 +91,17 @@ resolveBootPlan role envVars docBlob config effective fdLimit =
     , planDecisions role (ambientAwsFromEnv envVars) config effective fdLimit
     )
 
-{- Every decision past the preamble. The configuration pass decides the refusals a role earns,
-and the mirror decision the runtime it earns them against. -}
+{- Every decision past the preamble, joined by '<*>' so both groups report. A refused
+configuration used to hide whatever the mirror decision would have said about the same run. -}
 planDecisions :: BootRole -> AmbientAws -> Config -> EffectiveRuntimePlan -> Int -> Either [BootError] BootPlan
 planDecisions role ambient config effective fdLimit =
     bootPlanFrom config fdLimit advisories <$> outcome
   where
-    (advisories, validatedE) = runVet (registryRoleOf role) (vetBoot config)
-    outcome = do
-        validated <- validatedE
-        mirror <- mirrorDecision role ambient effective config
-        pure (validated, mirror)
+    (advisories, outcome) =
+        runVet (registryRoleOf role) $
+            (,)
+                <$> vetBoot config
+                <*> decided (mirrorDecision role ambient effective config)
 
 {- What the mirror pipeline resolved to: the queue backend, the memory plan sized against it, and
 that plan's own lines. The memory plan reads the selected backend, so the two resolve together. -}
