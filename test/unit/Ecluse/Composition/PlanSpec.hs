@@ -88,6 +88,15 @@ spec = describe "resolveBootPlan" $ do
         -- The plan's own lines never repeat the preamble, so no line has two emission sites.
         fmap (any (`elem` brProvenance okReport) . bpLines) (brOutcome okReport) `shouldBe` Right False
 
+    it "carries the role it vetted under, so a boot starts the behaviour the plan names" $ do
+        -- The boot reads the behaviour off this field, so a plan resolved for one role can no
+        -- longer start another's.
+        config <- expectConfig staticEnvVars Nothing
+        let roleOf role = fmap bpRole (brOutcome (resolveBootPlan role (inputsFor staticEnvVars Nothing config noCeiling)))
+        roleOf (BootMirrorPipeline MirrorOnly) `shouldBe` Right (BootMirrorPipeline MirrorOnly)
+        roleOf BootStorePruner `shouldBe` Right BootStorePruner
+        roleOf BootWithoutPipeline `shouldBe` Right BootWithoutPipeline
+
     it "decides the mirror runtime, the memory plan, and both connection pools" $ do
         config <- expectConfig staticEnvVars Nothing
         plan <- expectPlan staticEnvVars Nothing config noCeiling
@@ -179,6 +188,20 @@ spec = describe "resolveBootPlan" $ do
             config <- expectConfig envVars Nothing
             refusalsOf (resolveBootPlan BootWithoutPipeline (inputsFor envVars Nothing config noCeiling))
                 `shouldBe` Left [MissingAdapter PyPI]
+
+        it "reports a refused queue URL alone, because the memory plan is sized against the runtime" $ do
+            -- The memory plan reads the resolved backend, so a backend that refuses leaves no
+            -- plan to judge the override against. The same override reports once the URL parses.
+            let unsafeCache = overrideEnv "ECLUSE_CACHE__MAX_BYTES" "1073741824" staticEnvVars
+                refusedQueue = overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" unsafeCache
+            refusedConfig <- expectConfig refusedQueue Nothing
+            refusalsOf (resolveBootPlan BootWithoutPipeline (inputsFor refusedQueue Nothing refusedConfig tightPod))
+                `shouldBe` Left [QueueUrlUnrecognised "https://queue.example.test/q"]
+            cachedConfig <- expectConfig unsafeCache Nothing
+            case refusalsOf (resolveBootPlan BootWithoutPipeline (inputsFor unsafeCache Nothing cachedConfig tightPod)) of
+                Left [MemoryPlanOverrideUnsafe violations] ->
+                    violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
+                other -> expectationFailure ("expected the override refusal alone, got: " <> show other)
 
         it "refuses --no-worker over the in-memory queue rather than planning the role" $ do
             -- The config is otherwise complete, so nothing else would refuse: dropping the role

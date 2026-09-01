@@ -102,7 +102,11 @@ import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf, instrumentDa
 background tasks arrive already wrapped in their supervision policy.
 -}
 data ServiceRuntime = ServiceRuntime
-    { svcRunsWorker :: Bool
+    { svcRole :: MirrorRole
+    {- ^ The mirror-pipeline half this runtime serves, taken from the boot plan so the role's
+    entry point selects its behaviour from what the plan carries.
+    -}
+    , svcRunsWorker :: Bool
     {- ^ Whether this process runs the mirror worker ('spawnsWorker'), the one fact both the
     spawn decision and the @\/livez@ arm below are derived from.
     -}
@@ -190,7 +194,8 @@ withServiceRuntime role bootEnv action = do
         let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant memoryPlan)
         action
             ServiceRuntime
-                { svcRunsWorker = runsWorkerHere
+                { svcRole = role
+                , svcRunsWorker = runsWorkerHere
                 , svcEnv = builtEnv
                 , svcAppConfig = appConfig
                 , svcBindings = bindings

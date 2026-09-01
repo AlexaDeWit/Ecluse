@@ -94,11 +94,15 @@ data BootReport = BootReport
     -- ^ Every refusal the role earned, or the decisions it cleared.
     }
 
-{- | What a boot resolves: the decisions the role applies, and the lines both entry
-points report in the order they hold here.
+{- | What a boot resolves: the role it starts, the decisions that role applies, and the lines
+both entry points report in the order they hold here.
 -}
 data BootPlan = BootPlan
-    { bpValidated :: ValidatedPlan
+    { bpRole :: BootRole
+    {- ^ The role the pass vetted under. A boot selects the behaviour it starts from this, so
+    the severities it cleared and the behaviour it runs name one role.
+    -}
+    , bpValidated :: ValidatedPlan
     -- ^ What the pure pass cleared: the mounts, the endpoints, and the settings no rule vets.
     , bpMirrorRuntime :: MirrorRuntimePlan
     -- ^ Whether a mirror runtime runs at all, and which queue backend carries it.
@@ -152,7 +156,7 @@ roleRefusalWarnings own inputs =
 configuration used to hide whatever the groups after it would have said about the same run. -}
 planDecisions :: BootRole -> BootInputs -> ([Text], Either [BootError] BootPlan)
 planDecisions role inputs =
-    second (fmap (bootPlanFrom inputs)) . runVet (registryRoleOf role) $
+    second (fmap (bootPlanFrom role inputs)) . runVet (registryRoleOf role) $
         (,,)
             <$> vetBoot config
             <*> decided (mirrorDecision role ambient (biRuntimePlan inputs) config)
@@ -190,11 +194,11 @@ mirrorDecision role ambient effective config = do
     roleRefusals runtime =
         fromLeft [] (maybe (Right ()) (`mirrorRoleRefusal` runtime) (pipelineRoleOf role))
 
--- The cleared plan, its resolved sizings, and the lines and warnings both entry points report.
-bootPlanFrom :: BootInputs -> (ValidatedPlan, MirrorDecision, Maybe AwsEndpoint) -> BootPlan
-bootPlanFrom inputs (validated, mirror, s3Endpoint) =
+bootPlanFrom :: BootRole -> BootInputs -> (ValidatedPlan, MirrorDecision, Maybe AwsEndpoint) -> BootPlan
+bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
     BootPlan
-        { bpValidated = validated
+        { bpRole = role
+        , bpValidated = validated
         , bpMirrorRuntime = mdRuntime mirror
         , bpMemoryPlan = memoryPlan
         , bpLimits =

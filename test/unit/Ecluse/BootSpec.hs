@@ -19,8 +19,8 @@ import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (ProcessOutcome (..), exitCodeFor, run, superviseProcess)
 import Ecluse.Boot (BootAborted (..), applySecretFileIndirection, orExit, readConfigDocument)
-import Ecluse.Composition.BootError (BootError (AwsEndpointMalformed), renderBootError)
-import Ecluse.Composition.Support (malformedAwsEndpoint)
+import Ecluse.Composition.BootError (BootError (AwsEndpointMalformed, SplitRoleNeedsDurableQueue), renderBootError)
+import Ecluse.Composition.Support (malformedAwsEndpoint, withoutQueueUrl)
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
 import Ecluse.Test.Log (captureStderr)
@@ -143,6 +143,15 @@ spec = do
             outcome <- timeout 100000 (withArgs ["proxy"] run)
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Nothing
+
+        it "refuses ecluse mirror over the in-memory queue, naming that command" $
+            -- The one guard on the CLI-to-role mapping. 'ecluse proxy' boots this same
+            -- configuration, so a dispatch that named the wrong role would not refuse at all,
+            -- and one that named the other split role would quote the wrong command.
+            splitRoleRefusal ["mirror"] `shouldReturn` refusalNaming "ecluse mirror"
+
+        it "refuses ecluse proxy --no-worker over the in-memory queue, naming that command" $
+            splitRoleRefusal ["proxy", "--no-worker"] `shouldReturn` refusalNaming "ecluse proxy --no-worker"
 
         it "aborts fast at boot when the SQS endpoint override is set with no AWS_REGION" $ do
             -- The override forces the SQS interpretation, and an emulator or VPC
@@ -379,6 +388,28 @@ spec = do
             case outcome of
                 Left BootAborted -> pure ()
                 Right () -> expectationFailure "expected the boot to abort"
+
+{- | Boot one argument vector over a mirroring configuration with no durable queue: the exit
+status the split-role refusal earns, and the report it printed.
+-}
+splitRoleRefusal :: [String] -> IO (Either ExitCode (Maybe ()), [Text])
+splitRoleRefusal args = do
+    unsetEnv "AWS_REGION"
+    unsetEnv "ECLUSE_QUEUE__URL"
+    traverse_ (uncurry setEnv) (withoutQueueUrl runEnv)
+    outcome <- newIORef (Nothing :: Maybe (Either ExitCode (Maybe ())))
+    report <- captureStderr $ do
+        result <- try (timeout 100000 (withArgs args run))
+        writeIORef outcome (Just result)
+    traverse_ (unsetEnv . fst) runEnv
+    readIORef outcome >>= \case
+        Nothing -> fail "the boot left no outcome behind"
+        Just result -> pure (result, reportLines report)
+
+-- | What 'splitRoleRefusal' must return: exit 2, and the refusal quoting one invocation.
+refusalNaming :: Text -> (Either ExitCode (Maybe ()), [Text])
+refusalNaming invocation =
+    (Left (ExitFailure 2), [renderBootError (SplitRoleNeedsDurableQueue invocation)])
 
 -- | 'malformedAwsEndpoint' as the refusal carries it, redacted behind the secret.
 malformedSecret :: Secret

@@ -109,7 +109,7 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
-import Ecluse.Composition.Plan (BootPlan (bpS3Endpoint))
+import Ecluse.Composition.Plan (BootPlan (bpRole, bpS3Endpoint))
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
@@ -132,26 +132,35 @@ run = do
         _ -> pass
     exitWith (exitCodeFor outcome)
 
-{- Dispatch one subcommand under the process perimeter. check-config runs outside
-'withBootEnv': no logger, no telemetry, no services. -}
+{- Dispatch one subcommand under the process perimeter. Each arm names its role once, and the
+plan carries it from there. check-config runs outside 'withBootEnv': no logger, no services. -}
 runCommand :: AppCommand -> IO ()
 runCommand = \case
     RunCheckConfig -> runCheckConfig
-    RunService role -> withBootEnv (BootMirrorPipeline role) (runServiceRole role)
-    RunPilot -> withBootEnv BootWithoutPipeline runPilot
+    RunService role -> withBootEnv (BootMirrorPipeline role) startPlannedRole
+    RunPilot -> withBootEnv BootWithoutPipeline startPlannedRole
+    RunDredger -> withBootEnv BootStorePruner startPlannedRole
+    -- A one-shot compile vets under the Pilot's role and then does its own work rather than
+    -- that role's long-running one, so it is the one boot whose behaviour the plan cannot name.
     RunPilotCompile opts ->
         withBootEnv BootWithoutPipeline $ \bootEnv ->
             void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (bpS3Endpoint (beBootPlan bootEnv)) (configApp (beConfig bootEnv)) opts)
-    RunDredger -> withBootEnv BootStorePruner runDredger
 
-{- Run one mirror-pipeline role over the assembly both roles share, so the dedicated worker
-composes the same wiring the serve path embeds. -}
-runServiceRole :: MirrorRole -> BootEnv -> IO ()
-runServiceRole role bootEnv =
-    withServiceRuntime role bootEnv $ case role of
-        MirrorOnly -> runMirror
-        ServeAndMirror -> runProxy
-        ServeOnly -> runProxy
+{- Start the behaviour the cleared plan carries. The role reaches here off the plan alone, so
+the severities a boot vetted under and the behaviour it starts cannot name different roles. -}
+startPlannedRole :: BootEnv -> IO ()
+startPlannedRole bootEnv = case bpRole (beBootPlan bootEnv) of
+    BootMirrorPipeline role -> withServiceRuntime role bootEnv runMirrorPipeline
+    BootStorePruner -> runDredger bootEnv
+    BootWithoutPipeline -> runPilot bootEnv
+
+{- Pick the entry point the assembled runtime's own role names. Both halves run over the one
+assembly, so the dedicated worker composes the wiring the serve path embeds. -}
+runMirrorPipeline :: ServiceRuntime -> IO ()
+runMirrorPipeline runtime = case svcRole runtime of
+    MirrorOnly -> runMirror runtime
+    ServeAndMirror -> runProxy runtime
+    ServeOnly -> runProxy runtime
 
 {- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so
 an orchestrator reads the ending from the status alone.

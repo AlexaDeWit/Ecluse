@@ -90,9 +90,8 @@ data BootEnv = BootEnv
     , beTelemetry :: Telemetry
     -- ^ The telemetry handle, inert unless @ECLUSE_OBSERVABILITY__TELEMETRY@ enabled it.
     , beBootPlan :: BootPlan
-    {- ^ Every decision the configuration settled: what the vetting pass cleared, the mirror
-    runtime, the memory plan, the sizings, and the ambient S3 endpoint. 'withBootEnv' has
-    already logged the lines.
+    {- ^ Every decision the configuration settled, including the role this process boots.
+    'withBootEnv' has already logged the plan's lines.
     -}
     }
 
