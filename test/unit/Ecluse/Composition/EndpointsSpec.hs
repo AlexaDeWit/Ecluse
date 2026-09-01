@@ -56,6 +56,12 @@ publicUpstreamSpec = describe "publicationTarget against a public upstream" $ do
         refusalsFor MirrorWriter (publishingTo "https://PUBLIC.Example.Test")
             `shouldReturn` [PublicationTargetOnPublicUpstream Npm Npm]
 
+    it "refuses the deleting role that same publication target, which no role may relay" $
+        -- The rule carries one severity for every role. Flipping it for the deleting role alone
+        -- would leave the assertions above passing and this collapse silent on a sweep.
+        refusalsFor MirrorPruner (publishingTo "https://public.example.test/npm/")
+            `shouldReturn` [PublicationTargetOnPublicUpstream Npm Npm]
+
     it "produces no witness at all once a collision refuses the boot" $ do
         mounts <- mountsFor (publishingTo "https://public.example.test")
         fmap Map.keys (clearedTargets mounts) `shouldBe` Left [PublicationTargetOnPublicUpstream Npm Npm]
@@ -199,11 +205,37 @@ advisorySpec = describe "the advisories a writing role logs" $ do
         advisoriesFor (mirroringTo "https://private.example.test/" staticEnvVars)
             `shouldReturn` ["mount \"npm\": mirrorTarget and privateUpstream resolve to the same registry (https://private.example.test/); the Dredger refuses this configuration, so pruning this mirror stays manual"]
 
+    it "gives the deleting role that same private-and-public-upstream advisory" $
+        -- Rule six advises every role, so a severity flipped for one alone fails here.
+        advisoriesForRole MirrorPruner (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM" "https://public.example.test" staticEnvVars)
+            `shouldReturn` ["mount \"npm\": privateUpstream and publicUpstream resolve to the same registry (https://public.example.test); the merge trusts the private leg, so this registry's versions are admitted unfiltered"]
+
     it "logs no advisory for a collapse it refuses outright" $
         advisoriesFor (withPyPI (publishingTo "https://pypi-mirror.example.test")) `shouldReturn` []
 
 aggregationSpec :: Spec
-aggregationSpec = describe "aggregation" $
+aggregationSpec = describe "aggregation" $ do
+    it "reports every refusing rule in the order the pass declares them" $ do
+        -- One registry on four keys fires rules one through five at once, so swapping any
+        -- adjacent pair of them in 'endpointRules' changes this list.
+        refusals <- refusalsFor MirrorPruner everyEndpointCollapseEnv
+        refusals
+            `shouldBe` [ PublicationTargetOnPublicUpstream Npm PyPI
+                       , PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream"
+                       , MirrorTargetOnPublicUpstream Npm PyPI
+                       , MirrorTargetOnMountEndpoint Npm PyPI "privateUpstream" sharedRegistryText
+                       , MirrorTargetOnMountEndpoint Npm Npm "publicationTarget" sharedRegistryText
+                       ]
+
+    it "logs the advising rules of that same configuration in that same order" $
+        -- Rules four and five advise a writing role, and rule six advises every role, so this
+        -- pins the tail of the order the refusal list above cannot reach.
+        advisoriesFor everyEndpointCollapseEnv
+            `shouldReturn` [ "mount \"npm\": mirrorTarget and mount \"pypi\" privateUpstream resolve to the same registry (" <> sharedRegistryText <> "); the Dredger refuses this configuration, so pruning this mirror stays manual"
+                           , "mount \"npm\": mirrorTarget and publicationTarget resolve to the same registry (" <> sharedRegistryText <> "); the Dredger refuses this configuration, so pruning this mirror stays manual"
+                           , "mount \"pypi\": privateUpstream and publicUpstream resolve to the same registry (" <> sharedRegistryText <> "); the merge trusts the private leg, so this registry's versions are admitted unfiltered"
+                           ]
+
     it "reports every collision in one boot failure, in rule order" $ do
         -- One publication target on two public-upstream hosts is impossible, so this
         -- collides the publication target with one mount and the mirror target with another.
@@ -226,7 +258,11 @@ refusalsFor role env = fromLeft [] . snd . runVet role . vetEndpoints <$> mounts
 
 -- Every advisory a writing role (@ecluse proxy@ and @ecluse mirror@ alike) logs.
 advisoriesFor :: [(String, String)] -> IO [Text]
-advisoriesFor env = fst . runVet MirrorWriter . vetEndpoints <$> mountsFor env
+advisoriesFor = advisoriesForRole MirrorWriter
+
+-- Every advisory one role logs, whatever that role's pass decided.
+advisoriesForRole :: RegistryRole -> [(String, String)] -> IO [Text]
+advisoriesForRole role env = fst . runVet role . vetEndpoints <$> mountsFor env
 
 -- The publish endpoints a writing role's pass clears, or every refusal at once.
 clearedTargets :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem PublicationTarget)
@@ -266,6 +302,22 @@ from another: the pair the store comparison decides.
 mirrorAgainstPypiPrivate :: String -> String -> [(String, String)]
 mirrorAgainstPypiPrivate mirror private =
     overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM" private (withPyPI (mirroringTo mirror staticEnvVars))
+
+{- | One registry held by the npm mount's publicationTarget and mirrorTarget and by both of the
+PyPI neighbour's upstreams, so every endpoint rule fires on one configuration.
+-}
+everyEndpointCollapseEnv :: [(String, String)]
+everyEndpointCollapseEnv =
+    overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM" sharedRegistry $
+        overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM" sharedRegistry $
+            withPyPI (mirroringTo sharedRegistry (publishingTo sharedRegistry))
+
+-- | The registry every key in 'everyEndpointCollapseEnv' collapses onto.
+sharedRegistry :: String
+sharedRegistry = "https://shared.example.test"
+
+sharedRegistryText :: Text
+sharedRegistryText = toText sharedRegistry
 
 -- The PyPI neighbour publishing to the given target. The endpoint rules read no allow-list.
 pypiPublishingTo :: String -> [(String, String)] -> [(String, String)]
