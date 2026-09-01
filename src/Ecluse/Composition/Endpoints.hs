@@ -11,17 +11,15 @@ path and missing on the other. The vetted 'PublicationTarget' and 'MirrorStore' 
 a pass that refused nothing, so a publish relay and a store sweep cannot reach a refused endpoint.
 -}
 module Ecluse.Composition.Endpoints (
-    -- * The endpoint rules
-    endpointRefusals,
-    endpointAdvisories,
+    -- * The endpoint pass
+    VettedEndpoints (..),
+    vetEndpoints,
 
-    -- * The vetted endpoints
+    -- * The endpoints it clears
     PublicationTarget,
     publicationTargetUrl,
-    vetPublicationTargets,
     MirrorStore,
     mirrorStoreUrl,
-    vetMirrorStores,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -39,24 +37,36 @@ import Ecluse.Composition.Vet (
     Severity (Advise, Refuse),
     Vet,
     rule,
-    runVet,
+    vetRole,
  )
 import Ecluse.Config (MountConfig (..), sameRegistry)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 
-{- | Every refusal a role earns from the rules. 'Ecluse.Composition.validateComposition' folds
-the writing roles' refusals into the aggregated boot report, and each role adds its own.
--}
-endpointRefusals :: RegistryRole -> Map Ecosystem MountConfig -> [BootError]
-endpointRefusals role mounts = fromLeft [] (snd (runVet role (vetEndpoints mounts)))
+-- | The endpoints one role's pass cleared it to use, keyed by the mount that declares them.
+data VettedEndpoints = VettedEndpoints
+    { vePublicationTargets :: Map Ecosystem PublicationTarget
+    -- ^ Each mount's cleared publish endpoint.
+    , veMirrorStores :: Map Ecosystem MirrorStore
+    {- ^ The stores a sweep may delete from. A writing role only advises on the collapses that
+    make a delete unsafe, so its pass clears none.
+    -}
+    }
 
-{- | Every advisory a role logs: one line per collapse it tolerates, naming the two keys, the
-registry they share, and what the collapse costs.
+{- | Vet every mount's declared endpoints against each other: the refusals and advisories this
+role earns, and the endpoints a pass that refused nothing clears it to use.
 -}
-endpointAdvisories :: RegistryRole -> Map Ecosystem MountConfig -> [Text]
-endpointAdvisories role mounts = fst (runVet role (vetEndpoints mounts))
+vetEndpoints :: Map Ecosystem MountConfig -> Vet VettedEndpoints
+vetEndpoints mounts = clearedFor <$> vetRole <* endpointRules mounts
+  where
+    clearedFor role =
+        VettedEndpoints
+            { vePublicationTargets = Map.mapMaybe (fmap PublicationTarget . mntPublicationTarget) mounts
+            , veMirrorStores = case role of
+                MirrorWriter -> Map.empty
+                MirrorPruner -> Map.mapMaybe (fmap MirrorStore . mntMirrorTarget) mounts
+            }
 
 {- | A publication target that holds no other registry role. The publish path relays the
 publisher's own credential, so the relay takes this vetted value and never a configured URL.
@@ -68,15 +78,6 @@ newtype PublicationTarget = PublicationTarget RegistryUrl
 publicationTargetUrl :: PublicationTarget -> RegistryUrl
 publicationTargetUrl (PublicationTarget url) = url
 
-{- | Vet every mount's declared publication target, or report every refusal at once. The
-composition root builds a publish binding from this result, never from the raw configuration.
--}
-vetPublicationTargets :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem PublicationTarget)
-vetPublicationTargets mounts =
-    snd (runVet MirrorWriter (targets <$ vetEndpoints mounts))
-  where
-    targets = Map.mapMaybe (fmap PublicationTarget . mntPublicationTarget) mounts
-
 {- | A mirror target no other configured endpoint holds. Deleting from it destroys nothing
 another role owns, which is what a store sweep needs before it may delete anything.
 -}
@@ -87,19 +88,10 @@ newtype MirrorStore = MirrorStore RegistryUrl
 mirrorStoreUrl :: MirrorStore -> RegistryUrl
 mirrorStoreUrl (MirrorStore url) = url
 
-{- | Vet every mount's declared mirror target, or report every refusal at once. The store
-maintenance capability is built from this result alone, so an overlap cannot reach a delete.
--}
-vetMirrorStores :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem MirrorStore)
-vetMirrorStores mounts =
-    snd (runVet MirrorPruner (stores <$ vetEndpoints mounts))
-  where
-    stores = Map.mapMaybe (fmap MirrorStore . mntMirrorTarget) mounts
-
 {- Every endpoint rule, in the order a boot report lists them. A mirror target on another mount's
-publication target is caught below, read from the publishing side. -}
-vetEndpoints :: Map Ecosystem MountConfig -> Vet ()
-vetEndpoints mounts =
+publication target is 'publicationOffNeighbourEndpoints', read from the publishing side. -}
+endpointRules :: Map Ecosystem MountConfig -> Vet ()
+endpointRules mounts =
     publicationOffPublicUpstreams mounts
         *> publicationOffNeighbourEndpoints mounts
         *> mirrorOffPublicUpstreams mounts
@@ -141,7 +133,7 @@ mirrorOffOwnPublicationTarget =
 
 privateOffPublicUpstream :: Map Ecosystem MountConfig -> Vet ()
 privateOffPublicUpstream =
-    vetCollisions (const (Advise (advisoryLine mergeTrustsPrivate))) $
+    vetCollisions (const (advise mergeTrustsPrivate)) $
         EndpointComparison KeyPrivateUpstream [KeyPublicUpstream] SameMount ByRegistry
   where
     mergeTrustsPrivate =
@@ -150,11 +142,16 @@ privateOffPublicUpstream =
 -- A mirror target on another declared endpoint: the deleting role refuses, the writing roles warn.
 mirrorCollapse :: RegistryRole -> Severity EndpointPair
 mirrorCollapse = \case
-    MirrorWriter -> Advise (advisoryLine pruningStaysManual)
+    MirrorWriter -> advise pruningStaysManual
     MirrorPruner -> Refuse mirrorOnMountEndpoint
   where
     pruningStaysManual =
         "the Dredger refuses this configuration, so pruning this mirror stays manual"
+
+{- Every advisory carries the mount, the keys and the registry 'advisoryLine' names, so a rule
+cannot emit a bare consequence clause. -}
+advise :: Text -> Severity EndpointPair
+advise = Advise . advisoryLine
 
 publicationOnPublicUpstream :: EndpointPair -> BootError
 publicationOnPublicUpstream pair =
@@ -233,7 +230,6 @@ comparedPairs cmp mounts =
     , Just otherUrl <- [endpointOf otherKey otherCfg]
     ]
 
--- The pair, when both of its endpoints name one store under the comparison.
 collidingPair :: RegistryMatch -> EndpointPair -> Maybe EndpointPair
 collidingPair match pair
     | sameStore match (epUrl pair) (epOtherUrl pair) = Just pair

@@ -192,14 +192,14 @@ error, not a silent skip:
   mount's `publicUpstream` host. `ecluse dredger` deletes from each mount's `mirrorTarget`, so it
   also refuses a `mirrorTarget` equal to any mount's `privateUpstream` or to its own mount's
   `publicationTarget`. `ecluse proxy` and `ecluse mirror` boot on those three and warn once per
-  collapsed pair, and the operator prunes that mirror by hand. Each rule names the pairs it
-  compares and its severity per role, so a refusal and a warning cannot describe different rules. The
-  comparison is by full registry URL, not by host, because repositories of one CodeArtifact domain
-  differ only in path, and a repository's per-format endpoints are separate stores. It folds the
-  authority to lower case and applies the default port, so neither a capital letter nor an explicit
-  `:443` defeats a refusal. Applying the default port keeps the port in the key rather than dropping
-  it, so `:8443` stays a separate store. The path is compared exactly, which is what keeps those
-  per-format endpoints apart.
+  collapsed pair, and the operator prunes that mirror by hand. One combinator turns each detected
+  collision into the outcome the booting role earns, so a refusal on one path and a warning on
+  another always come from the same rule. The comparison is by full registry URL, not by host,
+  because repositories of one CodeArtifact domain differ only in path, and a repository's per-format
+  endpoints are separate stores. It folds the authority to lower case and applies the default port,
+  so neither a capital letter nor an explicit `:443` defeats a refusal. Applying the default port
+  keeps the port in the key rather than dropping it, so `:8443` stays a separate store. The path is
+  compared exactly, which is what keeps those per-format endpoints apart.
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the

@@ -48,15 +48,15 @@ import Ecluse.Composition.MemoryPlan (
     planCacheConfig,
  )
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring))
-import Ecluse.Composition.MirrorRole (enqueuesJobs, mirrorRoleRefusal, spawnsWorker)
-import Ecluse.Composition.Types (MirrorRole)
-import Ecluse.Composition.Plan (BootPlan (bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections))
+import Ecluse.Composition.MirrorRole (enqueuesJobs, spawnsWorker)
+import Ecluse.Composition.Plan (BootPlan (bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections, bpValidated))
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition
+import Ecluse.Composition.Types (MirrorRole)
+import Ecluse.Composition.Validate (ValidatedPlan (vpMounts, vpSettings), VettedMount (vmMount))
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (
     AppConfig (cfgCache, cfgLimits),
-    Config (configApp),
     LimitsSettings (limMaxNestingDepth, limMaxVersionCount),
  )
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
@@ -124,21 +124,20 @@ data ServiceRuntime = ServiceRuntime
     , svcCheckLive :: IO Liveness
     }
 
-{- | Assemble the role's runtime and run @action@ within it. It refuses unsafe or incomplete
-wiring, this role over this mirror runtime included, before it opens any listener.
+{- | Assemble the role's runtime and run @action@ within it. It builds from the boot's cleared
+plan alone, and refuses what only a live environment can settle, before it opens any listener.
 -}
 withServiceRuntime :: MirrorRole -> BootEnv -> (ServiceRuntime -> IO ()) -> IO ()
 withServiceRuntime role bootEnv action = do
-    let config = beConfig bootEnv
-        appConfig = configApp config
-        logEnv = beLogEnv bootEnv
+    let logEnv = beLogEnv bootEnv
         telemetry = beTelemetry bootEnv
         -- Every decision below comes from the plan "Ecluse.Boot" resolved and logged. This
         -- assembly only applies it.
         bootPlan = beBootPlan bootEnv
+        validated = bpValidated bootPlan
+        appConfig = vpSettings validated
         mirrorRuntime = bpMirrorRuntime bootPlan
         memoryPlan = bpMemoryPlan bootPlan
-    orExit (T.unlines . map renderBootError) (mirrorRoleRefusal role mirrorRuntime)
 
     -- The metric instruments do not exist until the telemetry substrate is built well below. The
     -- credential provider built here records through reporters that 'installMetrics' makes live.
@@ -150,7 +149,7 @@ withServiceRuntime role bootEnv action = do
                 }
     -- Each mount's mirror-write credential derives from the mirror-target host: a static token or
     -- the CodeArtifact mint. The mint runs once eagerly here, so a misconfiguration fails at boot.
-    providers <- initCredentialProviders credentialReporters config >>= orExit (T.unlines . map renderBootError)
+    providers <- initCredentialProviders credentialReporters (map vmMount (vpMounts validated)) >>= orExit (T.unlines . map renderBootError)
     -- Each mount ecosystem syncs independently, so one missing artifact never holds back
     -- another. Without a store the map is empty, rules abstain, and readiness is ungated.
     cveSyncPlan <- planCveSync logEnv (beS3Endpoint bootEnv) appConfig
@@ -170,8 +169,8 @@ withServiceRuntime role bootEnv action = do
                 , maxVersionCount = limMaxVersionCount (cfgLimits appConfig)
                 , maxNestingDepth = limMaxNestingDepth (cfgLimits appConfig)
                 }
-    bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers limits publishBudget config >>= orExit (T.unlines . map renderBootError)
-    publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
+    bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers limits publishBudget validated >>= orExit (T.unlines . map renderBootError)
+    publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers validated)
     heartbeat <- newWorkerHeartbeat
     let runsWorkerHere = spawnsWorker role mirrorRuntime
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly

@@ -14,12 +14,16 @@ import Ecluse.Composition.Support (
     expectConfig,
     expectEnv,
     expectProviders,
+    expectValidated,
     fixedNow,
     overrideEnv,
     staticEnvVars,
     testLimits,
     withoutMirrorTargetUrl,
  )
+import Ecluse.Composition.Types (RegistryRole (MirrorWriter))
+import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
+import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     ConfigError (..),
     PolicyError (UnknownRuleType),
@@ -80,8 +84,8 @@ mountDoc eco =
                \\"mirrorTarget\":\"https://mir\",\"mirrorTargetToken\":\"t\"}}}"
         )
 
--- Build the served bindings from an env + optional document through 'planMounts',
--- with the real adapter resolver, the fixed clock, and the env's static providers.
+-- Build the served bindings from an env + optional document through the boot's own pure pass
+-- and then 'planMounts', with the real adapter resolver, fixed clock, and static providers.
 planFrom :: [(String, String)] -> Maybe ByteString -> IO (Either [BootError] [MountBinding])
 planFrom = planFromWith testLimits
 
@@ -100,15 +104,18 @@ planFromWith limits envVars mDocBytes = do
             toBoot missing@(MirrorCredentialTokenMissing _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@(MirrorCredentialConflict _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@PublicUrlRequired = [PolicyBootError (UnknownRuleType "server" (renderConfigError missing))]
-        Right cfg -> do
-            initCredentialProviders noCredentialReporters cfg >>= \case
-                Left pErrs -> pure (Left pErrs)
-                Right providers -> do
-                    -- The root always pairs a publishing mount with a body budget. A
-                    -- generous test budget keeps these specs about the wiring.
-                    bodyBudget <- newByteAdmission (128 * 1024 * 1024)
-                    let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
-                    planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits (Just publishBudget) cfg
+        Right cfg -> case snd (runVet MirrorWriter (vetBoot cfg)) of
+            -- The pass refuses before anything is built, which is what the composition root sees.
+            Left vetErrs -> pure (Left vetErrs)
+            Right plan ->
+                initCredentialProviders noCredentialReporters (map vmMount (vpMounts plan)) >>= \case
+                    Left pErrs -> pure (Left pErrs)
+                    Right providers -> do
+                        -- The root always pairs a publishing mount with a body budget. A
+                        -- generous test budget keeps these specs about the wiring.
+                        bodyBudget <- newByteAdmission (128 * 1024 * 1024)
+                        let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
+                        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits (Just publishBudget) plan
 
 planMountsSpec :: Spec
 planMountsSpec = describe "planMounts (config-driven serving)" $ do
@@ -166,7 +173,8 @@ planMountsSpec = describe "planMounts (config-driven serving)" $ do
     it "threads the inbound edge token, clock, and help message onto the deps" $ do
         config <- expectConfig (("ECLUSE_SERVER__AUTH_TOKEN", "edge-secret") : ("ECLUSE_SERVER__HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
         providers <- expectProviders config
-        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
+        plan <- expectValidated config
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing plan >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"

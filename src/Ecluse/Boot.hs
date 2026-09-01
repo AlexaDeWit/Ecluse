@@ -47,6 +47,7 @@ import Ecluse.Composition.Plan (
     resolveBootPlan,
  )
 import Ecluse.Composition.Sizing (openFileSoftLimit)
+import Ecluse.Composition.Types (BootRole)
 import Ecluse.Config (
     AppConfig (cfgObservability, cfgRuntime, cfgServer),
     Config (configApp),
@@ -94,8 +95,8 @@ data BootEnv = BootEnv
     , beTelemetry :: Telemetry
     -- ^ The telemetry handle, inert unless @ECLUSE_OBSERVABILITY__TELEMETRY@ enabled it.
     , beBootPlan :: BootPlan
-    {- ^ Every decision the boot resolved: the mirror runtime, the memory plan, and the
-    connection-pool sizes. 'withBootEnv' has already logged the plan's lines.
+    {- ^ Every decision the boot resolved: what its vetting pass cleared, the mirror runtime,
+    the memory plan, and the connection-pool sizes. 'withBootEnv' has already logged the lines.
     -}
     }
 
@@ -168,11 +169,11 @@ readConfigDocument envVars = do
                         <> T.pack (ioeGetErrorString err)
                     )
 
-{- | Assemble the 'BootEnv' and run @action@ within it. A configuration error refuses before
-the runtime posture applies, and the plan's own refusals follow it.
+{- | Assemble the 'BootEnv' for a role and run @action@ within it. A configuration error refuses
+before the runtime posture applies, and the plan's own refusals follow it.
 -}
-withBootEnv :: (BootEnv -> IO ()) -> IO ()
-withBootEnv action = do
+withBootEnv :: BootRole -> (BootEnv -> IO ()) -> IO ()
+withBootEnv role action = do
     rawEnvVars <- getEnvironment
     envVars <- applySecretFileIndirection rawEnvVars >>= orExit id
     docBlob <- readConfigDocument envVars >>= orExit id
@@ -195,7 +196,7 @@ withBootEnv action = do
     runtimePlan <-
         applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) runtimeOverrides
     fdLimit <- openFileSoftLimit
-    let (preamble, planE) = resolveBootPlan envVars docBlob config runtimePlan fdLimit
+    let (preamble, planE) = resolveBootPlan role envVars docBlob config runtimePlan fdLimit
     -- The provenance block logs ahead of every refusable phase, so a refusal that names a
     -- config key stays traceable to the layer that set it.
     traverse_ (logBootInfo logEnv) preamble

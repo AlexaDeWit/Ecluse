@@ -9,15 +9,16 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.Endpoints (
-    endpointAdvisories,
-    endpointRefusals,
+    MirrorStore,
+    PublicationTarget,
+    VettedEndpoints (veMirrorStores, vePublicationTargets),
     mirrorStoreUrl,
     publicationTargetUrl,
-    vetMirrorStores,
-    vetPublicationTargets,
+    vetEndpoints,
  )
 import Ecluse.Composition.Support (expectConfig, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp), MountConfig)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -35,7 +36,7 @@ publicUpstreamSpec :: Spec
 publicUpstreamSpec = describe "publicationTarget against a public upstream" $ do
     it "vets a publication target that shares no host and no URL with another role" $ do
         mounts <- mountsFor publishingEnv
-        case vetPublicationTargets mounts of
+        case clearedTargets mounts of
             Left errs -> expectationFailure ("unexpected collisions: " <> show errs)
             Right vetted ->
                 fmap (registryUrlText . publicationTargetUrl) (Map.lookup Npm vetted)
@@ -57,7 +58,7 @@ publicUpstreamSpec = describe "publicationTarget against a public upstream" $ do
 
     it "produces no witness at all once a collision refuses the boot" $ do
         mounts <- mountsFor (publishingTo "https://public.example.test")
-        fmap Map.keys (vetPublicationTargets mounts) `shouldBe` Left [PublicationTargetOnPublicUpstream Npm Npm]
+        fmap Map.keys (clearedTargets mounts) `shouldBe` Left [PublicationTargetOnPublicUpstream Npm Npm]
 
 otherMountSpec :: Spec
 otherMountSpec = describe "publicationTarget against another mount's endpoints" $ do
@@ -77,9 +78,9 @@ otherMountSpec = describe "publicationTarget against another mount's endpoints" 
                     withPyPI (publishingTo "https://shared-publish.example.test")
         refusals <- refusalsFor MirrorWriter env
         refusals
-            `shouldMatchList` [ PublicationTargetOnMountEndpoint Npm PyPI "publicationTarget"
-                              , PublicationTargetOnMountEndpoint PyPI Npm "publicationTarget"
-                              ]
+            `shouldBe` [ PublicationTargetOnMountEndpoint Npm PyPI "publicationTarget"
+                       , PublicationTargetOnMountEndpoint PyPI Npm "publicationTarget"
+                       ]
 
     it "boots a publication target equal to its own mount's private upstream" $ do
         -- The recommended read-back topology: the publisher writes where the mount reads.
@@ -109,7 +110,7 @@ mirrorStoreSpec :: Spec
 mirrorStoreSpec = describe "mirrorTarget against another declared endpoint" $ do
     it "vets a mirror store no other endpoint holds" $ do
         mounts <- mountsFor staticEnvVars
-        case vetMirrorStores mounts of
+        case clearedStores mounts of
             Left errs -> expectationFailure ("unexpected refusals: " <> show errs)
             Right vetted ->
                 fmap (registryUrlText . mirrorStoreUrl) (Map.lookup Npm vetted)
@@ -137,7 +138,7 @@ mirrorStoreSpec = describe "mirrorTarget against another declared endpoint" $ do
 
     it "produces no mirror-store witness once a collapse refuses the deleting role" $ do
         mounts <- mountsFor (withPyPI (mirroringTo "https://pypi-private.example.test" staticEnvVars))
-        fmap Map.keys (vetMirrorStores mounts)
+        fmap Map.keys (clearedStores mounts)
             `shouldBe` Left [MirrorTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"]
 
     it "refuses every role a mirror target on another mount's publication target" $ do
@@ -203,7 +204,7 @@ advisorySpec = describe "the advisories a writing role logs" $ do
 
 aggregationSpec :: Spec
 aggregationSpec = describe "aggregation" $
-    it "reports every collision in one boot failure" $ do
+    it "reports every collision in one boot failure, in rule order" $ do
         -- One publication target on two public-upstream hosts is impossible, so this
         -- collides the publication target with one mount and the mirror target with another.
         let env =
@@ -211,9 +212,9 @@ aggregationSpec = describe "aggregation" $
                     withPyPI (publishingTo "https://pypi-private.example.test")
         refusals <- refusalsFor MirrorWriter env
         refusals
-            `shouldMatchList` [ PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream"
-                              , MirrorTargetOnPublicUpstream Npm PyPI
-                              ]
+            `shouldBe` [ PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream"
+                       , MirrorTargetOnPublicUpstream Npm PyPI
+                       ]
 
 -- The active mounts an environment layer resolves to: the input every rule reads.
 mountsFor :: [(String, String)] -> IO (Map Ecosystem MountConfig)
@@ -221,11 +222,19 @@ mountsFor env = cfgMounts . configApp <$> expectConfig env Nothing
 
 -- Every refusal a role earns from an environment layer.
 refusalsFor :: RegistryRole -> [(String, String)] -> IO [BootError]
-refusalsFor role env = endpointRefusals role <$> mountsFor env
+refusalsFor role env = fromLeft [] . snd . runVet role . vetEndpoints <$> mountsFor env
 
 -- Every advisory a writing role (@ecluse proxy@ and @ecluse mirror@ alike) logs.
 advisoriesFor :: [(String, String)] -> IO [Text]
-advisoriesFor env = endpointAdvisories MirrorWriter <$> mountsFor env
+advisoriesFor env = fst . runVet MirrorWriter . vetEndpoints <$> mountsFor env
+
+-- The publish endpoints a writing role's pass clears, or every refusal at once.
+clearedTargets :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem PublicationTarget)
+clearedTargets mounts = vePublicationTargets <$> snd (runVet MirrorWriter (vetEndpoints mounts))
+
+-- The stores the deleting role's pass clears a sweep for, or every refusal at once.
+clearedStores :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem MirrorStore)
+clearedStores mounts = veMirrorStores <$> snd (runVet MirrorPruner (vetEndpoints mounts))
 
 -- The npm mount publishing to its own registry, the collision-free baseline.
 publishingEnv :: [(String, String)]

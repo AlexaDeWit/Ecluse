@@ -308,6 +308,7 @@ library
     Ecluse.Composition.Plan
     Ecluse.Composition.Sizing
     Ecluse.Composition.Types
+    Ecluse.Composition.Validate
     Ecluse.Composition.Vet
     Ecluse.Composition.Worker
     Ecluse.Config

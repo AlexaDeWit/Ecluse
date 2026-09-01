@@ -7,7 +7,9 @@ module Ecluse.Composition.PlanSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe, MissingAdapter, QueueUrlUnrecognised))
+import Ecluse.Composition.BootError (
+    BootError (MemoryPlanOverrideUnsafe, MissingAdapter, QueueUrlUnrecognised, SplitRoleNeedsDurableQueue),
+ )
 import Ecluse.Composition.MemoryPlan (MemoryPlan (mpOverrideViolations, mpQueueMemoryMaxDepth))
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
@@ -16,6 +18,7 @@ import Ecluse.Composition.MirrorQueue (
  )
 import Ecluse.Composition.Plan (BootPlan (..), configDocumentPath, defaultConfigPath, resolveBootPlan)
 import Ecluse.Composition.Support (expectConfig, fdLimit, noCeiling, overrideEnv, staticEnvVars, withoutMirrorTargetUrl, withoutQueueUrl)
+import Ecluse.Composition.Types (BootRole (BootMirrorPipeline, BootWithoutPipeline), MirrorRole (ServeOnly))
 import Ecluse.Config (Config, mountPostureLines, resolvedKeyProvenance)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup))
@@ -47,11 +50,11 @@ spec = describe "resolveBootPlan" $ do
         let refusingEnv = overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" staticEnvVars
         ok <- expectConfig staticEnvVars Nothing
         refused <- expectConfig refusingEnv Nothing
-        let (okPreamble, okPlan) = resolveBootPlan staticEnvVars Nothing ok noCeiling fdLimit
-            (refusedPreamble, refusedPlan) = resolveBootPlan refusingEnv Nothing refused noCeiling fdLimit
+        let (okPreamble, okPlan) = resolveBootPlan BootWithoutPipeline staticEnvVars Nothing ok noCeiling fdLimit
+            (refusedPreamble, refusedPlan) = resolveBootPlan BootWithoutPipeline refusingEnv Nothing refused noCeiling fdLimit
         okPreamble `shouldBe` absentDocumentLine : resolvedKeyProvenance staticEnvVars Nothing
         refusedPreamble `shouldBe` absentDocumentLine : resolvedKeyProvenance refusingEnv Nothing
-        refusedPlan `shouldSatisfy` isLeft
+        void refusedPlan `shouldSatisfy` isLeft
         -- The plan's own lines never repeat the preamble, so no line has two emission sites.
         fmap (any (`elem` okPreamble) . bpLines) okPlan `shouldBe` Right False
 
@@ -86,7 +89,7 @@ spec = describe "resolveBootPlan" $ do
         let envVars = overrideEnv "ECLUSE_CONFIG" "/srv/ecluse.yaml" staticEnvVars
             document = "server:\n  helpMessage: from the document\n"
         config <- expectConfig envVars (Just document)
-        let (preamble, _) = resolveBootPlan envVars (Just document) config noCeiling fdLimit
+        let (preamble, _) = resolveBootPlan BootWithoutPipeline envVars (Just document) config noCeiling fdLimit
         listToMaybe preamble `shouldBe` Just "Config document: /srv/ecluse.yaml"
         configDocumentPath staticEnvVars `shouldBe` defaultConfigPath
 
@@ -102,13 +105,13 @@ spec = describe "resolveBootPlan" $ do
         it "refuses a structural composition error" $ do
             let envVars = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars
             config <- expectConfig envVars Nothing
-            snd (resolveBootPlan envVars Nothing config noCeiling fdLimit)
+            refusalsOf (resolveBootPlan BootWithoutPipeline envVars Nothing config noCeiling fdLimit)
                 `shouldBe` Left [MissingAdapter PyPI]
 
         it "refuses a queue URL whose shape names no backend" $ do
             let envVars = overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" staticEnvVars
             config <- expectConfig envVars Nothing
-            snd (resolveBootPlan envVars Nothing config noCeiling fdLimit)
+            refusalsOf (resolveBootPlan BootWithoutPipeline envVars Nothing config noCeiling fdLimit)
                 `shouldBe` Left [QueueUrlUnrecognised "https://queue.example.test/q"]
 
         it "refuses an explicit memory override the shed ladder cannot work around" $ do
@@ -116,10 +119,24 @@ spec = describe "resolveBootPlan" $ do
             -- the pin is the named cause.
             let envVars = overrideEnv "ECLUSE_CACHE__MAX_BYTES" "1073741824" serveOnlyEnvVars
             config <- expectConfig envVars Nothing
-            case snd (resolveBootPlan envVars Nothing config tightPod fdLimit) of
+            case refusalsOf (resolveBootPlan BootWithoutPipeline envVars Nothing config tightPod fdLimit) of
                 Left [MemoryPlanOverrideUnsafe violations] ->
                     violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
                 other -> expectationFailure ("expected a refused override, got: " <> show other)
+
+        it "refuses --no-worker over the in-memory queue rather than planning the role" $ do
+            -- The config is otherwise complete, so nothing else would refuse: dropping the role
+            -- guard would let this plan, and then boot, a runtime whose jobs nothing consumes.
+            let envVars = withoutQueueUrl staticEnvVars
+            config <- expectConfig envVars Nothing
+            refusalsOf (resolveBootPlan (BootMirrorPipeline ServeOnly) envVars Nothing config noCeiling fdLimit)
+                `shouldBe` Left [SplitRoleNeedsDurableQueue "ecluse proxy --no-worker"]
+
+{- | A plan resolution reduced to its verdict. 'BootPlan' carries the cleared adapters, which are
+records of functions, so the refusal is what an assertion compares.
+-}
+refusalsOf :: ([Text], Either [BootError] BootPlan) -> Either [BootError] ()
+refusalsOf = void . snd
 
 -- | Resolve the boot plan for a fixture, failing the test on a refusal.
 expectPlan :: [(String, String)] -> Maybe ByteString -> Config -> EffectiveRuntimePlan -> IO BootPlan
@@ -127,7 +144,7 @@ expectPlan envVars docBlob config effective =
     either
         (\errs -> fail ("boot plan refused: " <> show errs))
         pure
-        (snd (resolveBootPlan envVars docBlob config effective fdLimit))
+        (snd (resolveBootPlan BootWithoutPipeline envVars docBlob config effective fdLimit))
 
 -- | staticEnvVars with the mirror target and its write token dropped: the mount serves only.
 serveOnlyEnvVars :: [(String, String)]

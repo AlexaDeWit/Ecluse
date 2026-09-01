@@ -333,11 +333,11 @@ spec = do
             checkReport `shouldNotSatisfy` T.isInfixOf "s3cr3t"
 
         it "reports the plan's own refusals and the endpoint's in one aggregated list" $
-            bootRefusals [("AWS_ENDPOINT_URL", malformedEndpoint)] (Left [QueueRegionMissing])
+            void (bootRefusals [("AWS_ENDPOINT_URL", malformedEndpoint)] (Left [QueueRegionMissing]))
                 `shouldBe` Left [QueueRegionMissing, AwsEndpointMalformed malformedSecret]
 
         it "adds no refusal when AWS_ENDPOINT_URL is unset" $
-            bootRefusals [] (Left [QueueRegionMissing]) `shouldBe` Left [QueueRegionMissing]
+            void (bootRefusals [] (Left [QueueRegionMissing])) `shouldBe` Left [QueueRegionMissing]
 
     describe "superviseProcess (the typed process perimeter)" $ do
         it "classifies a graceful return as ShutdownRequested" $

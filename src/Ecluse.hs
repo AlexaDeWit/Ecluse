@@ -109,7 +109,10 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
-import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
+import Ecluse.Composition.Types (
+    BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
+    MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
+ )
 import Ecluse.Config (Config (configApp))
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Dredger
@@ -133,12 +136,12 @@ run = do
 runCommand :: AppCommand -> IO ()
 runCommand = \case
     RunCheckConfig -> runCheckConfig
-    RunService role -> withBootEnv (runServiceRole role)
-    RunPilot -> withBootEnv runPilot
+    RunService role -> withBootEnv (BootMirrorPipeline role) (runServiceRole role)
+    RunPilot -> withBootEnv BootWithoutPipeline runPilot
     RunPilotCompile opts ->
-        withBootEnv $ \bootEnv ->
+        withBootEnv BootWithoutPipeline $ \bootEnv ->
             void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beS3Endpoint bootEnv) (configApp (beConfig bootEnv)) opts)
-    RunDredger -> withBootEnv runDredger
+    RunDredger -> withBootEnv BootStorePruner runDredger
 
 {- Run one mirror-pipeline role over the assembly both roles share, so the dedicated worker
 composes the same wiring the serve path embeds. -}

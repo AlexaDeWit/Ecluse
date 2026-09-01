@@ -21,6 +21,7 @@ import Ecluse.Boot (applySecretFileIndirection, bootRefusals, orExit, readConfig
 import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.Plan (BootPlan (bpLines, bpWarnings), resolveBootPlan)
 import Ecluse.Composition.Sizing (openFileSoftLimit)
+import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (
     AppConfig (cfgRuntime),
     Config (configApp),
@@ -59,7 +60,9 @@ runCheckConfig = do
                 }
         runtimePlan = resolveRuntimePlan overrides cgroup rts
         effective = appliedRuntimePlan cgroup runtimePlan rts
-    let (preamble, planE) = resolveBootPlan envVars docBlob config effective fdLimit
+    -- The checker runs no mirror pipeline and prunes no store, so it vets under the writing
+    -- roles' severities and earns no pipeline refusal of its own.
+    let (preamble, planE) = resolveBootPlan BootWithoutPipeline envVars docBlob config effective fdLimit
     -- The boot logs these posture lines and warnings from 'Ecluse.Rts.applyRuntimePosture',
     -- which the checker never runs. They stand in that position here.
     traverse_ TIO.putStrLn (renderEffectivePosture effective)
