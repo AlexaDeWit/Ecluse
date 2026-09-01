@@ -72,8 +72,8 @@ data Severity finding
     | -- | Boot, and log this advisory line.
       Advise (finding -> Text)
 
-{- | One rule: its severity per role, the condition it detects in an input, and that input. Every
-refusal and every advisory is built here, so the two cannot describe different rules.
+{- | One rule: its severity per role, the condition it detects in an input, and that input. One
+detection feeds both the refusal and the advisory, so the two cannot describe different rules.
 -}
 rule :: (RegistryRole -> Severity finding) -> (input -> Maybe finding) -> input -> Vet ()
 rule severity detect input = Vet $ \role ->
