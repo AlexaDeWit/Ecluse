@@ -5,9 +5,9 @@
 {- | The boot validation pass: one role-parameterised applicative that accumulates every refusal
 and every advisory a configuration earns.
 
-A rule names the condition it detects and its severity per role, and 'rule' is the only path from
-a detected condition to an outcome, so a rule cannot be fatal on one boot path and missing on
-another.
+A rule whose severity varies by 'RegistryRole' reaches its outcome only through 'rule', so it
+cannot be fatal on one boot path and missing on another. An outcome settled outside the pass, such
+as a refusal keyed on the mirror-pipeline half a process runs, joins it through 'decided'.
 Advisories ride the success path, so a check that passes can still advise.
 -}
 module Ecluse.Composition.Vet (
@@ -58,7 +58,7 @@ vetRole :: Vet RegistryRole
 vetRole = Vet $ \role -> ([], Success role)
 
 {- | Carry an outcome a producer decided for itself into the pass, so its refusals join the rest.
-'rule' cannot express one, because there is no condition left to detect.
+'rule' cannot express one already settled, or one whose severity turns on more than 'RegistryRole'.
 -}
 decided :: Either [BootError] a -> Vet a
 decided outcome = Vet . const $ case outcome of

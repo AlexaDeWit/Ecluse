@@ -183,8 +183,8 @@ error, not a silent skip:
   token, and a CodeArtifact target that carries one. It also rejects a CodeArtifact identity that
   cannot mint an initial token.
 - A static publish credential requires a verifiable edge.
-  `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` without `ECLUSE_SERVER__AUTH_TOKEN` fails the load
-  as `PublishStaticCredentialNeedsEdge`. That pairing would let any unauthenticated client publish
+  `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` without `ECLUSE_SERVER__AUTH_TOKEN` is refused as
+  `PublishStaticCredentialNeedsEdge`. That pairing would let any unauthenticated client publish
   under Écluse's own identity.
 - Endpoints that hold different registry roles must not name one registry. Every role refuses a
   `publicationTarget` on any mount's `publicUpstream` host, a `publicationTarget` equal to another
@@ -201,10 +201,14 @@ error, not a silent skip:
   keeps the port in the key rather than dropping it, so `:8443` stays a separate store. The path is
   compared exactly, which is what keeps those per-format endpoints apart.
 
-Every refusal above is decided by one pure pass over the loaded configuration. The pass takes the
-booting role, reads nothing from the environment, and accumulates: one run reports every refusal
-and every advisory the role earns. A boot runs that pass once, for the role it starts, and the
-advisories reach the log even when a refusal stops the boot.
+Most of those refusals are decided as the configuration loads. The publish-policy pairing and the
+endpoint-disjointness rules are decided after it, by one pure pass over the loaded configuration
+and the environment snapshot that load read. The pass takes the
+booting role and accumulates, so one run reports every refusal and every advisory that role earns,
+and the advisories reach the log even when a refusal stops the boot. Two decisions sit outside
+that: a memory-plan override is judged against the resolved mirror runtime, so a refused queue URL
+reports without it, and minting a CodeArtifact identity's first token needs a live environment, so
+it is the one refusal above that `ecluse check-config` does not reach.
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the
@@ -213,11 +217,13 @@ key, secrets redacted, precedence environment > document > default. It exits `0`
 configuration, and `2` with the same aggregated report a boot would log. Both entry points call the
 one pass, so a role's verdict is the same on either side of it.
 
-The checker picks no subcommand, so it runs the pass once per role. Its own role-free pass decides
-the exit status, and a refusal only some roles earn prints as a warning naming the command that
-earns it: `ecluse proxy --no-worker` and `ecluse mirror` over the bounded in-memory queue, and
-`ecluse dredger` on a collapsed endpoint pair. A configuration one role refuses and another boots
-is a normal deployment, which is why those do not fail the check.
+The checker picks no subcommand, so it runs the pass once per role. It runs no mirror pipeline and
+prunes no store, so its own pass vets under the writing roles' severities, and that pass decides
+the exit status. A refusal only some roles earn prints as a warning naming the command that earns
+it: `ecluse proxy --no-worker` and `ecluse mirror` over the bounded in-memory queue, `ecluse mirror`
+where no mount declares a `mirrorTarget`, and `ecluse dredger` on a collapsed endpoint pair. A
+configuration one role refuses and another boots is a normal deployment, which is why those do not
+fail the check.
 
 What the checker does not reach is the environment-dependent tier. Minting a mirror-write
 credential and allocating each mount's rule state need a live environment, so a boot builds them

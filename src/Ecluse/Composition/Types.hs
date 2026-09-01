@@ -38,6 +38,7 @@ data BootRole
 pass once per entry rather than once.
 -}
 everyBootRole :: [BootRole]
+-- Nothing but this list holds the roles, so a new constructor must be added here by hand.
 everyBootRole =
     map BootMirrorPipeline [ServeAndMirror, ServeOnly, MirrorOnly] <> [BootStorePruner, BootWithoutPipeline]
 

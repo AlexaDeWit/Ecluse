@@ -2,33 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The boot's environment-dependent tier: turn the config-decidable tier's 'ValidatedPlan' into
-the served 'MountBinding's and the worker's publish targets.
-
-'resolveBootWiring' is that tier's entry point, and every refusal it reports needs a live
-environment: it mints each mount's mirror-write credential and runs 'Ecluse.Core.Rules.prepare',
-which allocates per-rule engine state once at boot. That is why binding assembly is 'IO' and why
-@ecluse check-config@ reaches none of it. Everything else stays a pure function of the plan. The
-module holds no socket and no clock of its own, and 'WiringPorts' carries the clock and the
-adapter resolver in, so a unit test runs the whole assembly without opening a listener.
-
-The composition root's other concerns live in the sibling modules:
-
-* "Ecluse.Composition.BootError" holds the boot-error vocabulary and its rendering.
-* "Ecluse.Composition.Credential" holds the credential providers and the
-  mirror-target credential selection.
-* "Ecluse.Composition.Plan" holds the config-decidable tier this one takes its plan from.
-* "Ecluse.Composition.Validate" holds the pure boot pass and the plan it clears.
-* "Ecluse.Composition.Endpoints" holds the endpoint-collision rules. A pass that
-  refused nothing produces the vetted publication target and mirror store.
-* "Ecluse.Composition.Vet" holds the accumulating validation applicative those rules are
-  expressed in, and the severity a rule carries per boot role.
-* "Ecluse.Composition.MirrorQueue" holds the mirror-queue backend selection.
-* "Ecluse.Composition.Sizing" holds the config-derived runtime sizings.
-
-One report aggregates every boot failure, so a single run shows every problem an operator must
-fix. A bad configuration is a loud, immediate startup failure, never a quietly mis-enforced or
-half-wired state (see @docs\/architecture\/configuration.md@ → "Validation").
+{- | The boot's environment-dependent tier: turn the 'ValidatedPlan' that
+"Ecluse.Composition.Plan" resolves and "Ecluse.Composition.Validate" clears into the served
+'MountBinding's and the worker's publish targets. 'resolveBootWiring' is the entry point, and
+every refusal it reports needs a live environment: it mints each mount's mirror-write credential
+and runs 'Ecluse.Core.Rules.prepare', which allocates per-rule engine state once at boot. That is
+why binding assembly is 'IO' and why @ecluse check-config@ reaches none of it. 'WiringPorts'
+carries the clock and the adapter resolver in, so a unit test runs the whole assembly without
+opening a listener (see @docs\/architecture\/configuration.md@ → "Validation").
 -}
 module Ecluse.Composition (
     -- * The environment-dependent tier

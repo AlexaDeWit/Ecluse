@@ -3,12 +3,12 @@
 -- SPDX-License-Identifier: MIT
 
 {- | @ecluse check-config@: run the boot's config-decidable tier and print the resolved posture,
-without starting anything. It runs 'Ecluse.Composition.Plan.resolveBootPlan' once for its own
-role-free pass and once per other boot role, and prints the plan's lines, applying none of it: no
-socket opens, no capability count changes, no re-exec, no cloud call. It predicts the posture from
+without starting anything. It runs 'Ecluse.Composition.Plan.resolveBootPlan' once for its own pass
+and once per other boot role, and prints the plan's lines, applying none of it: no socket opens, no
+capability count changes, no re-exec, no cloud call. It predicts the posture from
 'appliedRuntimePlan', because the checker's own process posture is not the boot's. It exits @0@ on
-a valid configuration and @2@ where its own role-free pass refuses, and a refusal only some roles
-earn prints as a warning naming the command that earns it.
+a valid configuration and @2@ where its own pass refuses, and a refusal only some roles earn prints
+as a warning naming the command that earns it.
 -}
 module Ecluse.CheckConfig (runCheckConfig) where
 

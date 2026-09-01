@@ -148,8 +148,8 @@ mirrorCollapse = \case
     pruningStaysManual =
         "the Dredger refuses this configuration, so pruning this mirror stays manual"
 
-{- Every advisory carries the mount, the keys and the registry 'advisoryLine' names, so a rule
-cannot emit a bare consequence clause. -}
+{- The advisory former every rule here builds through, so each line carries the mount, the keys
+and the registry 'advisoryLine' names ahead of its consequence clause. -}
 advise :: Text -> Severity EndpointPair
 advise = Advise . advisoryLine
 

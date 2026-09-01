@@ -24,7 +24,8 @@ selects the role:
   because it deletes from that store. The other roles start and warn instead.
 - **`ecluse check-config`**: validates the shared configuration and prints the resolved posture
   without starting anything (exit `0` valid, `2` refused). It checks every role, so a refusal only
-  one command earns (`ecluse mirror` without a durable queue, `ecluse dredger` on a collapsed
+  one command earns (`ecluse proxy --no-worker` or `ecluse mirror` without a durable queue,
+  `ecluse mirror` where no mount declares a `mirrorTarget`, `ecluse dredger` on a collapsed
   endpoint pair) prints here as a warning naming that command. Run it in CI or before a rollout.
 
 All roles share one configuration. The proxy and the mirror worker scale. Run Pilot as a singleton,
