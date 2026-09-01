@@ -17,7 +17,7 @@ import Data.Text.IO qualified as TIO
 import System.Environment (getEnvironment)
 
 import Ecluse.Boot (applySecretFileIndirection, orExit, readConfigDocument, refuseBoot)
-import Ecluse.Composition.BootError (renderBootError)
+import Ecluse.Composition.BootError (renderBootErrors)
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
     BootPlan (bpLines, bpWarnings),
@@ -85,7 +85,7 @@ runCheckConfig = do
     bootPlan <- case brOutcome report of
         Left errs -> do
             traverse_ warn (brAdvisories report)
-            refuseBoot (T.unlines (map renderBootError errs) <> "\nconfiguration: refused")
+            refuseBoot (renderBootErrors errs <> "\nconfiguration: refused")
         Right plan -> pure plan
     traverse_ TIO.putStrLn (bpLines bootPlan)
     traverse_ warn (bpWarnings bootPlan)

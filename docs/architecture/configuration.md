@@ -227,8 +227,15 @@ fail the check.
 
 What the checker does not reach is the environment-dependent tier. Minting a mirror-write
 credential and allocating each mount's rule state need a live environment, so a boot builds them
-and the checker makes no cloud call. That tier is what the type separates: the pure pass yields the
-boot plan, and the wiring built from it is `IO`.
+and the checker makes no cloud call. Two types keep that boundary visible. The pure pass yields the
+boot plan, which is the artefact the checker prints and the last one it can reach. A boot then runs
+an effectful planning phase over that plan, which spends every remaining refusal and yields an
+executable plan.
+
+Nothing downstream of an executable plan refuses to boot. Holding one means the assembly below it
+only builds and allocates, so a role's runtime cannot reject a configuration the boot already
+cleared. A listener that fails to bind and an upstream that stops answering are still possible, and
+those are runtime faults for supervision rather than refusals.
 
 ## Client authentication
 

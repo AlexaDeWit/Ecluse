@@ -109,6 +109,8 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
+import Ecluse.Composition.BootError (renderBootErrors)
+import Ecluse.Composition.Executable (planExecutable)
 import Ecluse.Composition.Plan (BootPlan (bpRole, bpS3Endpoint))
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
@@ -150,9 +152,18 @@ runCommand = \case
 the severities a boot vetted under and the behaviour it starts cannot name different roles. -}
 startPlannedRole :: BootEnv -> IO ()
 startPlannedRole bootEnv = case bpRole (beBootPlan bootEnv) of
-    BootMirrorPipeline role -> withServiceRuntime role bootEnv runMirrorPipeline
+    BootMirrorPipeline role -> startMirrorPipeline role bootEnv
     BootStorePruner -> runDredger bootEnv
     BootWithoutPipeline -> runPilot bootEnv
+
+{- Plan the mirror pipeline's runtime, then assemble it. This is the last phase that can refuse:
+the plan it yields is what the assembly below builds from, and nothing there rejects one. -}
+startMirrorPipeline :: MirrorRole -> BootEnv -> IO ()
+startMirrorPipeline role bootEnv = do
+    plan <-
+        planExecutable (beLogEnv bootEnv) mountBindingFor (beBootPlan bootEnv)
+            >>= orExit renderBootErrors
+    withServiceRuntime role bootEnv plan runMirrorPipeline
 
 {- Pick the entry point the assembled runtime's own role names. Both halves run over the one
 assembly, so the dedicated worker composes the wiring the serve path embeds. -}

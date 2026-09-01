@@ -5,11 +5,11 @@
 {- | The assembly every mirror-pipeline role runs over: the composition-root 'Env' and the
 services derived from it.
 
-'withServiceRuntime' applies the 'Ecluse.Composition.Plan.BootPlan' decisions, resolves the
-runtime-edge handles, mount bindings, and worker bundles, then hands the lot to a role.
-"Ecluse.Proxy" adds the front door over it and "Ecluse.Mirror" runs the worker alone, so the
-dedicated worker is the same worker the serve path embeds rather than a second copy of it.
-Pure plan derivation stays in "Ecluse.Composition" and its siblings.
+'withServiceRuntime' builds from the 'ExecutablePlan' the boot already gated: it allocates the
+runtime-edge handles and hands a role the mounts and worker bundles that plan carries. Nothing
+here refuses to boot, because every refusal is spent by then. "Ecluse.Proxy" adds the front door
+over it and "Ecluse.Mirror" runs the worker alone, so the dedicated worker is the same worker the
+serve path embeds rather than a second copy of it.
 -}
 module Ecluse.Service (
     -- * The role-shared runtime
@@ -25,39 +25,33 @@ module Ecluse.Service (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
-import Data.Time (getCurrentTime)
 import GHC.Conc (setNumCapabilities)
 import Katip (LogEnv, SimpleLogPayload, katipAddNamespace, runKatipContextT)
 import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 
-import Ecluse.Boot
-import Ecluse.Composition (
-    BootWiring (bwBindings, bwPublishTargets),
-    PublishBudget (PublishBudget, pbBodyBudget, pbMaxRequestBytes),
-    WiringPorts (WiringPorts, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
-    resolveBootWiring,
+import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), buildMirrorQueue, logBootWarning, logRuleBootOrder)
+import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
+import Ecluse.Composition.Executable (
+    ExecutablePlan (epBootPlan, epCveSync, epDeferredMetrics, epWiring),
  )
-import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpAdmissionCapacity, mpMaxRequestBytes, mpMirrorArtifactTenant, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
+    MemoryPlan (mpAdmissionCapacity, mpMirrorArtifactTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
     MirrorArtifactTenant (matMaxBytes),
-    PublishTenant (ptAggregateBytes),
     mirrorArtifactBytesCap,
  )
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring))
 import Ecluse.Composition.MirrorRole (enqueuesJobs, spawnsWorker)
 import Ecluse.Composition.Plan (
-    BootPlan (bpCacheConfig, bpLimits, bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections, bpS3Endpoint, bpValidated),
+    BootPlan (bpCacheConfig, bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections, bpValidated),
  )
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Types (MirrorRole)
-import Ecluse.Composition.Validate (ValidatedPlan (vpMounts, vpSettings), VettedMount (vmEcosystem))
+import Ecluse.Composition.Validate (ValidatedPlan (vpSettings))
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (AppConfig)
-import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
+import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
 import Ecluse.Core.Cve.Slot (generationInstalledAt)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, noMirrorQueue, reportWorthy)
@@ -70,7 +64,6 @@ import Ecluse.Core.Registry.Adapter (
     serveRouter,
  )
 import Ecluse.Core.Server.Admission (newServeAdmission)
-import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
 import Ecluse.Core.Supervision (
@@ -80,9 +73,8 @@ import Ecluse.Core.Supervision (
     superviseLoop,
     transientPolicy,
  )
-import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
-import Ecluse.Cve.Sync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, katipFaultReporter, planCveSync)
+import Ecluse.Cve.Sync (CveSyncHandle (csEnv, csReady), cveSyncReady, cveSyncScheduleFor)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEcosystem, syncSlot), SyncSchedule, runCveSync)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..))
@@ -90,11 +82,8 @@ import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Instruments (advisorySyncMetricsPortOf, registerAdvisoryDatabaseAge)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
-    deferredBreakerReporter,
     deferredMirrorEnqueueFailure,
-    deferredRefreshReporter,
     installMetrics,
-    newDeferredMetrics,
  )
 import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf, instrumentDataPlaneManagerSettings)
 
@@ -125,52 +114,28 @@ data ServiceRuntime = ServiceRuntime
     , svcCheckLive :: IO Liveness
     }
 
-{- | Assemble the role's runtime and run @action@ within it. It builds from the boot's cleared
-plan alone, and refuses what only a live environment can settle, before it opens any listener.
+{- | Assemble the role's runtime and run @action@ within it. The plan it takes is post-gating, so
+this only builds and allocates: nothing here can refuse the boot.
 -}
-withServiceRuntime :: MirrorRole -> BootEnv -> (ServiceRuntime -> IO ()) -> IO ()
-withServiceRuntime role bootEnv action = do
+withServiceRuntime :: MirrorRole -> BootEnv -> ExecutablePlan -> (ServiceRuntime -> IO ()) -> IO ()
+withServiceRuntime role bootEnv plan action = do
     let logEnv = beLogEnv bootEnv
         telemetry = beTelemetry bootEnv
-        -- Every decision below comes from the plan "Ecluse.Boot" resolved and logged. This
-        -- assembly only applies it.
-        bootPlan = beBootPlan bootEnv
-        validated = bpValidated bootPlan
-        appConfig = vpSettings validated
+        -- Every decision below comes from the plan the boot resolved and logged, and
+        -- "Ecluse.Composition.Executable" then cleared. This assembly only applies it.
+        bootPlan = epBootPlan plan
+        appConfig = vpSettings (bpValidated bootPlan)
         mirrorRuntime = bpMirrorRuntime bootPlan
         memoryPlan = bpMemoryPlan bootPlan
+        deferredMetrics = epDeferredMetrics plan
+        cveSyncPlan = epCveSync plan
+        bindings = bwBindings (epWiring plan)
 
-    -- The metric instruments do not exist until the telemetry substrate is built well below. The
-    -- credential provider built here records through reporters that 'installMetrics' makes live.
-    deferredMetrics <- newDeferredMetrics
-    let credentialReporters =
-            CredentialReporters
-                { crBreakerReporter = deferredBreakerReporter deferredMetrics CredentialMint
-                , crRefreshReporter = deferredRefreshReporter deferredMetrics CodeArtifact
-                }
-    -- Each mount ecosystem syncs independently, so one missing artifact never holds back
-    -- another. Without a store the map is empty, rules abstain, and readiness is ungated.
-    cveSyncPlan <- planCveSync logEnv (bpS3Endpoint bootPlan) appConfig (map vmEcosystem (vpMounts validated))
-    -- Where the plan shed the capability count (the nursery was the pressure),
-    -- apply it in-process before the parallel machinery spins up.
+    -- Where the plan shed the capability count (the nursery was the pressure), apply it
+    -- in-process before the parallel machinery spins up. Past the gate, so a refused boot
+    -- never reshapes the process it is about to abandon.
     whenJust (mpShedCapabilities memoryPlan) setNumCapabilities
     serveAdmission <- newServeAdmission (mpAdmissionCapacity memoryPlan)
-    -- One process-wide byte aggregate serves every publishing mount. It exists exactly when
-    -- a publication target is configured, the same predicate the plan's tenant derives from.
-    publishBudget <- forM (mpPublishTenant memoryPlan) $ \tenant -> do
-        bodyBudget <- newByteAdmission (ptAggregateBytes tenant)
-        pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes memoryPlan}
-    let wiringPorts =
-            WiringPorts
-                { wpReporters = credentialReporters
-                , wpResolveAdapter = mountBindingFor
-                , wpClock = getCurrentTime
-                , wpRuleDeps = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
-                }
-    wiring <-
-        resolveBootWiring wiringPorts (bpLimits bootPlan) publishBudget validated
-            >>= orExit (T.unlines . map renderBootError)
-    let bindings = bwBindings wiring
     heartbeat <- newWorkerHeartbeat
     let runsWorkerHere = spawnsWorker role mirrorRuntime
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
@@ -199,7 +164,7 @@ withServiceRuntime role bootEnv action = do
                 , svcEnv = builtEnv
                 , svcAppConfig = appConfig
                 , svcBindings = bindings
-                , svcWorkerPolicies = workerPoliciesFor builtEnv bindings (bwPublishTargets wiring) workerArtifactMaxBytes
+                , svcWorkerPolicies = workerPoliciesFor builtEnv bindings (bwPublishTargets (epWiring plan)) workerArtifactMaxBytes
                 , svcMirrorDrain = superviseDrain builtEnv <$> mirrorDrain
                 , svcSyncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor appConfig) cveSyncPlan
                 , svcCheckReady = cveSyncReady cveSyncPlan

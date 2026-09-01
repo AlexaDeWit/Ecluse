@@ -13,6 +13,7 @@ no policy of its own beyond the rendering.
 module Ecluse.Composition.BootError (
     BootError (..),
     renderBootError,
+    renderBootErrors,
 ) where
 
 import Data.Text qualified as T
@@ -100,6 +101,12 @@ data BootError
       -}
       MirrorRoleWithoutMirroring
     deriving stock (Eq, Show)
+
+{- | Render an aggregated refusal as the one block a failed launch reports, so every problem an
+operator must fix appears in a single run.
+-}
+renderBootErrors :: [BootError] -> Text
+renderBootErrors = T.unlines . map renderBootError
 
 -- | Render a 'BootError' as a human-facing line for the aggregated failure block.
 renderBootError :: BootError -> Text

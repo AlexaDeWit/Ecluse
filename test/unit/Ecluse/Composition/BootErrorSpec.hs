@@ -7,13 +7,30 @@ module Ecluse.Composition.BootErrorSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Composition.BootError (BootError (..), renderBootError)
+import Ecluse.Composition.BootError (BootError (..), renderBootError, renderBootErrors)
 import Ecluse.Config (PolicyError (UnknownRuleType))
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 
 spec :: Spec
-spec = describe "renderBootError" $
+spec = do
+    renderBootErrorSpec
+    renderBootErrorsSpec
+
+renderBootErrorsSpec :: Spec
+renderBootErrorsSpec =
+    describe "renderBootErrors" $
+        it "reports every aggregated refusal, one line each, in the order it received them" $
+            -- One failed launch shows every problem an operator must fix, so no refusal may be
+            -- dropped and none may be reordered ahead of another.
+            renderBootErrors [MissingAdapter PyPI, MirrorRoleWithoutMirroring]
+                `shouldBe` renderBootError (MissingAdapter PyPI)
+                    <> "\n"
+                    <> renderBootError MirrorRoleWithoutMirroring
+                    <> "\n"
+
+renderBootErrorSpec :: Spec
+renderBootErrorSpec = describe "renderBootError" $
     it "renders each boot-error kind as a distinct operator-facing line" $ do
         renderBootError (PolicyBootError (UnknownRuleType "x" "Y")) `shouldSatisfy` infixed "unknown type"
         renderBootError (MissingAdapter PyPI) `shouldSatisfy` infixed "no adapter"

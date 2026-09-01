@@ -20,12 +20,20 @@ module Ecluse.Composition.Support (
     expectProviders,
     expectConfig,
     expectValidated,
+    bootInputsFor,
+    expectPlan,
 ) where
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
-import Ecluse.Composition.Types (RegistryRole (MirrorWriter))
+import Ecluse.Composition.Plan (
+    BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
+    BootPlan,
+    BootReport (brOutcome),
+    resolveBootPlan,
+ )
+import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), RegistryRole (MirrorWriter))
 import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig, renderConfigError)
@@ -117,3 +125,24 @@ expectProviders config = do
 expectConfig :: [(String, String)] -> Maybe ByteString -> IO Config
 expectConfig env mDoc =
     either (\errs -> fail ("config load failed: " <> show (map renderConfigError errs))) pure (loadConfig env mDoc)
+
+{- | The pure tier's inputs for a fixture: the layers a configuration loaded from, and the process
+facts a boot would have measured.
+-}
+bootInputsFor :: [(String, String)] -> Maybe ByteString -> Config -> EffectiveRuntimePlan -> BootInputs
+bootInputsFor envVars docBlob config effective =
+    BootInputs
+        { biEnvVars = envVars
+        , biDocument = docBlob
+        , biConfig = config
+        , biRuntimePlan = effective
+        , biFdLimit = fdLimit
+        }
+
+-- | Resolve the boot plan for a fixture, failing the test on a refusal.
+expectPlan :: [(String, String)] -> Maybe ByteString -> Config -> EffectiveRuntimePlan -> IO BootPlan
+expectPlan envVars docBlob config effective =
+    either
+        (\errs -> fail ("boot plan refused: " <> show errs))
+        pure
+        (brOutcome (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars docBlob config effective)))

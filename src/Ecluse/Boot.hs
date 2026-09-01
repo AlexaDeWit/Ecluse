@@ -6,8 +6,8 @@
 @*_FILE@ secret indirection, loads the configuration under the @ECLUSE_CONFIG@ semantics,
 applies the runtime posture, builds the process logger, resolves the 'BootPlan', and
 brackets the telemetry substrate. It is the one place the plan's lines reach the boot log.
-It then hands the 'BootEnv' to a role-specific composition root such as "Ecluse.Service",
-which applies the plan's decisions and builds its own service resources.
+It then hands the 'BootEnv' to the role dispatch in "Ecluse", which starts the behaviour the
+plan names and, for a mirror-pipeline role, plans that role's runtime first.
 -}
 module Ecluse.Boot (
     BootEnv (..),
@@ -33,7 +33,7 @@ import System.Environment (getEnvironment)
 import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
 import UnliftIO (throwIO, tryIO)
 
-import Ecluse.Composition.BootError (renderBootError)
+import Ecluse.Composition.BootError (renderBootErrors)
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     deadLetterTerminusWarning,
@@ -208,7 +208,7 @@ withBootEnv role action = do
     bootPlan <- case brOutcome report of
         -- An advisory about a configuration that will not start is still one its operator
         -- must act on, so a refusal reports beside it rather than instead of it.
-        Left errs -> logAdvisories >> refuseBoot (T.unlines (map renderBootError errs))
+        Left errs -> logAdvisories >> refuseBoot (renderBootErrors errs)
         Right plan -> pure plan
     -- @ecluse check-config@ prints the same lists in this order, so a transcript and a
     -- boot log agree line for line.
