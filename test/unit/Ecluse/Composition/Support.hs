@@ -11,6 +11,7 @@ module Ecluse.Composition.Support (
     fdLimit,
     noCeiling,
     staticEnvVars,
+    malformedAwsEndpoint,
     withoutMirrorTargetUrl,
     withoutQueueUrl,
     overrideEnv,
@@ -69,6 +70,12 @@ staticEnvVars =
     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
     ]
+
+{- | An ambient @AWS_ENDPOINT_URL@ carrying userinfo, which the egress guard refuses. Both entry
+points must report it, and neither may echo the credential it holds.
+-}
+malformedAwsEndpoint :: String
+malformedAwsEndpoint = "http://operator:s3cr3t@localhost:9000"
 
 -- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test can supply its own.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]

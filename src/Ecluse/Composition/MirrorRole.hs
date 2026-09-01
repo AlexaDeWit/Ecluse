@@ -14,7 +14,6 @@ module Ecluse.Composition.MirrorRole (
     runsWorker,
     spawnsWorker,
     enqueuesJobs,
-    roleInvocation,
     mirrorRoleRefusal,
 ) where
 
@@ -23,7 +22,7 @@ import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     MirrorRuntimePlan (MirrorWith, NoMirroring),
  )
-import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
+import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly), roleInvocation)
 
 -- | Whether this role would run the mirror worker, given a runtime that has one to run.
 runsWorker :: MirrorRole -> Bool
@@ -48,13 +47,6 @@ enqueuesJobs = \case
     ServeAndMirror -> True
     ServeOnly -> True
     MirrorOnly -> False
-
--- | How an operator spells this role on the command line, for the boot refusal's message.
-roleInvocation :: MirrorRole -> Text
-roleInvocation = \case
-    ServeAndMirror -> "ecluse proxy"
-    ServeOnly -> "ecluse proxy --no-worker"
-    MirrorOnly -> "ecluse mirror"
 
 {- | Refuse a role the resolved mirror runtime cannot serve. A split role over the bounded
 in-memory queue would strand every job, because that queue lives inside one process.

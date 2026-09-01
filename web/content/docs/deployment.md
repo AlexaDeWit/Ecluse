@@ -23,9 +23,9 @@ selects the role:
   `mirrorTarget` is also any mount's `privateUpstream` or its own mount's `publicationTarget`,
   because it deletes from that store. The other roles start and warn instead.
 - **`ecluse check-config`**: validates the shared configuration and prints the resolved posture
-  without starting anything (exit `0` valid, `2` refused). It carries no role, so a collapsed
-  endpoint pair that only `ecluse dredger` refuses prints here as a warning. Run it in CI or
-  before a rollout.
+  without starting anything (exit `0` valid, `2` refused). It checks every role, so a refusal only
+  one command earns (`ecluse mirror` without a durable queue, `ecluse dredger` on a collapsed
+  endpoint pair) prints here as a warning naming that command. Run it in CI or before a rollout.
 
 All roles share one configuration. The proxy and the mirror worker scale. Run Pilot as a singleton,
 because multiple instances race and duplicate API calls.

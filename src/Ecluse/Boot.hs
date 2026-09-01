@@ -14,9 +14,9 @@ module Ecluse.Boot (
     applySecretFileIndirection,
     readConfigDocument,
     withBootEnv,
-    bootRefusals,
     BootAborted (..),
     orExit,
+    refuseBoot,
     logBootWarning,
     logBootInfo,
     logRuleBootOrder,
@@ -33,14 +33,16 @@ import System.Environment (getEnvironment)
 import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
 import UnliftIO (throwIO, tryIO)
 
-import Ecluse.Composition.BootError (BootError (AwsEndpointMalformed), renderBootError)
+import Ecluse.Composition.BootError (renderBootError)
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     deadLetterTerminusWarning,
     memoryQueueDropWarning,
  )
 import Ecluse.Composition.Plan (
+    BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
     BootPlan (bpLines, bpWarnings),
+    BootReport (brAdvisories, brOutcome, brProvenance),
     configDocumentPath,
     defaultConfigPath,
     explicitConfigPath,
@@ -57,7 +59,6 @@ import Ecluse.Config (
     loadConfig,
     renderConfigError,
  )
-import Ecluse.Config.Ambient (ambientAwsFromEnv, ambientS3Endpoint)
 import Ecluse.Config.Resolve (secretEnvSpellings)
 import Ecluse.Core.Queue (MirrorQueue (deadLetterTerminus, deliveryBudget))
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
@@ -65,7 +66,6 @@ import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
 import Ecluse.Rts (RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes), applyRuntimePosture)
-import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Log (moduleLog, newLogEnv)
 import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
 import Ecluse.Runtime.Server (
@@ -85,18 +85,14 @@ data BootEnv = BootEnv
     {- ^ The whole loaded configuration document. A subcommand that wants only the
     application slice projects it with 'configApp'.
     -}
-    , beS3Endpoint :: Maybe AwsEndpoint
-    {- ^ The @AWS_ENDPOINT_URL@ override the S3 advisory client dials, read from the
-    process environment beside the config and resolved once here. 'Nothing' is no
-    override, since a malformed one refused the boot.
-    -}
     , beLogEnv :: LogEnv
     -- ^ The process structured-logging environment.
     , beTelemetry :: Telemetry
     -- ^ The telemetry handle, inert unless @ECLUSE_OBSERVABILITY__TELEMETRY@ enabled it.
     , beBootPlan :: BootPlan
-    {- ^ Every decision the boot resolved: what its vetting pass cleared, the mirror runtime,
-    the memory plan, and the connection-pool sizes. 'withBootEnv' has already logged the lines.
+    {- ^ Every decision the configuration settled: what the vetting pass cleared, the mirror
+    runtime, the memory plan, the sizings, and the ambient S3 endpoint. 'withBootEnv' has
+    already logged the lines.
     -}
     }
 
@@ -196,40 +192,39 @@ withBootEnv role action = do
     runtimePlan <-
         applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) runtimeOverrides
     fdLimit <- openFileSoftLimit
-    let (preamble, planE) = resolveBootPlan role envVars docBlob config runtimePlan fdLimit
+    let report =
+            resolveBootPlan
+                role
+                BootInputs
+                    { biEnvVars = envVars
+                    , biDocument = docBlob
+                    , biConfig = config
+                    , biRuntimePlan = runtimePlan
+                    , biFdLimit = fdLimit
+                    }
     -- The provenance block logs ahead of every refusable phase, so a refusal that names a
     -- config key stays traceable to the layer that set it.
-    traverse_ (logBootInfo logEnv) preamble
-    (bootPlan, s3Endpoint) <-
-        orExit (T.unlines . map renderBootError) (bootRefusals envVars planE)
-    -- @ecluse check-config@ prints the same two lists in this order, so a transcript and a
+    traverse_ (logBootInfo logEnv) (brProvenance report)
+    let logAdvisories = traverse_ (logBootWarning logEnv) (brAdvisories report)
+    bootPlan <- case brOutcome report of
+        -- An advisory about a configuration that will not start is still one its operator
+        -- must act on, so a refusal reports beside it rather than instead of it.
+        Left errs -> logAdvisories >> refuseBoot (T.unlines (map renderBootError errs))
+        Right plan -> pure plan
+    -- @ecluse check-config@ prints the same lists in this order, so a transcript and a
     -- boot log agree line for line.
     traverse_ (logBootInfo logEnv) (bpLines bootPlan)
     traverse_ (logBootWarning logEnv) (bpWarnings bootPlan)
+    logAdvisories
     prepareTelemetryBoot (obsTelemetry observability) logEnv
     withTelemetry (obsTelemetry observability) logEnv $ \telemetry ->
         action
             BootEnv
                 { beConfig = config
-                , beS3Endpoint = s3Endpoint
                 , beLogEnv = logEnv
                 , beTelemetry = telemetry
                 , beBootPlan = bootPlan
                 }
-
-{- | The plan and the ambient S3 endpoint together, or every refusal from both sides, so one
-launch names each problem. @ecluse check-config@ calls it too, so the two verdicts agree.
--}
-bootRefusals ::
-    [(String, String)] ->
-    Either [BootError] BootPlan ->
-    Either [BootError] (BootPlan, Maybe AwsEndpoint)
-bootRefusals envVars planE = case (planE, endpointE) of
-    (Right plan, Right endpoint) -> Right (plan, endpoint)
-    (p, e) -> Left (concat (lefts [void p, void e]))
-  where
-    endpointE =
-        first (pure . AwsEndpointMalformed) (ambientS3Endpoint (ambientAwsFromEnv envVars))
 
 {- Build the config-selected mirror queue. Only the memory arm spends @memoryDepth@, and
 'deadLetterTerminusWarning' is decided here because it needs the built handle. -}
@@ -275,12 +270,15 @@ data BootAborted = BootAborted
 
 instance Exception BootAborted
 
-{- Report the rendered failure to stderr and throw 'BootAborted', otherwise yield the value.
-It writes the whole aggregated block, so one failed launch shows every problem. -}
+{- | Report a rendered refusal to stderr and abort start-up. The caller renders the whole
+aggregated block, so one failed launch shows every problem.
+-}
+refuseBoot :: Text -> IO a
+refuseBoot rendered = TIO.hPutStrLn stderr rendered >> throwIO BootAborted
+
+-- Refuse on a Left through 'refuseBoot', otherwise yield the value.
 orExit :: (e -> Text) -> Either e a -> IO a
-orExit render = \case
-    Right a -> pure a
-    Left err -> TIO.hPutStrLn stderr (render err) >> throwIO BootAborted
+orExit render = either (refuseBoot . render) pure
 
 {- Prepare the telemetry substrate before the SDK initialises. With
 @ECLUSE_OBSERVABILITY__TELEMETRY@ off it is a no-op, reading no process environment. -}

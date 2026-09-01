@@ -2,22 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition-root wiring: turn the boot's 'ValidatedPlan' and the process-global
-credential providers into the served 'MountBinding's.
+{- | The boot's environment-dependent tier: turn the config-decidable tier's 'ValidatedPlan' into
+the served 'MountBinding's and the worker's publish targets.
 
-This is the __listener-free__ heart of the composition root ("Ecluse" calls it). It
-holds no socket, no network, and no clock of its own. The caller injects the clock
-and the ecosystem-to-adapter resolver, so a unit test runs the boot-time wiring
-without opening a listener. Its one effect is 'Ecluse.Core.Rules.prepare' on each
-mount's rule set. That allocates per-rule engine state once at boot: a breaker for a
-resilient rule, though the built-in rules need none today. Binding assembly is
-therefore 'IO'. Everything else stays a pure function of the plan.
+'resolveBootWiring' is that tier's entry point, and every refusal it reports needs a live
+environment: it mints each mount's mirror-write credential and runs 'Ecluse.Core.Rules.prepare',
+which allocates per-rule engine state once at boot. That is why binding assembly is 'IO' and why
+@ecluse check-config@ reaches none of it. Everything else stays a pure function of the plan. The
+module holds no socket and no clock of its own, and 'WiringPorts' carries the clock and the
+adapter resolver in, so a unit test runs the whole assembly without opening a listener.
 
 The composition root's other concerns live in the sibling modules:
 
 * "Ecluse.Composition.BootError" holds the boot-error vocabulary and its rendering.
 * "Ecluse.Composition.Credential" holds the credential providers and the
   mirror-target credential selection.
+* "Ecluse.Composition.Plan" holds the config-decidable tier this one takes its plan from.
 * "Ecluse.Composition.Validate" holds the pure boot pass and the plan it clears.
 * "Ecluse.Composition.Endpoints" holds the endpoint-collision rules. A pass that
   refused nothing produces the vetted publication target and mirror store.
@@ -31,6 +31,11 @@ fix. A bad configuration is a loud, immediate startup failure, never a quietly m
 half-wired state (see @docs\/architecture\/configuration.md@ → "Validation").
 -}
 module Ecluse.Composition (
+    -- * The environment-dependent tier
+    WiringPorts (..),
+    BootWiring (..),
+    resolveBootWiring,
+
     -- * Boot-time wiring
     planMounts,
 
@@ -46,7 +51,12 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 
 import Ecluse.Composition.BootError (BootError (..))
-import Ecluse.Composition.Credential (CredentialProviders, initializedEcosystems, lookupProvider)
+import Ecluse.Composition.Credential (
+    CredentialProviders,
+    initCredentialProviders,
+    initializedEcosystems,
+    lookupProvider,
+ )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMounts, vpPublications, vpSettings),
@@ -70,6 +80,7 @@ import Ecluse.Config (
     unUrl,
  )
 import Ecluse.Core.Credential (CredentialProvider)
+import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter (
@@ -88,6 +99,44 @@ import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), mountUpstreams)
 import Ecluse.Core.Text (stripTrailingSlash)
+
+{- | The capabilities the wiring is built through, injected so a unit test runs the boot-time
+assembly without opening a listener.
+-}
+data WiringPorts = WiringPorts
+    { wpReporters :: CredentialReporters
+    -- ^ Where the credential providers record their mint breaker and refresh outcomes.
+    , wpResolveAdapter :: Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
+    -- ^ The ecosystem-to-binding resolver, 'Nothing' for an ecosystem this build ships no adapter for.
+    , wpClock :: IO UTCTime
+    -- ^ The clock every mount's serve path reads.
+    , wpRuleDeps :: Ecosystem -> RuleDeps
+    -- ^ One ecosystem's rule capabilities, including its advisory-database lookup.
+    }
+
+{- | What only a live environment settled: the mounts the front door serves, and the publish
+targets the worker writes approved artifacts through.
+-}
+data BootWiring = BootWiring
+    { bwBindings :: [MountBinding]
+    -- ^ The resolved mounts. A worker-only role builds them for their rules, and serves none.
+    , bwPublishTargets :: [PublishTarget]
+    -- ^ One target per mirrored mount, each holding the provider that mints its write token.
+    }
+
+{- | Build the boot wiring from the cleared plan, or the refusals only a live environment can
+settle. The credential providers stay internal: a mount reaches one through the wiring it produced.
+-}
+resolveBootWiring :: WiringPorts -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
+resolveBootWiring ports limits publishBudget plan = do
+    -- Each mount's mirror-write credential derives from the mirror-target host: a static token or
+    -- the CodeArtifact mint. The mint runs once eagerly here, so a misconfiguration fails at boot.
+    providersE <- initCredentialProviders (wpReporters ports) (map vmMount (vpMounts plan))
+    case providersE of
+        Left errs -> pure (Left errs)
+        Right providers -> do
+            bindingsE <- planMounts (wpResolveAdapter ports) (wpClock ports) (wpRuleDeps ports) providers limits publishBudget plan
+            pure (BootWiring <$> bindingsE <*> planPublishTargets providers plan)
 
 {- | The publish-side byte discipline: the process-wide aggregate admission and the
 per-request cap. It exists exactly when a publication target is configured.

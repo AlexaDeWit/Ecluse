@@ -7,9 +7,14 @@ module Ecluse.CompositionSpec (spec) where
 import Test.Hspec
 
 import Ecluse (mountBindingFor)
-import Ecluse.Composition (PublishBudget (..), planMounts)
+import Ecluse.Composition (
+    BootWiring (bwBindings),
+    PublishBudget (..),
+    WiringPorts (WiringPorts, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
+    planMounts,
+    resolveBootWiring,
+ )
 import Ecluse.Composition.BootError (BootError (..))
-import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.Support (
     expectConfig,
     expectEnv,
@@ -22,7 +27,7 @@ import Ecluse.Composition.Support (
     withoutMirrorTargetUrl,
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorWriter))
-import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
+import Ecluse.Composition.Validate (vetBoot)
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     ConfigError (..),
@@ -84,8 +89,19 @@ mountDoc eco =
                \\"mirrorTarget\":\"https://mir\",\"mirrorTargetToken\":\"t\"}}}"
         )
 
+{- The ports a unit test injects into the environment-dependent tier: the real adapter resolver,
+a fixed clock, inert rule deps, and reporters that record nothing. -}
+testWiringPorts :: WiringPorts
+testWiringPorts =
+    WiringPorts
+        { wpReporters = noCredentialReporters
+        , wpResolveAdapter = mountBindingFor
+        , wpClock = pure fixedNow
+        , wpRuleDeps = const inertRuleDeps
+        }
+
 -- Build the served bindings from an env + optional document through the boot's own pure pass
--- and then 'planMounts', with the real adapter resolver, fixed clock, and static providers.
+-- and then its environment-dependent tier, exactly as the composition root does.
 planFrom :: [(String, String)] -> Maybe ByteString -> IO (Either [BootError] [MountBinding])
 planFrom = planFromWith testLimits
 
@@ -107,15 +123,12 @@ planFromWith limits envVars mDocBytes = do
         Right cfg -> case snd (runVet MirrorWriter (vetBoot cfg)) of
             -- The pass refuses before anything is built, which is what the composition root sees.
             Left vetErrs -> pure (Left vetErrs)
-            Right plan ->
-                initCredentialProviders noCredentialReporters (map vmMount (vpMounts plan)) >>= \case
-                    Left pErrs -> pure (Left pErrs)
-                    Right providers -> do
-                        -- The root always pairs a publishing mount with a body budget. A
-                        -- generous test budget keeps these specs about the wiring.
-                        bodyBudget <- newByteAdmission (128 * 1024 * 1024)
-                        let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
-                        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits (Just publishBudget) plan
+            Right plan -> do
+                -- The root always pairs a publishing mount with a body budget. A
+                -- generous test budget keeps these specs about the wiring.
+                bodyBudget <- newByteAdmission (128 * 1024 * 1024)
+                let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
+                fmap bwBindings <$> resolveBootWiring testWiringPorts limits (Just publishBudget) plan
 
 planMountsSpec :: Spec
 planMountsSpec = describe "planMounts (config-driven serving)" $ do

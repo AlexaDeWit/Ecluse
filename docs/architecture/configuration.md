@@ -201,14 +201,28 @@ error, not a silent skip:
   keeps the port in the key rather than dropping it, so `:8443` stays a separate store. The path is
   compared exactly, which is what keeps those per-format endpoints apart.
 
+Every refusal above is decided by one pure pass over the loaded configuration. The pass takes the
+booting role, reads nothing from the environment, and accumulates: one run reports every refusal
+and every advisory the role earns. A boot runs that pass once, for the role it starts, and the
+advisories reach the log even when a refusal stops the boot.
+
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the
-ambient `AWS_ENDPOINT_URL` override the boot resolves beside the plan. It prints every decision, one
-provenance line per resolved key, secrets redacted, precedence environment > document > default. It
-exits `0` on a valid configuration, and `2` with the same aggregated report a boot would log. The
-two entry points take that report from one function, so the checker's verdict and the boot's cannot
-drift. That report covers the roles that write, so a collapsed endpoint pair that only
-`ecluse dredger` refuses prints as a warning rather than refusing with exit `2`.
+ambient `AWS_ENDPOINT_URL` override. It prints every decision, one provenance line per resolved
+key, secrets redacted, precedence environment > document > default. It exits `0` on a valid
+configuration, and `2` with the same aggregated report a boot would log. Both entry points call the
+one pass, so a role's verdict is the same on either side of it.
+
+The checker picks no subcommand, so it runs the pass once per role. Its own role-free pass decides
+the exit status, and a refusal only some roles earn prints as a warning naming the command that
+earns it: `ecluse proxy --no-worker` and `ecluse mirror` over the bounded in-memory queue, and
+`ecluse dredger` on a collapsed endpoint pair. A configuration one role refuses and another boots
+is a normal deployment, which is why those do not fail the check.
+
+What the checker does not reach is the environment-dependent tier. Minting a mirror-write
+credential and allocating each mount's rule state need a live environment, so a boot builds them
+and the checker makes no cloud call. That tier is what the type separates: the pure pass yields the
+boot plan, and the wiring built from it is `IO`.
 
 ## Client authentication
 

@@ -34,31 +34,29 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 
 import Ecluse.Boot
 import Ecluse.Composition (
+    BootWiring (bwBindings, bwPublishTargets),
     PublishBudget (PublishBudget, pbBodyBudget, pbMaxRequestBytes),
-    planMounts,
-    planPublishTargets,
+    WiringPorts (WiringPorts, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
+    resolveBootWiring,
  )
 import Ecluse.Composition.BootError (renderBootError)
-import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpAdmissionCapacity, mpMaxRequestBytes, mpMaxResponseBytes, mpMirrorArtifactTenant, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
+    MemoryPlan (mpAdmissionCapacity, mpMaxRequestBytes, mpMirrorArtifactTenant, mpPublishTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
     MirrorArtifactTenant (matMaxBytes),
     PublishTenant (ptAggregateBytes),
     mirrorArtifactBytesCap,
-    planCacheConfig,
  )
 import Ecluse.Composition.MirrorQueue (MirrorRuntimePlan (MirrorWith, NoMirroring))
 import Ecluse.Composition.MirrorRole (enqueuesJobs, spawnsWorker)
-import Ecluse.Composition.Plan (BootPlan (bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections, bpValidated))
+import Ecluse.Composition.Plan (
+    BootPlan (bpCacheConfig, bpLimits, bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections, bpS3Endpoint, bpValidated),
+ )
 import Ecluse.Composition.Sizing (connectionPoolSettings)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Types (MirrorRole)
-import Ecluse.Composition.Validate (ValidatedPlan (vpMounts, vpSettings), VettedMount (vmMount))
+import Ecluse.Composition.Validate (ValidatedPlan (vpMounts, vpSettings), VettedMount (vmEcosystem))
 import Ecluse.Composition.Worker (workerPoliciesFor)
-import Ecluse.Config (
-    AppConfig (cfgCache, cfgLimits),
-    LimitsSettings (limMaxNestingDepth, limMaxVersionCount),
- )
+import Ecluse.Config (AppConfig)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured), CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Cve.Slot (generationInstalledAt)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
@@ -71,7 +69,6 @@ import Ecluse.Core.Registry.Adapter (
     serveCredential,
     serveRouter,
  )
-import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount))
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
@@ -147,13 +144,9 @@ withServiceRuntime role bootEnv action = do
                 { crBreakerReporter = deferredBreakerReporter deferredMetrics CredentialMint
                 , crRefreshReporter = deferredRefreshReporter deferredMetrics CodeArtifact
                 }
-    -- Each mount's mirror-write credential derives from the mirror-target host: a static token or
-    -- the CodeArtifact mint. The mint runs once eagerly here, so a misconfiguration fails at boot.
-    providers <- initCredentialProviders credentialReporters (map vmMount (vpMounts validated)) >>= orExit (T.unlines . map renderBootError)
     -- Each mount ecosystem syncs independently, so one missing artifact never holds back
     -- another. Without a store the map is empty, rules abstain, and readiness is ungated.
-    cveSyncPlan <- planCveSync logEnv (beS3Endpoint bootEnv) appConfig
-    let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
+    cveSyncPlan <- planCveSync logEnv (bpS3Endpoint bootPlan) appConfig (map vmEcosystem (vpMounts validated))
     -- Where the plan shed the capability count (the nursery was the pressure),
     -- apply it in-process before the parallel machinery spins up.
     whenJust (mpShedCapabilities memoryPlan) setNumCapabilities
@@ -163,21 +156,24 @@ withServiceRuntime role bootEnv action = do
     publishBudget <- forM (mpPublishTenant memoryPlan) $ \tenant -> do
         bodyBudget <- newByteAdmission (ptAggregateBytes tenant)
         pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes memoryPlan}
-    let limits =
-            Limits
-                { maxBodyBytes = mpMaxResponseBytes memoryPlan
-                , maxVersionCount = limMaxVersionCount (cfgLimits appConfig)
-                , maxNestingDepth = limMaxNestingDepth (cfgLimits appConfig)
+    let wiringPorts =
+            WiringPorts
+                { wpReporters = credentialReporters
+                , wpResolveAdapter = mountBindingFor
+                , wpClock = getCurrentTime
+                , wpRuleDeps = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule) (katipFaultReporter logEnv)
                 }
-    bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers limits publishBudget validated >>= orExit (T.unlines . map renderBootError)
-    publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers validated)
+    wiring <-
+        resolveBootWiring wiringPorts (bpLimits bootPlan) publishBudget validated
+            >>= orExit (T.unlines . map renderBootError)
+    let bindings = bwBindings wiring
     heartbeat <- newWorkerHeartbeat
     let runsWorkerHere = spawnsWorker role mirrorRuntime
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
     logRuleBootOrder logEnv bindings
     (queue, mirrorDrain) <- mirrorHandOff role logEnv deferredMetrics (mpQueueMemoryMaxDepth memoryPlan) mirrorRuntime
-    metadataCache <- newMetadataCache (planCacheConfig (cfgCache appConfig) memoryPlan)
+    metadataCache <- newMetadataCache (bpCacheConfig bootPlan)
 
     -- The two managers stay split: public reads are anonymous and private reads forward the
     -- client's credential. Https-only egress closes the SSRF and resolve-to-internal class.
@@ -198,7 +194,7 @@ withServiceRuntime role bootEnv action = do
                 , svcEnv = builtEnv
                 , svcAppConfig = appConfig
                 , svcBindings = bindings
-                , svcWorkerPolicies = workerPoliciesFor builtEnv bindings publishTargets workerArtifactMaxBytes
+                , svcWorkerPolicies = workerPoliciesFor builtEnv bindings (bwPublishTargets wiring) workerArtifactMaxBytes
                 , svcMirrorDrain = superviseDrain builtEnv <$> mirrorDrain
                 , svcSyncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor appConfig) cveSyncPlan
                 , svcCheckReady = cveSyncReady cveSyncPlan

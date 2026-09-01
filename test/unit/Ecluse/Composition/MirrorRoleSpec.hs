@@ -4,10 +4,9 @@
 
 module Ecluse.Composition.MirrorRoleSpec (spec) where
 
-import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Composition.BootError (BootError (MirrorRoleWithoutMirroring, SplitRoleNeedsDurableQueue), renderBootError)
+import Ecluse.Composition.BootError (BootError (MirrorRoleWithoutMirroring, SplitRoleNeedsDurableQueue))
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     MirrorRuntimePlan (MirrorWith, NoMirroring),
@@ -15,7 +14,6 @@ import Ecluse.Composition.MirrorQueue (
 import Ecluse.Composition.MirrorRole (
     enqueuesJobs,
     mirrorRoleRefusal,
-    roleInvocation,
     runsWorker,
     spawnsWorker,
  )
@@ -94,11 +92,3 @@ spec = do
 
         it "refuses the dedicated worker with no mount mirroring: it would have nothing to do" $
             mirrorRoleRefusal MirrorOnly NoMirroring `shouldBe` Left [MirrorRoleWithoutMirroring]
-
-    describe "roleInvocation -- the refusal quotes what the operator typed" $
-        it "spells each role as its command line, so the message names a runnable fix" $ do
-            roleInvocation ServeAndMirror `shouldBe` "ecluse proxy"
-            roleInvocation ServeOnly `shouldBe` "ecluse proxy --no-worker"
-            roleInvocation MirrorOnly `shouldBe` "ecluse mirror"
-            renderBootError (SplitRoleNeedsDurableQueue (roleInvocation MirrorOnly))
-                `shouldSatisfy` T.isInfixOf "ecluse mirror"

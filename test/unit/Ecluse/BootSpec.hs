@@ -18,8 +18,9 @@ import UnliftIO (throwIO, timeout, try)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (ProcessOutcome (..), exitCodeFor, run, superviseProcess)
-import Ecluse.Boot (BootAborted (..), applySecretFileIndirection, bootRefusals, orExit, readConfigDocument)
-import Ecluse.Composition.BootError (BootError (AwsEndpointMalformed, QueueRegionMissing), renderBootError)
+import Ecluse.Boot (BootAborted (..), applySecretFileIndirection, orExit, readConfigDocument)
+import Ecluse.Composition.BootError (BootError (AwsEndpointMalformed), renderBootError)
+import Ecluse.Composition.Support (malformedAwsEndpoint)
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
 import Ecluse.Test.Log (captureStderr)
@@ -312,7 +313,7 @@ spec = do
         it "refuses one malformed override in the boot and in check-config alike" $ do
             -- The pre-flight tool must never pass a value the real boot then refuses.
             traverse_ (uncurry setEnv) runEnv
-            setEnv "AWS_ENDPOINT_URL" malformedEndpoint
+            setEnv "AWS_ENDPOINT_URL" malformedAwsEndpoint
             -- Each outcome leaves its capture through a ref, so every assertion waits for
             -- the cleanup below and no failure strands the malformed override.
             bootOutcome <- newIORef (Nothing :: Maybe (Either ExitCode (Maybe ())))
@@ -331,13 +332,6 @@ spec = do
             reportLines checkReport `shouldBe` [endpointRefusal, "configuration: refused"]
             -- The override can carry a credential, so no report may echo it.
             checkReport `shouldNotSatisfy` T.isInfixOf "s3cr3t"
-
-        it "reports the plan's own refusals and the endpoint's in one aggregated list" $
-            void (bootRefusals [("AWS_ENDPOINT_URL", malformedEndpoint)] (Left [QueueRegionMissing]))
-                `shouldBe` Left [QueueRegionMissing, AwsEndpointMalformed malformedSecret]
-
-        it "adds no refusal when AWS_ENDPOINT_URL is unset" $
-            void (bootRefusals [] (Left [QueueRegionMissing])) `shouldBe` Left [QueueRegionMissing]
 
     describe "superviseProcess (the typed process perimeter)" $ do
         it "classifies a graceful return as ShutdownRequested" $
@@ -386,15 +380,11 @@ spec = do
                 Left BootAborted -> pure ()
                 Right () -> expectationFailure "expected the boot to abort"
 
--- | An AWS_ENDPOINT_URL the egress gate refuses: userinfo, carrying a credential.
-malformedEndpoint :: String
-malformedEndpoint = "http://operator:s3cr3t@localhost:9000"
-
--- | 'malformedEndpoint' as the refusal carries it, redacted behind the secret.
+-- | 'malformedAwsEndpoint' as the refusal carries it, redacted behind the secret.
 malformedSecret :: Secret
-malformedSecret = mkSecret (toText malformedEndpoint)
+malformedSecret = mkSecret (toText malformedAwsEndpoint)
 
--- | The one rendered line both entry points report for 'malformedEndpoint'.
+-- | The one rendered line both entry points report for 'malformedAwsEndpoint'.
 endpointRefusal :: Text
 endpointRefusal = renderBootError (AwsEndpointMalformed malformedSecret)
 

@@ -35,7 +35,7 @@ spec = do
         it "plans nothing without a configured advisory store" $ do
             cfg <- expectAppConfig [] Nothing
             logEnv <- newTestLogEnv
-            plan <- planCveSync logEnv Nothing cfg
+            plan <- planCveSync logEnv Nothing cfg []
             Map.keys plan `shouldBe` []
 
         it "plans one handle per configured mount ecosystem and prepares the data dir" $
@@ -54,7 +54,7 @@ spec = do
                         ]
                         (Just mountedNpmDoc)
                 logEnv <- newTestLogEnv
-                plan <- planCveSync logEnv Nothing cfg
+                plan <- planCveSync logEnv Nothing cfg [Npm]
                 Map.keys plan `shouldBe` [Npm]
                 for_ (Map.lookup Npm plan) $ \handle -> do
                     syncEcosystem (csEnv handle) `shouldBe` Npm

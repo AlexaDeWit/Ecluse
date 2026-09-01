@@ -11,11 +11,14 @@ side owns.
 module Ecluse.Composition.Types (
     -- * The booting command
     BootRole (..),
+    everyBootRole,
+    bootInvocation,
     registryRoleOf,
     pipelineRoleOf,
 
     -- * The roles it decomposes into
     MirrorRole (..),
+    roleInvocation,
     RegistryRole (..),
 ) where
 
@@ -30,6 +33,20 @@ data BootRole
     | -- | @ecluse pilot@ and @ecluse check-config@: they neither mirror nor delete.
       BootWithoutPipeline
     deriving stock (Eq, Show)
+
+{- | Every role a boot runs under. @ecluse check-config@ picks no subcommand, so it runs the pure
+pass once per entry rather than once.
+-}
+everyBootRole :: [BootRole]
+everyBootRole =
+    map BootMirrorPipeline [ServeAndMirror, ServeOnly, MirrorOnly] <> [BootStorePruner, BootWithoutPipeline]
+
+-- | How an operator spells a booting command, for a report that names the role a refusal belongs to.
+bootInvocation :: BootRole -> Text
+bootInvocation = \case
+    BootMirrorPipeline role -> roleInvocation role
+    BootStorePruner -> "ecluse dredger"
+    BootWithoutPipeline -> "ecluse pilot"
 
 -- | The registry role a command's rules apply. Only the Dredger deletes.
 registryRoleOf :: BootRole -> RegistryRole
@@ -54,6 +71,13 @@ data MirrorRole
     | -- | @ecluse mirror@: the worker alone, serving only its health probes.
       MirrorOnly
     deriving stock (Eq, Show)
+
+-- | How an operator spells this role on the command line, for the boot refusal's message.
+roleInvocation :: MirrorRole -> Text
+roleInvocation = \case
+    ServeAndMirror -> "ecluse proxy"
+    ServeOnly -> "ecluse proxy --no-worker"
+    MirrorOnly -> "ecluse mirror"
 
 {- | The boot role a vetting pass vets for. The proxy and the mirror worker write to a mount's
 mirror target, and the Dredger deletes from it, which is what makes a shared store unsafe.

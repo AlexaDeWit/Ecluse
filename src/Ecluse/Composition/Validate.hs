@@ -54,7 +54,9 @@ data ValidatedPlan = ValidatedPlan
     , vpMirrorStores :: Map Ecosystem MirrorStore
     -- ^ The stores a sweep may delete from. Only @ecluse dredger@'s pass clears one.
     , vpSettings :: AppConfig
-    -- ^ The settings no rule vets, so nothing here decides whether the runtime may read them.
+    {- ^ The settings no rule vets. The mounts it still carries are the raw declarations, and
+    'vpMounts' holds the vetted ones the runtime reads.
+    -}
     }
 
 -- | One active mount, paired with the adapter this build ships for its ecosystem.

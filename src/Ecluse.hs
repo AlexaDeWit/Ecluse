@@ -109,6 +109,7 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
+import Ecluse.Composition.Plan (BootPlan (bpS3Endpoint))
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
@@ -140,7 +141,7 @@ runCommand = \case
     RunPilot -> withBootEnv BootWithoutPipeline runPilot
     RunPilotCompile opts ->
         withBootEnv BootWithoutPipeline $ \bootEnv ->
-            void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beS3Endpoint bootEnv) (configApp (beConfig bootEnv)) opts)
+            void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (bpS3Endpoint (beBootPlan bootEnv)) (configApp (beConfig bootEnv)) opts)
     RunDredger -> withBootEnv BootStorePruner runDredger
 
 {- Run one mirror-pipeline role over the assembly both roles share, so the dedicated worker

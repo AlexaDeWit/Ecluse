@@ -806,6 +806,7 @@ test-suite ecluse-unit
     Ecluse.Composition.PlanSpec
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support
+    Ecluse.Composition.TypesSpec
     Ecluse.Composition.VetSpec
     Ecluse.Composition.WorkerSpec
     Ecluse.CompositionSpec
