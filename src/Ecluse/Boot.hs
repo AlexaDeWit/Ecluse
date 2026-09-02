@@ -27,7 +27,6 @@ module Ecluse.Boot (
 import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Data.Text qualified as T
-import Data.Text.IO qualified as TIO
 import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS))
 import System.Environment (getEnvironment)
 import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
@@ -261,19 +260,19 @@ logRuleBootOrder logEnv = traverse_ logMount
         logBootInfo logEnv ("rule boot order for mount " <> label <> ":")
         traverse_ (logBootInfo logEnv) (renderBootOrder (pdRules deps))
 
-{- | Raised to abort start-up after a boot phase reported its failure to stderr. A typed
+{- | Raised to abort start-up, carrying the rendered refusal the exit site reports. A typed
 abort, rather than 'exitFailure', lets a test observe it without the process exiting.
 -}
-data BootAborted = BootAborted
+newtype BootAborted = BootAborted Text
     deriving stock (Eq, Show)
 
 instance Exception BootAborted
 
-{- | Report a rendered refusal to stderr and abort start-up. The caller renders the whole
-aggregated block, so one failed launch shows every problem.
+{- | Abort start-up with a rendered refusal. The caller renders the whole aggregated block, so
+one failed launch shows every problem.
 -}
 refuseBoot :: Text -> IO a
-refuseBoot rendered = TIO.hPutStrLn stderr rendered >> throwIO BootAborted
+refuseBoot = throwIO . BootAborted
 
 -- Refuse on a Left through 'refuseBoot', otherwise yield the value.
 orExit :: (e -> Text) -> Either e a -> IO a

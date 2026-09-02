@@ -357,8 +357,9 @@ spec = do
         it "classifies a graceful return as ShutdownRequested" $
             superviseProcess pass `shouldReturn` ShutdownRequested
 
-        it "classifies a boot abort as BootFault" $
-            superviseProcess (throwIO BootAborted) `shouldReturn` BootFault
+        it "classifies a boot abort as BootFault carrying the refusal it was raised with" $
+            superviseProcess (throwIO (BootAborted "mount npm has no adapter wired in this build"))
+                `shouldReturn` BootFault "mount npm has no adapter wired in this build"
 
         it "classifies a synchronous service escape as ServiceExited with its rendered detail" $ do
             outcome <- superviseProcess (throwIO (SimulatedServiceFault "wiring broke"))
@@ -387,7 +388,7 @@ spec = do
         it "maps each outcome onto its documented status" $ do
             exitCodeFor ShutdownRequested `shouldBe` ExitSuccess
             exitCodeFor (ServiceExited "detail") `shouldBe` ExitFailure 1
-            exitCodeFor BootFault `shouldBe` ExitFailure 2
+            exitCodeFor (BootFault "refusal") `shouldBe` ExitFailure 2
             exitCodeFor RunCancelled `shouldBe` ExitFailure 3
 
     describe "orExit (boot fail-fast)" $ do
@@ -395,9 +396,11 @@ spec = do
             orExit (const "unused") (Right 7 :: Either () Int) `shouldReturn` 7
 
         it "reports the failure and aborts the boot on a Left" $ do
+            -- The abort carries the rendered failure, and 'run' is what puts it on stderr, so a
+            -- non-zero exit cannot leave without it.
             outcome <- try (orExit (const "boot rejected") (Left ()) :: IO ()) :: IO (Either BootAborted ())
             case outcome of
-                Left BootAborted -> pure ()
+                Left (BootAborted rendered) -> rendered `shouldBe` "boot rejected"
                 Right () -> expectationFailure "expected the boot to abort"
 
 {- | Boot one argument vector over one environment: the exit status it earns, and the report it

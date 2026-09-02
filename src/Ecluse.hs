@@ -132,10 +132,9 @@ run :: IO ()
 run = do
     cmd <- execCLI
     outcome <- superviseProcess (runCommand cmd)
-    case outcome of
-        ServiceExited detail -> TIO.hPutStrLn stderr ("ecluse: service exited: " <> detail)
-        RunCancelled -> TIO.hPutStrLn stderr "ecluse: run cancelled"
-        _ -> pass
+    -- A non-zero status is representable only beside its reason ('ProcessExit'), so reporting
+    -- here covers every one of them.
+    traverse_ (TIO.hPutStrLn stderr) (exitReasonFor outcome)
     exitWith (exitCodeFor outcome)
 
 {- Dispatch one subcommand under the process perimeter. Each arm names its role once, and the
@@ -180,10 +179,8 @@ data ProcessOutcome
       ShutdownRequested
     | -- | A service failed up with the carried rendered fault: exit 1.
       ServiceExited Text
-    | {- | The boot aborted ('BootAborted'), after the boot phase reported its
-      errors to standard error: exit 2.
-      -}
-      BootFault
+    | -- | The boot aborted ('BootAborted') with the carried rendered refusal: exit 2.
+      BootFault Text
     | -- | The run was cancelled from outside (a kill, an interrupt): exit 3.
       RunCancelled
     deriving stock (Eq, Show)
@@ -196,7 +193,7 @@ superviseProcess service =
     Exception.try service >>= \case
         Right () -> pure ShutdownRequested
         Left err
-            | Just BootAborted <- fromException err -> pure BootFault
+            | Just (BootAborted rendered) <- fromException err -> pure (BootFault rendered)
             | Just (code :: ExitCode) <- fromException err -> Exception.throwIO code
             | Just (killed :: AsyncException) <- fromException err ->
                 pure $ case killed of
@@ -208,10 +205,29 @@ superviseProcess service =
             | Just (_ :: SomeAsyncException) <- fromException err -> Exception.throwIO err
             | otherwise -> pure (ServiceExited (displayExceptionT err))
 
+{- How a run ends. A failing status is representable only beside the reason it reports, so
+'run' cannot exit non-zero in silence. -}
+data ProcessExit
+    = ExitedCleanly
+    | ExitedWith ExitCode Text
+
+-- The status and the report one outcome owns. Both 'run' and 'exitCodeFor' read the ending here.
+processExitFor :: ProcessOutcome -> ProcessExit
+processExitFor = \case
+    ShutdownRequested -> ExitedCleanly
+    ServiceExited detail -> ExitedWith (ExitFailure 1) ("ecluse: service exited: " <> detail)
+    -- The boot phase rendered the whole aggregated block, which reports here unprefixed.
+    BootFault rendered -> ExitedWith (ExitFailure 2) rendered
+    RunCancelled -> ExitedWith (ExitFailure 3) "ecluse: run cancelled"
+
 -- | The process exit status each 'ProcessOutcome' owns.
 exitCodeFor :: ProcessOutcome -> ExitCode
-exitCodeFor = \case
-    ShutdownRequested -> ExitSuccess
-    ServiceExited _ -> ExitFailure 1
-    BootFault -> ExitFailure 2
-    RunCancelled -> ExitFailure 3
+exitCodeFor outcome = case processExitFor outcome of
+    ExitedCleanly -> ExitSuccess
+    ExitedWith code _ -> code
+
+-- What an outcome reports before exiting. A graceful shutdown is the only one with nothing to say.
+exitReasonFor :: ProcessOutcome -> Maybe Text
+exitReasonFor outcome = case processExitFor outcome of
+    ExitedCleanly -> Nothing
+    ExitedWith _ reason -> Just reason

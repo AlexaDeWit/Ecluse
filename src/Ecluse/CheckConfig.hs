@@ -95,8 +95,8 @@ runCheckConfig = do
     traverse_ warn (roleRefusalWarnings BootWithoutPipeline inputs)
     TIO.putStrLn "configuration: valid"
   where
-    {- Print the aggregated report and the verdict, then abort through the boot's own
-    typed path, which 'Ecluse.superviseProcess' maps to exit 2. -}
+    {- Carry the aggregated report and the verdict into the boot's own typed abort, which
+    'Ecluse.superviseProcess' maps to exit 2 and 'Ecluse.run' reports. -}
     orRefuse :: (e -> Text) -> Either e a -> IO a
     orRefuse render = orExit (\err -> render err <> "\nconfiguration: refused")
 
