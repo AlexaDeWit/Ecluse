@@ -51,7 +51,17 @@ import Ecluse.Composition.Types (
 import Ecluse.Config (mountPostureLines, resolvedKeyProvenance)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup))
+import Ecluse.Rts (
+    CgroupLimits (..),
+    EffectiveAxis (..),
+    EffectiveRuntimePlan (..),
+    Provenance (FromCgroup),
+    RtsPosture (..),
+    RuntimeOverrides (..),
+    appliedRuntimePlan,
+    reconcileRuntimePlan,
+    resolveRuntimePlan,
+ )
 
 spec :: Spec
 spec = describe "resolveBootPlan" $ do
@@ -234,19 +244,21 @@ spec = describe "resolveBootPlan" $ do
             brAdvisories report `shouldBe` []
 
     describe "the runtime posture each entry point sizes against" $
-        it "decides an override against the posture it was handed, so the two sides can differ" $ do
-            -- A boot hands the posture it measured after applying it and the checker hands the
-            -- one 'appliedRuntimePlan' predicts an application would reach. The pass is the same
-            -- function, so its verdict agrees only where those two values agree.
+        it "decides an override against the posture its own entry point resolved, so the two sides can differ" $ do
+            -- One set of process facts, resolved through the two functions the two entry points
+            -- call: 'reconcileRuntimePlan' for the boot, which measures the posture it reached,
+            -- and 'appliedRuntimePlan' for the checker, which predicts a full application. The
+            -- pass is the same function, so its verdict agrees only where those two values agree.
             let envVars = overrideEnv "ECLUSE_CACHE__MAX_BYTES" "1073741824" serveOnlyEnvVars
             config <- expectConfig envVars Nothing
-            let verdictUnder effective =
+            let plan = resolveRuntimePlan roomyHeapOverride noCgroup ghcrtsBoundPosture
+                verdictUnder effective =
                     refusalsOf (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars Nothing config effective))
-            verdictUnder noCeiling `shouldBe` Right ()
-            case verdictUnder tightPod of
+            verdictUnder (appliedRuntimePlan noCgroup plan ghcrtsBoundPosture) `shouldBe` Right ()
+            case verdictUnder (reconcileRuntimePlan noCgroup plan ghcrtsBoundPosture) of
                 Left [MemoryPlanOverrideUnsafe violations] ->
                     violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
-                other -> expectationFailure ("expected the smaller posture to refuse, got: " <> show other)
+                other -> expectationFailure ("expected the measured posture to refuse, got: " <> show other)
 
     describe "roleRefusalWarnings -- what a checker with no subcommand still reports" $ do
         it "names both split roles the in-memory queue strands, which its own pass boots" $ do
@@ -306,6 +318,27 @@ serveOnlyEnvVars =
 -- | The preamble's first line when no document exists at the default path.
 absentDocumentLine :: Text
 absentDocumentLine = "Config document: none at /etc/ecluse/config.yaml (defaults and environment only)"
+
+-- | No cgroup of either kind, so the plan's heap ceiling rests on the configured override alone.
+noCgroup :: CgroupLimits
+noCgroup = CgroupLimits{cgCpuCores = Nothing, cgMemoryMaxBytes = Nothing}
+
+-- | A 4 GiB configured ceiling on four cores, which a 256 MiB live posture falls well short of.
+roomyHeapOverride :: RuntimeOverrides
+roomyHeapOverride = RuntimeOverrides{roCores = Just 4, roCoresCeiling = Nothing, roMaxHeapBytes = Just (4096 * mib)}
+
+{- | An operator @GHCRTS -M256m@ binding the heap below the plan. The capability count matches,
+so the heap axis alone separates what the boot measures from what the checker predicts.
+-}
+ghcrtsBoundPosture :: RtsPosture
+ghcrtsBoundPosture =
+    RtsPosture
+        { rpCapabilities = 4
+        , rpProcessors = 4
+        , rpAllocAreaBytes = 4 * mib
+        , rpNurseryChunkBytes = Nothing
+        , rpMaxHeapBytes = Just (256 * mib)
+        }
 
 -- | A 256 MiB pod on four capabilities: the computed tenants shed to fit, and nothing refuses.
 tightPod :: EffectiveRuntimePlan
