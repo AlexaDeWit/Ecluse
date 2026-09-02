@@ -36,8 +36,10 @@ synced database under `advisories.dataDir` (default `/var/lib/ecluse/advisories`
 compiles there. The image runs as uid `65532` and sets no working directory, so mount a volume at
 that path on every role that reads or writes advisories, and let uid `65532` write it. In
 Kubernetes an `emptyDir` is enough: the artifact re-syncs after a restart, and Écluse sweeps the
-partial downloads an interrupted run left behind. Without the mount the boot refuses, naming
-`advisories.dataDir` and the permission error it hit.
+partial downloads an interrupted run left behind. On a mirror-pipeline role (`ecluse proxy`, `ecluse
+proxy --no-worker`, `ecluse mirror`) the boot refuses without the mount, naming
+`ECLUSE_ADVISORIES__DATA_DIR` and the error it hit. Pilot creates the directory when it first
+compiles, so there a missing mount surfaces as a runtime fault instead.
 
 ### Splitting the proxy from the mirror worker
 

@@ -164,9 +164,8 @@ mirrorWiringFrom role deferredMetrics cveSync queue wiring =
         , mwDeferredMetrics = deferredMetrics
         }
 
-{- Plan one advisory sync per vetted mount ecosystem. It creates the local data directory and
-discovers the advisory store's credentials, so an environment that can do neither refuses here.
-Each ecosystem syncs independently, so one missing artifact never holds back another. -}
+{- It creates the local data directory and discovers the advisory store's credentials, so an
+environment that can do neither refuses here rather than at first sync. -}
 planAdvisorySync :: LogEnv -> BootPlan -> IO (Either [BootError] (Map Ecosystem CveSyncHandle))
 planAdvisorySync logEnv bootPlan =
     refuseOnThrow AdvisorySyncUnavailable $
