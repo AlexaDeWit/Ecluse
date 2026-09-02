@@ -67,8 +67,10 @@ renderBootErrorSpec = describe "renderBootError" $
         -- refusals do, so a warned operator never learns more than a refused one.
         renderBootError (PublicationTargetOnPublicUpstream Npm PyPI "https://store.example.test")
             `shouldSatisfy` infixed "point it at a registry that shares a host with no public upstream"
-        renderBootError (PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream")
-            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET is also ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM"
+        renderBootError (PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://store.example.test")
+            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET is also ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM (https://store.example.test)"
+        renderBootError (PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://store.example.test")
+            `shouldSatisfy` infixed "point it at a registry that holds no other role"
         renderBootError (MirrorTargetOnPublicUpstream Npm Npm "https://store.example.test")
             `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__MIRROR_TARGET (https://store.example.test) shares a host with ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM"
         renderBootError (MirrorTargetOnPublicUpstream Npm Npm "https://store.example.test")

@@ -163,6 +163,7 @@ publicationOnMountEndpoint pair =
         (epMount pair)
         (epOtherMount pair)
         (endpointKeyName (epOtherKey pair))
+        (registryUrlText (epUrl pair))
 
 mirrorOnPublicUpstream :: EndpointPair -> BootError
 mirrorOnPublicUpstream pair =

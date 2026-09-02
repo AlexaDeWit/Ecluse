@@ -72,11 +72,11 @@ otherMountSpec :: Spec
 otherMountSpec = describe "publicationTarget against another mount's endpoints" $ do
     it "refuses a publication target that is another mount's private upstream" $
         refusalsFor MirrorWriter (withPyPI (publishingTo "https://pypi-private.example.test"))
-            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream"]
+            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"]
 
     it "refuses a publication target that is another mount's mirror target" $
         refusalsFor MirrorWriter (withPyPI (publishingTo "https://pypi-mirror.example.test"))
-            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "mirrorTarget"]
+            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "mirrorTarget" "https://pypi-mirror.example.test"]
 
     it "refuses two mounts that publish to one registry" $ do
         -- Each mount relays a different publisher's credential, so one shared publication
@@ -86,8 +86,8 @@ otherMountSpec = describe "publicationTarget against another mount's endpoints" 
                     withPyPI (publishingTo "https://shared-publish.example.test")
         refusals <- refusalsFor MirrorWriter env
         refusals
-            `shouldBe` [ PublicationTargetOnMountEndpoint Npm PyPI "publicationTarget"
-                       , PublicationTargetOnMountEndpoint PyPI Npm "publicationTarget"
+            `shouldBe` [ PublicationTargetOnMountEndpoint Npm PyPI "publicationTarget" "https://shared-publish.example.test"
+                       , PublicationTargetOnMountEndpoint PyPI Npm "publicationTarget" "https://shared-publish.example.test"
                        ]
 
     it "boots a publication target equal to its own mount's private upstream" $ do
@@ -98,7 +98,7 @@ otherMountSpec = describe "publicationTarget against another mount's endpoints" 
 
     it "ignores a trailing-slash difference when comparing full URLs" $
         refusalsFor MirrorWriter (withPyPI (publishingTo "https://pypi-private.example.test/"))
-            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream"]
+            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test/"]
 
 mirrorTargetSpec :: Spec
 mirrorTargetSpec = describe "mirrorTarget against a public upstream" $ do
@@ -159,8 +159,8 @@ mirrorStoreSpec = describe "mirrorTarget against another declared endpoint" $ do
         -- Already fatal before this rule existed, read from the publishing side, and it stays
         -- one refusal rather than one per direction.
         let env = pypiPublishingTo "https://mirror.example.test" staticEnvVars
-        refusalsFor MirrorWriter env `shouldReturn` [PublicationTargetOnMountEndpoint PyPI Npm "mirrorTarget"]
-        refusalsFor MirrorPruner env `shouldReturn` [PublicationTargetOnMountEndpoint PyPI Npm "mirrorTarget"]
+        refusalsFor MirrorWriter env `shouldReturn` [PublicationTargetOnMountEndpoint PyPI Npm "mirrorTarget" "https://mirror.example.test"]
+        refusalsFor MirrorPruner env `shouldReturn` [PublicationTargetOnMountEndpoint PyPI Npm "mirrorTarget" "https://mirror.example.test"]
 
     it "treats two format endpoints of one repository as distinct stores" $ do
         -- A repository's per-format endpoints share an authority and differ by path, and deletion
@@ -229,7 +229,7 @@ aggregationSpec = describe "aggregation" $ do
         refusals <- refusalsFor MirrorPruner everyEndpointCollapseEnv
         refusals
             `shouldBe` [ PublicationTargetOnPublicUpstream Npm PyPI sharedRegistryText
-                       , PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream"
+                       , PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" sharedRegistryText
                        , MirrorTargetOnPublicUpstream Npm PyPI sharedRegistryText
                        , MirrorTargetOnMountEndpoint Npm PyPI "privateUpstream" sharedRegistryText
                        , MirrorTargetOnMountEndpoint Npm Npm "publicationTarget" sharedRegistryText
@@ -252,7 +252,7 @@ aggregationSpec = describe "aggregation" $ do
                     withPyPI (publishingTo "https://pypi-private.example.test")
         refusals <- refusalsFor MirrorWriter env
         refusals
-            `shouldBe` [ PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream"
+            `shouldBe` [ PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"
                        , MirrorTargetOnPublicUpstream Npm PyPI "https://pypi-public.example.test"
                        ]
 

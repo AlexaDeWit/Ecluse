@@ -76,10 +76,10 @@ data BootError
       mount's public upstream. The publisher's relayed credential would reach a public registry.
       -}
       PublicationTargetOnPublicUpstream Ecosystem Ecosystem Text
-    | {- | A mount's publication target is also the named mount's endpoint under the named key,
-      so a publish would be relayed into a role the operator declared for something else.
+    | {- | A mount's publication target is also the named mount's endpoint under the named key, at
+      the carried registry. A publish would be relayed into a role declared for something else.
       -}
-      PublicationTargetOnMountEndpoint Ecosystem Ecosystem Text
+      PublicationTargetOnMountEndpoint Ecosystem Ecosystem Text Text
     | {- | A mount's mirror target, at the carried registry, shares a host with the named mount's
       public upstream. Écluse's own mirror-write credential would reach a public registry.
       -}
@@ -153,11 +153,13 @@ renderBootError = \case
             <> ") shares a host with "
             <> mountKeyRef other "publicUpstream"
             <> ": a publish carries the publisher's own credential, which must never reach a public upstream, so point it at a registry that shares a host with no public upstream"
-    PublicationTargetOnMountEndpoint eco other key ->
+    PublicationTargetOnMountEndpoint eco other key url ->
         mountKeyRef eco "publicationTarget"
             <> " is also "
             <> mountKeyRef other key
-            <> ": point it at a registry that holds no other role, so a publish is never relayed into one"
+            <> " ("
+            <> url
+            <> "): point it at a registry that holds no other role, so a publish is never relayed into one"
     MirrorTargetOnPublicUpstream eco other url ->
         mountKeyRef eco "mirrorTarget"
             <> " ("
