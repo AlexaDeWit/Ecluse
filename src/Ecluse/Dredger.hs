@@ -19,8 +19,7 @@ import Ecluse.Runtime.Log (moduleLog)
 import Ecluse.Runtime.Server (ServerConfig (scPort), probeOnlyApplication, runWarp)
 
 {- | The Dredger worker mode: a probe-only HTTP server over the vetted mirror stores. It deletes
-from each mount's mirror target, so the boot's own pass refuses an endpoint another role holds
-and this mode never sees one.
+from each mount's mirror target, so the boot's own pass refuses an endpoint another role holds.
 -}
 runDredger :: BootEnv -> IO ()
 runDredger bootEnv = do

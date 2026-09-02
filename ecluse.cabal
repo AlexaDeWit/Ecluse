@@ -359,6 +359,7 @@ library
     , text                            ^>=2.1
     , time                            ^>=1.12
     , unix                            ^>=2.8
+    , universe-base                   ^>=1.1
     , unliftio                        ^>=0.2.25
     , validation-selective            ^>=0.2
     , versions                        ^>=6.0
@@ -809,6 +810,7 @@ test-suite ecluse-unit
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support
     Ecluse.Composition.TypesSpec
+    Ecluse.Composition.ValidateSpec
     Ecluse.Composition.VetSpec
     Ecluse.Composition.WorkerSpec
     Ecluse.CompositionSpec

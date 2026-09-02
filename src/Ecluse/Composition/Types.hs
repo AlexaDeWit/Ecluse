@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The roles a boot runs under: which command started the process, which half of the mirror
-pipeline that process runs, and which registry role its validation rules apply.
+pipeline that process runs, and which registry role its validation rules apply under.
 
 The command line writes these and the boot pipeline reads them, so they live in a module neither
 side owns.
@@ -22,6 +22,14 @@ module Ecluse.Composition.Types (
     RegistryRole (..),
 ) where
 
+-- relude's prelude exports a Bounded/Enum-based `universe`. Hide it so the
+-- Generic-derived `Data.Universe.Class.universe` is the one in scope here.
+import Prelude hiding (universe)
+
+import Data.List (partition)
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
+
 {- | What a booting command does with the configured mirror targets. It decides each rule's
 severity and which witnesses the boot's vetting pass issues.
 -}
@@ -32,15 +40,18 @@ data BootRole
       BootStorePruner
     | -- | @ecluse pilot@ and @ecluse check-config@: they neither mirror nor delete.
       BootWithoutPipeline
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Generic, Show)
 
-{- | Every role a boot runs under. @ecluse check-config@ picks no subcommand, so it runs the pure
-pass once per entry rather than once.
+instance Universe BootRole where universe = universeGeneric
+
+{- | Every role a boot runs under, the mirror-pipeline halves first. @ecluse check-config@ picks
+no subcommand, so it runs the pure pass once per entry rather than once.
 -}
 everyBootRole :: [BootRole]
--- Nothing but this list holds the roles, so a new constructor must be added here by hand.
-everyBootRole =
-    map BootMirrorPipeline [ServeAndMirror, ServeOnly, MirrorOnly] <> [BootStorePruner, BootWithoutPipeline]
+-- 'universe' enumerates the constructors, so a role added to 'BootRole' joins with no edit here.
+everyBootRole = pipelineRoles <> rest
+  where
+    (pipelineRoles, rest) = partition (isJust . pipelineRoleOf) universe
 
 -- | How an operator spells a booting command, for a report that names the role a refusal belongs to.
 bootInvocation :: BootRole -> Text
@@ -49,7 +60,7 @@ bootInvocation = \case
     BootStorePruner -> "ecluse dredger"
     BootWithoutPipeline -> "ecluse pilot"
 
--- | The registry role a command's rules apply. Only the Dredger deletes.
+-- | The registry role a command's rules apply under. Only the Dredger deletes.
 registryRoleOf :: BootRole -> RegistryRole
 registryRoleOf = \case
     BootMirrorPipeline _ -> MirrorWriter
@@ -71,7 +82,9 @@ data MirrorRole
       ServeOnly
     | -- | @ecluse mirror@: the worker alone, serving only its health probes.
       MirrorOnly
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe MirrorRole where universe = universeGeneric
 
 -- | How an operator spells this role on the command line, for the boot refusal's message.
 roleInvocation :: MirrorRole -> Text
@@ -80,7 +93,7 @@ roleInvocation = \case
     ServeOnly -> "ecluse proxy --no-worker"
     MirrorOnly -> "ecluse mirror"
 
-{- | The boot role a vetting pass vets for. The proxy and the mirror worker write to a mount's
+{- | The registry role a vetting pass vets for. The proxy and the mirror worker write to a mount's
 mirror target, and the Dredger deletes from it, which is what makes a shared store unsafe.
 -}
 data RegistryRole

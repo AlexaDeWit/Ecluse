@@ -6,8 +6,8 @@
 @*_FILE@ secret indirection, loads the configuration under the @ECLUSE_CONFIG@ semantics,
 applies the runtime posture, builds the process logger, resolves the 'BootPlan', and
 brackets the telemetry substrate. It is the one place the plan's lines reach the boot log.
-It then hands the 'BootEnv' to the role dispatch in "Ecluse", which starts the behaviour the
-plan names and, for a mirror-pipeline role, plans that role's runtime first.
+It then hands the 'BootEnv' to the role dispatch in "Ecluse", which plans that role's runtime
+and starts the behaviour the plan names.
 -}
 module Ecluse.Boot (
     BootEnv (..),

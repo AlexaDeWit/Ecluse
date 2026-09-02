@@ -6,10 +6,10 @@
 services derived from it.
 
 'withServiceRuntime' builds from the 'ExecutablePlan' the boot already gated: it allocates the
-runtime-edge handles and hands a role the mounts and worker bundles that plan carries. Nothing
-here refuses to boot, because every refusal is spent by then. "Ecluse.Proxy" adds the front door
-over it and "Ecluse.Mirror" runs the worker alone, so the dedicated worker is the same worker the
-serve path embeds rather than a second copy of it.
+runtime-edge handles and hands a role the mounts and worker bundles its 'MirrorWiring' carries.
+Nothing here refuses to boot, because every refusal is spent by then. "Ecluse.Proxy" adds the
+front door over it and "Ecluse.Mirror" runs the worker alone, so the dedicated worker is the same
+worker the serve path embeds rather than a second copy of it.
 -}
 module Ecluse.Service (
     -- * The role-shared runtime
@@ -30,13 +30,14 @@ import Katip (LogEnv, SimpleLogPayload, katipAddNamespace, runKatipContextT)
 import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 
-import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), buildMirrorQueue, logBootWarning, logRuleBootOrder)
+import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), logBootWarning, logRuleBootOrder)
 import Ecluse.Composition (BootWiring (bwBindings, bwPublishTargets))
 import Ecluse.Composition.Executable (
-    ExecutablePlan (epBootPlan, epCveSync, epDeferredMetrics, epWiring),
+    ExecutablePlan (epBootPlan),
+    MirrorWiring (mwBootWiring, mwCveSync, mwDeferredMetrics, mwQueue, mwRole),
  )
 import Ecluse.Composition.MemoryPlan (
-    MemoryPlan (mpAdmissionCapacity, mpMirrorArtifactTenant, mpQueueMemoryMaxDepth, mpShedCapabilities),
+    MemoryPlan (mpAdmissionCapacity, mpMirrorArtifactTenant, mpShedCapabilities),
     MirrorArtifactTenant (matMaxBytes),
     mirrorArtifactBytesCap,
  )
@@ -54,7 +55,7 @@ import Ecluse.Config (AppConfig)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
 import Ecluse.Core.Cve.Slot (generationInstalledAt)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
-import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, noMirrorQueue, reportWorthy)
+import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterEcosystem,
@@ -117,19 +118,20 @@ data ServiceRuntime = ServiceRuntime
 {- | Assemble the role's runtime and run @action@ within it. The plan it takes is post-gating, so
 this only builds and allocates: nothing here can refuse the boot.
 -}
-withServiceRuntime :: MirrorRole -> BootEnv -> ExecutablePlan -> (ServiceRuntime -> IO ()) -> IO ()
-withServiceRuntime role bootEnv plan action = do
+withServiceRuntime :: BootEnv -> ExecutablePlan -> MirrorWiring -> (ServiceRuntime -> IO ()) -> IO ()
+withServiceRuntime bootEnv plan mirror action = do
     let logEnv = beLogEnv bootEnv
         telemetry = beTelemetry bootEnv
         -- Every decision below comes from the plan the boot resolved and logged, and
         -- "Ecluse.Composition.Executable" then cleared. This assembly only applies it.
         bootPlan = epBootPlan plan
+        role = mwRole mirror
         appConfig = vpSettings (bpValidated bootPlan)
         mirrorRuntime = bpMirrorRuntime bootPlan
         memoryPlan = bpMemoryPlan bootPlan
-        deferredMetrics = epDeferredMetrics plan
-        cveSyncPlan = epCveSync plan
-        bindings = bwBindings (epWiring plan)
+        deferredMetrics = mwDeferredMetrics mirror
+        cveSyncPlan = mwCveSync mirror
+        bindings = bwBindings (mwBootWiring mirror)
 
     -- Where the plan shed the capability count (the nursery was the pressure), apply it
     -- in-process before the parallel machinery spins up. Past the gate, so a refused boot
@@ -141,7 +143,7 @@ withServiceRuntime role bootEnv plan action = do
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
     logRuleBootOrder logEnv bindings
-    (queue, mirrorDrain) <- mirrorHandOff role logEnv deferredMetrics (mpQueueMemoryMaxDepth memoryPlan) mirrorRuntime
+    (queue, mirrorDrain) <- mirrorHandOff role logEnv deferredMetrics mirrorRuntime (mwQueue mirror)
     metadataCache <- newMetadataCache (bpCacheConfig bootPlan)
 
     -- The two managers stay split: public reads are anonymous and private reads forward the
@@ -164,7 +166,7 @@ withServiceRuntime role bootEnv plan action = do
                 , svcEnv = builtEnv
                 , svcAppConfig = appConfig
                 , svcBindings = bindings
-                , svcWorkerPolicies = workerPoliciesFor builtEnv bindings (bwPublishTargets (epWiring plan)) workerArtifactMaxBytes
+                , svcWorkerPolicies = workerPoliciesFor builtEnv bindings (bwPublishTargets (mwBootWiring mirror)) workerArtifactMaxBytes
                 , svcMirrorDrain = superviseDrain builtEnv <$> mirrorDrain
                 , svcSyncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor appConfig) cveSyncPlan
                 , svcCheckReady = cveSyncReady cveSyncPlan
@@ -179,21 +181,19 @@ workerLiveness runningWorker heartbeat
     | runningWorker = heartbeatLivenessNow heartbeat
     | otherwise = pure alwaysLive
 
-{- Build the role's view of the mirror queue and, for a producing role, its drain. A
-worker-only role takes the backend directly, because nothing in that process enqueues. -}
-mirrorHandOff :: MirrorRole -> LogEnv -> DeferredMetrics -> Int -> MirrorRuntimePlan -> IO (MirrorQueue, Maybe (IO ()))
-mirrorHandOff role logEnv deferredMetrics memoryDepth = \case
+{- Build the role's view of the queue the boot already built, and, for a producing role, its
+drain. A worker-only role takes the backend directly, because nothing in that process enqueues. -}
+mirrorHandOff :: MirrorRole -> LogEnv -> DeferredMetrics -> MirrorRuntimePlan -> MirrorQueue -> IO (MirrorQueue, Maybe (IO ()))
+mirrorHandOff role logEnv deferredMetrics mirrorRuntime backendQueue = case mirrorRuntime of
     -- Under NoMirroring the inert queue is unreachable.
-    NoMirroring -> pure (noMirrorQueue, Nothing)
-    MirrorWith queuePlan -> do
-        backendQueue <- buildMirrorQueue logEnv memoryDepth queuePlan
-        if not (enqueuesJobs role)
-            then pure (backendQueue, Nothing)
-            else do
-                -- The buffered hand-off keeps the serve path off the backend's enqueue latency.
-                (queue, drainEnqueueBuffer) <-
-                    bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
-                pure (queue, Just drainEnqueueBuffer)
+    NoMirroring -> pure (backendQueue, Nothing)
+    MirrorWith _
+        | not (enqueuesJobs role) -> pure (backendQueue, Nothing)
+        | otherwise -> do
+            -- The buffered hand-off keeps the serve path off the backend's enqueue latency.
+            (queue, drainEnqueueBuffer) <-
+                bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
+            pure (queue, Just drainEnqueueBuffer)
 
 {- The buffered hand-off in front of the mirror queue's backend. A dropped or undelivered
 job is safe, because the serve path re-enqueues it on the next demand for its artifact. -}

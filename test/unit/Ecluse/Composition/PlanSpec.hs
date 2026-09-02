@@ -218,8 +218,7 @@ spec = describe "resolveBootPlan" $ do
                 `shouldBe` [mirrorCollapseAdvisory]
 
         it "keeps the advisories a refused configuration earned, so one run reports both" $ do
-            -- A refusal used to swallow them, which left an operator fixing the refusal and
-            -- meeting the advisory only on the next attempt.
+            -- An advisory an operator must act on survives the refusal, so one run reports both.
             let envVars = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" collapsedMirrorEnv
             config <- expectConfig envVars Nothing
             let report = resolveBootPlan BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling)
@@ -233,6 +232,21 @@ spec = describe "resolveBootPlan" $ do
             let report = resolveBootPlan BootStorePruner (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
             refusalsOf report `shouldBe` Left [collapsedMirrorRefusal]
             brAdvisories report `shouldBe` []
+
+    describe "the runtime posture each entry point sizes against" $
+        it "decides an override against the posture it was handed, so the two sides can differ" $ do
+            -- A boot hands the posture it measured after applying it and the checker hands the
+            -- one 'appliedRuntimePlan' predicts an application would reach. The pass is the same
+            -- function, so its verdict agrees only where those two values agree.
+            let envVars = overrideEnv "ECLUSE_CACHE__MAX_BYTES" "1073741824" serveOnlyEnvVars
+            config <- expectConfig envVars Nothing
+            let verdictUnder effective =
+                    refusalsOf (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars Nothing config effective))
+            verdictUnder noCeiling `shouldBe` Right ()
+            case verdictUnder tightPod of
+                Left [MemoryPlanOverrideUnsafe violations] ->
+                    violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
+                other -> expectationFailure ("expected the smaller posture to refuse, got: " <> show other)
 
     describe "roleRefusalWarnings -- what a checker with no subcommand still reports" $ do
         it "names both split roles the in-memory queue strands, which its own pass boots" $ do

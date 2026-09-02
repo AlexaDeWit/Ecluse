@@ -148,14 +148,14 @@ mirrorCollapse = \case
     pruningStaysManual =
         "the Dredger refuses this configuration, so pruning this mirror stays manual"
 
-{- The advisory former every rule here builds through, so each line carries the mount, the keys
+{- The advisory builder every rule here goes through, so each line carries the mount, the keys
 and the registry 'advisoryLine' names ahead of its consequence clause. -}
 advise :: Text -> Severity EndpointPair
 advise = Advise . advisoryLine
 
 publicationOnPublicUpstream :: EndpointPair -> BootError
 publicationOnPublicUpstream pair =
-    PublicationTargetOnPublicUpstream (epMount pair) (epOtherMount pair)
+    PublicationTargetOnPublicUpstream (epMount pair) (epOtherMount pair) (registryUrlText (epUrl pair))
 
 publicationOnMountEndpoint :: EndpointPair -> BootError
 publicationOnMountEndpoint pair =
@@ -166,7 +166,7 @@ publicationOnMountEndpoint pair =
 
 mirrorOnPublicUpstream :: EndpointPair -> BootError
 mirrorOnPublicUpstream pair =
-    MirrorTargetOnPublicUpstream (epMount pair) (epOtherMount pair)
+    MirrorTargetOnPublicUpstream (epMount pair) (epOtherMount pair) (registryUrlText (epUrl pair))
 
 -- A sweep deletes from the mirror target, so a store another role holds loses that role's data.
 mirrorOnMountEndpoint :: EndpointPair -> BootError

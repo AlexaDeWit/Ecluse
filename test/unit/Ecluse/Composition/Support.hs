@@ -22,6 +22,7 @@ module Ecluse.Composition.Support (
     expectValidated,
     bootInputsFor,
     expectPlan,
+    expectPlanFor,
 ) where
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
@@ -139,10 +140,14 @@ bootInputsFor envVars docBlob config effective =
         , biFdLimit = fdLimit
         }
 
--- | Resolve the boot plan for a fixture, failing the test on a refusal.
+-- | Resolve the boot plan a checker's own role settles for a fixture, failing on a refusal.
 expectPlan :: [(String, String)] -> Maybe ByteString -> Config -> EffectiveRuntimePlan -> IO BootPlan
-expectPlan envVars docBlob config effective =
+expectPlan = expectPlanFor BootWithoutPipeline
+
+-- | 'expectPlan' for a named role, for a spec that drives a role's own arm of a later phase.
+expectPlanFor :: BootRole -> [(String, String)] -> Maybe ByteString -> Config -> EffectiveRuntimePlan -> IO BootPlan
+expectPlanFor role envVars docBlob config effective =
     either
         (\errs -> fail ("boot plan refused: " <> show errs))
         pure
-        (brOutcome (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars docBlob config effective)))
+        (brOutcome (resolveBootPlan role (bootInputsFor envVars docBlob config effective)))

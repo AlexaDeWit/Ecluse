@@ -2,11 +2,6 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- This spec writes the applicative laws out in full (@pure f <*> v@) to /assert/ them.
--- hlint would otherwise "simplify" the exact expressions under test. The silence is
--- file-wide because proving the laws is the file's purpose, not an oversight.
-{- HLINT ignore "Use <$>" -}
-
 module Ecluse.Composition.VetSpec (spec) where
 
 import Hedgehog (Gen, forAll, (===))
@@ -33,7 +28,9 @@ spec = do
     inputSpec
 
 {- The four applicative laws. A hand-rolled instance can break any of them, and the accumulation
-every boot report depends on is only total while they hold. -}
+every boot report depends on is only total while they hold. Each is written out in full, because
+hlint would otherwise "simplify" the exact expression under test. -}
+{- HLINT ignore lawSpec "Use <$>" -}
 lawSpec :: Spec
 lawSpec = describe "the applicative laws" $ do
     it "identity: pure id <*> v is v" $

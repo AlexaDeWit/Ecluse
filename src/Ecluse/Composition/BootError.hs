@@ -72,18 +72,18 @@ data BootError
       (@ECLUSE_SERVER__AUTH_TOKEN@). An unauthenticated request could otherwise publish as Écluse.
       -}
       PublishStaticCredentialNeedsEdge Ecosystem
-    | {- | A mount's publication target shares a host with the named mount's public upstream.
-      The publisher's relayed credential would reach a public registry.
+    | {- | A mount's publication target, at the carried registry, shares a host with the named
+      mount's public upstream. The publisher's relayed credential would reach a public registry.
       -}
-      PublicationTargetOnPublicUpstream Ecosystem Ecosystem
+      PublicationTargetOnPublicUpstream Ecosystem Ecosystem Text
     | {- | A mount's publication target is also the named mount's endpoint under the named key,
       so a publish would be relayed into a role the operator declared for something else.
       -}
       PublicationTargetOnMountEndpoint Ecosystem Ecosystem Text
-    | {- | A mount's mirror target shares a host with the named mount's public upstream. Écluse's
-      own mirror-write credential would reach a public registry.
+    | {- | A mount's mirror target, at the carried registry, shares a host with the named mount's
+      public upstream. Écluse's own mirror-write credential would reach a public registry.
       -}
-      MirrorTargetOnPublicUpstream Ecosystem Ecosystem
+      MirrorTargetOnPublicUpstream Ecosystem Ecosystem Text
     | {- | A mount's mirror target is also the named mount's endpoint under the named key, at the
       carried registry. A sweep of that store would delete data the other role owns.
       -}
@@ -100,6 +100,10 @@ data BootError
       it has no queue to drain and nothing to publish.
       -}
       MirrorRoleWithoutMirroring
+    | {- | Building the configured mirror-queue backend threw. Carries the rendered exception,
+      which tells a transient fault from a permanent one to fix.
+      -}
+      MirrorQueueUnavailable Text
     deriving stock (Eq, Show)
 
 {- | Render an aggregated refusal as the one block a failed launch reports, so every problem an
@@ -142,21 +146,25 @@ renderBootError = \case
         mountKeyRef eco "publicationTarget" <> " is set but " <> mountKeyRef eco "publicationAllow" <> " is not: a publication target needs a publication allow-list (for npm, scopes such as @acme) for the anti-shadowing guard."
     PublishStaticCredentialNeedsEdge eco ->
         mountKeyRef eco "publicationTargetToken" <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
-    PublicationTargetOnPublicUpstream eco other ->
+    PublicationTargetOnPublicUpstream eco other url ->
         mountKeyRef eco "publicationTarget"
-            <> " shares a host with "
+            <> " ("
+            <> url
+            <> ") shares a host with "
             <> mountKeyRef other "publicUpstream"
-            <> ": a publish carries the publisher's own credential, which must never reach a public upstream"
+            <> ": a publish carries the publisher's own credential, which must never reach a public upstream, so point it at a registry that shares a host with no public upstream"
     PublicationTargetOnMountEndpoint eco other key ->
         mountKeyRef eco "publicationTarget"
             <> " is also "
             <> mountKeyRef other key
             <> ": point it at a registry that holds no other role, so a publish is never relayed into one"
-    MirrorTargetOnPublicUpstream eco other ->
+    MirrorTargetOnPublicUpstream eco other url ->
         mountKeyRef eco "mirrorTarget"
-            <> " shares a host with "
+            <> " ("
+            <> url
+            <> ") shares a host with "
             <> mountKeyRef other "publicUpstream"
-            <> ": the mirror write carries this proxy's own credential, which must never reach a public upstream"
+            <> ": the mirror write carries this proxy's own credential, which must never reach a public upstream, so point it at a registry that shares a host with no public upstream"
     MirrorTargetOnMountEndpoint eco other key url ->
         mountKeyRef eco "mirrorTarget"
             <> " is also "
@@ -171,3 +179,7 @@ renderBootError = \case
             <> " splits the mirror worker from the proxy, but ECLUSE_QUEUE__URL is unset, so mirroring runs on the bounded in-memory queue whose jobs never leave the process that enqueued them: point ECLUSE_QUEUE__URL at a durable queue, or run the single-process ecluse proxy"
     MirrorRoleWithoutMirroring ->
         "ecluse mirror runs the mirror worker alone, but no mount declares a mirror target, so it has nothing to mirror: set ECLUSE_MOUNTS__<ECOSYSTEM>__MIRROR_TARGET, or run a role that needs no mirror queue"
+    MirrorQueueUnavailable detail ->
+        "the mirror queue backend named by ECLUSE_QUEUE__URL could not be built at boot: "
+            <> detail
+            <> " (a transient AWS or network error may clear on retry. A permanent one, such as unresolvable AWS credentials or a queue URL naming no reachable queue, must be fixed)"

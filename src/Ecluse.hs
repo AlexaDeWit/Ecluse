@@ -110,8 +110,12 @@ import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
 import Ecluse.Composition.BootError (renderBootErrors)
-import Ecluse.Composition.Executable (planExecutable)
-import Ecluse.Composition.Plan (BootPlan (bpRole, bpS3Endpoint))
+import Ecluse.Composition.Executable (
+    RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
+    epRoleWiring,
+    planExecutable,
+ )
+import Ecluse.Composition.Plan (BootPlan (bpS3Endpoint))
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
@@ -148,22 +152,17 @@ runCommand = \case
         withBootEnv BootWithoutPipeline $ \bootEnv ->
             void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (bpS3Endpoint (beBootPlan bootEnv)) (configApp (beConfig bootEnv)) opts)
 
-{- Start the behaviour the cleared plan carries. The role reaches here off the plan alone, so
-the severities a boot vetted under and the behaviour it starts cannot name different roles. -}
+{- Plan the role's runtime, then start the behaviour that plan carries. Every role plans through
+the one phase, so this is where a boot spends its last refusal whichever role it started. -}
 startPlannedRole :: BootEnv -> IO ()
-startPlannedRole bootEnv = case bpRole (beBootPlan bootEnv) of
-    BootMirrorPipeline role -> startMirrorPipeline role bootEnv
-    BootStorePruner -> runDredger bootEnv
-    BootWithoutPipeline -> runPilot bootEnv
-
-{- Plan the mirror pipeline's runtime, then assemble it. This is the last phase that can refuse:
-the plan it yields is what the assembly below builds from, and nothing there rejects one. -}
-startMirrorPipeline :: MirrorRole -> BootEnv -> IO ()
-startMirrorPipeline role bootEnv = do
+startPlannedRole bootEnv = do
     plan <-
-        planExecutable (beLogEnv bootEnv) mountBindingFor (beBootPlan bootEnv)
+        planExecutable (beLogEnv bootEnv) mountBindingFor buildMirrorQueue (beBootPlan bootEnv)
             >>= orExit renderBootErrors
-    withServiceRuntime role bootEnv plan runMirrorPipeline
+    case epRoleWiring plan of
+        MirrorPipelineWiring mirror -> withServiceRuntime bootEnv plan mirror runMirrorPipeline
+        StorePrunerWiring -> runDredger bootEnv
+        PilotWiring -> runPilot bootEnv
 
 {- Pick the entry point the assembled runtime's own role names. Both halves run over the one
 assembly, so the dedicated worker composes the wiring the serve path embeds. -}

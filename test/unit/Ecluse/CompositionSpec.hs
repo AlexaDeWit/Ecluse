@@ -131,7 +131,7 @@ planFromWith limits envVars mDocBytes = do
                 fmap bwBindings <$> resolveBootWiring testWiringPorts limits (Just publishBudget) plan
 
 planMountsSpec :: Spec
-planMountsSpec = describe "planMounts (config-driven serving)" $ do
+planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
     it "produces one npm binding with packument-serve deps wired (served, not a 501 stub)" $ do
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
@@ -293,7 +293,7 @@ planMountsSpec = describe "planMounts (config-driven serving)" $ do
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
 bootErrorSpec :: Spec
-bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
+bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
     it "fails on an unresolved rule policy (a typo'd rule type)" $ do
         _ <- expectEnv staticEnvVars
         _ <- expectDoc "{\"rules\":{\"oops\":{\"type\":\"Nope\"}}}"
@@ -391,7 +391,7 @@ bareName :: PackageName
 bareName = mkPackageName Npm Nothing "thing"
 
 publishWiringSpec :: Spec
-publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
+publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
     it "wires the publication target and scope allow-list onto the mount when configured" $ do
         let testEnv =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
@@ -437,7 +437,7 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
                     <> staticEnvVars
         _ <- expectEnv testEnv
         planFrom testEnv Nothing >>= \case
-            Left errs -> errs `shouldBe` [PublicationTargetOnPublicUpstream Npm Npm]
+            Left errs -> errs `shouldBe` [PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/npm/"]
             Right _ -> expectationFailure "expected a publication-target collision boot error"
 
     it "leaves the publish path off (no publish deps) when no publication target is configured" $ do

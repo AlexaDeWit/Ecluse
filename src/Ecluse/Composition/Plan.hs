@@ -8,14 +8,26 @@ that report them.
 
 'resolveBootPlan' is the whole of that tier. The boot ('Ecluse.Boot.withBootEnv') logs its lines
 and hands the plan to the role, and the dry-run checker ('Ecluse.CheckConfig.runCheckConfig')
-prints the same lines and applies nothing. Anything a refusal needs an environment for is built
-in 'IO' past this module, so no pure refusal can exist that the checker does not reach.
+prints the same lines and applies nothing. Every refusal here is one the checker reaches, as its
+own verdict or, for a role it does not vet under, as a 'roleRefusalWarnings' line.
 -}
 module Ecluse.Composition.Plan (
     -- * The config-decidable tier
     BootInputs (..),
-    BootReport (..),
-    BootPlan (..),
+    BootReport (brProvenance, brAdvisories, brOutcome),
+    BootPlan (
+        bpRole,
+        bpValidated,
+        bpMirrorRuntime,
+        bpMemoryPlan,
+        bpLimits,
+        bpCacheConfig,
+        bpS3Endpoint,
+        bpPrivateConnections,
+        bpPublicConnections,
+        bpLines,
+        bpWarnings
+    ),
     resolveBootPlan,
     roleRefusalWarnings,
 
@@ -152,8 +164,7 @@ roleRefusalWarnings own inputs =
     , err <- fromLeft [] (brOutcome (resolveBootPlan role inputs))
     ]
 
-{- Every decision past the provenance block, joined by '<*>' so every group reports. A refused
-configuration used to hide whatever the groups after it would have said about the same run. -}
+-- Every decision past the provenance block, joined by '<*>' so every group reports.
 planDecisions :: BootRole -> BootInputs -> ([Text], Either [BootError] BootPlan)
 planDecisions role inputs =
     second (fmap (bootPlanFrom role inputs)) . runVet (registryRoleOf role) $

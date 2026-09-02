@@ -205,17 +205,23 @@ Most of those refusals are decided as the configuration loads. The publish-polic
 endpoint-disjointness rules are decided after it, by one pure pass over the loaded configuration
 and the environment snapshot that load read. The pass takes the
 booting role and accumulates, so one run reports every refusal and every advisory that role earns,
-and the advisories reach the log even when a refusal stops the boot. Two decisions sit outside
-that: a memory-plan override is judged against the resolved mirror runtime, so a refused queue URL
-reports without it, and minting a CodeArtifact identity's first token needs a live environment, so
-it is the one refusal above that `ecluse check-config` does not reach.
+and the advisories reach the log even when a refusal stops the boot. One decision sits outside it:
+a memory-plan override is judged against the resolved mirror runtime, so a refused queue URL
+reports without it. The refusals `ecluse check-config` does not reach are the ones a live
+environment settles: minting a CodeArtifact identity's first token, building the mirror-queue
+backend, resolving a mount to the adapter this build ships, and resolving a mount's mirror-write
+provider.
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the
 ambient `AWS_ENDPOINT_URL` override. It prints every decision, one provenance line per resolved
 key, secrets redacted, precedence environment > document > default. It exits `0` on a valid
-configuration, and `2` with the same aggregated report a boot would log. Both entry points call the
-one pass, so a role's verdict is the same on either side of it.
+configuration, and `2` with the same aggregated report a boot would log. Both entry points call
+the one pure pass, so a role's verdict on one set of inputs is the same on either side of it. The
+inputs are not the same value. A boot passes the runtime posture it measured after applying it,
+and the checker passes the posture `appliedRuntimePlan` predicts an application would reach. Where
+an application falls short of that prediction, the boot sizes the memory plan against the smaller
+measured posture, so it can refuse an explicit override the checker cleared.
 
 The checker picks no subcommand, so it runs the pass once per role. It runs no mirror pipeline and
 prunes no store, so its own pass vets under the writing roles' severities, and that pass decides
@@ -226,11 +232,18 @@ configuration one role refuses and another boots is a normal deployment, which i
 fail the check.
 
 What the checker does not reach is the environment-dependent tier. Minting a mirror-write
-credential and allocating each mount's rule state need a live environment, so a boot builds them
-and the checker makes no cloud call. Two types keep that boundary visible. The pure pass yields the
-boot plan, which is the artefact the checker prints and the last one it can reach. A boot then runs
-an effectful planning phase over that plan, which spends every remaining refusal and yields an
-executable plan.
+credential, building the mirror-queue backend, and allocating each mount's rule state need a live
+environment, so a boot builds them and the checker makes no cloud call. Two types keep that
+boundary visible. The pure pass yields the boot plan, which is the artefact the checker prints and
+the last one it can reach. A boot then runs an effectful planning phase over that plan, which
+spends every remaining refusal and yields an executable plan.
+
+Every role runs that phase, and each has its own arm in it. The three mirror-pipeline halves
+settle the mount wiring, the advisory sync, and the queue backend there, and one run reports every
+refusal all of that earns. `ecluse dredger` and `ecluse pilot` settle nothing a live environment
+decides today, and a refusal either of them later needs is spent at the same gate. So an executable
+plan carries the role's own wiring, and a boot spends its last refusal in one place whichever role
+it started.
 
 Nothing downstream of an executable plan refuses to boot. Holding one means the assembly below it
 only builds and allocates, so a role's runtime cannot reject a configuration the boot already
