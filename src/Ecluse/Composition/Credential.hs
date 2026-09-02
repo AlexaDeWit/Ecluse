@@ -47,9 +47,8 @@ module Ecluse.Composition.Credential (
 ) where
 
 import Data.Map.Strict qualified as Map
-import UnliftIO (tryAny)
 
-import Ecluse.Composition.BootError (BootError (..))
+import Ecluse.Composition.BootError (BootError (..), refuseOnThrow)
 import Ecluse.Config (
     MirrorCredential (..),
     MirrorTarget (..),
@@ -59,7 +58,6 @@ import Ecluse.Config (
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig, newCodeArtifactProvider)
 
 {- | The process-global credential providers, keyed by the ecosystem they serve. A
@@ -92,9 +90,9 @@ initCredentialProviders reporters mounts = do
 -- a shared domain carries one refresh schedule and one breaker rather than one per mount.
 initSharedCodeArtifact :: CredentialReporters -> (CodeArtifactConfig, NonEmpty Ecosystem) -> IO (Either [BootError] [(Ecosystem, CredentialProvider)])
 initSharedCodeArtifact reporters (caConfig, ecosystems) =
-    tryAny (newCodeArtifactProvider reporters caConfig) <&> \case
-        Left err -> Left [CodeArtifactMintFailed (displayExceptionT err)]
-        Right provider -> Right [(eco, provider) | eco <- toList ecosystems]
+    fmap fannedOut <$> refuseOnThrow CodeArtifactMintFailed (newCodeArtifactProvider reporters caConfig)
+  where
+    fannedOut provider = [(eco, provider) | eco <- toList ecosystems]
 
 {- | Group the mounts' resolved CodeArtifact identities, one group per distinct
 'CodeArtifactConfig'. The mint's scope is the domain, not the repository endpoint, so

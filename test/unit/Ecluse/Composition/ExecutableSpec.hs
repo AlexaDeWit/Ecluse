@@ -13,7 +13,7 @@ import Ecluse.Composition (
     PublishTarget (ptEcosystem),
     ResolveAdapter,
  )
-import Ecluse.Composition.BootError (BootError (MirrorQueueUnavailable, MissingAdapter))
+import Ecluse.Composition.BootError (BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, MissingAdapter))
 import Ecluse.Composition.Executable (
     BuildMirrorQueue,
     ExecutablePlan (epBootPlan, epRoleWiring),
@@ -22,7 +22,7 @@ import Ecluse.Composition.Executable (
     planExecutable,
  )
 import Ecluse.Composition.Plan (BootPlan (bpRole))
-import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, staticEnvVars)
+import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
     MirrorRole (ServeAndMirror),
@@ -73,6 +73,24 @@ spec = describe "planExecutable" $ do
             Left [MirrorQueueUnavailable _, MissingAdapter Npm] -> pass
             Left errs -> expectationFailure ("expected both refusals in one list, got: " <> show errs)
 
+    it "refuses an advisory sync the live environment cannot prepare" $ do
+        -- The sync creates its data directory and discovers the advisory store's credentials, and
+        -- it runs a step ahead of the queue build, so a throw here would exit 1 past this gate.
+        outcome <- planWith unwritableAdvisoryEnv (BootMirrorPipeline ServeAndMirror) mountBindingFor inertQueue
+        case outcome of
+            Right _ -> expectationFailure "expected the planning phase to refuse"
+            Left [AdvisorySyncUnavailable detail] -> detail `shouldSatisfy` T.isInfixOf advisoryDataDir
+            Left errs -> expectationFailure ("expected one advisory-sync refusal, got: " <> show errs)
+
+    it "reports the advisory refusal beside the queue and wiring refusals from one run" $ do
+        -- The advisory sync accumulates with the other two rather than short-circuiting them,
+        -- which is what keeps one launch reporting every problem an operator must fix.
+        outcome <- planWith unwritableAdvisoryEnv (BootMirrorPipeline ServeAndMirror) (\_ _ _ -> Nothing) refusingQueue
+        case outcome of
+            Right _ -> expectationFailure "expected the planning phase to refuse"
+            Left [AdvisorySyncUnavailable _, MirrorQueueUnavailable _, MissingAdapter Npm] -> pass
+            Left errs -> expectationFailure ("expected all three refusals in one list, got: " <> show errs)
+
     it "plans the store pruner and the pilot through the same phase, each on its own arm" $ do
         -- Neither arm resolves an adapter or builds a queue, so ports that refuse outright leave
         -- both roles clearing exactly as they do with working ones. The gate still stands ahead
@@ -101,11 +119,27 @@ live call this phase now folds into a refusal.
 refusingQueue :: BuildMirrorQueue
 refusingQueue _ _ _ = throwString "no credentials"
 
+{- | An advisory store over a data directory under a path that is not a directory, so preparing
+the sync throws where every host behaves alike, before it reaches a credential chain.
+-}
+unwritableAdvisoryEnv :: [(String, String)]
+unwritableAdvisoryEnv =
+    overrideEnv "ECLUSE_ADVISORIES__DATA_DIR" advisoryDataDir $
+        overrideEnv "ECLUSE_ADVISORIES__URL" "s3://advisories.example.test/ecluse" staticEnvVars
+
+-- | The unwritable data directory 'unwritableAdvisoryEnv' points at, which its refusal names.
+advisoryDataDir :: (IsString s) => s
+advisoryDataDir = "/dev/null/ecluse-advisories"
+
 -- | Plan a boot over 'staticEnvVars' for one role, through the given ports.
 planFor :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> IO (Either [BootError] ExecutablePlan)
-planFor role resolveAdapter buildQueue = do
-    config <- expectConfig staticEnvVars Nothing
-    bootPlan <- expectPlanFor role staticEnvVars Nothing config noCeiling
+planFor = planWith staticEnvVars
+
+-- | 'planFor' over a named environment layer, for a refusal 'staticEnvVars' cannot reach.
+planWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> IO (Either [BootError] ExecutablePlan)
+planWith envVars role resolveAdapter buildQueue = do
+    config <- expectConfig envVars Nothing
+    bootPlan <- expectPlanFor role envVars Nothing config noCeiling
     logEnv <- newTestLogEnv
     planExecutable logEnv resolveAdapter buildQueue bootPlan
 

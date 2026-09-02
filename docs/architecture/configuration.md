@@ -209,8 +209,8 @@ and the advisories reach the log even when a refusal stops the boot. One decisio
 a memory-plan override is judged against the resolved mirror runtime, so a refused queue URL
 reports without it. The refusals `ecluse check-config` does not reach are the ones a live
 environment settles: minting a CodeArtifact identity's first token, building the mirror-queue
-backend, resolving a mount to the adapter this build ships, and resolving a mount's mirror-write
-provider.
+backend, preparing each mount ecosystem's advisory sync, resolving a mount to the adapter this
+build ships, and resolving a mount's mirror-write provider.
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the
@@ -231,12 +231,11 @@ where no mount declares a `mirrorTarget`, and `ecluse dredger` on a collapsed en
 configuration one role refuses and another boots is a normal deployment, which is why those do not
 fail the check.
 
-What the checker does not reach is the environment-dependent tier. Minting a mirror-write
-credential, building the mirror-queue backend, and allocating each mount's rule state need a live
-environment, so a boot builds them and the checker makes no cloud call. Two types keep that
-boundary visible. The pure pass yields the boot plan, which is the artefact the checker prints and
-the last one it can reach. A boot then runs an effectful planning phase over that plan, which
-spends every remaining refusal and yields an executable plan.
+What the checker does not reach is the environment-dependent tier those refusals sit in. A boot
+builds it and the checker makes no cloud call, which is also why allocating each mount's rule state
+waits for a boot. Two types keep that boundary visible. The pure pass yields the boot plan, which is
+the artefact the checker prints and the last one it can reach. A boot then runs an effectful
+planning phase over that plan, which spends every remaining refusal and yields an executable plan.
 
 Every role runs that phase, and each has its own arm in it. The three mirror-pipeline halves
 settle the mount wiring, the advisory sync, and the queue backend there, and one run reports every

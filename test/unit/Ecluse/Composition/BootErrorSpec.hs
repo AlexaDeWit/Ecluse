@@ -92,6 +92,13 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "ECLUSE_QUEUE__URL"
         renderBootError (MirrorQueueUnavailable "CredentialChainExhausted")
             `shouldSatisfy` infixed "transient"
+        -- The advisory sync reaches the same credential discovery, so it refuses at that gate too.
+        renderBootError (AdvisorySyncUnavailable "CredentialChainExhausted")
+            `shouldSatisfy` infixed "ECLUSE_ADVISORIES__URL"
+        renderBootError (AdvisorySyncUnavailable "CredentialChainExhausted")
+            `shouldSatisfy` infixed "ECLUSE_ADVISORIES__DATA_DIR"
+        renderBootError (AdvisorySyncUnavailable "CredentialChainExhausted")
+            `shouldSatisfy` infixed "transient"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay

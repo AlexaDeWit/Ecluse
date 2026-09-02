@@ -8,15 +8,17 @@ its operator-facing rendering.
 Each case is a __fail-loud__ boot failure, and the root aggregates them, so a single run reports
 every problem an operator must fix (see @docs\/architecture\/configuration.md@ → "Validation").
 This module is the shared spine of the composition-root modules that produce them, so it holds
-no policy of its own beyond the rendering.
+no policy of its own beyond the rendering and the fold that turns a thrown fault into one.
 -}
 module Ecluse.Composition.BootError (
     BootError (..),
+    refuseOnThrow,
     renderBootError,
     renderBootErrors,
 ) where
 
 import Data.Text qualified as T
+import UnliftIO (tryAny)
 
 import Ecluse.Config (
     PolicyError,
@@ -25,6 +27,7 @@ import Ecluse.Config (
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Text (displayExceptionT)
 
 {- | A reason the composition root refuses to start. The root aggregates them, so a
 single run reports every problem an operator must fix.
@@ -104,7 +107,17 @@ data BootError
       which tells a transient fault from a permanent one to fix.
       -}
       MirrorQueueUnavailable Text
+    | {- | Preparing the configured advisory sync threw. Carries the rendered exception, which
+      tells a transient fault from a permanent one to fix.
+      -}
+      AdvisorySyncUnavailable Text
     deriving stock (Eq, Show)
+
+{- | Fold a thrown fault into the boot error the caller names, so a phase that dials a live
+environment refuses through the aggregate rather than escaping the boot as an exception.
+-}
+refuseOnThrow :: (Text -> BootError) -> IO a -> IO (Either [BootError] a)
+refuseOnThrow refusal action = first (pure . refusal . displayExceptionT) <$> tryAny action
 
 {- | Render an aggregated refusal as the one block a failed launch reports, so every problem an
 operator must fix appears in a single run.
@@ -185,3 +198,7 @@ renderBootError = \case
         "the mirror queue backend named by ECLUSE_QUEUE__URL could not be built at boot: "
             <> detail
             <> " (a transient AWS or network error may clear on retry. A permanent one, such as unresolvable AWS credentials or a queue URL naming no reachable queue, must be fixed)"
+    AdvisorySyncUnavailable detail ->
+        "the advisory sync named by ECLUSE_ADVISORIES__URL could not be prepared at boot: "
+            <> detail
+            <> " (a transient AWS or network error may clear on retry. A permanent one, such as unresolvable AWS credentials or an ECLUSE_ADVISORIES__DATA_DIR this process cannot create, must be fixed)"

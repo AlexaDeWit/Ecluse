@@ -20,7 +20,6 @@ module Ecluse.Composition.Executable (
 
 import Data.Time (getCurrentTime)
 import Katip (LogEnv)
-import UnliftIO (tryAny)
 import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Composition (
@@ -30,7 +29,10 @@ import Ecluse.Composition (
     WiringPorts (WiringPorts, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
     resolveBootWiring,
  )
-import Ecluse.Composition.BootError (BootError (MirrorQueueUnavailable))
+import Ecluse.Composition.BootError (
+    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable),
+    refuseOnThrow,
+ )
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpMaxRequestBytes, mpPublishTenant, mpQueueMemoryMaxDepth),
     PublishTenant (ptAggregateBytes),
@@ -52,7 +54,6 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
-import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Cve.Sync (CveSyncHandle, cveRuleDepsFor, katipFaultReporter, planCveSync)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
@@ -116,35 +117,37 @@ planExecutable logEnv resolveAdapter buildQueue bootPlan = case bpRole bootPlan 
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}
 
-{- The mirror pipeline's arm: the advisory sync, the queue backend, and the mount wiring. The two
-refusable steps accumulate, so one launch reports both rather than the earlier one alone. -}
+{- The mirror pipeline's arm: the advisory sync, the queue backend, and the mount wiring. The three
+refusable steps accumulate, so one launch reports every one rather than the earliest alone. -}
 planMirrorWiring :: LogEnv -> ResolveAdapter -> BuildMirrorQueue -> MirrorRole -> BootPlan -> IO (Either [BootError] MirrorWiring)
 planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan = do
     -- The metric instruments do not exist until the assembly builds the telemetry substrate. The
     -- credential providers minted below record through reporters 'installMetrics' makes live.
     deferredMetrics <- newDeferredMetrics
-    -- Each mount ecosystem syncs independently, so one missing artifact never holds back another.
-    -- An unwritable advisories.dataDir throws out of this phase rather than refusing through it.
-    cveSync <- planCveSync logEnv (bpS3Endpoint bootPlan) (vpSettings validated) (map vmEcosystem (vpMounts validated))
+    cveSync <- planAdvisorySync logEnv bootPlan
     publishBudget <- planPublishBudget memoryPlan
     queue <- planMirrorQueue buildQueue logEnv (mpQueueMemoryMaxDepth memoryPlan) (bpMirrorRuntime bootPlan)
-    let ports =
+    -- A refused sync leaves the rules abstaining, so the wiring below still builds and still
+    -- reports what it refuses. The accumulation then discards it along with the sync.
+    let ruleDeps =
+            cveRuleDepsFor
+                (fromRight mempty cveSync)
+                (deferredBreakerReporter deferredMetrics EffectfulRule)
+                (katipFaultReporter logEnv)
+        ports =
             WiringPorts
                 { wpReporters = credentialReportersOver deferredMetrics
                 , wpResolveAdapter = resolveAdapter
                 , wpClock = getCurrentTime
-                , wpRuleDeps =
-                    cveRuleDepsFor
-                        cveSync
-                        (deferredBreakerReporter deferredMetrics EffectfulRule)
-                        (katipFaultReporter logEnv)
+                , wpRuleDeps = ruleDeps
                 }
     -- The wiring reads the rule deps and the publish budget above, so it follows them rather than
     -- accumulating with them.
     wiring <- resolveBootWiring ports (bpLimits bootPlan) publishBudget validated
     pure . validationToEither $
-        mirrorWiringFrom role deferredMetrics cveSync
-            <$> eitherToValidation queue
+        mirrorWiringFrom role deferredMetrics
+            <$> eitherToValidation cveSync
+            <*> eitherToValidation queue
             <*> eitherToValidation wiring
   where
     validated = bpValidated bootPlan
@@ -161,15 +164,23 @@ mirrorWiringFrom role deferredMetrics cveSync queue wiring =
         , mwDeferredMetrics = deferredMetrics
         }
 
+{- Plan one advisory sync per vetted mount ecosystem. It creates the local data directory and
+discovers the advisory store's credentials, so an environment that can do neither refuses here.
+Each ecosystem syncs independently, so one missing artifact never holds back another. -}
+planAdvisorySync :: LogEnv -> BootPlan -> IO (Either [BootError] (Map Ecosystem CveSyncHandle))
+planAdvisorySync logEnv bootPlan =
+    refuseOnThrow AdvisorySyncUnavailable $
+        planCveSync logEnv (bpS3Endpoint bootPlan) (vpSettings validated) (map vmEcosystem (vpMounts validated))
+  where
+    validated = bpValidated bootPlan
+
 {- Build the selected queue backend. It dials the provider to read the queue's redrive policy, so
 an environment that cannot reach it refuses here rather than failing the running worker. -}
 planMirrorQueue :: BuildMirrorQueue -> LogEnv -> Int -> MirrorRuntimePlan -> IO (Either [BootError] MirrorQueue)
 planMirrorQueue buildQueue logEnv memoryDepth = \case
     -- Under NoMirroring nothing enqueues, so the inert queue is unreachable.
     NoMirroring -> pure (Right noMirrorQueue)
-    MirrorWith queuePlan ->
-        first (pure . MirrorQueueUnavailable . displayExceptionT)
-            <$> tryAny (buildQueue logEnv memoryDepth queuePlan)
+    MirrorWith queuePlan -> refuseOnThrow MirrorQueueUnavailable (buildQueue logEnv memoryDepth queuePlan)
 
 {- One process-wide byte aggregate serves every publishing mount. It exists exactly when a
 publication target is configured, the same predicate the plan's tenant derives from. -}
