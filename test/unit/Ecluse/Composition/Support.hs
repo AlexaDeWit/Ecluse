@@ -13,6 +13,7 @@ module Ecluse.Composition.Support (
     staticEnvVars,
     codeArtifactMirrorUrl,
     codeArtifactEnvVars,
+    noMaintenanceBackend,
     malformedAwsEndpoint,
     withoutMirrorTargetUrl,
     withoutMirrorTargetToken,
@@ -30,6 +31,7 @@ module Ecluse.Composition.Support (
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
+import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
@@ -41,6 +43,7 @@ import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), RegistryRole (M
 import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig, renderConfigError)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Security (Limits (..))
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
 import Ecluse.Test.Credential (noCredentialReporters)
@@ -101,6 +104,11 @@ host, so the static token goes with the target it belonged to.
 codeArtifactEnvVars :: [(String, String)]
 codeArtifactEnvVars =
     overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" codeArtifactMirrorUrl (withoutMirrorTargetToken staticEnvVars)
+
+-- | The deleting role's refusal of 'staticEnvVars', whose mirror target no backend here sweeps.
+noMaintenanceBackend :: BootError
+noMaintenanceBackend =
+    StoreMaintenanceUnavailable Npm "its host names no store maintenance backend this build carries"
 
 -- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test can supply its own.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]

@@ -12,13 +12,12 @@ import Ecluse.Composition.BootError (
         MissingAdapter,
         PublicationAllowMissing,
         PublicationTargetOnPublicUpstream,
-        PublishStaticCredentialNeedsEdge,
-        StoreMaintenanceUnavailable
+        PublishStaticCredentialNeedsEdge
     ),
  )
 import Ecluse.Composition.Endpoints (mirrorStoreUrl, publicationTargetUrl)
 import Ecluse.Composition.Maintenance (StoreBackend (CodeArtifactBackend))
-import Ecluse.Composition.Support (codeArtifactEnvVars, codeArtifactMirrorUrl, expectConfig, overrideEnv, staticEnvVars)
+import Ecluse.Composition.Support (codeArtifactEnvVars, codeArtifactMirrorUrl, expectConfig, noMaintenanceBackend, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPublications, vpSettings),
@@ -123,11 +122,6 @@ refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
                            , PublicationAllowMissing Npm
                            , PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/npm/"
                            ]
-
--- | The deleting role's refusal of 'staticEnvVars', whose mirror target no backend here sweeps.
-noMaintenanceBackend :: BootError
-noMaintenanceBackend =
-    StoreMaintenanceUnavailable Npm "its host names no store maintenance backend this build carries"
 
 -- | The npm mount publishing to a registry of its own, under the allow-list the guard enforces.
 publishingEnv :: [(String, String)]

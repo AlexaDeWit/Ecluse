@@ -15,8 +15,7 @@ import Ecluse.Composition.BootError (
         MirrorTargetOnMountEndpoint,
         MissingAdapter,
         QueueUrlUnrecognised,
-        SplitRoleNeedsDurableQueue,
-        StoreMaintenanceUnavailable
+        SplitRoleNeedsDurableQueue
     ),
     renderBootError,
  )
@@ -41,6 +40,7 @@ import Ecluse.Composition.Support (
     expectPlan,
     malformedAwsEndpoint,
     noCeiling,
+    noMaintenanceBackend,
     overrideEnv,
     staticEnvVars,
     withoutMirrorTargetUrl,
@@ -266,7 +266,7 @@ spec = describe "resolveBootPlan" $ do
 
     describe "roleRefusalWarnings -- what a checker with no subcommand still reports" $ do
         it "names both split roles the in-memory queue strands, which its own pass boots" $ do
-            let envVars = withoutQueueUrl staticEnvVars
+            let envVars = withoutQueueUrl codeArtifactEnvVars
             config <- expectConfig envVars Nothing
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling)
                 `shouldBe` [ wouldRefuse "ecluse proxy --no-worker" (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")
@@ -293,7 +293,7 @@ spec = describe "resolveBootPlan" $ do
                 `shouldBe` [wouldRefuse "ecluse dredger" noMaintenanceBackend]
 
         it "omits the role the caller already reported for" $ do
-            let envVars = withoutQueueUrl staticEnvVars
+            let envVars = withoutQueueUrl codeArtifactEnvVars
             config <- expectConfig envVars Nothing
             roleRefusalWarnings (BootMirrorPipeline MirrorOnly) (bootInputsFor envVars Nothing config noCeiling)
                 `shouldBe` [wouldRefuse "ecluse proxy --no-worker" (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")]
@@ -312,11 +312,6 @@ collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" "https://pr
 
 collapsedMirrorRefusal :: BootError
 collapsedMirrorRefusal = MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" "https://private.example.test"
-
--- | The Dredger's refusal of a mirror target on a host no backend in this build sweeps.
-noMaintenanceBackend :: BootError
-noMaintenanceBackend =
-    StoreMaintenanceUnavailable Npm "its host names no store maintenance backend this build carries"
 
 mirrorCollapseAdvisory :: Text
 mirrorCollapseAdvisory =
