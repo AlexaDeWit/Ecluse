@@ -2,17 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @amazonka@ edge of the transport-fault vocabulary: fold the AWS error
-sum into "Ecluse.Core.Fault" at an adapter boundary.
+{- | The @amazonka@ edge of the transport-fault vocabulary: fold the AWS error sum into
+"Ecluse.Core.Fault" at an adapter boundary.
 
-Both AWS adapters face the same 'Amazonka.Error', so the classification lives
-once, here: the SQS mirror queue ("Ecluse.Runtime.Queue.Sqs") and the advisory
-sync's S3 transport ("Ecluse.Runtime.Cve.Sync"). A genuine transport failure
-arrives in @amazonka@'s transport channel as the same @http-client@ exception
-every other adapter sees, and the shared
-'Ecluse.Core.Fault.Http.classifyTransport' classifies it. A service-level refusal
-(a throttle, an access denial, a serialisation surprise) is 'TransportProtocol'
-with the rendered error as detail. The wire worked, the service said no.
+Three adapters face the same 'Amazonka.Error', so the classification lives once, here: the SQS
+mirror queue, the advisory sync's S3 transport, and the CodeArtifact store maintenance leaf. A
+service-level refusal (a throttle, an access denial, a serialisation surprise) is
+'TransportProtocol' with the rendered error as detail: the wire worked, the service said no.
 -}
 module Ecluse.Runtime.Aws.Fault (
     classifyAwsTransport,

@@ -31,7 +31,7 @@ import Ecluse.Composition.Endpoints (
     VettedEndpoints (veMirrorStores, vePublicationTargets),
     vetEndpoints,
  )
-import Ecluse.Composition.Maintenance (StoreBackend, vetStoreBackends)
+import Ecluse.Composition.Maintenance (ClearedBackend, vetStoreBackends)
 import Ecluse.Composition.Vet (Severity (Refuse), Vet, rule)
 import Ecluse.Config (
     AppConfig (cfgMounts, cfgServer),
@@ -85,7 +85,7 @@ backend this build sweeps it with.
 -}
 data VettedStore = VettedStore
     { vsStore :: MirrorStore
-    , vsBackend :: StoreBackend
+    , vsBackend :: ClearedBackend
     }
 
 {- | Vet the whole loaded configuration for one role. The four groups compose with '<*>', so one
@@ -101,8 +101,8 @@ vetBoot config =
   where
     app = configApp config
 
-    -- Both store maps hold the mounts declaring a mirror target under the deleting role, and
-    -- nothing under a writing one, so the pairing drops none.
+    -- Both groups enumerate the mounts declaring a mirrorTarget, and a target the backend rule
+    -- refuses yields no plan at all, so under the deleting role the two maps share a keyset.
     assemble mounts policies endpoints backends =
         ValidatedPlan
             { vpMounts = mounts

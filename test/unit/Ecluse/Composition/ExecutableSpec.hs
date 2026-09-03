@@ -7,7 +7,7 @@ module Ecluse.Composition.ExecutableSpec (spec) where
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
-import UnliftIO (throwString)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition (
     BootWiring (bwBindings, bwPublishTargets),
@@ -16,6 +16,7 @@ import Ecluse.Composition (
  )
 import Ecluse.Composition.BootError (
     BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, MissingAdapter, StoreMaintenanceUnavailable),
+    StoreMaintenanceReason (ClientBuildFailed),
  )
 import Ecluse.Composition.Executable (
     BuildMirrorQueue,
@@ -68,7 +69,7 @@ spec = describe "planExecutable" $ do
         outcome <- planFor (BootMirrorPipeline ServeAndMirror) mountBindingFor refusingQueue inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
-            Left [MirrorQueueUnavailable detail] -> detail `shouldSatisfy` T.isInfixOf "no credentials"
+            Left [MirrorQueueUnavailable detail] -> detail `shouldSatisfy` T.isInfixOf "NoCredentials"
             Left errs -> expectationFailure ("expected one queue refusal, got: " <> show errs)
 
     it "reports the queue refusal and the wiring refusal from one run" $ do
@@ -115,7 +116,8 @@ spec = describe "planExecutable" $ do
         outcome <- planWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
-            Left [StoreMaintenanceUnavailable Npm detail] -> detail `shouldSatisfy` T.isInfixOf "no credentials"
+            Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed detail)] ->
+                detail `shouldSatisfy` T.isInfixOf "NoCredentials"
             Left errs -> expectationFailure ("expected one maintenance refusal, got: " <> show errs)
 
     it "plans the pilot through the same phase, on its own arm" $ do
@@ -141,7 +143,7 @@ inertQueue _ _ _ = pure noMirrorQueue
 live call this phase now folds into a refusal.
 -}
 refusingQueue :: BuildMirrorQueue
-refusingQueue _ _ _ = throwString "no credentials"
+refusingQueue _ _ _ = throwIO NoCredentials
 
 -- | A store builder that hands out the in-memory fake, so the pruner's arm reaches no cloud.
 inertStore :: BuildStoreMaintenance
@@ -149,7 +151,13 @@ inertStore _ = fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
 
 -- | A store builder that throws as @amazonka@ does when it discovers no credentials.
 refusingStore :: BuildStoreMaintenance
-refusingStore _ = throwString "no credentials"
+refusingStore _ = throwIO NoCredentials
+
+-- | The typed stand-in for amazonka's credential-discovery failure.
+data NoCredentials = NoCredentials
+    deriving stock (Show)
+
+instance Exception NoCredentials
 
 {- | An advisory store over a data directory under a path that is not a directory, so preparing
 the sync throws where every host behaves alike, before it reaches a credential chain.

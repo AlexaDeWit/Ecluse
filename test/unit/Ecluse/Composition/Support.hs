@@ -31,7 +31,7 @@ module Ecluse.Composition.Support (
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
-import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable))
+import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoBackendForHost))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
@@ -107,8 +107,7 @@ codeArtifactEnvVars =
 
 -- | The deleting role's refusal of 'staticEnvVars', whose mirror target no backend here sweeps.
 noMaintenanceBackend :: BootError
-noMaintenanceBackend =
-    StoreMaintenanceUnavailable Npm "its host names no store maintenance backend this build carries"
+noMaintenanceBackend = StoreMaintenanceUnavailable Npm NoBackendForHost
 
 -- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test can supply its own.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]

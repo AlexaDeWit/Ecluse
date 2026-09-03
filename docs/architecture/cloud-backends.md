@@ -2,7 +2,7 @@
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
-How Écluse mirrors approved public packages, and the two handles that couple it to a cloud
+How Écluse mirrors approved public packages, and the three handles that couple it to a cloud
 provider.
 
 ## Mirror queue

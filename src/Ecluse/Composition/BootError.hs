@@ -12,6 +12,7 @@ no policy of its own beyond the rendering and the fold that turns a thrown fault
 -}
 module Ecluse.Composition.BootError (
     BootError (..),
+    StoreMaintenanceReason (..),
     refuseOnThrow,
     renderBootError,
     renderBootErrors,
@@ -114,7 +115,19 @@ data BootError
     | {- | A vetted mirror store has no store maintenance backend the Dredger can sweep it
       with, carrying why.
       -}
-      StoreMaintenanceUnavailable Ecosystem Text
+      StoreMaintenanceUnavailable Ecosystem StoreMaintenanceReason
+    deriving stock (Eq, Show)
+
+-- | Why a mount's mirror target reached no store maintenance handle.
+data StoreMaintenanceReason
+    = -- | The target's host names no backend this build carries.
+      NoBackendForHost
+    | -- | The backend its host names has no package format for this ecosystem.
+      NoFormatFor Ecosystem
+    | -- | The target's path is not a repository endpoint under the carried format token.
+      NotRepositoryEndpoint Text
+    | -- | Building the cleared backend's client against the live environment threw.
+      ClientBuildFailed Text
     deriving stock (Eq, Show)
 
 {- | Fold a thrown fault into the boot error the caller names, so a phase that dials a live
@@ -209,5 +222,13 @@ renderBootError = \case
     StoreMaintenanceUnavailable eco reason ->
         mountKeyRef eco "mirrorTarget"
             <> " has no usable store maintenance backend: "
-            <> reason
+            <> renderStoreMaintenanceReason reason
             <> " (the Dredger deletes from every mount's mirror target, so it refuses rather than starting against a store it cannot sweep)"
+
+renderStoreMaintenanceReason :: StoreMaintenanceReason -> Text
+renderStoreMaintenanceReason = \case
+    NoBackendForHost -> "its host names no store maintenance backend this build carries"
+    NoFormatFor eco -> "CodeArtifact has no package format for the " <> ecosystemName eco <> " ecosystem"
+    NotRepositoryEndpoint format ->
+        "its path is not a CodeArtifact repository endpoint, /" <> format <> "/{repository}/"
+    ClientBuildFailed detail -> "building its client failed: " <> detail

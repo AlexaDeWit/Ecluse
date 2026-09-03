@@ -266,9 +266,8 @@ chunksOfCeiling ceiling' items = case ceiling' of
     go _ [] = []
     go size batch = let (chunk, rest) = splitAt size batch in chunk : go size rest
 
-{- | Send each chunk in turn and collect one outcome per version. A faulted chunk stops the
-run, because the fault carries the backend's own retry advice and later chunks would spend
-calls against it.
+{- | Send each chunk in turn and collect one outcome per version. A faulted chunk stops the run,
+because the fault carries the backend's own retry advice.
 -}
 deleteAll ::
     (Monad m) =>

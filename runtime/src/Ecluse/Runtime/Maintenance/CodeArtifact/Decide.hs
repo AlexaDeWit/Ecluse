@@ -52,7 +52,6 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
 import Amazonka qualified as AWS
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
-import Data.Char (isDigit)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Lens.Micro ((.~), (?~), (^.))
@@ -83,7 +82,7 @@ import Ecluse.Core.Registry.Maintenance (
     VersionPresence (VersionServed, VersionWithdrawn),
     storeRefusal,
  )
-import Ecluse.Core.Text (nonBlank)
+import Ecluse.Core.Text (nonBlank, readDecimalText)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 
@@ -369,8 +368,7 @@ into a delay needs the current time and this stays pure. -}
 retryAfterSeconds :: [Header] -> Maybe RetryAfter
 retryAfterSeconds headers = do
     raw <- decodeUtf8 . snd <$> find ((== hRetryAfter) . fst) headers
-    guard (not (T.null raw) && T.all isDigit raw)
-    RetryAfter <$> readMaybe (toString raw)
+    RetryAfter <$> readDecimalText raw
 
 -- The format token for a store's own ecosystem.
 formatTokenOf :: CodeArtifactStore -> CA.PackageFormat

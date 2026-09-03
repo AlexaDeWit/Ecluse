@@ -16,7 +16,7 @@ import Ecluse.Composition.BootError (
     ),
  )
 import Ecluse.Composition.Endpoints (mirrorStoreUrl, publicationTargetUrl)
-import Ecluse.Composition.Maintenance (StoreBackend (CodeArtifactBackend))
+import Ecluse.Composition.Maintenance (StoreBackend (CodeArtifactBackend), clearedBackend)
 import Ecluse.Composition.Support (codeArtifactEnvVars, codeArtifactMirrorUrl, expectConfig, noMaintenanceBackend, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
@@ -30,6 +30,7 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     AppConfig (cfgMounts),
     Config,
+    MountConfig (mntMirrorTarget),
     PublicationAllow (PublicationAllowNpmScopes),
  )
 import Ecluse.Core.Credential (unSecret)
@@ -74,6 +75,12 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
             `shouldBe` Just codeArtifactMirrorUrl
         fmap (repositoryOf . vsBackend) (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just "mirror"
 
+    it "pairs a store with a backend for every mount that declares a mirror target" $ do
+        -- The endpoint group and the backend group are intersected by key. Both enumerate
+        -- mirrorTarget, so the deleting role's plan carries a store per declared target.
+        plan <- expectVetted MirrorPruner codeArtifactEnvVars
+        Map.keys (vpMirrorStores plan) `shouldBe` mirroringMounts (vpSettings plan)
+
     it "clears a writing role no store at all, because no writing role sweeps one" $ do
         -- The same configuration the deleting role gets a store from. A writing role holds a
         -- witness for a delete it may not perform, so its pass issues none.
@@ -88,7 +95,8 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
         advisories `shouldBe` []
         fmap (Map.keys . vpMirrorStores) outcome `shouldBe` Right []
   where
-    repositoryOf (CodeArtifactBackend coordinates) = casRepository coordinates
+    repositoryOf cleared = case clearedBackend cleared of
+        CodeArtifactBackend coordinates -> casRepository coordinates
 
 refusalSpec :: Spec
 refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
@@ -136,6 +144,11 @@ staticPublishEnv = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN" "p
 -- | Drop the publication allow-list, leaving the target the guard has nothing to check against.
 withoutAllow :: [(String, String)] -> [(String, String)]
 withoutAllow = filter ((/= "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW") . fst)
+
+-- | Every mount that declares a mirror target, which is what both store groups enumerate.
+mirroringMounts :: AppConfig -> [Ecosystem]
+mirroringMounts app =
+    [eco | (eco, mcfg) <- Map.toAscList (cfgMounts app), isJust (mntMirrorTarget mcfg)]
 
 -- | Vet an environment layer for one role, failing the test on a refusal.
 expectVetted :: RegistryRole -> [(String, String)] -> IO ValidatedPlan
