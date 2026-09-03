@@ -56,7 +56,10 @@ cabal test "$suite" \
   --test-show-details=direct \
   "$@"
 
-tix="$(find "$builddir" -type f -name "${suite}.tix" | head -n1)"
+# The newest .tix is the one this run wrote. The cached builddir keeps the
+# package directory of every version it ever built, so an older ecluse-<version>/
+# tree carries a stale .tix of the same name, and `find` does not order its results.
+tix="$(find "$builddir" -type f -name "${suite}.tix" -printf '%T@\t%p\n' | sort -n | tail -n1 | cut -f2-)"
 if [ -z "$tix" ]; then
   echo "coverage: no ${suite}.tix found under $builddir/ (did the suite run?)" >&2
   exit 1
@@ -141,10 +144,6 @@ case "$suite" in
       # (test/integration/Ecluse/Server/PublishSpec.hs).
       ./core/src/Ecluse/Core/Server/Pipeline/Publish.hs
     )
-    
-    # Ecluse.WorkerSpec no longer exists, so drop the orphaned coverage records
-    # the CI cache still holds for it.
-    support_exclude+=(-x "Ecluse.WorkerSpec")
     ;;
   ecluse-unit)
     src_dir="src"
