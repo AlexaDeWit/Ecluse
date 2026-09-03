@@ -56,7 +56,11 @@ cabal test "$suite" \
   --test-show-details=direct \
   "$@"
 
-tix="$(find "$builddir" -type f -name "${suite}.tix" | head -n1)"
+# The newest .tix is the one this run wrote. The cached builddir keeps the
+# package directory of every version it ever built, so an older
+# ecluse-<version>/ tree carries a stale .tix of the same name, and which one
+# `find` lists first varies by filesystem.
+tix="$(find "$builddir" -type f -name "${suite}.tix" -printf '%T@\t%p\n' | sort -n | tail -n1 | cut -f2-)"
 if [ -z "$tix" ]; then
   echo "coverage: no ${suite}.tix found under $builddir/ (did the suite run?)" >&2
   exit 1
