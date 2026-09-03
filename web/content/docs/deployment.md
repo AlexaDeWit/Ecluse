@@ -23,9 +23,10 @@ selects the role:
   `mirrorTarget` is also any mount's `privateUpstream` or its own mount's `publicationTarget`,
   because it deletes from that store. The other roles start and warn instead.
 - **`ecluse check-config`**: validates the shared configuration and prints the resolved posture
-  without starting anything (exit `0` valid, `2` refused). It carries no role, so a collapsed
-  endpoint pair that only `ecluse dredger` refuses prints here as a warning. Run it in CI or
-  before a rollout.
+  without starting anything (exit `0` valid, `2` refused). It checks every role, so a refusal only
+  one command earns (`ecluse proxy --no-worker` or `ecluse mirror` without a durable queue,
+  `ecluse mirror` where no mount declares a `mirrorTarget`, `ecluse dredger` on a collapsed
+  endpoint pair) prints here as a warning naming that command. Run it in CI or before a rollout.
 
 All roles share one configuration. The proxy and the mirror worker scale. Run Pilot as a singleton,
 because multiple instances race and duplicate API calls.
@@ -35,8 +36,10 @@ synced database under `advisories.dataDir` (default `/var/lib/ecluse/advisories`
 compiles there. The image runs as uid `65532` and sets no working directory, so mount a volume at
 that path on every role that reads or writes advisories, and let uid `65532` write it. In
 Kubernetes an `emptyDir` is enough: the artifact re-syncs after a restart, and Écluse sweeps the
-partial downloads an interrupted run left behind. Without the mount the first sync fails on
-permissions and the pod never reports ready.
+partial downloads an interrupted run left behind. On a mirror-pipeline role (`ecluse proxy`, `ecluse
+proxy --no-worker`, `ecluse mirror`) the boot refuses without the mount, naming
+`ECLUSE_ADVISORIES__DATA_DIR` and the error it hit. Pilot creates the directory when it first
+compiles, so there a missing mount surfaces as a runtime fault instead.
 
 ### Splitting the proxy from the mirror worker
 

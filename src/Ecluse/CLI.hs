@@ -12,7 +12,7 @@ import Data.Version (showVersion)
 import Options.Applicative
 import Paths_ecluse (version)
 
-import Ecluse.Composition.MirrorRole (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
+import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Pilot (PilotCompileOptions (..))
 
 data AppCommand

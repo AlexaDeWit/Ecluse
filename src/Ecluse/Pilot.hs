@@ -22,6 +22,7 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Boot (BootEnv (..), probeServerConfig)
+import Ecluse.Composition.Plan (BootPlan (bpS3Endpoint))
 import Ecluse.Config (
     AdvisoriesSettings (advDataDir, advUrl),
     AdvisoryStoreUrl,
@@ -66,7 +67,7 @@ runPilot bootEnv = do
         logFM InfoS (ls ("Pilot mode starting up on port " <> show (scPort cfg) :: String))
         raceServerAgainstLoop
             (liftIO $ runWarp cfg probeOnlyApplication)
-            (runExportLoop (beTelemetry bootEnv) (beS3Endpoint bootEnv) (beConfig bootEnv))
+            (runExportLoop (beTelemetry bootEnv) (bpS3Endpoint (beBootPlan bootEnv)) (beConfig bootEnv))
 
 -- Run the loop 'exportLoopPlan' names. Every fault inside it is transient, because a cycle
 -- has no wiring fault to fail up on.

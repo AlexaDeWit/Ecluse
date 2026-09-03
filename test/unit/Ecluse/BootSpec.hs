@@ -18,10 +18,15 @@ import UnliftIO (throwIO, timeout, try)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (ProcessOutcome (..), exitCodeFor, run, superviseProcess)
-import Ecluse.Boot (BootAborted (..), applySecretFileIndirection, bootRefusals, orExit, readConfigDocument)
-import Ecluse.Composition.BootError (BootError (AwsEndpointMalformed, QueueRegionMissing), renderBootError)
+import Ecluse.Boot (BootAborted (..), applySecretFileIndirection, orExit, readConfigDocument)
+import Ecluse.Composition.BootError (
+    BootError (AwsEndpointMalformed, MirrorTargetOnMountEndpoint, SplitRoleNeedsDurableQueue),
+    renderBootError,
+ )
+import Ecluse.Composition.Support (malformedAwsEndpoint, overrideEnv, withoutQueueUrl)
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Test.Log (captureStderr)
 
 runEnv :: [(String, String)]
@@ -142,6 +147,22 @@ spec = do
             outcome <- timeout 100000 (withArgs ["proxy"] run)
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Nothing
+
+        it "refuses ecluse mirror over the in-memory queue, naming that command" $
+            -- The one guard on the CLI-to-role mapping. 'ecluse proxy' boots this same
+            -- configuration, so a dispatch that named the wrong role would not refuse at all,
+            -- and one that named the other split role would quote the wrong command.
+            splitRoleRefusal ["mirror"] `shouldReturn` refusalNaming "ecluse mirror"
+
+        it "refuses ecluse proxy --no-worker over the in-memory queue, naming that command" $
+            splitRoleRefusal ["proxy", "--no-worker"] `shouldReturn` refusalNaming "ecluse proxy --no-worker"
+
+        it "refuses ecluse dredger where the mirror target is also the private upstream" $
+            -- The guard on the dredger's own CLI-to-role mapping. Only the pruning role refuses
+            -- this configuration: every other role advises and boots, so a dispatch naming the
+            -- wrong role would serve here instead of refusing.
+            bootRefusal ["dredger"] collapsedMirrorEnv
+                `shouldReturn` (Left (ExitFailure 2), [renderBootError collapsedMirrorRefusal])
 
         it "aborts fast at boot when the SQS endpoint override is set with no AWS_REGION" $ do
             -- The override forces the SQS interpretation, and an emulator or VPC
@@ -312,7 +333,7 @@ spec = do
         it "refuses one malformed override in the boot and in check-config alike" $ do
             -- The pre-flight tool must never pass a value the real boot then refuses.
             traverse_ (uncurry setEnv) runEnv
-            setEnv "AWS_ENDPOINT_URL" malformedEndpoint
+            setEnv "AWS_ENDPOINT_URL" malformedAwsEndpoint
             -- Each outcome leaves its capture through a ref, so every assertion waits for
             -- the cleanup below and no failure strands the malformed override.
             bootOutcome <- newIORef (Nothing :: Maybe (Either ExitCode (Maybe ())))
@@ -332,19 +353,13 @@ spec = do
             -- The override can carry a credential, so no report may echo it.
             checkReport `shouldNotSatisfy` T.isInfixOf "s3cr3t"
 
-        it "reports the plan's own refusals and the endpoint's in one aggregated list" $
-            bootRefusals [("AWS_ENDPOINT_URL", malformedEndpoint)] (Left [QueueRegionMissing])
-                `shouldBe` Left [QueueRegionMissing, AwsEndpointMalformed malformedSecret]
-
-        it "adds no refusal when AWS_ENDPOINT_URL is unset" $
-            bootRefusals [] (Left [QueueRegionMissing]) `shouldBe` Left [QueueRegionMissing]
-
     describe "superviseProcess (the typed process perimeter)" $ do
         it "classifies a graceful return as ShutdownRequested" $
             superviseProcess pass `shouldReturn` ShutdownRequested
 
-        it "classifies a boot abort as BootFault" $
-            superviseProcess (throwIO BootAborted) `shouldReturn` BootFault
+        it "classifies a boot abort as BootFault carrying the refusal it was raised with" $
+            superviseProcess (throwIO (BootAborted "mount npm has no adapter wired in this build"))
+                `shouldReturn` BootFault "mount npm has no adapter wired in this build"
 
         it "classifies a synchronous service escape as ServiceExited with its rendered detail" $ do
             outcome <- superviseProcess (throwIO (SimulatedServiceFault "wiring broke"))
@@ -373,7 +388,7 @@ spec = do
         it "maps each outcome onto its documented status" $ do
             exitCodeFor ShutdownRequested `shouldBe` ExitSuccess
             exitCodeFor (ServiceExited "detail") `shouldBe` ExitFailure 1
-            exitCodeFor BootFault `shouldBe` ExitFailure 2
+            exitCodeFor (BootFault "refusal") `shouldBe` ExitFailure 2
             exitCodeFor RunCancelled `shouldBe` ExitFailure 3
 
     describe "orExit (boot fail-fast)" $ do
@@ -381,20 +396,52 @@ spec = do
             orExit (const "unused") (Right 7 :: Either () Int) `shouldReturn` 7
 
         it "reports the failure and aborts the boot on a Left" $ do
+            -- The abort carries the rendered failure, and 'run' is what puts it on stderr, so a
+            -- non-zero exit cannot leave without it.
             outcome <- try (orExit (const "boot rejected") (Left ()) :: IO ()) :: IO (Either BootAborted ())
             case outcome of
-                Left BootAborted -> pure ()
+                Left (BootAborted rendered) -> rendered `shouldBe` "boot rejected"
                 Right () -> expectationFailure "expected the boot to abort"
 
--- | An AWS_ENDPOINT_URL the egress gate refuses: userinfo, carrying a credential.
-malformedEndpoint :: String
-malformedEndpoint = "http://operator:s3cr3t@localhost:9000"
+{- | Boot one argument vector over one environment: the exit status it earns, and the report it
+printed. A role that does not refuse serves instead, which the timeout ends.
+-}
+bootRefusal :: [String] -> [(String, String)] -> IO (Either ExitCode (Maybe ()), [Text])
+bootRefusal args envVars = do
+    unsetEnv "AWS_REGION"
+    unsetEnv "ECLUSE_QUEUE__URL"
+    traverse_ (uncurry setEnv) envVars
+    outcome <- newIORef (Nothing :: Maybe (Either ExitCode (Maybe ())))
+    report <- captureStderr $ do
+        result <- try (timeout 100000 (withArgs args run))
+        writeIORef outcome (Just result)
+    traverse_ (unsetEnv . fst) runEnv
+    readIORef outcome >>= \case
+        Nothing -> fail "the boot left no outcome behind"
+        Just result -> pure (result, reportLines report)
 
--- | 'malformedEndpoint' as the refusal carries it, redacted behind the secret.
+-- | 'bootRefusal' over a mirroring configuration with no durable queue.
+splitRoleRefusal :: [String] -> IO (Either ExitCode (Maybe ()), [Text])
+splitRoleRefusal args = bootRefusal args (withoutQueueUrl runEnv)
+
+-- | The npm mount mirroring where it reads: a writing role's advisory, the Dredger's refusal.
+collapsedMirrorEnv :: [(String, String)]
+collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" "https://private.example.test" runEnv
+
+-- | The one refusal that configuration earns, and only under @ecluse dredger@.
+collapsedMirrorRefusal :: BootError
+collapsedMirrorRefusal = MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" "https://private.example.test"
+
+-- | What 'splitRoleRefusal' must return: exit 2, and the refusal quoting one invocation.
+refusalNaming :: Text -> (Either ExitCode (Maybe ()), [Text])
+refusalNaming invocation =
+    (Left (ExitFailure 2), [renderBootError (SplitRoleNeedsDurableQueue invocation)])
+
+-- | 'malformedAwsEndpoint' as the refusal carries it, redacted behind the secret.
 malformedSecret :: Secret
-malformedSecret = mkSecret (toText malformedEndpoint)
+malformedSecret = mkSecret (toText malformedAwsEndpoint)
 
--- | The one rendered line both entry points report for 'malformedEndpoint'.
+-- | The one rendered line both entry points report for 'malformedAwsEndpoint'.
 endpointRefusal :: Text
 endpointRefusal = renderBootError (AwsEndpointMalformed malformedSecret)
 

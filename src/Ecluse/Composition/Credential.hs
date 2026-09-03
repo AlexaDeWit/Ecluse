@@ -8,7 +8,7 @@ mirror-write credential into a live, process-global 'CredentialProvider'.
 == Global providers, per-mount reference
 
 A 'Ecluse.Core.Credential.CredentialProvider' is the service's own cloud identity,
-built __once__ here from the resolved config and held process-global. A mount
+built __once__ here from the cleared mounts and held process-global. A mount
 references one by its ecosystem and never holds its own. Config load derives which
 credential a mount uses __from the mirror-target URL__
 ('Ecluse.Config.MirrorCredential.resolveMirrorCredential') and carries it on the mount
@@ -47,11 +47,9 @@ module Ecluse.Composition.Credential (
 ) where
 
 import Data.Map.Strict qualified as Map
-import UnliftIO (tryAny)
 
-import Ecluse.Composition.BootError (BootError (..))
+import Ecluse.Composition.BootError (BootError (..), refuseOnThrow)
 import Ecluse.Config (
-    Config (..),
     MirrorCredential (..),
     MirrorTarget (..),
     Mount (..),
@@ -60,7 +58,6 @@ import Ecluse.Config (
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig, newCodeArtifactProvider)
 
 {- | The process-global credential providers, keyed by the ecosystem they serve. A
@@ -69,15 +66,15 @@ ecosystem absent from the keyset has an unresolved credential reference.
 -}
 newtype CredentialProviders = CredentialProviders (Map Ecosystem CredentialProvider)
 
-{- | Build the global credential providers from the resolved config, or the boot
+{- | Build the global credential providers from the boot's cleared mounts, or the boot
 errors that block them. Each provider mints eagerly, so a bad identity, region, or
 permission fails loud here as 'CodeArtifactMintFailed' rather than at first publish.
 -}
-initCredentialProviders :: CredentialReporters -> Config -> IO (Either [BootError] CredentialProviders)
-initCredentialProviders reporters config = do
+initCredentialProviders :: CredentialReporters -> [Mount] -> IO (Either [BootError] CredentialProviders)
+initCredentialProviders reporters mounts = do
     let creds =
-            [ (eco, mtCredential target)
-            | (eco, mount) <- Map.toList (configMounts config)
+            [ (mountEcosystem mount, mtCredential target)
+            | mount <- mounts
             , Just target <- [regMirrorTarget (mountRegistries mount)]
             ]
     -- The static leaf is stateless, so it stays per mount, unlike a CodeArtifact provider.
@@ -93,9 +90,9 @@ initCredentialProviders reporters config = do
 -- a shared domain carries one refresh schedule and one breaker rather than one per mount.
 initSharedCodeArtifact :: CredentialReporters -> (CodeArtifactConfig, NonEmpty Ecosystem) -> IO (Either [BootError] [(Ecosystem, CredentialProvider)])
 initSharedCodeArtifact reporters (caConfig, ecosystems) =
-    tryAny (newCodeArtifactProvider reporters caConfig) <&> \case
-        Left err -> Left [CodeArtifactMintFailed (displayExceptionT err)]
-        Right provider -> Right [(eco, provider) | eco <- toList ecosystems]
+    fmap fannedOut <$> refuseOnThrow CodeArtifactMintFailed (newCodeArtifactProvider reporters caConfig)
+  where
+    fannedOut provider = [(eco, provider) | eco <- toList ecosystems]
 
 {- | Group the mounts' resolved CodeArtifact identities, one group per distinct
 'CodeArtifactConfig'. The mint's scope is the domain, not the repository endpoint, so

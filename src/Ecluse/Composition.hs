@@ -2,36 +2,24 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition-root wiring: turn a validated 'Config' and the process-global
-credential providers into the served 'MountBinding's. Any boot problem fails fast,
-__aggregated__ with the rest.
-
-This is the __listener-free__ heart of the composition root ("Ecluse" calls it). It
-holds no socket, no network, and no clock of its own. The caller injects the clock
-and the ecosystem-to-adapter resolver, so a unit test runs the boot-time validation
-without opening a listener. Its one effect is 'Ecluse.Core.Rules.prepare' on each
-mount's rule set. That allocates per-rule engine state once at boot: a breaker for a
-resilient rule, though the built-in rules need none today. Binding assembly is
-therefore 'IO'. Everything else stays a pure function of the validated config.
-
-The composition root's other concerns live in the sibling modules:
-
-* "Ecluse.Composition.BootError" holds the boot-error vocabulary and its rendering.
-* "Ecluse.Composition.Credential" holds the credential providers and the
-  mirror-target credential selection.
-* "Ecluse.Composition.Endpoints" holds the endpoint-collision rule table, and the vetted
-  publication target and mirror store a passing walk of it produces.
-* "Ecluse.Composition.MirrorQueue" holds the mirror-queue backend selection.
-* "Ecluse.Composition.Sizing" holds the config-derived runtime sizings.
-
-One report aggregates every boot failure, so a single run shows every problem an operator must
-fix. A bad configuration is a loud, immediate startup failure, never a quietly mis-enforced or
-half-wired state (see @docs\/architecture\/configuration.md@ → "Validation").
+{- | The wiring half of the boot's effectful tier: turn the 'ValidatedPlan' that
+"Ecluse.Composition.Plan" resolves and "Ecluse.Composition.Validate" clears into the served
+'MountBinding's and the worker's publish targets. Every refusal 'resolveBootWiring' reports needs a
+live environment: it mints each mount's mirror-write credential and runs
+'Ecluse.Core.Rules.prepare', which allocates per-rule engine state once at boot. That is why this
+is 'IO' and why @ecluse check-config@ reaches none of it. "Ecluse.Composition.Executable" runs it
+as one phase, and 'WiringPorts' carries the clock and the adapter resolver in, so a unit test runs
+the assembly without opening a listener (see @docs\/architecture\/configuration.md@ → "Validation").
 -}
 module Ecluse.Composition (
+    -- * The environment-dependent wiring
+    ResolveAdapter,
+    WiringPorts (..),
+    BootWiring (..),
+    resolveBootWiring,
+
     -- * Boot-time wiring
     planMounts,
-    validateComposition,
 
     -- * Publish-side wiring
     PublishBudget (..),
@@ -43,19 +31,23 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Composition.BootError (BootError (..))
-import Ecluse.Composition.Credential (CredentialProviders, initializedEcosystems, lookupProvider)
-import Ecluse.Composition.Endpoints (
-    PublicationTarget,
-    RegistryRole (MirrorWriter),
-    endpointRefusals,
-    publicationTargetUrl,
-    vetPublicationTargets,
+import Ecluse.Composition.Credential (
+    CredentialProviders,
+    initCredentialProviders,
+    initializedEcosystems,
+    lookupProvider,
+ )
+import Ecluse.Composition.Endpoints (publicationTargetUrl)
+import Ecluse.Composition.Validate (
+    ValidatedPlan (vpMounts, vpPublications, vpSettings),
+    VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
+    VettedPublication (vpubAllow, vpubStaticToken, vpubTarget),
  )
 import Ecluse.Config (
     AppConfig (..),
-    Config (..),
     EgressSettings (..),
     IntegritySettings (..),
     MirrorTarget (mtUrl),
@@ -70,13 +62,13 @@ import Ecluse.Config (
     regPrivateUpstream,
     unUrl,
  )
-import Ecluse.Core.Credential (CredentialProvider, Secret)
+import Ecluse.Core.Credential (CredentialProvider)
+import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterArtifact,
-    adapterFor,
     adapterMetadata,
     adapterPublish,
     artifactHosts,
@@ -91,6 +83,56 @@ import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite), mountUpstreams)
 import Ecluse.Core.Text (stripTrailingSlash)
 
+{- | Resolve an ecosystem's deps to its complete mount, 'Nothing' for an ecosystem this build
+ships no adapter for. "Ecluse.Service" holds the one implementation.
+-}
+type ResolveAdapter = Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
+
+{- | The capabilities the wiring is built through, injected so a unit test runs the boot-time
+assembly without opening a listener.
+-}
+data WiringPorts = WiringPorts
+    { wpReporters :: CredentialReporters
+    -- ^ Where the credential providers record their mint breaker and refresh outcomes.
+    , wpResolveAdapter :: ResolveAdapter
+    -- ^ The ecosystem-to-binding resolver, 'Nothing' for an ecosystem this build ships no adapter for.
+    , wpClock :: IO UTCTime
+    -- ^ The clock every mount's serve path reads.
+    , wpRuleDeps :: Ecosystem -> RuleDeps
+    -- ^ One ecosystem's rule capabilities, including its advisory-database lookup.
+    }
+
+{- | What only a live environment settled: the mounts the front door serves, and the publish
+targets the worker writes approved artifacts through.
+-}
+data BootWiring = BootWiring
+    { bwBindings :: [MountBinding]
+    -- ^ The resolved mounts. A worker-only role builds them for their rules, and serves none.
+    , bwPublishTargets :: [PublishTarget]
+    -- ^ One target per mirrored mount, each holding the provider that mints its write token.
+    }
+
+{- | Build the boot wiring from the cleared plan, or the refusals only a live environment can
+settle. The credential providers stay internal: a mount reaches one through the wiring it produced.
+-}
+resolveBootWiring :: WiringPorts -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
+resolveBootWiring ports limits publishBudget plan = do
+    -- Each mount's mirror-write credential derives from the mirror-target host: a static token or
+    -- the CodeArtifact mint. The mint runs once eagerly here, so a misconfiguration fails at boot.
+    -- The two groups below both consume the providers, so this step precedes them rather than
+    -- accumulating with them.
+    providersE <- initCredentialProviders (wpReporters ports) (map vmMount (vpMounts plan))
+    case providersE of
+        Left errs -> pure (Left errs)
+        Right providers -> do
+            bindingsE <- planMounts (wpResolveAdapter ports) (wpClock ports) (wpRuleDeps ports) providers limits publishBudget plan
+            -- The serve side and the publish side read the same providers independently, so
+            -- 'Validation' reports both rather than the mounts' refusals alone.
+            pure . validationToEither $
+                BootWiring
+                    <$> eitherToValidation bindingsE
+                    <*> eitherToValidation (planPublishTargets providers plan)
+
 {- | The publish-side byte discipline: the process-wide aggregate admission and the
 per-request cap. It exists exactly when a publication target is configured.
 -}
@@ -99,60 +141,49 @@ data PublishBudget = PublishBudget
     , pbMaxRequestBytes :: Int
     }
 
-{- | Turn a validated 'Config' into the served 'MountBinding's, or every boot error at once. The
-caller injects every capability, so this opens no socket, and the 'Limits' arrive resolved.
+{- | Turn the boot's cleared plan into the served 'MountBinding's, or every remaining boot error at
+once. The caller injects every capability, so this opens no socket, and the 'Limits' arrive resolved.
 -}
 planMounts ::
-    (Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
+    ResolveAdapter ->
     IO UTCTime ->
     (Ecosystem -> RuleDeps) ->
     CredentialProviders ->
     Limits ->
     Maybe PublishBudget ->
-    Config ->
+    ValidatedPlan ->
     IO (Either [BootError] [MountBinding])
-planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget config = do
-    -- 'Ecluse.Composition.Plan.resolveBootPlan' runs 'validateComposition' first on both
-    -- entry points. This call keeps the structural errors in reach of a caller without a plan.
-    let structuralErrs = validateComposition config
-        pubDepsMap = Map.mapWithKey (\eco mcfg -> publishDepsFor (adapterFor eco) app mcfg (Map.lookup eco vettedTargets) limits publishBudget helpMessage) (cfgMounts app)
-    -- 'Ecluse.Config.loadConfig' derives 'configMounts' from 'cfgMounts' entry for
-    -- entry, so the two maps share a keyset and this pairing is total.
-    let mounts = Map.elems (Map.intersectionWith (,) (configMounts config) (cfgMounts app))
-    bindingResults <- traverse (\(mount, mcfg) -> bindingFor (join (Map.lookup (mountEcosystem mount) pubDepsMap)) mount mcfg) mounts
-    pure $ case (structuralErrs, partitionEithers bindingResults) of
-        ([], ([], bindings)) -> Right bindings
-        (_, (errs, _)) -> Left (structuralErrs <> concat errs)
+planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget plan = do
+    bindingResults <- traverse bindingFor (vpMounts plan)
+    pure $ case partitionEithers bindingResults of
+        ([], bindings) -> Right bindings
+        (errs, _) -> Left (concat errs)
   where
     app :: AppConfig
-    app = configApp config
-
-    -- A refused vetting yields no target, so no mount is wired for publishing. That same
-    -- refusal is in 'structuralErrs', so the run reports it and builds nothing.
-    vettedTargets :: Map Ecosystem PublicationTarget
-    vettedTargets = fromRight Map.empty (vetPublicationTargets (cfgMounts app))
+    app = vpSettings plan
 
     -- The operator help message, derived from the environment layer like the
     -- inbound token, so every mount's denials carry it.
     helpMessage :: Maybe HelpMessage
     helpMessage = mkHelpMessage <$> srvHelpMessage (cfgServer app)
 
-    {- It checks the credential reference and the adapter even when one has already
-    failed, so a mount missing both reports both in one run. -}
-    bindingFor :: Maybe PublishDeps -> Mount -> MountConfig -> IO (Either [BootError] MountBinding)
-    bindingFor pubDeps mount mcfg =
-        case adapterFor eco of
-            -- 'validateComposition' already reported the missing adapter, so only the
-            -- credential reference is still this mount's to check.
-            Nothing -> pure (Left (maybeToList (credentialError providers mount)))
-            Just adapter -> do
-                deps <- packumentDepsFor adapter mount mcfg
-                pure $ case (credentialError providers mount, resolveAdapter eco deps pubDeps) of
-                    (Nothing, Just binding) -> Right binding
-                    (mCredErr, mBinding) ->
-                        Left (maybeToList mCredErr <> [MissingAdapter eco | isNothing mBinding])
+    {- The plan cleared the adapter, so only the credential reference and the injected resolver
+    are still this mount's to check, and it reports both in one run. -}
+    bindingFor :: VettedMount -> IO (Either [BootError] MountBinding)
+    bindingFor vetted = do
+        deps <- packumentDepsFor (vmAdapter vetted) (vmMount vetted) (vmConfig vetted)
+        pure $ case (credentialError providers (vmMount vetted), resolveAdapter eco deps (publishDeps vetted)) of
+            (Nothing, Just binding) -> Right binding
+            (mCredErr, mBinding) ->
+                Left (maybeToList mCredErr <> [MissingAdapter eco | isNothing mBinding])
       where
-        eco = mountEcosystem mount
+        eco = vmEcosystem vetted
+
+    -- A mount the pass cleared no publication for leaves @PUT \/{pkg}@ answering @405@.
+    publishDeps :: VettedMount -> Maybe PublishDeps
+    publishDeps vetted =
+        Map.lookup (vmEcosystem vetted) (vpPublications plan)
+            >>= publishDepsFor (vmAdapter vetted) app limits publishBudget helpMessage
 
     {- The ecosystem-shaped fields are the adapter's own records, carried whole, and the
     rest is the mount's configuration. @mountBaseUrl@ owns the @dist.tarball@ base. -}
@@ -221,63 +252,28 @@ mountBaseUrl publicUrl eco =
 mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
 
-{- | The pure structural validation a boot enforces beyond 'Ecluse.Config.loadConfig': the
-adapter, publish-policy, and writing-role endpoint refusals. 'planMounts' owns 'UnresolvedCredential'.
+{- | Build the first-party publish dependencies from a cleared publication. 'Nothing' without a
+publish budget, which the memory plan allocates exactly when some mount publishes.
 -}
-validateComposition :: Config -> [BootError]
-validateComposition config =
-    missingAdapters <> publishPolicyErrors <> endpointRefusals MirrorWriter (cfgMounts app)
-  where
-    app = configApp config
-    missingAdapters =
-        [MissingAdapter eco | eco <- Map.keys (configMounts config), isNothing (adapterFor eco)]
-    publishPolicyErrors =
-        concat
-            [ publishBootErrors eco mcfg (srvAuthToken (cfgServer app))
-            | (eco, mcfg) <- Map.toAscList (cfgMounts app)
-            , isJust (mntPublicationTarget mcfg)
-            ]
-
-{- | Build the first-party publish dependencies, shared across the mounts. 'Nothing' without a
-vetted publication target, so the publish path is off and a @PUT \/{pkg}@ answers @405@.
--}
-publishDepsFor :: Maybe RegistryAdapter -> AppConfig -> MountConfig -> Maybe PublicationTarget -> Limits -> Maybe PublishBudget -> Maybe HelpMessage -> Maybe PublishDeps
-publishDepsFor mAdapter app mcfg mTarget limits publishBudget helpMessage = do
-    target <- mTarget
-    adapter <- mAdapter
+publishDepsFor :: RegistryAdapter -> AppConfig -> Limits -> Maybe PublishBudget -> Maybe HelpMessage -> VettedPublication -> Maybe PublishDeps
+publishDepsFor adapter app limits publishBudget helpMessage publication = do
     budget <- publishBudget
-    allow <- mntPublicationAllow mcfg
     pure
         PublishDeps
-            { pubTargetUrl = publicationTargetUrl target
-            , pubAllowed = publicationAllowedName allow
-            , pubStaticToken = mntPublicationTargetToken mcfg
-            , pubInboundToken = inboundToken
+            { pubTargetUrl = publicationTargetUrl (vpubTarget publication)
+            , pubAllowed = publicationAllowedName (vpubAllow publication)
+            , pubStaticToken = vpubStaticToken publication
+            , pubInboundToken = srvAuthToken (cfgServer app)
             , pubLimits = limits
             , pubBodyBudget = pbBodyBudget budget
             , pubMaxRequestBytes = pbMaxRequestBytes budget
             , pubHelp = helpMessage
             , pubAdapter = adapterPublish adapter
             }
-  where
-    inboundToken :: Maybe Secret
-    inboundToken = srvAuthToken (cfgServer app)
 
 -- Each arm derives the ecosystem-neutral predicate the publish path enforces.
 publicationAllowedName :: PublicationAllow -> PackageName -> Bool
 publicationAllowedName (PublicationAllowNpmScopes scopes) = npmPublishAllowed (toList scopes)
-
--- The caller applies this only to a mount with a configured publication target.
-publishBootErrors :: Ecosystem -> MountConfig -> Maybe Secret -> [BootError]
-publishBootErrors eco mcfg inboundToken = catMaybes [allowError, edgeError]
-  where
-    allowError, edgeError :: Maybe BootError
-    allowError
-        | isNothing (mntPublicationAllow mcfg) = Just (PublicationAllowMissing eco)
-        | otherwise = Nothing
-    edgeError
-        | isJust (mntPublicationTargetToken mcfg) && isNothing inboundToken = Just (PublishStaticCredentialNeedsEdge eco)
-        | otherwise = Nothing
 
 {- | One ecosystem's resolved publish target: the endpoint the worker writes approved
 artifacts to, and the provider that mints its bearer token. Resolved once, not per request.
@@ -291,15 +287,15 @@ data PublishTarget = PublishTarget
     -- ^ The provider minting the mirror-target write token.
     }
 
-{- | Resolve each configured mount to its publish target, or the aggregated boot errors. An
+{- | Resolve each cleared mount to its publish target, or the aggregated boot errors. An
 unresolved credential raises the same error 'planMounts' reports for the serve side.
 -}
 planPublishTargets ::
     CredentialProviders ->
-    Config ->
+    ValidatedPlan ->
     Either [BootError] [PublishTarget]
-planPublishTargets providers config =
-    case partitionEithers (mapMaybe (publishTargetFor providers) (Map.elems (configMounts config))) of
+planPublishTargets providers plan =
+    case partitionEithers (mapMaybe (publishTargetFor providers . vmMount) (vpMounts plan)) of
         ([], targets) -> Right targets
         (errs, _) -> Left (concat errs)
 

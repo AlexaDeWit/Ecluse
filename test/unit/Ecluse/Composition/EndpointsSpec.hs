@@ -9,15 +9,16 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.Endpoints (
-    RegistryRole (MirrorPruner, MirrorWriter),
-    endpointAdvisories,
-    endpointRefusals,
+    MirrorStore,
+    PublicationTarget,
+    VettedEndpoints (veMirrorStores, vePublicationTargets),
     mirrorStoreUrl,
     publicationTargetUrl,
-    vetMirrorStores,
-    vetPublicationTargets,
+    vetEndpoints,
  )
 import Ecluse.Composition.Support (expectConfig, overrideEnv, staticEnvVars)
+import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp), MountConfig)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -35,7 +36,7 @@ publicUpstreamSpec :: Spec
 publicUpstreamSpec = describe "publicationTarget against a public upstream" $ do
     it "vets a publication target that shares no host and no URL with another role" $ do
         mounts <- mountsFor publishingEnv
-        case vetPublicationTargets mounts of
+        case clearedTargets mounts of
             Left errs -> expectationFailure ("unexpected collisions: " <> show errs)
             Right vetted ->
                 fmap (registryUrlText . publicationTargetUrl) (Map.lookup Npm vetted)
@@ -45,29 +46,37 @@ publicUpstreamSpec = describe "publicationTarget against a public upstream" $ do
         -- The path differs, so only the host comparison catches it. A publish carries the
         -- publisher's own credential, which must never reach the public leg.
         refusalsFor MirrorWriter (publishingTo "https://public.example.test/npm/")
-            `shouldReturn` [PublicationTargetOnPublicUpstream Npm Npm]
+            `shouldReturn` [PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/npm/"]
 
     it "refuses a publication target on another mount's public-upstream host" $
         refusalsFor MirrorWriter (withPyPI (publishingTo "https://pypi-public.example.test"))
-            `shouldReturn` [PublicationTargetOnPublicUpstream Npm PyPI]
+            `shouldReturn` [PublicationTargetOnPublicUpstream Npm PyPI "https://pypi-public.example.test"]
 
     it "compares the host case-insensitively, as URL authority semantics require" $
         refusalsFor MirrorWriter (publishingTo "https://PUBLIC.Example.Test")
-            `shouldReturn` [PublicationTargetOnPublicUpstream Npm Npm]
+            -- The refusal quotes the value as configured, so an operator finds the key by search.
+            `shouldReturn` [PublicationTargetOnPublicUpstream Npm Npm "https://PUBLIC.Example.Test"]
+
+    it "refuses the deleting role that same publication target, which no role may relay" $
+        -- The rule carries one severity for every role. Flipping it for the deleting role alone
+        -- would leave the assertions above passing and this collapse silent on a sweep.
+        refusalsFor MirrorPruner (publishingTo "https://public.example.test/npm/")
+            `shouldReturn` [PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/npm/"]
 
     it "produces no witness at all once a collision refuses the boot" $ do
         mounts <- mountsFor (publishingTo "https://public.example.test")
-        fmap Map.keys (vetPublicationTargets mounts) `shouldBe` Left [PublicationTargetOnPublicUpstream Npm Npm]
+        fmap Map.keys (clearedTargets mounts)
+            `shouldBe` Left [PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test"]
 
 otherMountSpec :: Spec
 otherMountSpec = describe "publicationTarget against another mount's endpoints" $ do
     it "refuses a publication target that is another mount's private upstream" $
         refusalsFor MirrorWriter (withPyPI (publishingTo "https://pypi-private.example.test"))
-            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream"]
+            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"]
 
     it "refuses a publication target that is another mount's mirror target" $
         refusalsFor MirrorWriter (withPyPI (publishingTo "https://pypi-mirror.example.test"))
-            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "mirrorTarget"]
+            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "mirrorTarget" "https://pypi-mirror.example.test"]
 
     it "refuses two mounts that publish to one registry" $ do
         -- Each mount relays a different publisher's credential, so one shared publication
@@ -77,9 +86,9 @@ otherMountSpec = describe "publicationTarget against another mount's endpoints" 
                     withPyPI (publishingTo "https://shared-publish.example.test")
         refusals <- refusalsFor MirrorWriter env
         refusals
-            `shouldMatchList` [ PublicationTargetOnMountEndpoint Npm PyPI "publicationTarget"
-                              , PublicationTargetOnMountEndpoint PyPI Npm "publicationTarget"
-                              ]
+            `shouldBe` [ PublicationTargetOnMountEndpoint Npm PyPI "publicationTarget" "https://shared-publish.example.test"
+                       , PublicationTargetOnMountEndpoint PyPI Npm "publicationTarget" "https://shared-publish.example.test"
+                       ]
 
     it "boots a publication target equal to its own mount's private upstream" $ do
         -- The recommended read-back topology: the publisher writes where the mount reads.
@@ -89,18 +98,18 @@ otherMountSpec = describe "publicationTarget against another mount's endpoints" 
 
     it "ignores a trailing-slash difference when comparing full URLs" $
         refusalsFor MirrorWriter (withPyPI (publishingTo "https://pypi-private.example.test/"))
-            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream"]
+            `shouldReturn` [PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test/"]
 
 mirrorTargetSpec :: Spec
 mirrorTargetSpec = describe "mirrorTarget against a public upstream" $ do
     it "refuses every role a mirror target on its own mount's public-upstream host" $ do
-        let env = mirroringTo "https://public.example.test/npm/" staticEnvVars
-        refusalsFor MirrorWriter env `shouldReturn` [MirrorTargetOnPublicUpstream Npm Npm]
-        refusalsFor MirrorPruner env `shouldReturn` [MirrorTargetOnPublicUpstream Npm Npm]
+        let env = mirroringTo mirrorOnPublicUrl staticEnvVars
+        refusalsFor MirrorWriter env `shouldReturn` [MirrorTargetOnPublicUpstream Npm Npm mirrorOnPublicUrl]
+        refusalsFor MirrorPruner env `shouldReturn` [MirrorTargetOnPublicUpstream Npm Npm mirrorOnPublicUrl]
 
     it "refuses a mirror target on another mount's public-upstream host" $
         refusalsFor MirrorWriter (withPyPI (mirroringTo "https://pypi-public.example.test" staticEnvVars))
-            `shouldReturn` [MirrorTargetOnPublicUpstream Npm PyPI]
+            `shouldReturn` [MirrorTargetOnPublicUpstream Npm PyPI "https://pypi-public.example.test"]
 
     it "leaves a mirror target on a registry of its own alone" $
         refusalsFor MirrorWriter staticEnvVars `shouldReturn` []
@@ -109,11 +118,17 @@ mirrorStoreSpec :: Spec
 mirrorStoreSpec = describe "mirrorTarget against another declared endpoint" $ do
     it "vets a mirror store no other endpoint holds" $ do
         mounts <- mountsFor staticEnvVars
-        case vetMirrorStores mounts of
+        case clearedStores mounts of
             Left errs -> expectationFailure ("unexpected refusals: " <> show errs)
             Right vetted ->
                 fmap (registryUrlText . mirrorStoreUrl) (Map.lookup Npm vetted)
                     `shouldBe` Just "https://mirror.example.test"
+
+    it "clears a writing role no store at all, whatever the mirror target is" $ do
+        -- The role gate on the witness itself. 'MirrorWriter' never sweeps, so flipping the
+        -- 'vetEndpoints' arm would hand a delete witness to a role that may not delete.
+        mounts <- mountsFor staticEnvVars
+        writerStores mounts `shouldBe` Right Map.empty
 
     it "refuses the deleting role a mirror target on its own mount's private upstream" $ do
         let env = mirroringTo "https://private.example.test" staticEnvVars
@@ -137,15 +152,15 @@ mirrorStoreSpec = describe "mirrorTarget against another declared endpoint" $ do
 
     it "produces no mirror-store witness once a collapse refuses the deleting role" $ do
         mounts <- mountsFor (withPyPI (mirroringTo "https://pypi-private.example.test" staticEnvVars))
-        fmap Map.keys (vetMirrorStores mounts)
+        fmap Map.keys (clearedStores mounts)
             `shouldBe` Left [MirrorTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"]
 
     it "refuses every role a mirror target on another mount's publication target" $ do
         -- Already fatal before this rule existed, read from the publishing side, and it stays
         -- one refusal rather than one per direction.
         let env = pypiPublishingTo "https://mirror.example.test" staticEnvVars
-        refusalsFor MirrorWriter env `shouldReturn` [PublicationTargetOnMountEndpoint PyPI Npm "mirrorTarget"]
-        refusalsFor MirrorPruner env `shouldReturn` [PublicationTargetOnMountEndpoint PyPI Npm "mirrorTarget"]
+        refusalsFor MirrorWriter env `shouldReturn` [PublicationTargetOnMountEndpoint PyPI Npm "mirrorTarget" "https://mirror.example.test"]
+        refusalsFor MirrorPruner env `shouldReturn` [PublicationTargetOnMountEndpoint PyPI Npm "mirrorTarget" "https://mirror.example.test"]
 
     it "treats two format endpoints of one repository as distinct stores" $ do
         -- A repository's per-format endpoints share an authority and differ by path, and deletion
@@ -198,12 +213,38 @@ advisorySpec = describe "the advisories a writing role logs" $ do
         advisoriesFor (mirroringTo "https://private.example.test/" staticEnvVars)
             `shouldReturn` ["mount \"npm\": mirrorTarget and privateUpstream resolve to the same registry (https://private.example.test/); the Dredger refuses this configuration, so pruning this mirror stays manual"]
 
+    it "gives the deleting role that same private-and-public-upstream advisory" $
+        -- Rule six advises every role, so a severity flipped for one alone fails here.
+        advisoriesForRole MirrorPruner (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM" "https://public.example.test" staticEnvVars)
+            `shouldReturn` ["mount \"npm\": privateUpstream and publicUpstream resolve to the same registry (https://public.example.test); the merge trusts the private leg, so this registry's versions are admitted unfiltered"]
+
     it "logs no advisory for a collapse it refuses outright" $
         advisoriesFor (withPyPI (publishingTo "https://pypi-mirror.example.test")) `shouldReturn` []
 
 aggregationSpec :: Spec
-aggregationSpec = describe "aggregation" $
-    it "reports every collision in one boot failure" $ do
+aggregationSpec = describe "aggregation" $ do
+    it "reports every refusing rule in the order the pass declares them" $ do
+        -- One registry on four keys fires rules one through five at once, so swapping any
+        -- adjacent pair of them in 'endpointRules' changes this list.
+        refusals <- refusalsFor MirrorPruner everyEndpointCollapseEnv
+        refusals
+            `shouldBe` [ PublicationTargetOnPublicUpstream Npm PyPI sharedRegistryText
+                       , PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" sharedRegistryText
+                       , MirrorTargetOnPublicUpstream Npm PyPI sharedRegistryText
+                       , MirrorTargetOnMountEndpoint Npm PyPI "privateUpstream" sharedRegistryText
+                       , MirrorTargetOnMountEndpoint Npm Npm "publicationTarget" sharedRegistryText
+                       ]
+
+    it "logs the advising rules of that same configuration in that same order" $
+        -- Rules four and five advise a writing role, and rule six advises every role, so this
+        -- pins the tail of the order the refusal list above cannot reach.
+        advisoriesFor everyEndpointCollapseEnv
+            `shouldReturn` [ "mount \"npm\": mirrorTarget and mount \"pypi\" privateUpstream resolve to the same registry (" <> sharedRegistryText <> "); the Dredger refuses this configuration, so pruning this mirror stays manual"
+                           , "mount \"npm\": mirrorTarget and publicationTarget resolve to the same registry (" <> sharedRegistryText <> "); the Dredger refuses this configuration, so pruning this mirror stays manual"
+                           , "mount \"pypi\": privateUpstream and publicUpstream resolve to the same registry (" <> sharedRegistryText <> "); the merge trusts the private leg, so this registry's versions are admitted unfiltered"
+                           ]
+
+    it "reports every collision in one boot failure, in rule order" $ do
         -- One publication target on two public-upstream hosts is impossible, so this
         -- collides the publication target with one mount and the mirror target with another.
         let env =
@@ -211,9 +252,9 @@ aggregationSpec = describe "aggregation" $
                     withPyPI (publishingTo "https://pypi-private.example.test")
         refusals <- refusalsFor MirrorWriter env
         refusals
-            `shouldMatchList` [ PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream"
-                              , MirrorTargetOnPublicUpstream Npm PyPI
-                              ]
+            `shouldBe` [ PublicationTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"
+                       , MirrorTargetOnPublicUpstream Npm PyPI "https://pypi-public.example.test"
+                       ]
 
 -- The active mounts an environment layer resolves to: the input every rule reads.
 mountsFor :: [(String, String)] -> IO (Map Ecosystem MountConfig)
@@ -221,11 +262,31 @@ mountsFor env = cfgMounts . configApp <$> expectConfig env Nothing
 
 -- Every refusal a role earns from an environment layer.
 refusalsFor :: RegistryRole -> [(String, String)] -> IO [BootError]
-refusalsFor role env = endpointRefusals role <$> mountsFor env
+refusalsFor role env = fromLeft [] . snd . runVet role . vetEndpoints <$> mountsFor env
 
 -- Every advisory a writing role (@ecluse proxy@ and @ecluse mirror@ alike) logs.
 advisoriesFor :: [(String, String)] -> IO [Text]
-advisoriesFor env = endpointAdvisories MirrorWriter <$> mountsFor env
+advisoriesFor = advisoriesForRole MirrorWriter
+
+-- Every advisory one role logs, whatever that role's pass decided.
+advisoriesForRole :: RegistryRole -> [(String, String)] -> IO [Text]
+advisoriesForRole role env = fst . runVet role . vetEndpoints <$> mountsFor env
+
+-- The publish endpoints a writing role's pass clears, or every refusal at once.
+clearedTargets :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem PublicationTarget)
+clearedTargets mounts = vePublicationTargets <$> snd (runVet MirrorWriter (vetEndpoints mounts))
+
+-- The stores the deleting role's pass clears a sweep for, or every refusal at once.
+clearedStores :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem MirrorStore)
+clearedStores mounts = veMirrorStores <$> snd (runVet MirrorPruner (vetEndpoints mounts))
+
+-- The stores a writing role's pass clears a sweep for. It sweeps nothing, so it clears none.
+writerStores :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem MirrorStore)
+writerStores mounts = veMirrorStores <$> snd (runVet MirrorWriter (vetEndpoints mounts))
+
+-- | The npm mount mirroring to a path on its own public-upstream host: the host rule's subject.
+mirrorOnPublicUrl :: (IsString s) => s
+mirrorOnPublicUrl = "https://public.example.test/npm/"
 
 -- The npm mount publishing to its own registry, the collision-free baseline.
 publishingEnv :: [(String, String)]
@@ -257,6 +318,22 @@ from another: the pair the store comparison decides.
 mirrorAgainstPypiPrivate :: String -> String -> [(String, String)]
 mirrorAgainstPypiPrivate mirror private =
     overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM" private (withPyPI (mirroringTo mirror staticEnvVars))
+
+{- | One registry held by the npm mount's publicationTarget and mirrorTarget and by both of the
+PyPI neighbour's upstreams, so every endpoint rule fires on one configuration.
+-}
+everyEndpointCollapseEnv :: [(String, String)]
+everyEndpointCollapseEnv =
+    overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM" sharedRegistry $
+        overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM" sharedRegistry $
+            withPyPI (mirroringTo sharedRegistry (publishingTo sharedRegistry))
+
+-- | The registry every key in 'everyEndpointCollapseEnv' collapses onto.
+sharedRegistry :: String
+sharedRegistry = "https://shared.example.test"
+
+sharedRegistryText :: Text
+sharedRegistryText = toText sharedRegistry
 
 -- The PyPI neighbour publishing to the given target. The endpoint rules read no allow-list.
 pypiPublishingTo :: String -> [(String, String)] -> [(String, String)]

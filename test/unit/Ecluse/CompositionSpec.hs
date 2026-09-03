@@ -7,19 +7,28 @@ module Ecluse.CompositionSpec (spec) where
 import Test.Hspec
 
 import Ecluse (mountBindingFor)
-import Ecluse.Composition (PublishBudget (..), planMounts)
+import Ecluse.Composition (
+    BootWiring (bwBindings),
+    PublishBudget (..),
+    WiringPorts (WiringPorts, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
+    planMounts,
+    resolveBootWiring,
+ )
 import Ecluse.Composition.BootError (BootError (..))
-import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.Support (
     expectConfig,
     expectEnv,
     expectProviders,
+    expectValidated,
     fixedNow,
     overrideEnv,
     staticEnvVars,
     testLimits,
     withoutMirrorTargetUrl,
  )
+import Ecluse.Composition.Types (RegistryRole (MirrorWriter))
+import Ecluse.Composition.Validate (vetBoot)
+import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     ConfigError (..),
     PolicyError (UnknownRuleType),
@@ -80,8 +89,19 @@ mountDoc eco =
                \\"mirrorTarget\":\"https://mir\",\"mirrorTargetToken\":\"t\"}}}"
         )
 
--- Build the served bindings from an env + optional document through 'planMounts',
--- with the real adapter resolver, the fixed clock, and the env's static providers.
+{- The ports a unit test injects into the environment-dependent tier: the real adapter resolver,
+a fixed clock, inert rule deps, and reporters that record nothing. -}
+testWiringPorts :: WiringPorts
+testWiringPorts =
+    WiringPorts
+        { wpReporters = noCredentialReporters
+        , wpResolveAdapter = mountBindingFor
+        , wpClock = pure fixedNow
+        , wpRuleDeps = const inertRuleDeps
+        }
+
+-- Build the served bindings from an env + optional document through the boot's own pure pass
+-- and then its environment-dependent tier, exactly as the composition root does.
 planFrom :: [(String, String)] -> Maybe ByteString -> IO (Either [BootError] [MountBinding])
 planFrom = planFromWith testLimits
 
@@ -100,18 +120,18 @@ planFromWith limits envVars mDocBytes = do
             toBoot missing@(MirrorCredentialTokenMissing _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@(MirrorCredentialConflict _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@PublicUrlRequired = [PolicyBootError (UnknownRuleType "server" (renderConfigError missing))]
-        Right cfg -> do
-            initCredentialProviders noCredentialReporters cfg >>= \case
-                Left pErrs -> pure (Left pErrs)
-                Right providers -> do
-                    -- The root always pairs a publishing mount with a body budget. A
-                    -- generous test budget keeps these specs about the wiring.
-                    bodyBudget <- newByteAdmission (128 * 1024 * 1024)
-                    let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
-                    planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits (Just publishBudget) cfg
+        Right cfg -> case snd (runVet MirrorWriter (vetBoot cfg)) of
+            -- The pass refuses before anything is built, which is what the composition root sees.
+            Left vetErrs -> pure (Left vetErrs)
+            Right plan -> do
+                -- The root always pairs a publishing mount with a body budget. A
+                -- generous test budget keeps these specs about the wiring.
+                bodyBudget <- newByteAdmission (128 * 1024 * 1024)
+                let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
+                fmap bwBindings <$> resolveBootWiring testWiringPorts limits (Just publishBudget) plan
 
 planMountsSpec :: Spec
-planMountsSpec = describe "planMounts (config-driven serving)" $ do
+planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
     it "produces one npm binding with packument-serve deps wired (served, not a 501 stub)" $ do
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
@@ -166,7 +186,8 @@ planMountsSpec = describe "planMounts (config-driven serving)" $ do
     it "threads the inbound edge token, clock, and help message onto the deps" $ do
         config <- expectConfig (("ECLUSE_SERVER__AUTH_TOKEN", "edge-secret") : ("ECLUSE_SERVER__HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
         providers <- expectProviders config
-        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing config >>= \case
+        plan <- expectValidated config
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing plan >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -272,7 +293,7 @@ planMountsSpec = describe "planMounts (config-driven serving)" $ do
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
 bootErrorSpec :: Spec
-bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
+bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
     it "fails on an unresolved rule policy (a typo'd rule type)" $ do
         _ <- expectEnv staticEnvVars
         _ <- expectDoc "{\"rules\":{\"oops\":{\"type\":\"Nope\"}}}"
@@ -370,7 +391,7 @@ bareName :: PackageName
 bareName = mkPackageName Npm Nothing "thing"
 
 publishWiringSpec :: Spec
-publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
+publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
     it "wires the publication target and scope allow-list onto the mount when configured" $ do
         let testEnv =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
@@ -416,7 +437,7 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
                     <> staticEnvVars
         _ <- expectEnv testEnv
         planFrom testEnv Nothing >>= \case
-            Left errs -> errs `shouldBe` [PublicationTargetOnPublicUpstream Npm Npm]
+            Left errs -> errs `shouldBe` [PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/npm/"]
             Right _ -> expectationFailure "expected a publication-target collision boot error"
 
     it "leaves the publish path off (no publish deps) when no publication target is configured" $ do

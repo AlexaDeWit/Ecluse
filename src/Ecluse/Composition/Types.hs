@@ -1,0 +1,104 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+{- | The roles a boot runs under: which command started the process, which half of the mirror
+pipeline that process runs, and which registry role its validation rules apply under.
+
+The command line writes these and the boot pipeline reads them, so they live in a module neither
+side owns.
+-}
+module Ecluse.Composition.Types (
+    -- * The booting command
+    BootRole (..),
+    everyBootRole,
+    bootInvocation,
+    registryRoleOf,
+    pipelineRoleOf,
+
+    -- * The roles it decomposes into
+    MirrorRole (..),
+    roleInvocation,
+    RegistryRole (..),
+) where
+
+-- relude's prelude exports a Bounded/Enum-based `universe`. Hide it so the
+-- Generic-derived `Data.Universe.Class.universe` is the one in scope here.
+import Prelude hiding (universe)
+
+import Data.List (partition)
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
+
+{- | What a booting command does with the configured mirror targets. It decides each rule's
+severity and which witnesses the boot's vetting pass issues.
+-}
+data BootRole
+    = -- | @ecluse proxy@, @ecluse proxy --no-worker@ and @ecluse mirror@: they write.
+      BootMirrorPipeline MirrorRole
+    | -- | @ecluse dredger@: it permanently deletes.
+      BootStorePruner
+    | -- | @ecluse pilot@ and @ecluse check-config@: they neither mirror nor delete.
+      BootWithoutPipeline
+    deriving stock (Eq, Generic, Show)
+
+instance Universe BootRole where universe = universeGeneric
+
+{- | Every role a boot runs under, the mirror-pipeline halves first. @ecluse check-config@ picks
+no subcommand, so it runs the pure pass once per entry rather than once.
+-}
+everyBootRole :: [BootRole]
+-- 'universe' enumerates the constructors, so a role added to 'BootRole' joins with no edit here.
+everyBootRole = pipelineRoles <> rest
+  where
+    (pipelineRoles, rest) = partition (isJust . pipelineRoleOf) universe
+
+-- | How an operator spells a booting command, for a report that names the role a refusal belongs to.
+bootInvocation :: BootRole -> Text
+bootInvocation = \case
+    BootMirrorPipeline role -> roleInvocation role
+    BootStorePruner -> "ecluse dredger"
+    BootWithoutPipeline -> "ecluse pilot"
+
+-- | The registry role a command's rules apply under. Only the Dredger deletes.
+registryRoleOf :: BootRole -> RegistryRole
+registryRoleOf = \case
+    BootMirrorPipeline _ -> MirrorWriter
+    BootStorePruner -> MirrorPruner
+    BootWithoutPipeline -> MirrorWriter
+
+-- | The mirror-pipeline half a command runs, 'Nothing' where it runs none.
+pipelineRoleOf :: BootRole -> Maybe MirrorRole
+pipelineRoleOf = \case
+    BootMirrorPipeline role -> Just role
+    BootStorePruner -> Nothing
+    BootWithoutPipeline -> Nothing
+
+-- | The mirror-pipeline halves one process runs, selected by the command line.
+data MirrorRole
+    = -- | @ecluse proxy@: the front door and the mirror worker in one process.
+      ServeAndMirror
+    | -- | @ecluse proxy --no-worker@: the front door alone, still enqueueing.
+      ServeOnly
+    | -- | @ecluse mirror@: the worker alone, serving only its health probes.
+      MirrorOnly
+    deriving stock (Eq, Generic, Show)
+
+instance Universe MirrorRole where universe = universeGeneric
+
+-- | How an operator spells this role on the command line, for the boot refusal's message.
+roleInvocation :: MirrorRole -> Text
+roleInvocation = \case
+    ServeAndMirror -> "ecluse proxy"
+    ServeOnly -> "ecluse proxy --no-worker"
+    MirrorOnly -> "ecluse mirror"
+
+{- | The registry role a vetting pass vets for. The proxy and the mirror worker write to a mount's
+mirror target, and the Dredger deletes from it, which is what makes a shared store unsafe.
+-}
+data RegistryRole
+    = -- | @ecluse proxy@ and @ecluse mirror@: they read and write, and delete nothing.
+      MirrorWriter
+    | -- | @ecluse dredger@: it permanently deletes from every mount's mirror target.
+      MirrorPruner
+    deriving stock (Eq, Show)

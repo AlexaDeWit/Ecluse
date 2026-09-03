@@ -7,27 +7,25 @@ module Ecluse.Dredger (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
 import Katip (Severity (InfoS))
 
-import Ecluse.Boot (BootEnv (..), orExit, probeServerConfig)
-import Ecluse.Composition.BootError (renderBootError)
-import Ecluse.Composition.Endpoints (MirrorStore, mirrorStoreUrl, vetMirrorStores)
-import Ecluse.Config (AppConfig (cfgMounts), Config (configApp))
+import Ecluse.Boot (BootEnv (..), probeServerConfig)
+import Ecluse.Composition.Endpoints (MirrorStore, mirrorStoreUrl)
+import Ecluse.Composition.Plan (BootPlan (bpValidated))
+import Ecluse.Composition.Validate (ValidatedPlan (vpMirrorStores, vpSettings))
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Runtime.Log (moduleLog)
 import Ecluse.Runtime.Server (ServerConfig (scPort), probeOnlyApplication, runWarp)
 
 {- | The Dredger worker mode: a probe-only HTTP server over the vetted mirror stores. It deletes
-from each mount's mirror target, so an endpoint another role holds refuses here, not at a delete.
+from each mount's mirror target, so the boot's own pass refuses an endpoint another role holds.
 -}
 runDredger :: BootEnv -> IO ()
 runDredger bootEnv = do
-    let appConfig = configApp (beConfig bootEnv)
-    stores <- orExit (T.unlines . map renderBootError) (vetMirrorStores (cfgMounts appConfig))
-    traverse_ (dredgerLog . vettedStoreLine) (Map.toAscList stores)
-    let cfg = probeServerConfig appConfig
+    let validated = bpValidated (beBootPlan bootEnv)
+    traverse_ (dredgerLog . vettedStoreLine) (Map.toAscList (vpMirrorStores validated))
+    let cfg = probeServerConfig (vpSettings validated)
     dredgerLog ("Dredger mode starting up on port " <> show (scPort cfg))
     runWarp cfg probeOnlyApplication
   where

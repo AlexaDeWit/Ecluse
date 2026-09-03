@@ -109,7 +109,17 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
-import Ecluse.Composition.MirrorRole (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
+import Ecluse.Composition.BootError (renderBootErrors)
+import Ecluse.Composition.Executable (
+    RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
+    epRoleWiring,
+    planExecutable,
+ )
+import Ecluse.Composition.Plan (BootPlan (bpS3Endpoint))
+import Ecluse.Composition.Types (
+    BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
+    MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
+ )
 import Ecluse.Config (Config (configApp))
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Dredger
@@ -122,32 +132,44 @@ run :: IO ()
 run = do
     cmd <- execCLI
     outcome <- superviseProcess (runCommand cmd)
-    case outcome of
-        ServiceExited detail -> TIO.hPutStrLn stderr ("ecluse: service exited: " <> detail)
-        RunCancelled -> TIO.hPutStrLn stderr "ecluse: run cancelled"
-        _ -> pass
+    -- A non-zero status is representable only beside its reason ('ProcessExit'), so reporting
+    -- here covers every one of them.
+    traverse_ (TIO.hPutStrLn stderr) (exitReasonFor outcome)
     exitWith (exitCodeFor outcome)
 
-{- Dispatch one subcommand under the process perimeter. check-config runs outside
-'withBootEnv': no logger, no telemetry, no services. -}
+{- Dispatch one subcommand under the process perimeter. Each arm names its role once, and the
+plan carries it from there. check-config runs outside 'withBootEnv': no logger, no services. -}
 runCommand :: AppCommand -> IO ()
 runCommand = \case
     RunCheckConfig -> runCheckConfig
-    RunService role -> withBootEnv (runServiceRole role)
-    RunPilot -> withBootEnv runPilot
+    RunService role -> withBootEnv (BootMirrorPipeline role) startPlannedRole
+    RunPilot -> withBootEnv BootWithoutPipeline startPlannedRole
+    RunDredger -> withBootEnv BootStorePruner startPlannedRole
+    -- A one-shot compile vets under the Pilot's role and then does its own work rather than
+    -- that role's long-running one, so it is the one boot whose behaviour the plan cannot name.
     RunPilotCompile opts ->
-        withBootEnv $ \bootEnv ->
-            void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beS3Endpoint bootEnv) (configApp (beConfig bootEnv)) opts)
-    RunDredger -> withBootEnv runDredger
+        withBootEnv BootWithoutPipeline $ \bootEnv ->
+            void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (bpS3Endpoint (beBootPlan bootEnv)) (configApp (beConfig bootEnv)) opts)
 
-{- Run one mirror-pipeline role over the assembly both roles share, so the dedicated worker
-composes the same wiring the serve path embeds. -}
-runServiceRole :: MirrorRole -> BootEnv -> IO ()
-runServiceRole role bootEnv =
-    withServiceRuntime role bootEnv $ case role of
-        MirrorOnly -> runMirror
-        ServeAndMirror -> runProxy
-        ServeOnly -> runProxy
+{- Plan the role's runtime, then start the behaviour that plan carries. Every role plans through
+the one phase, so this is where a boot spends its last refusal whichever role it started. -}
+startPlannedRole :: BootEnv -> IO ()
+startPlannedRole bootEnv = do
+    plan <-
+        planExecutable (beLogEnv bootEnv) mountBindingFor buildMirrorQueue (beBootPlan bootEnv)
+            >>= orExit renderBootErrors
+    case epRoleWiring plan of
+        MirrorPipelineWiring mirror -> withServiceRuntime bootEnv plan mirror runMirrorPipeline
+        StorePrunerWiring -> runDredger bootEnv
+        PilotWiring -> runPilot bootEnv
+
+{- Pick the entry point the assembled runtime's own role names. Both halves run over the one
+assembly, so the dedicated worker composes the wiring the serve path embeds. -}
+runMirrorPipeline :: ServiceRuntime -> IO ()
+runMirrorPipeline runtime = case svcRole runtime of
+    MirrorOnly -> runMirror runtime
+    ServeAndMirror -> runProxy runtime
+    ServeOnly -> runProxy runtime
 
 {- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so
 an orchestrator reads the ending from the status alone.
@@ -157,10 +179,8 @@ data ProcessOutcome
       ShutdownRequested
     | -- | A service failed up with the carried rendered fault: exit 1.
       ServiceExited Text
-    | {- | The boot aborted ('BootAborted'), after the boot phase reported its
-      errors to standard error: exit 2.
-      -}
-      BootFault
+    | -- | The boot aborted ('BootAborted') with the carried rendered refusal: exit 2.
+      BootFault Text
     | -- | The run was cancelled from outside (a kill, an interrupt): exit 3.
       RunCancelled
     deriving stock (Eq, Show)
@@ -173,7 +193,7 @@ superviseProcess service =
     Exception.try service >>= \case
         Right () -> pure ShutdownRequested
         Left err
-            | Just BootAborted <- fromException err -> pure BootFault
+            | Just (BootAborted rendered) <- fromException err -> pure (BootFault rendered)
             | Just (code :: ExitCode) <- fromException err -> Exception.throwIO code
             | Just (killed :: AsyncException) <- fromException err ->
                 pure $ case killed of
@@ -185,10 +205,29 @@ superviseProcess service =
             | Just (_ :: SomeAsyncException) <- fromException err -> Exception.throwIO err
             | otherwise -> pure (ServiceExited (displayExceptionT err))
 
+{- How a run ends. A failing status is representable only beside the reason it reports, so
+'run' cannot exit non-zero in silence. -}
+data ProcessExit
+    = ExitedCleanly
+    | ExitedWith ExitCode Text
+
+-- The status and the report one outcome owns. Both 'run' and 'exitCodeFor' read the ending here.
+processExitFor :: ProcessOutcome -> ProcessExit
+processExitFor = \case
+    ShutdownRequested -> ExitedCleanly
+    ServiceExited detail -> ExitedWith (ExitFailure 1) ("ecluse: service exited: " <> detail)
+    -- The boot phase rendered the whole aggregated block, which reports here unprefixed.
+    BootFault rendered -> ExitedWith (ExitFailure 2) rendered
+    RunCancelled -> ExitedWith (ExitFailure 3) "ecluse: run cancelled"
+
 -- | The process exit status each 'ProcessOutcome' owns.
 exitCodeFor :: ProcessOutcome -> ExitCode
-exitCodeFor = \case
-    ShutdownRequested -> ExitSuccess
-    ServiceExited _ -> ExitFailure 1
-    BootFault -> ExitFailure 2
-    RunCancelled -> ExitFailure 3
+exitCodeFor outcome = case processExitFor outcome of
+    ExitedCleanly -> ExitSuccess
+    ExitedWith code _ -> code
+
+-- What an outcome reports before exiting. A graceful shutdown is the only one with nothing to say.
+exitReasonFor :: ProcessOutcome -> Maybe Text
+exitReasonFor outcome = case processExitFor outcome of
+    ExitedCleanly -> Nothing
+    ExitedWith _ reason -> Just reason

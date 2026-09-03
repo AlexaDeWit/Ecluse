@@ -7,18 +7,61 @@ module Ecluse.Composition.PlanSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Composition.BootError (BootError (MemoryPlanOverrideUnsafe, MissingAdapter, QueueUrlUnrecognised))
+import Ecluse.Composition.BootError (
+    BootError (
+        AwsEndpointMalformed,
+        MemoryPlanOverrideUnsafe,
+        MirrorRoleWithoutMirroring,
+        MirrorTargetOnMountEndpoint,
+        MissingAdapter,
+        QueueUrlUnrecognised,
+        SplitRoleNeedsDurableQueue
+    ),
+    renderBootError,
+ )
 import Ecluse.Composition.MemoryPlan (MemoryPlan (mpOverrideViolations, mpQueueMemoryMaxDepth))
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     MirrorRuntimePlan (MirrorWith, NoMirroring),
     memoryQueueBootWarning,
  )
-import Ecluse.Composition.Plan (BootPlan (..), configDocumentPath, defaultConfigPath, resolveBootPlan)
-import Ecluse.Composition.Support (expectConfig, fdLimit, noCeiling, overrideEnv, staticEnvVars, withoutMirrorTargetUrl, withoutQueueUrl)
-import Ecluse.Config (Config, mountPostureLines, resolvedKeyProvenance)
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup))
+import Ecluse.Composition.Plan (
+    BootPlan (..),
+    BootReport (brAdvisories, brOutcome, brProvenance),
+    configDocumentPath,
+    defaultConfigPath,
+    resolveBootPlan,
+    roleRefusalWarnings,
+ )
+import Ecluse.Composition.Support (
+    bootInputsFor,
+    expectConfig,
+    expectPlan,
+    malformedAwsEndpoint,
+    noCeiling,
+    overrideEnv,
+    staticEnvVars,
+    withoutMirrorTargetUrl,
+    withoutQueueUrl,
+ )
+import Ecluse.Composition.Types (
+    BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
+    MirrorRole (MirrorOnly, ServeOnly),
+ )
+import Ecluse.Config (mountPostureLines, resolvedKeyProvenance)
+import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Rts (
+    CgroupLimits (..),
+    EffectiveAxis (..),
+    EffectiveRuntimePlan (..),
+    Provenance (FromCgroup),
+    RtsPosture (..),
+    RuntimeOverrides (..),
+    appliedRuntimePlan,
+    reconcileRuntimePlan,
+    resolveRuntimePlan,
+ )
 
 spec :: Spec
 spec = describe "resolveBootPlan" $ do
@@ -47,13 +90,22 @@ spec = describe "resolveBootPlan" $ do
         let refusingEnv = overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" staticEnvVars
         ok <- expectConfig staticEnvVars Nothing
         refused <- expectConfig refusingEnv Nothing
-        let (okPreamble, okPlan) = resolveBootPlan staticEnvVars Nothing ok noCeiling fdLimit
-            (refusedPreamble, refusedPlan) = resolveBootPlan refusingEnv Nothing refused noCeiling fdLimit
-        okPreamble `shouldBe` absentDocumentLine : resolvedKeyProvenance staticEnvVars Nothing
-        refusedPreamble `shouldBe` absentDocumentLine : resolvedKeyProvenance refusingEnv Nothing
-        refusedPlan `shouldSatisfy` isLeft
+        let okReport = resolveBootPlan BootWithoutPipeline (bootInputsFor staticEnvVars Nothing ok noCeiling)
+            refusedReport = resolveBootPlan BootWithoutPipeline (bootInputsFor refusingEnv Nothing refused noCeiling)
+        brProvenance okReport `shouldBe` absentDocumentLine : resolvedKeyProvenance staticEnvVars Nothing
+        brProvenance refusedReport `shouldBe` absentDocumentLine : resolvedKeyProvenance refusingEnv Nothing
+        refusalsOf refusedReport `shouldSatisfy` isLeft
         -- The plan's own lines never repeat the preamble, so no line has two emission sites.
-        fmap (any (`elem` okPreamble) . bpLines) okPlan `shouldBe` Right False
+        fmap (any (`elem` brProvenance okReport) . bpLines) (brOutcome okReport) `shouldBe` Right False
+
+    it "carries the role it vetted under, so a boot starts the behaviour the plan names" $ do
+        -- The boot reads the behaviour off this field, so a plan resolved for one role can no
+        -- longer start another's.
+        config <- expectConfig staticEnvVars Nothing
+        let roleOf role = fmap bpRole (brOutcome (resolveBootPlan role (bootInputsFor staticEnvVars Nothing config noCeiling)))
+        roleOf (BootMirrorPipeline MirrorOnly) `shouldBe` Right (BootMirrorPipeline MirrorOnly)
+        roleOf BootStorePruner `shouldBe` Right BootStorePruner
+        roleOf BootWithoutPipeline `shouldBe` Right BootWithoutPipeline
 
     it "decides the mirror runtime, the memory plan, and both connection pools" $ do
         config <- expectConfig staticEnvVars Nothing
@@ -86,7 +138,7 @@ spec = describe "resolveBootPlan" $ do
         let envVars = overrideEnv "ECLUSE_CONFIG" "/srv/ecluse.yaml" staticEnvVars
             document = "server:\n  helpMessage: from the document\n"
         config <- expectConfig envVars (Just document)
-        let (preamble, _) = resolveBootPlan envVars (Just document) config noCeiling fdLimit
+        let preamble = brProvenance (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars (Just document) config noCeiling))
         listToMaybe preamble `shouldBe` Just "Config document: /srv/ecluse.yaml"
         configDocumentPath staticEnvVars `shouldBe` defaultConfigPath
 
@@ -102,13 +154,13 @@ spec = describe "resolveBootPlan" $ do
         it "refuses a structural composition error" $ do
             let envVars = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars
             config <- expectConfig envVars Nothing
-            snd (resolveBootPlan envVars Nothing config noCeiling fdLimit)
+            refusalsOf (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling))
                 `shouldBe` Left [MissingAdapter PyPI]
 
         it "refuses a queue URL whose shape names no backend" $ do
             let envVars = overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" staticEnvVars
             config <- expectConfig envVars Nothing
-            snd (resolveBootPlan envVars Nothing config noCeiling fdLimit)
+            refusalsOf (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling))
                 `shouldBe` Left [QueueUrlUnrecognised "https://queue.example.test/q"]
 
         it "refuses an explicit memory override the shed ladder cannot work around" $ do
@@ -116,18 +168,147 @@ spec = describe "resolveBootPlan" $ do
             -- the pin is the named cause.
             let envVars = overrideEnv "ECLUSE_CACHE__MAX_BYTES" "1073741824" serveOnlyEnvVars
             config <- expectConfig envVars Nothing
-            case snd (resolveBootPlan envVars Nothing config tightPod fdLimit) of
+            case refusalsOf (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars Nothing config tightPod)) of
                 Left [MemoryPlanOverrideUnsafe violations] ->
                     violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
                 other -> expectationFailure ("expected a refused override, got: " <> show other)
 
--- | Resolve the boot plan for a fixture, failing the test on a refusal.
-expectPlan :: [(String, String)] -> Maybe ByteString -> Config -> EffectiveRuntimePlan -> IO BootPlan
-expectPlan envVars docBlob config effective =
-    either
-        (\errs -> fail ("boot plan refused: " <> show errs))
-        pure
-        (snd (resolveBootPlan envVars docBlob config effective fdLimit))
+        it "names both groups of a configuration wrong in two independent ways" $ do
+            -- A mount with no adapter and a queue URL naming no backend are decided by different
+            -- groups. One run reports both, so an operator fixes both before the next boot.
+            let envVars =
+                    overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" $
+                        overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars
+            config <- expectConfig envVars Nothing
+            refusalsOf (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling))
+                `shouldBe` Left [MissingAdapter PyPI, QueueUrlUnrecognised "https://queue.example.test/q"]
+
+        it "reports the plan's own refusals and the ambient endpoint's in one aggregated list" $ do
+            -- The ambient AWS_ENDPOINT_URL is settled over the environment the rest of the pass
+            -- reads, so one launch names it beside whatever else the configuration got wrong.
+            let envVars =
+                    overrideEnv "AWS_ENDPOINT_URL" malformedAwsEndpoint $
+                        overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars
+            config <- expectConfig envVars Nothing
+            refusalsOf (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling))
+                `shouldBe` Left [MissingAdapter PyPI, AwsEndpointMalformed (mkSecret (toText malformedAwsEndpoint))]
+
+        it "adds no refusal when AWS_ENDPOINT_URL is unset" $ do
+            let envVars = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars
+            config <- expectConfig envVars Nothing
+            refusalsOf (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling))
+                `shouldBe` Left [MissingAdapter PyPI]
+
+        it "reports a refused queue URL alone, because the memory plan is sized against the runtime" $ do
+            -- The memory plan reads the resolved backend, so a backend that refuses leaves no
+            -- plan to judge the override against. The same override reports once the URL parses.
+            let unsafeCache = overrideEnv "ECLUSE_CACHE__MAX_BYTES" "1073741824" staticEnvVars
+                refusedQueue = overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" unsafeCache
+            refusedConfig <- expectConfig refusedQueue Nothing
+            refusalsOf (resolveBootPlan BootWithoutPipeline (bootInputsFor refusedQueue Nothing refusedConfig tightPod))
+                `shouldBe` Left [QueueUrlUnrecognised "https://queue.example.test/q"]
+            cachedConfig <- expectConfig unsafeCache Nothing
+            case refusalsOf (resolveBootPlan BootWithoutPipeline (bootInputsFor unsafeCache Nothing cachedConfig tightPod)) of
+                Left [MemoryPlanOverrideUnsafe violations] ->
+                    violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
+                other -> expectationFailure ("expected the override refusal alone, got: " <> show other)
+
+        it "refuses --no-worker over the in-memory queue rather than planning the role" $ do
+            -- The config is otherwise complete, so nothing else would refuse: dropping the role
+            -- guard would let this plan, and then boot, a runtime whose jobs nothing consumes.
+            let envVars = withoutQueueUrl staticEnvVars
+            config <- expectConfig envVars Nothing
+            refusalsOf (resolveBootPlan (BootMirrorPipeline ServeOnly) (bootInputsFor envVars Nothing config noCeiling))
+                `shouldBe` Left [SplitRoleNeedsDurableQueue "ecluse proxy --no-worker"]
+
+    describe "the advisories a pass reports beside its verdict" $ do
+        it "reports a writing role's advisory beside the plan it cleared" $ do
+            config <- expectConfig collapsedMirrorEnv Nothing
+            brAdvisories (resolveBootPlan BootWithoutPipeline (bootInputsFor collapsedMirrorEnv Nothing config noCeiling))
+                `shouldBe` [mirrorCollapseAdvisory]
+
+        it "keeps the advisories a refused configuration earned, so one run reports both" $ do
+            -- An advisory an operator must act on survives the refusal, so one run reports both.
+            let envVars = overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" collapsedMirrorEnv
+            config <- expectConfig envVars Nothing
+            let report = resolveBootPlan BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling)
+            refusalsOf report `shouldBe` Left [MissingAdapter PyPI]
+            brAdvisories report `shouldBe` [mirrorCollapseAdvisory]
+
+        it "gives the deleting role the refusal alone, never the writing roles' advisory too" $ do
+            -- One rule turns the detected collapse into exactly one outcome per role, so the
+            -- Dredger reports what it refuses and not what another role would have tolerated.
+            config <- expectConfig collapsedMirrorEnv Nothing
+            let report = resolveBootPlan BootStorePruner (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
+            refusalsOf report `shouldBe` Left [collapsedMirrorRefusal]
+            brAdvisories report `shouldBe` []
+
+    describe "the runtime posture each entry point sizes against" $
+        it "decides an override against the posture its own entry point resolved, so the two sides can differ" $ do
+            -- One set of process facts, resolved through the two functions the two entry points
+            -- call: 'reconcileRuntimePlan' for the boot, which measures the posture it reached,
+            -- and 'appliedRuntimePlan' for the checker, which predicts a full application. The
+            -- pass is the same function, so its verdict agrees only where those two values agree.
+            let envVars = overrideEnv "ECLUSE_CACHE__MAX_BYTES" "1073741824" serveOnlyEnvVars
+            config <- expectConfig envVars Nothing
+            let plan = resolveRuntimePlan roomyHeapOverride noCgroup ghcrtsBoundPosture
+                verdictUnder effective =
+                    refusalsOf (resolveBootPlan BootWithoutPipeline (bootInputsFor envVars Nothing config effective))
+            verdictUnder (appliedRuntimePlan noCgroup plan ghcrtsBoundPosture) `shouldBe` Right ()
+            case verdictUnder (reconcileRuntimePlan noCgroup plan ghcrtsBoundPosture) of
+                Left [MemoryPlanOverrideUnsafe violations] ->
+                    violations `shouldSatisfy` any (T.isInfixOf "cache.maxBytes")
+                other -> expectationFailure ("expected the measured posture to refuse, got: " <> show other)
+
+    describe "roleRefusalWarnings -- what a checker with no subcommand still reports" $ do
+        it "names both split roles the in-memory queue strands, which its own pass boots" $ do
+            let envVars = withoutQueueUrl staticEnvVars
+            config <- expectConfig envVars Nothing
+            roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling)
+                `shouldBe` [ wouldRefuse "ecluse proxy --no-worker" (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")
+                           , wouldRefuse "ecluse mirror" (SplitRoleNeedsDurableQueue "ecluse mirror")
+                           ]
+
+        it "names the dedicated worker where no mount declares a mirror target" $ do
+            config <- expectConfig serveOnlyEnvVars Nothing
+            roleRefusalWarnings BootWithoutPipeline (bootInputsFor serveOnlyEnvVars Nothing config noCeiling)
+                `shouldBe` [wouldRefuse "ecluse mirror" MirrorRoleWithoutMirroring]
+
+        it "names the Dredger on a collapse the writing roles only warn about" $ do
+            config <- expectConfig collapsedMirrorEnv Nothing
+            roleRefusalWarnings BootWithoutPipeline (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
+                `shouldBe` [wouldRefuse "ecluse dredger" collapsedMirrorRefusal]
+
+        it "omits the role the caller already reported for" $ do
+            let envVars = withoutQueueUrl staticEnvVars
+            config <- expectConfig envVars Nothing
+            roleRefusalWarnings (BootMirrorPipeline MirrorOnly) (bootInputsFor envVars Nothing config noCeiling)
+                `shouldBe` [wouldRefuse "ecluse proxy --no-worker" (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")]
+
+        it "reports nothing where every role boots the configuration" $ do
+            config <- expectConfig staticEnvVars Nothing
+            roleRefusalWarnings BootWithoutPipeline (bootInputsFor staticEnvVars Nothing config noCeiling) `shouldBe` []
+
+-- | One warning line as a checker prints it: the command that refuses, and the refusal itself.
+wouldRefuse :: Text -> BootError -> Text
+wouldRefuse invocation err = invocation <> " would refuse to boot: " <> renderBootError err
+
+-- | The npm mount mirroring where it reads: a writing role's advisory, the Dredger's refusal.
+collapsedMirrorEnv :: [(String, String)]
+collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" "https://private.example.test" staticEnvVars
+
+collapsedMirrorRefusal :: BootError
+collapsedMirrorRefusal = MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" "https://private.example.test"
+
+mirrorCollapseAdvisory :: Text
+mirrorCollapseAdvisory =
+    "mount \"npm\": mirrorTarget and privateUpstream resolve to the same registry (https://private.example.test); the Dredger refuses this configuration, so pruning this mirror stays manual"
+
+{- | A plan resolution reduced to its verdict. 'BootPlan' carries the cleared adapters, which are
+records of functions, so the refusal is what an assertion compares.
+-}
+refusalsOf :: BootReport -> Either [BootError] ()
+refusalsOf = void . brOutcome
 
 -- | staticEnvVars with the mirror target and its write token dropped: the mount serves only.
 serveOnlyEnvVars :: [(String, String)]
@@ -137,6 +318,27 @@ serveOnlyEnvVars =
 -- | The preamble's first line when no document exists at the default path.
 absentDocumentLine :: Text
 absentDocumentLine = "Config document: none at /etc/ecluse/config.yaml (defaults and environment only)"
+
+-- | No cgroup of either kind, so the plan's heap ceiling rests on the configured override alone.
+noCgroup :: CgroupLimits
+noCgroup = CgroupLimits{cgCpuCores = Nothing, cgMemoryMaxBytes = Nothing}
+
+-- | A 4 GiB configured ceiling on four cores, which a 256 MiB live posture falls well short of.
+roomyHeapOverride :: RuntimeOverrides
+roomyHeapOverride = RuntimeOverrides{roCores = Just 4, roCoresCeiling = Nothing, roMaxHeapBytes = Just (4096 * mib)}
+
+{- | An operator @GHCRTS -M256m@ binding the heap below the plan. The capability count matches,
+so the heap axis alone separates what the boot measures from what the checker predicts.
+-}
+ghcrtsBoundPosture :: RtsPosture
+ghcrtsBoundPosture =
+    RtsPosture
+        { rpCapabilities = 4
+        , rpProcessors = 4
+        , rpAllocAreaBytes = 4 * mib
+        , rpNurseryChunkBytes = Nothing
+        , rpMaxHeapBytes = Just (256 * mib)
+        }
 
 -- | A 256 MiB pod on four capabilities: the computed tenants shed to fit, and nothing refuses.
 tightPod :: EffectiveRuntimePlan

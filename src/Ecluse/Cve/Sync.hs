@@ -28,7 +28,7 @@ import System.IO.Error (IOError, catchIOError)
 import Ecluse.Config (
     AdvisoriesSettings (advDataDir, advPollInterval, advUrl),
     AdvisoryStoreUrl,
-    AppConfig (cfgAdvisories, cfgLimits, cfgMounts),
+    AppConfig (cfgAdvisories, cfgLimits),
     LimitsSettings (limMaxAdvisoryDatabaseBytes),
     advisoryObjectKey,
     advisoryStoreBucket,
@@ -92,18 +92,18 @@ data CveSyncHandle = CveSyncHandle
     -}
     }
 
-{- | Build the advisory-sync plan, one 'CveSyncHandle' per mount ecosystem, or nothing with no
-store. A mount the build does not ship awaits an artifact that never comes, so it stays unready.
+{- | Build the advisory-sync plan, one 'CveSyncHandle' per vetted mount ecosystem, or nothing with
+no store. A mount the build does not ship awaits an artifact that never comes, so it stays unready.
 -}
-planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
-planCveSync logEnv s3Endpoint appCfg = case advUrl (cfgAdvisories appCfg) of
+planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> [Ecosystem] -> IO (Map.Map Ecosystem CveSyncHandle)
+planCveSync logEnv s3Endpoint appCfg ecosystems = case advUrl (cfgAdvisories appCfg) of
     Nothing -> pure Map.empty
     Just store -> do
         let dataDir = advDataDir (cfgAdvisories appCfg)
         createDirectoryIfMissing True dataDir
         sweepStaleTemps logEnv dataDir
         cveSource <- newS3CveSource s3Endpoint
-        Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource store) (Map.keys (cfgMounts appCfg))
+        Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource store) ecosystems
 
 -- 'cveSource' captures the S3 environment once, so every ecosystem's transport shares one
 -- credential discovery. The store addresses the remote object, the local copy its bare file name.

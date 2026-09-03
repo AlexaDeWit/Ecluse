@@ -11,6 +11,7 @@ module Ecluse.Composition.Support (
     fdLimit,
     noCeiling,
     staticEnvVars,
+    malformedAwsEndpoint,
     withoutMirrorTargetUrl,
     withoutQueueUrl,
     overrideEnv,
@@ -18,11 +19,24 @@ module Ecluse.Composition.Support (
     expectAppConfig,
     expectProviders,
     expectConfig,
+    expectValidated,
+    bootInputsFor,
+    expectPlan,
+    expectPlanFor,
 ) where
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
+import Ecluse.Composition.Plan (
+    BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
+    BootPlan,
+    BootReport (brOutcome),
+    resolveBootPlan,
+ )
+import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), RegistryRole (MirrorWriter))
+import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
+import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig, renderConfigError)
 import Ecluse.Core.Security (Limits (..))
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
@@ -66,6 +80,12 @@ staticEnvVars =
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
     ]
 
+{- | An ambient @AWS_ENDPOINT_URL@ carrying userinfo, which the egress guard refuses. Both entry
+points must report it, and neither may echo the credential it holds.
+-}
+malformedAwsEndpoint :: String
+malformedAwsEndpoint = "http://operator:s3cr3t@localhost:9000"
+
 -- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test can supply its own.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]
 withoutMirrorTargetUrl = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst)
@@ -88,12 +108,46 @@ expectEnv env = expectAppConfig env Nothing
 expectAppConfig :: [(String, String)] -> Maybe ByteString -> IO AppConfig
 expectAppConfig env mDoc = configApp <$> expectConfig env mDoc
 
+{- | Vet a resolved 'Config' as a writing role would, failing the test on a refusal. It is the
+boot's own pure pass, so a spec builds from exactly what the composition root would.
+-}
+expectValidated :: Config -> IO ValidatedPlan
+expectValidated config =
+    either (\errs -> fail ("boot vetting refused: " <> show errs)) pure (snd (runVet MirrorWriter (vetBoot config)))
+
 -- | Build the credential providers from a resolved 'Config', failing the test on a boot error.
 expectProviders :: Config -> IO CredentialProviders
-expectProviders config =
-    initCredentialProviders noCredentialReporters config >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
+expectProviders config = do
+    plan <- expectValidated config
+    initCredentialProviders noCredentialReporters (map vmMount (vpMounts plan))
+        >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
 
 -- | Build a 'Config' from an env and an optional document, failing the test on a policy error.
 expectConfig :: [(String, String)] -> Maybe ByteString -> IO Config
 expectConfig env mDoc =
     either (\errs -> fail ("config load failed: " <> show (map renderConfigError errs))) pure (loadConfig env mDoc)
+
+{- | The pure tier's inputs for a fixture: the layers a configuration loaded from, and the process
+facts a boot would have measured.
+-}
+bootInputsFor :: [(String, String)] -> Maybe ByteString -> Config -> EffectiveRuntimePlan -> BootInputs
+bootInputsFor envVars docBlob config effective =
+    BootInputs
+        { biEnvVars = envVars
+        , biDocument = docBlob
+        , biConfig = config
+        , biRuntimePlan = effective
+        , biFdLimit = fdLimit
+        }
+
+-- | Resolve the boot plan a checker's own role settles for a fixture, failing on a refusal.
+expectPlan :: [(String, String)] -> Maybe ByteString -> Config -> EffectiveRuntimePlan -> IO BootPlan
+expectPlan = expectPlanFor BootWithoutPipeline
+
+-- | 'expectPlan' for a named role, for a spec that drives a role's own arm of a later phase.
+expectPlanFor :: BootRole -> [(String, String)] -> Maybe ByteString -> Config -> EffectiveRuntimePlan -> IO BootPlan
+expectPlanFor role envVars docBlob config effective =
+    either
+        (\errs -> fail ("boot plan refused: " <> show errs))
+        pure
+        (brOutcome (resolveBootPlan role (bootInputsFor envVars docBlob config effective)))

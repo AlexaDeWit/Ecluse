@@ -7,11 +7,6 @@ module Ecluse.ServiceSpec (spec) where
 import Data.Time (addUTCTime, getCurrentTime)
 import Test.Hspec
 
-import Ecluse.Boot (BootAborted (BootAborted), BootEnv (..))
-import Ecluse.Composition.MirrorRole (MirrorRole (ServeOnly))
-import Ecluse.Composition.Plan (resolveBootPlan)
-import Ecluse.Composition.Support (expectConfig, fdLimit, noCeiling, staticEnvVars, withoutQueueUrl)
-import Ecluse.Config (Config)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Worker (
     Liveness (liveHealthy, liveLastPoll),
@@ -21,9 +16,7 @@ import Ecluse.Core.Worker (
     workerHeartbeatStaleAfter,
  )
 import Ecluse.Runtime.Server (MountBinding (bindingPrefix))
-import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Service (mountBindingFor, withServiceRuntime, workerLiveness)
-import Ecluse.Test.Log (newTestLogEnv)
+import Ecluse.Service (mountBindingFor, workerLiveness)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 
 {- | A heartbeat whose last poll is older than 'workerHeartbeatStaleAfter': a consume loop
@@ -36,37 +29,8 @@ stalledHeartbeat = do
     recordPoll heartbeat (addUTCTime (negate (workerHeartbeatStaleAfter + 60)) now)
     pure heartbeat
 
-{- | A 'BootEnv' over a resolved config, as @withBootEnv@ would hand one to a role. The runtime
-posture is the pinned fixture rather than this machine's, so nothing here re-execs the binary.
--}
-testBootEnv :: [(String, String)] -> Config -> IO BootEnv
-testBootEnv envVars config = do
-    logEnv <- newTestLogEnv
-    bootPlan <-
-        either
-            (\errs -> fail ("boot plan refused: " <> show errs))
-            pure
-            (snd (resolveBootPlan envVars Nothing config noCeiling fdLimit))
-    pure
-        BootEnv
-            { beConfig = config
-            , beS3Endpoint = Nothing
-            , beLogEnv = logEnv
-            , beTelemetry = telemetryDisabled
-            , beBootPlan = bootPlan
-            }
-
 spec :: Spec
 spec = do
-    describe "withServiceRuntime -- the role refusal is applied before any wiring" $
-        it "refuses --no-worker over the in-memory queue rather than assembling the role" $ do
-            -- The config is otherwise complete, so nothing downstream would refuse: dropping the
-            -- role guard would let this boot the whole runtime and return normally.
-            let envVars = withoutQueueUrl staticEnvVars
-            config <- expectConfig envVars Nothing
-            bootEnv <- testBootEnv envVars config
-            withServiceRuntime ServeOnly bootEnv (const pass) `shouldThrow` (== BootAborted)
-
     describe "workerLiveness -- what /livez answers once the spawn decision is derived" $ do
         it "reports a stalled consume loop as not live where the process runs one" $ do
             liveness <- stalledHeartbeat >>= workerLiveness True

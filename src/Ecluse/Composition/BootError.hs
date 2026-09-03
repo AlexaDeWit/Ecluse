@@ -8,14 +8,17 @@ its operator-facing rendering.
 Each case is a __fail-loud__ boot failure, and the root aggregates them, so a single run reports
 every problem an operator must fix (see @docs\/architecture\/configuration.md@ → "Validation").
 This module is the shared spine of the composition-root modules that produce them, so it holds
-no policy of its own beyond the rendering.
+no policy of its own beyond the rendering and the fold that turns a thrown fault into one.
 -}
 module Ecluse.Composition.BootError (
     BootError (..),
+    refuseOnThrow,
     renderBootError,
+    renderBootErrors,
 ) where
 
 import Data.Text qualified as T
+import UnliftIO (tryAny)
 
 import Ecluse.Config (
     PolicyError,
@@ -24,6 +27,7 @@ import Ecluse.Config (
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Text (displayExceptionT)
 
 {- | A reason the composition root refuses to start. The root aggregates them, so a
 single run reports every problem an operator must fix.
@@ -71,18 +75,18 @@ data BootError
       (@ECLUSE_SERVER__AUTH_TOKEN@). An unauthenticated request could otherwise publish as Écluse.
       -}
       PublishStaticCredentialNeedsEdge Ecosystem
-    | {- | A mount's publication target shares a host with the named mount's public upstream.
-      The publisher's relayed credential would reach a public registry.
+    | {- | A mount's publication target, at the carried registry, shares a host with the named
+      mount's public upstream. The publisher's relayed credential would reach a public registry.
       -}
-      PublicationTargetOnPublicUpstream Ecosystem Ecosystem
-    | {- | A mount's publication target is also the named mount's endpoint under the named key,
-      so a publish would be relayed into a role the operator declared for something else.
+      PublicationTargetOnPublicUpstream Ecosystem Ecosystem Text
+    | {- | A mount's publication target is also the named mount's endpoint under the named key, at
+      the carried registry. A publish would be relayed into a role declared for something else.
       -}
-      PublicationTargetOnMountEndpoint Ecosystem Ecosystem Text
-    | {- | A mount's mirror target shares a host with the named mount's public upstream. Écluse's
-      own mirror-write credential would reach a public registry.
+      PublicationTargetOnMountEndpoint Ecosystem Ecosystem Text Text
+    | {- | A mount's mirror target, at the carried registry, shares a host with the named mount's
+      public upstream. Écluse's own mirror-write credential would reach a public registry.
       -}
-      MirrorTargetOnPublicUpstream Ecosystem Ecosystem
+      MirrorTargetOnPublicUpstream Ecosystem Ecosystem Text
     | {- | A mount's mirror target is also the named mount's endpoint under the named key, at the
       carried registry. A sweep of that store would delete data the other role owns.
       -}
@@ -99,7 +103,27 @@ data BootError
       it has no queue to drain and nothing to publish.
       -}
       MirrorRoleWithoutMirroring
+    | {- | Building the configured mirror-queue backend threw. Carries the rendered exception,
+      which tells a transient fault from a permanent one to fix.
+      -}
+      MirrorQueueUnavailable Text
+    | {- | Preparing the configured advisory sync threw. Carries the rendered exception, which
+      tells a transient fault from a permanent one to fix.
+      -}
+      AdvisorySyncUnavailable Text
     deriving stock (Eq, Show)
+
+{- | Fold a thrown fault into the boot error the caller names, so a phase that dials a live
+environment refuses through the aggregate rather than escaping the boot as an exception.
+-}
+refuseOnThrow :: (Text -> BootError) -> IO a -> IO (Either [BootError] a)
+refuseOnThrow refusal action = first (pure . refusal . displayExceptionT) <$> tryAny action
+
+{- | Render an aggregated refusal as the one block a failed launch reports, so every problem an
+operator must fix appears in a single run.
+-}
+renderBootErrors :: [BootError] -> Text
+renderBootErrors = T.unlines . map renderBootError
 
 -- | Render a 'BootError' as a human-facing line for the aggregated failure block.
 renderBootError :: BootError -> Text
@@ -135,21 +159,27 @@ renderBootError = \case
         mountKeyRef eco "publicationTarget" <> " is set but " <> mountKeyRef eco "publicationAllow" <> " is not: a publication target needs a publication allow-list (for npm, scopes such as @acme) for the anti-shadowing guard."
     PublishStaticCredentialNeedsEdge eco ->
         mountKeyRef eco "publicationTargetToken" <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
-    PublicationTargetOnPublicUpstream eco other ->
+    PublicationTargetOnPublicUpstream eco other url ->
         mountKeyRef eco "publicationTarget"
-            <> " shares a host with "
+            <> " ("
+            <> url
+            <> ") shares a host with "
             <> mountKeyRef other "publicUpstream"
-            <> ": a publish carries the publisher's own credential, which must never reach a public upstream"
-    PublicationTargetOnMountEndpoint eco other key ->
+            <> ": a publish carries the publisher's own credential, which must never reach a public upstream, so point it at a registry that shares a host with no public upstream"
+    PublicationTargetOnMountEndpoint eco other key url ->
         mountKeyRef eco "publicationTarget"
             <> " is also "
             <> mountKeyRef other key
-            <> ": point it at a registry that holds no other role, so a publish is never relayed into one"
-    MirrorTargetOnPublicUpstream eco other ->
+            <> " ("
+            <> url
+            <> "): point it at a registry that holds no other role, so a publish is never relayed into one"
+    MirrorTargetOnPublicUpstream eco other url ->
         mountKeyRef eco "mirrorTarget"
-            <> " shares a host with "
+            <> " ("
+            <> url
+            <> ") shares a host with "
             <> mountKeyRef other "publicUpstream"
-            <> ": the mirror write carries this proxy's own credential, which must never reach a public upstream"
+            <> ": the mirror write carries this proxy's own credential, which must never reach a public upstream, so point it at a registry that shares a host with no public upstream"
     MirrorTargetOnMountEndpoint eco other key url ->
         mountKeyRef eco "mirrorTarget"
             <> " is also "
@@ -164,3 +194,11 @@ renderBootError = \case
             <> " splits the mirror worker from the proxy, but ECLUSE_QUEUE__URL is unset, so mirroring runs on the bounded in-memory queue whose jobs never leave the process that enqueued them: point ECLUSE_QUEUE__URL at a durable queue, or run the single-process ecluse proxy"
     MirrorRoleWithoutMirroring ->
         "ecluse mirror runs the mirror worker alone, but no mount declares a mirror target, so it has nothing to mirror: set ECLUSE_MOUNTS__<ECOSYSTEM>__MIRROR_TARGET, or run a role that needs no mirror queue"
+    MirrorQueueUnavailable detail ->
+        "the mirror queue backend named by ECLUSE_QUEUE__URL could not be built at boot: "
+            <> detail
+            <> " (a transient AWS or network error may clear on retry. A permanent one, such as unresolvable AWS credentials or a queue URL naming no reachable queue, must be fixed)"
+    AdvisorySyncUnavailable detail ->
+        "the advisory sync named by ECLUSE_ADVISORIES__URL could not be prepared at boot: "
+            <> detail
+            <> " (a transient AWS or network error may clear on retry. A permanent one, such as unresolvable AWS credentials or an ECLUSE_ADVISORIES__DATA_DIR this process cannot create, must be fixed)"

@@ -183,8 +183,8 @@ error, not a silent skip:
   token, and a CodeArtifact target that carries one. It also rejects a CodeArtifact identity that
   cannot mint an initial token.
 - A static publish credential requires a verifiable edge.
-  `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` without `ECLUSE_SERVER__AUTH_TOKEN` fails the load
-  as `PublishStaticCredentialNeedsEdge`. That pairing would let any unauthenticated client publish
+  `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` without `ECLUSE_SERVER__AUTH_TOKEN` is refused as
+  `PublishStaticCredentialNeedsEdge`. That pairing would let any unauthenticated client publish
   under Écluse's own identity.
 - Endpoints that hold different registry roles must not name one registry. Every role refuses a
   `publicationTarget` on any mount's `publicUpstream` host, a `publicationTarget` equal to another
@@ -192,23 +192,62 @@ error, not a silent skip:
   mount's `publicUpstream` host. `ecluse dredger` deletes from each mount's `mirrorTarget`, so it
   also refuses a `mirrorTarget` equal to any mount's `privateUpstream` or to its own mount's
   `publicationTarget`. `ecluse proxy` and `ecluse mirror` boot on those three and warn once per
-  collapsed pair, and the operator prunes that mirror by hand. One rule table carries every pair
-  and its severity per role, so a refusal and a warning cannot describe different rules. The
-  comparison is by full registry URL, not by host, because repositories of one CodeArtifact domain
-  differ only in path, and a repository's per-format endpoints are separate stores. It folds the
-  authority to lower case and applies the default port, so neither a capital letter nor an explicit
-  `:443` defeats a refusal. Applying the default port keeps the port in the key rather than dropping
-  it, so `:8443` stays a separate store. The path is compared exactly, which is what keeps those
-  per-format endpoints apart.
+  collapsed pair, and the operator prunes that mirror by hand. One combinator turns each detected
+  collision into the outcome the booting role earns, so a refusal on one path and a warning on
+  another always come from the same rule. The comparison is by full registry URL, not by host,
+  because repositories of one CodeArtifact domain differ only in path, and a repository's per-format
+  endpoints are separate stores. It folds the authority to lower case and applies the default port,
+  so neither a capital letter nor an explicit `:443` defeats a refusal. Applying the default port
+  keeps the port in the key rather than dropping it, so `:8443` stays a separate store. The path is
+  compared exactly, which is what keeps those per-format endpoints apart.
+
+Most of those refusals are decided as the configuration loads. The publish-policy pairing and the
+endpoint-disjointness rules are decided after it, by one pure pass over the loaded configuration
+and the environment snapshot that load read. The pass takes the
+booting role and accumulates, so one run reports every refusal and every advisory that role earns,
+and the advisories reach the log even when a refusal stops the boot. One decision sits outside it:
+a memory-plan override is judged against the resolved mirror runtime, so a refused queue URL
+reports without it. The refusals `ecluse check-config` does not reach are the ones a live
+environment settles: minting a CodeArtifact identity's first token, building the mirror-queue
+backend, preparing each mount ecosystem's advisory sync, resolving a mount to the adapter this
+build ships, and resolving a mount's mirror-write provider.
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the
-ambient `AWS_ENDPOINT_URL` override the boot resolves beside the plan. It prints every decision, one
-provenance line per resolved key, secrets redacted, precedence environment > document > default. It
-exits `0` on a valid configuration, and `2` with the same aggregated report a boot would log. The
-two entry points take that report from one function, so the checker's verdict and the boot's cannot
-drift. That report covers the roles that write, so a collapsed endpoint pair that only
-`ecluse dredger` refuses prints as a warning rather than refusing with exit `2`.
+ambient `AWS_ENDPOINT_URL` override. It prints every decision, one provenance line per resolved
+key, secrets redacted, precedence environment > document > default. It exits `0` on a valid
+configuration, and `2` with the same aggregated report a boot would log. Both entry points call
+the one pure pass, so a role's verdict on one set of inputs is the same on either side of it. The
+inputs are not the same value. A boot passes the runtime posture it measured after applying it,
+and the checker passes the posture `appliedRuntimePlan` predicts an application would reach. Where
+an application falls short of that prediction, the boot sizes the memory plan against the smaller
+measured posture, so it can refuse an explicit override the checker cleared.
+
+The checker picks no subcommand, so it runs the pass once per role. It runs no mirror pipeline and
+prunes no store, so its own pass vets under the writing roles' severities, and that pass decides
+the exit status. A refusal only some roles earn prints as a warning naming the command that earns
+it: `ecluse proxy --no-worker` and `ecluse mirror` over the bounded in-memory queue, `ecluse mirror`
+where no mount declares a `mirrorTarget`, and `ecluse dredger` on a collapsed endpoint pair. A
+configuration one role refuses and another boots is a normal deployment, which is why those do not
+fail the check.
+
+What the checker does not reach is the environment-dependent tier those refusals sit in. A boot
+builds it and the checker makes no cloud call, which is also why allocating each mount's rule state
+waits for a boot. Two types keep that boundary visible. The pure pass yields the boot plan, which is
+the artefact the checker prints and the last one it can reach. A boot then runs an effectful
+planning phase over that plan, which spends every remaining refusal and yields an executable plan.
+
+Every role runs that phase, and each has its own arm in it. The three mirror-pipeline halves
+settle the mount wiring, the advisory sync, and the queue backend there, and one run reports every
+refusal all of that earns. `ecluse dredger` and `ecluse pilot` settle nothing a live environment
+decides today, and a refusal either of them later needs is spent at the same gate. So an executable
+plan carries the role's own wiring, and a boot spends its last refusal in one place whichever role
+it started.
+
+Nothing downstream of an executable plan refuses to boot. Holding one means the assembly below it
+only builds and allocates, so a role's runtime cannot reject a configuration the boot already
+cleared. A listener that fails to bind and an upstream that stops answering are still possible, and
+those are runtime faults for supervision rather than refusals.
 
 ## Client authentication
 

@@ -295,6 +295,7 @@ library
     Ecluse.Composition.BootError
     Ecluse.Composition.Credential
     Ecluse.Composition.Endpoints
+    Ecluse.Composition.Executable
     Ecluse.Composition.MemoryPlan
     Ecluse.Composition.MemoryPlan.Bounds
     Ecluse.Composition.MemoryPlan.Demands
@@ -307,6 +308,9 @@ library
     Ecluse.Composition.MirrorRole
     Ecluse.Composition.Plan
     Ecluse.Composition.Sizing
+    Ecluse.Composition.Types
+    Ecluse.Composition.Validate
+    Ecluse.Composition.Vet
     Ecluse.Composition.Worker
     Ecluse.Config
     Ecluse.CLI
@@ -355,6 +359,7 @@ library
     , text                            ^>=2.1
     , time                            ^>=1.12
     , unix                            ^>=2.8
+    , universe-base                   ^>=1.1
     , unliftio                        ^>=0.2.25
     , validation-selective            ^>=0.2
     , versions                        ^>=6.0
@@ -796,6 +801,7 @@ test-suite ecluse-unit
     Ecluse.Composition.BootErrorSpec
     Ecluse.Composition.CredentialSpec
     Ecluse.Composition.EndpointsSpec
+    Ecluse.Composition.ExecutableSpec
     Ecluse.Composition.MemoryPlan.OverrideSpec
     Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec
@@ -803,6 +809,9 @@ test-suite ecluse-unit
     Ecluse.Composition.PlanSpec
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support
+    Ecluse.Composition.TypesSpec
+    Ecluse.Composition.ValidateSpec
+    Ecluse.Composition.VetSpec
     Ecluse.Composition.WorkerSpec
     Ecluse.CompositionSpec
     Ecluse.Config.AdvisoryStoreSpec
