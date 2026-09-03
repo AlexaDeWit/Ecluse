@@ -115,6 +115,7 @@ import Ecluse.Composition.Executable (
     epRoleWiring,
     planExecutable,
  )
+import Ecluse.Composition.Maintenance (buildStoreMaintenance)
 import Ecluse.Composition.Plan (BootPlan (bpS3Endpoint))
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
@@ -156,11 +157,11 @@ the one phase, so this is where a boot spends its last refusal whichever role it
 startPlannedRole :: BootEnv -> IO ()
 startPlannedRole bootEnv = do
     plan <-
-        planExecutable (beLogEnv bootEnv) mountBindingFor buildMirrorQueue (beBootPlan bootEnv)
+        planExecutable (beLogEnv bootEnv) mountBindingFor buildMirrorQueue buildStoreMaintenance (beBootPlan bootEnv)
             >>= orExit renderBootErrors
     case epRoleWiring plan of
         MirrorPipelineWiring mirror -> withServiceRuntime bootEnv plan mirror runMirrorPipeline
-        StorePrunerWiring -> runDredger bootEnv
+        StorePrunerWiring pruner -> runDredger bootEnv pruner
         PilotWiring -> runPilot bootEnv
 
 {- Pick the entry point the assembled runtime's own role names. Both halves run over the one

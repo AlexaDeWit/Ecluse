@@ -12,16 +12,19 @@ import Ecluse.Composition.BootError (
         MissingAdapter,
         PublicationAllowMissing,
         PublicationTargetOnPublicUpstream,
-        PublishStaticCredentialNeedsEdge
+        PublishStaticCredentialNeedsEdge,
+        StoreMaintenanceUnavailable
     ),
  )
 import Ecluse.Composition.Endpoints (mirrorStoreUrl, publicationTargetUrl)
-import Ecluse.Composition.Support (expectConfig, overrideEnv, staticEnvVars)
+import Ecluse.Composition.Maintenance (StoreBackend (CodeArtifactBackend))
+import Ecluse.Composition.Support (codeArtifactEnvVars, codeArtifactMirrorUrl, expectConfig, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPublications, vpSettings),
     VettedMount (vmEcosystem),
     VettedPublication (vpubAllow, vpubStaticToken, vpubTarget),
+    VettedStore (vsBackend, vsStore),
     vetBoot,
  )
 import Ecluse.Composition.Vet (runVet)
@@ -34,8 +37,9 @@ import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (casRepository))
 
-{- | Tests the boot's validate phase: the three groups a role's pass runs, and the plan a cleared
+{- | Tests the boot's validate phase: the four groups a role's pass runs, and the plan a cleared
 configuration reifies from. The groups compose with '<*>', so one run reports all of them.
 -}
 spec :: Spec
@@ -65,19 +69,30 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
         plan <- expectVetted MirrorWriter staticEnvVars
         Map.keys (vpPublications plan) `shouldBe` []
 
-    it "clears the deleting role a mirror store no other declared endpoint holds" $ do
-        plan <- expectVetted MirrorPruner staticEnvVars
-        fmap (registryUrlText . mirrorStoreUrl) (Map.lookup Npm (vpMirrorStores plan))
-            `shouldBe` Just "https://mirror.example.test"
+    it "clears the deleting role a mirror store no other declared endpoint holds, with its backend" $ do
+        plan <- expectVetted MirrorPruner codeArtifactEnvVars
+        fmap (registryUrlText . mirrorStoreUrl . vsStore) (Map.lookup Npm (vpMirrorStores plan))
+            `shouldBe` Just codeArtifactMirrorUrl
+        fmap (repositoryOf . vsBackend) (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just "mirror"
 
     it "clears a writing role no store at all, because no writing role sweeps one" $ do
         -- The same configuration the deleting role gets a store from. A writing role holds a
         -- witness for a delete it may not perform, so its pass issues none.
-        plan <- expectVetted MirrorWriter staticEnvVars
-        vpMirrorStores plan `shouldBe` Map.empty
+        plan <- expectVetted MirrorWriter codeArtifactEnvVars
+        Map.keys (vpMirrorStores plan) `shouldBe` []
+
+    it "clears a writing role a mirror target this build cannot sweep, and says nothing of it" $ do
+        -- Only the Dredger deletes, so only its pass reads the maintenance rule. The checker
+        -- names the Dredger's refusal for this configuration, so an operator still learns of it.
+        config <- expectConfig staticEnvVars Nothing
+        let (advisories, outcome) = runVet MirrorWriter (vetBoot config)
+        advisories `shouldBe` []
+        fmap (Map.keys . vpMirrorStores) outcome `shouldBe` Right []
+  where
+    repositoryOf (CodeArtifactBackend coordinates) = casRepository coordinates
 
 refusalSpec :: Spec
-refusalSpec = describe "vetBoot -- the refusals its three groups earn" $ do
+refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
     it "refuses a mount whose ecosystem this build ships no adapter for" $
         refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars)
             `shouldReturn` [MissingAdapter PyPI]
@@ -90,7 +105,14 @@ refusalSpec = describe "vetBoot -- the refusals its three groups earn" $ do
         refusalsFor MirrorWriter staticPublishEnv
             `shouldReturn` [PublishStaticCredentialNeedsEdge Npm]
 
-    it "reports a refusal from each of the three groups in one run" $ do
+    it "refuses the deleting role a mirror target this build has no maintenance backend for" $
+        refusalsFor MirrorPruner staticEnvVars `shouldReturn` [noMaintenanceBackend]
+
+    it "reports the mount refusal beside the maintenance refusal from one deleting-role run" $
+        refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars)
+            `shouldReturn` [MissingAdapter PyPI, noMaintenanceBackend]
+
+    it "reports a refusal from each of the writing groups in one run" $ do
         -- The point of the applicative: the mount group refusing does not hide what the publish
         -- policy and the endpoint rules would have said about the same configuration.
         let envVars =
@@ -101,6 +123,11 @@ refusalSpec = describe "vetBoot -- the refusals its three groups earn" $ do
                            , PublicationAllowMissing Npm
                            , PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/npm/"
                            ]
+
+-- | The deleting role's refusal of 'staticEnvVars', whose mirror target no backend here sweeps.
+noMaintenanceBackend :: BootError
+noMaintenanceBackend =
+    StoreMaintenanceUnavailable Npm "its host names no store maintenance backend this build carries"
 
 -- | The npm mount publishing to a registry of its own, under the allow-list the guard enforces.
 publishingEnv :: [(String, String)]

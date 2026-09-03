@@ -11,8 +11,11 @@ module Ecluse.Composition.Support (
     fdLimit,
     noCeiling,
     staticEnvVars,
+    codeArtifactMirrorUrl,
+    codeArtifactEnvVars,
     malformedAwsEndpoint,
     withoutMirrorTargetUrl,
+    withoutMirrorTargetToken,
     withoutQueueUrl,
     overrideEnv,
     expectEnv,
@@ -86,9 +89,26 @@ points must report it, and neither may echo the credential it holds.
 malformedAwsEndpoint :: String
 malformedAwsEndpoint = "http://operator:s3cr3t@localhost:9000"
 
+{- | The CodeArtifact repository endpoint the deleting role's fixtures mirror to: the one host
+this build carries a store maintenance backend for.
+-}
+codeArtifactMirrorUrl :: (IsString s) => s
+codeArtifactMirrorUrl = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"
+
+{- | 'staticEnvVars' mirroring to 'codeArtifactMirrorUrl'. The write credential derives from that
+host, so the static token goes with the target it belonged to.
+-}
+codeArtifactEnvVars :: [(String, String)]
+codeArtifactEnvVars =
+    overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" codeArtifactMirrorUrl (withoutMirrorTargetToken staticEnvVars)
+
 -- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test can supply its own.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]
 withoutMirrorTargetUrl = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst)
+
+-- | Drop the ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN entry, for a target that derives its own credential.
+withoutMirrorTargetToken :: [(String, String)] -> [(String, String)]
+withoutMirrorTargetToken = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst)
 
 {- | Drop the ECLUSE_QUEUE__URL entry, so a test can exercise the absent-URL rollover
 to the bounded in-memory queue.

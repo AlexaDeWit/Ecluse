@@ -6,9 +6,10 @@
 and every advisory a configuration earns.
 
 A rule whose severity varies by 'RegistryRole' reaches its outcome only through 'rule', so it
-cannot be fatal on one boot path and missing on another. An outcome settled outside the pass, such
-as a refusal keyed on the mirror-pipeline half a process runs, joins it through 'decided'.
-Advisories ride the success path, so a check that passes can still advise.
+cannot be fatal on one boot path and absent from another: a role that tolerates a finding says so
+in the rule. An outcome settled outside the pass, such as a refusal keyed on the mirror-pipeline
+half a process runs, joins it through 'decided'. Advisories ride the success path, so a check that
+passes can still advise.
 -}
 module Ecluse.Composition.Vet (
     -- * The accumulating pass
@@ -71,6 +72,10 @@ data Severity finding
       Refuse (finding -> BootError)
     | -- | Boot, and log this advisory line.
       Advise (finding -> Text)
+    | {- | Boot, and log nothing. For a finding about a capability this role never exercises,
+      where another role's pass refuses it and @ecluse check-config@ names that role.
+      -}
+      Ignore
 
 {- | One rule: its severity per role, the condition it detects in an input, and that input. One
 detection feeds both the refusal and the advisory, so the two cannot describe different rules.
@@ -81,3 +86,4 @@ rule severity detect input = Vet $ \role ->
         (Nothing, _) -> ([], Success ())
         (Just finding, Refuse toRefusal) -> ([], Failure [toRefusal finding])
         (Just finding, Advise toAdvisory) -> ([toAdvisory finding], Success ())
+        (Just _, Ignore) -> ([], Success ())

@@ -14,6 +14,7 @@ module Ecluse.Composition.Executable (
     ExecutablePlan (epBootPlan, epRoleWiring),
     RoleWiring (..),
     MirrorWiring (mwRole, mwBootWiring, mwCveSync, mwQueue, mwDeferredMetrics),
+    PrunerWiring (pwMaintenance),
     BuildMirrorQueue,
     planExecutable,
 ) where
@@ -33,6 +34,7 @@ import Ecluse.Composition.BootError (
     BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable),
     refuseOnThrow,
  )
+import Ecluse.Composition.Maintenance (BuildStoreMaintenance, planStoreMaintenance)
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpMaxRequestBytes, mpPublishTenant, mpQueueMemoryMaxDepth),
     PublishTenant (ptAggregateBytes),
@@ -48,10 +50,15 @@ import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
     MirrorRole,
  )
-import Ecluse.Composition.Validate (ValidatedPlan (vpMounts, vpSettings), VettedMount (vmEcosystem))
+import Ecluse.Composition.Validate (
+    ValidatedPlan (vpMirrorStores, vpMounts, vpSettings),
+    VettedMount (vmEcosystem),
+    VettedStore (vsBackend),
+ )
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
+import Ecluse.Core.Registry.Maintenance (StoreMaintenance)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
 import Ecluse.Cve.Sync (CveSyncHandle, cveRuleDepsFor, katipFaultReporter, planCveSync)
@@ -78,8 +85,8 @@ planned cannot reach another role's runtime.
 data RoleWiring
     = -- | @ecluse proxy@, @ecluse proxy --no-worker@ and @ecluse mirror@.
       MirrorPipelineWiring MirrorWiring
-    | -- | @ecluse dredger@: nothing here needs a live environment yet.
-      StorePrunerWiring
+    | -- | @ecluse dredger@: the maintenance handle for each store its pass cleared.
+      StorePrunerWiring PrunerWiring
     | -- | @ecluse pilot@: nothing here needs a live environment yet.
       PilotWiring
 
@@ -99,6 +106,14 @@ data MirrorWiring = MirrorWiring
     -}
     }
 
+{- | What the store pruner's arm settled: the handle the Dredger sweeps each cleared store with,
+built against the live environment, so a store whose client cannot be built refuses here.
+-}
+newtype PrunerWiring = PrunerWiring
+    { pwMaintenance :: Map Ecosystem StoreMaintenance
+    -- ^ One maintenance handle per store the plan cleared, keyed by the mount that declares it.
+    }
+
 {- | How a boot builds the selected mirror-queue backend. Injected, as the adapter resolver is,
 so a spec can drive this phase's refusals without reaching a cloud.
 -}
@@ -107,12 +122,20 @@ type BuildMirrorQueue = LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 {- | Plan the runtime the cleared plan's role starts, or report every refusal only a live
 environment can settle. Each role has one arm here, and a refusal is spent once for all of them.
 -}
-planExecutable :: LogEnv -> ResolveAdapter -> BuildMirrorQueue -> BootPlan -> IO (Either [BootError] ExecutablePlan)
-planExecutable logEnv resolveAdapter buildQueue bootPlan = case bpRole bootPlan of
+planExecutable ::
+    LogEnv ->
+    ResolveAdapter ->
+    BuildMirrorQueue ->
+    BuildStoreMaintenance ->
+    BootPlan ->
+    IO (Either [BootError] ExecutablePlan)
+planExecutable logEnv resolveAdapter buildQueue buildStore bootPlan = case bpRole bootPlan of
     BootMirrorPipeline role ->
         fmap (executablePlan . MirrorPipelineWiring)
             <$> planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan
-    BootStorePruner -> pure (Right (executablePlan StorePrunerWiring))
+    BootStorePruner ->
+        fmap (executablePlan . StorePrunerWiring . PrunerWiring)
+            <$> planStoreMaintenance buildStore (vsBackend <$> vpMirrorStores (bpValidated bootPlan))
     BootWithoutPipeline -> pure (Right (executablePlan PilotWiring))
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}

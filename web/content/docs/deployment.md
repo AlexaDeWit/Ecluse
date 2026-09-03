@@ -28,7 +28,8 @@ selects the role:
   without starting anything (exit `0` valid, `2` refused). It checks every role, so a refusal only
   one command earns (`ecluse proxy --no-worker` or `ecluse mirror` without a durable queue,
   `ecluse mirror` where no mount declares a `mirrorTarget`, `ecluse dredger` on a collapsed
-  endpoint pair) prints here as a warning naming that command. Run it in CI or before a rollout.
+  endpoint pair or on a `mirrorTarget` it has no maintenance backend for) prints here as a warning
+  naming that command. Run it in CI or before a rollout.
 
 All roles share one configuration. The proxy and the mirror worker scale. Run Pilot as a singleton,
 because multiple instances race and duplicate API calls.
