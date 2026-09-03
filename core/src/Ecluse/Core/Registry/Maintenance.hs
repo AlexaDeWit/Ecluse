@@ -41,7 +41,6 @@ module Ecluse.Core.Registry.Maintenance (
     -- * Verdicts
     ConsentVerdict (..),
     StoreClass (..),
-    renderStoreClass,
 
     -- * Faults
     StoreFault (..),
@@ -202,12 +201,6 @@ data StoreClass
       -}
       StorePreserved Text
     deriving stock (Eq, Show)
-
--- | Render a classification for the boot line that records what the Dredger may delete from.
-renderStoreClass :: StoreClass -> Text
-renderStoreClass = \case
-    StoreDestroyable -> "destroyable"
-    StorePreserved reason -> "not destroyable: " <> reason
 
 {- | A maintenance call that produced no answer, classified once at the adapter edge. The
 transport half is "Ecluse.Core.Fault"'s vocabulary, and the advice half is what to do next.

@@ -3,17 +3,21 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The AWS CodeArtifact leaf of the store maintenance handle: enumerate a repository's
-packages and versions, delete versions from it, and read the two verdicts a sweep needs
-before it deletes anything. This is __control plane__ only, on @amazonka@, while the data
-plane that serves and mirrors packages stays on @http-client@. The env is built once here
-and captured in the handle's closures, so the backend's state never reaches the proxy's
-@Env@. Every decision lives next door in
-"Ecluse.Runtime.Maintenance.CodeArtifact.Decide", and the backend-neutral paging, chunking,
-and delete drives live in "Ecluse.Core.Registry.Maintenance".
+packages and versions, delete versions from it, and read the two verdicts a sweep needs. This is
+__control plane__ only, on @amazonka@, while the data plane stays on @http-client@. Its five
+calls are a 'ControlPlane' record, built once from a discovered identity and captured in the
+handle's closures, so the backend's state never reaches the proxy's @Env@ and a spec can drive
+the sequencing without one. The decisions live in
+"Ecluse.Runtime.Maintenance.CodeArtifact.Decide", the drives in "Ecluse.Core.Registry.Maintenance".
 -}
 module Ecluse.Runtime.Maintenance.CodeArtifact (
     newCodeArtifactMaintenance,
     maintenanceForEnv,
+
+    -- * The calls the handle makes
+    ControlPlane (..),
+    controlPlaneFor,
+    maintenanceFor,
 ) where
 
 import Amazonka qualified as AWS
@@ -55,6 +59,17 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     versionsOfPage,
  )
 
+{- | The five control-plane calls this leaf makes, one field each, so the sequencing around them
+is drivable from response values of @amazonka@'s own types.
+-}
+data ControlPlane = ControlPlane
+    { cpListPackages :: CA.ListPackages -> IO (Either StoreFault CA.ListPackagesResponse)
+    , cpListVersions :: CA.ListPackageVersions -> IO (Either StoreFault CA.ListPackageVersionsResponse)
+    , cpDeleteVersions :: CA.DeletePackageVersions -> IO (Either StoreFault CA.DeletePackageVersionsResponse)
+    , cpListTags :: CA.ListTagsForResource -> IO (Either StoreFault CA.ListTagsForResourceResponse)
+    , cpDescribeRepository :: CA.DescribeRepository -> IO (Either StoreFault CA.DescribeRepositoryResponse)
+    }
+
 {- | Build the maintenance handle for one CodeArtifact repository, with AWS credentials
 discovered the standard way (environment, instance role, container role, SSO, STS).
 -}
@@ -62,28 +77,43 @@ newCodeArtifactMaintenance :: CodeArtifactStore -> IO StoreMaintenance
 newCodeArtifactMaintenance store =
     maintenanceForEnv store <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
 
-{- | Build the handle over a caller-supplied @amazonka@ 'AWS.Env'. Exposed so a test can
-hold the handle, and the facts it supplies, without discovering an ambient AWS identity.
+{- | Build the handle over a caller-supplied @amazonka@ 'AWS.Env'. Exposed so a test can hold the
+handle, and the facts it supplies, without discovering an ambient AWS identity.
 -}
 maintenanceForEnv :: CodeArtifactStore -> AWS.Env -> StoreMaintenance
-maintenanceForEnv store env =
+maintenanceForEnv store env = maintenanceFor store (controlPlaneFor env)
+
+-- | Every call sent over one env, with the AWS error folded into a 'StoreFault'.
+controlPlaneFor :: AWS.Env -> ControlPlane
+controlPlaneFor env =
+    ControlPlane
+        { cpListPackages = sendStore env
+        , cpListVersions = sendStore env
+        , cpDeleteVersions = sendStore env
+        , cpListTags = sendStore env
+        , cpDescribeRepository = sendStore env
+        }
+
+-- | Build the handle over a caller-supplied 'ControlPlane', which is all the effects it has.
+maintenanceFor :: CodeArtifactStore -> ControlPlane -> StoreMaintenance
+maintenanceFor store plane =
     StoreMaintenance
         { storeFacts = codeArtifactFacts
-        , enumeratePackages = pageAll (packagePage env store)
-        , enumerateVersions = pageAll . versionPage env store
-        , deleteVersions = deleteChunks env store
+        , enumeratePackages = pageAll (packagePage plane store)
+        , enumerateVersions = pageAll . versionPage plane store
+        , deleteVersions = deleteChunks plane store
         , -- CodeArtifact has no call that reports what a delete would do without doing it.
           rehearseDelete = Nothing
-        , verifyConsent = readConsent env store
-        , classifyStore = fmap (fmap classifyRepository) (describeStore env store)
+        , verifyConsent = readConsent plane store
+        , classifyStore = fmap (fmap classifyRepository) (describeStore plane store)
         }
 
 sendStore :: (AWS.AWSRequest a) => AWS.Env -> a -> IO (Either StoreFault (AWS.AWSResponse a))
 sendStore = sendClassified classifyStoreFault
 
-packagePage :: AWS.Env -> CodeArtifactStore -> Maybe Text -> IO (Either StoreFault (Maybe Text, [PackageName]))
-packagePage env store token =
-    fmap page <$> sendStore env (listPackagesRequest store token)
+packagePage :: ControlPlane -> CodeArtifactStore -> Maybe Text -> IO (Either StoreFault (Maybe Text, [PackageName]))
+packagePage plane store token =
+    fmap page <$> cpListPackages plane (listPackagesRequest store token)
   where
     page response =
         ( response ^. CAL.listPackagesResponse_nextToken
@@ -93,13 +123,13 @@ packagePage env store token =
         )
 
 versionPage ::
-    AWS.Env ->
+    ControlPlane ->
     CodeArtifactStore ->
     PackageName ->
     Maybe Text ->
     IO (Either StoreFault (Maybe Text, [StoredVersion]))
-versionPage env store name token =
-    fmap page <$> sendStore env (listVersionsRequest store name token)
+versionPage plane store name token =
+    fmap page <$> cpListVersions plane (listVersionsRequest store name token)
   where
     page response =
         ( response ^. CAL.listPackageVersionsResponse_nextToken
@@ -108,24 +138,25 @@ versionPage env store name token =
             (fromMaybe [] (response ^. CAL.listPackageVersionsResponse_versions))
         )
 
-deleteChunks :: AWS.Env -> CodeArtifactStore -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
-deleteChunks env store name versions =
+deleteChunks :: ControlPlane -> CodeArtifactStore -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
+deleteChunks plane store name versions =
     deleteAll send (chunksOfCeiling deleteCeiling versions)
   where
-    send batch = fmap (foldDeleteResponse batch) <$> sendStore env (deleteRequest store name batch)
+    send batch =
+        fmap (foldDeleteResponse batch) <$> cpDeleteVersions plane (deleteRequest store name batch)
 
 -- The consent marker is a tag on the repository, and a tag read is addressed by ARN, so
 -- the description comes first.
-readConsent :: AWS.Env -> CodeArtifactStore -> IO (Either StoreFault ConsentVerdict)
-readConsent env store =
-    describeStore env store >>= \case
+readConsent :: ControlPlane -> CodeArtifactStore -> IO (Either StoreFault ConsentVerdict)
+readConsent plane store =
+    describeStore plane store >>= \case
         Left fault -> pure (Left fault)
         Right description -> case arnOfDescription description of
             Left fault -> pure (Left fault)
-            Right arn -> fmap tags <$> sendStore env (listTagsRequest arn)
+            Right arn -> fmap tags <$> cpListTags plane (listTagsRequest arn)
   where
     tags response = consentOfTags (fromMaybe [] (response ^. CAL.listTagsForResourceResponse_tags))
 
-describeStore :: AWS.Env -> CodeArtifactStore -> IO (Either StoreFault CA.RepositoryDescription)
-describeStore env store =
-    (>>= repositoryOfResponse) <$> sendStore env (describeRepositoryRequest store)
+describeStore :: ControlPlane -> CodeArtifactStore -> IO (Either StoreFault CA.RepositoryDescription)
+describeStore plane store =
+    (>>= repositoryOfResponse) <$> cpDescribeRepository plane (describeRepositoryRequest store)

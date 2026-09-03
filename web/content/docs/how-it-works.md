@@ -28,8 +28,8 @@ itself.
 - `ecluse proxy` serves clients and runs the mirror worker.
 - `ecluse mirror` runs the mirror worker alone, when you want to scale it apart from the proxy.
 - `ecluse pilot` compiles the advisory database the fast lane reads.
-- `ecluse dredger` is the mirror-store pruning role. Not yet implemented: it answers its health
-  probes and prunes nothing.
+- `ecluse dredger` is the mirror-store pruning role. This build carries no sweep, so it refuses
+  to start rather than run idle.
 
 [Deploying Écluse](@/docs/deployment.md) covers all four.
 

@@ -14,7 +14,6 @@ module Ecluse.Composition.Executable (
     ExecutablePlan (epBootPlan, epRoleWiring),
     RoleWiring (..),
     MirrorWiring (mwRole, mwBootWiring, mwCveSync, mwQueue, mwDeferredMetrics),
-    PrunerWiring (pwMaintenance),
     BuildMirrorQueue,
     planExecutable,
 ) where
@@ -58,7 +57,6 @@ import Ecluse.Composition.Validate (
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
-import Ecluse.Core.Registry.Maintenance (StoreMaintenance)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
 import Ecluse.Cve.Sync (CveSyncHandle, cveRuleDepsFor, katipFaultReporter, planCveSync)
@@ -85,8 +83,6 @@ planned cannot reach another role's runtime.
 data RoleWiring
     = -- | @ecluse proxy@, @ecluse proxy --no-worker@ and @ecluse mirror@.
       MirrorPipelineWiring MirrorWiring
-    | -- | @ecluse dredger@: the maintenance handle for each store its pass cleared.
-      StorePrunerWiring PrunerWiring
     | -- | @ecluse pilot@: nothing here needs a live environment yet.
       PilotWiring
 
@@ -104,14 +100,6 @@ data MirrorWiring = MirrorWiring
     {- ^ The metric handle the credential providers and the rule breakers already record through.
     The assembly makes those recordings live once the instruments exist.
     -}
-    }
-
-{- | What the store pruner's arm settled: the handle the Dredger sweeps each cleared store with,
-built against the live environment, so a store whose client cannot be built refuses here.
--}
-newtype PrunerWiring = PrunerWiring
-    { pwMaintenance :: Map Ecosystem StoreMaintenance
-    -- ^ One maintenance handle per store the plan cleared, keyed by the mount that declares it.
     }
 
 {- | How a boot builds the selected mirror-queue backend. Injected, as the adapter resolver is,
@@ -135,16 +123,15 @@ planExecutable logEnv resolveAdapter buildQueue buildStore bootPlan = case bpRol
             <$> planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan
     -- The refusal below holds until this build carries a sweep.
     BootStorePruner ->
-        idlePrunerRefusal . fmap (executablePlan . StorePrunerWiring . PrunerWiring)
+        idlePrunerRefusal
             <$> planStoreMaintenance buildStore (vsBackend <$> vpMirrorStores (bpValidated bootPlan))
     BootWithoutPipeline -> pure (Right (executablePlan PilotWiring))
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}
 
-{- The deleting role plans its handles and then refuses whatever they settled, so one launch still
-reports every configuration and credential problem beside the refusal rather than the refusal
-alone. A yielded plan would start a role that holds a deleting identity and deletes nothing. -}
-idlePrunerRefusal :: Either [BootError] ExecutablePlan -> Either [BootError] ExecutablePlan
+{- The refusal is folded in after the handles are planned, so a store whose client cannot be built
+reports beside it rather than the refusal standing alone. -}
+idlePrunerRefusal :: Either [BootError] a -> Either [BootError] ExecutablePlan
 idlePrunerRefusal outcome = Left (fromLeft [] outcome <> [StorePrunerWithoutSweep])
 
 {- The mirror pipeline's arm: the advisory sync, the queue backend, and the mount wiring. The three

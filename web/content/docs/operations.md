@@ -35,7 +35,7 @@ returns `501` by design, because search is a discovery convenience, not an insta
 `GET /npm/-/package/{package}/dist-tags` and the `PUT` and `DELETE` of
 `/npm/-/package/{package}/dist-tags/{tag}` also return `501`, because Écluse implements no mutable
 named pointer. A package's tags are in the metadata document Écluse serves, and the publication
-target owns setting and removing them. The mirror, Pilot, and Dredger roles export the same
+target owns setting and removing them. The mirror and Pilot roles export the same
 `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`, and nothing else. With telemetry on, every role
 also opens a metrics listener on a second port, which co-located roles must not share
 ([Telemetry](@/docs/operations.md#telemetry-opt-in)).
@@ -249,5 +249,5 @@ arithmetic gives these worked shapes:
 | 4 CPU / 512 MiB | `-A32m` | The smaller per-core area fits four cores in less memory. |
 
 Taller pods amortise the cache and coalescing better, so prefer 4-CPU-ish shapes. Tune the
-allocation area with `GHCRTS` and read the effective value back from the boot log. Pilot and
-Dredger run different workloads, so tune their allocation area separately.
+allocation area with `GHCRTS` and read the effective value back from the boot log. Pilot runs a
+different workload, so tune its allocation area separately.

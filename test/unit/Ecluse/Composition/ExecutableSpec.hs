@@ -27,7 +27,7 @@ import Ecluse.Composition.Executable (
     BuildMirrorQueue,
     ExecutablePlan (epBootPlan, epRoleWiring),
     MirrorWiring (mwBootWiring, mwCveSync, mwRole),
-    RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
+    RoleWiring (MirrorPipelineWiring, PilotWiring),
     planExecutable,
  )
 import Ecluse.Composition.Maintenance (BuildStoreMaintenance)
@@ -112,8 +112,7 @@ spec = describe "planExecutable" $ do
 
     it "reports a store maintenance client the live environment cannot build ahead of that refusal" $ do
         -- The client discovers an AWS identity when it is built, so an environment with none
-        -- refuses here rather than failing the Dredger's first call against the store. The arm
-        -- plans before it refuses, which is what keeps both in one launch's report.
+        -- refuses here rather than failing the Dredger's first call against the store.
         outcome <- planWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
@@ -133,7 +132,6 @@ spec = describe "planExecutable" $ do
 plannedArm :: RoleWiring -> Text
 plannedArm = \case
     MirrorPipelineWiring _ -> "mirror pipeline"
-    StorePrunerWiring _ -> "store pruner"
     PilotWiring -> "pilot"
 
 -- | A queue builder that allocates nothing, for the arms whose refusals are elsewhere.

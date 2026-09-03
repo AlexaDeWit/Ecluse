@@ -36,6 +36,7 @@ import Ecluse.Config (AppConfig (cfgMounts), Config (configApp), MountConfig)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), formatToken)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
 
 spec :: Spec
 spec = do
@@ -114,7 +115,12 @@ passSpec = describe "vetStoreBackends" $ do
 {- The environment tier over the cleared backends. It builds one handle per store, and its
 refusals accumulate rather than stopping at the first store whose client cannot be built. -}
 planSpec :: Spec
-planSpec = describe "planStoreMaintenance" $
+planSpec = describe "planStoreMaintenance" $ do
+    it "builds one handle per cleared store, keyed by the mount that declares it" $ do
+        backends <- clearedBackendsFor twoStoreEnv
+        outcome <- planStoreMaintenance (const (fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)) backends
+        fmap Map.keys outcome `shouldBe` Right (Map.keys backends)
+
     it "reports a refusal for every store whose client the environment cannot build" $ do
         backends <- clearedBackendsFor twoStoreEnv
         Map.keys backends `shouldBe` [Npm, PyPI]

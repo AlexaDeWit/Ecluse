@@ -12,7 +12,6 @@ import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout), 
 import Ecluse.Core.Registry.Maintenance (
     DeleteCeiling (AtMost, NoCeiling),
     RetryAdvice (RetryFutile, RetryWorthwhile),
-    StoreClass (StoreDestroyable, StorePreserved),
     StoreFault (..),
     VersionOutcome (VersionRemoved, VersionUnreached),
     chunksOfCeiling,
@@ -20,7 +19,6 @@ import Ecluse.Core.Registry.Maintenance (
     pageAll,
     refusalCode,
     refusalDetail,
-    renderStoreClass,
     storeRefusal,
     unreachedBatch,
  )
@@ -35,14 +33,6 @@ spec = do
 
 vocabularySpec :: Spec
 vocabularySpec = do
-    describe "renderStoreClass" $ do
-        it "renders a destroyable store as such" $
-            renderStoreClass StoreDestroyable `shouldBe` "destroyable"
-
-        it "carries the reason a store is not destroyable into the line" $
-            renderStoreClass (StorePreserved "it has an external connection")
-                `shouldBe` "not destroyable: it has an external connection"
-
     describe "storeRefusal" $ do
         it "keeps the backend's code and message" $ do
             let refusal = storeRefusal "NOT_FOUND" "no such version"

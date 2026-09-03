@@ -111,7 +111,7 @@ import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
 import Ecluse.Composition.BootError (renderBootErrors)
 import Ecluse.Composition.Executable (
-    RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
+    RoleWiring (MirrorPipelineWiring, PilotWiring),
     epRoleWiring,
     planExecutable,
  )
@@ -123,7 +123,6 @@ import Ecluse.Composition.Types (
  )
 import Ecluse.Config (Config (configApp))
 import Ecluse.Core.Text (displayExceptionT)
-import Ecluse.Dredger
 import Ecluse.Mirror
 import Ecluse.Pilot
 import Ecluse.Proxy
@@ -161,7 +160,6 @@ startPlannedRole bootEnv = do
             >>= orExit renderBootErrors
     case epRoleWiring plan of
         MirrorPipelineWiring mirror -> withServiceRuntime bootEnv plan mirror runMirrorPipeline
-        StorePrunerWiring pruner -> runDredger bootEnv pruner
         PilotWiring -> runPilot bootEnv
 
 {- Pick the entry point the assembled runtime's own role names. Both halves run over the one

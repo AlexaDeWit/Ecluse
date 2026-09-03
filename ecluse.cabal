@@ -290,7 +290,6 @@ library
     Ecluse.Service
     Ecluse.Pilot
     Ecluse.Pilot.Plan
-    Ecluse.Dredger
     Ecluse.Cve.Sync
     Ecluse.Composition
     Ecluse.Composition.BootError
