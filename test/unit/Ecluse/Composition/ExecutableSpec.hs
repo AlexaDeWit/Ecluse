@@ -4,7 +4,6 @@
 
 module Ecluse.Composition.ExecutableSpec (spec) where
 
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
@@ -15,14 +14,19 @@ import Ecluse.Composition (
     ResolveAdapter,
  )
 import Ecluse.Composition.BootError (
-    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, MissingAdapter, StoreMaintenanceUnavailable),
+    BootError (
+        AdvisorySyncUnavailable,
+        MirrorQueueUnavailable,
+        MissingAdapter,
+        StoreMaintenanceUnavailable,
+        StorePrunerWithoutSweep
+    ),
     StoreMaintenanceReason (ClientBuildFailed),
  )
 import Ecluse.Composition.Executable (
     BuildMirrorQueue,
     ExecutablePlan (epBootPlan, epRoleWiring),
     MirrorWiring (mwBootWiring, mwCveSync, mwRole),
-    PrunerWiring (pwMaintenance),
     RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
     planExecutable,
  )
@@ -35,7 +39,6 @@ import Ecluse.Composition.Types (
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Queue (noMirrorQueue)
-import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend), StoreMaintenance (storeFacts))
 import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Log (newTestLogEnv)
@@ -99,26 +102,24 @@ spec = describe "planExecutable" $ do
             Left [AdvisorySyncUnavailable _, MirrorQueueUnavailable _, MissingAdapter Npm] -> pass
             Left errs -> expectationFailure ("expected all three refusals in one list, got: " <> show errs)
 
-    it "plans the store pruner on its own arm, one maintenance handle per cleared store" $ do
-        -- The arm builds the handle for each store the pure pass cleared and nothing else, so
-        -- ports that refuse an adapter or a queue leave it clearing exactly as working ones do.
-        pruner <- expectExecutableWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue inertStore
-        bpRole (epBootPlan pruner) `shouldBe` BootStorePruner
-        case epRoleWiring pruner of
-            StorePrunerWiring wiring -> do
-                Map.keys (pwMaintenance wiring) `shouldBe` [Npm]
-                map (factBackend . storeFacts) (Map.elems (pwMaintenance wiring)) `shouldBe` ["fake"]
-            other -> expectationFailure ("expected the store pruner arm, got the " <> toString (plannedArm other) <> " arm")
+    it "refuses the store pruner for want of a sweep, though every store and handle clears" $ do
+        -- This build carries no sweep, so a started Dredger would hold a deleting identity and
+        -- delete nothing. Its stores clear and its handles build, and the role still refuses.
+        outcome <- planWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue inertStore
+        case outcome of
+            Right _ -> expectationFailure "expected the store pruner arm to refuse"
+            Left errs -> errs `shouldBe` [StorePrunerWithoutSweep]
 
-    it "refuses a store maintenance client the live environment cannot build" $ do
+    it "reports a store maintenance client the live environment cannot build ahead of that refusal" $ do
         -- The client discovers an AWS identity when it is built, so an environment with none
-        -- refuses here rather than failing the Dredger's first call against the store.
+        -- refuses here rather than failing the Dredger's first call against the store. The arm
+        -- plans before it refuses, which is what keeps both in one launch's report.
         outcome <- planWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
-            Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed detail)] ->
+            Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed detail), StorePrunerWithoutSweep] ->
                 detail `shouldSatisfy` T.isInfixOf "NoCredentials"
-            Left errs -> expectationFailure ("expected one maintenance refusal, got: " <> show errs)
+            Left errs -> expectationFailure ("expected the handle refusal then the sweep refusal, got: " <> show errs)
 
     it "plans the pilot through the same phase, on its own arm" $ do
         -- Nothing here needs a live environment, so ports that refuse outright leave the role

@@ -136,8 +136,8 @@ type BuildStoreMaintenance = ClearedBackend -> IO StoreMaintenance
 
 -- | The live handle for a cleared backend, with its credentials discovered the standard AWS way.
 buildStoreMaintenance :: BuildStoreMaintenance
-buildStoreMaintenance (ClearedBackend (CodeArtifactBackend coordinates)) =
-    newCodeArtifactMaintenance coordinates
+buildStoreMaintenance cleared = case clearedBackend cleared of
+    CodeArtifactBackend coordinates -> newCodeArtifactMaintenance coordinates
 
 {- | Build one handle per cleared store, or every refusal the live environment earns. The builds
 accumulate, so one launch reports every store whose client cannot be built.

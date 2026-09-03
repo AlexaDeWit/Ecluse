@@ -9,7 +9,7 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (
     BootError (..),
-    StoreMaintenanceReason (ClientBuildFailed, NoBackendForHost),
+    StoreMaintenanceReason (ClientBuildFailed, NoBackendForHost, NoFormatFor, NotRepositoryEndpoint),
     renderBootError,
     renderBootErrors,
  )
@@ -112,6 +112,13 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "deletes from every mount's mirror target"
         renderBootError (StoreMaintenanceUnavailable Npm (ClientBuildFailed "CredentialChainExhausted"))
             `shouldSatisfy` infixed "building its client failed: CredentialChainExhausted"
+        renderBootError (StoreMaintenanceUnavailable RubyGems (NoFormatFor RubyGems))
+            `shouldSatisfy` infixed "CodeArtifact has no package format for the rubygems ecosystem"
+        renderBootError (StoreMaintenanceUnavailable Npm (NotRepositoryEndpoint "npm"))
+            `shouldSatisfy` infixed "its path is not a CodeArtifact repository endpoint, /npm/{repository}/"
+        -- The idle-Dredger refusal names the capability this build lacks, not a key to fix.
+        renderBootError StorePrunerWithoutSweep
+            `shouldSatisfy` infixed "this build carries no Dredger sweep, so ecluse dredger refuses to start rather than run idle"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay

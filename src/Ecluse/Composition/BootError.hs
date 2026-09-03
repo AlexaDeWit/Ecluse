@@ -116,6 +116,10 @@ data BootError
       with, carrying why.
       -}
       StoreMaintenanceUnavailable Ecosystem StoreMaintenanceReason
+    | {- | @ecluse dredger@ was launched against a build carrying no sweep, so the role would
+      hold a deleting identity and do nothing with it.
+      -}
+      StorePrunerWithoutSweep
     deriving stock (Eq, Show)
 
 -- | Why a mount's mirror target reached no store maintenance handle.
@@ -224,6 +228,8 @@ renderBootError = \case
             <> " has no usable store maintenance backend: "
             <> renderStoreMaintenanceReason reason
             <> " (the Dredger deletes from every mount's mirror target, so it refuses rather than starting against a store it cannot sweep)"
+    StorePrunerWithoutSweep ->
+        "this build carries no Dredger sweep, so ecluse dredger refuses to start rather than run idle: run a role this build has work for"
 
 renderStoreMaintenanceReason :: StoreMaintenanceReason -> Text
 renderStoreMaintenanceReason = \case

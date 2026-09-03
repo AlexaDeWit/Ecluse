@@ -31,7 +31,7 @@ import Ecluse.Composition (
     resolveBootWiring,
  )
 import Ecluse.Composition.BootError (
-    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable),
+    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, StorePrunerWithoutSweep),
     refuseOnThrow,
  )
 import Ecluse.Composition.Maintenance (BuildStoreMaintenance, planStoreMaintenance)
@@ -133,12 +133,19 @@ planExecutable logEnv resolveAdapter buildQueue buildStore bootPlan = case bpRol
     BootMirrorPipeline role ->
         fmap (executablePlan . MirrorPipelineWiring)
             <$> planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan
+    -- The refusal below holds until this build carries a sweep.
     BootStorePruner ->
-        fmap (executablePlan . StorePrunerWiring . PrunerWiring)
+        idlePrunerRefusal . fmap (executablePlan . StorePrunerWiring . PrunerWiring)
             <$> planStoreMaintenance buildStore (vsBackend <$> vpMirrorStores (bpValidated bootPlan))
     BootWithoutPipeline -> pure (Right (executablePlan PilotWiring))
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}
+
+{- The deleting role plans its handles and then refuses whatever they settled, so one launch still
+reports every configuration and credential problem beside the refusal rather than the refusal
+alone. A yielded plan would start a role that holds a deleting identity and deletes nothing. -}
+idlePrunerRefusal :: Either [BootError] ExecutablePlan -> Either [BootError] ExecutablePlan
+idlePrunerRefusal outcome = Left (fromLeft [] outcome <> [StorePrunerWithoutSweep])
 
 {- The mirror pipeline's arm: the advisory sync, the queue backend, and the mount wiring. The three
 refusable steps accumulate, so one launch reports every one rather than the earliest alone. -}
