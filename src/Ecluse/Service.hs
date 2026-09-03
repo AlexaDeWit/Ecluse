@@ -133,9 +133,8 @@ withServiceRuntime bootEnv plan mirror action = do
         cveSyncPlan = mwCveSync mirror
         bindings = bwBindings (mwBootWiring mirror)
 
-    -- Where the plan shed the capability count (the nursery was the pressure), apply it
-    -- in-process before the parallel machinery spins up. Past the gate, so a refused boot
-    -- never reshapes the process it is about to abandon.
+    -- Apply a shed capability count in-process before the parallel machinery spins up. Past the
+    -- gate, so a refused boot never reshapes the process it is about to abandon.
     whenJust (mpShedCapabilities memoryPlan) setNumCapabilities
     serveAdmission <- newServeAdmission (mpAdmissionCapacity memoryPlan)
     heartbeat <- newWorkerHeartbeat

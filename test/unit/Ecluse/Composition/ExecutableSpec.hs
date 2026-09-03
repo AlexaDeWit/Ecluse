@@ -67,8 +67,8 @@ spec = describe "planExecutable" $ do
             Left errs -> errs `shouldBe` [MissingAdapter Npm]
 
     it "refuses a mirror-queue backend the live environment cannot build" $ do
-        -- The backend dials its provider at boot. Before this phase owned it the throw escaped
-        -- past the gate into the assembly, which claims nothing there can refuse.
+        -- The backend dials its provider at boot, so a throw there is a refusal at the gate and
+        -- never a fault inside an assembly that claims nothing can refuse.
         outcome <- planFor (BootMirrorPipeline ServeAndMirror) mountBindingFor refusingQueue inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
@@ -138,8 +138,8 @@ plannedArm = \case
 inertQueue :: BuildMirrorQueue
 inertQueue _ _ _ = pure noMirrorQueue
 
-{- | A queue builder that throws as @amazonka@ does when it discovers no credentials, which is the
-live call this phase now folds into a refusal.
+{- | A queue builder that throws as @amazonka@ does when it discovers no credentials, the live
+call this phase folds into a refusal.
 -}
 refusingQueue :: BuildMirrorQueue
 refusingQueue _ _ _ = throwIO NoCredentials
