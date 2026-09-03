@@ -60,7 +60,9 @@ outputs:
   dist-cache-hit:
     description: >-
       "true" only on an exact key match on the dist-newstyle restore below, which happens
-      on a re-run of a commit main already saved. Empty when cabal-cache is "false".
+      when a main run meets its own commit's entry: a re-run, or a scheduled run on an
+      unchanged head. "false" on a version-family prefix fallback or a miss, and empty
+      when cabal-cache is "false".
     value: ${{ steps.restore-dist.outputs.cache-hit }}
 
 runs:

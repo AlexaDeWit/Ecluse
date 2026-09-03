@@ -30,7 +30,7 @@ selected="$(
         # Group every epoch of one logical cache: strip the commit, the version family,
         # and the hashFiles digest a key ends in, in whichever of those it carries.
         prefix = key
-        for (i = 0; i < 3; i++) {
+        while (1) {
           if (prefix ~ /-v[0-9]+\.[0-9]+\.[0-9]+$/) { sub(/-v[0-9]+\.[0-9]+\.[0-9]+$/, "", prefix); continue }
           seg = prefix; sub(/.*-/, "", seg)
           if (seg ~ /^[0-9a-f]+$/ && length(seg) >= 16) { sub(/-[0-9a-f]+$/, "", prefix); continue }

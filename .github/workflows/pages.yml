@@ -140,9 +140,11 @@ jobs:
       # Cache writes: main only, single writer (Pages). They sit right after the build
       # that produced them and before the deploy steps. The save therefore still
       # happens when a later step (Configure/Upload/Deploy) fails: the deps built fine
-      # and are worth caching. The actions/cache/save step no-ops when the key already
-      # exists, so an unchanged-deps push writes nothing. Pages writes a dependency
-      # epoch once, then reuses it untouched. Keys match the restore keys exactly.
+      # and are worth caching. The cabal-store key covers the dependency plan alone, so
+      # an unchanged-deps run finds its entry already there. The builddir key ends in the
+      # commit, so a run on a new main head writes a fresh entry, and the gate below skips
+      # the save only when the restore already found this commit's. Keys match the
+      # restore keys exactly.
       - name: Save doc-variant cabal store (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
