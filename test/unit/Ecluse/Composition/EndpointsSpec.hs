@@ -9,10 +9,8 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.Endpoints (
-    MirrorStore,
     PublicationTarget,
-    VettedEndpoints (veMirrorStores, vePublicationTargets),
-    mirrorStoreUrl,
+    VettedEndpoints (vePublicationTargets),
     publicationTargetUrl,
     vetEndpoints,
  )
@@ -116,20 +114,6 @@ mirrorTargetSpec = describe "mirrorTarget against a public upstream" $ do
 
 mirrorStoreSpec :: Spec
 mirrorStoreSpec = describe "mirrorTarget against another declared endpoint" $ do
-    it "vets a mirror store no other endpoint holds" $ do
-        mounts <- mountsFor staticEnvVars
-        case clearedStores mounts of
-            Left errs -> expectationFailure ("unexpected refusals: " <> show errs)
-            Right vetted ->
-                fmap (registryUrlText . mirrorStoreUrl) (Map.lookup Npm vetted)
-                    `shouldBe` Just "https://mirror.example.test"
-
-    it "clears a writing role no store at all, whatever the mirror target is" $ do
-        -- The role gate on the witness itself. 'MirrorWriter' never sweeps, so flipping the
-        -- 'vetEndpoints' arm would hand a delete witness to a role that may not delete.
-        mounts <- mountsFor staticEnvVars
-        writerStores mounts `shouldBe` Right Map.empty
-
     it "refuses the deleting role a mirror target on its own mount's private upstream" $ do
         let env = mirroringTo "https://private.example.test" staticEnvVars
         refusalsFor MirrorPruner env
@@ -149,11 +133,6 @@ mirrorStoreSpec = describe "mirrorTarget against another declared endpoint" $ do
         refusalsFor MirrorPruner env
             `shouldReturn` [MirrorTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"]
         refusalsFor MirrorWriter env `shouldReturn` []
-
-    it "produces no mirror-store witness once a collapse refuses the deleting role" $ do
-        mounts <- mountsFor (withPyPI (mirroringTo "https://pypi-private.example.test" staticEnvVars))
-        fmap Map.keys (clearedStores mounts)
-            `shouldBe` Left [MirrorTargetOnMountEndpoint Npm PyPI "privateUpstream" "https://pypi-private.example.test"]
 
     it "refuses every role a mirror target on another mount's publication target" $ do
         -- Already fatal before this rule existed, read from the publishing side, and it stays
@@ -275,14 +254,6 @@ advisoriesForRole role env = fst . runVet role . vetEndpoints <$> mountsFor env
 -- The publish endpoints a writing role's pass clears, or every refusal at once.
 clearedTargets :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem PublicationTarget)
 clearedTargets mounts = vePublicationTargets <$> snd (runVet MirrorWriter (vetEndpoints mounts))
-
--- The stores the deleting role's pass clears a sweep for, or every refusal at once.
-clearedStores :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem MirrorStore)
-clearedStores mounts = veMirrorStores <$> snd (runVet MirrorPruner (vetEndpoints mounts))
-
--- The stores a writing role's pass clears a sweep for. It sweeps nothing, so it clears none.
-writerStores :: Map Ecosystem MountConfig -> Either [BootError] (Map Ecosystem MirrorStore)
-writerStores mounts = veMirrorStores <$> snd (runVet MirrorWriter (vetEndpoints mounts))
 
 -- | The npm mount mirroring to a path on its own public-upstream host: the host rule's subject.
 mirrorOnPublicUrl :: (IsString s) => s

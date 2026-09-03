@@ -15,15 +15,14 @@ import Ecluse.Composition.BootError (
         PublishStaticCredentialNeedsEdge
     ),
  )
-import Ecluse.Composition.Endpoints (mirrorStoreUrl, publicationTargetUrl)
+import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Maintenance (StoreBackend (CodeArtifactBackend), clearedBackend)
-import Ecluse.Composition.Support (codeArtifactEnvVars, codeArtifactMirrorUrl, expectConfig, noMaintenanceBackend, overrideEnv, staticEnvVars)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, noMaintenanceBackend, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPublications, vpSettings),
     VettedMount (vmEcosystem),
     VettedPublication (vpubAllow, vpubStaticToken, vpubTarget),
-    VettedStore (vsBackend, vsStore),
     vetBoot,
  )
 import Ecluse.Composition.Vet (runVet)
@@ -69,15 +68,13 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
         plan <- expectVetted MirrorWriter staticEnvVars
         Map.keys (vpPublications plan) `shouldBe` []
 
-    it "clears the deleting role a mirror store no other declared endpoint holds, with its backend" $ do
+    it "clears the deleting role the backend for a mirror store no other endpoint holds" $ do
         plan <- expectVetted MirrorPruner codeArtifactEnvVars
-        fmap (registryUrlText . mirrorStoreUrl . vsStore) (Map.lookup Npm (vpMirrorStores plan))
-            `shouldBe` Just codeArtifactMirrorUrl
-        fmap (repositoryOf . vsBackend) (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just "mirror"
+        fmap repositoryOf (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just "mirror"
 
-    it "pairs a store with a backend for every mount that declares a mirror target" $ do
-        -- The endpoint group and the backend group are intersected by key. Both enumerate
-        -- mirrorTarget, so the deleting role's plan carries a store per declared target.
+    it "clears a backend for every mount that declares a mirror target" $ do
+        -- The plan's one store witness. A collapse the endpoint rules refuse yields no plan at
+        -- all, so a backend the plan carries is one no other declared endpoint holds.
         plan <- expectVetted MirrorPruner codeArtifactEnvVars
         Map.keys (vpMirrorStores plan) `shouldBe` mirroringMounts (vpSettings plan)
 

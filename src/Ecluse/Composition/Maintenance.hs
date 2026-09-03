@@ -5,9 +5,9 @@
 {- | The composition root's store maintenance build, split across the boot's two tiers. The pure
 half reads each mount's mirror target as the backend that maintains it, as one rule in the vetting
 pass, so @ecluse dredger@ refuses a store this build cannot sweep and @ecluse check-config@ names
-that refusal. Only that pass issues a 'ClearedBackend', so the effectful half, in the pruner's arm
-of the planning phase ("Ecluse.Composition.Executable"), builds a handle for no store it did not
-clear. The discrimination is on the store URL alone, the way the mirror-write credential is derived
+that refusal. Only that pass issues a 'ClearedBackend', and the effectful half, in the pruner's
+arm of the planning phase ("Ecluse.Composition.Executable"), builds a handle from that witness and
+nothing else. The discrimination is on the store URL alone, the way the mirror-write credential is derived
 ("Ecluse.Config.MirrorCredential"), so a store and the backend that sweeps it cannot diverge.
 -}
 module Ecluse.Composition.Maintenance (

@@ -17,7 +17,6 @@ module Ecluse.Composition.Validate (
     -- * What it clears
     VettedMount (vmEcosystem, vmAdapter, vmMount, vmConfig),
     VettedPublication (vpubTarget, vpubAllow, vpubStaticToken),
-    VettedStore (vsStore, vsBackend),
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -26,9 +25,8 @@ import Ecluse.Composition.BootError (
     BootError (MissingAdapter, PublicationAllowMissing, PublishStaticCredentialNeedsEdge),
  )
 import Ecluse.Composition.Endpoints (
-    MirrorStore,
     PublicationTarget,
-    VettedEndpoints (veMirrorStores, vePublicationTargets),
+    VettedEndpoints (vePublicationTargets),
     vetEndpoints,
  )
 import Ecluse.Composition.Maintenance (ClearedBackend, vetStoreBackends)
@@ -53,9 +51,9 @@ data ValidatedPlan = ValidatedPlan
     -- ^ Every active mount, in ascending ecosystem order, with the adapter that serves it.
     , vpPublications :: Map Ecosystem VettedPublication
     -- ^ Each mount's cleared publish path, absent where the mount declares no target.
-    , vpMirrorStores :: Map Ecosystem VettedStore
-    {- ^ The stores a sweep may delete from, each with the backend that sweeps it. Only
-    @ecluse dredger@'s pass clears one.
+    , vpMirrorStores :: Map Ecosystem ClearedBackend
+    {- ^ The backend for each store a sweep may delete from. Only @ecluse dredger@'s pass
+    clears one.
     -}
     , vpSettings :: AppConfig
     {- ^ The settings no rule vets. The mounts it still carries are the raw declarations, and
@@ -80,14 +78,6 @@ data VettedPublication = VettedPublication
     , vpubStaticToken :: Maybe Secret
     }
 
-{- | A store the deleting role's pass cleared: the endpoint no other registry role holds, and the
-backend this build sweeps it with.
--}
-data VettedStore = VettedStore
-    { vsStore :: MirrorStore
-    , vsBackend :: ClearedBackend
-    }
-
 {- | Vet the whole loaded configuration for one role. The four groups compose with '<*>', so one
 run reports every refusal and every advisory rather than the first group's alone.
 -}
@@ -101,13 +91,11 @@ vetBoot config =
   where
     app = configApp config
 
-    -- Both groups enumerate the mounts declaring a mirrorTarget, and a target the backend rule
-    -- refuses yields no plan at all, so under the deleting role the two maps share a keyset.
     assemble mounts policies endpoints backends =
         ValidatedPlan
             { vpMounts = mounts
             , vpPublications = Map.intersectionWith cleared (vePublicationTargets endpoints) policies
-            , vpMirrorStores = Map.intersectionWith VettedStore (veMirrorStores endpoints) backends
+            , vpMirrorStores = backends
             , vpSettings = app
             }
 

@@ -52,7 +52,6 @@ import Ecluse.Composition.Types (
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpSettings),
     VettedMount (vmEcosystem),
-    VettedStore (vsBackend),
  )
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -124,7 +123,7 @@ planExecutable logEnv resolveAdapter buildQueue buildStore bootPlan = case bpRol
     -- The refusal below holds until this build carries a sweep.
     BootStorePruner ->
         idlePrunerRefusal
-            <$> planStoreMaintenance buildStore (vsBackend <$> vpMirrorStores (bpValidated bootPlan))
+            <$> planStoreMaintenance buildStore (vpMirrorStores (bpValidated bootPlan))
     BootWithoutPipeline -> pure (Right (executablePlan PilotWiring))
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}
