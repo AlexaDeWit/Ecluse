@@ -73,15 +73,17 @@ jobs:
         with:
           cabal-cache: "true"
 
-      # Cached here, not in the shared action: no other job builds dist-coverage. A
-      # stale .mix is inert, hpc-codecov reads only the modules the .tix names.
+      # Cached here, not in the shared action: no other job builds dist-coverage. The key
+      # has the shape of dist-newstyle's: the version family bounds a restore, and the
+      # commit makes each main run's save a fresh entry.
       - name: Restore dist-coverage
+        id: restore-dist-coverage
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: dist-coverage
-          key: dist-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          key: dist-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
           restore-keys: |
-            dist-coverage-${{ runner.os }}-
+            dist-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-
 
       # An exact cabal-store hit already covers cabal.project's pinned index-state, so
       # `cabal update` would only re-fetch TUF metadata over its dead-mirror fallback.
@@ -139,6 +141,8 @@ jobs:
 
       # Sole writer of the three cabal-side caches, and only from main. !cancelled()
       # keeps the warm store when a later tier fails: the deps built fine either way.
+      # The two build-product keys end in the commit, so each main run writes a new
+      # entry, except on a re-run whose entry the restore above already found.
       - name: Save cabal store (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -147,18 +151,18 @@ jobs:
           key: cabal-store-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
 
       - name: Save dist-newstyle (main)
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.toolchain.outputs.dist-cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: dist-newstyle
-          key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
 
       - name: Save dist-coverage (main)
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.restore-dist-coverage.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: dist-coverage
-          key: dist-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          key: dist-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
 
   smoke:
     name: Smoke tests (live registries, non-gating)

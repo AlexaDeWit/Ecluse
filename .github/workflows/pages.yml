@@ -79,6 +79,7 @@ jobs:
       # closure. Pages restores and saves its own doc-variant store and builddir
       # instead, in the two steps below. See AGENTS.md.
       - name: Set up toolchain
+        id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "false"
@@ -108,14 +109,17 @@ jobs:
       # The doc-variant build products of the project's three libraries (the published
       # Haddock HTML) and the openapi-gen and site-gen executables, in their own
       # builddir (DOCS_BUILDDIR). Kept distinct from the gate's regular dist-newstyle.
-      # Small and fast-moving next to the store above. Same dep-plan key.
+      # Small and fast-moving next to the store above. The key has the shape of
+      # dist-newstyle's: the version family bounds a restore, and the commit makes each
+      # main run's save a fresh entry.
       - name: Restore doc-variant builddir
+        id: restore-docs-dist
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.DOCS_BUILDDIR }}
-          key: dist-docs-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          key: dist-docs-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
           restore-keys: |
-            dist-docs-${{ runner.os }}-
+            dist-docs-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-
 
       # Skipped on an exact doc-variant cabal-store cache hit: the restored index
       # already covers cabal.project's pinned index-state. `cabal update` otherwise
@@ -147,11 +151,11 @@ jobs:
           key: cabal-store-docs-v2-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
 
       - name: Save doc-variant builddir (main)
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.restore-docs-dist.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.DOCS_BUILDDIR }}
-          key: dist-docs-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          key: dist-docs-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
 
       # enablement: true turns Pages on via the API on first run, so bootstrapping
       # this needs no manual repo-settings step.
