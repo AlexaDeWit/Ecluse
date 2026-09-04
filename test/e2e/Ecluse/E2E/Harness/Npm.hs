@@ -186,8 +186,8 @@ anti-shadowing guard admits and the relay forwards to the publication target.
 publishInScopeName :: Text
 publishInScopeName = publishScope <> "/e2e-publish"
 
-{- | A package in a scope __outside__ the allow-list. The guard must refuse an @npm publish@ of it
-__before__ any upstream write, the property the refuse-before-write scenario proves.
+{- | A package in a scope __outside__ the mount's first-party namespaces. The guard must refuse an
+@npm publish@ of it __before__ any upstream write, the property the refuse-before-write scenario proves.
 -}
 publishOutOfScopeName :: Text
 publishOutOfScopeName = "@rogue/e2e-shadow"
