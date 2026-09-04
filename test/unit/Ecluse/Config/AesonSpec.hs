@@ -22,7 +22,6 @@ import Ecluse.Config (
     LimitsSettings (..),
     MountConfig (mntFirstParty),
     ObservabilitySettings (..),
-    PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix),
     QueueSettings (..),
     QueueTarget (..),
     RuntimeSettings (..),
@@ -35,8 +34,9 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (mkPackageName, mkPyPIPrefix)
+import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed, Warn))
+import Ecluse.Core.Registry.PyPI.Project (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix)
 import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
 
 spec :: Spec

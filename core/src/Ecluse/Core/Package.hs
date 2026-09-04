@@ -26,11 +26,6 @@ module Ecluse.Core.Package (
     unScope,
     renderScope,
 
-    -- * PyPI name prefixes
-    PyPIPrefix,
-    mkPyPIPrefix,
-    underPyPIPrefix,
-
     -- * Package identity
     PackageName,
     mkPackageName,
@@ -43,6 +38,9 @@ module Ecluse.Core.Package (
 
     -- * The name charset boundary
     isAsciiNameComponent,
+
+    -- * Canonical keys
+    normalisePyPI,
 
     -- * Normalised signals
     CodeExecSignal (..),
@@ -86,7 +84,7 @@ module Ecluse.Core.Package (
 ) where
 
 import Data.Aeson (Value)
-import Data.Char (isAlphaNum, isAscii, isControl)
+import Data.Char (isAscii, isControl)
 import Data.Text qualified as T
 import Data.Text.Short (ShortText)
 import Data.Text.Short qualified as TS
@@ -190,8 +188,9 @@ canonicalise = \case
     RubyGems -> id
     PyPI -> normalisePyPI
 
-{- PEP 503 name normalisation: lower-case, and collapse each run of
-@\'-\'@\/@\'_\'@\/@\'.\'@ to a single @\'-\'@.
+{- | PEP 503 name normalisation: lower-case, and collapse each run of
+@\'-\'@\/@\'_\'@\/@\'.\'@ to a single @\'-\'@. It is the canonical key a PyPI 'PackageName'
+matches on, so two spellings of one distribution compare equal.
 -}
 normalisePyPI :: Text -> Text
 normalisePyPI t =
@@ -199,33 +198,6 @@ normalisePyPI t =
         . filter (not . T.null)
         . T.splitOn "-"
         $ T.map (\c -> if c == '_' || c == '.' then '-' else c) (T.toLower t)
-
-{- | A PyPI name prefix in PEP 503 canonical form. PyPI has no structural namespace like npm's
-'Scope', so a deployment owns a prefix of its distributions' names.
--}
-newtype PyPIPrefix = PyPIPrefix ShortText
-    deriving stock (Eq, Show)
-
-{- | Build a prefix through the canonicaliser 'mkPackageName' uses. 'Nothing' for text no PyPI name
-can start with, or that canonicalises to nothing and would cover every name.
--}
-mkPyPIPrefix :: Text -> Maybe PyPIPrefix
-mkPyPIPrefix raw
-    | T.null canonical || not (T.all canonicalPyPIChar canonical) = Nothing
-    | otherwise = Just (PyPIPrefix (TS.fromText canonical))
-  where
-    canonical = normalisePyPI raw
-
--- PEP 503's canonical alphabet, the form 'normalisePyPI' leaves a legal name in.
-canonicalPyPIChar :: Char -> Bool
-canonicalPyPIChar c = c == '-' || (isAscii c && isAlphaNum c)
-
-{- | Whether a name sits under a prefix, ending at PEP 503's separator: @acme@ covers @acme-tools@, not
-@acmeco@, and not the bare @acme@, which is declared as a name.
--}
-underPyPIPrefix :: PyPIPrefix -> PackageName -> Bool
-underPyPIPrefix (PyPIPrefix prefix) name =
-    pkgEcosystem name == PyPI && TS.isPrefixOf (prefix <> "-") (pkgCanonical name)
 
 -- | Render a package name in its native wire form (the display name).
 renderPackageName :: PackageName -> Text

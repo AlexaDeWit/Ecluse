@@ -34,18 +34,18 @@ import Ecluse.Config (
     ConfigError (..),
     FirstParty (FirstPartyNpmScopes, FirstPartyPyPI),
     PolicyError (UnknownRuleType),
-    PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix),
     loadConfig,
     renderConfigError,
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (SHA1, SHA512), PackageName, mkPackageName, mkPyPIPrefix, mkScope)
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512), PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
+import Ecluse.Core.Registry.PyPI.Project (PyPIFirstParty (PyPIOwnedName))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
@@ -472,19 +472,11 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
             [scopedName "acme", scopedName "beta", scopedName "acme-evil", bareName]
             `shouldBe` [True, True, False, False]
 
-    it "matches a PyPI name on its canonical form, so one spelling has one verdict" $
-        map
-            (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . pypiName)
-            ["acme-tools", "Acme.TOOLS", "acme_tools", "acme-toolsmith"]
-            `shouldBe` [True, True, True, False]
-
-    it "matches a PyPI prefix at the separator, and not the bare prefix" $
-        -- A prefix that ran past the separator would privilege acmeco, a name the deployment
-        -- does not own. The bare name is a separate declaration.
-        maybe
-            (expectationFailure "acme is a valid prefix")
-            (\declared -> map (firstPartyName declared . pypiName) ["acme-tools", "Acme.Tools", "acmeco", "acme"] `shouldBe` [True, True, False, False])
-            (pypiPrefix "acme")
+    it "dispatches the PyPI arm to PyPI's own predicate" $
+        -- The arm's matching rules are pinned in "Ecluse.Registry.PyPI.ProjectSpec". This row
+        -- proves the root hands the declaration to it rather than deciding anything itself.
+        map (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . pypiName) ["acme-tools", "beta"]
+            `shouldBe` [True, False]
 
     it "wires the same predicate onto the mount's serve deps, deny by default" $ do
         let testEnv = [("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")] <> staticEnvVars
@@ -511,7 +503,3 @@ pypiName = mkPackageName PyPI Nothing
 -- A PyPI declaration of exact names.
 pypiFirstParty :: NonEmpty Text -> FirstParty
 pypiFirstParty = FirstPartyPyPI . fmap (PyPIOwnedName . pypiName)
-
--- A PyPI declaration of one prefix, 'Nothing' for text no PyPI name can start with.
-pypiPrefix :: Text -> Maybe FirstParty
-pypiPrefix = fmap (FirstPartyPyPI . pure . PyPIOwnedPrefix) . mkPyPIPrefix

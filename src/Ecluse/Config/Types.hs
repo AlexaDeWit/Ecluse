@@ -19,7 +19,6 @@ module Ecluse.Config.Types (
     splitHttpScheme,
     MirrorCredential (..),
     FirstParty (..),
-    PyPIFirstParty (..),
     MountIntegrity (..),
     MountConfig (..),
     AppConfig (..),
@@ -68,9 +67,10 @@ import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Config.Rule (PolicyError, RulePatch, renderPolicyError)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Package (PackageName, PyPIPrefix, Scope)
+import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy)
+import Ecluse.Core.Registry.PyPI.Project (PyPIFirstParty)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -136,16 +136,6 @@ data FirstParty
       FirstPartyNpmScopes (NonEmpty Scope)
     | -- | The PyPI distributions and name prefixes the deployment owns, at least one.
       FirstPartyPyPI (NonEmpty PyPIFirstParty)
-    deriving stock (Eq, Show)
-
-{- | One PyPI first-party declaration. PyPI carries no structural namespace, so a deployment
-either names a distribution it owns or the prefix its distributions share.
--}
-data PyPIFirstParty
-    = -- | A distribution the deployment owns, matched on its PEP 503 canonical name.
-      PyPIOwnedName PackageName
-    | -- | A prefix the deployment owns, matched at PEP 503's separator boundary.
-      PyPIOwnedPrefix PyPIPrefix
     deriving stock (Eq, Show)
 
 {- | A mount's refinements of the global @integrity@ group, under its own @integrity@ key so the

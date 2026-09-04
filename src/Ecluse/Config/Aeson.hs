@@ -23,10 +23,11 @@ import Ecluse.Config.Types
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName, parseEcosystem)
-import Ecluse.Core.Package (Scope, mkPackageName, mkPyPIPrefix)
+import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (parseDivergencePolicy)
 import Ecluse.Core.Registry.Npm.Project (projectScope)
+import Ecluse.Core.Registry.PyPI.Project (PyPIFirstParty, projectFirstPartyEntry)
 import Ecluse.Core.Security (parseBlockedRange)
 import Ecluse.Core.Text (readDecimalText)
 import Ecluse.Runtime.Log (parseLogFormat, parseLogLevel)
@@ -185,28 +186,17 @@ parseScopeEntry :: Text -> Parser Scope
 parseScopeEntry entry =
     either (const (fail ("invalid scope in firstParty: " <> show entry))) pure (projectScope entry)
 
+-- A configured list that names nothing privileges nothing, so it fails the load instead.
 parsePyPIFirstParty :: String -> Value -> Parser (NonEmpty PyPIFirstParty)
 parsePyPIFirstParty field v = do
     entries <- commaSeparated field (parsePyPIEntry field) v
     maybe (fail (field <> " must name at least one distribution or prefix")) pure (nonEmpty entries)
 
-{- A trailing @*@ marks a prefix (@acme-*@ the family, @acme@ the distribution). Both read through
-the PEP 503 canonicaliser, and a bare @*@ canonicalises to nothing, which is refused. -}
+-- Reject a firstParty segment no distribution name or prefix can equal, so a typo fails the load
+-- instead of seeding a privilege that covers nothing.
 parsePyPIEntry :: String -> Text -> Parser PyPIFirstParty
-parsePyPIEntry field entry = case T.stripSuffix "*" entry of
-    Just prefix
-        | endsAtSeparator prefix -> maybe invalid (pure . PyPIOwnedPrefix) (mkPyPIPrefix prefix)
-        | otherwise -> invalid
-    Nothing
-        | isJust (mkPyPIPrefix entry) -> pure (PyPIOwnedName (mkPackageName PyPI Nothing entry))
-        | otherwise -> invalid
-  where
-    -- The star follows a separator, so @acme*@ is a typo rather than a silent claim on @acmeco@.
-    endsAtSeparator :: Text -> Bool
-    endsAtSeparator prefix = maybe False ((`elem` ("-_." :: String)) . snd) (T.unsnoc prefix)
-
-    invalid :: Parser a
-    invalid = fail ("invalid entry in " <> field <> ": " <> show entry)
+parsePyPIEntry field entry =
+    either (const (fail ("invalid entry in " <> field <> ": " <> show entry))) pure (projectFirstPartyEntry entry)
 
 parseBlockedRanges :: String -> Value -> Parser [IPRange]
 parseBlockedRanges field = commaSeparated field parseBlockedRangeEntry

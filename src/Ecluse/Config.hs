@@ -25,7 +25,6 @@ module Ecluse.Config (
     MirrorTarget (..),
     MirrorCredential (..),
     FirstParty (..),
-    PyPIFirstParty (..),
     MountIntegrity (..),
     MountConfig (..),
     Url,

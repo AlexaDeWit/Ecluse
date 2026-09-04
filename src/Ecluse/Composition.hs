@@ -59,7 +59,6 @@ import Ecluse.Config (
     MountConfig (..),
     MountIntegrity (..),
     MountRegistries (..),
-    PyPIFirstParty (..),
     ServerSettings (..),
     Url,
     regMirrorTarget,
@@ -69,7 +68,7 @@ import Ecluse.Config (
 import Ecluse.Core.Credential (CredentialProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
-import Ecluse.Core.Package (PackageName, underPyPIPrefix)
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterArtifact,
@@ -78,6 +77,7 @@ import Ecluse.Core.Registry.Adapter (
     artifactHosts,
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
+import Ecluse.Core.Registry.PyPI.Project (pypiFirstPartyName)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
@@ -284,12 +284,7 @@ consumer of the privilege reads, so none can disagree about which names are priv
 firstPartyName :: FirstParty -> PackageName -> Bool
 firstPartyName = \case
     FirstPartyNpmScopes scopes -> npmPublishAllowed (toList scopes)
-    FirstPartyPyPI entries -> \name -> any (`owns` name) entries
-  where
-    owns :: PyPIFirstParty -> PackageName -> Bool
-    owns = \case
-        PyPIOwnedName owned -> (== owned)
-        PyPIOwnedPrefix prefix -> underPyPIPrefix prefix
+    FirstPartyPyPI entries -> pypiFirstPartyName entries
 
 {- | One ecosystem's resolved publish target: the endpoint the worker writes approved
 artifacts to, and the provider that mints its bearer token. Resolved once, not per request.
