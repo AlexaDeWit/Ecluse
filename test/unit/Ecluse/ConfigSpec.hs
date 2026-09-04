@@ -13,7 +13,7 @@ import Ecluse.Composition.Support (expectConfig)
 import Ecluse.Config (
     AppConfig (cfgQueue),
     Config (configApp, configMounts),
-    ConfigError (MirrorSettingWithoutWrite, MountMissingPrivateUpstream, PublicUrlRequired),
+    ConfigError (MountMissingPrivateUpstream, PublicUrlRequired),
     Mount (mountRegistries),
     MountMode (Mirrored, ServeOnly),
     MountRegistries (regMode),
@@ -55,7 +55,7 @@ spec = do
             mountPostureLines cfg `shouldSatisfy` any (T.isInfixOf "mirrored")
 
         it "resolves an absent mirrorTarget to a serve-only mount over the private merge" $ do
-            cfg <- configFor (bareNpmMountDoc [("privateUpstream", "https://priv.example.test")])
+            cfg <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test")])
             modeOf cfg `shouldBe` (Just . ServeOnly . rightToMaybe . mkRegistryUrl) "https://priv.example.test"
             mountPostureLines cfg `shouldSatisfy` any (T.isInfixOf "serve-only")
 
@@ -65,7 +65,10 @@ spec = do
             mountPostureLines cfg `shouldSatisfy` any (T.isInfixOf "pure public gate")
 
         it "switches a declared mount off under enabled: false (keys kept, nothing served)" $ do
-            cfg <- configFor "{\"mounts\":{\"npm\":{\"enabled\":false,\"privateUpstream\":\"https://priv.example.test\"}}}"
+            cfg <-
+                configFor
+                    "{\"mounts\":{\"npm\":{\"enabled\":false,\
+                    \\"privateUpstream\":{\"registry\":{\"url\":\"https://priv.example.test\"}}}}}"
             Map.keys (configMounts cfg) `shouldBe` []
 
         it "requires the private upstream on a mirrored mount (the mirror must read back)" $
@@ -80,14 +83,11 @@ spec = do
             loadConfig [] (Just (npmMountDoc [("mirrorTarget", "https://mirror.example.test")]))
                 `shouldBe` Left [PublicUrlRequired, MountMissingPrivateUpstream Npm]
 
-        it "refuses each leftover mirror-write setting on a serve-only mount, aggregated" $
-            loadConfig
-                pubUrlEnv
-                (Just "{\"mounts\":{\"npm\":{\"mirrorTargetToken\":\"t\",\"mirrorTokenDuration\":3600}}}")
-                `shouldBe` Left
-                    [ MirrorSettingWithoutWrite Npm "mirrorTargetToken"
-                    , MirrorSettingWithoutWrite Npm "mirrorTokenDuration"
-                    ]
+        it "prints the Verdaccio store's declared deletion consent in the mount posture" $ do
+            permitted <- configFor (verdaccioMountDoc "\"permitDeletion\":true,")
+            mountPostureLines permitted `shouldSatisfy` any (T.isInfixOf "which permits deletion")
+            withheld <- configFor (verdaccioMountDoc "")
+            mountPostureLines withheld `shouldSatisfy` any (T.isInfixOf "which withholds deletion")
 
     describe "resolvedKeyProvenance" $ do
         it "labels each resolved key with the layer that supplied it" $ do
@@ -100,9 +100,16 @@ spec = do
             provenance `shouldSatisfy` elem "config: observability.logFormat = json (default)"
 
         it "redacts secret-typed keys whatever layer supplies them" $ do
-            let provenance = resolvedKeyProvenance [("ECLUSE_SERVER__AUTH_TOKEN", "hunter2")] Nothing
+            let provenance =
+                    resolvedKeyProvenance
+                        [ ("ECLUSE_SERVER__AUTH_TOKEN", "hunter2")
+                        , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "hunter3")
+                        ]
+                        Nothing
             provenance `shouldSatisfy` elem "config: server.authToken = <redacted> (environment)"
-            provenance `shouldSatisfy` (not . any (T.isInfixOf "hunter2"))
+            provenance
+                `shouldSatisfy` elem "config: mounts.npm.mirrorTarget.verdaccio.token = <redacted> (environment)"
+            provenance `shouldSatisfy` (not . any (T.isInfixOf "hunter"))
 
 -- | The client-facing base URL every active-mount load needs (server.publicUrl).
 pubUrlEnv :: [(String, String)]
@@ -112,20 +119,24 @@ pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 configFor :: ByteString -> IO Config
 configFor doc = expectConfig pubUrlEnv (Just doc)
 
-{- | An npm mount document with the given string fields, over the shipped npm template. It carries
-a static @mirrorTargetToken@, so a non-CodeArtifact mirror target derives a valid write credential.
--}
+-- | An npm mount document declaring each named endpoint at its URL under the @registry@ tag.
 npmMountDoc :: [(Text, Text)] -> ByteString
-npmMountDoc fields = bareNpmMountDoc (fields <> [("mirrorTargetToken", "t")])
-
-{- | As 'npmMountDoc' but with no implicit write token, for the serve-only cases
-(where a leftover write setting is itself the refusal under test).
--}
-bareNpmMountDoc :: [(Text, Text)] -> ByteString
-bareNpmMountDoc fields =
-    encodeUtf8 ("{\"mounts\":{\"npm\":{" <> T.intercalate "," (map field fields) <> "}}}")
+npmMountDoc endpoints =
+    encodeUtf8 ("{\"mounts\":{\"npm\":{" <> T.intercalate "," (map endpoint endpoints) <> "}}}")
   where
-    field (key, value) = "\"" <> key <> "\":\"" <> value <> "\""
+    endpoint (key, url) = "\"" <> key <> "\":{\"registry\":{\"url\":\"" <> url <> "\"" <> write key <> "}}"
+    -- The registry tag requires a static write token on a mirror target and admits none elsewhere.
+    write key = if key == "mirrorTarget" then ",\"token\":\"t\"" else ""
+
+-- | A mirrored npm mount on Verdaccio, with the given extra keys written under that tag.
+verdaccioMountDoc :: Text -> ByteString
+verdaccioMountDoc extra =
+    encodeUtf8 $
+        "{\"mounts\":{\"npm\":{\
+        \\"privateUpstream\":{\"verdaccio\":{\"url\":\"https://priv.example.test\"}},\
+        \\"mirrorTarget\":{\"verdaccio\":{"
+            <> extra
+            <> "\"url\":\"https://verdaccio.example.test\",\"token\":\"t\"}}}}}"
 
 -- | The npm mount's resolved mode, when the config serves one.
 modeOf :: Config -> Maybe MountMode

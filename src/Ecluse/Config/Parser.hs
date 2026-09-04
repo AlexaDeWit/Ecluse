@@ -6,10 +6,10 @@
 enumerations, ports, durations, and the URL shapes.
 
 A malformed key fails at load with the key named, never at its first use. A group accepts exactly
-the keys its 'GroupDecoder' declares. A URL-valued key is refined by the smart constructor of the
-type it resolves to: 'parseHttpUrl', 'parseQueueUrl', and 'parseAdvisoryStoreUrl' pass it the key
-so the refusal names it, while 'parseRegistryUrl' prefixes the key itself and adds the host
-refusal 'RegistryUrl' omits.
+the keys its 'GroupDecoder' declares, and 'taggedTarget' nests one group per store tag under an
+endpoint. A URL-valued key is refined by the smart constructor of the type it resolves to:
+'parseHttpUrl', 'parseQueueUrl', and 'parseAdvisoryStoreUrl' pass it the key so the refusal names
+it, while 'parseRegistryUrl' prefixes the key itself and adds the host refusal 'RegistryUrl' omits.
 -}
 module Ecluse.Config.Parser (
     -- * Group decoding
@@ -24,6 +24,10 @@ module Ecluse.Config.Parser (
     optionalPlainKeyOr,
     nestedKey,
     unreadKey,
+
+    -- * Tagged targets
+    TagCase (..),
+    taggedTarget,
 
     -- * Value shapes
     expectString,
@@ -97,10 +101,14 @@ runGroupDecoder noun prefix decoder o = do
     gdRead decoder (GroupInput{giPrefix = prefix, giObject = o})
 
 {- | A required key, decoded by its own 'FromJSON' instance then refined by @parse@, which is
-handed the key's label so every refusal it raises names the key.
+handed the key's label so every refusal it raises names the key, an absent key included.
 -}
 requiredKey :: (FromJSON b) => Key.Key -> (String -> b -> Parser a) -> GroupDecoder a
-requiredKey k parse = GroupDecoder [k] (\input -> giObject input .: k >>= parse (labelOf input k))
+requiredKey k parse = GroupDecoder [k] present
+  where
+    present input = case KeyMap.lookup k (giObject input) of
+        Nothing -> fail (labelOf input k <> " is required")
+        Just v -> parseJSON v >>= parse (labelOf input k)
 
 -- | 'requiredKey' for an optional key: an absent or @null@ one yields 'Nothing'.
 optionalKey :: (FromJSON b) => Key.Key -> (String -> b -> Parser a) -> GroupDecoder (Maybe a)
@@ -138,6 +146,31 @@ nestedKey k parse = GroupDecoder [k] (nested . giObject)
 -- | A key the group accepts and no field reads.
 unreadKey :: Key.Key -> GroupDecoder ()
 unreadKey k = GroupDecoder [k] (const (pure ()))
+
+-- | One tag a target key admits: the tag as an operator writes it, and the group under it.
+data TagCase a = TagCase Key.Key (GroupDecoder a)
+
+{- | Read a target: an object naming exactly one of the tags this endpoint admits, and under it
+exactly the keys that tag admits. Two tags is what a layer earns for overriding a document's tag.
+-}
+taggedTarget :: [TagCase a] -> String -> Value -> Parser a
+taggedTarget cases field = \case
+    Object o -> case KeyMap.toList o of
+        [(tag, inner)] | Just (TagCase _ decoder) <- caseFor tag -> tagGroup tag decoder inner
+        written -> fail (field <> " must name " <> admitted <> ", got: " <> writtenTags (map fst written))
+    other -> fail (field <> " must be an object naming " <> admitted <> ", but encountered " <> valueKind other)
+  where
+    caseFor tag = find (\(TagCase k _) -> k == tag) cases
+
+    admitted = "exactly one store tag (" <> intercalate ", " (map (\(TagCase k _) -> Key.toString k) cases) <> ")"
+
+    writtenTags = \case
+        [] -> "no tag"
+        tags -> intercalate ", " (map (show . Key.toText) tags)
+
+    tagGroup tag decoder = \case
+        Object inner -> decodeGroup (field <> "." <> Key.toString tag) decoder inner
+        other -> fail (field <> "." <> Key.toString tag <> " must be an object, but encountered " <> valueKind other)
 
 labelOf :: GroupInput -> Key.Key -> String
 labelOf input k = giPrefix input <> Key.toString k

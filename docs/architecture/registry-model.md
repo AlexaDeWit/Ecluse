@@ -81,7 +81,7 @@ trigger, content, and credential from the mirror write.
 - **No read-back role.** Write-only from the proxy's view. Published packages read back through
   the private upstream. So the operator points the publication target at the same registry as the
   private upstream, or aggregates it into that read path.
-- **Opt-in.** The path exists only when `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is set. Otherwise
+- **Opt-in.** The path exists only when `mounts.npm.publicationTarget` is declared. Otherwise
   a `PUT /{pkg}` is `405 Method Not Allowed`.
 
 ```mermaid
@@ -92,7 +92,7 @@ sequenceDiagram
     participant PubT as Publication target
 
     Client->>E: PUT /{pkg} (npm publish: document + client token)
-    alt no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET configured
+    alt no mounts.npm.publicationTarget configured
         E-->>Client: 405 Method Not Allowed
     else publication target configured
         Note over E: enforce the mount's first-party namespaces<br/>(anti-shadowing, reject before any write)

@@ -36,8 +36,11 @@ import Ecluse.Config (
     Config (configApp, configMounts),
     FirstParty,
     Mount,
-    MountConfig (mntFirstParty, mntPublicationTarget, mntPublicationTargetToken),
+    MountConfig (mntFirstParty, mntPublicationTarget),
+    PublicationEndpoint (peTarget, peToken),
     ServerSettings (srvAuthToken),
+    StoreTag,
+    Target (tgtTag),
  )
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -139,17 +142,23 @@ vetPublication :: Maybe Secret -> (Ecosystem, MountConfig) -> Vet (Maybe (Ecosys
 vetPublication inboundToken subject@(eco, mcfg) =
     cleared
         <$ rule (const (Refuse FirstPartyMissing)) firstPartyMissing subject
-        <* rule (const (Refuse PublishStaticCredentialNeedsEdge)) (staticWithoutEdge inboundToken) subject
+        <* rule (const (Refuse (uncurry PublishStaticCredentialNeedsEdge))) (staticWithoutEdge inboundToken) subject
   where
-    cleared = mntFirstParty mcfg <&> \firstParty -> (eco, (firstParty, mntPublicationTargetToken mcfg))
+    cleared = mntFirstParty mcfg <&> \firstParty -> (eco, (firstParty, publicationToken mcfg))
+
+-- The static fallback the relay forwards when the publishing client sends none.
+publicationToken :: MountConfig -> Maybe Secret
+publicationToken mcfg = peToken =<< mntPublicationTarget mcfg
 
 firstPartyMissing :: (Ecosystem, MountConfig) -> Maybe Ecosystem
 firstPartyMissing (eco, mcfg)
     | isNothing (mntFirstParty mcfg) = Just eco
     | otherwise = Nothing
 
--- Any unauthenticated client could otherwise publish within scope under Écluse's own credential.
-staticWithoutEdge :: Maybe Secret -> (Ecosystem, MountConfig) -> Maybe Ecosystem
-staticWithoutEdge inboundToken (eco, mcfg)
-    | isJust (mntPublicationTargetToken mcfg) && isNothing inboundToken = Just eco
-    | otherwise = Nothing
+{- Any unauthenticated client could otherwise publish within scope under Écluse's own credential.
+The tag rides along, because the credential's key path nests below it. -}
+staticWithoutEdge :: Maybe Secret -> (Ecosystem, MountConfig) -> Maybe (Ecosystem, StoreTag)
+staticWithoutEdge inboundToken (eco, mcfg) = do
+    guard (isJust (publicationToken mcfg) && isNothing inboundToken)
+    endpoint <- mntPublicationTarget mcfg
+    pure (eco, tgtTag (peTarget endpoint))

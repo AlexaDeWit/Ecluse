@@ -25,10 +25,18 @@ module Ecluse.Config (
     MirrorTarget (..),
     StoreTag (..),
     storeTagName,
+    Target (..),
+    DeletionConsent (..),
+    MirrorWrite (..),
+    MirrorEndpoint (..),
+    meTarget,
+    PublicationEndpoint (..),
     MintPlan (..),
-    CodeArtifactAbsence (..),
     ControlPlane (..),
     StoreBackend (..),
+    sbTag,
+    sbMint,
+    sbControl,
     FirstParty (..),
     MountIntegrity (..),
     MountConfig (..),
@@ -75,7 +83,7 @@ import Ecluse.Config.Aeson ()
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Resolve (buildEnvAst, deepMerge, secretLeafKeys)
 import Ecluse.Config.Rule
-import Ecluse.Config.Target (resolveStoreBackend)
+import Ecluse.Config.Target (resolveStoreBackend, vetTargetTag)
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Rules.Types (PrecededRule)
@@ -92,13 +100,8 @@ defaultPolicy =
             Left e -> error ("Invalid default policy JSON: " <> T.pack e)
         Left e -> error ("Invalid default policy YAML: " <> show e)
 
-{- | Load the merged configuration: the defaults, the optional operator document, then the
-environment overlay, strongest-last.
-
-A mount is __active__ only when the operator overlay declares a key under
-@mounts.\<ecosystem\>@, in the document or in @ECLUSE_MOUNTS__*@. Until then the mounts in
-@config\/default.yaml@ stay dormant per-ecosystem templates. @enabled: false@ switches a
-declared mount off.
+{- | Load the merged configuration: the defaults, the operator document, then the environment
+overlay, strongest-last. A mount is __active__ only where that overlay declares a key under it.
 -}
 loadConfig :: [(String, String)] -> Maybe ByteString -> Either [ConfigError] Config
 loadConfig envVars mBytes = do
@@ -173,38 +176,40 @@ resolveMounts globalPolicy appConfig =
         ([], mounts) -> Right (Map.fromList mounts)
         (errs, _) -> Left (concat errs)
   where
-    resolveOne (eco, mcfg) = case (mntMirrorTarget mcfg, mntPrivateUpstream mcfg) of
-        (Just mirrorTarget, Just privateUpstream) ->
-            (eco,) <$> resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg
-        -- A mirrored mount must be able to read its mirror back.
-        (Just _, Nothing) -> Left [MountMissingPrivateUpstream eco]
-        (Nothing, mPrivate) -> case writeOnlySettings mcfg of
-            [] -> (eco,) <$> resolveServeOnly globalPolicy eco mPrivate mcfg
-            -- A write credential or token duration on a mount that never writes signals a
-            -- misunderstanding. Refuse each offending key rather than ignoring it.
-            offending -> Left (map (MirrorSettingWithoutWrite eco) offending)
+    resolveOne (eco, mcfg) = case lefts (map (uncurry (vetTargetTag eco)) (readAndPublishTargets mcfg)) of
+        [] -> (eco,) <$> resolveMode globalPolicy eco mcfg
+        tagErrs -> Left tagErrs
 
-    writeOnlySettings mcfg =
-        ["mirrorTargetToken" | isJust (mntMirrorTargetToken mcfg)]
-            <> ["mirrorTokenDuration" | isJust (mntMirrorTokenDuration mcfg)]
+{- Each read or publish endpoint a mount declares, with the key it is written under. The mirror
+target is absent because 'resolveStoreBackend' vets it while resolving its backend. -}
+readAndPublishTargets :: MountConfig -> [(Text, Target)]
+readAndPublishTargets mcfg =
+    [("privateUpstream", target) | Just target <- [mntPrivateUpstream mcfg]]
+        <> [("publicationTarget", peTarget endpoint) | Just endpoint <- [mntPublicationTarget mcfg]]
 
-{- | Project a mirrored mount onto its served form. 'resolveStoreBackend' derives the store from
-the mirror-target URL, so the resolved 'MirrorTarget' never pairs an endpoint with another's plan.
+-- A declared mirror target makes the mount mirrored, which then needs its private upstream.
+resolveMode :: RulePolicy -> Ecosystem -> MountConfig -> Either [ConfigError] Mount
+resolveMode globalPolicy eco mcfg = case (mntMirrorTarget mcfg, mntPrivateUpstream mcfg) of
+    (Just mirrorTarget, Just privateUpstream) ->
+        resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg
+    (Just _, Nothing) -> Left [MountMissingPrivateUpstream eco]
+    (Nothing, mPrivate) -> resolveServeOnly globalPolicy eco mPrivate mcfg
+
+{- | Project a mirrored mount onto its served form. 'resolveStoreBackend' reads the mirror target's
+declared tag, so the resolved 'MirrorTarget' never pairs an endpoint with another store's plan.
 -}
-resolveMirrored :: RulePolicy -> Ecosystem -> RegistryUrl -> RegistryUrl -> MountConfig -> Either [ConfigError] Mount
+resolveMirrored :: RulePolicy -> Ecosystem -> Target -> MirrorEndpoint -> MountConfig -> Either [ConfigError] Mount
 resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
     policy <- resolveMountPolicy globalPolicy mcfg
-    backend <-
-        first (: []) $
-            resolveStoreBackend eco mirrorTarget (mntMirrorTargetToken mcfg) (mntMirrorTokenDuration mcfg)
+    backend <- first (: []) (resolveStoreBackend eco mirrorTarget)
     Right $
         mountOf eco mcfg policy $
             Mirrored
                 MirroredLegs
-                    { mlPrivateUpstream = privateUpstream
+                    { mlPrivateUpstream = tgtUrl privateUpstream
                     , mlMirrorTarget =
                         MirrorTarget
-                            { mtUrl = mirrorTarget
+                            { mtUrl = meUrl mirrorTarget
                             , mtBackend = backend
                             }
                     }
@@ -212,10 +217,10 @@ resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
 {- | Project a serve-only mount onto its served form. It makes no mirror write, and
 its private upstream is optional, absent on the pure public gate.
 -}
-resolveServeOnly :: RulePolicy -> Ecosystem -> Maybe RegistryUrl -> MountConfig -> Either [ConfigError] Mount
+resolveServeOnly :: RulePolicy -> Ecosystem -> Maybe Target -> MountConfig -> Either [ConfigError] Mount
 resolveServeOnly globalPolicy eco mPrivate mcfg = do
     policy <- resolveMountPolicy globalPolicy mcfg
-    Right (mountOf eco mcfg policy (ServeOnly mPrivate))
+    Right (mountOf eco mcfg policy (ServeOnly (tgtUrl <$> mPrivate)))
 
 resolveMountPolicy :: RulePolicy -> MountConfig -> Either [ConfigError] RulePolicy
 resolveMountPolicy globalPolicy mcfg =
@@ -300,8 +305,11 @@ postureLine (eco, mount) = case regMode (mountRegistries mount) of
     Mirrored legs ->
         "mount \""
             <> ecosystemName eco
-            <> "\": mirrored; admitted public artifacts back-fill "
+            <> "\": mirrored; admitted public artifacts back-fill the "
+            <> storeTagName (sbTag (mtBackend (mlMirrorTarget legs)))
+            <> " store "
             <> registryUrlText (mtUrl (mlMirrorTarget legs))
+            <> consentClause (mtBackend (mlMirrorTarget legs))
     ServeOnly (Just private) ->
         "mount \""
             <> ecosystemName eco
@@ -312,3 +320,12 @@ postureLine (eco, mount) = case regMode (mountRegistries mount) of
         "mount \""
             <> ecosystemName eco
             <> "\": serve-only pure public gate (no private upstream, no mirrorTarget): every artifact streams from the gated public leg and is never mirrored"
+
+{- The deletion consent a store carries, which the operator declares on the store itself. Only a
+Verdaccio store carries one, so the clause is empty everywhere else. -}
+consentClause :: StoreBackend -> Text
+consentClause = \case
+    BackendVerdaccio _ DeletionPermitted -> ", which permits deletion"
+    BackendVerdaccio _ DeletionWithheld -> ", which withholds deletion"
+    BackendRegistry{} -> ""
+    BackendCodeArtifact{} -> ""

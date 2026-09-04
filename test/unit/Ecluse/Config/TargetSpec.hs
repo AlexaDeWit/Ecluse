@@ -4,121 +4,251 @@
 
 module Ecluse.Config.TargetSpec (spec) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Config.Target (
-    CodeArtifactAbsence (NoFormatFor, NotRepositoryEndpoint),
+import Ecluse.Composition.BootError (BootError (StoreTagConflict))
+import Ecluse.Composition.Endpoints (vetEndpoints)
+import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Vet (runVet)
+import Ecluse.Config (
+    AppConfig (cfgMounts),
+    Config (configApp, configMounts),
+    ConfigError,
     ControlPlane (ControlCodeArtifact, ControlNone),
+    DeletionConsent (DeletionPermitted, DeletionWithheld),
     MintPlan (MintCodeArtifact, MintStatic),
-    StoreBackend (sbControl, sbMint, sbTag),
-    StoreTag (TagCodeArtifact, TagRegistry),
-    parseCodeArtifactHost,
-    resolveStoreBackend,
+    MirrorTarget (mtBackend),
+    Mount (mountRegistries),
+    MountConfig,
+    StoreBackend (BackendRegistry, BackendVerdaccio),
+    StoreTag (TagCodeArtifact, TagRegistry, TagVerdaccio),
+    loadConfig,
+    regMirrorTarget,
+    renderConfigError,
+    sbControl,
+    sbMint,
+    sbTag,
  )
-import Ecluse.Config.Types (ConfigError (..), renderConfigError)
-import Ecluse.Core.Credential (Secret, mkSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Config.Target (parseCodeArtifactHost)
+import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..), formatToken)
-import Ecluse.Test.Package (unsafeRegistryUrl)
 
 spec :: Spec
 spec = do
-    mintSpec
-    controlSpec
+    admissionSpec
+    layeringSpec
+    hostValidationSpec
+    backendSpec
+    tagCollisionSpec
     parseCodeArtifactHostSpec
 
--- The CodeArtifact endpoint used across the derivation cases: a hyphenated domain so
--- the 12-digit owner after the LAST hyphen is recovered.
-codeArtifactTarget :: Text
-codeArtifactTarget = "https://my-domain-111122223333.d.codeartifact.us-west-2.amazonaws.com/npm/my-repo/"
+{- Every cell of the store admission matrix: which tags an endpoint admits, and which keys each
+tag admits there. A shape outside its cell refuses at load, naming the key path. -}
+admissionSpec :: Spec
+admissionSpec = describe "the tags and keys each endpoint admits" $ do
+    describe "publicUpstream" $ do
+        it "admits registry with a url" $
+            loadsWith [decl "publicUpstream" "registry" [url publicUrl]]
 
-mintSpec :: Spec
-mintSpec = describe "resolveStoreBackend (the target dictates the credential)" $ do
-    it "derives the CodeArtifact identity from a CodeArtifact target host" $ do
-        backend <- resolvedAt Npm codeArtifactTarget Nothing (Just 1800)
+        it "admits no other tag, naming the one it does" $ do
+            refuses
+                [decl "publicUpstream" "codeArtifact" [url codeArtifactMirror]]
+                "publicUpstream must name exactly one store tag (registry)"
+            refuses
+                [decl "publicUpstream" "verdaccio" [url verdaccioUrl]]
+                "publicUpstream must name exactly one store tag (registry)"
+
+        it "admits no key beside url" $
+            -- The shipped template always supplies this url, so the merged document can never
+            -- lack it. 'privateUpstream' below pins the registry tag's own required-url refusal.
+            refuses
+                [decl "publicUpstream" "registry" [url publicUrl, field "token" "t"]]
+                "unexpected publicUpstream.registry key(s): \"token\""
+
+    describe "privateUpstream" $ do
+        it "admits every tag, each carrying the url alone" $ do
+            loadsWith [decl "privateUpstream" "registry" [url privateUrl]]
+            loadsWith [decl "privateUpstream" "codeArtifact" [url codeArtifactInternal]]
+            loadsWith [decl "privateUpstream" "verdaccio" [url verdaccioUrl]]
+
+        it "requires the url and admits no credential, because a read is passthrough" $ do
+            refuses [decl "privateUpstream" "registry" []] "privateUpstream.registry.url is required"
+            refuses
+                [decl "privateUpstream" "verdaccio" [url verdaccioUrl, field "token" "t"]]
+                "unexpected privateUpstream.verdaccio key(s): \"token\""
+
+    describe "mirrorTarget" $ do
+        it "admits registry with a url and the static write token it needs" $
+            loadsWith (mirrored [decl "mirrorTarget" "registry" [url mirrorUrl, field "token" "t"]])
+
+        it "refuses a registry mirror target with no write token" $
+            refuses
+                (mirrored [decl "mirrorTarget" "registry" [url mirrorUrl]])
+                "mirrorTarget.registry.token is required"
+
+        it "admits codeArtifact with a url and an optional token duration" $ do
+            loadsWith (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror]])
+            loadsWith
+                (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror, field "tokenDuration" "3600"]])
+
+        it "refuses a static token beside the one codeArtifact mints" $
+            -- The mirror write is Écluse's one standing credential, so a minting tag admits
+            -- no operator-supplied bearer to contend with it.
+            refuses
+                (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror, field "token" "t"]])
+                "unexpected mirrorTarget.codeArtifact key(s): \"token\""
+
+        it "admits verdaccio with a url, a write token, and the optional deletion consent" $ do
+            loadsWith (mirrored [decl "mirrorTarget" "verdaccio" [url verdaccioUrl, field "token" "t"]])
+            loadsWith (mirrored [decl "mirrorTarget" "verdaccio" verdaccioWriteKeys])
+
+        it "refuses a verdaccio mirror target with no write token" $
+            refuses
+                (mirrored [decl "mirrorTarget" "verdaccio" [url verdaccioUrl]])
+                "mirrorTarget.verdaccio.token is required"
+
+        it "keeps each tag's own keys off the others" $ do
+            refuses
+                (mirrored [decl "mirrorTarget" "registry" [url mirrorUrl, field "token" "t", permitDeletion]])
+                "unexpected mirrorTarget.registry key(s): \"permitDeletion\""
+            refuses
+                (mirrored [decl "mirrorTarget" "verdaccio" [url verdaccioUrl, field "token" "t", field "tokenDuration" "3600"]])
+                "unexpected mirrorTarget.verdaccio key(s): \"tokenDuration\""
+
+    describe "publicationTarget" $ do
+        it "admits every tag, with the fallback token optional on each" $ do
+            loadsWith [decl "publicationTarget" "registry" [url publishUrl]]
+            loadsWith [decl "publicationTarget" "registry" [url publishUrl, field "token" "t"]]
+            loadsWith [decl "publicationTarget" "codeArtifact" [url codeArtifactInternal, field "token" "t"]]
+            loadsWith [decl "publicationTarget" "verdaccio" [url verdaccioUrl, field "token" "t"]]
+
+        it "requires the url and admits neither a mint lifetime nor a consent flag" $ do
+            refuses [decl "publicationTarget" "codeArtifact" []] "publicationTarget.codeArtifact.url is required"
+            refuses
+                [decl "publicationTarget" "registry" [url publishUrl, field "tokenDuration" "3600"]]
+                "unexpected publicationTarget.registry key(s): \"tokenDuration\""
+            refuses
+                [decl "publicationTarget" "verdaccio" [url verdaccioUrl, permitDeletion]]
+                "unexpected publicationTarget.verdaccio key(s): \"permitDeletion\""
+
+{- A layer fills keys under a tag, it never switches one, because 'deepMerge' unions the two
+objects rather than replacing the document's. -}
+layeringSpec :: Spec
+layeringSpec = describe "one tag per endpoint" $ do
+    it "refuses two tags written on one endpoint, listing what was written" $
+        refuses
+            (mirrored [twoTagged])
+            "mirrorTarget must name exactly one store tag (registry, codeArtifact, verdaccio), got: \"codeArtifact\", \"verdaccio\""
+
+    it "refuses an environment override that writes a second tag over the document's" $
+        loadConfig
+            (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "t")])
+            (Just (mountDoc (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror]])))
+            `shouldSatisfy` refusalMentions "must name exactly one store tag"
+
+    it "fills a key under the tag the document declared, from the environment layer" $ do
+        -- The arrangement a deployment writes: the document names the tag, and the environment
+        -- supplies a value under it without ever naming a second tag.
+        config <-
+            expectLoad
+                (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__TOKEN_DURATION", "1800")])
+                (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror]])
+        backend <- mirrorBackendOf config
+        case sbMint backend of
+            MintCodeArtifact caConfig -> caDurationSeconds caConfig `shouldBe` Just 1800
+            MintStatic _ -> expectationFailure "expected the CodeArtifact mint the tag names"
+
+    it "refuses an endpoint that is not an object at all" $
+        refuses
+            [decl' "mirrorTarget" "\"https://mirror.example.test\""]
+            "mirrorTarget must be an object naming exactly one store tag"
+
+-- The tag names the store, so a URL that contradicts it is refused under the key that wrote it.
+hostValidationSpec :: Spec
+hostValidationSpec = describe "the URL a tag admits" $ do
+    it "refuses a codeArtifact read target whose host is not a CodeArtifact endpoint" $ do
+        let outcome = loadMount [decl "privateUpstream" "codeArtifact" [url verdaccioUrl]]
+        outcome `shouldSatisfy` refusalMentions "mounts.npm.privateUpstream.codeArtifact.url"
+        outcome `shouldSatisfy` refusalMentions "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL"
+
+    it "refuses a codeArtifact publication target whose host is not a CodeArtifact endpoint" $
+        loadMount [decl "publicationTarget" "codeArtifact" [url publishUrl]]
+            `shouldSatisfy` refusalMentions "mounts.npm.publicationTarget.codeArtifact.url"
+
+    it "refuses a codeArtifact mirror target whose host is not a CodeArtifact endpoint" $
+        loadMount (mirrored [decl "mirrorTarget" "codeArtifact" [url mirrorUrl]])
+            `shouldSatisfy` refusalMentions "mounts.npm.mirrorTarget.codeArtifact.url"
+
+    it "refuses a mirror target addressing another format's endpoint of the same repository" $
+        -- A repository's per-format endpoints are separate stores, so an npm mount pointed at
+        -- the pypi endpoint would mirror into a store it never reads back.
+        loadMount (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactPyPI]])
+            `shouldSatisfy` refusalMentions "its path must be /npm/{repository}/"
+
+    it "refuses a mirror target naming no repository at all" $
+        loadMount (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactBare]])
+            `shouldSatisfy` refusalMentions "its path must be /npm/{repository}/"
+
+    it "refuses a codeArtifact mirror target on an ecosystem CodeArtifact has no format for" $
+        loadConfig pubUrlEnv (Just rubygemsDoc)
+            `shouldSatisfy` refusalMentions "CodeArtifact carries no package format for the rubygems ecosystem"
+
+-- The tag the operator declared is the backend every role reads, with no host shape consulted.
+backendSpec :: Spec
+backendSpec = describe "the store backend a mirror target resolves to" $ do
+    it "resolves registry to a static write credential and no control plane" $ do
+        backend <- backendFor [decl "mirrorTarget" "registry" [url mirrorUrl, field "token" "write-token"]]
+        backend `shouldBe` BackendRegistry (mkSecret "write-token")
+        sbTag backend `shouldBe` TagRegistry
+        sbMint backend `shouldBe` MintStatic (mkSecret "write-token")
+        sbControl backend `shouldBe` ControlNone
+
+    it "resolves codeArtifact to the identity its host carries and the repository it addresses" $ do
+        backend <- backendFor [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror, field "tokenDuration" "1800"]]
         sbTag backend `shouldBe` TagCodeArtifact
         sbMint backend
             `shouldBe` MintCodeArtifact
                 CodeArtifactConfig
-                    { caRegion = "us-west-2"
-                    , caDomain = "my-domain"
+                    { caRegion = "eu-west-1"
+                    , caDomain = "acme"
                     , caDomainOwner = Just "111122223333"
                     , caDurationSeconds = Just 1800
                     }
+        case sbControl backend of
+            ControlCodeArtifact store -> do
+                casRepository store `shouldBe` "mirror"
+                formatToken (casFormat store) `shouldBe` "npm"
+            ControlNone -> expectationFailure "expected a CodeArtifact control plane"
 
-    it "derives a static credential for a non-CodeArtifact target with a token" $ do
-        backend <- resolvedAt Npm nonCodeArtifactTarget (Just (mkSecret "write-token")) Nothing
-        sbTag backend `shouldBe` TagRegistry
-        sbMint backend `shouldBe` MintStatic (mkSecret "write-token")
+    it "resolves verdaccio to a static credential carrying the declared deletion consent" $ do
+        permitted <- backendFor [decl "mirrorTarget" "verdaccio" verdaccioWriteKeys]
+        permitted `shouldBe` BackendVerdaccio (mkSecret "write-token") DeletionPermitted
+        sbTag permitted `shouldBe` TagVerdaccio
+        sbMint permitted `shouldBe` MintStatic (mkSecret "write-token")
+        sbControl permitted `shouldBe` ControlNone
 
-    it "rejects a non-CodeArtifact target with no static write token, naming the key" $ do
-        case resolveStoreBackend Npm (unsafeRegistryUrl nonCodeArtifactTarget) Nothing Nothing of
-            Left err@(MirrorCredentialTokenMissing Npm) ->
-                renderConfigError err `shouldSatisfy` T.isInfixOf "MIRROR_TARGET_TOKEN"
-            other -> expectationFailure ("expected MirrorCredentialTokenMissing Npm, got " <> show other)
+    it "withholds deletion consent on a verdaccio store that never declares it" $ do
+        backend <- backendFor [decl "mirrorTarget" "verdaccio" [url verdaccioUrl, field "token" "write-token"]]
+        backend `shouldBe` BackendVerdaccio (mkSecret "write-token") DeletionWithheld
 
-    it "rejects a CodeArtifact target that also carries a static token (the two must not contend)" $ do
-        -- A CodeArtifact endpoint's token is always minted, so an operator-supplied bearer beside
-        -- it is a loud conflict, never a silent choice.
-        case resolveStoreBackend Npm (unsafeRegistryUrl codeArtifactTarget) (Just (mkSecret "stray")) (Just 1800) of
-            Left err@(MirrorCredentialConflict Npm) ->
-                renderConfigError err `shouldSatisfy` T.isInfixOf "MIRROR_TARGET_TOKEN"
-            other -> expectationFailure ("expected MirrorCredentialConflict Npm, got " <> show other)
+-- One store has one backend, so two endpoints at one registry must name one tag.
+tagCollisionSpec :: Spec
+tagCollisionSpec = describe "one tag per store" $ do
+    it "refuses one registry declared under two tags, for every role" $ do
+        mounts <- mountsFor [decl "privateUpstream" "verdaccio" [url sharedUrl], decl "mirrorTarget" "registry" [url sharedUrl, field "token" "t"]]
+        for_ [MirrorWriter, MirrorPruner] $ \role -> do
+            let refusals = tagConflicts role mounts
+            refusals `shouldSatisfy` any (isConflictAt "privateUpstream.verdaccio" "mirrorTarget.registry")
 
-    it "never mints a CodeArtifact token for a non-CodeArtifact endpoint (#808)" $ do
-        -- The core invariant: no input produces a MintCodeArtifact whose identity
-        -- was not parsed from the target host that receives it.
-        resolveStoreBackend Npm (unsafeRegistryUrl nonCodeArtifactTarget) (Just (mkSecret "t")) (Just 1800)
-            `shouldSatisfy` \case
-                Right backend -> case sbMint backend of
-                    MintCodeArtifact _ -> False
-                    MintStatic _ -> True
-                Left _ -> False
-
-{- A CodeArtifact path that addresses no repository stays the Dredger's refusal alone, so every
-role that never deletes still boots on it. -}
-controlSpec :: Spec
-controlSpec = describe "resolveStoreBackend (the control plane the target reaches)" $ do
-    it "reads the domain, its owner, the region, and the repository from the endpoint" $ do
-        store <- storeAt Npm npmEndpoint
-        casDomain store `shouldBe` "acme"
-        casDomainOwner store `shouldBe` "111122223333"
-        casRegion store `shouldBe` "eu-west-1"
-        casRepository store `shouldBe` "mirror"
-        formatToken (casFormat store) `shouldBe` "npm"
-
-    it "keeps a domain that carries its own hyphens" $ do
-        store <- storeAt Npm hyphenatedEndpoint
-        casDomain store `shouldBe` "acme-eu-team"
-
-    it "reads a pypi mount from the pypi endpoint of the same repository" $ do
-        store <- storeAt PyPI pypiEndpoint
-        casRepository store `shouldBe` "mirror"
-        formatToken (casFormat store) `shouldBe` "pypi"
-
-    it "reaches no control plane for a host no backend in this build recognises" $ do
-        backend <- resolvedAt Npm verdaccioEndpoint staticToken Nothing
-        sbTag backend `shouldBe` TagRegistry
-        sbControl backend `shouldBe` ControlNone
-
-    it "names the tag rather than the ecosystem's format for an unrecognised host" $ do
-        -- A RubyGems mirror on Verdaccio reaches no control plane for its tag, not for a
-        -- CodeArtifact format it was never going to need.
-        backend <- resolvedAt RubyGems verdaccioGemsEndpoint staticToken Nothing
-        sbTag backend `shouldBe` TagRegistry
-        sbControl backend `shouldBe` ControlNone
-
-    it "carries the absence for an ecosystem CodeArtifact has no format for" $
-        controlAt RubyGems npmEndpoint `shouldReturn` Left (NoFormatFor RubyGems)
-
-    it "carries the absence for a mount pointed at another format's endpoint of the same repository" $
-        controlAt Npm pypiEndpoint `shouldReturn` Left (NotRepositoryEndpoint "npm")
-
-    it "carries the absence for an endpoint that names no repository" $
-        controlAt Npm "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/"
-            `shouldReturn` Left (NotRepositoryEndpoint "npm")
+    it "stays silent on the development topology that names one Verdaccio on every endpoint" $ do
+        -- The end-to-end harness declares exactly this, which is why verdaccio is admitted
+        -- on a read target at all.
+        mounts <- mountsFor developmentTopology
+        for_ [MirrorWriter, MirrorPruner] $ \role -> tagConflicts role mounts `shouldBe` []
 
 parseCodeArtifactHostSpec :: Spec
 parseCodeArtifactHostSpec = describe "parseCodeArtifactHost" $ do
@@ -150,41 +280,120 @@ parseCodeArtifactHostSpec = describe "parseCodeArtifactHost" $ do
         parseCodeArtifactHost "my-domain-11112222333a.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
         parseCodeArtifactHost "my-domain-owner.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
 
--- Resolve one target, failing the test on a load-time refusal.
-resolvedAt :: Ecosystem -> Text -> Maybe Secret -> Maybe Natural -> IO StoreBackend
-resolvedAt eco url mToken mDuration =
-    either (fail . toString . renderConfigError) pure $
-        resolveStoreBackend eco (unsafeRegistryUrl url) mToken mDuration
+-- One endpoint declaration: the key, the tag under it, and the keys written under that tag.
+decl :: Text -> Text -> [Text] -> Text
+decl key tag keys = decl' key ("{\"" <> tag <> "\":{" <> T.intercalate "," keys <> "}}")
 
--- The CodeArtifact control plane a target resolves to, or the absence it carries instead.
-controlAt :: Ecosystem -> Text -> IO (Either CodeArtifactAbsence CodeArtifactStore)
-controlAt eco url = do
-    backend <- resolvedAt eco url Nothing Nothing
-    case sbControl backend of
-        ControlCodeArtifact addressed -> pure addressed
-        ControlNone -> fail "expected a CodeArtifact control plane"
+-- An endpoint key holding an arbitrary value, for the shapes a tagged object refuses.
+decl' :: Text -> Text -> Text
+decl' key body = "\"" <> key <> "\":" <> body
 
--- The addressed store, failing the test on the absence.
-storeAt :: Ecosystem -> Text -> IO CodeArtifactStore
-storeAt eco url = controlAt eco url >>= either (fail . show) pure
+field :: Text -> Text -> Text
+field key value = "\"" <> key <> "\":\"" <> value <> "\""
 
-staticToken :: Maybe Secret
-staticToken = Just (mkSecret "write-token")
+url :: Text -> Text
+url = field "url"
 
-nonCodeArtifactTarget :: (IsString s) => s
-nonCodeArtifactTarget = "https://mirror.example.test/"
+permitDeletion :: Text
+permitDeletion = "\"permitDeletion\":true"
 
-verdaccioEndpoint :: (IsString s) => s
-verdaccioEndpoint = "https://verdaccio.example.test/npm/mirror/"
+-- The two keys a Verdaccio mirror write declares beyond its url.
+verdaccioWriteKeys :: [Text]
+verdaccioWriteKeys = [url verdaccioUrl, field "token" "write-token", permitDeletion]
 
-verdaccioGemsEndpoint :: (IsString s) => s
-verdaccioGemsEndpoint = "https://verdaccio.example.test/gems/mirror/"
+-- A mirrored mount needs the private upstream its mirror is read back through.
+mirrored :: [Text] -> [Text]
+mirrored endpoints = decl "privateUpstream" "registry" [url privateUrl] : endpoints
 
-npmEndpoint :: (IsString s) => s
-npmEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"
+-- The harness topology: one Verdaccio named by every endpoint that may hold one.
+developmentTopology :: [Text]
+developmentTopology =
+    [ decl "privateUpstream" "verdaccio" [url sharedUrl]
+    , decl "mirrorTarget" "verdaccio" [url sharedUrl, field "token" "t"]
+    , decl "publicationTarget" "verdaccio" [url sharedUrl]
+    ]
 
-pypiEndpoint :: (IsString s) => s
-pypiEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/pypi/mirror/"
+twoTagged :: Text
+twoTagged =
+    decl' "mirrorTarget" $
+        "{\"codeArtifact\":{" <> url codeArtifactMirror <> "},\"verdaccio\":{" <> url verdaccioUrl <> "}}"
 
-hyphenatedEndpoint :: (IsString s) => s
-hyphenatedEndpoint = "https://acme-eu-team-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"
+mountDoc :: [Text] -> ByteString
+mountDoc endpoints = encodeUtf8 ("{\"mounts\":{\"npm\":{" <> T.intercalate "," endpoints <> "}}}")
+
+-- A rubygems mount mirroring into CodeArtifact, which carries no format for that ecosystem.
+rubygemsDoc :: ByteString
+rubygemsDoc =
+    encodeUtf8 $
+        "{\"mounts\":{\"rubygems\":{"
+            <> T.intercalate
+                ","
+                [ decl "privateUpstream" "registry" [url privateUrl]
+                , decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror]
+                ]
+            <> "}}}"
+
+loadMount :: [Text] -> Either [ConfigError] Config
+loadMount endpoints = loadConfig pubUrlEnv (Just (mountDoc endpoints))
+
+loadsWith :: [Text] -> Expectation
+loadsWith endpoints = case loadMount endpoints of
+    Left errs -> expectationFailure ("expected a load, got " <> show (map renderConfigError errs))
+    Right _ -> pass
+
+refuses :: [Text] -> Text -> Expectation
+refuses endpoints phrase = loadMount endpoints `shouldSatisfy` refusalMentions phrase
+
+refusalMentions :: Text -> Either [ConfigError] a -> Bool
+refusalMentions phrase = \case
+    Left errs -> any (T.isInfixOf phrase . renderConfigError) errs
+    Right _ -> False
+
+-- The npm mount's resolved mirror-write backend, failing the test on anything else.
+backendFor :: [Text] -> IO StoreBackend
+backendFor endpoints = mirrorBackendOf =<< expectLoad pubUrlEnv (mirrored endpoints)
+
+mirrorBackendOf :: Config -> IO StoreBackend
+mirrorBackendOf config =
+    case regMirrorTarget . mountRegistries =<< Map.lookup Npm (configMounts config) of
+        Just target -> pure (mtBackend target)
+        Nothing -> fail "the npm mount resolved no mirror target"
+
+mountsFor :: [Text] -> IO (Map Ecosystem MountConfig)
+mountsFor endpoints = cfgMounts . configApp <$> expectLoad pubUrlEnv endpoints
+
+-- Load one npm mount under an environment layer, failing the test on a refusal.
+expectLoad :: [(String, String)] -> [Text] -> IO Config
+expectLoad env endpoints =
+    either (fail . show . map renderConfigError) pure (loadConfig env (Just (mountDoc endpoints)))
+
+-- The tag-conflict refusals one role's endpoint pass earns, with its other findings dropped.
+tagConflicts :: RegistryRole -> Map Ecosystem MountConfig -> [BootError]
+tagConflicts role mounts = case snd (runVet role (vetEndpoints mounts)) of
+    Left errs -> [err | err@StoreTagConflict{} <- errs]
+    Right _ -> []
+
+isConflictAt :: Text -> Text -> BootError -> Bool
+isConflictAt key otherKey = \case
+    StoreTagConflict _ written _ otherWritten _ -> written == key && otherWritten == otherKey
+    _ -> False
+
+pubUrlEnv :: [(String, String)]
+pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
+
+publicUrl, privateUrl, mirrorUrl, publishUrl, verdaccioUrl, sharedUrl :: Text
+publicUrl = "https://registry.npmjs.org"
+privateUrl = "https://private.example.test"
+mirrorUrl = "https://mirror.example.test"
+publishUrl = "https://publish.example.test"
+verdaccioUrl = "https://verdaccio.example.test/"
+sharedUrl = "https://shared.example.test/"
+
+codeArtifactMirror, codeArtifactInternal, codeArtifactPyPI, codeArtifactBare :: Text
+codeArtifactMirror = codeArtifactDomain <> "/npm/mirror/"
+codeArtifactInternal = codeArtifactDomain <> "/npm/internal/"
+codeArtifactPyPI = codeArtifactDomain <> "/pypi/mirror/"
+codeArtifactBare = codeArtifactDomain <> "/npm/"
+
+codeArtifactDomain :: Text
+codeArtifactDomain = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com"

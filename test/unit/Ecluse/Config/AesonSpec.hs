@@ -108,9 +108,9 @@ spec = describe "decodeDocument" $ do
     it "activates a mount from the environment layer alone" $
         case loadConfig
             ( pubUrlEnv
-                <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
-                   , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-                   , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
+                <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
+                   , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
+                   , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "t")
                    ]
             )
             Nothing of
@@ -125,7 +125,7 @@ spec = describe "decodeDocument" $ do
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
     it "resolves a mount declaring only a private upstream as serve-only over the merge" $
-        case loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://private.example.test\"}}}") of
+        case loadConfig pubUrlEnv (Just (mountDoc "\"privateUpstream\":{\"registry\":{\"url\":\"https://private.example.test\"}}")) of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
@@ -134,7 +134,7 @@ spec = describe "decodeDocument" $ do
         -- mount without one is refused. Only serve-only mounts may omit it.
         loadConfig
             []
-            (Just "{\"mounts\":{\"npm\":{\"mirrorTarget\":\"https://mirror.example.test\",\"mirrorTargetToken\":\"t\"}}}")
+            (Just (mountDoc "\"mirrorTarget\":{\"registry\":{\"url\":\"https://mirror.example.test\",\"token\":\"t\"}}"))
             `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
 
     it "loads a mount whose mirror target is declared equal to its private upstream" $
@@ -143,17 +143,19 @@ spec = describe "decodeDocument" $ do
         case loadConfig
             pubUrlEnv
             ( Just
-                "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://one.example.test\",\
-                \\"mirrorTarget\":\"https://one.example.test\",\"mirrorTargetToken\":\"t\"}}}"
+                ( mountDoc
+                    "\"privateUpstream\":{\"registry\":{\"url\":\"https://one.example.test\"}},\
+                    \\"mirrorTarget\":{\"registry\":{\"url\":\"https://one.example.test\",\"token\":\"t\"}}"
+                )
             ) of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
-    it "fails loudly when an environment token activates a mount that never writes" $
-        -- A write token on a serve-only mount (no mirrorTarget) signals a
-        -- misunderstanding and is refused, naming the offending key.
-        loadConfig [("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN", "t")] Nothing
-            `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN"
+    it "fails loudly when an environment token declares a mirror target with no URL" $
+        -- The write token lives under the target's tag, so a token alone declares the
+        -- target and the missing url refuses, naming the key path.
+        loadConfig [("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__TOKEN", "t")] Nothing
+            `shouldSatisfy` decodeErrorMentions "mirrorTarget.registry.url is required"
 
     it "rejects a malformed firstParty entry (a wrong separator folds into one dead scope), naming firstParty" $
         -- A stray separator would otherwise fold into a single unmatchable scope that
@@ -217,7 +219,7 @@ spec = describe "decodeDocument" $ do
     it "accepts a well-formed comma-separated firstParty (trimmed, leading sigil tolerated)" $
         case loadConfig
             ( pubUrlEnv
-                <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
+                <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
                    , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme, beta")
                    ]
             )
@@ -227,8 +229,8 @@ spec = describe "decodeDocument" $ do
 
     it "reports every incomplete mirrored mount in one load, not only the first" $ do
         let doc =
-                "{\"mounts\":{\"npm\":{\"mirrorTarget\":\"https://m1.example.test\",\"mirrorTargetToken\":\"t\"},\
-                \\"pypi\":{\"mirrorTarget\":\"https://m2.example.test\",\"mirrorTargetToken\":\"t\"}}}"
+                "{\"mounts\":{\"npm\":{\"mirrorTarget\":{\"registry\":{\"url\":\"https://m1.example.test\",\"token\":\"t\"}}},\
+                \\"pypi\":{\"mirrorTarget\":{\"registry\":{\"url\":\"https://m2.example.test\",\"token\":\"t\"}}}}}"
         let outcome = loadConfig [] (Just doc)
         outcome `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
         outcome `shouldSatisfy` decodeErrorMentions "mounts.pypi.privateUpstream"
@@ -414,9 +416,9 @@ spec = describe "decodeDocument" $ do
         it "accepts an upstream URL with an explicit port" $
             case loadConfig
                 ( pubUrlEnv
-                    <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:8443/npm")
-                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
+                    <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://repo.internal.example.test:8443/npm")
+                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
+                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "t")
                        ]
                 )
                 Nothing of
@@ -425,9 +427,9 @@ spec = describe "decodeDocument" $ do
         it "accepts an upstream URL with a bracketed IPv6 host and a port" $
             case loadConfig
                 ( pubUrlEnv
-                    <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://[2001:db8::10]:8443/npm")
-                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "t")
+                    <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://[2001:db8::10]:8443/npm")
+                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
+                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "t")
                        ]
                 )
                 Nothing of
@@ -436,13 +438,13 @@ spec = describe "decodeDocument" $ do
         it "rejects an upstream URL with a non-numeric port, naming the value (fails closed at boot)" $
             -- The gate refuses every fetch from an authority it cannot extract, so the
             -- misconfiguration surfaces at load, never as a mount that silently serves nothing.
-            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:9x9/npm")] Nothing
+            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://repo.internal.example.test:9x9/npm")] Nothing
                 `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
         it "rejects an upstream URL with an out-of-range port" $
-            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:65536/npm")] Nothing
+            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://repo.internal.example.test:65536/npm")] Nothing
                 `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
         it "rejects an upstream URL with port 0" $
-            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test:0/npm")] Nothing
+            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://repo.internal.example.test:0/npm")] Nothing
                 `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
         it "rejects a mirror-target URL with a garbage port through the document layer" $
             loadConfig [] (Just (mountDocWithMirrorTarget "https://mirror.example.test:port/npm"))
@@ -453,23 +455,23 @@ spec = describe "decodeDocument" $ do
         -- as given. Refusing these shapes at load is what keeps a credential off those
         -- lines, so the refusal names the key and never the value.
         it "rejects an upstream URL carrying userinfo, naming the key and not the credential" $ do
-            let outcome = loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://deploy:hunter2@repo.internal.example.test/npm")] Nothing
-            outcome `shouldSatisfy` decodeErrorMentions "privateUpstream: registry URL must not carry userinfo"
+            let outcome = loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://deploy:hunter2@repo.internal.example.test/npm")] Nothing
+            outcome `shouldSatisfy` decodeErrorMentions "privateUpstream.registry.url: registry URL must not carry userinfo"
             outcome `shouldSatisfy` (not . decodeErrorMentions "hunter2")
 
         it "rejects an upstream URL carrying a query string, naming the key" $
-            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test/npm?token=abc")] Nothing
-                `shouldSatisfy` decodeErrorMentions "privateUpstream: registry URL must not carry a query string"
+            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://repo.internal.example.test/npm?token=abc")] Nothing
+                `shouldSatisfy` decodeErrorMentions "privateUpstream.registry.url: registry URL must not carry a query string"
 
         it "rejects an upstream URL carrying a fragment, naming the key" $
-            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://repo.internal.example.test/npm#frag")] Nothing
-                `shouldSatisfy` decodeErrorMentions "privateUpstream: registry URL must not carry a fragment"
+            loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://repo.internal.example.test/npm#frag")] Nothing
+                `shouldSatisfy` decodeErrorMentions "privateUpstream.registry.url: registry URL must not carry a fragment"
 
         -- A second endpoint key, so a key name hand-written into the wrong call site
         -- cannot pass by matching a neighbour's.
         it "rejects a mirror-target URL carrying userinfo, naming that key" $
             loadConfig [] (Just (mountDocWithMirrorTarget "https://deploy:hunter2@mirror.example.test/npm"))
-                `shouldSatisfy` decodeErrorMentions "mirrorTarget: registry URL must not carry userinfo"
+                `shouldSatisfy` decodeErrorMentions "mirrorTarget.registry.url: registry URL must not carry userinfo"
 
     describe "non-registry configured URLs (the same boot echo prints these keys)" $ do
         -- server.publicUrl, advisories.osvExportBaseUrl, and queue.url are not registry endpoints,
@@ -616,11 +618,12 @@ spec = describe "decodeDocument" $ do
         it "accepts the CodeArtifact token-duration range ends: 900 and 43200" $ do
             let docFor (n :: Int) =
                     encodeUtf8 @Text @ByteString $
-                        "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\
-                        \\"mirrorTarget\":\"https://c\",\"mirrorTargetToken\":\"t\",\
-                        \\"mirrorTokenDuration\":"
+                        "{\"mounts\":{\"npm\":{\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\
+                        \\"mirrorTarget\":{\"codeArtifact\":{\"url\":\""
+                            <> codeArtifactMirror
+                            <> "\",\"tokenDuration\":"
                             <> show n
-                            <> "}}}"
+                            <> "}}}}}"
             case loadConfig pubUrlEnv (Just (docFor 900)) of
                 Left e -> expectationFailure ("unexpected decode error: " <> show e)
                 Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
@@ -631,15 +634,21 @@ spec = describe "decodeDocument" $ do
         it "rejects a CodeArtifact token duration outside 900..43200, through both layers" $ do
             loadConfig
                 []
-                (Just "{\"mounts\":{\"npm\":{\"mirrorTokenDuration\":899}}}")
-                `shouldSatisfy` decodeErrorMentions "mirrorTokenDuration must be a duration in seconds within 900..43200"
-            loadConfig [("ECLUSE_MOUNTS__NPM__MIRROR_TOKEN_DURATION", "43201")] Nothing
-                `shouldSatisfy` decodeErrorMentions "mirrorTokenDuration must be a duration in seconds within 900..43200"
+                (Just (mountDoc (codeArtifactDurationDoc "899")))
+                `shouldSatisfy` decodeErrorMentions "mirrorTarget.codeArtifact.tokenDuration must be a duration in seconds within 900..43200"
+            loadConfig
+                [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", toString codeArtifactMirror)
+                , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__TOKEN_DURATION", "43201")
+                ]
+                Nothing
+                `shouldSatisfy` decodeErrorMentions "mirrorTarget.codeArtifact.tokenDuration must be a duration in seconds within 900..43200"
 
         it "rejects a quoted CodeArtifact token duration written as hex or padded" $
             for_ (["0x1000", " 3600", "(3600)"] :: [Text]) $ \spelling ->
-                loadConfig [] (Just (encodeUtf8 @Text @ByteString ("{\"mounts\":{\"npm\":{\"mirrorTokenDuration\":\"" <> spelling <> "\"}}}")))
-                    `shouldSatisfy` decodeErrorMentions "mirrorTokenDuration: invalid duration"
+                loadConfig
+                    []
+                    (Just (mountDoc (codeArtifactDurationDoc ("\"" <> spelling <> "\""))))
+                    `shouldSatisfy` decodeErrorMentions "mirrorTarget.codeArtifact.tokenDuration: invalid duration"
 
     describe "secret environment values (taken verbatim, never JSON-coerced)" $ do
         it "round-trips a JSON-looking authToken exactly" $
@@ -654,11 +663,11 @@ spec = describe "decodeDocument" $ do
             for_ jsonLookingSecrets $ \payload ->
                 case loadConfig
                     ( pubUrlEnv
-                        <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
-                           , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-                           , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", payload)
-                           , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-                           , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", payload)
+                        <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
+                           , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
+                           , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", payload)
+                           , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://publish.example.test")
+                           , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN", payload)
                            ]
                     )
                     Nothing of
@@ -712,7 +721,7 @@ loadFirstParty :: Text -> Either [ConfigError] Config
 loadFirstParty entry =
     loadConfig
         ( pubUrlEnv
-            <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
+            <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
                , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", toString entry)
                ]
         )
@@ -726,34 +735,49 @@ jsonLookingSecrets = ["12345", "true", "null"]
 singleMountDoc :: ByteString
 singleMountDoc =
     "{\"mounts\":{\"npm\":{\
-    \\"privateUpstream\":\"https://private.example.test\",\
-    \\"publicUpstream\":\"https://registry.npmjs.org\",\
-    \\"mirrorTarget\":\"https://mirror.example.test\",\"mirrorTargetToken\":\"token\"}},\
+    \\"privateUpstream\":{\"registry\":{\"url\":\"https://private.example.test\"}},\
+    \\"publicUpstream\":{\"registry\":{\"url\":\"https://registry.npmjs.org\"}},\
+    \\"mirrorTarget\":{\"registry\":{\"url\":\"https://mirror.example.test\",\"token\":\"token\"}}}},\
     \\"rules\":{\"min-age\":{\"ageSeconds\":1209600}}}"
+
+-- A codeArtifact mirror target carrying the given token duration, written as JSON.
+codeArtifactDurationDoc :: Text -> Text
+codeArtifactDurationDoc duration =
+    "\"mirrorTarget\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactMirror <> "\",\"tokenDuration\":" <> duration <> "}}"
+
+-- A one-mount npm document carrying exactly the given mount keys.
+mountDoc :: Text -> ByteString
+mountDoc keys = encodeUtf8 ("{\"mounts\":{\"npm\":{" <> keys <> "}}}")
+
+-- The CodeArtifact repository endpoint the tagged mirror-target cases address.
+codeArtifactMirror :: Text
+codeArtifactMirror = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"
 
 mountDocForEcosystem :: Text -> ByteString
 mountDocForEcosystem eco =
     encodeUtf8 $
         "{\"mounts\":{\""
             <> eco
-            <> "\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
-               \\"mirrorTarget\":\"https://c\",\"mirrorTargetToken\":\"token\"}}}"
+            <> "\":{\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\
+               \\"publicUpstream\":{\"registry\":{\"url\":\"https://b\"}},\
+               \\"mirrorTarget\":{\"registry\":{\"url\":\"https://c\",\"token\":\"token\"}}}}}"
 
 mountDocWithMirrorTarget :: Text -> ByteString
 mountDocWithMirrorTarget target =
-    encodeUtf8 $
-        "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
-        \\"mirrorTarget\":\""
+    mountDoc
+        ( "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\
+          \\"mirrorTarget\":{\"registry\":{\"url\":\""
             <> target
-            <> "\"}}}"
+            <> "\",\"token\":\"token\"}}"
+        )
 
 mountDocWithExtraKey :: Text -> ByteString
 mountDocWithExtraKey extra =
-    encodeUtf8 $
-        "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
-        \\"mirrorTarget\":\"https://c\",\""
+    mountDoc
+        ( "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\""
             <> extra
-            <> "\":\"x\"}}}"
+            <> "\":\"x\""
+        )
 
 decodeErrorMentions :: Text -> Either [ConfigError] a -> Bool
 decodeErrorMentions phrase (Left errs) = any (\err -> phrase `T.isInfixOf` renderConfigError err) errs

@@ -18,7 +18,15 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Maintenance (clearedBackend)
-import Ecluse.Composition.Support (codeArtifactEnvVars, codeArtifactMirrorUrl, expectConfig, noMaintenanceBackend, overrideEnv, staticEnvVars)
+import Ecluse.Composition.Support (
+    codeArtifactEnvVars,
+    codeArtifactMirrorUrl,
+    expectConfig,
+    noMaintenanceBackend,
+    overrideEnv,
+    staticEnvVars,
+    withoutPrivateUpstreamUrl,
+ )
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPublications, vpSettings),
@@ -32,6 +40,7 @@ import Ecluse.Config (
     Config,
     FirstParty (FirstPartyNpmScopes),
     MountConfig (mntMirrorTarget),
+    StoreTag (TagRegistry),
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -107,7 +116,7 @@ refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
 
     it "refuses a static publish credential with no verifiable inbound edge" $
         refusalsFor MirrorWriter staticPublishEnv
-            `shouldReturn` [PublishStaticCredentialNeedsEdge Npm]
+            `shouldReturn` [PublishStaticCredentialNeedsEdge Npm TagRegistry]
 
     it "refuses the deleting role a mirror target this build has no maintenance backend for" $
         refusalsFor MirrorPruner staticEnvVars `shouldReturn` [noMaintenanceBackend]
@@ -115,7 +124,7 @@ refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
     it "refuses the deleting role a collision on a target it has a backend for" $
         -- The plan carries the cleared backend alone, so a collision has to stop the boot
         -- through the endpoint rule. A backend the pass would clear yields no plan either way.
-        refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM" codeArtifactMirrorUrl codeArtifactEnvVars)
+        refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL" codeArtifactMirrorUrl (withoutPrivateUpstreamUrl codeArtifactEnvVars))
             `shouldReturn` [MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" codeArtifactMirrorUrl]
 
     it "reports the mount refusal beside the maintenance refusal from one deleting-role run" $
@@ -127,7 +136,7 @@ refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
         -- policy and the endpoint rules would have said about the same configuration.
         let envVars =
                 overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
-                    withoutFirstParty (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://public.example.test/npm/" staticEnvVars)
+                    withoutFirstParty (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" "https://public.example.test/npm/" staticEnvVars)
         refusalsFor MirrorWriter envVars
             `shouldReturn` [ MissingAdapter PyPI
                            , FirstPartyMissing Npm
@@ -138,11 +147,11 @@ refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
 publishingEnv :: [(String, String)]
 publishingEnv =
     overrideEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme" $
-        overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://publish.example.test" staticEnvVars
+        overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test" staticEnvVars
 
 -- | 'publishingEnv' publishing under a static credential, which needs an inbound edge beside it.
 staticPublishEnv :: [(String, String)]
-staticPublishEnv = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN" "publish-write-token" publishingEnv
+staticPublishEnv = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN" "publish-write-token" publishingEnv
 
 -- | Drop the first-party declaration, leaving the target the guard has nothing to check against.
 withoutFirstParty :: [(String, String)] -> [(String, String)]

@@ -2,25 +2,28 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Resolve a mount's mirror target to the one store backend value every role reads.
+{- | Resolve a mount's declared endpoints against the store tag each one names.
 
-The target URL decides. A CodeArtifact endpoint carries its mint identity in its host and mints
-its own write token. Any other host takes an operator-supplied static one, so a token can never
-pair with an endpoint it was not minted for. The load refuses the two degenerate arrangements:
-no static token where none is minted, and a static token beside a minted one. The Dredger, not
-the load, still refuses a CodeArtifact path that addresses no repository.
+The tag is the declaration, and the URL is checked against it. A @codeArtifact@ endpoint must carry
+the CodeArtifact host shape, and a @codeArtifact@ mirror target must address a repository under the
+mount's own package format, because a repository's per-format endpoints are separate stores. Every
+other tag admits any https registry the egress boundary cleared. Each refusal names the key, so a
+store this build cannot address is refused at load rather than at the first write.
 -}
 module Ecluse.Config.Target (
     -- * The resolved value
     StoreTag (..),
     storeTagName,
     MintPlan (..),
-    CodeArtifactAbsence (..),
     ControlPlane (..),
     StoreBackend (..),
+    sbTag,
+    sbMint,
+    sbControl,
 
     -- * Resolution
     resolveStoreBackend,
+    vetTargetTag,
     parseCodeArtifactHost,
     isAccountId,
 ) where
@@ -29,15 +32,19 @@ import Data.Char (isDigit)
 import Data.Text qualified as T
 
 import Ecluse.Config.Types (
-    CodeArtifactAbsence (..),
     ConfigError (..),
     ControlPlane (..),
     MintPlan (..),
+    MirrorEndpoint (..),
+    MirrorWrite (..),
     StoreBackend (..),
     StoreTag (..),
+    Target (..),
+    sbControl,
+    sbMint,
+    sbTag,
     storeTagName,
  )
-import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
@@ -49,50 +56,51 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     formatToken,
  )
 
-{- | Resolve the mirror target's store backend from its URL and the mount's write-token keys. A
-missing or conflicting static token is refused rather than silently dropped.
+{- | Resolve a mirror target's store backend from the tag it declares. Only the CodeArtifact arm
+reads the URL, and it refuses one that addresses no repository this mount could mirror into.
 -}
-resolveStoreBackend ::
-    Ecosystem ->
-    RegistryUrl ->
-    Maybe Secret ->
-    Maybe Natural ->
-    Either ConfigError StoreBackend
-resolveStoreBackend eco url mToken mDuration =
-    case parseCodeArtifactHost (hostAddress raw) of
-        Just (domain, owner, region) -> case mToken of
-            Just _ -> Left (MirrorCredentialConflict eco)
-            Nothing -> Right (codeArtifactBackend domain owner region)
-        Nothing -> case mToken of
-            Just token ->
-                Right StoreBackend{sbTag = TagRegistry, sbMint = MintStatic token, sbControl = ControlNone}
-            Nothing -> Left (MirrorCredentialTokenMissing eco)
-  where
-    raw = registryUrlText url
+resolveStoreBackend :: Ecosystem -> MirrorEndpoint -> Either ConfigError StoreBackend
+resolveStoreBackend eco endpoint = case meWrite endpoint of
+    WriteRegistry token -> Right (BackendRegistry token)
+    WriteVerdaccio token consent -> Right (BackendVerdaccio token consent)
+    WriteCodeArtifact mDuration -> do
+        (domain, owner, region) <- codeArtifactHost eco "mirrorTarget" (meUrl endpoint)
+        store <- codeArtifactStore eco (registryUrlText (meUrl endpoint)) domain owner region
+        Right (BackendCodeArtifact (mintIdentity domain owner region mDuration) store)
 
-    codeArtifactBackend domain owner region =
-        StoreBackend
-            { sbTag = TagCodeArtifact
-            , sbMint =
-                MintCodeArtifact
-                    CodeArtifactConfig
-                        { caRegion = region
-                        , caDomain = domain
-                        , caDomainOwner = Just owner
-                        , caDurationSeconds = mDuration
-                        }
-            , sbControl = ControlCodeArtifact (codeArtifactCoordinates eco raw domain owner region)
-            }
+{- | Vet a read or publish endpoint's URL against its declared tag. Only @codeArtifact@ constrains
+the host, and only a mirror target constrains the path, so this is total over the other tags.
+-}
+vetTargetTag :: Ecosystem -> Text -> Target -> Either ConfigError ()
+vetTargetTag eco key target = case tgtTag target of
+    TagCodeArtifact -> void (codeArtifactHost eco key (tgtUrl target))
+    TagRegistry -> Right ()
+    TagVerdaccio -> Right ()
 
-{- The format the ecosystem maps to, and the repository under it. The path's format segment must be
-the mount's own, because a repository's per-format endpoints are separate stores. -}
-codeArtifactCoordinates ::
-    Ecosystem -> Text -> Text -> Text -> Text -> Either CodeArtifactAbsence CodeArtifactStore
-codeArtifactCoordinates eco raw domain owner region = do
-    format <- maybeToRight (NoFormatFor eco) (codeArtifactFormat eco)
+-- The mint identity a CodeArtifact host carries, with the lifetime the operator asked for.
+mintIdentity :: Text -> Text -> Text -> Maybe Natural -> CodeArtifactConfig
+mintIdentity domain owner region mDuration =
+    CodeArtifactConfig
+        { caRegion = region
+        , caDomain = domain
+        , caDomainOwner = Just owner
+        , caDurationSeconds = mDuration
+        }
+
+-- The CodeArtifact identity a target's host carries, refused under the key it was written at.
+codeArtifactHost :: Ecosystem -> Text -> RegistryUrl -> Either ConfigError (Text, Text, Text)
+codeArtifactHost eco key url =
+    maybeToRight
+        (CodeArtifactHostMismatch eco (key <> ".codeArtifact.url"))
+        (parseCodeArtifactHost (hostAddress (registryUrlText url)))
+
+-- The repository a mirror target addresses, under the format token its mount's ecosystem maps to.
+codeArtifactStore :: Ecosystem -> Text -> Text -> Text -> Text -> Either ConfigError CodeArtifactStore
+codeArtifactStore eco raw domain owner region = do
+    format <- maybeToRight (CodeArtifactFormatUnsupported eco) (codeArtifactFormat eco)
     repository <-
         maybeToRight
-            (NotRepositoryEndpoint (formatToken format))
+            (CodeArtifactRepositoryMissing eco (formatToken format))
             (repositoryOfPath (formatToken format) raw)
     pure
         CodeArtifactStore

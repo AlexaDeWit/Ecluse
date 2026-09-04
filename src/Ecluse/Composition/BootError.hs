@@ -22,7 +22,6 @@ import Data.Text qualified as T
 import UnliftIO (tryAny)
 
 import Ecluse.Config (
-    CodeArtifactAbsence (NoFormatFor, NotRepositoryEndpoint),
     PolicyError,
     StoreTag,
     renderPolicyError,
@@ -78,7 +77,7 @@ data BootError
     | {- | A static publish credential is set without a verifiable inbound edge
       (@ECLUSE_SERVER__AUTH_TOKEN@). An unauthenticated request could otherwise publish as Écluse.
       -}
-      PublishStaticCredentialNeedsEdge Ecosystem
+      PublishStaticCredentialNeedsEdge Ecosystem StoreTag
     | {- | A mount's publication target, at the carried registry, shares a host with the named
       mount's public upstream. The publisher's relayed credential would reach a public registry.
       -}
@@ -95,6 +94,10 @@ data BootError
       carried registry. A sweep of that store would delete data the other role owns.
       -}
       MirrorTargetOnMountEndpoint Ecosystem Ecosystem Text Text
+    | {- | Two endpoints, each carried as its mount and its tagged key path, name the carried
+      registry under different tags, so the two declarations disagree about what serves that store.
+      -}
+      StoreTagConflict Ecosystem Text Ecosystem Text Text
     | {- | An explicit memory override breaks the combined memory-plan invariant even after every
       tenant shed to its minimum. A computed plan degrades and boots, an operator claim does not.
       -}
@@ -129,8 +132,6 @@ data BootError
 data StoreMaintenanceReason
     = -- | The mount's store tag names no control plane this build implements.
       NoControlPlane StoreTag
-    | -- | A CodeArtifact target that addresses no repository, carrying which of the two ways.
-      CodeArtifactUnaddressable CodeArtifactAbsence
     | -- | Building the cleared backend's client against the live environment threw.
       ClientBuildFailed Text
     deriving stock (Eq, Show)
@@ -179,8 +180,9 @@ renderBootError = \case
             <> " (a transient AWS error may clear on retry. A permanent one, such as a bad domain or region or a missing permission, must be fixed)"
     FirstPartyMissing eco ->
         mountKeyRef eco "publicationTarget" <> " is set but " <> mountKeyRef eco "firstParty" <> " is not: a publication target needs the namespaces this deployment owns, written in the ecosystem's own shape (npm scopes such as @acme, PyPI distribution names and acme-* prefixes), for the anti-shadowing guard."
-    PublishStaticCredentialNeedsEdge eco ->
-        mountKeyRef eco "publicationTargetToken" <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
+    PublishStaticCredentialNeedsEdge eco tag ->
+        mountKeyRef eco ("publicationTarget." <> storeTagName tag <> ".token")
+            <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
     PublicationTargetOnPublicUpstream eco other url ->
         mountKeyRef eco "publicationTarget"
             <> " ("
@@ -209,13 +211,20 @@ renderBootError = \case
             <> " ("
             <> url
             <> "): the Dredger permanently deletes from the mirror target, so point it at a registry that holds no other role, or run no Dredger against this configuration"
+    StoreTagConflict eco key other otherKey url ->
+        mountKeyRef eco key
+            <> " and "
+            <> mountKeyRef other otherKey
+            <> " name the same registry ("
+            <> url
+            <> ") under two tags: one store has one backend, so declare both endpoints under the same tag"
     MemoryPlanOverrideUnsafe details ->
         "memory plan refused: " <> T.intercalate "; " details
     SplitRoleNeedsDurableQueue invocation ->
         invocation
             <> " splits the mirror worker from the proxy, but ECLUSE_QUEUE__URL is unset, so mirroring runs on the bounded in-memory queue whose jobs never leave the process that enqueued them: point ECLUSE_QUEUE__URL at a durable queue, or run the single-process ecluse proxy"
     MirrorRoleWithoutMirroring ->
-        "ecluse mirror runs the mirror worker alone, but no mount declares a mirror target, so it has nothing to mirror: set ECLUSE_MOUNTS__<ECOSYSTEM>__MIRROR_TARGET, or run a role that needs no mirror queue"
+        "ecluse mirror runs the mirror worker alone, but no mount declares a mirror target, so it has nothing to mirror: set ECLUSE_MOUNTS__<ECOSYSTEM>__MIRROR_TARGET__<TAG>__URL, or run a role that needs no mirror queue"
     MirrorQueueUnavailable detail ->
         "the mirror queue backend named by ECLUSE_QUEUE__URL could not be built at boot: "
             <> detail
@@ -236,8 +245,4 @@ renderStoreMaintenanceReason :: StoreMaintenanceReason -> Text
 renderStoreMaintenanceReason = \case
     NoControlPlane tag ->
         "its target is a " <> storeTagName tag <> " store, which carries no store maintenance backend this build can sweep"
-    CodeArtifactUnaddressable (NoFormatFor eco) ->
-        "CodeArtifact has no package format for the " <> ecosystemName eco <> " ecosystem"
-    CodeArtifactUnaddressable (NotRepositoryEndpoint format) ->
-        "its path is not a CodeArtifact repository endpoint, /" <> format <> "/{repository}/"
     ClientBuildFailed detail -> "building its client failed: " <> detail

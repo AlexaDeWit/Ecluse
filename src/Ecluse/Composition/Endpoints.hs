@@ -27,7 +27,8 @@ import Ecluse.Composition.BootError (
         MirrorTargetOnMountEndpoint,
         MirrorTargetOnPublicUpstream,
         PublicationTargetOnMountEndpoint,
-        PublicationTargetOnPublicUpstream
+        PublicationTargetOnPublicUpstream,
+        StoreTagConflict
     ),
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
@@ -36,7 +37,15 @@ import Ecluse.Composition.Vet (
     Vet,
     rule,
  )
-import Ecluse.Config (MountConfig (..), sameRegistry)
+import Ecluse.Config (
+    MountConfig (..),
+    PublicationEndpoint (peTarget),
+    StoreTag (TagRegistry),
+    Target (Target, tgtTag, tgtUrl),
+    meTarget,
+    sameRegistry,
+    storeTagName,
+ )
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
@@ -53,7 +62,7 @@ role earns, and the endpoints a pass that refused nothing clears it to use.
 vetEndpoints :: Map Ecosystem MountConfig -> Vet VettedEndpoints
 vetEndpoints mounts = cleared <$ endpointRules mounts
   where
-    cleared = VettedEndpoints (Map.mapMaybe (fmap PublicationTarget . mntPublicationTarget) mounts)
+    cleared = VettedEndpoints (Map.mapMaybe (fmap (PublicationTarget . tgtUrl . peTarget) . mntPublicationTarget) mounts)
 
 {- | A publication target that holds no other registry role. The publish path relays the
 publisher's own credential, so the relay takes this vetted value and never a configured URL.
@@ -75,6 +84,7 @@ endpointRules mounts =
         *> mirrorOffPrivateUpstreams mounts
         *> mirrorOffOwnPublicationTarget mounts
         *> privateOffPublicUpstream mounts
+        *> oneTagPerStore mounts
 
 -- A publish relays the publisher's own credential, which must never reach a public registry.
 publicationOffPublicUpstreams :: Map Ecosystem MountConfig -> Vet ()
@@ -116,6 +126,28 @@ privateOffPublicUpstream =
     mergeTrustsPrivate =
         "the merge trusts the private leg, so this registry's versions are admitted unfiltered"
 
+{- One store cannot be two backends. It sits outside the comparison table because it puts every
+declared endpoint against every other, and each unordered pair is read once. -}
+oneTagPerStore :: Map Ecosystem MountConfig -> Vet ()
+oneTagPerStore = traverse_ (rule (const (Refuse storeTagConflict)) divergentTag) . distinctPairs
+
+divergentTag :: EndpointPair -> Maybe EndpointPair
+divergentTag pair
+    | sameRegistry (tgtUrl subject) (tgtUrl other), tgtTag subject /= tgtTag other = Just pair
+    | otherwise = Nothing
+  where
+    subject = epTarget pair
+    other = epOtherTarget pair
+
+storeTagConflict :: EndpointPair -> BootError
+storeTagConflict pair =
+    StoreTagConflict
+        (epMount pair)
+        (taggedKeyName (epKey pair) (epTarget pair))
+        (epOtherMount pair)
+        (taggedKeyName (epOtherKey pair) (epOtherTarget pair))
+        (registryUrlText (tgtUrl (epTarget pair)))
+
 -- A mirror target on another declared endpoint: the deleting role refuses, the writing roles warn.
 mirrorCollapse :: RegistryRole -> Severity EndpointPair
 mirrorCollapse = \case
@@ -132,7 +164,7 @@ advise = Advise . advisoryLine
 
 publicationOnPublicUpstream :: EndpointPair -> BootError
 publicationOnPublicUpstream pair =
-    PublicationTargetOnPublicUpstream (epMount pair) (epOtherMount pair) (registryUrlText (epUrl pair))
+    PublicationTargetOnPublicUpstream (epMount pair) (epOtherMount pair) (pairRegistry pair)
 
 publicationOnMountEndpoint :: EndpointPair -> BootError
 publicationOnMountEndpoint pair =
@@ -140,11 +172,11 @@ publicationOnMountEndpoint pair =
         (epMount pair)
         (epOtherMount pair)
         (endpointKeyName (epOtherKey pair))
-        (registryUrlText (epUrl pair))
+        (pairRegistry pair)
 
 mirrorOnPublicUpstream :: EndpointPair -> BootError
 mirrorOnPublicUpstream pair =
-    MirrorTargetOnPublicUpstream (epMount pair) (epOtherMount pair) (registryUrlText (epUrl pair))
+    MirrorTargetOnPublicUpstream (epMount pair) (epOtherMount pair) (pairRegistry pair)
 
 -- A sweep deletes from the mirror target, so a store another role holds loses that role's data.
 mirrorOnMountEndpoint :: EndpointPair -> BootError
@@ -153,7 +185,11 @@ mirrorOnMountEndpoint pair =
         (epMount pair)
         (epOtherMount pair)
         (endpointKeyName (epOtherKey pair))
-        (registryUrlText (epUrl pair))
+        (pairRegistry pair)
+
+-- The registry a colliding pair shares, as every refusal above quotes it.
+pairRegistry :: EndpointPair -> Text
+pairRegistry = registryUrlText . tgtUrl . epTarget
 
 -- A registry endpoint of a mount, named by the key the configuration declares it under.
 data EndpointKey
@@ -185,10 +221,10 @@ data EndpointComparison = EndpointComparison
 data EndpointPair = EndpointPair
     { epMount :: Ecosystem
     , epKey :: EndpointKey
-    , epUrl :: RegistryUrl
+    , epTarget :: Target
     , epOtherMount :: Ecosystem
     , epOtherKey :: EndpointKey
-    , epOtherUrl :: RegistryUrl
+    , epOtherTarget :: Target
     }
 
 -- One severity applied to every pair a comparison reads, one 'rule' per pair.
@@ -199,27 +235,45 @@ vetCollisions severity cmp mounts =
 -- Every pair of declared endpoints a comparison reads, mounts in ascending key order.
 comparedPairs :: EndpointComparison -> Map Ecosystem MountConfig -> [EndpointPair]
 comparedPairs cmp mounts =
-    [ EndpointPair eco (cmpSubject cmp) url other otherKey otherUrl
+    [ EndpointPair eco (cmpSubject cmp) target other otherKey otherTarget
     | (eco, mcfg) <- Map.toAscList mounts
-    , Just url <- [endpointOf (cmpSubject cmp) mcfg]
+    , Just target <- [endpointOf (cmpSubject cmp) mcfg]
     , (other, otherCfg) <- Map.toAscList mounts
     , withinScope (cmpScope cmp) eco other
     , otherKey <- cmpAgainst cmp
-    , Just otherUrl <- [endpointOf otherKey otherCfg]
+    , Just otherTarget <- [endpointOf otherKey otherCfg]
+    ]
+
+-- Each unordered pair of declared endpoints once, so one collision earns one refusal.
+distinctPairs :: Map Ecosystem MountConfig -> [EndpointPair]
+distinctPairs mounts =
+    [ EndpointPair eco key target other otherKey otherTarget
+    | (eco, key, target) : rest <- tails (declaredEndpoints mounts)
+    , (other, otherKey, otherTarget) <- rest
+    ]
+
+-- Every endpoint every mount declares, mounts in ascending key order.
+declaredEndpoints :: Map Ecosystem MountConfig -> [(Ecosystem, EndpointKey, Target)]
+declaredEndpoints mounts =
+    [ (eco, key, target)
+    | (eco, mcfg) <- Map.toAscList mounts
+    , key <- [KeyPublicUpstream, KeyPrivateUpstream, KeyMirrorTarget, KeyPublicationTarget]
+    , Just target <- [endpointOf key mcfg]
     ]
 
 collidingPair :: RegistryMatch -> EndpointPair -> Maybe EndpointPair
 collidingPair match pair
-    | sameStore match (epUrl pair) (epOtherUrl pair) = Just pair
+    | sameStore match (tgtUrl (epTarget pair)) (tgtUrl (epOtherTarget pair)) = Just pair
     | otherwise = Nothing
 
--- The URL a mount declares under one key. A mount declares no endpoint it does not hold.
-endpointOf :: EndpointKey -> MountConfig -> Maybe RegistryUrl
+{- The endpoint a mount declares under one key. Only @registry@ is admitted on the public
+upstream, so its tag is the one the parser pinned rather than one the mount wrote. -}
+endpointOf :: EndpointKey -> MountConfig -> Maybe Target
 endpointOf key mcfg = case key of
-    KeyPublicUpstream -> Just (mntPublicUpstream mcfg)
+    KeyPublicUpstream -> Just (Target TagRegistry (mntPublicUpstream mcfg))
     KeyPrivateUpstream -> mntPrivateUpstream mcfg
-    KeyMirrorTarget -> mntMirrorTarget mcfg
-    KeyPublicationTarget -> mntPublicationTarget mcfg
+    KeyMirrorTarget -> meTarget <$> mntMirrorTarget mcfg
+    KeyPublicationTarget -> peTarget <$> mntPublicationTarget mcfg
 
 -- Whether a rule compares this pair of mounts.
 withinScope :: MountScope -> Ecosystem -> Ecosystem -> Bool
@@ -249,6 +303,10 @@ endpointKeyName = \case
     KeyMirrorTarget -> "mirrorTarget"
     KeyPublicationTarget -> "publicationTarget"
 
+-- The key path down to the tag, the depth a tag refusal must name to be actionable.
+taggedKeyName :: EndpointKey -> Target -> Text
+taggedKeyName key target = endpointKeyName key <> "." <> storeTagName (tgtTag target)
+
 -- One advisory line: the collapsed pair, the registry they share, and the consequence.
 advisoryLine :: Text -> EndpointPair -> Text
 advisoryLine advice pair =
@@ -259,7 +317,7 @@ advisoryLine advice pair =
         <> " and "
         <> otherRef
         <> " resolve to the same registry ("
-        <> registryUrlText (epUrl pair)
+        <> pairRegistry pair
         <> "); "
         <> advice
   where

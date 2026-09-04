@@ -21,10 +21,10 @@ selects the role:
 - **`ecluse dredger`**: the registry cleanup worker. This build carries no sweep, so the role
   refuses to start rather than run idle. A configuration it refuses reports on its own, ahead of
   that: a mount's `mirrorTarget` that is also any mount's `privateUpstream` or its own mount's
-  `publicationTarget`, because it deletes from that store, and one that is not a CodeArtifact
-  repository endpoint for that mount's ecosystem, because it carries no way to sweep such a
-  store. It plans its handles before it refuses, so a store whose client it cannot build reports
-  beside the sweep refusal. The other roles start and warn on the collapsed pairs instead.
+  `publicationTarget`, because it deletes from that store, and one whose tag names a store this
+  build carries no control plane for. It plans its handles before it refuses, so a store whose
+  client it cannot build reports beside the sweep refusal. The other roles start and warn on the
+  collapsed pairs instead.
 - **`ecluse check-config`**: validates the shared configuration and prints the resolved posture
   without starting anything (exit `0` valid, `2` refused). It checks every role, so a refusal only
   one command earns (`ecluse proxy --no-worker` or `ecluse mirror` without a durable queue,
@@ -100,7 +100,8 @@ unless you have a specific reason to diverge.
 
 1. **Run three registries, not one.** Give the three roles distinct backends: the publication
    target is a first-party store, the mirror target is a public-derived store, and
-   `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` is a pull-through read endpoint that unions both.
+   `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL` is a pull-through read endpoint that
+   unions both.
    Separating provenance keeps the mirror auditable. One rule is hard: the aggregating endpoint
    unions **trusted** stores only, never a direct public upstream, because raw ungated packages
    would otherwise reach clients as trusted and bypass the gate. See
@@ -109,11 +110,11 @@ unless you have a specific reason to diverge.
    private upstream and publication target, with nothing to set: access then matches your registry
    IAM exactly, and Écluse holds no standing read credential. See
    [Credential flow and authority](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/registry-model.md#credential-flow-and-authority).
-3. **Mint the mirror-write token from the container role.** Point
-   `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` at a CodeArtifact endpoint, and the worker mints a
-   short-lived token under the task or instance role instead of carrying a static secret. Scope
-   that role **write-only** to the mirror store, and keep
-   `ECLUSE_MOUNTS__NPM__MIRROR_TOKEN_DURATION` short, because this is Écluse's only
+3. **Mint the mirror-write token from the container role.** Declare the mirror target under the
+   `codeArtifact` tag (`ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL`), and the worker
+   mints a short-lived token under the task or instance role instead of carrying a static secret.
+   Scope that role **write-only** to the mirror store, and keep
+   `ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__TOKEN_DURATION` short, because this is Écluse's only
    standing credential and it writes the trusted store. Scope the mirror queue the same way.
    Anyone who can write the queue can force a write to the trusted store, so grant only the serve
    role `SendMessage`, and only the worker
@@ -149,7 +150,7 @@ The reasoning behind each choice, and the residual risks it accepts, is in the
 
 | Deviation | What you lose | Does anything warn you? |
 |---|---|---|
-| One store for two roles: `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` equal to the private upstream, or `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` onto either | Provenance separation and clean post-incident scoping. The perimeter holds, but first-party and public-derived packages share one store | Yes, for four pairs. The proxy logs a boot warning when the mirror target resolves to the same registry as the private upstream, the public upstream, or the publication target, and when the private upstream resolves to the same registry as the public upstream. A publication target equal to the private upstream is the documented publish arrangement, so it raises nothing |
+| One store for two roles: a `mirrorTarget` equal to the private upstream, or a `publicationTarget` onto either | Provenance separation and clean post-incident scoping. The perimeter holds, but first-party and public-derived packages share one store | Yes, for four pairs. The proxy logs a boot warning when the mirror target resolves to the same registry as the private upstream, the public upstream, or the publication target, and when the private upstream resolves to the same registry as the public upstream. A publication target equal to the private upstream is the documented publish arrangement, so it raises nothing |
 | A private upstream that itself draws from public, say a CodeArtifact repo with the stock `npm-store` upstream to npmjs | The rules, integrity floor, and freshness quarantine, all nullified. Raw ungated packages reach clients through the trusted read path, behind the gate instead of through it | **No. Écluse cannot detect this one.** |
 | An open edge: `ECLUSE_SERVER__AUTH_TOKEN` unset | Écluse's own authentication layer. Access control leans entirely on your network boundary | Nothing fires, but the posture is your own explicit setting |
 | A static publish credential without an edge token | Nothing at runtime, because it never boots | Yes. The boot fails closed |
@@ -182,8 +183,9 @@ with the passthrough recipes below. Before the anonymous public fetch Écluse st
 credential, so a client token never leaves for a public registry, and it never caches the private
 origin across callers, so one caller's read can never answer another's.
 
-A `publish` forwards the publisher's own token the same way. Opt into a static
-`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` and Écluse publishes as itself instead. That opt-in
+A `publish` forwards the publisher's own token the same way. Opt into a static `token` under the
+publication target's tag (`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN`) and
+Écluse publishes as itself instead. That opt-in
 needs `ECLUSE_SERVER__AUTH_TOKEN` in place, or the boot refuses
 (`PublishStaticCredentialNeedsEdge`), because the pairing would let any unauthenticated client
 publish under it. `ECLUSE_MOUNTS__NPM__FIRST_PARTY` names the scopes you own, and only a
@@ -285,7 +287,7 @@ gate them:
 A **literal internal-range block** adds defence in depth: loopback, link-local including the
 `169.254.169.254` metadata endpoint, RFC1918, CGNAT, and IPv6 ULA. Écluse refuses a `dist.tarball`
 whose host is an internal-address literal, and `ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES` extends
-the block. The trusted private origin (`ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`) is deliberately
+the block. The trusted private origin (`mounts.npm.privateUpstream`) is deliberately
 **not** subject to it, because a private registry legitimately lives on your internal network.
 
 **The `dist.tarball` host gate.** Upstream chooses `dist.tarball`, so Écluse fetches a tarball only

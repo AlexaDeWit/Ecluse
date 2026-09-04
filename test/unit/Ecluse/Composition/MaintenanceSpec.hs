@@ -11,7 +11,7 @@ import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition.BootError (
     BootError (StoreMaintenanceUnavailable),
-    StoreMaintenanceReason (ClientBuildFailed, CodeArtifactUnaddressable),
+    StoreMaintenanceReason (ClientBuildFailed, NoControlPlane),
     renderBootError,
  )
 import Ecluse.Composition.Maintenance (
@@ -31,7 +31,7 @@ import Ecluse.Composition.Support (
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
-import Ecluse.Config (CodeArtifactAbsence (NotRepositoryEndpoint), Config (configMounts), MountMap)
+import Ecluse.Config (Config (configMounts), MountMap, StoreTag (TagVerdaccio))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (casRepository)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
@@ -60,12 +60,12 @@ passSpec = describe "vetStoreBackends" $ do
                 renderBootError err `shouldSatisfy` T.isInfixOf "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
             other -> expectationFailure ("expected the one maintenance refusal, got: " <> show other)
 
-    it "refuses the deleting role alone a CodeArtifact target whose path addresses no repository" $ do
-        -- The path check is the Dredger's, not the load's, so the writing role boots on the same
-        -- configuration the deleting role refuses.
-        mounts <- mountsFor (overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" repositorylessEndpoint codeArtifactEnvVars)
+    it "refuses the deleting role alone a Verdaccio target, which this build reaches no plane for" $ do
+        -- The rule turns on the tag, so a store no backend here sweeps refuses the Dredger
+        -- while the writing role boots on the same configuration.
+        mounts <- mountsFor verdaccioEnv
         runVet MirrorPruner (vetStoreBackends mounts)
-            `shouldBe` ([], Left [StoreMaintenanceUnavailable Npm (CodeArtifactUnaddressable (NotRepositoryEndpoint "npm"))])
+            `shouldBe` ([], Left [StoreMaintenanceUnavailable Npm (NoControlPlane TagVerdaccio)])
         runVet MirrorWriter (vetStoreBackends mounts) `shouldBe` ([], Right Map.empty)
 
     it "clears a writing role no backend, and neither refuses nor advises on a target it cannot sweep" $ do
@@ -126,8 +126,15 @@ clearedBackendsFor env = do
 twoStoreEnv :: [(String, String)]
 twoStoreEnv =
     overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
-        overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM" pypiInternalEndpoint $
-            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET" pypiEndpoint codeArtifactEnvVars
+        overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL" pypiInternalEndpoint $
+            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL" pypiEndpoint codeArtifactEnvVars
+
+-- | 'staticEnvVars' mirroring to a Verdaccio store, the tag this build carries no sweep for.
+verdaccioEnv :: [(String, String)]
+verdaccioEnv =
+    overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL" "https://verdaccio.example.test/" $
+        overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN" "write-token" $
+            withoutMirrorTargetToken (withoutMirrorTargetUrl staticEnvVars)
 
 -- The repository a cleared backend addresses, read back through the pass's own witness.
 repositoryOf :: ClearedBackend -> Text
@@ -138,7 +145,3 @@ pypiEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com
 
 pypiInternalEndpoint :: (IsString s) => s
 pypiInternalEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/pypi/internal/"
-
--- A CodeArtifact endpoint that stops at the format segment, so its path names no repository.
-repositorylessEndpoint :: (IsString s) => s
-repositorylessEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/"

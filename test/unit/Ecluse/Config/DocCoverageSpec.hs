@@ -12,9 +12,8 @@ import Test.Hspec
 
 import Ecluse.Config (loadConfig, renderConfigError)
 
-{- | Every operator-facing @ECLUSE_*@ spelling, paired with a value the loader must accept.
-Each must have its document key in @config\/default.yaml@ (active or commented) and must load,
-so listing a new key here is part of adding it.
+{- | Every operator-facing @ECLUSE_*@ spelling outside a mount's tagged endpoints, paired with a
+value the loader must accept. Each needs its document key in @config\/default.yaml@, and must load.
 -}
 documentedEnvVars :: [(String, String)]
 documentedEnvVars =
@@ -55,16 +54,50 @@ documentedEnvVars =
     , ("ECLUSE_OBSERVABILITY__TELEMETRY", "off")
     , ("ECLUSE_RULES", "{\"min-age\":{\"ageSeconds\":100}}")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM", "https://registry.npmjs.org")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TOKEN_DURATION", "3600")
-    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-token")
     , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")
     , ("ECLUSE_MOUNTS__NPM__INTEGRITY__MIN_TRUSTED", "sha256")
     , ("ECLUSE_MOUNTS__NPM__INTEGRITY__DIVERGENCE_POLICY", "warn")
+    ]
+
+{- | The mount endpoint spellings, one loadable layer per store tag. An endpoint names exactly one
+tag, so the three cannot be set together: two tags on one endpoint is itself a refusal.
+-}
+taggedMountLayers :: [[(String, String)]]
+taggedMountLayers = [registryLayer, codeArtifactLayer, verdaccioLayer]
+
+registryLayer :: [(String, String)]
+registryLayer =
+    [ ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://registry.npmjs.org")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "mirror-write-token")
+    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://publish.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN", "publish-token")
+    ]
+
+codeArtifactLayer :: [(String, String)]
+codeArtifactLayer =
+    [ ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://registry.npmjs.org")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", codeArtifactRepository <> "internal/")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactRepository <> "mirror/")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__TOKEN_DURATION", "3600")
+    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__URL", codeArtifactRepository <> "internal/")
+    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN", "publish-token")
+    ]
+
+-- The npm-format repository endpoints of one CodeArtifact domain, which the tag validates against.
+codeArtifactRepository :: String
+codeArtifactRepository = "https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/"
+
+verdaccioLayer :: [(String, String)]
+verdaccioLayer =
+    [ ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://registry.npmjs.org")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://verdaccio.example.test/")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://verdaccio.example.test/")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "mirror-write-token")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION", "true")
+    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__URL", "https://verdaccio.example.test/")
+    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__TOKEN", "publish-token")
     ]
 
 {- | Process-level and indirection spellings: documented in the operator manual's prose,
@@ -74,8 +107,8 @@ documentedProcessVars :: [String]
 documentedProcessVars =
     [ "ECLUSE_CONFIG"
     , "ECLUSE_SERVER__AUTH_TOKEN_FILE"
-    , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE"
-    , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN_FILE"
+    , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN_FILE"
+    , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN_FILE"
     ]
 
 {- | Spellings the loader must refuse: the keys this configuration pass renamed, and a plain
@@ -87,6 +120,9 @@ retiredEnvVars =
     , ("ECLUSE_ADVISORIES__MAX_DATABASE_BYTES", "1048576")
     , ("ECLUSE_QUEUE__MEMORY_MAX_DEPTH", "100")
     , ("ECLUSE_MOUNTS__NPM__MIN_TRUSTED_INTEGRITY", "sha256")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TOKEN_DURATION", "3600")
+    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-token")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION", "3600")
     , ("ECLUSE_MOUNTS__NPM__PUBLISH_ALLOW", "@acme")
     , ("ECLUSE_SERVER__PROT", "8080")
@@ -138,7 +174,7 @@ spec = describe "the configuration reference covers the accepted variables" $ do
         yaml <- decodeUtf8 <$> readFileBS "config/default.yaml"
         let missing =
                 [ var
-                | var <- map fst documentedEnvVars
+                | var <- map fst (documentedEnvVars <> concat taggedMountLayers)
                 , maybe True (not . documentsKey yaml) (documentKey var)
                 ]
         missing `shouldBe` []
@@ -152,8 +188,10 @@ spec = describe "the configuration reference covers the accepted variables" $ do
                 ]
         missing `shouldBe` []
 
-    it "keeps the golden list honest: every listed variable loads together" $
-        loadConfig documentedEnvVars Nothing `shouldSatisfy` isRight
+    -- One layer per tag, because an endpoint carrying two of them is a refusal by design.
+    it "keeps the golden list honest: every listed variable loads under its own tag" $
+        for_ taggedMountLayers $ \layer ->
+            loadConfig (documentedEnvVars <> layer) Nothing `shouldSatisfy` isRight
 
     -- The loader owns the whole ECLUSE_ prefix, so a retired or misspelled variable becomes an
     -- unknown document key rather than resolving quietly to its default.

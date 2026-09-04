@@ -138,9 +138,9 @@ spec =
 s3EnvVars :: Text -> Text -> [(String, String)]
 s3EnvVars endpointUrl bucket =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.invalid")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "test-token")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.invalid")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.invalid")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "test-token")
     , ("ECLUSE_ADVISORIES__URL", toString ("s3://" <> bucket))
     , ("AWS_REGION", "us-east-1")
     , ("AWS_ENDPOINT_URL", toString endpointUrl)
