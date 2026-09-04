@@ -56,14 +56,7 @@ cabal test "$suite" \
   --test-show-details=direct \
   "$@"
 
-# The newest .tix is the one this run wrote. The cached builddir keeps the
-# package directory of every version it ever built, so an older ecluse-<version>/
-# tree carries a stale .tix of the same name, and `find` does not order its results.
-tix="$(find "$builddir" -type f -name "${suite}.tix" -printf '%T@\t%p\n' | sort -n | tail -n1 | cut -f2-)"
-if [ -z "$tix" ]; then
-  echo "coverage: no ${suite}.tix found under $builddir/ (did the suite run?)" >&2
-  exit 1
-fi
+tix="$(bash scripts/coverage-tix.sh "$suite" "$builddir")"
 
 # Every HPC mix directory produced by the coverage build.
 mix_args=()
