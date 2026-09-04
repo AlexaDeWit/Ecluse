@@ -2,8 +2,8 @@
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
-How Écluse mirrors approved public packages, and the three handles that couple it to a cloud
-provider.
+How Écluse mirrors approved public packages, and the backends that carry the queue and each
+mount's store.
 
 ## Mirror queue
 
@@ -129,44 +129,76 @@ already is. Its observability is the worker's error log and metric.
 
 ## Cloud backends
 
-Écluse couples to a cloud provider through exactly three handles. A new provider is an additive
-backend, not a structural change, the same posture as the [registry
+Four axes settle what a deployment runs, and the composition root resolves each one from the single
+configuration every role reads, so no two roles disagree about a deployment.
+
+| Axis | Scope | What it settles |
+|---|---|---|
+| Ecosystem | Per mount | The protocol Écluse speaks to clients and upstreams, as the `RegistryAdapter` |
+| Store | Per mount | Where a mount's private packages live, and what its control plane can do |
+| Platform | Per deployment | The mirror queue every role shares, and the object store the advisory database syncs from |
+| Role | Per process | Which faces of the resolved plan a process runs: `ecluse proxy`, `mirror`, `pilot`, `dredger`, `check-config` |
+
+The store and the platform are the two that name a backend, and they pair freely. A cloud is not an
+axis of its own: AWS is the SQS platform plus the CodeArtifact store, and SQS carries the queue
+whatever store a mount names. Every endpoint a mount declares carries the tag that names its store,
+and the [configuration reference](https://ecluse-proxy.com/docs/configuration/) holds the tags with
+the keys each one admits.
+
+Écluse reaches both through exactly three handles. A new backend is an additive leaf, not a
+structural change, the same posture as the [registry
 abstraction](registry-model.md#registry-abstraction):
 
-1. **`MirrorQueue`**, the durable hand-off from the request path to the [mirror
+1. **`MirrorQueue`**, the platform's durable hand-off from the request path to the [mirror
    worker](#mirror-queue).
-2. **`CredentialProvider`**, which mints the short-lived bearer token for the managed registry
-   (see [Credential provider](#credential-provider)).
-3. **`StoreMaintenance`**, which enumerates the mirror store and deletes versions from it for
-   `ecluse dredger`. Enumeration and deletion are backend operations, not ecosystem ones, because
-   the npm wire protocol has no enumeration and a managed registry deletes through its own control
-   plane. Every fact that varies by backend is a value the handle supplies: the batch ceiling for a
+2. **`CredentialProvider`**, which mints a store's short-lived bearer token (see [The credential
+   mint](#the-credential-mint)).
+3. **`StoreMaintenance`**, which enumerates a store and deletes versions from it for
+   `ecluse dredger`. Enumeration and deletion are store operations, not ecosystem ones, because the
+   npm wire protocol has no enumeration and a hosted registry deletes through its own control
+   plane. Every fact that varies by store is a value the handle supplies: the batch ceiling for a
    destructive call, whether a deleted version can be published again, the backend's own dry run
    where it has one, and whether a delete finishes before the call answers.
 
-One npm data plane, publish included, serves every cloud, because a managed registry is an npm
-endpoint plus a token. There is no per-cloud publish path. The mirror and publish paths need no
-object-store handle, and only the advisory-database sync uses S3. AWS ships today.
+### The two store kinds
+
+A store belongs to one of two kinds, and the kind fixes what the ecosystem contributes and what
+the store contributes.
+
+A **hosted registry** speaks the ecosystem's protocol over HTTPS itself, so the data plane is the
+ecosystem adapter's, unchanged. One publish path therefore serves every hosted store, because such
+a store is a protocol endpoint plus a token. The store adds its credential mint, a control plane
+where it has one, its coordinates, and the facts that control plane obeys. CodeArtifact and
+Verdaccio are this kind, and it is the kind this build carries.
+
+An **object store** speaks no package protocol. Écluse becomes the registry for that mount, over
+get, put, list-by-prefix, and delete on keyed blobs, and the ecosystem contributes the layout that
+maps a package, a version, and an artifact onto keys. No build carries one.
+
+### The join
+
+The root joins one ecosystem adapter with one store per mount, and that join is the only place the
+two meet. A store backend never imports an adapter, and an adapter never imports a backend. Both
+speak the shared vocabulary alone: `Ecosystem`, `PackageName`, and `Version`. A backend that needs
+an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format token does.
 
 ### Service mapping
 
-| Concern | AWS (shipped) |
-|---------|-----|
-| Mirror queue | SQS |
-| Managed npm registry | CodeArtifact |
-| Store maintenance | CodeArtifact |
-| Workload identity / token source | STS / instance role |
+| Concern | Axis | What carries it |
+|---|---|---|
+| Mirror queue | Platform | SQS, or the bounded in-memory queue inside a single process |
+| Advisory store | Platform | S3 |
+| Workload identity and token source | Platform | STS, through the task or instance role |
+| Package store | Store, per mount | CodeArtifact under the `codeArtifact` tag, any host that speaks the ecosystem's protocol under `registry`, and Verdaccio, the development store, under `verdaccio` |
+| Store maintenance | Store, per mount | The CodeArtifact control plane. A `registry` or a `verdaccio` store carries none, so `ecluse dredger` refuses a mirror target under either tag and names the tag |
 
-The managed registry speaks the npm protocol over HTTPS. Only the token source differs per
-cloud.
+### The credential mint
 
-### Credential provider
-
-Outbound auth (proxy to registry) is its own handle. A `CredentialProvider` yields the current
-bearer token for a registry endpoint, refreshing before expiry. Only the mirror-target write uses
-it: reads forward the caller's own credential and the public upstream is anonymous
-([Credential flow and authority](registry-model.md#credential-flow-and-authority)). The
-credential is derived from the mirror-target URL, see
+Outbound auth (proxy to registry) is the mint facet of a hosted store. A `CredentialProvider`
+yields the current bearer token for that store's endpoint, refreshing before expiry. Only the
+mirror-target write uses it: reads forward the caller's own credential and the public upstream is
+anonymous ([Credential flow and authority](registry-model.md#credential-flow-and-authority)). The
+tag the mirror target declares picks the mint, see
 [Outbound registry credentials](configuration.md#outbound-registry-credentials).
 
 Only an expired token *and* a still-failing mint fail the dependent operation, the mirror

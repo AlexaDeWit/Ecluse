@@ -39,9 +39,9 @@ reads the public upstream anonymously.
 - **Public upstream (read/fallback)**: queried anonymously. Any auth a public mirror needs is
   Écluse's own, not the client's.
 - **Mirror target (write)**: always Écluse's own
-  [`CredentialProvider`](cloud-backends.md#credential-provider) token, derived from the
-  mirror-target URL. A CodeArtifact host mints per its domain, and any other host uses a static
-  write token (see [Configuration](configuration.md#outbound-registry-credentials)). Declare it
+  [`CredentialProvider`](cloud-backends.md#the-credential-mint) token, from the tag the target
+  declares. The `codeArtifact` tag mints per its domain, and the other tags carry a static write
+  token (see [Configuration](configuration.md#outbound-registry-credentials)). Declare it
   under its own key even when it equals the private upstream: the client reads it, Écluse writes
   it.
 - **Publication target (write)**: the client's own forwarded credential. Écluse mints no token.
@@ -358,9 +358,13 @@ how trusted and gated provenances combine.
 
 ## Registry abstraction
 
-The proxy core is registry-agnostic. An ecosystem contributes a protocol adapter, and the
-environment supplies the transport and a [`CredentialProvider`](cloud-backends.md#credential-provider)
-that mints its token. AWS CodeArtifact, GCP Artifact Registry, and a self-hosted Verdaccio or
-Nexus all speak the same npm protocol. They differ only in how Écluse obtains a bearer token. The
-backend matrix is therefore the product of ecosystem and credential provider. Only npm ships.
-See [Cloud backends](cloud-backends.md#cloud-backends).
+The proxy core is registry-agnostic. A mount is where two axes meet: its ecosystem contributes the
+protocol adapter, and its store contributes the backend the mount's private packages live in.
+[Cloud backends](cloud-backends.md#cloud-backends) covers the two store kinds and what each one
+supplies.
+
+The two sides share only the vocabulary above: `Ecosystem`, `PackageName`, and `Version`. Neither
+imports the other, and a store that needs an ecosystem fact reads it off the `Ecosystem` value, as
+the CodeArtifact format token does. A backend matrix therefore costs one adapter per ecosystem plus
+one backend per store, never a cell per pair. npm is the only ecosystem this build carries, and its
+stores are CodeArtifact, any host that speaks the protocol, and Verdaccio for development.
