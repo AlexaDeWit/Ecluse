@@ -39,6 +39,9 @@ module Ecluse.Core.Package (
     -- * The name charset boundary
     isAsciiNameComponent,
 
+    -- * Canonical keys
+    normalisePyPI,
+
     -- * Normalised signals
     CodeExecSignal (..),
     Trust (..),
@@ -185,8 +188,9 @@ canonicalise = \case
     RubyGems -> id
     PyPI -> normalisePyPI
 
-{- PEP 503 name normalisation: lower-case, and collapse each run of
-@\'-\'@\/@\'_\'@\/@\'.\'@ to a single @\'-\'@.
+{- | PEP 503 name normalisation: lower-case, and collapse each run of
+@\'-\'@\/@\'_\'@\/@\'.\'@ to a single @\'-\'@. It is the canonical key a PyPI 'PackageName'
+matches on, so two spellings of one distribution compare equal.
 -}
 normalisePyPI :: Text -> Text
 normalisePyPI t =

@@ -222,10 +222,16 @@ mounts:
     # when the publishing client sends none. Requires server.authToken, or the boot
     # refuses (PublishStaticCredentialNeedsEdge).
     # publicationTargetToken:
-    # Names a client may publish. Required with a publication target. The shape is
-    # per-ecosystem, and npm reads it as a comma-separated list of scopes. It limits
-    # names, not callers, and an empty or malformed list is refused at load.
-    # publicationAllow: "@acme,@beta"
+    # The namespaces this deployment owns, comma separated. Required with a publication
+    # target. Only a first-party name may be published here, and a first-party name
+    # resolves from privateUpstream alone: it is never fetched from publicUpstream,
+    # never merged with a public document, never mirrored, and a private miss is a 404.
+    # The shape is per-ecosystem. npm reads scopes. PyPI reads PEP 503 canonical
+    # distribution names, and an entry ending in a separator then * is a prefix, so
+    # acme-* covers acme-tools and not acmeco. A star on no separator (acme*) is
+    # refused. It limits names, not callers, and an empty or malformed list is
+    # refused at load.
+    # firstParty: "@acme,@beta"
     # Per-mount refinements of the integrity group above, under the same key names.
     # integrity:
     #   minTrusted: sha256

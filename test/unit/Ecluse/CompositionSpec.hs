@@ -11,6 +11,7 @@ import Ecluse.Composition (
     BootWiring (bwBindings),
     PublishBudget (..),
     WiringPorts (WiringPorts, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
+    firstPartyName,
     planMounts,
     resolveBootWiring,
  )
@@ -31,6 +32,7 @@ import Ecluse.Composition.Validate (vetBoot)
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     ConfigError (..),
+    FirstParty (FirstPartyNpmScopes, FirstPartyPyPI),
     PolicyError (UnknownRuleType),
     loadConfig,
     renderConfigError,
@@ -43,6 +45,7 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
+import Ecluse.Core.Registry.PyPI.Project (PyPIFirstParty (PyPIOwnedName))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
@@ -73,6 +76,7 @@ spec = do
     planMountsSpec
     bootErrorSpec
     publishWiringSpec
+    firstPartySpec
 
 expectDoc :: ByteString -> IO ByteString
 expectDoc = pure
@@ -346,12 +350,12 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
                 registryUrlText (pdPublicBaseUrl deps) `shouldBe` "https://registry.npmjs.org"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
-    it "fails when a publication target is set without a publish allow-list" $ do
-        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW absent
+    it "fails when a publication target is set without first-party namespaces" $ do
+        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__FIRST_PARTY absent
         -- leaves the anti-shadowing guard nothing to enforce, so the boot refuses rather than defaulting.
         _ <- expectEnv (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars)
         planFrom (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars) Nothing >>= \case
-            Left errs -> errs `shouldBe` [PublicationAllowMissing Npm]
+            Left errs -> errs `shouldBe` [FirstPartyMissing Npm]
             Right _ -> expectationFailure "expected a publication-allow-missing boot error"
 
     it "fails when a static publish credential is set without a verifiable inbound edge" $ do
@@ -360,7 +364,7 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
         -- publish within scope under Ecluse's own write credential, so the boot refuses.
         let testEnvVars =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme")
+                , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")
                 , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-write-token")
                 ]
                     <> staticEnvVars
@@ -369,8 +373,8 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
             Left errs -> errs `shouldBe` [PublishStaticCredentialNeedsEdge Npm]
             Right _ -> expectationFailure "expected a publish-static-credential-needs-edge boot error"
 
-    it "accumulates both publish boot errors when the allow-list is missing and the static credential has no edge" $ do
-        -- Both couplings trip at once and surface together in a stable order: the allow-list
+    it "accumulates both publish boot errors when the namespaces are missing and the static credential has no edge" $ do
+        -- Both couplings trip at once and surface together in a stable order: the namespaces
         -- first, then the edge requirement. The operator then fixes both before the next boot.
         let testEnvVars =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
@@ -379,10 +383,10 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
                     <> staticEnvVars
         _ <- expectEnv testEnvVars
         planFrom testEnvVars Nothing >>= \case
-            Left errs -> errs `shouldMatchList` [PublicationAllowMissing Npm, PublishStaticCredentialNeedsEdge Npm]
+            Left errs -> errs `shouldMatchList` [FirstPartyMissing Npm, PublishStaticCredentialNeedsEdge Npm]
             Right _ -> expectationFailure "expected both publish boot errors, accumulated"
 
--- An npm name under the given scope, for the publish allow-list predicate.
+-- An npm name under the given scope, for the first-party predicate.
 scopedName :: Text -> PackageName
 scopedName scope = mkPackageName Npm (Just (mkScope scope)) "thing"
 
@@ -392,10 +396,10 @@ bareName = mkPackageName Npm Nothing "thing"
 
 publishWiringSpec :: Spec
 publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
-    it "wires the publication target and scope allow-list onto the mount when configured" $ do
+    it "wires the publication target and the first-party predicate onto the mount when configured" $ do
         let testEnv =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme, @beta")
+                , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme, @beta")
                 ]
                     <> staticEnvVars
         _ <- expectEnv testEnv
@@ -403,7 +407,7 @@ publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
             Right [binding] -> case bindingPublishDeps binding of
                 Just deps -> do
                     registryUrlText (pubTargetUrl deps) `shouldBe` "https://publish.example.test"
-                    -- The allow-list reaches the mount as npm's own predicate: both
+                    -- The declaration reaches the mount as npm's own predicate: both
                     -- configured scopes admit, and anything outside them is refused.
                     map (pubAllowed deps) [scopedName "acme", scopedName "beta"] `shouldBe` [True, True]
                     map (pubAllowed deps) [scopedName "evil", bareName] `shouldBe` [False, False]
@@ -415,7 +419,7 @@ publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
         -- credential boots once ECLUSE_SERVER__AUTH_TOKEN gates the edge.
         let testEnv =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme")
+                , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")
                 , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-write-token")
                 , ("ECLUSE_SERVER__AUTH_TOKEN", "edge-token")
                 ]
@@ -432,7 +436,7 @@ publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
         -- refused target cannot be wired at all.
         let testEnv =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://public.example.test/npm/")
-                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme")
+                , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")
                 ]
                     <> staticEnvVars
         _ <- expectEnv testEnv
@@ -456,3 +460,46 @@ mirrorTargetText :: MirrorServePlan -> Maybe Text
 mirrorTargetText = \case
     MirrorOnAdmit url -> Just (registryUrlText url)
     NoMirrorWrite -> Nothing
+
+{- | The one first-party predicate every consumer of the privilege reads. Each ecosystem's arm is pinned
+here, because a disagreement between consumers is the dependency confusion it closes.
+-}
+firstPartySpec :: Spec
+firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $ do
+    it "matches an npm scope exactly, refusing a lookalike and an unscoped name" $
+        map
+            (firstPartyName (FirstPartyNpmScopes (mkScope "acme" :| [mkScope "beta"])))
+            [scopedName "acme", scopedName "beta", scopedName "acme-evil", bareName]
+            `shouldBe` [True, True, False, False]
+
+    it "dispatches the PyPI arm to PyPI's own predicate" $
+        -- The arm's matching rules are pinned in "Ecluse.Registry.PyPI.ProjectSpec". This row
+        -- proves the root hands the declaration to it rather than deciding anything itself.
+        map (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . pypiName) ["acme-tools", "beta"]
+            `shouldBe` [True, False]
+
+    it "wires the same predicate onto the mount's serve deps, deny by default" $ do
+        let testEnv = [("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")] <> staticEnvVars
+        _ <- expectEnv testEnv
+        planFrom testEnv Nothing >>= \case
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                map (pdFirstParty deps) [scopedName "acme", scopedName "evil", bareName]
+                    `shouldBe` [True, False, False]
+            _ -> expectationFailure "expected a single wired binding"
+
+    it "owns no name on a mount that declares none" $ do
+        _ <- expectEnv staticEnvVars
+        planFrom staticEnvVars Nothing >>= \case
+            Right [binding] ->
+                map (pdFirstParty (bindingPackumentDeps binding)) [scopedName "acme", bareName]
+                    `shouldBe` [False, False]
+            _ -> expectationFailure "expected a single wired binding"
+
+-- A PyPI name, in the ecosystem whose canonical form is PEP 503's.
+pypiName :: Text -> PackageName
+pypiName = mkPackageName PyPI Nothing
+
+-- A PyPI declaration of exact names.
+pypiFirstParty :: NonEmpty Text -> FirstParty
+pypiFirstParty = FirstPartyPyPI . fmap (PyPIOwnedName . pypiName)

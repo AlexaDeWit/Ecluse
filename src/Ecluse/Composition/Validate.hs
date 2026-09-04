@@ -16,13 +16,13 @@ module Ecluse.Composition.Validate (
 
     -- * What it clears
     VettedMount (vmEcosystem, vmAdapter, vmMount, vmConfig),
-    VettedPublication (vpubTarget, vpubAllow, vpubStaticToken),
+    VettedPublication (vpubTarget, vpubFirstParty, vpubStaticToken),
 ) where
 
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition.BootError (
-    BootError (MissingAdapter, PublicationAllowMissing, PublishStaticCredentialNeedsEdge),
+    BootError (FirstPartyMissing, MissingAdapter, PublishStaticCredentialNeedsEdge),
  )
 import Ecluse.Composition.Endpoints (
     PublicationTarget,
@@ -34,9 +34,9 @@ import Ecluse.Composition.Vet (Severity (Refuse), Vet, rule)
 import Ecluse.Config (
     AppConfig (cfgMounts, cfgServer),
     Config (configApp, configMounts),
+    FirstParty,
     Mount,
-    MountConfig (mntPublicationAllow, mntPublicationTarget, mntPublicationTargetToken),
-    PublicationAllow,
+    MountConfig (mntFirstParty, mntPublicationTarget, mntPublicationTargetToken),
     ServerSettings (srvAuthToken),
  )
 import Ecluse.Core.Credential (Secret)
@@ -69,12 +69,12 @@ data VettedMount = VettedMount
     , vmConfig :: MountConfig
     }
 
-{- | A mount's cleared publish path: the vetted endpoint, the allow-list the anti-shadowing guard
-enforces, and the static credential the inbound edge gate covers.
+{- | A mount's cleared publish path: the vetted endpoint, the first-party namespaces the
+anti-shadowing guard enforces, and the static credential the inbound edge gate covers.
 -}
 data VettedPublication = VettedPublication
     { vpubTarget :: PublicationTarget
-    , vpubAllow :: PublicationAllow
+    , vpubFirstParty :: FirstParty
     , vpubStaticToken :: Maybe Secret
     }
 
@@ -99,7 +99,7 @@ vetBoot config =
             , vpSettings = app
             }
 
-    cleared target (allow, staticToken) = VettedPublication target allow staticToken
+    cleared target (firstParty, staticToken) = VettedPublication target firstParty staticToken
 
 {- Every active mount, refusing the ecosystems this build ships no adapter for. Serving one would
 answer every route with a stub, which is a wiring fault rather than a posture an operator chose. -}
@@ -123,9 +123,9 @@ vetMount (eco, (mount, mcfg)) =
         | isNothing (adapterFor e) = Just e
         | otherwise = Nothing
 
-{- The two couplings a declared publication target carries: the allow-list the anti-shadowing
-guard enforces, and the verifiable inbound edge a static publish credential needs. -}
-vetPublishPolicy :: AppConfig -> Vet (Map Ecosystem (PublicationAllow, Maybe Secret))
+{- The two couplings a declared publication target carries: the first-party namespaces the
+guard enforces, and the inbound edge a static publish credential needs. -}
+vetPublishPolicy :: AppConfig -> Vet (Map Ecosystem (FirstParty, Maybe Secret))
 vetPublishPolicy app =
     Map.fromList . catMaybes <$> traverse (vetPublication (srvAuthToken (cfgServer app))) publishingMounts
   where
@@ -135,17 +135,17 @@ vetPublishPolicy app =
         , isJust (mntPublicationTarget mcfg)
         ]
 
-vetPublication :: Maybe Secret -> (Ecosystem, MountConfig) -> Vet (Maybe (Ecosystem, (PublicationAllow, Maybe Secret)))
+vetPublication :: Maybe Secret -> (Ecosystem, MountConfig) -> Vet (Maybe (Ecosystem, (FirstParty, Maybe Secret)))
 vetPublication inboundToken subject@(eco, mcfg) =
     cleared
-        <$ rule (const (Refuse PublicationAllowMissing)) allowMissing subject
+        <$ rule (const (Refuse FirstPartyMissing)) firstPartyMissing subject
         <* rule (const (Refuse PublishStaticCredentialNeedsEdge)) (staticWithoutEdge inboundToken) subject
   where
-    cleared = mntPublicationAllow mcfg <&> \allow -> (eco, (allow, mntPublicationTargetToken mcfg))
+    cleared = mntFirstParty mcfg <&> \firstParty -> (eco, (firstParty, mntPublicationTargetToken mcfg))
 
-allowMissing :: (Ecosystem, MountConfig) -> Maybe Ecosystem
-allowMissing (eco, mcfg)
-    | isNothing (mntPublicationAllow mcfg) = Just eco
+firstPartyMissing :: (Ecosystem, MountConfig) -> Maybe Ecosystem
+firstPartyMissing (eco, mcfg)
+    | isNothing (mntFirstParty mcfg) = Just eco
     | otherwise = Nothing
 
 -- Any unauthenticated client could otherwise publish within scope under Écluse's own credential.

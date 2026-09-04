@@ -7,7 +7,7 @@
 The publish flow runs in order:
 
 * validate edge authentication
-* apply the anti-shadowing allow-list guard, so the package name is one this proxy may publish
+* apply the anti-shadowing first-party guard, so the package name is one this deployment owns
 * bound the request body at the per-request size cap
 * check body-name agreement between the URL path and the publish document
 * relay the request to the upstream publication target with the publisher's credential
@@ -68,7 +68,7 @@ servePublish replies name request respond = do
         Nothing -> liftIO (respond (publishDisabled replies))
         Just deps -> publishWithDeps replies deps (forwardedCredential mount request) name request respond
 
--- The edge gate, the anti-shadowing scope guard, and the body-name agreement check all run
+-- The edge gate, the anti-shadowing first-party guard, and the body-name agreement check all run
 -- before any write. The relay then carries the publisher's forwarded credential.
 publishWithDeps ::
     PublishReplies response ->
@@ -89,8 +89,8 @@ publishWithDeps replies deps clientToken name request respond
         liftIO (respond (publishTooLarge replies deps))
     | otherwise = do
         rt <- asks ctxRuntime
-        -- The admission is acquired only after the edge gate and the scope guard admitted the
-        -- request, so a refused publish reserves nothing. The weight is the declared
+        -- The admission is acquired only after the edge gate and the first-party guard admitted
+        -- the request, so a refused publish reserves nothing. The weight is the declared
         -- Content-Length, and a chunked body reserves the per-request cap pessimistically.
         outcome <- withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight $ do
             -- 'boundedRead' caps this counted read and returns the breach as a value: a
@@ -177,8 +177,8 @@ publishDisabled replies =
         "publishing is not enabled on this proxy (no publication target is configured); \
         \publish directly to the registry you intend to publish to"
 
--- A @403@ for a publish whose name is outside the configured publish-scope allow-list:
--- the anti-shadowing guard, refused before any upstream write.
+-- A @403@ for a publish whose name is outside the mount's first-party namespaces: the
+-- anti-shadowing guard, refused before any upstream write.
 outOfScope :: PublishReplies response -> PublishDeps -> PackageName -> response
 outOfScope replies deps name =
     publishError replies status403 [] (appendHelp (pubHelp deps) message)
@@ -187,10 +187,10 @@ outOfScope replies deps name =
     message =
         "refusing to publish '"
             <> renderPackageName name
-            <> "': its name is outside the configured publish-scope allow-list (the anti-shadowing guard against publishing a name that shadows a public package)"
+            <> "': its name is outside the first-party namespaces this deployment declares (the anti-shadowing guard against publishing a name that shadows a public package)"
 
--- A @403@ for a publish whose body declares a package name that disagrees with the
--- URL-path name the scope guard authorised, refused before any upstream write.
+-- A @403@ for a publish whose body declares a package name that disagrees with the requested
+-- name the first-party guard authorised, refused before any upstream write.
 bodyNameMismatch :: PublishReplies response -> PublishDeps -> PackageName -> Text -> response
 bodyNameMismatch replies deps name declared =
     publishError replies status403 [] (appendHelp (pubHelp deps) message)
@@ -201,7 +201,7 @@ bodyNameMismatch replies deps name declared =
             <> renderPackageName name
             <> "': the document body declares the name '"
             <> declared
-            <> "', which disagrees with the URL-path package name the scope guard authorised (the anti-shadowing guard against publishing a name the allow-list never saw)"
+            <> "', which disagrees with the requested package name the first-party guard authorised (the anti-shadowing guard against publishing a name the guard never saw)"
 
 {- The first declared body name that disagrees with the URL-path name. A relay keyed off the
 body could otherwise write a name the scope guard never authorised. Each declared name is

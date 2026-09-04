@@ -27,6 +27,7 @@ import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (parseDivergencePolicy)
 import Ecluse.Core.Registry.Npm.Project (projectScope)
+import Ecluse.Core.Registry.PyPI.Project (PyPIFirstParty, projectFirstPartyEntry)
 import Ecluse.Core.Security (parseBlockedRange)
 import Ecluse.Core.Text (readDecimalText)
 import Ecluse.Runtime.Log (parseLogFormat, parseLogLevel)
@@ -45,7 +46,7 @@ mountDecoder eco =
         <*> optionalKey "mirrorTokenDuration" parseCodeArtifactDuration
         <*> optionalKey "publicationTarget" parseRegistryUrl
         <*> optionalKey "publicationTargetToken" parseSecret
-        <*> optionalKey "publicationAllow" (parsePublicationAllow eco)
+        <*> optionalKey "firstParty" (parseFirstParty eco)
         <*> nestedKey "integrity" (decodeGroup "integrity" mountIntegrityDecoder)
         <*> optionalPlainKeyOr "rules" (RulePatch Map.empty)
 
@@ -166,27 +167,36 @@ parseSecret :: String -> Value -> Parser Secret
 parseSecret field = expectString field (pure . mkSecret)
 
 -- Every arm is explicit, so an added 'Ecosystem' surfaces here as a compiler error. One with no
--- allow-list shape yet refuses the key rather than parsing it as another ecosystem's.
-parsePublicationAllow :: Ecosystem -> String -> Value -> Parser PublicationAllow
-parsePublicationAllow eco field v = case eco of
-    Npm -> PublicationAllowNpmScopes <$> parseNpmScopes field v
-    PyPI -> unsupported
-    RubyGems -> unsupported
-  where
-    unsupported :: Parser PublicationAllow
-    unsupported = fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
+-- namespace shape yet refuses the key rather than parsing it as another ecosystem's.
+parseFirstParty :: Ecosystem -> String -> Value -> Parser FirstParty
+parseFirstParty eco field v = case eco of
+    Npm -> FirstPartyNpmScopes <$> parseNpmScopes field v
+    PyPI -> FirstPartyPyPI <$> parsePyPIFirstParty field v
+    RubyGems -> fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
 
--- A configured list that admits nothing refuses every publish, so it fails the load instead.
+-- A configured list that names nothing privileges nothing, so it fails the load instead.
 parseNpmScopes :: String -> Value -> Parser (NonEmpty Scope)
 parseNpmScopes field v = do
     scopes <- commaSeparated field parseScopeEntry v
     maybe (fail (field <> " must name at least one scope")) pure (nonEmpty scopes)
 
--- Reject a publicationAllow segment no scope can equal, an empty one or a wrong separator, so a
--- typo fails the load instead of seeding an allow-list that refuses every publish.
+-- Reject a firstParty segment no scope can equal, an empty one or a wrong separator, so a typo
+-- fails the load instead of seeding a privilege that covers nothing.
 parseScopeEntry :: Text -> Parser Scope
 parseScopeEntry entry =
-    either (const (fail ("invalid scope in publicationAllow: " <> show entry))) pure (projectScope entry)
+    either (const (fail ("invalid scope in firstParty: " <> show entry))) pure (projectScope entry)
+
+-- A configured list that names nothing privileges nothing, so it fails the load instead.
+parsePyPIFirstParty :: String -> Value -> Parser (NonEmpty PyPIFirstParty)
+parsePyPIFirstParty field v = do
+    entries <- commaSeparated field (parsePyPIEntry field) v
+    maybe (fail (field <> " must name at least one distribution or prefix")) pure (nonEmpty entries)
+
+-- Reject a firstParty segment no distribution name or prefix can equal, so a typo fails the load
+-- instead of seeding a privilege that covers nothing.
+parsePyPIEntry :: String -> Text -> Parser PyPIFirstParty
+parsePyPIEntry field entry =
+    either (const (fail ("invalid entry in " <> field <> ": " <> show entry))) pure (projectFirstPartyEntry entry)
 
 parseBlockedRanges :: String -> Value -> Parser [IPRange]
 parseBlockedRanges field = commaSeparated field parseBlockedRangeEntry

@@ -66,7 +66,7 @@ A client asks for a package's version listing, then for a tarball.
    mirror job copies it into the mirror target in the background. Mirroring is demand-driven, so
    only a version a client pulls gets mirrored.
 3. **A publish.** Publishing stays off until you configure a publication target. With one, Écluse
-   refuses any name outside your allow-list before it writes upstream.
+   refuses any name outside the mount's first-party namespaces before it writes upstream.
 
 No rule ever re-gates a version your private registry already holds: only the trusted integrity
 floor applies to it.

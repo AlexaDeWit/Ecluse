@@ -24,7 +24,7 @@ module Ecluse.Config (
     regMirrorTarget,
     MirrorTarget (..),
     MirrorCredential (..),
-    PublicationAllow (..),
+    FirstParty (..),
     MountIntegrity (..),
     MountConfig (..),
     Url,

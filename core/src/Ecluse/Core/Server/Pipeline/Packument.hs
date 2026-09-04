@@ -51,6 +51,10 @@ combines the two: a private version wins a collision, and an integrity divergenc
 flagged. If one upstream is unavailable while the other succeeds, the handler serves the
 best-effort union of what resolved. Only when /nothing/ resolves does the request error.
 
+A first-party name is the exception. Its namespace belongs to this deployment, so the public
+origin is never fetched, nothing of its can be merged in, and a private miss answers @404@
+('Ecluse.Core.Server.Context.pdFirstParty').
+
 == Decision surface vs served surface
 
 The merge and filter reason over the /typed/ 'PackageInfo'. The document served is the
@@ -150,6 +154,7 @@ import Ecluse.Core.Server.Pipeline.Origin (
     fetchPublicOrigin,
     fingerprintPiece,
     originManifest,
+    originMissed,
  )
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
@@ -175,6 +180,7 @@ data PackumentReplies response = PackumentReplies
     , packumentNotModified :: ResponseHeaders -> response
     , packumentUnauthorised :: ResponseHeaders -> Text -> response
     , packumentForbidden :: ResponseHeaders -> Text -> response
+    , packumentNotFound :: ResponseHeaders -> Text -> response
     , packumentInternal :: ResponseHeaders -> Text -> response
     , packumentBadGateway :: ResponseHeaders -> Text -> response
     , packumentUnavailable :: ResponseHeaders -> Text -> response
@@ -273,10 +279,7 @@ serveAdmittedPackument mode replies deps clientToken name request respond rt = d
     logFM InfoS (ls ("serving packument request for " <> renderPackageName name))
     let metrics = srMetrics rt
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
-    (privResult, pubResult) <-
-        concurrently
-            (fetchPrivateOrigin deps rt clientToken name)
-            (fetchPublicOrigin deps rt name)
+    (privResult, pubResult) <- resolveOrigins deps rt clientToken name
     (public, publicExclusions, publicVerdicts) <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx (originManifest pubResult))
     let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
         sources = catMaybes [private, public]
@@ -293,13 +296,41 @@ serveAdmittedPackument mode replies deps clientToken name request respond rt = d
         serveResolved served = do
             liftIO (mpServeDecision metrics Metric.Admit)
             answerPackumentConditional mode replies deps name request respond rt sources served
-    case packumentPlan sources of
-        Nothing -> noServeableVersions
-        Just plan -> do
-            -- Every policy logs and meters a cross-upstream integrity divergence (threat #11). Only
-            -- 'FailClosed' then withholds the contested versions.
-            warnDivergences metrics name plan
-            maybe noServeableVersions serveResolved (survivingPlan (pdDivergencePolicy deps) plan)
+    if pdFirstParty deps name && originMissed privResult
+        then do
+            liftIO (mpServeDecision metrics Metric.Deny)
+            liftIO (respond (firstPartyAbsent replies deps name))
+        else case packumentPlan sources of
+            Nothing -> noServeableVersions
+            Just plan -> do
+                -- Every policy logs and meters a cross-upstream integrity divergence (threat #11). Only
+                -- 'FailClosed' then withholds the contested versions.
+                warnDivergences metrics name plan
+                maybe noServeableVersions serveResolved (survivingPlan (pdDivergencePolicy deps) plan)
+
+{- Resolve the origins this request may read: a first-party name reads the private origin alone
+and never the public leg. Every other name reads both concurrently. -}
+resolveOrigins :: PackumentDeps -> ServeRuntime -> Maybe Secret -> PackageName -> Handler (OriginResult, OriginResult)
+resolveOrigins deps rt clientToken name
+    | pdFirstParty deps name = do
+        privResult <- fetchPrivateOrigin deps rt clientToken name
+        pure (privResult, OriginAbsent)
+    | otherwise =
+        concurrently
+            (fetchPrivateOrigin deps rt clientToken name)
+            (fetchPublicOrigin deps rt name)
+
+{- The @404@ for a first-party name the private upstream did not resolve. The namespace belongs to
+this deployment, so no public document may stand in for it. -}
+firstPartyAbsent :: PackumentReplies response -> PackumentDeps -> PackageName -> response
+firstPartyAbsent replies deps name =
+    packumentNotFound replies [] (appendHelp (pdHelp deps) message)
+  where
+    message :: Text
+    message =
+        "'"
+            <> renderPackageName name
+            <> "' did not resolve from the private upstream, and its namespace is first-party to this deployment, so it is never fetched from the public registry"
 
 {- Answer the conditional packument request before any assembly. A 304 costs the fetches
 and the plan, never the document rebuild, the encode, or an output hash. -}

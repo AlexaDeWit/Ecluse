@@ -172,10 +172,10 @@ readable back over the private leg. The relay forwards the client's own bearer, 
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
     [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://mirror/")
-    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", publishScope)
+    , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", publishScope)
     ]
 
--- The publish-scope allow-list value 'publishTargetEnv' configures. 'publishInScopeName'
+-- The first-party namespace 'publishTargetEnv' configures. 'publishInScopeName'
 -- derives from it, so the configured scope and the in-scope name cannot drift apart.
 publishScope :: Text
 publishScope = "@acme"
@@ -186,8 +186,8 @@ anti-shadowing guard admits and the relay forwards to the publication target.
 publishInScopeName :: Text
 publishInScopeName = publishScope <> "/e2e-publish"
 
-{- | A package in a scope __outside__ the allow-list. The guard must refuse an @npm publish@ of it
-__before__ any upstream write, the property the refuse-before-write scenario proves.
+{- | A package in a scope __outside__ the mount's first-party namespaces. The guard must refuse an
+@npm publish@ of it __before__ any upstream write, the property the refuse-before-write scenario proves.
 -}
 publishOutOfScopeName :: Text
 publishOutOfScopeName = "@rogue/e2e-shadow"

@@ -18,7 +18,7 @@ module Ecluse.Config.Types (
     HttpScheme (..),
     splitHttpScheme,
     MirrorCredential (..),
-    PublicationAllow (..),
+    FirstParty (..),
     MountIntegrity (..),
     MountConfig (..),
     AppConfig (..),
@@ -70,6 +70,7 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy)
+import Ecluse.Core.Registry.PyPI.Project (PyPIFirstParty)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -127,15 +128,14 @@ data MirrorCredential
       MirrorStatic Secret
     deriving stock (Eq, Show)
 
--- The sum is closed and grows one arm per ecosystem, so it stays a data declaration.
-{- HLINT ignore PublicationAllow "Use newtype instead of data" -}
-
-{- | A mount's publication allow-list, one arm per ecosystem. An allow-list is read only in the
-shape its own registry names packages with, so a mount can never carry another ecosystem's.
+{- | The namespaces a mount's deployment owns, one arm per ecosystem, read only in that registry's own naming
+shape. Every consumer of the privilege derives its predicate from this one value.
 -}
-data PublicationAllow
-    = -- | The npm scopes a client may publish under, at least one.
-      PublicationAllowNpmScopes (NonEmpty Scope)
+data FirstParty
+    = -- | The npm scopes the deployment owns, at least one.
+      FirstPartyNpmScopes (NonEmpty Scope)
+    | -- | The PyPI distributions and name prefixes the deployment owns, at least one.
+      FirstPartyPyPI (NonEmpty PyPIFirstParty)
     deriving stock (Eq, Show)
 
 {- | A mount's refinements of the global @integrity@ group, under its own @integrity@ key so the
@@ -163,7 +163,7 @@ data MountConfig = MountConfig
     , mntMirrorTokenDuration :: Maybe Natural
     , mntPublicationTarget :: Maybe RegistryUrl
     , mntPublicationTargetToken :: Maybe Secret
-    , mntPublicationAllow :: Maybe PublicationAllow
+    , mntFirstParty :: Maybe FirstParty
     , mntIntegrity :: MountIntegrity
     , mntAdditionalRules :: RulePatch
     }

@@ -246,7 +246,7 @@ publishScenarios = do
                 -- below is attributable to the refusal, not to stale state.
                 absentBefore <- verdaccioHasVersionNow e2e name ver
                 absentBefore `shouldBe` False
-                -- The proxy refuses a name outside ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW with a 403
+                -- The proxy refuses a name outside ECLUSE_MOUNTS__NPM__FIRST_PARTY with a 403
                 -- before the relay. The harness lets Verdaccio accept anonymous publishes, so it
                 -- would store anything that reached it, so a False proves nothing left the proxy.
                 withPublishProject e2e name ver $ \proj -> do

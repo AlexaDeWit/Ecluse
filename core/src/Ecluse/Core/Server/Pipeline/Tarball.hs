@@ -279,7 +279,13 @@ serveTarballWithDeps mode replies deps clientToken name version file request res
                 -- gate runs. The public path records its own decision on a miss.
                 liftIO (mpServeDecision (srMetrics rt) Metric.Admit)
                 pure received
-            Nothing -> servePublicArtifact mode replies rt deps validators name version file respond
+            -- A first-party name has one authority, so a private miss ends here rather than
+            -- falling through to the public leg.
+            Nothing
+                | pdFirstParty deps name -> do
+                    liftIO (mpServeDecision (srMetrics rt) Metric.Deny)
+                    liftIO (respond (artifactError replies deps firstPartyAbsent))
+                | otherwise -> servePublicArtifact mode replies rt deps validators name version file respond
 
 {- Stream the artifact from the trusted private upstream by the requested filename, without
 fetching the private packument first. A 2xx or an upstream 304 yields 'Just' and answers the
@@ -428,6 +434,14 @@ versionAbsent :: ServeDecision
 versionAbsent =
     versionUnresolved VersionMissing "the requested version was not found upstream"
 
+{- A first-party artifact the private upstream did not serve. No public artifact may
+stand in for it, and 'artifactOutcomeStatus' renders it @404@. -}
+firstPartyAbsent :: ServeDecision
+firstPartyAbsent =
+    versionUnresolved
+        VersionMissing
+        "the requested artifact is first-party to this deployment, so it is served from the private upstream only and is never fetched from the public registry"
+
 {- The refusal a version the single-version read could not resolve renders as. Its transience
 is the shared projection's, the one the worker's retry-versus-drop reads. -}
 versionUnresolved :: VersionEvaluation -> Text -> ServeDecision
@@ -541,12 +555,12 @@ crossHostRefused :: TarballReplies response -> response
 crossHostRefused replies =
     tarballError replies status403 [] "the upstream artifact host is not permitted by the tarball-host policy"
 
-{- | The status a refused artifact request renders. The version-absent miss is the forwarded
-@404@: every other inability keeps the @503@ or @500@ its transience earns.
+{- | The status a refused artifact request renders. A version-absent miss and a first-party miss
+are the @404@s: every other inability keeps the @503@ or @500@ its transience earns.
 -}
 artifactOutcomeStatus :: ServeDecision -> ArtifactStatus
 artifactOutcomeStatus decision
-    | decision == versionAbsent = NotFound
+    | decision `elem` [versionAbsent, firstPartyAbsent] = NotFound
     | otherwise = artifactStatus decision
 
 {- Render a non-admit artifact outcome as the serve error model. A transient status carries no

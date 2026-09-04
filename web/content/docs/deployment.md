@@ -186,8 +186,9 @@ A `publish` forwards the publisher's own token the same way. Opt into a static
 `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` and Écluse publishes as itself instead. That opt-in
 needs `ECLUSE_SERVER__AUTH_TOKEN` in place, or the boot refuses
 (`PublishStaticCredentialNeedsEdge`), because the pairing would let any unauthenticated client
-publish under it. `ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW` limits which package names a client may
-publish. It authorises _names_, not _callers_, so it is not authentication. The reasoning is in
+publish under it. `ECLUSE_MOUNTS__NPM__FIRST_PARTY` names the scopes you own, and only a
+name under one of them may be published (see
+[First-party namespaces](@/docs/configuration.md#first-party-namespaces)). The reasoning is in
 [security posture](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md#a-static-publish-credential-is-fail-closed) and
 [Publishing first-party packages](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
 

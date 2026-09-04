@@ -68,10 +68,10 @@ data BootError
       tells a transient AWS error from a permanent one to fix.
       -}
       CodeArtifactMintFailed Text
-    | {- | A publication target is set and the mount declares no publication allow-list, so the
+    | {- | A publication target is set and the mount declares no first-party namespaces, so the
       anti-shadowing guard has nothing to enforce and any name could be shadowed.
       -}
-      PublicationAllowMissing Ecosystem
+      FirstPartyMissing Ecosystem
     | {- | A static publish credential is set without a verifiable inbound edge
       (@ECLUSE_SERVER__AUTH_TOKEN@). An unauthenticated request could otherwise publish as Écluse.
       -}
@@ -176,8 +176,8 @@ renderBootError = \case
         "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
             <> detail
             <> " (a transient AWS error may clear on retry. A permanent one, such as a bad domain or region or a missing permission, must be fixed)"
-    PublicationAllowMissing eco ->
-        mountKeyRef eco "publicationTarget" <> " is set but " <> mountKeyRef eco "publicationAllow" <> " is not: a publication target needs a publication allow-list (for npm, scopes such as @acme) for the anti-shadowing guard."
+    FirstPartyMissing eco ->
+        mountKeyRef eco "publicationTarget" <> " is set but " <> mountKeyRef eco "firstParty" <> " is not: a publication target needs the namespaces this deployment owns, written in the ecosystem's own shape (npm scopes such as @acme, PyPI distribution names and acme-* prefixes), for the anti-shadowing guard."
     PublishStaticCredentialNeedsEdge eco ->
         mountKeyRef eco "publicationTargetToken" <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
     PublicationTargetOnPublicUpstream eco other url ->

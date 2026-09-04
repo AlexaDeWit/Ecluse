@@ -21,6 +21,9 @@ module Ecluse.Composition (
     -- * Boot-time wiring
     planMounts,
 
+    -- * The first-party privilege
+    firstPartyName,
+
     -- * Publish-side wiring
     PublishBudget (..),
     PublishTarget (..),
@@ -44,18 +47,18 @@ import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMounts, vpPublications, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
-    VettedPublication (vpubAllow, vpubStaticToken, vpubTarget),
+    VettedPublication (vpubFirstParty, vpubStaticToken, vpubTarget),
  )
 import Ecluse.Config (
     AppConfig (..),
     EgressSettings (..),
+    FirstParty (..),
     IntegritySettings (..),
     MirrorTarget (mtUrl),
     Mount (..),
     MountConfig (..),
     MountIntegrity (..),
     MountRegistries (..),
-    PublicationAllow (..),
     ServerSettings (..),
     Url,
     regMirrorTarget,
@@ -74,6 +77,7 @@ import Ecluse.Core.Registry.Adapter (
     artifactHosts,
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
+import Ecluse.Core.Registry.PyPI.Project (pypiFirstPartyName)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
@@ -202,6 +206,9 @@ planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget plan 
                         (regPrivateUpstream regs)
                         (regPublicUpstream regs)
                         (maybe NoMirrorWrite (MirrorOnAdmit . mtUrl) (regMirrorTarget regs))
+                , -- Deny by default: a mount that declares no namespaces owns none, so every
+                  -- name resolves through both upstreams as before.
+                  pdFirstParty = maybe (const False) firstPartyName (mntFirstParty mcfg)
                 , pdMountBaseUrl = mountBaseUrl (srvPublicUrl (cfgServer app)) (mountEcosystem mount)
                 , pdRules = prepared
                 , -- The operator-configured ranges extending the fixed internal-range block
@@ -259,7 +266,7 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
     pure
         PublishDeps
             { pubTargetUrl = publicationTargetUrl (vpubTarget publication)
-            , pubAllowed = publicationAllowedName (vpubAllow publication)
+            , pubAllowed = firstPartyName (vpubFirstParty publication)
             , pubStaticToken = vpubStaticToken publication
             , pubInboundToken = srvAuthToken (cfgServer app)
             , pubLimits = limits
@@ -269,9 +276,13 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
             , pubAdapter = adapterPublish adapter
             }
 
--- Each arm derives the ecosystem-neutral predicate the publish path enforces.
-publicationAllowedName :: PublicationAllow -> PackageName -> Bool
-publicationAllowedName (PublicationAllowNpmScopes scopes) = npmPublishAllowed (toList scopes)
+{- | Whether a name belongs to a namespace this deployment owns. Each arm derives the one predicate every
+consumer of the privilege reads, so none can disagree about which names are privileged.
+-}
+firstPartyName :: FirstParty -> PackageName -> Bool
+firstPartyName = \case
+    FirstPartyNpmScopes scopes -> npmPublishAllowed (toList scopes)
+    FirstPartyPyPI entries -> pypiFirstPartyName entries
 
 {- | One ecosystem's resolved publish target: the endpoint the worker writes approved
 artifacts to, and the provider that mints its bearer token. Resolved once, not per request.

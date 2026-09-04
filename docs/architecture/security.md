@@ -107,8 +107,8 @@ reaches the mirror.
 ## A static publish credential is fail-closed
 
 The [first-party publish path](registry-model.md#publishing-first-party-packages-the-publication-target)
-relays a client `npm publish` to the publication target. Its scope allow-list
-(`ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW`) constrains which package names a client may publish. It
+relays a client `npm publish` to the publication target. The mount's first-party namespaces
+(`ECLUSE_MOUNTS__NPM__FIRST_PARTY`) constrain which package names a client may publish. It
 is not authentication and does not verify who is publishing. A deployment may set
 `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN`, substituting Écluse's own credential for a
 publisher who forwards none. If it does, the composition root refuses to boot without a
@@ -127,7 +127,7 @@ The npm publish document carries its own declared identity: a top-level `_id` an
 body, the npm-protocol norm, would write a name the scope guard never saw. So an anti-shadowing
 guard that validated only the URL-path name while relaying the document byte-for-byte would be
 bypassable. A crafted `PUT /@acme/anything` whose body declares `@victim/target` would publish
-outside the allow-list, shadowing a public package.
+outside the mount's first-party namespaces, shadowing a public package.
 
 So the guard holds guard-name ≡ write-name ≡ body-name. After the scope check admits the
 URL-path name, the guard compares every present declared body name to it: `_id`, top-level

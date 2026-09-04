@@ -186,7 +186,7 @@ declaredNames body =
     , Just (String declared) <- [slot]
     ]
 
-{- | Whether npm's publish allow-list covers a name: its scope must equal a configured entry
+{- | Whether npm's first-party namespaces cover a name: its scope must equal a configured entry
 exactly, so an unscoped name and @\@acme-evil@ against an @\@acme@ entry are both refused.
 -}
 npmPublishAllowed :: [Scope] -> PackageName -> Bool
