@@ -24,6 +24,7 @@ import Ecluse.Composition.Support (
     expectValidated,
     fixedNow,
     overrideEnv,
+    scopedName,
     staticEnvVars,
     testLimits,
     withoutMirrorTargetUrl,
@@ -67,7 +68,7 @@ import Ecluse.Core.Server.Upstream (
     upstreamTarballHostGate,
  )
 import Ecluse.Test.Credential (noCredentialReporters)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, thingName)
 import Ecluse.Test.Rules (inertRuleDeps)
 
 {- | Tests the composition root's boot-time wiring. Every boot problem is a fail-fast,
@@ -388,14 +389,6 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
             Left errs -> errs `shouldMatchList` [FirstPartyMissing Npm, PublishStaticCredentialNeedsEdge Npm TagRegistry]
             Right _ -> expectationFailure "expected both publish boot errors, accumulated"
 
--- An npm name under the given scope, for the first-party predicate.
-scopedName :: Text -> PackageName
-scopedName scope = mkPackageName Npm (Just (mkScope scope)) "thing"
-
--- An unscoped npm name: in no scope, so the deny-by-default guard refuses it.
-bareName :: PackageName
-bareName = mkPackageName Npm Nothing "thing"
-
 publishWiringSpec :: Spec
 publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
     it "wires the publication target and the first-party predicate onto the mount when configured" $ do
@@ -412,7 +405,7 @@ publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
                     -- The declaration reaches the mount as npm's own predicate: both
                     -- configured scopes admit, and anything outside them is refused.
                     map (pubAllowed deps) [scopedName "acme", scopedName "beta"] `shouldBe` [True, True]
-                    map (pubAllowed deps) [scopedName "evil", bareName] `shouldBe` [False, False]
+                    map (pubAllowed deps) [scopedName "evil", thingName] `shouldBe` [False, False]
                 Nothing -> expectationFailure "expected the mount to carry publish deps"
             _ -> expectationFailure "expected a single wired binding"
 
@@ -471,7 +464,7 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
     it "matches an npm scope exactly, refusing a lookalike and an unscoped name" $
         map
             (firstPartyName (FirstPartyNpmScopes (mkScope "acme" :| [mkScope "beta"])))
-            [scopedName "acme", scopedName "beta", scopedName "acme-evil", bareName]
+            [scopedName "acme", scopedName "beta", scopedName "acme-evil", thingName]
             `shouldBe` [True, True, False, False]
 
     it "dispatches the PyPI arm to PyPI's own predicate" $
@@ -486,7 +479,7 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
         planFrom testEnv Nothing >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
-                map (pdFirstParty deps) [scopedName "acme", scopedName "evil", bareName]
+                map (pdFirstParty deps) [scopedName "acme", scopedName "evil", thingName]
                     `shouldBe` [True, False, False]
             _ -> expectationFailure "expected a single wired binding"
 
@@ -494,7 +487,7 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
             Right [binding] ->
-                map (pdFirstParty (bindingPackumentDeps binding)) [scopedName "acme", bareName]
+                map (pdFirstParty (bindingPackumentDeps binding)) [scopedName "acme", thingName]
                     `shouldBe` [False, False]
             _ -> expectationFailure "expected a single wired binding"
 

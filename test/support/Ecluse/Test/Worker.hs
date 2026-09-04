@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
-import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
+import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
 import Ecluse.Test.Rules (constRule)
 
@@ -48,7 +48,10 @@ npmPolicyWith ::
     WorkerPolicy
 npmPolicyWith clock artifactMaxBytes publish resolve rules =
     WorkerPolicy
-        { wpResolveVersion = resolve
+        { -- Deny by default, as a mount that declares no namespaces owns none. A case
+          -- that drives the privilege overrides this field.
+          wpFirstParty = const False
+        , wpResolveVersion = resolve
         , wpRules = rules
         , wpMinIntegrity = defaultMinIntegrity
         , wpArtifactHostHonoured = const True

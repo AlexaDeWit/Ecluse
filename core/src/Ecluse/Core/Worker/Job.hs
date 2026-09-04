@@ -115,15 +115,20 @@ reevaluateThenMirror receipt job = do
             -- Structurally unreachable: only an activated ecosystem enqueues jobs, and
             -- activation implies a bundle. Kept as the fail-closed drop.
             pure (Dropped ("no rule policy is configured for the " <> ecosystemName (pkgEcosystem (jobPackage job)) <> " ecosystem; refusing to mirror " <> renderJob job))
-        Just policy ->
-            alreadyMirrored policy job >>= \case
-                True -> do
-                    logFM InfoS (ls ("already present at the mirror target, acking without re-publish: " <> renderJob job))
-                    pure Succeeded
-                False ->
-                    reevaluatePolicy policy job >>= \case
-                        Right admitted -> mirrorArtifact policy receipt job admitted
-                        Left outcome -> pure outcome
+        Just policy
+            -- An operator can declare the namespace after the enqueue, so the privilege is read
+            -- ahead of the mirror probe: the public leg is never entered for a name it owns.
+            | wpFirstParty policy (jobPackage job) ->
+                pure (Dropped ("this deployment owns the namespace of " <> renderJob job <> "; refusing to mirror public content under a first-party name"))
+            | otherwise ->
+                alreadyMirrored policy job >>= \case
+                    True -> do
+                        logFM InfoS (ls ("already present at the mirror target, acking without re-publish: " <> renderJob job))
+                        pure Succeeded
+                    False ->
+                        reevaluatePolicy policy job >>= \case
+                            Right admitted -> mirrorArtifact policy receipt job admitted
+                            Left outcome -> pure outcome
 
 {- Confirm presence positively only: a fetch fault or an unparseable body answers 'False', so the
 job falls through to the full gated pipeline. The probe never admits an unvetted job. -}

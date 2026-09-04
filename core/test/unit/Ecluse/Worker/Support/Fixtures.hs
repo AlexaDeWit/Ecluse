@@ -38,6 +38,7 @@ module Ecluse.Worker.Support.Fixtures (
     sampleArtifact,
     sampleDetails,
     presentResolver,
+    refusingResolver,
     resolverWithArtifact,
 
     -- * Worker policies, and the overrides a case applies to them
@@ -47,6 +48,7 @@ module Ecluse.Worker.Support.Fixtures (
     admitPolicies,
     admitPoliciesWithDigests,
     withPublish,
+    withFirstParty,
     withHostGate,
     withArtifactRequest,
     withArtifactCap,
@@ -102,7 +104,7 @@ import Ecluse.Core.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
     JobOutcome (Dropped, Retried),
     WorkerPolicies,
-    WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpPublish),
+    WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpFirstParty, wpPublish),
  )
 import Ecluse.Test.Package (
     unsafeFilename,
@@ -246,6 +248,12 @@ rules over its 'PackageDetails'.
 presentResolver :: PackageName -> Version -> IO VersionEvaluation
 presentResolver name version = pure (VersionPresent (sampleDetails name version))
 
+{- | A resolver that throws if it is consulted, so a case proving a job was decided ahead of
+the public leg cannot hide a metadata request behind a passing assertion.
+-}
+refusingResolver :: PackageName -> Version -> IO VersionEvaluation
+refusingResolver _ _ = throwIO (TestContractEscape "refusingResolver: public metadata consulted")
+
 {- | A resolver whose resolved snapshot carries the given artifact, for the ingest-gate cases where
 current metadata changed shape after the job was enqueued.
 -}
@@ -292,6 +300,12 @@ admitPoliciesWithDigests hashes =
 -- | Give every bundle in the map the same publish capability.
 withPublish :: MirrorPublish -> WorkerPolicies -> WorkerPolicies
 withPublish publish = Map.map (\p -> p{wpPublish = publish})
+
+{- | Override the first-party predicate of every policy in the map, so a case drives a job
+whose namespace the deployment declared after the enqueue.
+-}
+withFirstParty :: (PackageName -> Bool) -> WorkerPolicies -> WorkerPolicies
+withFirstParty owned = Map.map (\p -> p{wpFirstParty = owned})
 
 {- | Override the tarball-host gate of every policy in the map: the payload
 re-gating tests refuse (or admit) every authority wholesale.
