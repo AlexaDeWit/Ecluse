@@ -7,8 +7,8 @@ does when two of them land on the same one.
 
 Each rule names the endpoints it compares and its severity per role, and one 'Vet' pass over all
 of them yields both the boot refusals and the boot advisories, so no rule can be fatal on one
-path and missing on the other. The vetted 'PublicationTarget' and 'MirrorStore' issue only from
-a pass that refused nothing, so a publish relay and a store sweep cannot reach a refused endpoint.
+path and missing on the other. The vetted 'PublicationTarget' issues only from a pass that
+refused nothing, so a publish relay cannot reach a refused endpoint.
 -}
 module Ecluse.Composition.Endpoints (
     -- * The endpoint pass
@@ -18,8 +18,6 @@ module Ecluse.Composition.Endpoints (
     -- * The endpoints it clears
     PublicationTarget,
     publicationTargetUrl,
-    MirrorStore,
-    mirrorStoreUrl,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -37,7 +35,6 @@ import Ecluse.Composition.Vet (
     Severity (Advise, Refuse),
     Vet,
     rule,
-    vetRole,
  )
 import Ecluse.Config (MountConfig (..), sameRegistry)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
@@ -45,28 +42,18 @@ import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 
 -- | The endpoints one role's pass cleared it to use, keyed by the mount that declares them.
-data VettedEndpoints = VettedEndpoints
+newtype VettedEndpoints = VettedEndpoints
     { vePublicationTargets :: Map Ecosystem PublicationTarget
     -- ^ Each mount's cleared publish endpoint.
-    , veMirrorStores :: Map Ecosystem MirrorStore
-    {- ^ The stores a sweep may delete from. A writing role only advises on the collapses that
-    make a delete unsafe, so its pass clears none.
-    -}
     }
 
 {- | Vet every mount's declared endpoints against each other: the refusals and advisories this
 role earns, and the endpoints a pass that refused nothing clears it to use.
 -}
 vetEndpoints :: Map Ecosystem MountConfig -> Vet VettedEndpoints
-vetEndpoints mounts = clearedFor <$> vetRole <* endpointRules mounts
+vetEndpoints mounts = cleared <$ endpointRules mounts
   where
-    clearedFor role =
-        VettedEndpoints
-            { vePublicationTargets = Map.mapMaybe (fmap PublicationTarget . mntPublicationTarget) mounts
-            , veMirrorStores = case role of
-                MirrorWriter -> Map.empty
-                MirrorPruner -> Map.mapMaybe (fmap MirrorStore . mntMirrorTarget) mounts
-            }
+    cleared = VettedEndpoints (Map.mapMaybe (fmap PublicationTarget . mntPublicationTarget) mounts)
 
 {- | A publication target that holds no other registry role. The publish path relays the
 publisher's own credential, so the relay takes this vetted value and never a configured URL.
@@ -77,16 +64,6 @@ newtype PublicationTarget = PublicationTarget RegistryUrl
 -- | The vetted endpoint the publish relay dials.
 publicationTargetUrl :: PublicationTarget -> RegistryUrl
 publicationTargetUrl (PublicationTarget url) = url
-
-{- | A mirror target no other configured endpoint holds. Deleting from it destroys nothing
-another role owns, which is what a store sweep needs before it may delete anything.
--}
-newtype MirrorStore = MirrorStore RegistryUrl
-    deriving stock (Eq, Show)
-
--- | The vetted store a sweep may delete from.
-mirrorStoreUrl :: MirrorStore -> RegistryUrl
-mirrorStoreUrl (MirrorStore url) = url
 
 {- Every endpoint rule, in the order a boot report lists them. A mirror target on another mount's
 publication target is 'publicationOffNeighbourEndpoints', read from the publishing side. -}

@@ -7,7 +7,12 @@ module Ecluse.Composition.BootErrorSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Composition.BootError (BootError (..), renderBootError, renderBootErrors)
+import Ecluse.Composition.BootError (
+    BootError (..),
+    StoreMaintenanceReason (ClientBuildFailed, NoBackendForHost, NoFormatFor, NotRepositoryEndpoint),
+    renderBootError,
+    renderBootErrors,
+ )
 import Ecluse.Config (PolicyError (UnknownRuleType))
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
@@ -99,6 +104,21 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "ECLUSE_ADVISORIES__DATA_DIR"
         renderBootError (AdvisorySyncUnavailable "CredentialChainExhausted")
             `shouldSatisfy` infixed "transient"
+        -- The maintenance refusal names the key, the reason, and why the Dredger will not
+        -- start without a backend for it.
+        renderBootError (StoreMaintenanceUnavailable Npm NoBackendForHost)
+            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__MIRROR_TARGET has no usable store maintenance backend: its host names no store maintenance backend this build carries"
+        renderBootError (StoreMaintenanceUnavailable Npm NoBackendForHost)
+            `shouldSatisfy` infixed "deletes from every mount's mirror target"
+        renderBootError (StoreMaintenanceUnavailable Npm (ClientBuildFailed "CredentialChainExhausted"))
+            `shouldSatisfy` infixed "building its client failed: CredentialChainExhausted"
+        renderBootError (StoreMaintenanceUnavailable RubyGems (NoFormatFor RubyGems))
+            `shouldSatisfy` infixed "CodeArtifact has no package format for the rubygems ecosystem"
+        renderBootError (StoreMaintenanceUnavailable Npm (NotRepositoryEndpoint "npm"))
+            `shouldSatisfy` infixed "its path is not a CodeArtifact repository endpoint, /npm/{repository}/"
+        -- The idle-Dredger refusal names the capability this build lacks, not a key to fix.
+        renderBootError StorePrunerWithoutSweep
+            `shouldSatisfy` infixed "this build carries no Dredger sweep, so ecluse dredger refuses to start rather than run idle"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay

@@ -2,7 +2,7 @@
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
-How Écluse mirrors approved public packages, and the two handles that couple it to a cloud
+How Écluse mirrors approved public packages, and the three handles that couple it to a cloud
 provider.
 
 ## Mirror queue
@@ -129,7 +129,7 @@ already is. Its observability is the worker's error log and metric.
 
 ## Cloud backends
 
-Écluse couples to a cloud provider through exactly two handles. A new provider is an additive
+Écluse couples to a cloud provider through exactly three handles. A new provider is an additive
 backend, not a structural change, the same posture as the [registry
 abstraction](registry-model.md#registry-abstraction):
 
@@ -137,6 +137,12 @@ abstraction](registry-model.md#registry-abstraction):
    worker](#mirror-queue).
 2. **`CredentialProvider`**, which mints the short-lived bearer token for the managed registry
    (see [Credential provider](#credential-provider)).
+3. **`StoreMaintenance`**, which enumerates the mirror store and deletes versions from it for
+   `ecluse dredger`. Enumeration and deletion are backend operations, not ecosystem ones, because
+   the npm wire protocol has no enumeration and a managed registry deletes through its own control
+   plane. Every fact that varies by backend is a value the handle supplies: the batch ceiling for a
+   destructive call, whether a deleted version can be published again, the backend's own dry run
+   where it has one, and whether a delete finishes before the call answers.
 
 One npm data plane, publish included, serves every cloud, because a managed registry is an npm
 endpoint plus a token. There is no per-cloud publish path. The mirror and publish paths need no
@@ -148,6 +154,7 @@ object-store handle, and only the advisory-database sync uses S3. AWS ships toda
 |---------|-----|
 | Mirror queue | SQS |
 | Managed npm registry | CodeArtifact |
+| Store maintenance | CodeArtifact |
 | Workload identity / token source | STS / instance role |
 
 The managed registry speaks the npm protocol over HTTPS. Only the token source differs per

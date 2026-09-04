@@ -30,9 +30,10 @@ import Ecluse.Composition (
     resolveBootWiring,
  )
 import Ecluse.Composition.BootError (
-    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable),
+    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, StorePrunerWithoutSweep),
     refuseOnThrow,
  )
+import Ecluse.Composition.Maintenance (BuildStoreMaintenance, planStoreMaintenance)
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpMaxRequestBytes, mpPublishTenant, mpQueueMemoryMaxDepth),
     PublishTenant (ptAggregateBytes),
@@ -48,7 +49,10 @@ import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
     MirrorRole,
  )
-import Ecluse.Composition.Validate (ValidatedPlan (vpMounts, vpSettings), VettedMount (vmEcosystem))
+import Ecluse.Composition.Validate (
+    ValidatedPlan (vpMirrorStores, vpMounts, vpSettings),
+    VettedMount (vmEcosystem),
+ )
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
@@ -78,8 +82,6 @@ planned cannot reach another role's runtime.
 data RoleWiring
     = -- | @ecluse proxy@, @ecluse proxy --no-worker@ and @ecluse mirror@.
       MirrorPipelineWiring MirrorWiring
-    | -- | @ecluse dredger@: nothing here needs a live environment yet.
-      StorePrunerWiring
     | -- | @ecluse pilot@: nothing here needs a live environment yet.
       PilotWiring
 
@@ -107,15 +109,29 @@ type BuildMirrorQueue = LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 {- | Plan the runtime the cleared plan's role starts, or report every refusal only a live
 environment can settle. Each role has one arm here, and a refusal is spent once for all of them.
 -}
-planExecutable :: LogEnv -> ResolveAdapter -> BuildMirrorQueue -> BootPlan -> IO (Either [BootError] ExecutablePlan)
-planExecutable logEnv resolveAdapter buildQueue bootPlan = case bpRole bootPlan of
+planExecutable ::
+    LogEnv ->
+    ResolveAdapter ->
+    BuildMirrorQueue ->
+    BuildStoreMaintenance ->
+    BootPlan ->
+    IO (Either [BootError] ExecutablePlan)
+planExecutable logEnv resolveAdapter buildQueue buildStore bootPlan = case bpRole bootPlan of
     BootMirrorPipeline role ->
         fmap (executablePlan . MirrorPipelineWiring)
             <$> planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan
-    BootStorePruner -> pure (Right (executablePlan StorePrunerWiring))
+    -- This build carries no sweep, so the arm plans its handles and then refuses.
+    BootStorePruner ->
+        idlePrunerRefusal
+            <$> planStoreMaintenance buildStore (vpMirrorStores (bpValidated bootPlan))
     BootWithoutPipeline -> pure (Right (executablePlan PilotWiring))
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}
+
+{- The refusal is folded in after the handles are planned, so a store whose client cannot be built
+reports beside it rather than the refusal standing alone. -}
+idlePrunerRefusal :: Either [BootError] a -> Either [BootError] ExecutablePlan
+idlePrunerRefusal outcome = Left (fromLeft [] outcome <> [StorePrunerWithoutSweep])
 
 {- The mirror pipeline's arm: the advisory sync, the queue backend, and the mount wiring. The three
 refusable steps accumulate, so one launch reports every one rather than the earliest alone. -}

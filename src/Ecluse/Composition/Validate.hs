@@ -25,11 +25,11 @@ import Ecluse.Composition.BootError (
     BootError (MissingAdapter, PublicationAllowMissing, PublishStaticCredentialNeedsEdge),
  )
 import Ecluse.Composition.Endpoints (
-    MirrorStore,
     PublicationTarget,
-    VettedEndpoints (veMirrorStores, vePublicationTargets),
+    VettedEndpoints (vePublicationTargets),
     vetEndpoints,
  )
+import Ecluse.Composition.Maintenance (ClearedBackend, vetStoreBackends)
 import Ecluse.Composition.Vet (Severity (Refuse), Vet, rule)
 import Ecluse.Config (
     AppConfig (cfgMounts, cfgServer),
@@ -51,8 +51,10 @@ data ValidatedPlan = ValidatedPlan
     -- ^ Every active mount, in ascending ecosystem order, with the adapter that serves it.
     , vpPublications :: Map Ecosystem VettedPublication
     -- ^ Each mount's cleared publish path, absent where the mount declares no target.
-    , vpMirrorStores :: Map Ecosystem MirrorStore
-    -- ^ The stores a sweep may delete from. Only @ecluse dredger@'s pass clears one.
+    , vpMirrorStores :: Map Ecosystem ClearedBackend
+    {- ^ The backend for each store a sweep may delete from. Only @ecluse dredger@'s pass
+    clears one.
+    -}
     , vpSettings :: AppConfig
     {- ^ The settings no rule vets. The mounts it still carries are the raw declarations, and
     'vpMounts' holds the vetted ones the runtime reads.
@@ -76,7 +78,7 @@ data VettedPublication = VettedPublication
     , vpubStaticToken :: Maybe Secret
     }
 
-{- | Vet the whole loaded configuration for one role. The three groups compose with '<*>', so one
+{- | Vet the whole loaded configuration for one role. The four groups compose with '<*>', so one
 run reports every refusal and every advisory rather than the first group's alone.
 -}
 vetBoot :: Config -> Vet ValidatedPlan
@@ -85,14 +87,15 @@ vetBoot config =
         <$> vetMounts config
         <*> vetPublishPolicy app
         <*> vetEndpoints (cfgMounts app)
+        <*> vetStoreBackends (cfgMounts app)
   where
     app = configApp config
 
-    assemble mounts policies endpoints =
+    assemble mounts policies endpoints backends =
         ValidatedPlan
             { vpMounts = mounts
             , vpPublications = Map.intersectionWith cleared (vePublicationTargets endpoints) policies
-            , vpMirrorStores = veMirrorStores endpoints
+            , vpMirrorStores = backends
             , vpSettings = app
             }
 

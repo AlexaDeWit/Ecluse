@@ -9,14 +9,16 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (
     BootError (
+        MirrorTargetOnMountEndpoint,
         MissingAdapter,
         PublicationAllowMissing,
         PublicationTargetOnPublicUpstream,
         PublishStaticCredentialNeedsEdge
     ),
  )
-import Ecluse.Composition.Endpoints (mirrorStoreUrl, publicationTargetUrl)
-import Ecluse.Composition.Support (expectConfig, overrideEnv, staticEnvVars)
+import Ecluse.Composition.Endpoints (publicationTargetUrl)
+import Ecluse.Composition.Maintenance (StoreBackend (CodeArtifactBackend), clearedBackend)
+import Ecluse.Composition.Support (codeArtifactEnvVars, codeArtifactMirrorUrl, expectConfig, noMaintenanceBackend, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPublications, vpSettings),
@@ -28,14 +30,16 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     AppConfig (cfgMounts),
     Config,
+    MountConfig (mntMirrorTarget),
     PublicationAllow (PublicationAllowNpmScopes),
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (casRepository))
 
-{- | Tests the boot's validate phase: the three groups a role's pass runs, and the plan a cleared
+{- | Tests the boot's validate phase: the four groups a role's pass runs, and the plan a cleared
 configuration reifies from. The groups compose with '<*>', so one run reports all of them.
 -}
 spec :: Spec
@@ -65,19 +69,35 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
         plan <- expectVetted MirrorWriter staticEnvVars
         Map.keys (vpPublications plan) `shouldBe` []
 
-    it "clears the deleting role a mirror store no other declared endpoint holds" $ do
-        plan <- expectVetted MirrorPruner staticEnvVars
-        fmap (registryUrlText . mirrorStoreUrl) (Map.lookup Npm (vpMirrorStores plan))
-            `shouldBe` Just "https://mirror.example.test"
+    it "clears the deleting role the backend for a mirror store no other endpoint holds" $ do
+        plan <- expectVetted MirrorPruner codeArtifactEnvVars
+        fmap repositoryOf (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just "mirror"
+
+    it "clears a backend for every mount that declares a mirror target" $ do
+        -- The plan's one store witness. A collapse the endpoint rules refuse yields no plan at
+        -- all, so a backend the plan carries is one no other declared endpoint holds.
+        plan <- expectVetted MirrorPruner codeArtifactEnvVars
+        Map.keys (vpMirrorStores plan) `shouldBe` mirroringMounts (vpSettings plan)
 
     it "clears a writing role no store at all, because no writing role sweeps one" $ do
         -- The same configuration the deleting role gets a store from. A writing role holds a
         -- witness for a delete it may not perform, so its pass issues none.
-        plan <- expectVetted MirrorWriter staticEnvVars
-        vpMirrorStores plan `shouldBe` Map.empty
+        plan <- expectVetted MirrorWriter codeArtifactEnvVars
+        Map.keys (vpMirrorStores plan) `shouldBe` []
+
+    it "clears a writing role a mirror target this build cannot sweep, and says nothing of it" $ do
+        -- Only the Dredger deletes, so only its pass reads the maintenance rule. The checker
+        -- names the Dredger's refusal for this configuration, so an operator still learns of it.
+        config <- expectConfig staticEnvVars Nothing
+        let (advisories, outcome) = runVet MirrorWriter (vetBoot config)
+        advisories `shouldBe` []
+        fmap (Map.keys . vpMirrorStores) outcome `shouldBe` Right []
+  where
+    repositoryOf cleared = case clearedBackend cleared of
+        CodeArtifactBackend coordinates -> casRepository coordinates
 
 refusalSpec :: Spec
-refusalSpec = describe "vetBoot -- the refusals its three groups earn" $ do
+refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
     it "refuses a mount whose ecosystem this build ships no adapter for" $
         refusalsFor MirrorWriter (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars)
             `shouldReturn` [MissingAdapter PyPI]
@@ -90,7 +110,20 @@ refusalSpec = describe "vetBoot -- the refusals its three groups earn" $ do
         refusalsFor MirrorWriter staticPublishEnv
             `shouldReturn` [PublishStaticCredentialNeedsEdge Npm]
 
-    it "reports a refusal from each of the three groups in one run" $ do
+    it "refuses the deleting role a mirror target this build has no maintenance backend for" $
+        refusalsFor MirrorPruner staticEnvVars `shouldReturn` [noMaintenanceBackend]
+
+    it "refuses the deleting role a collision on a target it has a backend for" $
+        -- The plan carries the cleared backend alone, so a collision has to stop the boot
+        -- through the endpoint rule. A backend the pass would clear yields no plan either way.
+        refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM" codeArtifactMirrorUrl codeArtifactEnvVars)
+            `shouldReturn` [MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" codeArtifactMirrorUrl]
+
+    it "reports the mount refusal beside the maintenance refusal from one deleting-role run" $
+        refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars)
+            `shouldReturn` [MissingAdapter PyPI, noMaintenanceBackend]
+
+    it "reports a refusal from each of the writing groups in one run" $ do
         -- The point of the applicative: the mount group refusing does not hide what the publish
         -- policy and the endpoint rules would have said about the same configuration.
         let envVars =
@@ -115,6 +148,11 @@ staticPublishEnv = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN" "p
 -- | Drop the publication allow-list, leaving the target the guard has nothing to check against.
 withoutAllow :: [(String, String)] -> [(String, String)]
 withoutAllow = filter ((/= "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW") . fst)
+
+-- | Every mount that declares a mirror target, which is what both store groups enumerate.
+mirroringMounts :: AppConfig -> [Ecosystem]
+mirroringMounts app =
+    [eco | (eco, mcfg) <- Map.toAscList (cfgMounts app), isJust (mntMirrorTarget mcfg)]
 
 -- | Vet an environment layer for one role, failing the test on a refusal.
 expectVetted :: RegistryRole -> [(String, String)] -> IO ValidatedPlan

@@ -23,7 +23,7 @@ import Ecluse.Composition.BootError (
     BootError (AwsEndpointMalformed, MirrorTargetOnMountEndpoint, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
-import Ecluse.Composition.Support (malformedAwsEndpoint, overrideEnv, withoutQueueUrl)
+import Ecluse.Composition.Support (malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, withoutQueueUrl)
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -160,9 +160,10 @@ spec = do
         it "refuses ecluse dredger where the mirror target is also the private upstream" $
             -- The guard on the dredger's own CLI-to-role mapping. Only the pruning role refuses
             -- this configuration: every other role advises and boots, so a dispatch naming the
-            -- wrong role would serve here instead of refusing.
+            -- wrong role would serve here instead of refusing. The collapsed target is also one
+            -- no backend here sweeps, and the pass reports both.
             bootRefusal ["dredger"] collapsedMirrorEnv
-                `shouldReturn` (Left (ExitFailure 2), [renderBootError collapsedMirrorRefusal])
+                `shouldReturn` (Left (ExitFailure 2), map renderBootError [collapsedMirrorRefusal, noMaintenanceBackend])
 
         it "aborts fast at boot when the SQS endpoint override is set with no AWS_REGION" $ do
             -- The override forces the SQS interpretation, and an emulator or VPC

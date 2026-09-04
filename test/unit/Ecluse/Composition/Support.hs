@@ -11,8 +11,12 @@ module Ecluse.Composition.Support (
     fdLimit,
     noCeiling,
     staticEnvVars,
+    codeArtifactMirrorUrl,
+    codeArtifactEnvVars,
+    noMaintenanceBackend,
     malformedAwsEndpoint,
     withoutMirrorTargetUrl,
+    withoutMirrorTargetToken,
     withoutQueueUrl,
     overrideEnv,
     expectEnv,
@@ -27,6 +31,7 @@ module Ecluse.Composition.Support (
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
+import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoBackendForHost))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
@@ -38,6 +43,7 @@ import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), RegistryRole (M
 import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig, renderConfigError)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Security (Limits (..))
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
 import Ecluse.Test.Credential (noCredentialReporters)
@@ -86,9 +92,30 @@ points must report it, and neither may echo the credential it holds.
 malformedAwsEndpoint :: String
 malformedAwsEndpoint = "http://operator:s3cr3t@localhost:9000"
 
+{- | The CodeArtifact repository endpoint the deleting role's fixtures mirror to: the one host
+this build carries a store maintenance backend for.
+-}
+codeArtifactMirrorUrl :: (IsString s) => s
+codeArtifactMirrorUrl = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"
+
+{- | 'staticEnvVars' mirroring to 'codeArtifactMirrorUrl'. The write credential derives from that
+host, so the static token goes with the target it belonged to.
+-}
+codeArtifactEnvVars :: [(String, String)]
+codeArtifactEnvVars =
+    overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" codeArtifactMirrorUrl (withoutMirrorTargetToken staticEnvVars)
+
+-- | The deleting role's refusal of 'staticEnvVars', whose mirror target no backend here sweeps.
+noMaintenanceBackend :: BootError
+noMaintenanceBackend = StoreMaintenanceUnavailable Npm NoBackendForHost
+
 -- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test can supply its own.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]
 withoutMirrorTargetUrl = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst)
+
+-- | Drop the ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN entry, for a target that derives its own credential.
+withoutMirrorTargetToken :: [(String, String)] -> [(String, String)]
+withoutMirrorTargetToken = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst)
 
 {- | Drop the ECLUSE_QUEUE__URL entry, so a test can exercise the absent-URL rollover
 to the bounded in-memory queue.

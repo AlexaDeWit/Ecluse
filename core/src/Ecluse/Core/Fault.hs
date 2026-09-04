@@ -25,6 +25,9 @@ module Ecluse.Core.Fault (
     TransportCause (..),
     transportRetryable,
 
+    -- * Retry delays
+    RetryAfter (..),
+
     -- * The shared detail budget
     boundedDetail,
 ) where
@@ -72,6 +75,12 @@ transportRetryable = \case
     TransportUnreachable -> True
     TransportTls -> False
     TransportProtocol -> False
+
+{- | A @Retry-After@ delay, in whole seconds. A 'newtype' so a raw count of seconds is
+never confused with some other integer when it reaches a response header or a sweep's wait.
+-}
+newtype RetryAfter = RetryAfter Int
+    deriving stock (Eq, Ord, Show)
 
 {- | Build a 'TransportFault' with the detail truncated to the log-line budget, so a
 pathological rendered exception cannot bloat a log line or a held error value.

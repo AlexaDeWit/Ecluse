@@ -6,23 +6,33 @@ module Ecluse.Composition.ExecutableSpec (spec) where
 
 import Data.Text qualified as T
 import Test.Hspec
-import UnliftIO (throwString)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition (
     BootWiring (bwBindings, bwPublishTargets),
     PublishTarget (ptEcosystem),
     ResolveAdapter,
  )
-import Ecluse.Composition.BootError (BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, MissingAdapter))
+import Ecluse.Composition.BootError (
+    BootError (
+        AdvisorySyncUnavailable,
+        MirrorQueueUnavailable,
+        MissingAdapter,
+        StoreMaintenanceUnavailable,
+        StorePrunerWithoutSweep
+    ),
+    StoreMaintenanceReason (ClientBuildFailed),
+ )
 import Ecluse.Composition.Executable (
     BuildMirrorQueue,
     ExecutablePlan (epBootPlan, epRoleWiring),
     MirrorWiring (mwBootWiring, mwCveSync, mwRole),
-    RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
+    RoleWiring (MirrorPipelineWiring, PilotWiring),
     planExecutable,
  )
+import Ecluse.Composition.Maintenance (BuildStoreMaintenance)
 import Ecluse.Composition.Plan (BootPlan (bpRole))
-import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, overrideEnv, staticEnvVars)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
     MirrorRole (ServeAndMirror),
@@ -32,6 +42,7 @@ import Ecluse.Core.Queue (noMirrorQueue)
 import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Log (newTestLogEnv)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
 
 {- | Tests the boot's effectful planning phase. Every role plans through it, and every refusal a
 live environment can settle is spent there, so a yielded plan is one nothing downstream rejects.
@@ -39,7 +50,7 @@ live environment can settle is spent there, so a yielded plan is one nothing dow
 spec :: Spec
 spec = describe "planExecutable" $ do
     it "yields the mounts and the publish targets a mirror-pipeline role assembles from" $ do
-        plan <- expectExecutable (BootMirrorPipeline ServeAndMirror) mountBindingFor inertQueue
+        plan <- expectExecutable (BootMirrorPipeline ServeAndMirror) mountBindingFor inertQueue inertStore
         mirror <- expectMirrorWiring plan
         mwRole mirror `shouldBe` ServeAndMirror
         map bindingPrefix (bwBindings (mwBootWiring mirror)) `shouldBe` [pure "npm"]
@@ -50,7 +61,7 @@ spec = describe "planExecutable" $ do
     it "refuses, and yields no plan, where a cleared mount resolves to no binding" $ do
         -- The refusal this phase raises without a cloud. The injected resolver stands in for a
         -- build shipping no adapter, which is what makes the wiring, not the pure pass, refuse.
-        outcome <- planFor (BootMirrorPipeline ServeAndMirror) (\_ _ _ -> Nothing) inertQueue
+        outcome <- planFor (BootMirrorPipeline ServeAndMirror) (\_ _ _ -> Nothing) inertQueue inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
             Left errs -> errs `shouldBe` [MissingAdapter Npm]
@@ -58,16 +69,16 @@ spec = describe "planExecutable" $ do
     it "refuses a mirror-queue backend the live environment cannot build" $ do
         -- The backend dials its provider at boot. Before this phase owned it the throw escaped
         -- past the gate into the assembly, which claims nothing there can refuse.
-        outcome <- planFor (BootMirrorPipeline ServeAndMirror) mountBindingFor refusingQueue
+        outcome <- planFor (BootMirrorPipeline ServeAndMirror) mountBindingFor refusingQueue inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
-            Left [MirrorQueueUnavailable detail] -> detail `shouldSatisfy` T.isInfixOf "no credentials"
+            Left [MirrorQueueUnavailable detail] -> detail `shouldSatisfy` T.isInfixOf "NoCredentials"
             Left errs -> expectationFailure ("expected one queue refusal, got: " <> show errs)
 
     it "reports the queue refusal and the wiring refusal from one run" $ do
         -- The two refusable steps accumulate, so an operator fixes both before the next boot
         -- rather than meeting the second one only once the first is gone.
-        outcome <- planFor (BootMirrorPipeline ServeAndMirror) (\_ _ _ -> Nothing) refusingQueue
+        outcome <- planFor (BootMirrorPipeline ServeAndMirror) (\_ _ _ -> Nothing) refusingQueue inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
             Left [MirrorQueueUnavailable _, MissingAdapter Npm] -> pass
@@ -76,7 +87,7 @@ spec = describe "planExecutable" $ do
     it "refuses an advisory sync the live environment cannot prepare" $ do
         -- The sync creates its data directory and discovers the advisory store's credentials, and
         -- it runs a step ahead of the queue build, so a throw here would exit 1 past this gate.
-        outcome <- planWith unwritableAdvisoryEnv (BootMirrorPipeline ServeAndMirror) mountBindingFor inertQueue
+        outcome <- planWith unwritableAdvisoryEnv (BootMirrorPipeline ServeAndMirror) mountBindingFor inertQueue inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
             Left [AdvisorySyncUnavailable detail] -> detail `shouldSatisfy` T.isInfixOf advisoryDataDir
@@ -85,20 +96,35 @@ spec = describe "planExecutable" $ do
     it "reports the advisory refusal beside the queue and wiring refusals from one run" $ do
         -- The advisory sync accumulates with the other two rather than short-circuiting them,
         -- which is what keeps one launch reporting every problem an operator must fix.
-        outcome <- planWith unwritableAdvisoryEnv (BootMirrorPipeline ServeAndMirror) (\_ _ _ -> Nothing) refusingQueue
+        outcome <- planWith unwritableAdvisoryEnv (BootMirrorPipeline ServeAndMirror) (\_ _ _ -> Nothing) refusingQueue inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
             Left [AdvisorySyncUnavailable _, MirrorQueueUnavailable _, MissingAdapter Npm] -> pass
             Left errs -> expectationFailure ("expected all three refusals in one list, got: " <> show errs)
 
-    it "plans the store pruner and the pilot through the same phase, each on its own arm" $ do
-        -- Neither arm resolves an adapter or builds a queue, so ports that refuse outright leave
-        -- both roles clearing exactly as they do with working ones. The gate still stands ahead
-        -- of them, which is where a refusal either role later needs is spent.
-        pruner <- expectExecutable BootStorePruner (\_ _ _ -> Nothing) refusingQueue
-        plannedArm (epRoleWiring pruner) `shouldBe` "store pruner"
-        bpRole (epBootPlan pruner) `shouldBe` BootStorePruner
-        pilot <- expectExecutable BootWithoutPipeline (\_ _ _ -> Nothing) refusingQueue
+    it "refuses the store pruner for want of a sweep, though every store and handle clears" $ do
+        -- This build carries no sweep, so a started Dredger would hold a deleting identity and
+        -- delete nothing. Its stores clear and its handles build, and the role still refuses.
+        outcome <- planWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue inertStore
+        case outcome of
+            Right _ -> expectationFailure "expected the store pruner arm to refuse"
+            Left errs -> errs `shouldBe` [StorePrunerWithoutSweep]
+
+    it "reports a store maintenance client the live environment cannot build ahead of that refusal" $ do
+        -- The client discovers an AWS identity when it is built, so an environment with none
+        -- refuses here rather than failing the Dredger's first call against the store.
+        outcome <- planWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingStore
+        case outcome of
+            Right _ -> expectationFailure "expected the planning phase to refuse"
+            Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed detail), StorePrunerWithoutSweep] ->
+                detail `shouldSatisfy` T.isInfixOf "NoCredentials"
+            Left errs -> expectationFailure ("expected the handle refusal then the sweep refusal, got: " <> show errs)
+
+    it "plans the pilot through the same phase, on its own arm" $ do
+        -- Nothing here needs a live environment, so ports that refuse outright leave the role
+        -- clearing exactly as working ones do. The gate still stands ahead of it, which is
+        -- where a refusal it later needs is spent.
+        pilot <- expectExecutable BootWithoutPipeline (\_ _ _ -> Nothing) refusingQueue refusingStore
         plannedArm (epRoleWiring pilot) `shouldBe` "pilot"
         bpRole (epBootPlan pilot) `shouldBe` BootWithoutPipeline
 
@@ -106,7 +132,6 @@ spec = describe "planExecutable" $ do
 plannedArm :: RoleWiring -> Text
 plannedArm = \case
     MirrorPipelineWiring _ -> "mirror pipeline"
-    StorePrunerWiring -> "store pruner"
     PilotWiring -> "pilot"
 
 -- | A queue builder that allocates nothing, for the arms whose refusals are elsewhere.
@@ -117,7 +142,21 @@ inertQueue _ _ _ = pure noMirrorQueue
 live call this phase now folds into a refusal.
 -}
 refusingQueue :: BuildMirrorQueue
-refusingQueue _ _ _ = throwString "no credentials"
+refusingQueue _ _ _ = throwIO NoCredentials
+
+-- | A store builder that hands out the in-memory fake, so the pruner's arm reaches no cloud.
+inertStore :: BuildStoreMaintenance
+inertStore _ = fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
+
+-- | A store builder that throws as @amazonka@ does when it discovers no credentials.
+refusingStore :: BuildStoreMaintenance
+refusingStore _ = throwIO NoCredentials
+
+-- | The typed stand-in for amazonka's credential-discovery failure.
+data NoCredentials = NoCredentials
+    deriving stock (Show)
+
+instance Exception NoCredentials
 
 {- | An advisory store over a data directory under a path that is not a directory, so preparing
 the sync throws where every host behaves alike, before it reaches a credential chain.
@@ -132,21 +171,25 @@ advisoryDataDir :: (IsString s) => s
 advisoryDataDir = "/dev/null/ecluse-advisories"
 
 -- | Plan a boot over 'staticEnvVars' for one role, through the given ports.
-planFor :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> IO (Either [BootError] ExecutablePlan)
+planFor :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> BuildStoreMaintenance -> IO (Either [BootError] ExecutablePlan)
 planFor = planWith staticEnvVars
 
 -- | 'planFor' over a named environment layer, for a refusal 'staticEnvVars' cannot reach.
-planWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> IO (Either [BootError] ExecutablePlan)
-planWith envVars role resolveAdapter buildQueue = do
+planWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> BuildStoreMaintenance -> IO (Either [BootError] ExecutablePlan)
+planWith envVars role resolveAdapter buildQueue buildStore = do
     config <- expectConfig envVars Nothing
     bootPlan <- expectPlanFor role envVars Nothing config noCeiling
     logEnv <- newTestLogEnv
-    planExecutable logEnv resolveAdapter buildQueue bootPlan
+    planExecutable logEnv resolveAdapter buildQueue buildStore bootPlan
 
 -- | 'planFor', failing the test on a refusal.
-expectExecutable :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> IO ExecutablePlan
-expectExecutable role resolveAdapter buildQueue =
-    planFor role resolveAdapter buildQueue
+expectExecutable :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> BuildStoreMaintenance -> IO ExecutablePlan
+expectExecutable = expectExecutableWith staticEnvVars
+
+-- | 'planWith', failing the test on a refusal.
+expectExecutableWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> BuildStoreMaintenance -> IO ExecutablePlan
+expectExecutableWith envVars role resolveAdapter buildQueue buildStore =
+    planWith envVars role resolveAdapter buildQueue buildStore
         >>= either (\errs -> fail ("planning refused: " <> show errs)) pure
 
 -- | The mirror-pipeline arm of a plan, failing the test on any other arm.

@@ -200,17 +200,24 @@ error, not a silent skip:
   so neither a capital letter nor an explicit `:443` defeats a refusal. Applying the default port
   keeps the port in the key rather than dropping it, so `:8443` stays a separate store. The path is
   compared exactly, which is what keeps those per-format endpoints apart.
+- Every mount's `mirrorTarget` needs a store maintenance backend. `ecluse dredger` reads that URL as
+  CodeArtifact coordinates, so it refuses a host that is not a CodeArtifact endpoint, a path that is
+  not the repository's endpoint for the mount's own ecosystem (`/npm/{repository}/` for an npm
+  mount), and an ecosystem CodeArtifact carries no package format for. The refusal names the mount
+  key and the reason. Only the Dredger deletes, so only the Dredger refuses: the other roles boot
+  on such a target and log nothing, and `ecluse check-config` names the Dredger's refusal.
 
-Most of those refusals are decided as the configuration loads. The publish-policy pairing and the
-endpoint-disjointness rules are decided after it, by one pure pass over the loaded configuration
-and the environment snapshot that load read. The pass takes the
+Most of those refusals are decided as the configuration loads. The publish-policy pairing, the
+endpoint-disjointness rules, and the store maintenance backend are decided after it, by one pure
+pass over the loaded configuration and the environment snapshot that load read. The pass takes the
 booting role and accumulates, so one run reports every refusal and every advisory that role earns,
 and the advisories reach the log even when a refusal stops the boot. One decision sits outside it:
 a memory-plan override is judged against the resolved mirror runtime, so a refused queue URL
 reports without it. The refusals `ecluse check-config` does not reach are the ones a live
 environment settles: minting a CodeArtifact identity's first token, building the mirror-queue
 backend, preparing each mount ecosystem's advisory sync, resolving a mount to the adapter this
-build ships, and resolving a mount's mirror-write provider.
+build ships, resolving a mount's mirror-write provider, and building the client the Dredger
+sweeps each mirror store with.
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the
@@ -227,9 +234,9 @@ The checker picks no subcommand, so it runs the pass once per role. It runs no m
 prunes no store, so its own pass vets under the writing roles' severities, and that pass decides
 the exit status. A refusal only some roles earn prints as a warning naming the command that earns
 it: `ecluse proxy --no-worker` and `ecluse mirror` over the bounded in-memory queue, `ecluse mirror`
-where no mount declares a `mirrorTarget`, and `ecluse dredger` on a collapsed endpoint pair. A
-configuration one role refuses and another boots is a normal deployment, which is why those do not
-fail the check.
+where no mount declares a `mirrorTarget`, and `ecluse dredger` on a collapsed endpoint pair or on
+a `mirrorTarget` this build has no maintenance backend for. A configuration one role refuses and
+another boots is a normal deployment, which is why those do not fail the check.
 
 What the checker does not reach is the environment-dependent tier those refusals sit in. A boot
 builds it and the checker makes no cloud call, which is also why allocating each mount's rule state
@@ -239,10 +246,12 @@ planning phase over that plan, which spends every remaining refusal and yields a
 
 Every role runs that phase, and each has its own arm in it. The three mirror-pipeline halves
 settle the mount wiring, the advisory sync, and the queue backend there, and one run reports every
-refusal all of that earns. `ecluse dredger` and `ecluse pilot` settle nothing a live environment
-decides today, and a refusal either of them later needs is spent at the same gate. So an executable
-plan carries the role's own wiring, and a boot spends its last refusal in one place whichever role
-it started.
+refusal all of that earns. `ecluse dredger` plans the client it would sweep each cleared mirror
+store with there, so a store whose client cannot be built reports at the gate rather than on the
+first call against it, and then refuses: this build carries no sweep, and a role with no coherent
+runtime behaviour gets no runtime. `ecluse pilot` settles nothing a live environment decides today, and a refusal it
+later needs is spent at the same gate. So an executable plan carries the role's own wiring, and a
+boot spends its last refusal in one place whichever role it started.
 
 Nothing downstream of an executable plan refuses to boot. Holding one means the assembly below it
 only builds and allocates, so a role's runtime cannot reject a configuration the boot already

@@ -18,15 +18,19 @@ selects the role:
 - **`ecluse mirror`**: the mirror worker on its own, for a worker fleet you scale separately. See
   [Splitting the proxy from the mirror worker](#splitting-the-proxy-from-the-mirror-worker).
 - **`ecluse pilot`**: the OSV advisory ingestion pipeline.
-- **`ecluse dredger`**: the registry cleanup worker. Pruning is not yet implemented. The role
-  starts and answers its health probes, and it prunes nothing. It refuses to start when a mount's
-  `mirrorTarget` is also any mount's `privateUpstream` or its own mount's `publicationTarget`,
-  because it deletes from that store. The other roles start and warn instead.
+- **`ecluse dredger`**: the registry cleanup worker. This build carries no sweep, so the role
+  refuses to start rather than run idle. A configuration it refuses reports on its own, ahead of
+  that: a mount's `mirrorTarget` that is also any mount's `privateUpstream` or its own mount's
+  `publicationTarget`, because it deletes from that store, and one that is not a CodeArtifact
+  repository endpoint for that mount's ecosystem, because it carries no way to sweep such a
+  store. It plans its handles before it refuses, so a store whose client it cannot build reports
+  beside the sweep refusal. The other roles start and warn on the collapsed pairs instead.
 - **`ecluse check-config`**: validates the shared configuration and prints the resolved posture
   without starting anything (exit `0` valid, `2` refused). It checks every role, so a refusal only
   one command earns (`ecluse proxy --no-worker` or `ecluse mirror` without a durable queue,
   `ecluse mirror` where no mount declares a `mirrorTarget`, `ecluse dredger` on a collapsed
-  endpoint pair) prints here as a warning naming that command. Run it in CI or before a rollout.
+  endpoint pair or on a `mirrorTarget` it has no maintenance backend for) prints here as a warning
+  naming that command. Run it in CI or before a rollout.
 
 All roles share one configuration. The proxy and the mirror worker scale. Run Pilot as a singleton,
 because multiple instances race and duplicate API calls.
@@ -308,7 +312,7 @@ Each role needs a different slice of that allowance, and only the proxy needs in
 | `ecluse proxy` | Client traffic, behind the edge you front it with | The upstreams, the mirror target, the metadata endpoint, and the advisory store when `ECLUSE_ADVISORIES__URL` is set | The mirror-write credential, plus the advisory-store read (`s3:GetObject`) when that store is set. Nothing more |
 | `ecluse mirror` | None public (health probes only, for the orchestrator) | The public upstream, the mirror target, the mirror queue, the metadata endpoint, and the advisory store when `ECLUSE_ADVISORIES__URL` is set | The same as the proxy: the mirror-write credential and the advisory-store read |
 | `ecluse pilot` | None public | The OSV export host in `ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL` (default `osv-vulnerabilities.storage.googleapis.com`), the EPSS feed host in `ECLUSE_ADVISORIES__EPSS_FEED_URL` (default `epss.empiricalsecurity.com`), the metadata endpoint, and your object store | `s3:PutObject` to upload the advisory database |
-| `ecluse dredger` | None public (health probes only, for the orchestrator) | Not yet implemented. The role answers its probes and calls nothing | None |
+| `ecluse dredger` | None | The metadata endpoint, and the STS endpoint where the identity comes from there. Building each mirror store's client discovers an AWS identity, and the role refuses before it calls any registry or control plane | An AWS identity, discovered but never spent: this build carries no sweep, so the role refuses to start. It needs no CodeArtifact permission |
 
 **Do not block the metadata endpoint or internal ranges for the proxy itself.** Écluse reaches
 metadata through the AWS SDK to mint its instance-role credentials, so denying it breaks those

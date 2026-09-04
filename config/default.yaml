@@ -17,7 +17,7 @@
 server:
   # TCP port, 0 to 65535. 0 binds an OS-assigned ephemeral port. Every role listens
   # here: the proxy serves its mounts and its probes, and the worker roles (mirror,
-  # pilot, dredger) serve /livez and /readyz alone. OTEL_METRICS_EXPORTER=prometheus
+  # pilot) serve /livez and /readyz alone. OTEL_METRICS_EXPORTER=prometheus
   # selects the scrape transport and adds a second listener on its own port, addressed
   # by OTEL_EXPORTER_PROMETHEUS_HOST and OTEL_EXPORTER_PROMETHEUS_PORT rather than by a
   # key here.
@@ -200,6 +200,9 @@ mounts:
     # `ecluse dredger` deletes from this store, so it refuses a target that is also any
     # mount's privateUpstream or this mount's publicationTarget. `ecluse proxy` and
     # `ecluse mirror` boot on those and warn once per pair, and pruning stays manual.
+    # The Dredger also refuses a target that is not a CodeArtifact repository endpoint
+    # for this mount's ecosystem (/npm/{repository}/ for npm). The other roles boot on
+    # such a target, and `ecluse check-config` warns of the Dredger's refusal.
     # mirrorTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/mirror/
     # Set via ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN (a secret). Required for a
     # non-CodeArtifact mirror target, forbidden for a CodeArtifact one or a serve-only mount.

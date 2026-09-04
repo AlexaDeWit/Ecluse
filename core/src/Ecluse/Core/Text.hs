@@ -14,6 +14,7 @@ module Ecluse.Core.Text (
     joinUrlPath,
     lastPathSegment,
     afterFirst,
+    registryPath,
     readDecimalText,
     readHexText,
     renderIso8601Utc,
@@ -59,6 +60,12 @@ matches first, so a crafted "https://169.254.169.254/x?u=https://ok" gates on th
 -}
 afterFirst :: Text -> Text -> Text
 afterFirst needle hay = fromMaybe hay (T.stripPrefix needle (snd (T.breakOn needle hay)))
+
+{- | The path half of an absolute URL, from the first slash after the authority. It splits on the
+first scheme separator, so a later one inside the URL cannot move where the path starts.
+-}
+registryPath :: Text -> Text
+registryPath raw = T.dropWhile (/= '/') (afterFirst "://" raw)
 
 {- | The non-negative integer a bare decimal digit run spells, 'Nothing' for anything else.
 Stricter than 'readMaybe', which also takes a sign, @0x10@, @0o10@, @  5@, and @(5)@.

@@ -35,10 +35,12 @@ import Ecluse.Composition.Plan (
  )
 import Ecluse.Composition.Support (
     bootInputsFor,
+    codeArtifactEnvVars,
     expectConfig,
     expectPlan,
     malformedAwsEndpoint,
     noCeiling,
+    noMaintenanceBackend,
     overrideEnv,
     staticEnvVars,
     withoutMirrorTargetUrl,
@@ -100,9 +102,10 @@ spec = describe "resolveBootPlan" $ do
 
     it "carries the role it vetted under, so a boot starts the behaviour the plan names" $ do
         -- The boot reads the behaviour off this field, so a plan resolved for one role can no
-        -- longer start another's.
-        config <- expectConfig staticEnvVars Nothing
-        let roleOf role = fmap bpRole (brOutcome (resolveBootPlan role (bootInputsFor staticEnvVars Nothing config noCeiling)))
+        -- longer start another's. The mirror target is one the deleting role can sweep, so
+        -- every role clears the configuration.
+        config <- expectConfig codeArtifactEnvVars Nothing
+        let roleOf role = fmap bpRole (brOutcome (resolveBootPlan role (bootInputsFor codeArtifactEnvVars Nothing config noCeiling)))
         roleOf (BootMirrorPipeline MirrorOnly) `shouldBe` Right (BootMirrorPipeline MirrorOnly)
         roleOf BootStorePruner `shouldBe` Right BootStorePruner
         roleOf BootWithoutPipeline `shouldBe` Right BootWithoutPipeline
@@ -238,9 +241,10 @@ spec = describe "resolveBootPlan" $ do
         it "gives the deleting role the refusal alone, never the writing roles' advisory too" $ do
             -- One rule turns the detected collapse into exactly one outcome per role, so the
             -- Dredger reports what it refuses and not what another role would have tolerated.
+            -- The collapsed target is also one no backend here sweeps, and the pass reports both.
             config <- expectConfig collapsedMirrorEnv Nothing
             let report = resolveBootPlan BootStorePruner (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
-            refusalsOf report `shouldBe` Left [collapsedMirrorRefusal]
+            refusalsOf report `shouldBe` Left [collapsedMirrorRefusal, noMaintenanceBackend]
             brAdvisories report `shouldBe` []
 
     describe "the runtime posture each entry point sizes against" $
@@ -262,7 +266,7 @@ spec = describe "resolveBootPlan" $ do
 
     describe "roleRefusalWarnings -- what a checker with no subcommand still reports" $ do
         it "names both split roles the in-memory queue strands, which its own pass boots" $ do
-            let envVars = withoutQueueUrl staticEnvVars
+            let envVars = withoutQueueUrl codeArtifactEnvVars
             config <- expectConfig envVars Nothing
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling)
                 `shouldBe` [ wouldRefuse "ecluse proxy --no-worker" (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")
@@ -277,17 +281,26 @@ spec = describe "resolveBootPlan" $ do
         it "names the Dredger on a collapse the writing roles only warn about" $ do
             config <- expectConfig collapsedMirrorEnv Nothing
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
-                `shouldBe` [wouldRefuse "ecluse dredger" collapsedMirrorRefusal]
+                `shouldBe` [ wouldRefuse "ecluse dredger" collapsedMirrorRefusal
+                           , wouldRefuse "ecluse dredger" noMaintenanceBackend
+                           ]
+
+        it "names the Dredger on a mirror target this build has no maintenance backend for" $ do
+            -- The writing roles boot on such a target and log nothing, so this line is where an
+            -- operator who never runs the Dredger against it still learns that they cannot.
+            config <- expectConfig staticEnvVars Nothing
+            roleRefusalWarnings BootWithoutPipeline (bootInputsFor staticEnvVars Nothing config noCeiling)
+                `shouldBe` [wouldRefuse "ecluse dredger" noMaintenanceBackend]
 
         it "omits the role the caller already reported for" $ do
-            let envVars = withoutQueueUrl staticEnvVars
+            let envVars = withoutQueueUrl codeArtifactEnvVars
             config <- expectConfig envVars Nothing
             roleRefusalWarnings (BootMirrorPipeline MirrorOnly) (bootInputsFor envVars Nothing config noCeiling)
                 `shouldBe` [wouldRefuse "ecluse proxy --no-worker" (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")]
 
         it "reports nothing where every role boots the configuration" $ do
-            config <- expectConfig staticEnvVars Nothing
-            roleRefusalWarnings BootWithoutPipeline (bootInputsFor staticEnvVars Nothing config noCeiling) `shouldBe` []
+            config <- expectConfig codeArtifactEnvVars Nothing
+            roleRefusalWarnings BootWithoutPipeline (bootInputsFor codeArtifactEnvVars Nothing config noCeiling) `shouldBe` []
 
 -- | One warning line as a checker prints it: the command that refuses, and the refusal itself.
 wouldRefuse :: Text -> BootError -> Text

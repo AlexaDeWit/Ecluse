@@ -22,8 +22,8 @@ thin composition shell. Each publishes its own Haddock, generated from `main`.
   <a class="card" href="ecluse/index.html">
     <h2><code>ecluse</code></h2>
     <p>The composition shell: the <code>run</code> entry point, configuration loading and
-    resolution, the composition root that assembles the runtime, and the proxy, pilot, and
-    dredger role runners.</p>
+    resolution, the composition root that assembles the runtime, and the proxy and pilot role
+    runners.</p>
   </a>
   <a class="card" href="/docs/protocol-support/">
     <h2>Protocol support</h2>

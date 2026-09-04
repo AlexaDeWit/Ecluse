@@ -13,7 +13,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Composition.BootError (BootError (QueueUrlUnrecognised))
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (
-    Severity (Advise, Refuse),
+    Severity (Advise, Ignore, Refuse),
     Vet,
     decided,
     rule,
@@ -78,6 +78,18 @@ accumulationSpec = describe "accumulation" $ do
                        , (["Advised 1"], Left [QueueUrlUnrecognised "Refused 2"])
                        ]
 
+    it "neither refuses nor advises on a finding the role ignores, and still yields the value" $
+        observe (probeVetFn (Probe Advised 1) <*> probeVet (Probe Ignored 2))
+            `shouldBe` [ (["Advised 1"], Right 3)
+                       , (["Advised 1"], Right 3)
+                       ]
+
+    it "lets one rule ignore a finding under one role and refuse it under the other" $
+        -- The severity table carries the silence, so a role that boots on the finding does so by
+        -- declaration rather than because the rule was never applied on its path.
+        observe (rule ignoredByWriter Just "finding")
+            `shouldBe` [([], Right ()), ([], Left [QueueUrlUnrecognised "finding"])]
+
 -- The two ways into a pass that are not a rule: the role it runs for, and a settled outcome.
 inputSpec :: Spec
 inputSpec = describe "the pass's own inputs" $ do
@@ -95,7 +107,7 @@ observe :: Vet a -> [([Text], Either [BootError] a)]
 observe v = [runVet role v | role <- [MirrorWriter, MirrorPruner]]
 
 -- The finding a probe carries. 'RoleSplit' is what exercises the role reader.
-data Finding = Undetected | Refused | Advised | RoleSplit
+data Finding = Undetected | Refused | Advised | Ignored | RoleSplit
     deriving stock (Eq, Show, Bounded, Enum)
 
 -- A printable stand-in for a vet: one finding, and the value the vet yields.
@@ -122,6 +134,7 @@ findingVet (Probe finding n) = case finding of
     Undetected -> rule (const (Refuse QueueUrlUnrecognised)) (const Nothing) label
     Refused -> rule (const (Refuse QueueUrlUnrecognised)) Just label
     Advised -> rule (const (Advise id)) Just label
+    Ignored -> rule (const Ignore) Just label
     RoleSplit -> rule roleSplit Just label
   where
     label = show finding <> " " <> show n
@@ -129,4 +142,10 @@ findingVet (Probe finding n) = case finding of
 roleSplit :: RegistryRole -> Severity Text
 roleSplit = \case
     MirrorWriter -> Advise id
+    MirrorPruner -> Refuse QueueUrlUnrecognised
+
+-- A finding only the deleting role acts on, the shape the store maintenance rule takes.
+ignoredByWriter :: RegistryRole -> Severity Text
+ignoredByWriter = \case
+    MirrorWriter -> Ignore
     MirrorPruner -> Refuse QueueUrlUnrecognised

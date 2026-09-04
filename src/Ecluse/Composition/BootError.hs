@@ -12,6 +12,7 @@ no policy of its own beyond the rendering and the fold that turns a thrown fault
 -}
 module Ecluse.Composition.BootError (
     BootError (..),
+    StoreMaintenanceReason (..),
     refuseOnThrow,
     renderBootError,
     renderBootErrors,
@@ -111,6 +112,26 @@ data BootError
       tells a transient fault from a permanent one to fix.
       -}
       AdvisorySyncUnavailable Text
+    | {- | A vetted mirror store has no store maintenance backend the Dredger can sweep it
+      with, carrying why.
+      -}
+      StoreMaintenanceUnavailable Ecosystem StoreMaintenanceReason
+    | {- | @ecluse dredger@ was launched against a build carrying no sweep, so the role would
+      hold a deleting identity and do nothing with it.
+      -}
+      StorePrunerWithoutSweep
+    deriving stock (Eq, Show)
+
+-- | Why a mount's mirror target reached no store maintenance handle.
+data StoreMaintenanceReason
+    = -- | The target's host names no backend this build carries.
+      NoBackendForHost
+    | -- | The backend its host names has no package format for this ecosystem.
+      NoFormatFor Ecosystem
+    | -- | The target's path is not a repository endpoint under the carried format token.
+      NotRepositoryEndpoint Text
+    | -- | Building the cleared backend's client against the live environment threw.
+      ClientBuildFailed Text
     deriving stock (Eq, Show)
 
 {- | Fold a thrown fault into the boot error the caller names, so a phase that dials a live
@@ -202,3 +223,18 @@ renderBootError = \case
         "the advisory sync named by ECLUSE_ADVISORIES__URL could not be prepared at boot: "
             <> detail
             <> " (a transient AWS or network error may clear on retry. A permanent one, such as unresolvable AWS credentials or an ECLUSE_ADVISORIES__DATA_DIR this process cannot create, must be fixed)"
+    StoreMaintenanceUnavailable eco reason ->
+        mountKeyRef eco "mirrorTarget"
+            <> " has no usable store maintenance backend: "
+            <> renderStoreMaintenanceReason reason
+            <> " (the Dredger deletes from every mount's mirror target, so it refuses rather than starting against a store it cannot sweep)"
+    StorePrunerWithoutSweep ->
+        "this build carries no Dredger sweep, so ecluse dredger refuses to start rather than run idle: run a role this build has work for"
+
+renderStoreMaintenanceReason :: StoreMaintenanceReason -> Text
+renderStoreMaintenanceReason = \case
+    NoBackendForHost -> "its host names no store maintenance backend this build carries"
+    NoFormatFor eco -> "CodeArtifact has no package format for the " <> ecosystemName eco <> " ecosystem"
+    NotRepositoryEndpoint format ->
+        "its path is not a CodeArtifact repository endpoint, /" <> format <> "/{repository}/"
+    ClientBuildFailed detail -> "building its client failed: " <> detail
