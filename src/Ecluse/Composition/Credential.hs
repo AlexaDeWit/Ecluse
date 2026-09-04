@@ -60,15 +60,13 @@ import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig, newCodeArtifactProvider)
 
-{- | The process-global credential providers, keyed by the ecosystem they serve. A
-mount references one by ecosystem and never holds its own, so a mount naming an
-ecosystem absent from the keyset has an unresolved credential reference.
+{- | The process-global credential providers, keyed by the ecosystem they serve. A mount naming
+an ecosystem absent from the keyset has an unresolved credential reference.
 -}
 newtype CredentialProviders = CredentialProviders (Map Ecosystem CredentialProvider)
 
-{- | Build the global credential providers from the boot's cleared mounts, or the boot
-errors that block them. Each provider mints eagerly, so a bad identity, region, or
-permission fails loud here as 'CodeArtifactMintFailed' rather than at first publish.
+{- | Build the global credential providers from the cleared mounts, or every boot error that
+blocks one. Each provider mints eagerly, so a bad identity fails here as 'CodeArtifactMintFailed'.
 -}
 initCredentialProviders :: CredentialReporters -> [Mount] -> IO (Either [BootError] CredentialProviders)
 initCredentialProviders reporters mounts = do
@@ -94,9 +92,8 @@ initSharedCodeArtifact reporters (caConfig, ecosystems) =
   where
     fannedOut provider = [(eco, provider) | eco <- toList ecosystems]
 
-{- | Group the mounts' resolved CodeArtifact identities, one group per distinct
-'CodeArtifactConfig'. The mint's scope is the domain, not the repository endpoint, so
-mounts in one domain share a provider, while a differing duration keeps its own.
+{- | Group the mounts' resolved CodeArtifact identities by distinct 'CodeArtifactConfig'. The
+mint's scope is the domain, so one domain shares a provider and a differing duration keeps its own.
 -}
 codeArtifactIdentityGroups :: [(Ecosystem, CodeArtifactConfig)] -> [(CodeArtifactConfig, NonEmpty Ecosystem)]
 codeArtifactIdentityGroups plans =

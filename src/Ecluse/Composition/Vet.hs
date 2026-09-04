@@ -38,9 +38,8 @@ instance Functor Vet where
         let (advisories, outcome) = run role
          in (advisories, fmap f outcome)
 
-{- 'Vet' has no 'Monad' instance on purpose. A bind would let one check's failure hide the next
-check's finding, which is the short-circuiting this pass exists to remove. '<*>' runs both sides
-whatever either decides, so one boot reports everything an operator must fix. -}
+{- 'Vet' has no 'Monad' instance on purpose: a bind would let one check's failure hide the next
+check's finding. '<*>' runs both sides whatever either decides, so one boot reports every finding. -}
 instance Applicative Vet where
     pure a = Vet (const ([], Success a))
     Vet runF <*> Vet runA = Vet $ \role ->

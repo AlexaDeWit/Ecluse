@@ -207,17 +207,20 @@ error, not a silent skip:
   key and the reason. Only the Dredger deletes, so only the Dredger refuses: the other roles boot
   on such a target and log nothing, and `ecluse check-config` names the Dredger's refusal.
 
-Most of those refusals are decided as the configuration loads. The publish-policy pairing, the
-endpoint-disjointness rules, and the store maintenance backend are decided after it, by one pure
-pass over the loaded configuration and the environment snapshot that load read. The pass takes the
-booting role and accumulates, so one run reports every refusal and every advisory that role earns,
-and the advisories reach the log even when a refusal stops the boot. One decision sits outside it:
-a memory-plan override is judged against the resolved mirror runtime, so a refused queue URL
-reports without it. The refusals `ecluse check-config` does not reach are the ones a live
-environment settles: minting a CodeArtifact identity's first token, building the mirror-queue
-backend, preparing each mount ecosystem's advisory sync, resolving a mount to the adapter this
-build ships, resolving a mount's mirror-write provider, and building the client the Dredger
-sweeps each mirror store with.
+Most of those refusals are decided as the configuration loads. The mount-adapter rule, the
+publish-policy pairing, the endpoint-disjointness rules, and the store maintenance backend are
+decided after it, by one pure pass over the loaded configuration and the environment snapshot that
+load read. The pass takes the booting role and accumulates, so one run reports every refusal and
+every advisory that role earns, and the advisories reach the log even when a refusal stops the
+boot. One decision sits outside it: a memory-plan override is judged against the resolved mirror
+runtime, so a refused queue URL reports without it. The refusals `ecluse check-config` does not
+reach are the ones a live environment settles. These are the steps that raise them:
+
+- minting a CodeArtifact identity's first token
+- building the mirror-queue backend
+- preparing each mount ecosystem's advisory sync
+- resolving a mount's mirror-write provider
+- building the client the Dredger sweeps each mirror store with
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the

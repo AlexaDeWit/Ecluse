@@ -117,10 +117,8 @@ settle. The credential providers stay internal: a mount reaches one through the 
 -}
 resolveBootWiring :: WiringPorts -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
 resolveBootWiring ports limits publishBudget plan = do
-    -- Each mount's mirror-write credential derives from the mirror-target host: a static token or
-    -- the CodeArtifact mint. The mint runs once eagerly here, so a misconfiguration fails at boot.
-    -- The two groups below both consume the providers, so this step precedes them rather than
-    -- accumulating with them.
+    -- The mirror-write credential mints once, eagerly, so a misconfiguration fails at boot. Both
+    -- groups below consume the providers, so this step runs before them, not alongside them.
     providersE <- initCredentialProviders (wpReporters ports) (map vmMount (vpMounts plan))
     case providersE of
         Left errs -> pure (Left errs)
