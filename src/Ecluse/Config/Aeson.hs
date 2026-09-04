@@ -190,19 +190,21 @@ parsePyPIFirstParty field v = do
     entries <- commaSeparated field (parsePyPIEntry field) v
     maybe (fail (field <> " must name at least one distribution or prefix")) pure (nonEmpty entries)
 
-{- A trailing @*@ marks a prefix, so @acme-*@ declares the family and @acme@ the distribution
-itself. Both read through the PEP 503 canonicaliser, so one spelling has one verdict. A bare @*@
-would privilege every name on PyPI, and it canonicalises to nothing, which 'named' refuses along
-with an empty segment. -}
+{- A trailing @*@ marks a prefix (@acme-*@ the family, @acme@ the distribution). Both read through
+the PEP 503 canonicaliser, and a bare @*@ canonicalises to nothing, which is refused. -}
 parsePyPIEntry :: String -> Text -> Parser PyPIFirstParty
 parsePyPIEntry field entry = case T.stripSuffix "*" entry of
-    Just prefix -> maybe invalid (pure . PyPIOwnedPrefix) (mkPyPIPrefix prefix)
-    -- A name and a prefix share one alphabet, and 'mkPyPIPrefix' holds it, so a typo fails the
-    -- load rather than privileging a name no distribution can carry.
+    Just prefix
+        | endsAtSeparator prefix -> maybe invalid (pure . PyPIOwnedPrefix) (mkPyPIPrefix prefix)
+        | otherwise -> invalid
     Nothing
         | isJust (mkPyPIPrefix entry) -> pure (PyPIOwnedName (mkPackageName PyPI Nothing entry))
         | otherwise -> invalid
   where
+    -- The star follows a separator, so @acme*@ is a typo rather than a silent claim on @acmeco@.
+    endsAtSeparator :: Text -> Bool
+    endsAtSeparator prefix = maybe False ((`elem` ("-_." :: String)) . snd) (T.unsnoc prefix)
+
     invalid :: Parser a
     invalid = fail ("invalid entry in " <> field <> ": " <> show entry)
 

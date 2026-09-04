@@ -263,7 +263,7 @@ mirrorOnPublicUrl = "https://public.example.test/npm/"
 publishingEnv :: [(String, String)]
 publishingEnv = publishingTo "https://publish.example.test"
 
--- The npm mount publishing to the given target, with the allow-list the publish path needs.
+-- The npm mount publishing to the given target, with the namespaces the publish path needs.
 publishingTo :: String -> [(String, String)]
 publishingTo target =
     overrideEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme" $
@@ -306,7 +306,7 @@ sharedRegistry = "https://shared.example.test"
 sharedRegistryText :: Text
 sharedRegistryText = toText sharedRegistry
 
--- The PyPI neighbour publishing to the given target. The endpoint rules read no allow-list.
+-- The PyPI neighbour publishing to the given target. The endpoint rules read no namespaces.
 pypiPublishingTo :: String -> [(String, String)] -> [(String, String)]
 pypiPublishingTo target env =
     overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET" target (withPyPI env)

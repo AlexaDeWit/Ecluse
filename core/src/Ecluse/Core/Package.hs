@@ -200,16 +200,14 @@ normalisePyPI t =
         . T.splitOn "-"
         $ T.map (\c -> if c == '_' || c == '.' then '-' else c) (T.toLower t)
 
-{- | A PyPI name prefix, held in PEP 503 canonical form. PyPI has no structural namespace the
-way npm has a 'Scope', so a deployment that owns a family of distributions owns a prefix of
-their names.
+{- | A PyPI name prefix in PEP 503 canonical form. PyPI has no structural namespace like npm's
+'Scope', so a deployment owns a prefix of its distributions' names.
 -}
 newtype PyPIPrefix = PyPIPrefix ShortText
     deriving stock (Eq, Show)
 
-{- | Build a prefix, canonicalising it the way 'mkPackageName' canonicalises a name. 'Nothing'
-for text no PyPI name can start with: outside PEP 503's alphabet, or canonicalising to nothing,
-which would cover every name on PyPI.
+{- | Build a prefix through the canonicaliser 'mkPackageName' uses. 'Nothing' for text no PyPI name
+can start with, or that canonicalises to nothing and would cover every name.
 -}
 mkPyPIPrefix :: Text -> Maybe PyPIPrefix
 mkPyPIPrefix raw
@@ -222,9 +220,8 @@ mkPyPIPrefix raw
 canonicalPyPIChar :: Char -> Bool
 canonicalPyPIChar c = c == '-' || (isAscii c && isAlphaNum c)
 
-{- | Whether a name sits under a prefix. The match ends at PEP 503's separator, so @acme@ covers
-@acme-tools@ and not @acmeco@, which is a name the deployment does not own. The bare prefix is
-not itself covered: a deployment owning that distribution declares it as a name.
+{- | Whether a name sits under a prefix, ending at PEP 503's separator: @acme@ covers @acme-tools@, not
+@acmeco@, and not the bare @acme@, which is declared as a name.
 -}
 underPyPIPrefix :: PyPIPrefix -> PackageName -> Bool
 underPyPIPrefix (PyPIPrefix prefix) name =

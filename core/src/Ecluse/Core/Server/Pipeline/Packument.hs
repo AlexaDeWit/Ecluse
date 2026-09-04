@@ -154,6 +154,7 @@ import Ecluse.Core.Server.Pipeline.Origin (
     fetchPublicOrigin,
     fingerprintPiece,
     originManifest,
+    originMissed,
  )
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
@@ -307,9 +308,8 @@ serveAdmittedPackument mode replies deps clientToken name request respond rt = d
                 warnDivergences metrics name plan
                 maybe noServeableVersions serveResolved (survivingPlan (pdDivergencePolicy deps) plan)
 
-{- Resolve the origins this request may read. A first-party name has one authority, so the public
-leg is not entered at all: it is neither fetched nor merged. Every other name reads both
-concurrently. -}
+{- Resolve the origins this request may read: a first-party name reads the private origin alone
+and never the public leg. Every other name reads both concurrently. -}
 resolveOrigins :: PackumentDeps -> ServeRuntime -> Maybe Secret -> PackageName -> Handler (OriginResult, OriginResult)
 resolveOrigins deps rt clientToken name
     | pdFirstParty deps name = do
@@ -319,15 +319,6 @@ resolveOrigins deps rt clientToken name
         concurrently
             (fetchPrivateOrigin deps rt clientToken name)
             (fetchPublicOrigin deps rt name)
-
--- Whether an origin yielded no document and claimed nothing about a different package. An
--- unreachable upstream lands here too: nothing else may answer for a first-party name.
-originMissed :: OriginResult -> Bool
-originMissed = \case
-    OriginResolved{} -> False
-    OriginNameMismatch -> False
-    OriginUnresolved -> True
-    OriginAbsent -> True
 
 {- The @404@ for a first-party name the private upstream did not resolve. The namespace belongs to
 this deployment, so no public document may stand in for it. -}

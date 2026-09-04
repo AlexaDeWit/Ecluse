@@ -434,9 +434,8 @@ versionAbsent :: ServeDecision
 versionAbsent =
     versionUnresolved VersionMissing "the requested version was not found upstream"
 
-{- A first-party artifact the private upstream did not serve. Its namespace belongs to this
-deployment, so no public artifact may stand in for it and 'artifactOutcomeStatus' renders the
-miss as a @404@. -}
+{- A first-party artifact the private upstream did not serve. No public artifact may
+stand in for it, and 'artifactOutcomeStatus' renders it @404@. -}
 firstPartyAbsent :: ServeDecision
 firstPartyAbsent =
     versionUnresolved

@@ -128,12 +128,8 @@ data MirrorCredential
       MirrorStatic Secret
     deriving stock (Eq, Show)
 
-{- | The namespaces a mount's deployment owns, one arm per ecosystem. An arm is read only in the
-shape its own registry names packages with, so a mount can never carry another ecosystem's.
-
-The privilege is one statement with three readers: only a first-party name may be published
-through the relay, a first-party name resolves from the private upstream alone, and a store
-sweep shields the versions the deployment published itself.
+{- | The namespaces a mount's deployment owns, one arm per ecosystem, read only in that registry's own naming
+shape. Every consumer of the privilege derives its predicate from this one value.
 -}
 data FirstParty
     = -- | The npm scopes the deployment owns, at least one.

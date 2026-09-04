@@ -31,6 +31,7 @@ module Ecluse.Core.Server.Pipeline.Origin (
     -- * The per-origin outcome
     OriginResult (..),
     originManifest,
+    originMissed,
 
     -- * Fetching the two origins
     fetchPrivateOrigin,
@@ -120,6 +121,16 @@ originManifest = \case
     OriginNameMismatch -> Nothing
     OriginUnresolved -> Nothing
     OriginAbsent -> Nothing
+
+{- | Whether an origin yielded no document and claimed nothing about a different package. An
+unreachable upstream lands here too: nothing else may answer for a single-authority name.
+-}
+originMissed :: OriginResult -> Bool
+originMissed = \case
+    OriginResolved{} -> False
+    OriginNameMismatch -> False
+    OriginUnresolved -> True
+    OriginAbsent -> True
 
 {- Every fetch outcome arrives typed in the 'MetadataError' channel, so the exception arm
 catches an invariant break only. A handle that escapes its contract costs one origin's

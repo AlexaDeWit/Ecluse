@@ -55,7 +55,7 @@ import Ecluse.Core.Server.Pipeline (servePackument, serveTarball)
 import Ecluse.Core.Server.Pipeline.Publish ()
 import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
-import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
+import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Log (newTestLogEnv)
@@ -140,11 +140,13 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             decisions >>= (`shouldBe` [Admit])
 
     it "keeps a first-party packument off the public upstream, answering 404 on a private miss" $ do
-        (metricsPort, _decisions) <- recordingMetricsPort
+        (metricsPort, decisions) <- recordingMetricsPort
         rt <- mkRuntime metricsPort
         hits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
             base <- depsFor port
+            -- Each predicate reads the requested name, as the one the composition root derives
+            -- does, rather than answering a constant whatever it is asked.
             let serveUnder firstParty =
                     captureServe
                         npmPackumentContract
@@ -153,16 +155,18 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         (servePackument npmPackumentReplies leftpad defaultRequest)
             -- The first-party serve runs first, against a cold metadata cache, so a zero count
             -- means the public leg was never entered rather than answered from a cache entry.
-            firstParty <- serveUnder (const True)
+            firstParty <- serveUnder (== leftpad)
             statusCode (responseStatus firstParty) `shouldBe` 404
             readIORef hits >>= (`shouldBe` 0)
+            decisions >>= (`shouldBe` [Deny])
             -- The control: the same live upstream serves the same name once it is not first-party.
-            thirdParty <- serveUnder (const False)
+            thirdParty <- serveUnder (/= leftpad)
             statusCode (responseStatus thirdParty) `shouldBe` 200
             readIORef hits >>= (`shouldSatisfy` (> 0))
+            decisions >>= (`shouldBe` [Deny, Admit])
 
     it "keeps a first-party artifact off the public upstream, answering 404 after a private miss" $ do
-        (metricsPort, _decisions) <- recordingMetricsPort
+        (metricsPort, decisions) <- recordingMetricsPort
         rt <- mkRuntime metricsPort
         hits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
@@ -173,12 +177,14 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         rt
                         (mountWith base{pdFirstParty = firstParty})
                         (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
-            firstParty <- serveUnder (const True)
+            firstParty <- serveUnder (== leftpad)
             statusCode (responseStatus firstParty) `shouldBe` 404
             readIORef hits >>= (`shouldBe` 0)
-            thirdParty <- serveUnder (const False)
+            decisions >>= (`shouldBe` [Deny])
+            thirdParty <- serveUnder (/= leftpad)
             statusCode (responseStatus thirdParty) `shouldBe` 200
             readIORef hits >>= (`shouldSatisfy` (> 0))
+            decisions >>= (`shouldBe` [Deny, Admit])
 
     it "sheds packument work when metadata admission refuses" $ do
         (metricsPort, _decisions) <- recordingMetricsPort

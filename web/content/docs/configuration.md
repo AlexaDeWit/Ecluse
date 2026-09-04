@@ -120,16 +120,22 @@ The shape follows the ecosystem, and an empty or malformed list is refused at bo
 | Ecosystem | An entry is | Example |
 | --- | --- | --- |
 | npm | A scope | `@acme,@beta` |
-| PyPI | A distribution name, or a prefix written with a trailing `*` | `acme,acme-*` |
+| PyPI | A distribution name, or a prefix written as a separator then `*` | `acme,acme-*` |
 
 A PyPI entry reads through PEP 503 normalisation, so `Acme_Tools` and `acme-tools` are one name. A
 prefix stops at the separator, so `acme-*` covers `acme-tools` and not `acmeco`, which is a name
-you do not own. Declare the bare `acme` too if you publish a distribution under that exact name.
+you do not own. The star has to follow a separator, and `acme*` is refused, because a prefix that
+ran past the separator would privilege names you do not own. Declare the bare `acme` too if you
+publish a distribution under that exact name.
 
 Setting `firstParty` on an npm mount narrows what a scoped install reaches. A name under one of
 your scopes that the private upstream does not have answers `404`, and Écluse does not fall back to
 the public registry for it. That refusal is the point: a public package published under a scope you
 own is a dependency-confusion attack.
+
+A private upstream that is unreachable answers `404` for a first-party name too, rather than the
+`503` a merged name gets. The private upstream is that name's one authority, so an origin Écluse
+cannot read leaves nothing that may answer for it.
 
 This is a privilege over names, not authentication. It says which names are yours, never who may
 use them, so the private upstream stays the authority on every caller.

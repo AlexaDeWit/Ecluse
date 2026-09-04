@@ -227,9 +227,10 @@ mounts:
     # resolves from privateUpstream alone: it is never fetched from publicUpstream,
     # never merged with a public document, never mirrored, and a private miss is a 404.
     # The shape is per-ecosystem. npm reads scopes. PyPI reads PEP 503 canonical
-    # distribution names, and an entry ending in * is a prefix that stops at the
-    # separator, so acme-* covers acme-tools and not acmeco. It limits names, not
-    # callers, and an empty or malformed list is refused at load.
+    # distribution names, and an entry ending in a separator then * is a prefix, so
+    # acme-* covers acme-tools and not acmeco. A star on no separator (acme*) is
+    # refused. It limits names, not callers, and an empty or malformed list is
+    # refused at load.
     # firstParty: "@acme,@beta"
     # Per-mount refinements of the integrity group above, under the same key names.
     # integrity:

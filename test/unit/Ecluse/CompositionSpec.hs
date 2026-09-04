@@ -373,8 +373,8 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
             Left errs -> errs `shouldBe` [PublishStaticCredentialNeedsEdge Npm]
             Right _ -> expectationFailure "expected a publish-static-credential-needs-edge boot error"
 
-    it "accumulates both publish boot errors when the allow-list is missing and the static credential has no edge" $ do
-        -- Both couplings trip at once and surface together in a stable order: the allow-list
+    it "accumulates both publish boot errors when the namespaces are missing and the static credential has no edge" $ do
+        -- Both couplings trip at once and surface together in a stable order: the namespaces
         -- first, then the edge requirement. The operator then fixes both before the next boot.
         let testEnvVars =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
@@ -461,9 +461,8 @@ mirrorTargetText = \case
     MirrorOnAdmit url -> Just (registryUrlText url)
     NoMirrorWrite -> Nothing
 
-{- | The one first-party predicate, the value the serve path, the publish relay, and a store
-sweep all read. Each ecosystem's arm is pinned here, because a disagreement between the three
-consumers is exactly the dependency confusion the privilege closes.
+{- | The one first-party predicate every consumer of the privilege reads. Each ecosystem's arm is pinned
+here, because a disagreement between consumers is the dependency confusion it closes.
 -}
 firstPartySpec :: Spec
 firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $ do
@@ -475,17 +474,17 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
 
     it "matches a PyPI name on its canonical form, so one spelling has one verdict" $
         map
-            (firstPartyName (pypiFirstParty ["Acme_Tools"]) . pypiName)
+            (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . pypiName)
             ["acme-tools", "Acme.TOOLS", "acme_tools", "acme-toolsmith"]
             `shouldBe` [True, True, True, False]
 
     it "matches a PyPI prefix at the separator, and not the bare prefix" $
         -- A prefix that ran past the separator would privilege acmeco, a name the deployment
         -- does not own. The bare name is a separate declaration.
-        map
-            (firstPartyName (pypiPrefix "acme") . pypiName)
-            ["acme-tools", "Acme.Tools", "acmeco", "acme"]
-            `shouldBe` [True, True, False, False]
+        maybe
+            (expectationFailure "acme is a valid prefix")
+            (\declared -> map (firstPartyName declared . pypiName) ["acme-tools", "Acme.Tools", "acmeco", "acme"] `shouldBe` [True, True, False, False])
+            (pypiPrefix "acme")
 
     it "wires the same predicate onto the mount's serve deps, deny by default" $ do
         let testEnv = [("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")] <> staticEnvVars
@@ -510,10 +509,9 @@ pypiName :: Text -> PackageName
 pypiName = mkPackageName PyPI Nothing
 
 -- A PyPI declaration of exact names.
-pypiFirstParty :: [Text] -> FirstParty
-pypiFirstParty names = FirstPartyPyPI (fromList (map (PyPIOwnedName . pypiName) names))
+pypiFirstParty :: NonEmpty Text -> FirstParty
+pypiFirstParty = FirstPartyPyPI . fmap (PyPIOwnedName . pypiName)
 
--- A PyPI declaration of one prefix. 'mkPyPIPrefix' refuses only text that canonicalises to
--- nothing, which these fixtures are not.
-pypiPrefix :: Text -> FirstParty
-pypiPrefix raw = FirstPartyPyPI (fromList (map PyPIOwnedPrefix (maybeToList (mkPyPIPrefix raw))))
+-- A PyPI declaration of one prefix, 'Nothing' for text no PyPI name can start with.
+pypiPrefix :: Text -> Maybe FirstParty
+pypiPrefix = fmap (FirstPartyPyPI . pure . PyPIOwnedPrefix) . mkPyPIPrefix

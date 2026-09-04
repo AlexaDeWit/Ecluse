@@ -55,7 +55,7 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
         -- Nothing vets the settings, so the plan carries them as loaded rather than dropping them.
         Map.keys (cfgMounts (vpSettings plan)) `shouldBe` [Npm]
 
-    it "clears a declared publication target with its allow-list and its static credential" $ do
+    it "clears a declared publication target with its namespaces and its static credential" $ do
         plan <- expectVetted MirrorWriter (overrideEnv "ECLUSE_SERVER__AUTH_TOKEN" "edge-token" staticPublishEnv)
         case Map.lookup Npm (vpPublications plan) of
             Nothing -> expectationFailure "expected the publishing mount to clear a publication"
@@ -135,7 +135,7 @@ refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
                            , PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/npm/"
                            ]
 
--- | The npm mount publishing to a registry of its own, under the allow-list the guard enforces.
+-- | The npm mount publishing to a registry of its own, under the namespaces the guard enforces.
 publishingEnv :: [(String, String)]
 publishingEnv =
     overrideEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme" $

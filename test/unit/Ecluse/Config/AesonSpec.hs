@@ -17,9 +17,12 @@ import Ecluse.Config (
     Config (..),
     ConfigError,
     EgressSettings (..),
+    FirstParty (FirstPartyPyPI),
     IntegritySettings (..),
     LimitsSettings (..),
+    MountConfig (mntFirstParty),
     ObservabilitySettings (..),
+    PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix),
     QueueSettings (..),
     QueueTarget (..),
     RuntimeSettings (..),
@@ -32,6 +35,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Package (mkPackageName, mkPyPIPrefix)
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed, Warn))
 import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
 
@@ -163,7 +167,7 @@ spec = describe "decodeDocument" $ do
 
     it "rejects an empty firstParty at load, naming firstParty" $
         -- A configured list that admits nothing would refuse every publish, so the load
-        -- refuses it rather than binding a dead allow-list.
+        -- refuses it rather than binding a privilege that covers nothing.
         loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"firstParty\":\"\"}}}")
             `shouldSatisfy` decodeErrorMentions "firstParty must name at least one scope"
 
@@ -177,6 +181,21 @@ spec = describe "decodeDocument" $ do
         loadConfig pubUrlEnv (Just "{\"mounts\":{\"pypi\":{\"firstParty\":\"\"}}}")
             `shouldSatisfy` decodeErrorMentions "firstParty must name at least one distribution or prefix"
 
+    it "reads a PyPI firstParty into canonical names and prefixes, in the order written" $
+        -- The loaded value is what every consumer of the privilege derives from, so its shape is
+        -- pinned here rather than inferred from a refusal.
+        case (loadPyPIFirstParty "Acme_Tools, widgets-*", mkPyPIPrefix "widgets") of
+            (Left e, _) -> expectationFailure ("unexpected decode error: " <> show e)
+            (_, Nothing) -> expectationFailure "widgets is a valid prefix"
+            (Right doc, Just prefix) ->
+                (mntFirstParty <$> Map.lookup PyPI (cfgMounts (configApp doc)))
+                    `shouldBe` Just
+                        ( Just
+                            ( FirstPartyPyPI
+                                (PyPIOwnedName (mkPackageName PyPI Nothing "Acme_Tools") :| [PyPIOwnedPrefix prefix])
+                            )
+                        )
+
     describe "a PyPI firstParty entry reads through PEP 503's name grammar" $
         -- An entry no distribution name can equal privileges nothing, so it fails the load
         -- rather than binding at request time. A bare @*@ would privilege every name on PyPI.
@@ -187,7 +206,7 @@ spec = describe "decodeDocument" $ do
                     else loadPyPIFirstParty entry `shouldSatisfy` decodeErrorMentions "invalid entry in firstParty"
 
     describe "a firstParty entry reads through npm's own scope grammar" $
-        -- The allow-list and the request path must not disagree about what a scope is, so the
+        -- The declaration and the request path must not disagree about what a scope is, so the
         -- entry goes through the same splitter the route and the projection use.
         for_ scopeEntryVerdicts $ \(entry, valid) ->
             it (show entry <> (if valid then " is a scope" else " is refused")) $
@@ -663,16 +682,23 @@ scopeEntryVerdicts =
     , ("..", False)
     ]
 
-{- Each PyPI firstParty entry the loader must refuse or accept. A trailing @*@ marks a prefix,
+{- Each PyPI firstParty entry the loader must refuse or accept. A prefix is a separator then @*@,
 and anything outside PEP 503's name alphabet, or that canonicalises to nothing, is refused. -}
 pypiEntryVerdicts :: [(Text, Bool)]
 pypiEntryVerdicts =
     [ ("acme", True)
     , ("Acme_Tools", True)
     , ("acme-*", True)
+    , ("acme_*", True)
+    , ("acme.*", True)
+    , ("acme*", False)
+    , ("-*", False)
+    , ("*acme", False)
     , ("*", False)
     , ("@acme", False)
     , ("acme/tools", False)
+    , ("acme tools", False)
+    , (",", False)
     , (".", False)
     ]
 

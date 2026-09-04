@@ -143,12 +143,8 @@ data PackumentDeps = PackumentDeps
     'pdPrivateBaseUrl', 'pdPublicBaseUrl', 'pdMirror', and 'pdTarballHostGate'.
     -}
     , pdFirstParty :: PackageName -> Bool
-    {- ^ Whether a name belongs to a namespace this deployment owns, derived once at the
-    composition root from the mount's declaration and deny by default. A first-party name has
-    one authority, the private upstream: the public leg is never entered for it, so it is
-    never fetched, merged, or mirrored, and a private miss is a @404@. That closes dependency
-    confusion, where a public package registered under a name the deployment owns would
-    otherwise be served in place of the private one.
+    {- ^ Whether a name belongs to a namespace this deployment owns, derived once at the composition root and deny
+    by default. Its one authority is the private upstream: the public leg is never entered, and a private miss is @404@.
     -}
     , pdMountBaseUrl :: Text
     {- ^ The mount's externally-visible base URL, under which served @dist.tarball@
@@ -292,9 +288,8 @@ data PublishDeps = PublishDeps
     @npm publish@ is relayed to, as the https-only witness. The package path is appended to it.
     -}
     , pubAllowed :: PackageName -> Bool
-    {- ^ Whether this package may publish here, refused before any upstream write. It is the same
-    first-party predicate the serve path reads as 'pdFirstParty', derived once at the composition
-    root, deny by default.
+    {- ^ Whether this package may publish here, refused before any upstream write: the same
+    first-party predicate the serve path reads as 'pdFirstParty'.
     -}
     , pubStaticToken :: Maybe Secret
     {- ^ The static fallback credential (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN@) forwarded to the

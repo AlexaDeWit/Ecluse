@@ -278,9 +278,8 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
             , pubAdapter = adapterPublish adapter
             }
 
-{- | Whether a name belongs to a namespace this deployment owns. Each arm derives the one
-ecosystem-neutral predicate the serve path, the publish relay, and a store sweep all read, so
-the three cannot disagree about which names are privileged.
+{- | Whether a name belongs to a namespace this deployment owns. Each arm derives the one predicate every
+consumer of the privilege reads, so none can disagree about which names are privileged.
 -}
 firstPartyName :: FirstParty -> PackageName -> Bool
 firstPartyName = \case

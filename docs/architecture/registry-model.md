@@ -186,8 +186,8 @@ track which input a survivor came from, so the serve layer can index back to the
 - **Fetch in parallel.** Private (passthrough) and public (anonymous) concurrently. A name inside
   the mount's `firstParty` namespaces is the exception: it has one authority, so Écluse fetches the
   private origin alone and a miss there is a `404`. A public package registered under a name the
-  deployment owns is a dependency-confusion attack, and refusing the public leg is what keeps the
-  guard's verdict the same at publish, at serve, and at reaping.
+  deployment owns is a dependency-confusion attack, and refusing the public leg is what keeps one
+  verdict on a name wherever the privilege is read.
 - **Trust split by provenance.** Private versions enter unfiltered. The rules engine gates public
   versions first (see [Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)). The
   result is `trusted(private) ∪ filtered(public)`.

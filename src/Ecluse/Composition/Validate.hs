@@ -124,8 +124,7 @@ vetMount (eco, (mount, mcfg)) =
         | otherwise = Nothing
 
 {- The two couplings a declared publication target carries: the first-party namespaces the
-anti-shadowing guard enforces, and the verifiable inbound edge a static publish credential
-needs. -}
+guard enforces, and the inbound edge a static publish credential needs. -}
 vetPublishPolicy :: AppConfig -> Vet (Map Ecosystem (FirstParty, Maybe Secret))
 vetPublishPolicy app =
     Map.fromList . catMaybes <$> traverse (vetPublication (srvAuthToken (cfgServer app))) publishingMounts

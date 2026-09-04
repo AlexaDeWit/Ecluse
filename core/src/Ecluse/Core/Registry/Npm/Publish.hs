@@ -187,8 +187,7 @@ declaredNames body =
     ]
 
 {- | Whether npm's first-party namespaces cover a name: its scope must equal a configured entry
-exactly, so an unscoped name and @\@acme-evil@ against an @\@acme@ entry are both refused. The
-composition root derives the serve, publish, and store-sweep predicate from this one answer.
+exactly, so an unscoped name and @\@acme-evil@ against an @\@acme@ entry are both refused.
 -}
 npmPublishAllowed :: [Scope] -> PackageName -> Bool
 npmPublishAllowed scopes name = case pkgNamespace name of

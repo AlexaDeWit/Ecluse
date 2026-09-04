@@ -127,7 +127,7 @@ The npm publish document carries its own declared identity: a top-level `_id` an
 body, the npm-protocol norm, would write a name the scope guard never saw. So an anti-shadowing
 guard that validated only the URL-path name while relaying the document byte-for-byte would be
 bypassable. A crafted `PUT /@acme/anything` whose body declares `@victim/target` would publish
-outside the allow-list, shadowing a public package.
+outside the mount's first-party namespaces, shadowing a public package.
 
 So the guard holds guard-name ≡ write-name ≡ body-name. After the scope check admits the
 URL-path name, the guard compares every present declared body name to it: `_id`, top-level
