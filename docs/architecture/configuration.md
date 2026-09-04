@@ -30,8 +30,8 @@ tags on the endpoint and refuses as such: a layer fills keys under a tag, it nev
 And two endpoints that name one registry under different tags refuse for every role, because one
 store has one backend.
 
-Secrets never live in the structured config. A token is always an environment variable. A store
-declared under a minting tag holds none: it mints a short-lived token from ambient cloud
+Secrets never live in the structured config. A token is always an environment variable. A mirror
+target under the minting tag holds none: the worker mints a short-lived token from ambient cloud
 credentials instead (see [Outbound registry credentials](#outbound-registry-credentials)).
 
 ### Registry endpoints must be https

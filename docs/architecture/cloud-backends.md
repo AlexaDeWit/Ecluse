@@ -136,7 +136,7 @@ configuration every role reads, so no two roles disagree about a deployment.
 |---|---|---|
 | Ecosystem | Per mount | The protocol Écluse speaks to clients and upstreams, as the `RegistryAdapter` |
 | Store | Per mount | Where a mount's private packages live, and what its control plane can do |
-| Platform | Per deployment | The mirror queue every role shares, and the object store the advisory database syncs from |
+| Platform | Per deployment | The mirror queue, and the object store the advisory database syncs from |
 | Role | Per process | Which faces of the resolved plan a process runs: `ecluse proxy`, `mirror`, `pilot`, `dredger`, `check-config` |
 
 The store and the platform are the two that name a backend, and they pair freely. A cloud is not an
@@ -171,9 +171,7 @@ a store is a protocol endpoint plus a token. The store adds its credential mint,
 where it has one, its coordinates, and the facts that control plane obeys. CodeArtifact and
 Verdaccio are this kind, and it is the kind this build carries.
 
-An **object store** speaks no package protocol. Écluse becomes the registry for that mount, over
-get, put, list-by-prefix, and delete on keyed blobs, and the ecosystem contributes the layout that
-maps a package, a version, and an artifact onto keys. No build carries one.
+An **object store** speaks no package protocol, and no build carries one.
 
 ### The join
 
@@ -188,7 +186,7 @@ an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format
 |---|---|---|
 | Mirror queue | Platform | SQS, or the bounded in-memory queue inside a single process |
 | Advisory store | Platform | S3 |
-| Workload identity and token source | Platform | STS, through the task or instance role |
+| Workload identity and token source | Deployment credentials, read by the store's mint | STS, through the task or instance role |
 | Package store | Store, per mount | CodeArtifact under the `codeArtifact` tag, any host that speaks the ecosystem's protocol under `registry`, and Verdaccio, the development store, under `verdaccio` |
 | Store maintenance | Store, per mount | The CodeArtifact control plane. A `registry` or a `verdaccio` store carries none, so `ecluse dredger` refuses a mirror target under either tag and names the tag |
 
