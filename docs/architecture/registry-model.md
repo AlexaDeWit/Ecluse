@@ -95,7 +95,7 @@ sequenceDiagram
     alt no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET configured
         E-->>Client: 405 Method Not Allowed
     else publication target configured
-        Note over E: enforce publish-scope allow-list<br/>(anti-shadowing, reject before any write)
+        Note over E: enforce the mount's first-party namespaces<br/>(anti-shadowing, reject before any write)
         alt name out of scope
             E-->>Client: 4xx npm-shaped error (no upstream write)
         else name in scope

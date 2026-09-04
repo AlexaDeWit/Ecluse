@@ -350,7 +350,7 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
                 registryUrlText (pdPublicBaseUrl deps) `shouldBe` "https://registry.npmjs.org"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
-    it "fails when a publication target is set without a publish allow-list" $ do
+    it "fails when a publication target is set without first-party namespaces" $ do
         -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__FIRST_PARTY absent
         -- leaves the anti-shadowing guard nothing to enforce, so the boot refuses rather than defaulting.
         _ <- expectEnv (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars)

@@ -97,7 +97,7 @@ flowchart TD
 
     K -->|"publish (PUT)"| W1{"ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set?"}
     W1 -->|"no"| W405(["405 Method Not Allowed. Done."])
-    W1 -->|"yes"| W2["Enforce publish-scope allow-list<br/>(anti-shadowing)"]
+    W1 -->|"yes"| W2["Enforce the mount's first-party namespaces<br/>(anti-shadowing)"]
     W2 -->|"out of scope"| WR(["4xx, no upstream write. Done."])
     W2 -->|"in scope"| W3["Write to publication target<br/>(client token forwarded)"]
     W3 --> WSV(["npm success. Done."])
@@ -107,10 +107,11 @@ flowchart TD
   public metadata, and a denial follows the [error model](architecture/web-layer.md#error-model).
   Mirroring is demand-driven, so Écluse mirrors only the versions a client pulls.
 - **Packument**: the merge keeps not-yet-mirrored public versions visible, so demand-driven
-  mirroring can fire. See
+  mirroring can fire. A first-party name skips the public leg entirely and answers `404` on a
+  private miss. See
   [Packument merge](architecture/registry-model.md#packument-merge-across-upstreams).
-- **Publish**: Écluse checks the name against the publish-scope allow-list before any upstream
-  write (anti-shadowing). The path is opt-in: a `PUT` is `405` when
+- **Publish**: Écluse checks the name against the mount's first-party namespaces before any
+  upstream write (anti-shadowing). The path is opt-in: a `PUT` is `405` when
   `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is unset. See
   [Publishing first-party packages](architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
 

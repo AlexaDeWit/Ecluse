@@ -291,7 +291,7 @@ spec = do
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "refuses a publication target without a publication allow-list with exit 2 (the boot's own refusal)" $ do
+        it "refuses a publication target without first-party namespaces with exit 2 (the boot's own refusal)" $ do
             traverse_ (uncurry setEnv) runEnv
             setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://publish.example.test"
             outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())

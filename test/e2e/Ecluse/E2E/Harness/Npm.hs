@@ -175,7 +175,7 @@ publishTargetEnv =
     , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", publishScope)
     ]
 
--- The publish-scope allow-list value 'publishTargetEnv' configures. 'publishInScopeName'
+-- The first-party namespace 'publishTargetEnv' configures. 'publishInScopeName'
 -- derives from it, so the configured scope and the in-scope name cannot drift apart.
 publishScope :: Text
 publishScope = "@acme"
