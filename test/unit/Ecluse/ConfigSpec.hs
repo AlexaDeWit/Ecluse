@@ -100,9 +100,16 @@ spec = do
             provenance `shouldSatisfy` elem "config: observability.logFormat = json (default)"
 
         it "redacts secret-typed keys whatever layer supplies them" $ do
-            let provenance = resolvedKeyProvenance [("ECLUSE_SERVER__AUTH_TOKEN", "hunter2")] Nothing
+            let provenance =
+                    resolvedKeyProvenance
+                        [ ("ECLUSE_SERVER__AUTH_TOKEN", "hunter2")
+                        , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "hunter3")
+                        ]
+                        Nothing
             provenance `shouldSatisfy` elem "config: server.authToken = <redacted> (environment)"
-            provenance `shouldSatisfy` (not . any (T.isInfixOf "hunter2"))
+            provenance
+                `shouldSatisfy` elem "config: mounts.npm.mirrorTarget.verdaccio.token = <redacted> (environment)"
+            provenance `shouldSatisfy` (not . any (T.isInfixOf "hunter"))
 
 -- | The client-facing base URL every active-mount load needs (server.publicUrl).
 pubUrlEnv :: [(String, String)]

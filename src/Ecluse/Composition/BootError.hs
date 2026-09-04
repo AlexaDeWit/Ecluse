@@ -76,7 +76,6 @@ data BootError
       FirstPartyMissing Ecosystem
     | {- | A static publish credential is set without a verifiable inbound edge
       (@ECLUSE_SERVER__AUTH_TOKEN@). An unauthenticated request could otherwise publish as Écluse.
-      Carries the tag the target is declared under, which the credential's key path nests below.
       -}
       PublishStaticCredentialNeedsEdge Ecosystem StoreTag
     | {- | A mount's publication target, at the carried registry, shares a host with the named
@@ -96,8 +95,7 @@ data BootError
       -}
       MirrorTargetOnMountEndpoint Ecosystem Ecosystem Text Text
     | {- | Two endpoints, each carried as its mount and its tagged key path, name the carried
-      registry under different tags. One store has one backend, so the two declarations disagree
-      about what this build would speak to it.
+      registry under different tags, so the two declarations disagree about what serves that store.
       -}
       StoreTagConflict Ecosystem Text Ecosystem Text Text
     | {- | An explicit memory override breaks the combined memory-plan invariant even after every
@@ -226,7 +224,7 @@ renderBootError = \case
         invocation
             <> " splits the mirror worker from the proxy, but ECLUSE_QUEUE__URL is unset, so mirroring runs on the bounded in-memory queue whose jobs never leave the process that enqueued them: point ECLUSE_QUEUE__URL at a durable queue, or run the single-process ecluse proxy"
     MirrorRoleWithoutMirroring ->
-        "ecluse mirror runs the mirror worker alone, but no mount declares a mirror target, so it has nothing to mirror: set ECLUSE_MOUNTS__<ECOSYSTEM>__MIRROR_TARGET, or run a role that needs no mirror queue"
+        "ecluse mirror runs the mirror worker alone, but no mount declares a mirror target, so it has nothing to mirror: set ECLUSE_MOUNTS__<ECOSYSTEM>__MIRROR_TARGET__<TAG>__URL, or run a role that needs no mirror queue"
     MirrorQueueUnavailable detail ->
         "the mirror queue backend named by ECLUSE_QUEUE__URL could not be built at boot: "
             <> detail

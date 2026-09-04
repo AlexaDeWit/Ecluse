@@ -63,6 +63,8 @@ admissionSpec = describe "the tags and keys each endpoint admits" $ do
                 "publicUpstream must name exactly one store tag (registry)"
 
         it "admits no key beside url" $
+            -- The shipped template always supplies this url, so the merged document can never
+            -- lack it. 'privateUpstream' below pins the registry tag's own required-url refusal.
             refuses
                 [decl "publicUpstream" "registry" [url publicUrl, field "token" "t"]]
                 "unexpected publicUpstream.registry key(s): \"token\""
@@ -124,8 +126,11 @@ admissionSpec = describe "the tags and keys each endpoint admits" $ do
             loadsWith [decl "publicationTarget" "codeArtifact" [url codeArtifactInternal, field "token" "t"]]
             loadsWith [decl "publicationTarget" "verdaccio" [url verdaccioUrl, field "token" "t"]]
 
-        it "requires the url and admits no consent flag" $ do
+        it "requires the url and admits neither a mint lifetime nor a consent flag" $ do
             refuses [decl "publicationTarget" "codeArtifact" []] "publicationTarget.codeArtifact.url is required"
+            refuses
+                [decl "publicationTarget" "registry" [url publishUrl, field "tokenDuration" "3600"]]
+                "unexpected publicationTarget.registry key(s): \"tokenDuration\""
             refuses
                 [decl "publicationTarget" "verdaccio" [url verdaccioUrl, permitDeletion]]
                 "unexpected publicationTarget.verdaccio key(s): \"permitDeletion\""
@@ -144,6 +149,18 @@ layeringSpec = describe "one tag per endpoint" $ do
             (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "t")])
             (Just (mountDoc (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror]])))
             `shouldSatisfy` refusalMentions "must name exactly one store tag"
+
+    it "fills a key under the tag the document declared, from the environment layer" $ do
+        -- The arrangement a deployment writes: the document names the tag, and the environment
+        -- supplies a value under it without ever naming a second tag.
+        config <-
+            expectLoad
+                (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__TOKEN_DURATION", "1800")])
+                (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror]])
+        backend <- mirrorBackendOf config
+        case sbMint backend of
+            MintCodeArtifact caConfig -> caDurationSeconds caConfig `shouldBe` Just 1800
+            MintStatic _ -> expectationFailure "expected the CodeArtifact mint the tag names"
 
     it "refuses an endpoint that is not an object at all" $
         refuses
@@ -334,15 +351,21 @@ refusalMentions phrase = \case
 
 -- The npm mount's resolved mirror-write backend, failing the test on anything else.
 backendFor :: [Text] -> IO StoreBackend
-backendFor endpoints = do
-    config <- either (fail . show . map renderConfigError) pure (loadMount (mirrored endpoints))
+backendFor endpoints = mirrorBackendOf =<< expectLoad pubUrlEnv (mirrored endpoints)
+
+mirrorBackendOf :: Config -> IO StoreBackend
+mirrorBackendOf config =
     case regMirrorTarget . mountRegistries =<< Map.lookup Npm (configMounts config) of
         Just target -> pure (mtBackend target)
         Nothing -> fail "the npm mount resolved no mirror target"
 
 mountsFor :: [Text] -> IO (Map Ecosystem MountConfig)
-mountsFor endpoints =
-    cfgMounts . configApp <$> either (fail . show . map renderConfigError) pure (loadMount endpoints)
+mountsFor endpoints = cfgMounts . configApp <$> expectLoad pubUrlEnv endpoints
+
+-- Load one npm mount under an environment layer, failing the test on a refusal.
+expectLoad :: [(String, String)] -> [Text] -> IO Config
+expectLoad env endpoints =
+    either (fail . show . map renderConfigError) pure (loadConfig env (Just (mountDoc endpoints)))
 
 -- The tag-conflict refusals one role's endpoint pass earns, with its other findings dropped.
 tagConflicts :: RegistryRole -> Map Ecosystem MountConfig -> [BootError]

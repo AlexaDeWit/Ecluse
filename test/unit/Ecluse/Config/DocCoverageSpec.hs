@@ -13,8 +13,7 @@ import Test.Hspec
 import Ecluse.Config (loadConfig, renderConfigError)
 
 {- | Every operator-facing @ECLUSE_*@ spelling outside a mount's tagged endpoints, paired with a
-value the loader must accept. Each must have its document key in @config\/default.yaml@ (active or
-commented) and must load, so listing a new key here is part of adding it.
+value the loader must accept. Each needs its document key in @config\/default.yaml@, and must load.
 -}
 documentedEnvVars :: [(String, String)]
 documentedEnvVars =

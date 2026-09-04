@@ -35,8 +35,7 @@ deepMerge (Object l) (Object r) = Object $ KeyMap.unionWith deepMerge l r
 deepMerge _ r = r
 
 {- | Convert @ECLUSE_@-prefixed environment variables into a nested JSON Object, prefix stripped:
-@__@ descends into an object and @_@ joins a camelCase word ('mountKeyRef' inverts it). A value
-that parses as JSON decodes, anything else stays a String.
+@__@ descends into an object and @_@ joins a camelCase word ('mountKeyRef' inverts it).
 -}
 buildEnvAst :: [(String, String)] -> Value
 buildEnvAst env =

@@ -245,7 +245,7 @@ sbMint = \case
     BackendCodeArtifact caConfig _ -> MintCodeArtifact caConfig
     BackendVerdaccio token _ -> MintStatic token
 
--- | The control plane this build reaches for a backend. Verdaccio carries none yet.
+-- | The control plane this build reaches for a backend.
 sbControl :: StoreBackend -> ControlPlane
 sbControl = \case
     BackendRegistry{} -> ControlNone
@@ -491,8 +491,7 @@ data ConfigError
       -}
       MountMissingPrivateUpstream Ecosystem
     | {- | An endpoint declared under the @codeArtifact@ tag whose URL is not a CodeArtifact
-      endpoint. The tag names the store, so a URL that contradicts it is a misdirected write or
-      read. Carries the mount's ecosystem and the endpoint's document path under the mount.
+      endpoint. The tag names the store, so a URL contradicting it is a misdirected write or read.
       -}
       CodeArtifactHostMismatch Ecosystem Text
     | {- | A @codeArtifact@ mirror target on a mount whose ecosystem CodeArtifact carries no

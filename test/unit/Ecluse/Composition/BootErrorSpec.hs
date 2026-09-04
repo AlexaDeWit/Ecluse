@@ -93,7 +93,7 @@ renderBootErrorSpec = describe "renderBootError" $
         renderBootError (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")
             `shouldSatisfy` infixed "ecluse proxy --no-worker"
         renderBootError (SplitRoleNeedsDurableQueue "ecluse mirror") `shouldSatisfy` infixed "ECLUSE_QUEUE__URL"
-        renderBootError MirrorRoleWithoutMirroring `shouldSatisfy` infixed "ECLUSE_MOUNTS__<ECOSYSTEM>__MIRROR_TARGET"
+        renderBootError MirrorRoleWithoutMirroring `shouldSatisfy` infixed "ECLUSE_MOUNTS__<ECOSYSTEM>__MIRROR_TARGET__<TAG>__URL"
         -- The queue backend refuses at the boot's own gate, so its render tells a transient
         -- fault from a permanent one exactly as the credential mint's does.
         renderBootError (MirrorQueueUnavailable "CredentialChainExhausted")
