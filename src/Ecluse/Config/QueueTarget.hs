@@ -5,7 +5,7 @@
 {- | Derive the mirror-queue backend from the queue URL's own shape, once at load ('mkQueueUrl').
 
 The queue URL is the single source of truth for which backend carries the mirror jobs, the same
-derivation the mirror-write credential follows ("Ecluse.Config.MirrorCredential"). An SQS queue URL
+derivation the mirror-write credential follows ("Ecluse.Config.Target"). An SQS queue URL
 (@https:\/\/sqs.{region}.amazonaws.com\/{account}\/{queue}@) names the SQS backend and carries its
 region, and a Pub\/Sub topic resource (@projects\/{project}\/topics\/{topic}@) names the GCP one. No
 separate backend selector exists to disagree with the URL.
@@ -21,8 +21,8 @@ module Ecluse.Config.QueueTarget (
 
 import Data.Text qualified as T
 
-import Ecluse.Config.MirrorCredential (isAccountId)
 import Ecluse.Config.Queue.Internal (QueueTarget (..), QueueUrl (..), queueUrlTarget, queueUrlText)
+import Ecluse.Config.Target (isAccountId)
 import Ecluse.Config.Types (HttpScheme (Https), splitHttpScheme)
 import Ecluse.Core.Security (refuseCredentialMaterial, splitHostPort)
 import Ecluse.Core.Text (nonBlank)

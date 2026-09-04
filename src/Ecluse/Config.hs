@@ -23,7 +23,12 @@ module Ecluse.Config (
     regPrivateUpstream,
     regMirrorTarget,
     MirrorTarget (..),
-    MirrorCredential (..),
+    StoreTag (..),
+    storeTagName,
+    MintPlan (..),
+    CodeArtifactAbsence (..),
+    ControlPlane (..),
+    StoreBackend (..),
     FirstParty (..),
     MountIntegrity (..),
     MountConfig (..),
@@ -68,9 +73,9 @@ import Data.Yaml (decodeEither')
 import Ecluse.Config.AdvisoryStore (advisoryObjectKey, advisoryStoreBucket)
 import Ecluse.Config.Aeson ()
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
-import Ecluse.Config.MirrorCredential (resolveMirrorCredential)
 import Ecluse.Config.Resolve (buildEnvAst, deepMerge, secretLeafKeys)
 import Ecluse.Config.Rule
+import Ecluse.Config.Target (resolveStoreBackend)
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Rules.Types (PrecededRule)
@@ -116,9 +121,8 @@ loadConfig envVars mBytes = do
         (errs, resolved) -> Left (errs <> fromLeft [] resolved)
     Right (Config appConfig mounts)
 
-{- | The ecosystems the operator overlay declares under @mounts@: the activation set. The
-merged defaults never activate a mount. An unknown ecosystem key cannot reach here, because
-parsing already rejected it, and this refuses it anyway rather than assuming it away.
+{- | The ecosystems the operator overlay declares under @mounts@: the activation set, which the
+merged defaults never join. An unknown ecosystem key is refused here as well as at the parse.
 -}
 declaredMounts :: Value -> Either [ConfigError] (Set Ecosystem)
 declaredMounts overridesAst = Set.fromList <$> traverse parseKey (mountKeysOf overridesAst)
@@ -160,9 +164,8 @@ resolveGlobalPolicy overridesAst = do
         Left err -> Left [ParseError ("Rules parse error: " <> T.pack err)]
     first (pure . PolicyErrors) (resolvePolicy defaultPolicy globalRulePatch)
 
-{- | Resolve every active mount into its served 'Mount', aggregating failures so one load
-reports every incomplete mount. A declared @mirrorTarget@ makes the mount mirrored and
-requires a private upstream. An absent one makes it serve-only.
+{- | Resolve every active mount into its served 'Mount', aggregating failures so one load reports
+every incomplete mount. A declared @mirrorTarget@ makes it mirrored and requires a private upstream.
 -}
 resolveMounts :: RulePolicy -> AppConfig -> Either [ConfigError] MountMap
 resolveMounts globalPolicy appConfig =
@@ -185,16 +188,15 @@ resolveMounts globalPolicy appConfig =
         ["mirrorTargetToken" | isJust (mntMirrorTargetToken mcfg)]
             <> ["mirrorTokenDuration" | isJust (mntMirrorTokenDuration mcfg)]
 
-{- | Project a mirrored mount onto its served form. 'resolveMirrorCredential' derives the
-mirror-write credential from the mirror-target URL, so the resolved 'MirrorTarget' never pairs
-an endpoint with a credential meant for another.
+{- | Project a mirrored mount onto its served form. 'resolveStoreBackend' derives the store from
+the mirror-target URL, so the resolved 'MirrorTarget' never pairs an endpoint with another's plan.
 -}
 resolveMirrored :: RulePolicy -> Ecosystem -> RegistryUrl -> RegistryUrl -> MountConfig -> Either [ConfigError] Mount
 resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
     policy <- resolveMountPolicy globalPolicy mcfg
-    credential <-
+    backend <-
         first (: []) $
-            resolveMirrorCredential eco mirrorTarget (mntMirrorTargetToken mcfg) (mntMirrorTokenDuration mcfg)
+            resolveStoreBackend eco mirrorTarget (mntMirrorTargetToken mcfg) (mntMirrorTokenDuration mcfg)
     Right $
         mountOf eco mcfg policy $
             Mirrored
@@ -203,7 +205,7 @@ resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
                     , mlMirrorTarget =
                         MirrorTarget
                             { mtUrl = mirrorTarget
-                            , mtCredential = credential
+                            , mtBackend = backend
                             }
                     }
 
@@ -247,10 +249,8 @@ registryKey url = (hostPortAddress raw, stripTrailingSlash (registryPath raw))
   where
     raw = registryUrlText url
 
-{- | One line per resolved leaf of the merged configuration: the dotted path, the rendered
-value with secret-typed keys redacted, and the layer that supplied it. That layer is
-environment, document, or default, in that order of precedence. Derived and computed values
-are absent, because their own resolvers log them. Renders nothing when a layer fails to parse.
+{- | One line per resolved leaf of the merged configuration: the dotted path, the value with
+secret-typed keys redacted, and its layer. Empty when a layer fails to parse, and computed keys are absent.
 -}
 resolvedKeyProvenance :: [(String, String)] -> Maybe ByteString -> [Text]
 resolvedKeyProvenance envVars mBytes = fromRight [] $ do
@@ -289,9 +289,8 @@ renderLeafValue path v
         String t -> t
         other -> decodeUtf8 (LBS.toStrict (encode other))
 
-{- | Boot-time posture: one line per served mount naming its derived mode and its consequence.
-An unintentionally dropped @mirrorTarget@ then shows up as "serve-only" at the next boot,
-rather than silently un-mirroring.
+{- | Boot-time posture: one line per served mount naming its derived mode and its consequence, so
+an unintentionally dropped @mirrorTarget@ shows up as "serve-only" rather than silently un-mirroring.
 -}
 mountPostureLines :: Config -> [Text]
 mountPostureLines config = map postureLine (Map.toAscList (configMounts config))

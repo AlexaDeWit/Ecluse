@@ -2,38 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition root's credential build: turn each active mount's __resolved__
-mirror-write credential into a live, process-global 'CredentialProvider'.
+{- | The composition root's credential build: each active mount's resolved 'MintPlan' becomes a
+live, process-global 'CredentialProvider' the mount references by its ecosystem.
 
-== Global providers, per-mount reference
-
-A 'Ecluse.Core.Credential.CredentialProvider' is the service's own cloud identity,
-built __once__ here from the cleared mounts and held process-global. A mount
-references one by its ecosystem and never holds its own. Config load derives which
-credential a mount uses __from the mirror-target URL__
-('Ecluse.Config.MirrorCredential.resolveMirrorCredential') and carries it on the mount
-as a 'Ecluse.Config.MirrorCredential'. AWS can therefore mint a CodeArtifact token
-only for the domain the worker writes to. This module realises that resolved plan:
-
-* 'MirrorStatic': a stateless static provider from the operator-supplied token.
-* 'MirrorCodeArtifact': the refresh\/cache wrapper around the CodeArtifact mint leaf
-  ('newCodeArtifactProvider'). It mints once eagerly, so a misconfigured identity or a
-  missing permission fails loudly here at boot as a 'CodeArtifactMintFailed'. AWS
-  credentials come from the ambient container\/task role (the standard chain), never
-  from an Écluse key.
-
-Provider granularity follows the credential's real scope, not the mount count. AWS
-mints a CodeArtifact token per domain. Mounts whose resolved CodeArtifact identities
-coincide ('codeArtifactIdentityGroups') therefore share one provider: one eager boot
-mint, one refresh schedule, one breaker. Each still looks its provider up by its own
-ecosystem.
-
-The refreshing CodeArtifact provider takes the 'CredentialReporters', so its mint
-breaker and its refresh outcomes record to telemetry. The static provider never
-refreshes, so they do not concern it. The composition root supplies the deferred
-reporters that go live once the telemetry substrate exists. Failures aggregate as
-'Ecluse.Composition.BootError.BootError's, so one run reports every domain that failed
-to mint.
+'MintStatic' becomes a stateless provider. 'MintCodeArtifact' becomes the refresh wrapper around
+'newCodeArtifactProvider', which mints once eagerly, so a bad identity fails loudly here as a
+'CodeArtifactMintFailed'. AWS credentials come from the ambient container role, never an Écluse
+key, and AWS mints per domain, so identities that coincide share one provider and one breaker.
 -}
 module Ecluse.Composition.Credential (
     -- * Global credential providers
@@ -50,9 +25,10 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition.BootError (BootError (..), refuseOnThrow)
 import Ecluse.Config (
-    MirrorCredential (..),
+    MintPlan (..),
     MirrorTarget (..),
     Mount (..),
+    StoreBackend (sbMint),
     regMirrorTarget,
  )
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
@@ -71,13 +47,13 @@ blocks one. Each provider mints eagerly, so a bad identity fails here as 'CodeAr
 initCredentialProviders :: CredentialReporters -> [Mount] -> IO (Either [BootError] CredentialProviders)
 initCredentialProviders reporters mounts = do
     let creds =
-            [ (mountEcosystem mount, mtCredential target)
+            [ (mountEcosystem mount, sbMint (mtBackend target))
             | mount <- mounts
             , Just target <- [regMirrorTarget (mountRegistries mount)]
             ]
     -- The static leaf is stateless, so it stays per mount, unlike a CodeArtifact provider.
-    let statics = [(eco, staticProviderFor token) | (eco, MirrorStatic token) <- creds]
-    let caPlans = [(eco, ca) | (eco, MirrorCodeArtifact ca) <- creds]
+    let statics = [(eco, staticProviderFor token) | (eco, MintStatic token) <- creds]
+    let caPlans = [(eco, ca) | (eco, MintCodeArtifact ca) <- creds]
     results <- traverse (initSharedCodeArtifact reporters) (codeArtifactIdentityGroups caPlans)
     let (initErrs, shared) = partitionEithers results
     if not (null initErrs)
