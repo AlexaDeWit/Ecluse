@@ -284,7 +284,7 @@ publication target, and 'pubStaticToken' is only a fallback for a client that se
 -}
 data PublishDeps = PublishDeps
     { pubTargetUrl :: RegistryUrl
-    {- ^ The publication target endpoint (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET@) a client
+    {- ^ The publication target endpoint (@mounts.npm.publicationTarget@) a client
     @npm publish@ is relayed to, as the https-only witness. The package path is appended to it.
     -}
     , pubAllowed :: PackageName -> Bool
@@ -292,9 +292,8 @@ data PublishDeps = PublishDeps
     first-party predicate the serve path reads as 'pdFirstParty'.
     -}
     , pubStaticToken :: Maybe Secret
-    {- ^ The static fallback credential (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN@) forwarded to the
-    publication target __only when the client sends no token of its own__. It is 'Nothing' on
-    the common path, where the publisher's own token passes through.
+    {- ^ The static fallback credential (the @token@ under that target's tag), forwarded __only
+    when the client sends none of its own__. 'Nothing' on the common passthrough path.
     -}
     , pubInboundToken :: Maybe Secret
     {- ^ The optional inbound edge token a client must present (@ECLUSE_SERVER__AUTH_TOKEN@),

@@ -4,6 +4,7 @@
 
 module Ecluse.CompositionSpec (spec) where
 
+import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse (mountBindingFor)
@@ -15,7 +16,7 @@ import Ecluse.Composition (
     planMounts,
     resolveBootWiring,
  )
-import Ecluse.Composition.BootError (BootError (..))
+import Ecluse.Composition.BootError (BootError (..), renderBootError)
 import Ecluse.Composition.Support (
     expectConfig,
     expectEnv,
@@ -34,6 +35,7 @@ import Ecluse.Config (
     ConfigError (..),
     FirstParty (FirstPartyNpmScopes, FirstPartyPyPI),
     PolicyError (UnknownRuleType),
+    StoreTag (TagRegistry),
     loadConfig,
     renderConfigError,
  )
@@ -89,8 +91,9 @@ mountDoc eco =
     encodeUtf8
         ( "{\"mounts\":{\""
             <> eco
-            <> "\":{\"privateUpstream\":\"https://priv\",\"publicUpstream\":\"https://pub\",\
-               \\"mirrorTarget\":\"https://mir\",\"mirrorTargetToken\":\"t\"}}}"
+            <> "\":{\"privateUpstream\":{\"registry\":{\"url\":\"https://priv\"}},\
+               \\"publicUpstream\":{\"registry\":{\"url\":\"https://pub\"}},\
+               \\"mirrorTarget\":{\"registry\":{\"url\":\"https://mir\",\"token\":\"t\"}}}}}"
         )
 
 {- The ports a unit test injects into the environment-dependent tier: the real adapter resolver,
@@ -120,9 +123,9 @@ planFromWith limits envVars mDocBytes = do
             toBoot (PolicyErrors es) = map PolicyBootError es
             toBoot (ParseError err) = [PolicyBootError (UnknownRuleType "parse" err)]
             toBoot missing@(MountMissingPrivateUpstream _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
-            toBoot missing@(MirrorSettingWithoutWrite _ _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
-            toBoot missing@(MirrorCredentialTokenMissing _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
-            toBoot missing@(MirrorCredentialConflict _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
+            toBoot missing@(CodeArtifactHostMismatch _ _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
+            toBoot missing@(CodeArtifactFormatUnsupported _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
+            toBoot missing@(CodeArtifactRepositoryMissing _ _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@PublicUrlRequired = [PolicyBootError (UnknownRuleType "server" (renderConfigError missing))]
         Right cfg -> case snd (runVet MirrorWriter (vetBoot cfg)) of
             -- The pass refuses before anything is built, which is what the composition root sees.
@@ -309,9 +312,9 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
         -- Touching any pypi key activates the mount, so the env fixture must carry
         -- the private upstream the activation contract requires.
         let pypiEnv =
-                ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM", "https://priv.example.test")
-                    : ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET", "https://mir.example.test")
-                    : ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN", "t")
+                ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://priv.example.test")
+                    : ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__URL", "https://mir.example.test")
+                    : ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__TOKEN", "t")
                     : staticEnvVars
         _ <- expectEnv pypiEnv
         _ <- expectDoc (mountDoc "pypi")
@@ -319,19 +322,18 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
             Left errs -> errs `shouldBe` [MissingAdapter PyPI]
             Right _ -> expectationFailure "expected boot failure"
 
-    it "refuses a leftover write token on a mount that declares no mirror target" $ do
-        -- Mirroring is derived from the declared target: no mirrorTarget means
-        -- serve-only. A write token left behind signals a misunderstanding (most
-        -- likely a dropped target), so it is refused per key, never ignored.
+    it "refuses a leftover write token on a mount that declares no mirror-target url" $ do
+        -- The write token lives under the target's tag, so a token left behind still
+        -- declares the target and the absent url refuses, naming the key path.
         let env = withoutMirrorTargetUrl staticEnvVars
         planFrom env Nothing >>= \case
             Left errs ->
-                errs
-                    `shouldBe` [PolicyBootError (UnknownRuleType "mount" (renderConfigError (MirrorSettingWithoutWrite Npm "mirrorTargetToken")))]
-            Right _ -> expectationFailure "expected a mirror-setting-without-write boot error"
+                map renderBootError errs
+                    `shouldSatisfy` any (T.isInfixOf "mirrorTarget.registry.url is required")
+            Right _ -> expectationFailure "expected a mirror-target boot error"
 
     it "binds a serve-only mount (no mirror target): NoMirrorWrite deps over the private merge" $ do
-        let env = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) (withoutMirrorTargetUrl staticEnvVars)
+        let env = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN") . fst) (withoutMirrorTargetUrl staticEnvVars)
         planFrom env Nothing >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
@@ -351,39 +353,39 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "fails when a publication target is set without first-party namespaces" $ do
-        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set but ECLUSE_MOUNTS__NPM__FIRST_PARTY absent
+        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL set but ECLUSE_MOUNTS__NPM__FIRST_PARTY absent
         -- leaves the anti-shadowing guard nothing to enforce, so the boot refuses rather than defaulting.
-        _ <- expectEnv (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars)
-        planFrom (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test") : staticEnvVars) Nothing >>= \case
+        _ <- expectEnv (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://publish.example.test") : staticEnvVars)
+        planFrom (("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://publish.example.test") : staticEnvVars) Nothing >>= \case
             Left errs -> errs `shouldBe` [FirstPartyMissing Npm]
             Right _ -> expectationFailure "expected a publication-allow-missing boot error"
 
     it "fails when a static publish credential is set without a verifiable inbound edge" $ do
         -- ECLUSE_SERVER__AUTH_TOKEN unset is the default open edge. With
-        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN set, any unauthenticated client could
+        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN set, any unauthenticated client could
         -- publish within scope under Ecluse's own write credential, so the boot refuses.
         let testEnvVars =
-                [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
+                [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://publish.example.test")
                 , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")
-                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-write-token")
+                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN", "publish-write-token")
                 ]
                     <> staticEnvVars
         _ <- expectEnv testEnvVars
         planFrom testEnvVars Nothing >>= \case
-            Left errs -> errs `shouldBe` [PublishStaticCredentialNeedsEdge Npm]
+            Left errs -> errs `shouldBe` [PublishStaticCredentialNeedsEdge Npm TagRegistry]
             Right _ -> expectationFailure "expected a publish-static-credential-needs-edge boot error"
 
     it "accumulates both publish boot errors when the namespaces are missing and the static credential has no edge" $ do
         -- Both couplings trip at once and surface together in a stable order: the namespaces
         -- first, then the edge requirement. The operator then fixes both before the next boot.
         let testEnvVars =
-                [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
-                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-write-token")
+                [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://publish.example.test")
+                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN", "publish-write-token")
                 ]
                     <> staticEnvVars
         _ <- expectEnv testEnvVars
         planFrom testEnvVars Nothing >>= \case
-            Left errs -> errs `shouldMatchList` [FirstPartyMissing Npm, PublishStaticCredentialNeedsEdge Npm]
+            Left errs -> errs `shouldMatchList` [FirstPartyMissing Npm, PublishStaticCredentialNeedsEdge Npm TagRegistry]
             Right _ -> expectationFailure "expected both publish boot errors, accumulated"
 
 -- An npm name under the given scope, for the first-party predicate.
@@ -398,7 +400,7 @@ publishWiringSpec :: Spec
 publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
     it "wires the publication target and the first-party predicate onto the mount when configured" $ do
         let testEnv =
-                [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
+                [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://publish.example.test")
                 , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme, @beta")
                 ]
                     <> staticEnvVars
@@ -418,9 +420,9 @@ publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
         -- The positive control for the fail-loud boot test above: the same static publish
         -- credential boots once ECLUSE_SERVER__AUTH_TOKEN gates the edge.
         let testEnv =
-                [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
+                [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://publish.example.test")
                 , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")
-                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-write-token")
+                , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN", "publish-write-token")
                 , ("ECLUSE_SERVER__AUTH_TOKEN", "edge-token")
                 ]
                     <> staticEnvVars
@@ -435,7 +437,7 @@ publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
         -- The witness that reaches the relay comes only from the collision check, so a
         -- refused target cannot be wired at all.
         let testEnv =
-                [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://public.example.test/npm/")
+                [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://public.example.test/npm/")
                 , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")
                 ]
                     <> staticEnvVars
@@ -445,7 +447,7 @@ publishWiringSpec = describe "resolveBootWiring (first-party publish deps)" $ do
             Right _ -> expectationFailure "expected a publication-target collision boot error"
 
     it "leaves the publish path off (no publish deps) when no publication target is configured" $ do
-        -- The opt-out: with no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET the mount carries no
+        -- The opt-out: with no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL the mount carries no
         -- publish deps, so a PUT /{pkg} is 405. There is no implicit write path.
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case

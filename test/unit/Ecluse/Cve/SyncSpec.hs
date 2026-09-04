@@ -169,9 +169,9 @@ mountedNpmDoc :: ByteString
 mountedNpmDoc =
     "{\"server\":{\"publicUrl\":\"https://registry.example.test\"},\
     \\"mounts\":{\"npm\":{\
-    \\"privateUpstream\":\"https://private.example.test\",\
-    \\"publicUpstream\":\"https://registry.npmjs.org\",\
-    \\"mirrorTarget\":\"https://mirror.example.test\",\"mirrorTargetToken\":\"token\"}}}"
+    \\"privateUpstream\":{\"registry\":{\"url\":\"https://private.example.test\"}},\
+    \\"publicUpstream\":{\"registry\":{\"url\":\"https://registry.npmjs.org\"}},\
+    \\"mirrorTarget\":{\"registry\":{\"url\":\"https://mirror.example.test\",\"token\":\"token\"}}}}}"
 
 -- | A non-'IO' exception, to prove the sweep does not swallow every fault.
 data SweepBoom = SweepBoom

@@ -171,7 +171,7 @@ readable back over the private leg. The relay forwards the client's own bearer, 
 -}
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
-    [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://mirror/")
+    [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__URL", "https://mirror/")
     , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", publishScope)
     ]
 

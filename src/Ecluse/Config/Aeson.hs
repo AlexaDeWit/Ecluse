@@ -29,6 +29,7 @@ import Ecluse.Core.Package.Merge (parseDivergencePolicy)
 import Ecluse.Core.Registry.Npm.Project (projectScope)
 import Ecluse.Core.Registry.PyPI.Project (PyPIFirstParty, projectFirstPartyEntry)
 import Ecluse.Core.Security (parseBlockedRange)
+import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Text (readDecimalText)
 import Ecluse.Runtime.Log (parseLogFormat, parseLogLevel)
 import Ecluse.Runtime.Telemetry (parseTelemetrySwitch)
@@ -39,16 +40,53 @@ mountDecoder :: Ecosystem -> GroupDecoder MountConfig
 mountDecoder eco =
     MountConfig
         <$> optionalPlainKey "enabled"
-        <*> optionalKey "privateUpstream" parseRegistryUrl
-        <*> requiredKey "publicUpstream" parseRegistryUrl
-        <*> optionalKey "mirrorTarget" parseRegistryUrl
-        <*> optionalKey "mirrorTargetToken" parseSecret
-        <*> optionalKey "mirrorTokenDuration" parseCodeArtifactDuration
-        <*> optionalKey "publicationTarget" parseRegistryUrl
-        <*> optionalKey "publicationTargetToken" parseSecret
+        <*> optionalKey "privateUpstream" parseReadTarget
+        <*> requiredKey "publicUpstream" parsePublicUpstream
+        <*> optionalKey "mirrorTarget" parseMirrorTarget
+        <*> optionalKey "publicationTarget" parsePublicationTarget
         <*> optionalKey "firstParty" (parseFirstParty eco)
         <*> nestedKey "integrity" (decodeGroup "integrity" mountIntegrityDecoder)
         <*> optionalPlainKeyOr "rules" (RulePatch Map.empty)
+
+-- Each endpoint admits exactly the tags and keys its cell of the store admission matrix names,
+-- so a shape outside the cell has nothing to parse into and refuses with the key path.
+parsePublicUpstream :: String -> Value -> Parser RegistryUrl
+parsePublicUpstream = taggedTarget [TagCase (tagKey TagRegistry) targetUrl]
+
+parseReadTarget :: String -> Value -> Parser Target
+parseReadTarget = taggedTarget (map readCase [TagRegistry, TagCodeArtifact, TagVerdaccio])
+  where
+    readCase tag = TagCase (tagKey tag) (Target tag <$> targetUrl)
+
+parseMirrorTarget :: String -> Value -> Parser MirrorEndpoint
+parseMirrorTarget =
+    taggedTarget
+        [ TagCase (tagKey TagRegistry) (MirrorEndpoint <$> targetUrl <*> (WriteRegistry <$> writeToken))
+        , TagCase (tagKey TagCodeArtifact) (MirrorEndpoint <$> targetUrl <*> (WriteCodeArtifact <$> mintLifetime))
+        , TagCase (tagKey TagVerdaccio) (MirrorEndpoint <$> targetUrl <*> (WriteVerdaccio <$> writeToken <*> deletionConsent))
+        ]
+  where
+    writeToken = requiredKey "token" parseSecret
+    mintLifetime = optionalKey "tokenDuration" parseCodeArtifactDuration
+
+parsePublicationTarget :: String -> Value -> Parser PublicationEndpoint
+parsePublicationTarget = taggedTarget (map publishCase [TagRegistry, TagCodeArtifact, TagVerdaccio])
+  where
+    publishCase tag =
+        TagCase (tagKey tag) (PublicationEndpoint . Target tag <$> targetUrl <*> optionalKey "token" parseSecret)
+
+-- The one key every tag admits, refined by the egress boundary's own constructor.
+targetUrl :: GroupDecoder RegistryUrl
+targetUrl = requiredKey "url" parseRegistryUrl
+
+-- Unwritten, the Dredger holds no consent to delete from the store.
+deletionConsent :: GroupDecoder DeletionConsent
+deletionConsent = optionalKeyOr "permitDeletion" False (const (pure . consentOf))
+  where
+    consentOf granted = if granted then DeletionPermitted else DeletionWithheld
+
+tagKey :: StoreTag -> Key.Key
+tagKey = Key.fromText . storeTagName
 
 -- Both keys are optional, so a mount that writes no @integrity@ object decodes the empty one.
 mountIntegrityDecoder :: GroupDecoder MountIntegrity

@@ -9,14 +9,13 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (
     BootError (..),
-    StoreMaintenanceReason (ClientBuildFailed, CodeArtifactUnaddressable, NoControlPlane),
+    StoreMaintenanceReason (ClientBuildFailed, NoControlPlane),
     renderBootError,
     renderBootErrors,
  )
 import Ecluse.Config (
-    CodeArtifactAbsence (NoFormatFor, NotRepositoryEndpoint),
     PolicyError (UnknownRuleType),
-    StoreTag (TagRegistry),
+    StoreTag (TagRegistry, TagVerdaccio),
  )
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
@@ -66,7 +65,7 @@ renderBootErrorSpec = describe "renderBootError" $
         -- The mint-failure render tells a transient failure from a permanent one.
         renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
         renderBootError (FirstPartyMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__FIRST_PARTY"
-        renderBootError (PublishStaticCredentialNeedsEdge Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
+        renderBootError (PublishStaticCredentialNeedsEdge Npm TagVerdaccio) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__TOKEN"
         -- Each collision render names the offending key, the mount it collided with, and why.
         renderBootError (PublicationTargetOnPublicUpstream Npm PyPI "https://store.example.test")
             `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET (https://store.example.test) shares a host with ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM"
@@ -116,10 +115,12 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "deletes from every mount's mirror target"
         renderBootError (StoreMaintenanceUnavailable Npm (ClientBuildFailed "CredentialChainExhausted"))
             `shouldSatisfy` infixed "building its client failed: CredentialChainExhausted"
-        renderBootError (StoreMaintenanceUnavailable RubyGems (CodeArtifactUnaddressable (NoFormatFor RubyGems)))
-            `shouldSatisfy` infixed "CodeArtifact has no package format for the rubygems ecosystem"
-        renderBootError (StoreMaintenanceUnavailable Npm (CodeArtifactUnaddressable (NotRepositoryEndpoint "npm")))
-            `shouldSatisfy` infixed "its path is not a CodeArtifact repository endpoint, /npm/{repository}/"
+        -- The tag conflict names both endpoints down to the tag, so an operator sees which
+        -- declaration to change.
+        renderBootError (StoreTagConflict Npm "mirrorTarget.codeArtifact" Npm "privateUpstream.verdaccio" "https://one.example.test")
+            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT and ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO"
+        renderBootError (StoreTagConflict Npm "mirrorTarget.codeArtifact" Npm "privateUpstream.verdaccio" "https://one.example.test")
+            `shouldSatisfy` infixed "one store has one backend, so declare both endpoints under the same tag"
         -- The idle-Dredger refusal names the capability this build lacks, not a key to fix.
         renderBootError StorePrunerWithoutSweep
             `shouldSatisfy` infixed "this build carries no Dredger sweep, so ecluse dredger refuses to start rather than run idle"

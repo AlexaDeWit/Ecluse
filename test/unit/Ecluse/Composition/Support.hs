@@ -17,6 +17,7 @@ module Ecluse.Composition.Support (
     malformedAwsEndpoint,
     withoutMirrorTargetUrl,
     withoutMirrorTargetToken,
+    withoutPrivateUpstreamUrl,
     withoutQueueUrl,
     overrideEnv,
     expectEnv,
@@ -79,11 +80,11 @@ static write token, so the mount's mirror credential derives to a static provide
 staticEnvVars :: [(String, String)]
 staticEnvVars =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM", "https://public.example.test")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://public.example.test")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "mirror-write-token")
     ]
 
 {- | An ambient @AWS_ENDPOINT_URL@ carrying userinfo, which the egress guard refuses. Both entry
@@ -98,24 +99,29 @@ this build carries a store maintenance backend for.
 codeArtifactMirrorUrl :: (IsString s) => s
 codeArtifactMirrorUrl = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"
 
-{- | 'staticEnvVars' mirroring to 'codeArtifactMirrorUrl'. The write credential derives from that
-host, so the static token goes with the target it belonged to.
+{- | 'staticEnvVars' mirroring to 'codeArtifactMirrorUrl' under its own tag. That tag mints the
+write token, so the static one goes with the registry target it belonged to.
 -}
 codeArtifactEnvVars :: [(String, String)]
 codeArtifactEnvVars =
-    overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" codeArtifactMirrorUrl (withoutMirrorTargetToken staticEnvVars)
+    overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactMirrorUrl $
+        withoutMirrorTargetToken (withoutMirrorTargetUrl staticEnvVars)
 
 -- | The deleting role's refusal of 'staticEnvVars', whose mirror target no backend here sweeps.
 noMaintenanceBackend :: BootError
 noMaintenanceBackend = StoreMaintenanceUnavailable Npm (NoControlPlane TagRegistry)
 
--- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test can supply its own.
+-- | Drop the registry mirror-target URL, so a test can declare its own target under any tag.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]
-withoutMirrorTargetUrl = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst)
+withoutMirrorTargetUrl = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL") . fst)
 
--- | Drop the ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN entry, for a target that derives its own credential.
+-- | Drop the registry mirror-target token, for a tag that mints its own credential.
 withoutMirrorTargetToken :: [(String, String)] -> [(String, String)]
-withoutMirrorTargetToken = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst)
+withoutMirrorTargetToken = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN") . fst)
+
+-- | Drop the registry private upstream, so a test can declare its own under any tag.
+withoutPrivateUpstreamUrl :: [(String, String)] -> [(String, String)]
+withoutPrivateUpstreamUrl = filter ((/= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL") . fst)
 
 {- | Drop the ECLUSE_QUEUE__URL entry, so a test can exercise the absent-URL rollover
 to the bounded in-memory queue.

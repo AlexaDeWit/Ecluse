@@ -28,8 +28,8 @@ import Ecluse.Config (
     MintPlan (..),
     MirrorTarget (..),
     Mount (..),
-    StoreBackend (sbMint),
     regMirrorTarget,
+    sbMint,
  )
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)

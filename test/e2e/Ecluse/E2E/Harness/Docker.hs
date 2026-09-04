@@ -254,10 +254,10 @@ proxyEnv hostPort queueUrl =
       -- the test cert serves the upstream and mirror stubs over TLS. SSL_CERT_FILE below
       -- extends the proxy image's trust store with the test CA, the documented internal-CA
       -- operator workflow.
-      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://mirror/")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM", "https://upstream/")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror/")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "e2e-publish-token")
+      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://mirror/")
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://mirror/")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "e2e-publish-token")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
     , ("ECLUSE_QUEUE__URL", queueUrl)
     , -- The production endpoint override (AWS-SDK-standard), aimed at the ministack

@@ -95,7 +95,7 @@ flowchart TD
     P3 -->|"survivors"| PSV(["Serve merged packument. Done."])
     P3 -->|"none survive"| PD(["403 / 503. Done."])
 
-    K -->|"publish (PUT)"| W1{"ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set?"}
+    K -->|"publish (PUT)"| W1{"mounts.npm.publicationTarget declared?"}
     W1 -->|"no"| W405(["405 Method Not Allowed. Done."])
     W1 -->|"yes"| W2["Enforce the mount's first-party namespaces<br/>(anti-shadowing)"]
     W2 -->|"out of scope"| WR(["4xx, no upstream write. Done."])
@@ -112,7 +112,7 @@ flowchart TD
   [Packument merge](architecture/registry-model.md#packument-merge-across-upstreams).
 - **Publish**: Écluse checks the name against the mount's first-party namespaces before any
   upstream write (anti-shadowing). The path is opt-in: a `PUT` is `405` when
-  `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is unset. See
+  `mounts.npm.publicationTarget` is undeclared. See
   [Publishing first-party packages](architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
 
 ## Document map

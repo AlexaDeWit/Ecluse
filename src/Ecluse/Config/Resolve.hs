@@ -15,6 +15,7 @@ module Ecluse.Config.Resolve (
     secretEnvSpellings,
     envSpellingOf,
     mountKeyRef,
+    mountDocRef,
 ) where
 
 import Data.Aeson (Value (..), eitherDecodeStrict)
@@ -33,12 +34,9 @@ deepMerge :: Value -> Value -> Value
 deepMerge (Object l) (Object r) = Object $ KeyMap.unionWith deepMerge l r
 deepMerge _ r = r
 
-{- | Convert environment variables into a nested JSON Object. It keeps @ECLUSE_@-prefixed keys
-and strips the prefix. Double underscores nest, single underscores become camelCase, so
-@ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM@ becomes @{"mounts": {"npm": {"privateUpstream": ...}}}@.
-A value that parses as JSON decodes, anything else stays a String. Anything outside the prefix
-is never config: the composition root reads the ambient SDK environment, @AWS_*@ included,
-directly (see "Ecluse.Config.Ambient").
+{- | Convert @ECLUSE_@-prefixed environment variables into a nested JSON Object, prefix stripped:
+@__@ descends into an object and @_@ joins a camelCase word ('mountKeyRef' inverts it). A value
+that parses as JSON decodes, anything else stays a String.
 -}
 buildEnvAst :: [(String, String)] -> Value
 buildEnvAst env =
@@ -57,12 +55,11 @@ configEnvKey name
 reservedProcessKeys :: [Text]
 reservedProcessKeys = ["ECLUSE_CONFIG"]
 
-{- | The secret-typed leaf keys of the config schema, in their document spelling. The one source
-for every site that treats a secret specially: verbatim env values, redacted provenance, and the
-@*_FILE@ indirection ("Ecluse.Boot").
+{- | The secret-typed leaf keys, in their document spelling: @token@ is the one under every store
+tag. Verbatim env values, redacted provenance, and the @*_FILE@ indirection all read them here.
 -}
 secretLeafKeys :: [Text]
-secretLeafKeys = ["authToken", "mirrorTargetToken", "publicationTargetToken"]
+secretLeafKeys = ["authToken", "token"]
 
 -- | 'secretLeafKeys' in their environment spelling (@authToken@ -> @AUTH_TOKEN@).
 secretEnvSpellings :: [Text]
@@ -78,12 +75,19 @@ envSpellingOf = T.toUpper . T.concatMap underscoreUpper
         | isUpper c = "_" <> T.singleton c
         | otherwise = T.singleton c
 
-{- | The environment key a mount-scoped document key resolves from, @mirrorTargetToken@ on npm
-giving @ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN@. Every refusal that names one builds it here.
+{- | The environment key a mount-scoped document path resolves from: @mirrorTarget.codeArtifact.url@
+on npm gives @ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL@. Every refusal builds it here.
 -}
 mountKeyRef :: Ecosystem -> Text -> Text
-mountKeyRef eco key =
-    "ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName eco) <> "__" <> envSpellingOf key
+mountKeyRef eco path =
+    "ECLUSE_MOUNTS__"
+        <> T.toUpper (ecosystemName eco)
+        <> "__"
+        <> T.intercalate "__" (map envSpellingOf (T.splitOn "." path))
+
+-- | 'mountKeyRef' in the document spelling: @mounts.npm.mirrorTarget.codeArtifact.url@.
+mountDocRef :: Ecosystem -> Text -> Text
+mountDocRef eco path = "mounts." <> ecosystemName eco <> "." <> path
 
 envVarValue :: (Text, String) -> Value
 envVarValue (key, value) =

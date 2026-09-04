@@ -19,10 +19,18 @@ module Ecluse.Config.Types (
     splitHttpScheme,
     StoreTag (..),
     storeTagName,
+    Target (..),
+    DeletionConsent (..),
+    MirrorWrite (..),
+    MirrorEndpoint (..),
+    meTarget,
+    PublicationEndpoint (..),
     MintPlan (..),
-    CodeArtifactAbsence (..),
     ControlPlane (..),
     StoreBackend (..),
+    sbTag,
+    sbMint,
+    sbControl,
     FirstParty (..),
     MountIntegrity (..),
     MountConfig (..),
@@ -68,7 +76,7 @@ import Ecluse.Config.Advisory.Internal (
     advisoryStoreUrlText,
  )
 import Ecluse.Config.Queue.Internal (QueueTarget (..), QueueUrl, queueUrlTarget, queueUrlText)
-import Ecluse.Config.Resolve (mountKeyRef)
+import Ecluse.Config.Resolve (mountDocRef, mountKeyRef)
 import Ecluse.Config.Rule (PolicyError, RulePatch, renderPolicyError)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
@@ -124,12 +132,16 @@ splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
 splitHttpScheme raw =
     ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)
 
--- | Which store backend serves a mount, derived from its mirror-target URL.
+{- | Which store backend an endpoint names. The operator declares it as the one key under the
+endpoint, and the load validates the URL against it rather than guessing it from a host shape.
+-}
 data StoreTag
     = -- | Any host that speaks the ecosystem's protocol, authenticated by a static token.
       TagRegistry
     | -- | A CodeArtifact repository endpoint, which mints its own write token.
       TagCodeArtifact
+    | -- | A Verdaccio development store, authenticated by a static token.
+      TagVerdaccio
     deriving stock (Eq, Show)
 
 -- | The tag as an operator writes it, and as a refusal names it.
@@ -137,10 +149,61 @@ storeTagName :: StoreTag -> Text
 storeTagName = \case
     TagRegistry -> "registry"
     TagCodeArtifact -> "codeArtifact"
+    TagVerdaccio -> "verdaccio"
 
-{- | How a mount's mirror write authenticates, __derived from the mirror-target URL__ so a token
-can never pair with an endpoint it was not minted for ("Ecluse.Config.Target").
+-- | An endpoint as a mount declares it: the tag naming its store, and the URL under that tag.
+data Target = Target
+    { tgtTag :: StoreTag
+    , tgtUrl :: RegistryUrl
+    }
+    deriving stock (Eq, Show)
+
+{- | Whether the operator consented to @ecluse dredger@ deleting from a Verdaccio store. It is a
+declaration about that one store, so it exists under no other tag.
 -}
+data DeletionConsent
+    = DeletionPermitted
+    | DeletionWithheld
+    deriving stock (Eq, Show)
+
+{- | How a mount's mirror write authenticates, one arm per tag. The mirror write is Écluse's one
+standing credential, so a minting tag carries no static token and a non-minting tag requires one.
+-}
+data MirrorWrite
+    = -- | Any protocol-speaking host: the operator's static write token.
+      WriteRegistry Secret
+    | -- | A CodeArtifact repository: the requested lifetime of the token it mints.
+      WriteCodeArtifact (Maybe Natural)
+    | -- | A Verdaccio store: its static write token, and the operator's deletion consent.
+      WriteVerdaccio Secret DeletionConsent
+    deriving stock (Eq, Show)
+
+-- | A declared @mirrorTarget@: where the mirror writes, and how that write authenticates.
+data MirrorEndpoint = MirrorEndpoint
+    { meUrl :: RegistryUrl
+    , meWrite :: MirrorWrite
+    }
+    deriving stock (Eq, Show)
+
+-- | The mirror endpoint as the collision rules read it. The tag comes from 'meWrite'.
+meTarget :: MirrorEndpoint -> Target
+meTarget endpoint = Target (writeTag (meWrite endpoint)) (meUrl endpoint)
+  where
+    writeTag = \case
+        WriteRegistry{} -> TagRegistry
+        WriteCodeArtifact{} -> TagCodeArtifact
+        WriteVerdaccio{} -> TagVerdaccio
+
+{- | A declared @publicationTarget@: where a client publish is relayed, and the static credential
+forwarded __only when the publishing client sends none__.
+-}
+data PublicationEndpoint = PublicationEndpoint
+    { peTarget :: Target
+    , peToken :: Maybe Secret
+    }
+    deriving stock (Eq, Show)
+
+-- | How a mount's mirror write authenticates, projected from its resolved 'StoreBackend'.
 data MintPlan
     = -- | A CodeArtifact mirror target: the mint identity parsed from its host.
       MintCodeArtifact CodeArtifactConfig
@@ -148,33 +211,46 @@ data MintPlan
       MintStatic Secret
     deriving stock (Eq, Show)
 
-{- | Why a CodeArtifact target addresses no repository. Carried on the value rather than refused
-at load, because only @ecluse dredger@ needs it.
--}
-data CodeArtifactAbsence
-    = -- | CodeArtifact has no package format for this ecosystem.
-      NoFormatFor Ecosystem
-    | -- | The target's path is not a repository endpoint under the carried format token.
-      NotRepositoryEndpoint Text
-    deriving stock (Eq, Show)
-
 -- | The control plane a mount's store offers, the face @ecluse dredger@ deletes through.
 data ControlPlane
-    = -- | The CodeArtifact repository the target addresses, or why it addresses none.
-      ControlCodeArtifact (Either CodeArtifactAbsence CodeArtifactStore)
+    = -- | The CodeArtifact repository the target addresses, which the load has vetted.
+      ControlCodeArtifact CodeArtifactStore
     | -- | The tag names no control plane this build implements.
       ControlNone
     deriving stock (Eq, Show)
 
-{- | A mount's store backend, resolved once at load ("Ecluse.Config.Target") and read by every
-consumer, so no two roles can infer a different backend for the same mount.
+{- | A mount's store backend, resolved once at load ("Ecluse.Config.Target"), so no two roles infer
+a different one. The tag discriminates, so no arm pairs one store's mint with another's plane.
 -}
-data StoreBackend = StoreBackend
-    { sbTag :: StoreTag
-    , sbMint :: MintPlan
-    , sbControl :: ControlPlane
-    }
+data StoreBackend
+    = -- | A protocol-speaking host: its static write token, and no control plane.
+      BackendRegistry Secret
+    | -- | A CodeArtifact repository: the identity it mints from, and the store a sweep deletes in.
+      BackendCodeArtifact CodeArtifactConfig CodeArtifactStore
+    | -- | A Verdaccio store: its static write token, and the operator's deletion consent.
+      BackendVerdaccio Secret DeletionConsent
     deriving stock (Eq, Show)
+
+-- | The tag a backend was declared under.
+sbTag :: StoreBackend -> StoreTag
+sbTag = \case
+    BackendRegistry{} -> TagRegistry
+    BackendCodeArtifact{} -> TagCodeArtifact
+    BackendVerdaccio{} -> TagVerdaccio
+
+-- | How the mirror write to this backend authenticates.
+sbMint :: StoreBackend -> MintPlan
+sbMint = \case
+    BackendRegistry token -> MintStatic token
+    BackendCodeArtifact caConfig _ -> MintCodeArtifact caConfig
+    BackendVerdaccio token _ -> MintStatic token
+
+-- | The control plane this build reaches for a backend. Verdaccio carries none yet.
+sbControl :: StoreBackend -> ControlPlane
+sbControl = \case
+    BackendRegistry{} -> ControlNone
+    BackendCodeArtifact _ store -> ControlCodeArtifact store
+    BackendVerdaccio{} -> ControlNone
 
 {- | The namespaces a mount's deployment owns, one arm per ecosystem, read only in that registry's own naming
 shape. Every consumer of the privilege derives its predicate from this one value.
@@ -204,13 +280,11 @@ data MountConfig = MountConfig
     {- ^ The mount's on\/off switch. Any operator-declared key already activates the mount, so
     @true@ serves the public gate that declares no other key and @false@ switches one off in place.
     -}
-    , mntPrivateUpstream :: Maybe RegistryUrl
+    , mntPrivateUpstream :: Maybe Target
     , mntPublicUpstream :: RegistryUrl
-    , mntMirrorTarget :: Maybe RegistryUrl
-    , mntMirrorTargetToken :: Maybe Secret
-    , mntMirrorTokenDuration :: Maybe Natural
-    , mntPublicationTarget :: Maybe RegistryUrl
-    , mntPublicationTargetToken :: Maybe Secret
+    -- ^ Only the @registry@ tag is admitted here, so the URL is the whole declaration.
+    , mntMirrorTarget :: Maybe MirrorEndpoint
+    , mntPublicationTarget :: Maybe PublicationEndpoint
     , mntFirstParty :: Maybe FirstParty
     , mntIntegrity :: MountIntegrity
     , mntAdditionalRules :: RulePatch
@@ -416,21 +490,19 @@ data ConfigError
       (no @mirrorTarget@) never raises this.
       -}
       MountMissingPrivateUpstream Ecosystem
-    | {- | A serve-only mount (no @mirrorTarget@ declared) carries a mirror-write
-      setting anyway. A write credential or token duration on a mount that never
-      writes signals a misunderstanding (most likely a missing @mirrorTarget@), so
-      it is refused per offending key rather than silently ignored. Carries the
-      mount's ecosystem and the offending document key.
+    | {- | An endpoint declared under the @codeArtifact@ tag whose URL is not a CodeArtifact
+      endpoint. The tag names the store, so a URL that contradicts it is a misdirected write or
+      read. Carries the mount's ecosystem and the endpoint's document path under the mount.
       -}
-      MirrorSettingWithoutWrite Ecosystem Text
-    | {- | An active mount's mirror target mints no write token, so it needs an explicit static
-      one, and none was supplied. Carries the mount's ecosystem.
+      CodeArtifactHostMismatch Ecosystem Text
+    | {- | A @codeArtifact@ mirror target on a mount whose ecosystem CodeArtifact carries no
+      package format for, so no repository under it could hold the mirror.
       -}
-      MirrorCredentialTokenMissing Ecosystem
-    | {- | An active mount's mirror target mints its own write token, yet a static one was also
-      supplied, and the two must never contend. Carries the mount's ecosystem.
+      CodeArtifactFormatUnsupported Ecosystem
+    | {- | A @codeArtifact@ mirror target whose path addresses no repository under the mount's own
+      format, whose per-format endpoints are separate stores. Carries the expected format token.
       -}
-      MirrorCredentialConflict Ecosystem
+      CodeArtifactRepositoryMissing Ecosystem Text
     deriving stock (Eq, Show)
 
 renderConfigError :: ConfigError -> Text
@@ -442,48 +514,29 @@ renderConfigError PublicUrlRequired =
         <> "and without one the npm CLI reads the relative dist.tarball as a file: path and every install fails; "
         <> "set it to the URL clients reach this proxy on (e.g. https://registry.example.com)"
 renderConfigError (MountMissingPrivateUpstream eco) =
-    let name = ecosystemName eco
-        envKey = mountKeyRef eco "privateUpstream"
-     in "mount \""
-            <> name
-            <> "\" declares a mirror target, so it must also define the private upstream the mirror is read back through: set mounts."
-            <> name
-            <> ".privateUpstream in the config document (or "
-            <> envKey
-            <> "), or remove mounts."
-            <> name
-            <> ".mirrorTarget for a serve-only mount that never mirrors"
-renderConfigError (MirrorSettingWithoutWrite eco key) =
-    let name = ecosystemName eco
-        envKey = mountKeyRef eco key
-     in "mount \""
-            <> name
-            <> "\" declares no mirror target, so mounts."
-            <> name
-            <> "."
-            <> key
-            <> " ("
-            <> envKey
-            <> ") has nothing to write with: set mounts."
-            <> name
-            <> ".mirrorTarget to mirror, or remove the setting for a serve-only mount"
-renderConfigError (MirrorCredentialTokenMissing eco) =
-    let name = ecosystemName eco
-        envKey = mountKeyRef eco "mirrorTargetToken"
-     in "mount \""
-            <> name
-            <> "\" mirror target is not a CodeArtifact endpoint, so its write credential is not minted: set a static write token with mounts."
-            <> name
-            <> ".mirrorTargetToken (or "
-            <> envKey
-            <> ")"
-renderConfigError (MirrorCredentialConflict eco) =
-    let name = ecosystemName eco
-        envKey = mountKeyRef eco "mirrorTargetToken"
-     in "mount \""
-            <> name
-            <> "\" mirror target is a CodeArtifact endpoint (its write token is minted from the host identity), so a static write token must not also be set: remove mounts."
-            <> name
-            <> ".mirrorTargetToken (or "
-            <> envKey
-            <> ")"
+    "mount \""
+        <> ecosystemName eco
+        <> "\" declares a mirror target, so it must also define the private upstream the mirror is read back through: set "
+        <> keyRef eco "privateUpstream"
+        <> " in the config document, or remove "
+        <> mountDocRef eco "mirrorTarget"
+        <> " for a serve-only mount that never mirrors"
+renderConfigError (CodeArtifactHostMismatch eco path) =
+    keyRef eco path
+        <> " is declared under the codeArtifact tag, but its host is not a CodeArtifact endpoint "
+        <> "({domain}-{account}.d.codeartifact.{region}.amazonaws.com): correct the URL, or declare this "
+        <> "endpoint under the tag that names its store"
+renderConfigError (CodeArtifactFormatUnsupported eco) =
+    keyRef eco "mirrorTarget.codeArtifact.url"
+        <> " names a CodeArtifact store, but CodeArtifact carries no package format for the "
+        <> ecosystemName eco
+        <> " ecosystem: mirror this mount to a store CodeArtifact serves"
+renderConfigError (CodeArtifactRepositoryMissing eco format) =
+    keyRef eco "mirrorTarget.codeArtifact.url"
+        <> " is not a CodeArtifact repository endpoint for this mount: its path must be /"
+        <> format
+        <> "/{repository}/"
+
+-- A mount-scoped key in both spellings, the form every refusal above names it in.
+keyRef :: Ecosystem -> Text -> Text
+keyRef eco path = mountDocRef eco path <> " (" <> mountKeyRef eco path <> ")"

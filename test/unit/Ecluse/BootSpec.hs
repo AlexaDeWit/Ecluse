@@ -32,14 +32,22 @@ import Ecluse.Test.Log (captureStderr)
 runEnv :: [(String, String)]
 runEnv =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "mirror-write-token")
     , ("AWS_ACCESS_KEY_ID", "test")
     , ("AWS_SECRET_ACCESS_KEY", "test")
     , ("ECLUSE_SERVER__PORT", "0")
     ]
+
+-- | A CodeArtifact repository endpoint of the npm format, which its tag validates against.
+codeArtifactRepository :: String
+codeArtifactRepository = "https://d-111122223333.d.codeartifact.us-east-1.amazonaws.com/npm/r/"
+
+-- | Whether a variable declares the registry-tagged mirror target 'runEnv' carries.
+isRegistryMirrorKey :: String -> Bool
+isRegistryMirrorKey name = "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__" `isPrefixOf` name
 
 awsRunEnv :: [(String, String)]
 awsRunEnv =
@@ -176,33 +184,31 @@ spec = do
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "aborts fast at boot when a write-only mirror setting remains without a mirror target" $ do
-            -- The write token is a write-only setting. With no mirrorTarget to write
-            -- to, each such key is refused (MirrorSettingWithoutWrite), never
-            -- silently ignored.
-            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET") . fst) awsRunEnv)
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
+        it "aborts fast at boot when a mirror target declares its write token and no url" $ do
+            -- The write token lives under the target's own tag, so a token alone declares
+            -- the target and the absent url is refused, never silently ignored.
+            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL") . fst) awsRunEnv)
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "aborts fast at boot when a non-CodeArtifact mirror target has no write token" $ do
-            -- The mirror credential is derived from the target: Écluse writes a
-            -- non-CodeArtifact endpoint with a static token, so a missing token
-            -- fails at boot.
+        it "aborts fast at boot when a registry mirror target has no write token" $ do
+            -- The registry tag mints nothing, so it requires the operator's static write
+            -- token and a target without one fails at boot.
             traverse_ (uncurry setEnv) awsRunEnv
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "aborts fast at boot when a CodeArtifact mirror target also carries a static token" $ do
-            -- A CodeArtifact endpoint mints its own token. A static token beside it is
-            -- a loud conflict, caught before any AWS call, never a silent choice.
+        it "aborts fast at boot when a second tag lands on the declared mirror target" $ do
+            -- A layer fills keys under a tag, it never switches one, so an endpoint left
+            -- carrying two tags is a loud refusal caught before any AWS call.
             traverse_ (uncurry setEnv) awsRunEnv
-            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" "https://d-111122223333.d.codeartifact.us-east-1.amazonaws.com/npm/r/"
+            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactRepository
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
@@ -211,11 +217,11 @@ spec = do
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
                 let secretPath = dir </> "mirror-token"
                 writeFileText secretPath "mirror-write-token\n"
-                traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) runEnv)
-                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
-                setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE" secretPath
+                traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN") . fst) runEnv)
+                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN"
+                setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE" secretPath
                 outcome <- timeout 100000 (withArgs ["proxy"] run)
-                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE"
+                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE"
                 traverse_ (unsetEnv . fst) runEnv
                 outcome `shouldBe` Nothing
 
@@ -224,9 +230,9 @@ spec = do
                 let secretPath = dir </> "mirror-token"
                 writeFileText secretPath "mirror-write-token\n"
                 traverse_ (uncurry setEnv) runEnv
-                setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE" secretPath
+                setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE" secretPath
                 outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE"
+                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE"
                 traverse_ (unsetEnv . fst) runEnv
                 outcome `shouldBe` Left (ExitFailure 2)
 
@@ -238,8 +244,8 @@ spec = do
                     resolved <-
                         applySecretFileIndirection
                             [ ("ECLUSE_SERVER__AUTH_TOKEN_FILE", secretPath)
-                            , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE", secretPath)
-                            , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN_FILE", secretPath)
+                            , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN_FILE", secretPath)
+                            , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN_FILE", secretPath)
                             ]
                     case resolved of
                         Left e -> expectationFailure (toString e)
@@ -247,8 +253,8 @@ spec = do
                             -- The indirection resolves each *_FILE to its base variable...
                             map fst env
                                 `shouldMatchList` [ "ECLUSE_SERVER__AUTH_TOKEN"
-                                                  , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
-                                                  , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
+                                                  , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN"
+                                                  , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN"
                                                   ]
                             -- The value must survive the whole load verbatim: a JSON-looking secret
                             -- must never be coerced to a non-string. Only the auth token is loaded,
@@ -260,11 +266,11 @@ spec = do
                                         `shouldBe` Just payload
 
         it "refuses a *_FILE secret whose file cannot be read" $ do
-            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) runEnv)
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
-            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE" "/nonexistent/ecluse/secret"
+            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN") . fst) runEnv)
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN"
+            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE" "/nonexistent/ecluse/secret"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE"
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE"
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
@@ -293,21 +299,21 @@ spec = do
 
         it "refuses a publication target without first-party namespaces with exit 2 (the boot's own refusal)" $ do
             traverse_ (uncurry setEnv) runEnv
-            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://publish.example.test"
+            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test"
             outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET"
+            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL"
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "refuses a static publication token without an inbound edge with exit 2" $ do
             traverse_ (uncurry setEnv) runEnv
-            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://publish.example.test"
+            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test"
             setEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme"
-            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN" "publish-write-token"
+            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN" "publish-write-token"
             outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET"
+            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL"
             unsetEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY"
-            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
+            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN"
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
@@ -322,11 +328,11 @@ spec = do
         it "validates a CodeArtifact-shaped mirror target structurally and exits 0 (no mint, no cloud call)" $ do
             -- The derived-credential expectation is structural on the loaded config.
             -- check-config must never mint the token a boot would.
-            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) runEnv)
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN"
-            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" "https://d-111122223333.d.codeartifact.us-east-1.amazonaws.com/npm/r/"
+            traverse_ (uncurry setEnv) (filter (not . isRegistryMirrorKey . fst) runEnv)
+            traverse_ unsetEnv (filter isRegistryMirrorKey (map fst runEnv))
+            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactRepository
             outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
+            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL"
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left ExitSuccess
 
@@ -427,7 +433,7 @@ splitRoleRefusal args = bootRefusal args (withoutQueueUrl runEnv)
 
 -- | The npm mount mirroring where it reads: a writing role's advisory, the Dredger's refusal.
 collapsedMirrorEnv :: [(String, String)]
-collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" "https://private.example.test" runEnv
+collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL" "https://private.example.test" runEnv
 
 -- | The one refusal that configuration earns, and only under @ecluse dredger@.
 collapsedMirrorRefusal :: BootError

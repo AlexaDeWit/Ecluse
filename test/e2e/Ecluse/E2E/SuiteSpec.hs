@@ -103,7 +103,7 @@ scenarios = do
                     void $ withUpstreamPaused e2e (npmCiIn proj) >>= shouldSucceed -- (5) public down → from the mirror
         describe "first-party publish -- opt-in posture" $
             it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
-                -- The base topology sets no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET, so PUT is not an allowed
+                -- The base topology declares no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET, so PUT is not an allowed
                 -- method. A raw PUT suffices because the 405 precedes any body read.
                 status <- proxyPut e2e ("/npm/" <> publishInScopeName)
                 status `shouldBe` 405

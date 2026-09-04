@@ -182,46 +182,69 @@ mounts:
   # environment declares any key under it. `enabled: true` alone is enough for the
   # serve-only pure public gate, and declaring `mirrorTarget` is what makes a mount
   # mirror.
-  # Every registry endpoint below must be an https:// URL carrying a dialable host, and
-  # none may carry userinfo, a query, or a fragment: a credential belongs in its own
-  # key. The boot refuses anything else, naming the key.
+  # Every endpoint below is an object with exactly one key, the store tag, and under
+  # that tag the keys it admits there. The tag names the backend: `registry` is any
+  # host that speaks the ecosystem's protocol, `codeArtifact` is an AWS CodeArtifact
+  # repository, and `verdaccio` is a development store. The load checks the URL against
+  # the tag and refuses a mismatch, naming the key.
+  # A layer fills keys under a tag, it never switches one. An environment variable
+  # written under a tag the document did not use leaves the endpoint carrying two tags,
+  # which the load refuses. Two endpoints that name the same registry under different
+  # tags are refused too, because one store has one backend.
+  # Every url must be an https:// URL carrying a dialable host, and none may carry
+  # userinfo, a query, or a fragment: a credential belongs in its own key.
   npm:
-    publicUpstream: https://registry.npmjs.org
+    publicUpstream:
+      # Only `registry` is admitted here, because the public leg is anonymous.
+      registry:
+        url: https://registry.npmjs.org
     # The only key the serve-only pure public gate needs. false switches off a mount
     # whose other keys remain.
     # enabled: true
     # The read authority. Required on a mirrored mount, so the mirror reads back.
     # Optional on a serve-only mount, where it still merges with the gated public set.
-    # privateUpstream: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
-    # Declaring it makes the mount mirrored. The write credential derives from this
-    # URL: a CodeArtifact host mints a short-lived token scoped to its domain, and any
-    # other host needs mirrorTargetToken. The boot refuses a target on any mount's
+    # Every tag is admitted and each carries the url alone: a read forwards the caller's
+    # own credential, so no tag holds one here.
+    # privateUpstream:
+    #   codeArtifact:
+    #     url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
+    # Declaring it makes the mount mirrored. The mirror write is Écluse's one standing
+    # credential, so `codeArtifact` mints its own token and admits no `token` key, while
+    # `registry` and `verdaccio` require one. The boot refuses a target on any mount's
     # publicUpstream host, which the write credential must never reach.
     # `ecluse dredger` deletes from this store, so it refuses a target that is also any
     # mount's privateUpstream or this mount's publicationTarget. `ecluse proxy` and
     # `ecluse mirror` boot on those and warn once per pair, and pruning stays manual.
-    # The Dredger also refuses a target that is not a CodeArtifact repository endpoint
-    # for this mount's ecosystem (/npm/{repository}/ for npm). The other roles boot on
-    # such a target, and `ecluse check-config` warns of the Dredger's refusal.
-    # mirrorTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/mirror/
-    # Set via ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN (a secret). Required for a
-    # non-CodeArtifact mirror target, forbidden for a CodeArtifact one or a serve-only mount.
-    # mirrorTargetToken:
-    # Lifetime in seconds of a minted mirror-write token. The mint provider comes from
-    # the mirror target, so this key names none: for a CodeArtifact target the bound is
-    # 900 to 43200, and unset CodeArtifact defaults it to the caller's role-credential
-    # expiry. The refresh policy adapts to the minted token's actual expiry, so this is
-    # a preference.
-    # mirrorTokenDuration: 3600
-    # Where a client `npm publish` is relayed. Opt-in: unset, PUT /{pkg} is 405.
+    # mirrorTarget:
+    #   codeArtifact:
+    #     # The path must address the repository endpoint for this mount's format
+    #     # (/npm/{repository}/ for npm), and the load refuses anything else.
+    #     url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/mirror/
+    #     # Lifetime in seconds of a minted write token, within 900 to 43200. Unset,
+    #     # CodeArtifact defaults it to the caller's role-credential expiry. The refresh
+    #     # policy follows the minted token's actual expiry, so this is a preference.
+    #     tokenDuration: 3600
+    # A non-minting mirror target takes a static write token instead. Set it via
+    # ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN (a secret).
+    # mirrorTarget:
+    #   verdaccio:
+    #     url: https://verdaccio.internal/
+    #     token:
+    #     # The Dredger's consent to delete from this store, and Verdaccio's key alone.
+    #     # Without it the Dredger refuses the store, and every other role ignores it.
+    #     permitDeletion: true
+    # Where a client `npm publish` is relayed. Opt-in: unset, PUT /{pkg} is 405. Every
+    # tag is admitted, and `token` is the fallback forwarded only when the publishing
+    # client sends none. Set it via
+    # ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN (a secret); it
+    # requires server.authToken, or the boot refuses.
     # It carries the publisher's own credential, so the boot refuses one on any mount's
     # publicUpstream host, or equal to another mount's privateUpstream, mirrorTarget, or
     # publicationTarget. Its own mount's privateUpstream or mirrorTarget stays legal.
-    # publicationTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
-    # Set via ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN (a secret). Forwarded only
-    # when the publishing client sends none. Requires server.authToken, or the boot
-    # refuses (PublishStaticCredentialNeedsEdge).
-    # publicationTargetToken:
+    # publicationTarget:
+    #   codeArtifact:
+    #     url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
+    #     token:
     # The namespaces this deployment owns, comma separated. Required with a publication
     # target. Only a first-party name may be published here, and a first-party name
     # resolves from privateUpstream alone: it is never fetched from publicUpstream,
@@ -242,9 +265,13 @@ mounts:
   # No adapter ships for these two yet, so activating either refuses the boot. The
   # public upstream is here so the key is settled before the ecosystem lands.
   pypi:
-    publicUpstream: https://pypi.org
+    publicUpstream:
+      registry:
+        url: https://pypi.org
   rubygems:
-    publicUpstream: https://rubygems.org
+    publicUpstream:
+      registry:
+        url: https://rubygems.org
 
 # The rule policy. A shipped name below patches that rule, `enabled: false` suppresses
 # it, and a new name with a `type` adds one. A rule reads only its own type's parameters,

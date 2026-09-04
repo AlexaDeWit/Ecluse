@@ -25,7 +25,7 @@ import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Composition.BootError (
     BootError (StoreMaintenanceUnavailable),
-    StoreMaintenanceReason (ClientBuildFailed, CodeArtifactUnaddressable, NoControlPlane),
+    StoreMaintenanceReason (ClientBuildFailed, NoControlPlane),
     refuseOnThrow,
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
@@ -35,8 +35,10 @@ import Ecluse.Config (
     MirrorTarget (mtBackend),
     Mount (mountRegistries),
     MountMap,
-    StoreBackend (sbControl, sbTag),
+    StoreBackend,
     regMirrorTarget,
+    sbControl,
+    sbTag,
  )
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Maintenance (StoreMaintenance)
@@ -79,7 +81,7 @@ vetStoreBackends mounts = clearedFor <$> vetRole <* traverse_ (rule severity unm
 -- The store a resolved backend lets the Dredger delete from, or why this build reaches none.
 sweepableStore :: StoreBackend -> Either StoreMaintenanceReason CodeArtifactStore
 sweepableStore backend = case sbControl backend of
-    ControlCodeArtifact addressed -> first CodeArtifactUnaddressable addressed
+    ControlCodeArtifact store -> Right store
     ControlNone -> Left (NoControlPlane (sbTag backend))
 
 {- | How a boot builds one store's maintenance handle. Injected, as the queue builder is, so a spec

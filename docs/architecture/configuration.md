@@ -20,6 +20,16 @@ A mount's shape is **derived, not declared**. Any operator-supplied key under `m
 activates it, and a declared `mirrorTarget`, not a mode flag, makes it mirrored. A mirrored mount
 then requires a `privateUpstream` so the mirror reads back.
 
+Each endpoint a mount names is one **tagged target**: an object with exactly one key, the tag, and
+under it the keys that tag admits there. The tag names the store backend and the load checks the
+URL against it, so a `codeArtifact:` endpoint whose host is not a CodeArtifact endpoint refuses at
+load naming the key. There is no bare-URL shorthand, because one fact with two spellings drifts.
+The operator manual carries the admission matrix. Two consequences fall out of the layering rule.
+Layers union objects, so an environment variable under a tag the document did not use leaves two
+tags on the endpoint and refuses as such: a layer fills keys under a tag, it never switches one.
+And two endpoints that name one registry under different tags refuse for every role, because one
+store has one backend.
+
 Secrets never live in the structured config. A token is always an environment variable. A
 cloud-managed registry derives a short-lived token from ambient cloud credentials (see
 [Outbound registry credentials](#outbound-registry-credentials)).
@@ -39,7 +49,7 @@ host. It drops a plaintext tarball on any other host and skips that version.
 
 ### Upstream composition (optional)
 
-`ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` may point at a single registry, or at one that aggregates
+`mounts.npm.privateUpstream` may point at a single registry, or at one that aggregates
 others: a CodeArtifact repository with upstream relationships to the mirror-target and first-party
 repos. One fetch then returns the whole trusted set. This is an optimisation, never a precondition,
 because Écluse [merges packuments across upstreams](registry-model.md#packument-merge-across-upstreams)
@@ -58,11 +68,12 @@ carrying userinfo, a query string, or a fragment at load, and the error names th
 lets the boot-time configuration echo, the endpoint-collision warnings, and the mount posture lines
 print a configured endpoint as written.
 
-The mirror-write credential is **derived from the mirror-target URL**. It is always the credential
-that endpoint dictates, and Écluse can never pair it with an endpoint it was not minted for. A
-CodeArtifact endpoint (`{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`) encodes its whole
-mint identity in its host, so the worker mints a short-lived token scoped to that domain. The
-worker writes any other host with a static token (`…MIRROR_TARGET_TOKEN`).
+The mirror-write credential follows the **tag the mirror target declares**, and the load checks the
+URL against that tag, so Écluse can never pair a credential with an endpoint it was not scoped for.
+The `codeArtifact` tag requires a host of the shape
+`{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`, which encodes the whole mint identity, so
+the worker mints a short-lived token scoped to that domain and the tag admits no static one. The
+two non-minting tags each require a `token` under the target.
 
 The CodeArtifact mint is per
 domain, so mounts whose resolved identities coincide share one
@@ -177,13 +188,17 @@ error, not a silent skip:
 - Merge references must resolve. Écluse rejects a `rules` entry that neither names a known default
   nor supplies a complete new rule.
 - Écluse rejects a mount incoherent with its derived mode: a mirrored mount with no
-  `privateUpstream`, and a serve-only mount carrying a mirror-write setting. The error names the
-  offending key, and one report covers every incomplete mount.
-- The mirror-write credential must resolve. Écluse rejects a non-CodeArtifact target with no static
-  token, and a CodeArtifact target that carries one. It also rejects a CodeArtifact identity that
-  cannot mint an initial token.
-- A static publish credential requires a verifiable edge.
-  `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` without `ECLUSE_SERVER__AUTH_TOKEN` is refused as
+  `privateUpstream`. The error names the offending key, and one report covers every incomplete
+  mount.
+- An endpoint must carry exactly one tag and only the keys that tag admits there. The mirror-write
+  credential falls out of that: the minting tag admits no static token and the two non-minting tags
+  require one. Écluse still rejects a CodeArtifact identity that cannot mint an initial token.
+- A `codeArtifact` endpoint's URL must match its tag. Écluse rejects a host that is not a
+  CodeArtifact endpoint on any endpoint, and on a mirror target it also rejects a path that is not
+  the repository endpoint for the mount's own ecosystem (`/npm/{repository}/` for an npm mount) and
+  an ecosystem CodeArtifact carries no package format for. Each refusal names the key path.
+- A static publish credential requires a verifiable edge. A `token` under a `publicationTarget`
+  tag without `ECLUSE_SERVER__AUTH_TOKEN` is refused as
   `PublishStaticCredentialNeedsEdge`. That pairing would let any unauthenticated client publish
   under Écluse's own identity.
 - Endpoints that hold different registry roles must not name one registry. Every role refuses a
@@ -200,12 +215,11 @@ error, not a silent skip:
   so neither a capital letter nor an explicit `:443` defeats a refusal. Applying the default port
   keeps the port in the key rather than dropping it, so `:8443` stays a separate store. The path is
   compared exactly, which is what keeps those per-format endpoints apart.
-- Every mount's `mirrorTarget` needs a store maintenance backend. `ecluse dredger` reads that URL as
-  CodeArtifact coordinates, so it refuses a host that is not a CodeArtifact endpoint, a path that is
-  not the repository's endpoint for the mount's own ecosystem (`/npm/{repository}/` for an npm
-  mount), and an ecosystem CodeArtifact carries no package format for. The refusal names the mount
-  key and the reason. Only the Dredger deletes, so only the Dredger refuses: the other roles boot
-  on such a target and log nothing, and `ecluse check-config` names the Dredger's refusal.
+- Every mount's `mirrorTarget` needs a store maintenance backend. `ecluse dredger` reads the tag,
+  so it refuses a target whose tag names a store this build carries no control plane for. The
+  refusal names the mount key and the reason. Only the Dredger deletes, so only the Dredger refuses:
+  the other roles boot on such a target and log nothing, and `ecluse check-config` names the
+  Dredger's refusal.
 
 Most of those refusals are decided as the configuration loads. The mount-adapter rule, the
 publish-policy pairing, the endpoint-disjointness rules, and the store maintenance backend are

@@ -6,6 +6,7 @@
 module Ecluse.Config.ResolveSpec (spec) where
 
 import Data.Aeson (Value (..))
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Ecluse.Config.Resolve (buildEnvAst, deepMerge)
 import Test.Hspec (Spec, describe, it, shouldBe)
@@ -66,7 +67,7 @@ spec = do
                     [ ("IGNORE_ME", "1")
                     , ("ECLUSE_MOUNTS__NPM__PORT", "8080")
                     , ("ECLUSE_DEBUG", "true")
-                    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://default.internal")
+                    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://default.internal")
                     , ("ECLUSE_A__B__C", "hello")
                     ]
             let expected =
@@ -81,7 +82,7 @@ spec = do
                                             , Object $
                                                 KeyMap.fromList
                                                     [ ("port", Number 8080)
-                                                    , ("privateUpstream", String "https://default.internal")
+                                                    , ("privateUpstream", taggedUrl "registry" "https://default.internal")
                                                     ]
                                             )
                                         ]
@@ -127,15 +128,14 @@ spec = do
             -- `FromJSON EnvConfig` and `FromJSON ConfigDoc` expect.
             let env =
                     [ ("ECLUSE_SERVER__PORT", "4873")
-                    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.com")
-                    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM", "https://public.example.com")
-                    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.com")
+                    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.com")
+                    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://public.example.com")
+                    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", toString codeArtifactMirror)
                     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
                     , ("ECLUSE_QUEUE__MAX_MEMORY_DEPTH", "50000")
                     , ("ECLUSE_QUEUE__MAX_RECEIVE_COUNT", "5")
                     , ("ECLUSE_SERVER__AUTH_TOKEN", "secret-token")
-                    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-token")
-                    , ("ECLUSE_MOUNTS__NPM__MIRROR_TOKEN_DURATION", "43200")
+                    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__TOKEN_DURATION", "43200")
                     , ("ECLUSE_SERVER__HELP_MESSAGE", "contact support")
                     , ("ECLUSE_ADVISORIES__COMPILE_INTERVAL", "3600")
                     , ("ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "30")
@@ -153,8 +153,8 @@ spec = do
                     , ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.com")
                     , ("ECLUSE_INTEGRITY__MIN_PUBLIC", "sha256")
                     , ("ECLUSE_INTEGRITY__MIN_TRUSTED", "sha256")
-                    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.com")
-                    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-token")
+                    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://publish.example.com")
+                    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN", "publish-token")
                     , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@test")
                     ]
 
@@ -180,13 +180,24 @@ spec = do
                                             ( "npm"
                                             , Object $
                                                 KeyMap.fromList
-                                                    [ ("privateUpstream", String "https://private.example.com")
-                                                    , ("publicUpstream", String "https://public.example.com")
-                                                    , ("mirrorTarget", String "https://mirror.example.com")
-                                                    , ("mirrorTargetToken", String "mirror-token")
-                                                    , ("mirrorTokenDuration", Number 43200)
-                                                    , ("publicationTarget", String "https://publish.example.com")
-                                                    , ("publicationTargetToken", String "publish-token")
+                                                    [ ("privateUpstream", taggedUrl "registry" "https://private.example.com")
+                                                    , ("publicUpstream", taggedUrl "registry" "https://public.example.com")
+                                                    ,
+                                                        ( "mirrorTarget"
+                                                        , tagged
+                                                            "codeArtifact"
+                                                            [ ("url", String codeArtifactMirror)
+                                                            , ("tokenDuration", Number 43200)
+                                                            ]
+                                                        )
+                                                    ,
+                                                        ( "publicationTarget"
+                                                        , tagged
+                                                            "registry"
+                                                            [ ("url", String "https://publish.example.com")
+                                                            , ("token", String "publish-token")
+                                                            ]
+                                                        )
                                                     , ("firstParty", String "@test")
                                                     ]
                                             )
@@ -250,3 +261,15 @@ spec = do
                                 )
                             ]
             buildEnvAst env `shouldBe` expected
+
+-- | One endpoint's resolved shape: the tag it was written under, and the keys under it.
+tagged :: Key.Key -> [(Key.Key, Value)] -> Value
+tagged tag keys = Object (KeyMap.singleton tag (Object (KeyMap.fromList keys)))
+
+-- | 'tagged' for the endpoints that carry the url alone.
+taggedUrl :: Key.Key -> Text -> Value
+taggedUrl tag value = tagged tag [("url", String value)]
+
+-- | A CodeArtifact repository endpoint, as the tagged mirror target writes it.
+codeArtifactMirror :: Text
+codeArtifactMirror = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"

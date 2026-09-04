@@ -80,7 +80,7 @@ otherMountSpec = describe "publicationTarget against another mount's endpoints" 
         -- Each mount relays a different publisher's credential, so one shared publication
         -- target crosses the two tenancies. Both mounts report it.
         let env =
-                overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET" "https://shared-publish.example.test" $
+                overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL" "https://shared-publish.example.test" $
                     withPyPI (publishingTo "https://shared-publish.example.test")
         refusals <- refusalsFor MirrorWriter env
         refusals
@@ -185,7 +185,7 @@ advisorySpec = describe "the advisories a writing role logs" $ do
             `shouldReturn` ["mount \"npm\": mirrorTarget and mount \"pypi\" privateUpstream resolve to the same registry (https://pypi-private.example.test); the Dredger refuses this configuration, so pruning this mirror stays manual"]
 
     it "warns when a mount's private and public upstreams collide" $
-        advisoriesFor (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM" "https://public.example.test" staticEnvVars)
+        advisoriesFor (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL" "https://public.example.test" staticEnvVars)
             `shouldReturn` ["mount \"npm\": privateUpstream and publicUpstream resolve to the same registry (https://public.example.test); the merge trusts the private leg, so this registry's versions are admitted unfiltered"]
 
     it "ignores a trailing-slash difference when comparing endpoints" $
@@ -194,7 +194,7 @@ advisorySpec = describe "the advisories a writing role logs" $ do
 
     it "gives the deleting role that same private-and-public-upstream advisory" $
         -- Rule six advises every role, so a severity flipped for one alone fails here.
-        advisoriesForRole MirrorPruner (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM" "https://public.example.test" staticEnvVars)
+        advisoriesForRole MirrorPruner (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL" "https://public.example.test" staticEnvVars)
             `shouldReturn` ["mount \"npm\": privateUpstream and publicUpstream resolve to the same registry (https://public.example.test); the merge trusts the private leg, so this registry's versions are admitted unfiltered"]
 
     it "logs no advisory for a collapse it refuses outright" $
@@ -267,36 +267,36 @@ publishingEnv = publishingTo "https://publish.example.test"
 publishingTo :: String -> [(String, String)]
 publishingTo target =
     overrideEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme" $
-        overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" target staticEnvVars
+        overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" target staticEnvVars
 
 -- The npm mount mirroring to the given target.
 mirroringTo :: String -> [(String, String)] -> [(String, String)]
-mirroringTo = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
+mirroringTo = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL"
 
 {- | Activate a second, mirrored PyPI mount, so the cross-mount rules have a neighbour to
 collide with. No adapter ships for it, which these pure endpoint rules never consult.
 -}
 withPyPI :: [(String, String)] -> [(String, String)]
 withPyPI env =
-    overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM" "https://pypi-public.example.test" $
-        overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM" "https://pypi-private.example.test" $
-            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET" "https://pypi-mirror.example.test" $
-                overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN" "pypi-write-token" env
+    overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL" "https://pypi-public.example.test" $
+        overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" "https://pypi-private.example.test" $
+            overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__URL" "https://pypi-mirror.example.test" $
+                overrideEnv "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__REGISTRY__TOKEN" "pypi-write-token" env
 
 {- | The npm mount mirroring to one URL against a PyPI neighbour reading its private upstream
 from another: the pair the store comparison decides.
 -}
 mirrorAgainstPypiPrivate :: String -> String -> [(String, String)]
 mirrorAgainstPypiPrivate mirror private =
-    overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM" private (withPyPI (mirroringTo mirror staticEnvVars))
+    overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" private (withPyPI (mirroringTo mirror staticEnvVars))
 
 {- | One registry held by the npm mount's publicationTarget and mirrorTarget and by both of the
 PyPI neighbour's upstreams, so every endpoint rule fires on one configuration.
 -}
 everyEndpointCollapseEnv :: [(String, String)]
 everyEndpointCollapseEnv =
-    overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM" sharedRegistry $
-        overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM" sharedRegistry $
+    overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL" sharedRegistry $
+        overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" sharedRegistry $
             withPyPI (mirroringTo sharedRegistry (publishingTo sharedRegistry))
 
 -- | The registry every key in 'everyEndpointCollapseEnv' collapses onto.
@@ -309,4 +309,4 @@ sharedRegistryText = toText sharedRegistry
 -- The PyPI neighbour publishing to the given target. The endpoint rules read no namespaces.
 pypiPublishingTo :: String -> [(String, String)] -> [(String, String)]
 pypiPublishingTo target env =
-    overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET" target (withPyPI env)
+    overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL" target (withPyPI env)

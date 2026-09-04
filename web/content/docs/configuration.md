@@ -19,7 +19,8 @@ that supplied it and redacting secrets, and `ecluse check-config` prints the sam
 
 > **One spelling rule.** Environment variables are the mechanical transliteration of the document
 > schema: `__` descends into an object and `_` joins a camelCase word. So `ECLUSE_CACHE__MAX_BYTES`
-> spells `cache.maxBytes`, and `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` spells `mounts.npm.mirrorTarget`.
+> spells `cache.maxBytes`, and `ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL` spells
+> `mounts.npm.mirrorTarget.codeArtifact.url`.
 
 Écluse owns the whole `ECLUSE_` prefix. Every `ECLUSE_*` variable is read as a key of that schema,
 and one naming no key aborts the boot rather than resolving to a default, so a typo surfaces at
@@ -85,23 +86,65 @@ advisories:
 
 mounts:
   npm:
-    privateUpstream: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
-    publicUpstream: https://registry.npmjs.org
-    mirrorTarget: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/mirror/
+    privateUpstream:
+      codeArtifact:
+        url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
+    publicUpstream:
+      registry:
+        url: https://registry.npmjs.org
+    mirrorTarget:
+      codeArtifact:
+        url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/mirror/
 
 rules:
   min-age:
     ageSeconds: 1209600
 ```
 
-Delete the `mirrorTarget` line and the same mount is serve-only. It still merges the private
+Delete the `mirrorTarget` block and the same mount is serve-only. It still merges the private
 upstream with the gated public registry, but it never writes, so `queue` goes unread. Delete
 `privateUpstream` as well and you are back to the pure public gate of the
 [quick start](@/docs/quick-start.md), in document form. `enabled: true` is then the only key it
 needs, because `publicUpstream` already has a default.
 
-No token appears above, because Écluse mints the mirror-target write credential from the
-CodeArtifact host. Every other secret is an environment variable.
+No token appears above, because the `codeArtifact` tag mints the mirror-target write credential
+from its host. Every other secret is an environment variable.
+
+## Store tags
+
+Each of `publicUpstream`, `privateUpstream`, `mirrorTarget`, and `publicationTarget` is an object
+with exactly one key, the **tag**, and under it the keys that tag admits for that endpoint. The tag
+names the store backend, and the boot checks the URL against it. There is no bare-URL shorthand,
+because one fact with two spellings is one fact too many.
+
+| Tag | The store | Where it applies |
+| --- | --- | --- |
+| `registry` | Any host that speaks the ecosystem's protocol, such as Artifactory, Nexus, or a public registry | Every endpoint. The only tag `publicUpstream` admits |
+| `codeArtifact` | An AWS CodeArtifact repository endpoint. Écluse mints its write token from the host | Every endpoint but `publicUpstream` |
+| `verdaccio` | A Verdaccio development store, on a static token | Every endpoint but `publicUpstream` |
+
+The keys each tag admits depend on the endpoint, because the endpoints hold different credentials.
+
+| Endpoint | `registry` | `codeArtifact` | `verdaccio` |
+| --- | --- | --- | --- |
+| `publicUpstream` | `url` | not admitted | not admitted |
+| `privateUpstream` | `url` | `url` | `url` |
+| `mirrorTarget` | `url`, `token` | `url`, optional `tokenDuration` | `url`, `token`, optional `permitDeletion` |
+| `publicationTarget` | `url`, optional `token` | `url`, optional `token` | `url`, optional `token` |
+
+Three rules explain the table. A read forwards the caller's own credential, so no read target
+carries one. The mirror write is Écluse's one standing credential, so `codeArtifact` mints it and
+admits no `token`, while the two non-minting tags require one. The publication token is a fallback
+forwarded only when the publishing client sends none, which every tag admits.
+
+`permitDeletion: true` is your consent for `ecluse dredger` to delete from a Verdaccio store, and
+it exists on no other tag. Without it the Dredger refuses that store, and every other role ignores
+the key.
+
+Two rules govern how the layers combine. A layer fills keys under a tag, it never switches one: an
+environment variable written under a tag your document did not use leaves the endpoint carrying two
+tags, and the boot refuses it naming both. And two endpoints that name the same registry under
+different tags are refused for every role, because one store has one backend.
 
 ## First-party namespaces
 
@@ -143,16 +186,18 @@ use them, so the private upstream stays the authority on every caller.
 ## Secrets
 
 Secrets never live in the config document: client and registry tokens are always env vars. A
-CodeArtifact mirror target needs none, because Écluse mints its short-lived write token from the
-container's ambient AWS credentials. Any other mirror-target host needs
-`ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`. A **mirrored** mount therefore holds one write
-credential, and a serve-only mount never writes, so it holds none.
+`codeArtifact` mirror target needs none, because Écluse mints its short-lived write token from the
+container's ambient AWS credentials. The two non-minting tags take the `token` key under the target,
+so a Verdaccio mirror write reads `ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN`. A
+**mirrored** mount therefore holds one write credential, and a serve-only mount never writes, so it
+holds none.
 
 The secret-typed variables also accept the container-secret file pattern. Set the `_FILE` form
-(`ECLUSE_SERVER__AUTH_TOKEN_FILE`, `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN_FILE`,
-`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN_FILE`) to a file path, and the file's contents, with
-trailing newlines stripped, become the value, so the token never enters the environment. Setting
-both a variable and its `_FILE` form, or naming an unreadable file, is a fail-loud boot error.
+(`ECLUSE_SERVER__AUTH_TOKEN_FILE`, `ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN_FILE`,
+`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__CODE_ARTIFACT__TOKEN_FILE`) to a file path, and the file's
+contents, with trailing newlines stripped, become the value, so the token never enters the
+environment. Setting both a variable and its `_FILE` form, or naming an unreadable file, is a
+fail-loud boot error.
 
 A registry URL never carries a token either. Écluse refuses an endpoint written with userinfo
 (`https://user:token@host/`), a query string, or a fragment at boot, and the error names the key.

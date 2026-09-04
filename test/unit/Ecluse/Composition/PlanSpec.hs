@@ -308,7 +308,7 @@ wouldRefuse invocation err = invocation <> " would refuse to boot: " <> renderBo
 
 -- | The npm mount mirroring where it reads: a writing role's advisory, the Dredger's refusal.
 collapsedMirrorEnv :: [(String, String)]
-collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" "https://private.example.test" staticEnvVars
+collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL" "https://private.example.test" staticEnvVars
 
 collapsedMirrorRefusal :: BootError
 collapsedMirrorRefusal = MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" "https://private.example.test"
@@ -326,7 +326,7 @@ refusalsOf = void . brOutcome
 -- | staticEnvVars with the mirror target and its write token dropped: the mount serves only.
 serveOnlyEnvVars :: [(String, String)]
 serveOnlyEnvVars =
-    withoutMirrorTargetUrl (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN") . fst) staticEnvVars)
+    withoutMirrorTargetUrl (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN") . fst) staticEnvVars)
 
 -- | The preamble's first line when no document exists at the default path.
 absentDocumentLine :: Text
