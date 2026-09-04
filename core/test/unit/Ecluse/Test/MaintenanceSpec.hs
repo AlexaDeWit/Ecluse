@@ -33,10 +33,8 @@ import Ecluse.Test.Maintenance (
     newFakeStore,
  )
 
-{- The fake is the handle's second implementation, so what these cases really assert is
-that the contract carries a backend nothing like CodeArtifact: a two-version batch
-ceiling, a delete that finishes after the call, and a store that refuses a
-re-publication. -}
+{- The fake is the handle's second implementation, so these cases assert the contract carries a backend
+nothing like CodeArtifact: a two-version ceiling, a late-finishing delete, and no re-publication. -}
 spec :: Spec
 spec = do
     describe "the fake store's enumeration" $ do

@@ -43,7 +43,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Maintenance (StoreMaintenance)
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
-import Ecluse.Core.Text (afterFirst, nonBlank)
+import Ecluse.Core.Text (nonBlank, registryPath)
 import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactMaintenance)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     CodeArtifactStore (..),
@@ -99,9 +99,8 @@ resolveStoreBackend eco url = case parseCodeArtifactHost (hostAddress raw) of
   where
     raw = registryUrlText url
 
-{- The rest of a CodeArtifact endpoint: the format the ecosystem maps to, and the repository under
-it. The path's format segment has to be the mount's own, because a repository's per-format
-endpoints are separate stores. -}
+{- The format the ecosystem maps to, and the repository under it. The path's format segment must be
+the mount's own, because a repository's per-format endpoints are separate stores. -}
 codeArtifactCoordinates ::
     Ecosystem -> Text -> Text -> Text -> Text -> Either StoreMaintenanceReason CodeArtifactStore
 codeArtifactCoordinates eco raw domain owner region = do
@@ -127,7 +126,7 @@ repositoryOfPath format url = case pathSegments url of
 
 -- The non-empty path segments of an absolute URL, which the egress boundary has already vetted.
 pathSegments :: Text -> [Text]
-pathSegments url = filter (not . T.null) (T.splitOn "/" (T.dropWhile (/= '/') (afterFirst "://" url)))
+pathSegments = filter (not . T.null) . T.splitOn "/" . registryPath
 
 {- | How a boot builds one store's maintenance handle. Injected, as the queue builder is, so a spec
 drives the pruner's arm of the planning phase without discovering an AWS identity.

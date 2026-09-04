@@ -71,7 +71,8 @@ data ControlPlane = ControlPlane
     }
 
 {- | Build the maintenance handle for one CodeArtifact repository, with AWS credentials
-discovered the standard way (environment, instance role, container role, SSO, STS).
+discovered the standard way (environment, credentials file, web identity, container role,
+instance role).
 -}
 newCodeArtifactMaintenance :: CodeArtifactStore -> IO StoreMaintenance
 newCodeArtifactMaintenance store =

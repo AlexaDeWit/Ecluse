@@ -9,6 +9,7 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (
     BootError (
+        MirrorTargetOnMountEndpoint,
         MissingAdapter,
         PublicationAllowMissing,
         PublicationTargetOnPublicUpstream,
@@ -17,7 +18,7 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Maintenance (StoreBackend (CodeArtifactBackend), clearedBackend)
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, noMaintenanceBackend, overrideEnv, staticEnvVars)
+import Ecluse.Composition.Support (codeArtifactEnvVars, codeArtifactMirrorUrl, expectConfig, noMaintenanceBackend, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPublications, vpSettings),
@@ -111,6 +112,12 @@ refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
 
     it "refuses the deleting role a mirror target this build has no maintenance backend for" $
         refusalsFor MirrorPruner staticEnvVars `shouldReturn` [noMaintenanceBackend]
+
+    it "refuses the deleting role a collision on a target it has a backend for" $
+        -- The plan carries the cleared backend alone, so a collision has to stop the boot
+        -- through the endpoint rule. A backend the pass would clear yields no plan either way.
+        refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM" codeArtifactMirrorUrl codeArtifactEnvVars)
+            `shouldReturn` [MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" codeArtifactMirrorUrl]
 
     it "reports the mount refusal beside the maintenance refusal from one deleting-role run" $
         refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" staticEnvVars)

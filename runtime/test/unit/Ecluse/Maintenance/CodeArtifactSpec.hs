@@ -44,11 +44,8 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     consentTagValue,
  )
 
-{- | The CodeArtifact handle: the facts it supplies without a call, and the sequencing it puts
-around the five control-plane calls. Nothing here discovers an AWS identity or reaches a network:
-the driven cases supply a 'ControlPlane' whose fields answer with @amazonka@'s own response
-values. Every decision those calls feed is covered in
-"Ecluse.Maintenance.CodeArtifact.DecideSpec".
+{- | The CodeArtifact handle's facts and the sequencing around its five calls, driven over 'ControlPlane'
+answers built from @amazonka@'s own types. Each decision is covered in "Ecluse.Maintenance.CodeArtifact.DecideSpec".
 -}
 spec :: Spec
 spec = maybe noNpmFormat handleCases npmStore

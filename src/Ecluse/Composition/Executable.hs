@@ -120,7 +120,7 @@ planExecutable logEnv resolveAdapter buildQueue buildStore bootPlan = case bpRol
     BootMirrorPipeline role ->
         fmap (executablePlan . MirrorPipelineWiring)
             <$> planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan
-    -- The refusal below holds until this build carries a sweep.
+    -- This build carries no sweep, so the arm plans its handles and then refuses.
     BootStorePruner ->
         idlePrunerRefusal
             <$> planStoreMaintenance buildStore (vpMirrorStores (bpValidated bootPlan))

@@ -102,6 +102,9 @@ codecSpec = describe "the npm codec" $ do
         let named = CA.newPackageSummary & CAL.packageSummary_package ?~ "lodash"
         packagesOfPage Npm [named, CA.newPackageSummary] `shouldBe` [plainName]
 
+    it "reads a blank listing package name as absent, dropping the entry" $
+        packagesOfPage Npm [CA.newPackageSummary & CAL.packageSummary_package ?~ ""] `shouldBe` []
+
     it "reads a scoped listing entry back into a scoped name" $ do
         let scoped =
                 CA.newPackageSummary
@@ -289,6 +292,10 @@ verdictSpec = describe "the verdicts a sweep reads before it deletes" $ do
         let arned = CA.newRepositoryDescription & CAL.repositoryDescription_arn ?~ "arn:aws:codeartifact:::repository/acme/mirror"
         arnOfDescription arned `shouldBe` Right "arn:aws:codeartifact:::repository/acme/mirror"
         arnOfDescription CA.newRepositoryDescription `shouldSatisfy` isLeft
+
+    it "reads a blank ARN as absent, so no tag call is addressed to it" $
+        arnOfDescription (CA.newRepositoryDescription & CAL.repositoryDescription_arn ?~ "")
+            `shouldBe` arnOfDescription CA.newRepositoryDescription
   where
     preservedFor named = \case
         StorePreserved reason -> named `T.isInfixOf` reason
