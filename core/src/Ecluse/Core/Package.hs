@@ -40,7 +40,7 @@ module Ecluse.Core.Package (
     isAsciiNameComponent,
 
     -- * Canonical keys
-    normalisePyPI,
+    canonicalise,
 
     -- * Normalised signals
     CodeExecSignal (..),
@@ -106,6 +106,7 @@ import Ecluse.Core.Package.Hash (
     sriBody,
     sriPrefix,
  )
+import Ecluse.Core.Package.Pep503 (normalisePyPI)
 import Ecluse.Core.Version (Version)
 
 {- | An npm scope, stored without its leading @\'\@\'@ (the scope of @\@myorg\/pkg@ is
@@ -181,23 +182,14 @@ mkPackageName eco ns raw =
         Just s -> renderScope s <> "/" <> raw
         Nothing -> raw
 
--- Normalise a display name into its canonical matching key for an ecosystem.
+{- | Normalise a display name into its canonical matching key for an ecosystem. Each
+ecosystem's grammar lives in its own module.
+-}
 canonicalise :: Ecosystem -> Text -> Text
 canonicalise = \case
     Npm -> id
     RubyGems -> id
     PyPI -> normalisePyPI
-
-{- | PEP 503 name normalisation: lower-case, and collapse each run of
-@\'-\'@\/@\'_\'@\/@\'.\'@ to a single @\'-\'@. It is the canonical key a PyPI 'PackageName'
-matches on, so two spellings of one distribution compare equal.
--}
-normalisePyPI :: Text -> Text
-normalisePyPI t =
-    T.intercalate "-"
-        . filter (not . T.null)
-        . T.splitOn "-"
-        $ T.map (\c -> if c == '_' || c == '.' then '-' else c) (T.toLower t)
 
 -- | Render a package name in its native wire form (the display name).
 renderPackageName :: PackageName -> Text
