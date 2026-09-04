@@ -11,7 +11,7 @@ set -euo pipefail
 suite="${1:?usage: scripts/coverage-tix.sh <suite> [builddir]}"
 builddir="${2:-dist-coverage}"
 
-tix="$(find "$builddir" -type f -name "${suite}.tix" -printf '%T@\t%p\n' | sort -n | tail -n1 | cut -f2-)"
+tix="$(find "$builddir" -type f -name "${suite}.tix" -printf '%T@\t%p\n' | LC_ALL=C sort -n | tail -n1 | cut -f2-)"
 if [ -z "$tix" ]; then
   echo "coverage-tix: no ${suite}.tix found under $builddir/ (did the suite run?)" >&2
   exit 1

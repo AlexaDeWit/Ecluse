@@ -9,7 +9,7 @@
 # tier's number is under-counting every module the other tier exercises. For the
 # merged picture that matches the Codecov dashboard, run the combined report,
 # which needs Docker:
-#   scripts/coverage-combined.sh   (task coverage)
+#   task coverage   (the combined report, assembled in the Taskfile)
 # Each non-combined run prints this caveat. Set ECLTEST_COVERAGE_QUIET_PARTIAL=1
 # to suppress it, as the combined script does when it drives this one per tier.
 #
@@ -31,9 +31,9 @@ builddir="dist-coverage" # isolated so -fhpc instrumentation never invalidates
                          # the normal `cabal build` cache in dist-newstyle
 outdir="coverage"
 
-# When coverage-combined.sh drives this script per tier, it sets
-# ECLTEST_COVERAGE_QUIET_PARTIAL to suppress the caveat below. It prints the
-# merged total itself.
+# The Taskfile's `coverage` task sets ECLTEST_COVERAGE_QUIET_PARTIAL when it drives
+# this script per tier, to suppress the caveat below. It prints the merged total
+# itself.
 if [ -z "${ECLTEST_COVERAGE_QUIET_PARTIAL:-}" ]; then
   case "$suite" in
     ecluse-core-unit) other="ecluse-unit and ecluse-integration" ;;
