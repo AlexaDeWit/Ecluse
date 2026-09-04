@@ -17,7 +17,12 @@ module Ecluse.Config.Types (
     unUrl,
     HttpScheme (..),
     splitHttpScheme,
-    MirrorCredential (..),
+    StoreTag (..),
+    storeTagName,
+    MintPlan (..),
+    CodeArtifactAbsence (..),
+    ControlPlane (..),
+    StoreBackend (..),
     FirstParty (..),
     MountIntegrity (..),
     MountConfig (..),
@@ -76,6 +81,7 @@ import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig)
 import Ecluse.Runtime.Log (LogFormat, LogLevel)
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
 import Ecluse.Runtime.Telemetry (TelemetrySwitch)
 
 {- | An operator-configured @http(s)@ URL, whitespace-trimmed. 'mkUrl' is the only builder, so no
@@ -118,14 +124,58 @@ splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
 splitHttpScheme raw =
     ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)
 
-{- | The mirror-write credential, __derived from the mirror-target URL__ so a token can never pair
-with an endpoint it was not minted for. Load resolves it once ("Ecluse.Config.MirrorCredential").
+{- | Which store backend serves a mount, derived from its mirror-target URL. #1147 makes it a
+declared tag and adds @verdaccio@.
 -}
-data MirrorCredential
+data StoreTag
+    = -- | Any host that speaks the ecosystem's protocol, authenticated by a static token.
+      TagRegistry
+    | -- | A CodeArtifact repository endpoint, which mints its own write token.
+      TagCodeArtifact
+    deriving stock (Eq, Show)
+
+-- | The tag as an operator writes it, and as a refusal names it.
+storeTagName :: StoreTag -> Text
+storeTagName = \case
+    TagRegistry -> "registry"
+    TagCodeArtifact -> "codeArtifact"
+
+{- | How a mount's mirror write authenticates, __derived from the mirror-target URL__ so a token
+can never pair with an endpoint it was not minted for ("Ecluse.Config.Target").
+-}
+data MintPlan
     = -- | A CodeArtifact mirror target: the mint identity parsed from its host.
-      MirrorCodeArtifact CodeArtifactConfig
+      MintCodeArtifact CodeArtifactConfig
     | -- | Any other mirror target: an operator-supplied static write token.
-      MirrorStatic Secret
+      MintStatic Secret
+    deriving stock (Eq, Show)
+
+{- | Why a CodeArtifact target addresses no repository. Carried on the value rather than refused
+at load, because only @ecluse dredger@ needs it (#1147 moves the check to the load).
+-}
+data CodeArtifactAbsence
+    = -- | CodeArtifact has no package format for this ecosystem.
+      NoFormatFor Ecosystem
+    | -- | The target's path is not a repository endpoint under the carried format token.
+      NotRepositoryEndpoint Text
+    deriving stock (Eq, Show)
+
+-- | The control plane a mount's store offers, the face @ecluse dredger@ deletes through.
+data ControlPlane
+    = -- | The CodeArtifact repository the target addresses, or why it addresses none.
+      ControlCodeArtifact (Either CodeArtifactAbsence CodeArtifactStore)
+    | -- | The tag names no control plane this build implements.
+      ControlNone
+    deriving stock (Eq, Show)
+
+{- | A mount's store backend, resolved once at load ("Ecluse.Config.Target") and read by every
+consumer, so no two roles can infer a different backend for the same mount.
+-}
+data StoreBackend = StoreBackend
+    { sbTag :: StoreTag
+    , sbMint :: MintPlan
+    , sbControl :: ControlPlane
+    }
     deriving stock (Eq, Show)
 
 {- | The namespaces a mount's deployment owns, one arm per ecosystem, read only in that registry's own naming
@@ -332,7 +382,7 @@ regMirrorTarget regs = case regMode regs of
 
 data MirrorTarget = MirrorTarget
     { mtUrl :: RegistryUrl
-    , mtCredential :: MirrorCredential
+    , mtBackend :: StoreBackend
     }
     deriving stock (Eq, Show)
 
@@ -375,15 +425,12 @@ data ConfigError
       mount's ecosystem and the offending document key.
       -}
       MirrorSettingWithoutWrite Ecosystem Text
-    | {- | An active mount's mirror target is not a CodeArtifact endpoint (whose write
-      token would be minted), so it needs an explicit static write token, and none was
-      supplied. Carries the mount's ecosystem.
+    | {- | An active mount's mirror target mints no write token, so it needs an explicit static
+      one, and none was supplied. Carries the mount's ecosystem.
       -}
       MirrorCredentialTokenMissing Ecosystem
-    | {- | An active mount's mirror target is a CodeArtifact endpoint (its write token is
-      minted automatically from the host identity) yet a static write token was also
-      supplied. Refused so the two credential sources can never silently contend.
-      Carries the mount's ecosystem.
+    | {- | An active mount's mirror target mints its own write token, yet a static one was also
+      supplied, and the two must never contend. Carries the mount's ecosystem.
       -}
       MirrorCredentialConflict Ecosystem
     deriving stock (Eq, Show)

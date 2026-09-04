@@ -9,11 +9,15 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (
     BootError (..),
-    StoreMaintenanceReason (ClientBuildFailed, NoBackendForHost, NoFormatFor, NotRepositoryEndpoint),
+    StoreMaintenanceReason (ClientBuildFailed, CodeArtifactUnaddressable, NoControlPlane),
     renderBootError,
     renderBootErrors,
  )
-import Ecluse.Config (PolicyError (UnknownRuleType))
+import Ecluse.Config (
+    CodeArtifactAbsence (NoFormatFor, NotRepositoryEndpoint),
+    PolicyError (UnknownRuleType),
+    StoreTag (TagRegistry),
+ )
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 
@@ -106,15 +110,15 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "transient"
         -- The maintenance refusal names the key, the reason, and why the Dredger will not
         -- start without a backend for it.
-        renderBootError (StoreMaintenanceUnavailable Npm NoBackendForHost)
-            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__MIRROR_TARGET has no usable store maintenance backend: its host names no store maintenance backend this build carries"
-        renderBootError (StoreMaintenanceUnavailable Npm NoBackendForHost)
+        renderBootError (StoreMaintenanceUnavailable Npm (NoControlPlane TagRegistry))
+            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__MIRROR_TARGET has no usable store maintenance backend: its target is a registry store, which carries no store maintenance backend this build can sweep"
+        renderBootError (StoreMaintenanceUnavailable Npm (NoControlPlane TagRegistry))
             `shouldSatisfy` infixed "deletes from every mount's mirror target"
         renderBootError (StoreMaintenanceUnavailable Npm (ClientBuildFailed "CredentialChainExhausted"))
             `shouldSatisfy` infixed "building its client failed: CredentialChainExhausted"
-        renderBootError (StoreMaintenanceUnavailable RubyGems (NoFormatFor RubyGems))
+        renderBootError (StoreMaintenanceUnavailable RubyGems (CodeArtifactUnaddressable (NoFormatFor RubyGems)))
             `shouldSatisfy` infixed "CodeArtifact has no package format for the rubygems ecosystem"
-        renderBootError (StoreMaintenanceUnavailable Npm (NotRepositoryEndpoint "npm"))
+        renderBootError (StoreMaintenanceUnavailable Npm (CodeArtifactUnaddressable (NotRepositoryEndpoint "npm")))
             `shouldSatisfy` infixed "its path is not a CodeArtifact repository endpoint, /npm/{repository}/"
         -- The idle-Dredger refusal names the capability this build lacks, not a key to fix.
         renderBootError StorePrunerWithoutSweep

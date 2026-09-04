@@ -31,7 +31,7 @@ module Ecluse.Composition.Support (
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
-import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoBackendForHost))
+import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
@@ -42,7 +42,7 @@ import Ecluse.Composition.Plan (
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline), RegistryRole (MirrorWriter))
 import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMount), vetBoot)
 import Ecluse.Composition.Vet (runVet)
-import Ecluse.Config (AppConfig, Config (configApp), loadConfig, renderConfigError)
+import Ecluse.Config (AppConfig, Config (configApp), StoreTag (TagRegistry), loadConfig, renderConfigError)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Security (Limits (..))
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
@@ -107,7 +107,7 @@ codeArtifactEnvVars =
 
 -- | The deleting role's refusal of 'staticEnvVars', whose mirror target no backend here sweeps.
 noMaintenanceBackend :: BootError
-noMaintenanceBackend = StoreMaintenanceUnavailable Npm NoBackendForHost
+noMaintenanceBackend = StoreMaintenanceUnavailable Npm (NoControlPlane TagRegistry)
 
 -- | Drop any ECLUSE_MOUNTS__NPM__MIRROR_TARGET entry, so a test can supply its own.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]

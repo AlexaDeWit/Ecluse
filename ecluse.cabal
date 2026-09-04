@@ -321,11 +321,11 @@ library
     Ecluse.Config.AdvisoryStore
     Ecluse.Config.Ambient
     Ecluse.Config.DefaultConfig
-    Ecluse.Config.MirrorCredential
     Ecluse.Config.Parser
     Ecluse.Config.QueueTarget
     Ecluse.Config.Resolve
     Ecluse.Config.Rule
+    Ecluse.Config.Target
     Ecluse.Config.Types
     Ecluse.Rts
 
@@ -831,10 +831,10 @@ test-suite ecluse-unit
     Ecluse.Config.AesonSpec
     Ecluse.Config.AmbientSpec
     Ecluse.Config.DocCoverageSpec
-    Ecluse.Config.MirrorCredentialSpec
     Ecluse.Config.QueueTargetSpec
     Ecluse.Config.ResolveSpec
     Ecluse.Config.RuleSpec
+    Ecluse.Config.TargetSpec
     Ecluse.Config.TypesSpec
     Ecluse.ConfigSpec
     Ecluse.Cve.SyncSpec

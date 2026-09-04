@@ -22,8 +22,11 @@ import Data.Text qualified as T
 import UnliftIO (tryAny)
 
 import Ecluse.Config (
+    CodeArtifactAbsence (NoFormatFor, NotRepositoryEndpoint),
     PolicyError,
+    StoreTag,
     renderPolicyError,
+    storeTagName,
  )
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Core.Credential (Secret)
@@ -124,12 +127,10 @@ data BootError
 
 -- | Why a mount's mirror target reached no store maintenance handle.
 data StoreMaintenanceReason
-    = -- | The target's host names no backend this build carries.
-      NoBackendForHost
-    | -- | The backend its host names has no package format for this ecosystem.
-      NoFormatFor Ecosystem
-    | -- | The target's path is not a repository endpoint under the carried format token.
-      NotRepositoryEndpoint Text
+    = -- | The mount's store tag names no control plane this build implements.
+      NoControlPlane StoreTag
+    | -- | A CodeArtifact target that addresses no repository, carrying which of the two ways.
+      CodeArtifactUnaddressable CodeArtifactAbsence
     | -- | Building the cleared backend's client against the live environment threw.
       ClientBuildFailed Text
     deriving stock (Eq, Show)
@@ -233,8 +234,10 @@ renderBootError = \case
 
 renderStoreMaintenanceReason :: StoreMaintenanceReason -> Text
 renderStoreMaintenanceReason = \case
-    NoBackendForHost -> "its host names no store maintenance backend this build carries"
-    NoFormatFor eco -> "CodeArtifact has no package format for the " <> ecosystemName eco <> " ecosystem"
-    NotRepositoryEndpoint format ->
+    NoControlPlane tag ->
+        "its target is a " <> storeTagName tag <> " store, which carries no store maintenance backend this build can sweep"
+    CodeArtifactUnaddressable (NoFormatFor eco) ->
+        "CodeArtifact has no package format for the " <> ecosystemName eco <> " ecosystem"
+    CodeArtifactUnaddressable (NotRepositoryEndpoint format) ->
         "its path is not a CodeArtifact repository endpoint, /" <> format <> "/{repository}/"
     ClientBuildFailed detail -> "building its client failed: " <> detail

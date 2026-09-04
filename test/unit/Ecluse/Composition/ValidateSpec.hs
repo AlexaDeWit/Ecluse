@@ -17,7 +17,7 @@ import Ecluse.Composition.BootError (
     ),
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
-import Ecluse.Composition.Maintenance (StoreBackend (CodeArtifactBackend), clearedBackend)
+import Ecluse.Composition.Maintenance (clearedBackend)
 import Ecluse.Composition.Support (codeArtifactEnvVars, codeArtifactMirrorUrl, expectConfig, noMaintenanceBackend, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
@@ -93,8 +93,7 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
         advisories `shouldBe` []
         fmap (Map.keys . vpMirrorStores) outcome `shouldBe` Right []
   where
-    repositoryOf cleared = case clearedBackend cleared of
-        CodeArtifactBackend coordinates -> casRepository coordinates
+    repositoryOf = casRepository . clearedBackend
 
 refusalSpec :: Spec
 refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do

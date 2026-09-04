@@ -23,7 +23,12 @@ module Ecluse.Config (
     regPrivateUpstream,
     regMirrorTarget,
     MirrorTarget (..),
-    MirrorCredential (..),
+    StoreTag (..),
+    storeTagName,
+    MintPlan (..),
+    CodeArtifactAbsence (..),
+    ControlPlane (..),
+    StoreBackend (..),
     FirstParty (..),
     MountIntegrity (..),
     MountConfig (..),
@@ -68,9 +73,9 @@ import Data.Yaml (decodeEither')
 import Ecluse.Config.AdvisoryStore (advisoryObjectKey, advisoryStoreBucket)
 import Ecluse.Config.Aeson ()
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
-import Ecluse.Config.MirrorCredential (resolveMirrorCredential)
 import Ecluse.Config.Resolve (buildEnvAst, deepMerge, secretLeafKeys)
 import Ecluse.Config.Rule
+import Ecluse.Config.Target (resolveStoreBackend)
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Rules.Types (PrecededRule)
@@ -185,16 +190,15 @@ resolveMounts globalPolicy appConfig =
         ["mirrorTargetToken" | isJust (mntMirrorTargetToken mcfg)]
             <> ["mirrorTokenDuration" | isJust (mntMirrorTokenDuration mcfg)]
 
-{- | Project a mirrored mount onto its served form. 'resolveMirrorCredential' derives the
-mirror-write credential from the mirror-target URL, so the resolved 'MirrorTarget' never pairs
-an endpoint with a credential meant for another.
+{- | Project a mirrored mount onto its served form. 'resolveStoreBackend' derives the store from
+the mirror-target URL, so the resolved 'MirrorTarget' never pairs an endpoint with another's plan.
 -}
 resolveMirrored :: RulePolicy -> Ecosystem -> RegistryUrl -> RegistryUrl -> MountConfig -> Either [ConfigError] Mount
 resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
     policy <- resolveMountPolicy globalPolicy mcfg
-    credential <-
+    backend <-
         first (: []) $
-            resolveMirrorCredential eco mirrorTarget (mntMirrorTargetToken mcfg) (mntMirrorTokenDuration mcfg)
+            resolveStoreBackend eco mirrorTarget (mntMirrorTargetToken mcfg) (mntMirrorTokenDuration mcfg)
     Right $
         mountOf eco mcfg policy $
             Mirrored
@@ -203,7 +207,7 @@ resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
                     , mlMirrorTarget =
                         MirrorTarget
                             { mtUrl = mirrorTarget
-                            , mtCredential = credential
+                            , mtBackend = backend
                             }
                     }
 
