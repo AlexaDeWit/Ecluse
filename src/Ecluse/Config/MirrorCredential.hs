@@ -9,7 +9,7 @@ authenticates. A CodeArtifact endpoint
 (@{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@) encodes its whole mint
 identity in its host. Such a target therefore dictates a minted token scoped to
 exactly the domain the worker writes to. Any other host takes an operator-supplied
-static bearer.
+static write token.
 
 The credential comes from the same URL the request goes to, so a token can never pair
 with an endpoint it was not minted for. The divergence class is unrepresentable
@@ -63,7 +63,7 @@ resolveMirrorCredential eco url mToken mDuration =
             Just token -> Right (MirrorStatic token)
             Nothing -> Left (MirrorCredentialTokenMissing eco)
 
-{- | Parse a CodeArtifact npm endpoint host into its (domain, owner, region). The shape is
+{- | Parse a CodeArtifact endpoint host into its (domain, owner, region). The shape is
 @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@, where @{owner}@ is the 12-digit
 account id after the __last__ hyphen, so a domain may itself contain hyphens. Any other host
 yields 'Nothing' and counts as a static-token target, never a bogus owner.

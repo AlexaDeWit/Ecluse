@@ -47,7 +47,7 @@ import Data.ByteArray qualified as BA
 import Data.Time (UTCTime)
 import Text.Show (showString, showsPrec)
 
-{- | A short-lived bearer secret (an access token).
+{- | A short-lived secret (an access token).
 
 Redacted in 'Show' and compared in constant time, so holding one cannot disclose it. Build one
 with 'mkSecret' and recover the text __only__ at the point of use with 'unSecret'.
@@ -56,7 +56,7 @@ newtype Secret = Secret Text
 
 {- | Constant-time equality over the UTF-8 encoding of the wrapped token.
 
-The @ECLUSE_SERVER__AUTH_TOKEN@ edge gate compares a client's bearer token through this instance.
+The @ECLUSE_SERVER__AUTH_TOKEN@ edge gate compares a client's token through this instance.
 A short-circuiting compare would leak the secret's prefix length to a remote attacker. The token
 length still leaks, and Écluse accepts that.
 -}
