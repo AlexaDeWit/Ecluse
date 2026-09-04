@@ -69,9 +69,8 @@ data PyPIFirstParty
       PyPIOwnedPrefix PyPIPrefix
     deriving stock (Eq, Show)
 
-{- | Parse one configured entry. A trailing @*@ marks a prefix (@acme-*@ the family, @acme@ the
-distribution), and the star follows a separator, so @acme*@ is a typo rather than a silent claim on
-@acmeco@.
+{- | Parse one configured entry: a trailing @*@ after a separator marks a prefix (@acme-*@), anything
+else a distribution (@acme@). @acme*@ is refused as a typo, not a claim on @acmeco@.
 -}
 projectFirstPartyEntry :: Text -> Either ParseError PyPIFirstParty
 projectFirstPartyEntry entry = case T.stripSuffix "*" entry of
