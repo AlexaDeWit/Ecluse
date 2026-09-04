@@ -9,7 +9,7 @@
 # tier's number is under-counting every module the other tier exercises. For the
 # merged picture that matches the Codecov dashboard, run the combined report,
 # which needs Docker:
-#   scripts/coverage-combined.sh   (task coverage)
+#   task coverage   (the combined report, assembled in the Taskfile)
 # Each non-combined run prints this caveat. Set ECLTEST_COVERAGE_QUIET_PARTIAL=1
 # to suppress it, as the combined script does when it drives this one per tier.
 #
@@ -31,9 +31,9 @@ builddir="dist-coverage" # isolated so -fhpc instrumentation never invalidates
                          # the normal `cabal build` cache in dist-newstyle
 outdir="coverage"
 
-# When coverage-combined.sh drives this script per tier, it sets
-# ECLTEST_COVERAGE_QUIET_PARTIAL to suppress the caveat below. It prints the
-# merged total itself.
+# The Taskfile's `coverage` task sets ECLTEST_COVERAGE_QUIET_PARTIAL when it drives
+# this script per tier, to suppress the caveat below. It prints the merged total
+# itself.
 if [ -z "${ECLTEST_COVERAGE_QUIET_PARTIAL:-}" ]; then
   case "$suite" in
     ecluse-core-unit) other="ecluse-unit and ecluse-integration" ;;
@@ -56,14 +56,7 @@ cabal test "$suite" \
   --test-show-details=direct \
   "$@"
 
-# The newest .tix is the one this run wrote. The cached builddir keeps the
-# package directory of every version it ever built, so an older ecluse-<version>/
-# tree carries a stale .tix of the same name, and `find` does not order its results.
-tix="$(find "$builddir" -type f -name "${suite}.tix" -printf '%T@\t%p\n' | sort -n | tail -n1 | cut -f2-)"
-if [ -z "$tix" ]; then
-  echo "coverage: no ${suite}.tix found under $builddir/ (did the suite run?)" >&2
-  exit 1
-fi
+tix="$(bash scripts/coverage-tix.sh "$suite" "$builddir")"
 
 # Every HPC mix directory produced by the coverage build.
 mix_args=()
