@@ -103,6 +103,37 @@ needs, because `publicUpstream` already has a default.
 No token appears above, because Écluse mints the mirror-target write credential from the
 CodeArtifact host. Every other secret is an environment variable.
 
+## First-party namespaces
+
+A mount's `firstParty` key names the namespaces your deployment owns. Set it when your own
+packages live behind Écluse. The privilege then reaches every path that could confuse one of your
+names with a public one.
+
+| Path | What the privilege decides |
+| --- | --- |
+| Publish | Only a first-party name may be published through the relay. Every other name is a `403`. |
+| Serve | A first-party name resolves from `privateUpstream` alone. Écluse never fetches it from `publicUpstream` and never merges a public document into it. A private miss is a `404`. |
+| Mirror | Nothing first-party is mirrored, because nothing first-party is fetched from the public leg. |
+
+The shape follows the ecosystem, and an empty or malformed list is refused at boot.
+
+| Ecosystem | An entry is | Example |
+| --- | --- | --- |
+| npm | A scope | `@acme,@beta` |
+| PyPI | A distribution name, or a prefix written with a trailing `*` | `acme,acme-*` |
+
+A PyPI entry reads through PEP 503 normalisation, so `Acme_Tools` and `acme-tools` are one name. A
+prefix stops at the separator, so `acme-*` covers `acme-tools` and not `acmeco`, which is a name
+you do not own. Declare the bare `acme` too if you publish a distribution under that exact name.
+
+Setting `firstParty` on an npm mount narrows what a scoped install reaches. A name under one of
+your scopes that the private upstream does not have answers `404`, and Écluse does not fall back to
+the public registry for it. That refusal is the point: a public package published under a scope you
+own is a dependency-confusion attack.
+
+This is a privilege over names, not authentication. It says which names are yours, never who may
+use them, so the private upstream stays the authority on every caller.
+
 ## Secrets
 
 Secrets never live in the config document: client and registry tokens are always env vars. A

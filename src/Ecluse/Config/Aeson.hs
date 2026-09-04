@@ -23,7 +23,7 @@ import Ecluse.Config.Types
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName, parseEcosystem)
-import Ecluse.Core.Package (Scope)
+import Ecluse.Core.Package (Scope, mkPackageName, mkPyPIPrefix)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (parseDivergencePolicy)
 import Ecluse.Core.Registry.Npm.Project (projectScope)
@@ -45,7 +45,7 @@ mountDecoder eco =
         <*> optionalKey "mirrorTokenDuration" parseCodeArtifactDuration
         <*> optionalKey "publicationTarget" parseRegistryUrl
         <*> optionalKey "publicationTargetToken" parseSecret
-        <*> optionalKey "publicationAllow" (parsePublicationAllow eco)
+        <*> optionalKey "firstParty" (parseFirstParty eco)
         <*> nestedKey "integrity" (decodeGroup "integrity" mountIntegrityDecoder)
         <*> optionalPlainKeyOr "rules" (RulePatch Map.empty)
 
@@ -166,27 +166,45 @@ parseSecret :: String -> Value -> Parser Secret
 parseSecret field = expectString field (pure . mkSecret)
 
 -- Every arm is explicit, so an added 'Ecosystem' surfaces here as a compiler error. One with no
--- allow-list shape yet refuses the key rather than parsing it as another ecosystem's.
-parsePublicationAllow :: Ecosystem -> String -> Value -> Parser PublicationAllow
-parsePublicationAllow eco field v = case eco of
-    Npm -> PublicationAllowNpmScopes <$> parseNpmScopes field v
-    PyPI -> unsupported
-    RubyGems -> unsupported
-  where
-    unsupported :: Parser PublicationAllow
-    unsupported = fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
+-- namespace shape yet refuses the key rather than parsing it as another ecosystem's.
+parseFirstParty :: Ecosystem -> String -> Value -> Parser FirstParty
+parseFirstParty eco field v = case eco of
+    Npm -> FirstPartyNpmScopes <$> parseNpmScopes field v
+    PyPI -> FirstPartyPyPI <$> parsePyPIFirstParty field v
+    RubyGems -> fail (field <> " is not supported for " <> toString (ecosystemName eco) <> " yet")
 
--- A configured list that admits nothing refuses every publish, so it fails the load instead.
+-- A configured list that names nothing privileges nothing, so it fails the load instead.
 parseNpmScopes :: String -> Value -> Parser (NonEmpty Scope)
 parseNpmScopes field v = do
     scopes <- commaSeparated field parseScopeEntry v
     maybe (fail (field <> " must name at least one scope")) pure (nonEmpty scopes)
 
--- Reject a publicationAllow segment no scope can equal, an empty one or a wrong separator, so a
--- typo fails the load instead of seeding an allow-list that refuses every publish.
+-- Reject a firstParty segment no scope can equal, an empty one or a wrong separator, so a typo
+-- fails the load instead of seeding a privilege that covers nothing.
 parseScopeEntry :: Text -> Parser Scope
 parseScopeEntry entry =
-    either (const (fail ("invalid scope in publicationAllow: " <> show entry))) pure (projectScope entry)
+    either (const (fail ("invalid scope in firstParty: " <> show entry))) pure (projectScope entry)
+
+parsePyPIFirstParty :: String -> Value -> Parser (NonEmpty PyPIFirstParty)
+parsePyPIFirstParty field v = do
+    entries <- commaSeparated field (parsePyPIEntry field) v
+    maybe (fail (field <> " must name at least one distribution or prefix")) pure (nonEmpty entries)
+
+{- A trailing @*@ marks a prefix, so @acme-*@ declares the family and @acme@ the distribution
+itself. Both read through the PEP 503 canonicaliser, so one spelling has one verdict. A bare @*@
+would privilege every name on PyPI, and it canonicalises to nothing, which 'named' refuses along
+with an empty segment. -}
+parsePyPIEntry :: String -> Text -> Parser PyPIFirstParty
+parsePyPIEntry field entry = case T.stripSuffix "*" entry of
+    Just prefix -> maybe invalid (pure . PyPIOwnedPrefix) (mkPyPIPrefix prefix)
+    -- A name and a prefix share one alphabet, and 'mkPyPIPrefix' holds it, so a typo fails the
+    -- load rather than privileging a name no distribution can carry.
+    Nothing
+        | isJust (mkPyPIPrefix entry) -> pure (PyPIOwnedName (mkPackageName PyPI Nothing entry))
+        | otherwise -> invalid
+  where
+    invalid :: Parser a
+    invalid = fail ("invalid entry in " <> field <> ": " <> show entry)
 
 parseBlockedRanges :: String -> Value -> Parser [IPRange]
 parseBlockedRanges field = commaSeparated field parseBlockedRangeEntry

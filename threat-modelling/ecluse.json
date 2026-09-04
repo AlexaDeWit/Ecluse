@@ -1805,6 +1805,17 @@
                   "mitigation": "Risk treatment: accepted residual. No data crosses the boundary: the connection fails at the TLS handshake, before any request body goes out. The surface covers only allowlisted hosts whose DNS the attacker already controls, and the signal is coarse, connect and handshake timing alone. The host allowlist bounds which names can be aimed inward at all. It does not remove the residual timing signal.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000110"
+                },
+                {
+                  "number": 103,
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "title": "Dependency confusion through a first-party namespace on the public upstream",
+                  "type": "Spoofing",
+                  "description": "A mount declares the namespaces the deployment owns. An attacker registers a package on the public upstream under a name, scope, or prefix inside one of them, choosing a name the private store does not carry, or a version of one it does. Without the privilege the public leg would answer for that name: the packument merge would fold the public document in, the artifact path would stream its bytes after a private miss, and the mirror would write the admitted version into the deployment's own store. A build resolving a first-party dependency would install the attacker's package. That is dependency confusion, and the public leg is where it enters.",
+                  "mitigation": "A first-party name has one authority, the private upstream. The composition root derives one predicate from the mount's declaration and hands the same value to every consumer, so the publish relay, the serve path, and the store sweep cannot disagree about which names are privileged. The packument pipeline fetches the private origin alone for such a name, so no public document is fetched and none can be merged. The artifact pipeline ends a private miss there rather than falling through to the public leg. Nothing first-party is mirrored, because the mirror only enqueues a version the public leg admitted. A private miss is a 404, so no public package stands in for one the deployment owns. The declaration is parsed once at load into a closed per-ecosystem sum: npm matches a scope exactly, so @acme-evil does not satisfy @acme, and PyPI matches a PEP 503 canonical name exactly or a canonical prefix that stops at the separator, so acme-* covers acme-tools and not acmeco. An empty list is refused at load. Residual: a namespace the deployment has not declared carries no privilege, and a name the deployment owns but does not publish privately is unreachable rather than served from public.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000126"
                 }
               ],
               "trustBoundaryIds": [
@@ -1850,7 +1861,7 @@
             "data": {
               "type": "tm.Flow",
               "name": "relay npm publish (publisher token forwarded)",
-              "description": "A first-party publish relayed to the private store with the publisher's own token. The publish-scope allow-list gates it before any write.",
+              "description": "A first-party publish relayed to the private store with the publisher's own token. The mount's first-party namespaces gate it before any write.",
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
@@ -1867,7 +1878,7 @@
                   "title": "Package shadowing via first-party publish",
                   "type": "Tampering",
                   "description": "\u00c9cluse relays a publish to the private store with the publisher's own token. The packument merge serves private versions as trusted, winning collisions over public ones. A compromised-CI or insider publisher could clear the publish-scope check, or slip past it. They could then publish a name that the merge serves as a trusted version over the public package. That is a dependency-confusion path through \u00c9cluse's own trust model.",
-                  "mitigation": "The publicationAllow allow-list, for npm a list of scopes, refuses any name outside the operator's scopes before any upstream write. That is the anti-shadowing guard. The scope match is exact on the parsed namespace, so a prefix such as @acme-evil does not satisfy an @acme allow-list. Soundness requires the authorised identity to be the written identity. \u00c9cluse validates the publish document's own declared name and _id, and the per-version names, equal to the scope-guarded URL-path name before the relay. It then builds the write URL from that same canonical name. The guarded name, the written name, and the merge collision key are therefore one identity by construction. Residual: shadowing within an allow-listed scope, and allow-precedence choices, stay the operator's risk. Give the publisher's target credential least privilege.",
+                  "mitigation": "The mount's firstParty declaration, for npm a list of scopes, refuses any name outside the namespaces the deployment owns before any upstream write. That is the anti-shadowing guard. The scope match is exact on the parsed namespace, so a prefix such as @acme-evil does not satisfy an @acme allow-list. Soundness requires the authorised identity to be the written identity. \u00c9cluse validates the publish document's own declared name and _id, and the per-version names, equal to the scope-guarded URL-path name before the relay. It then builds the write URL from that same canonical name. The guarded name, the written name, and the merge collision key are therefore one identity by construction. Residual: shadowing within an allow-listed scope, and allow-precedence choices, stay the operator's risk. Give the publisher's target credential least privilege.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000106"
                 },

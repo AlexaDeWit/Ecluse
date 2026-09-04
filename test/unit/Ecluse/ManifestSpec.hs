@@ -109,12 +109,12 @@ spec = do
         it "the deny-by-default catch-all carries 404" $
             (statusCodes <$> getOp "/npm/{unsupportedPath}") `shouldBe` Just [404]
         it "the packument GET documents the gate statuses" $
-            (statusCodes <$> getOp "/npm/{package}") `shouldBe` Just [200, 304, 401, 403, 500, 502, 503]
+            (statusCodes <$> getOp "/npm/{package}") `shouldBe` Just [200, 304, 401, 403, 404, 500, 502, 503]
         it "the derived packument HEAD documents the same statuses with no bodies" $
             case headOp "/npm/{package}" of
                 Nothing -> expectationFailure "packument HEAD was not rendered"
                 Just op -> do
-                    statusCodes op `shouldBe` [200, 304, 401, 403, 500, 502, 503]
+                    statusCodes op `shouldBe` [200, 304, 401, 403, 404, 500, 502, 503]
                     responsesAreBodiless op `shouldBe` True
         it "the tarball GET honestly documents its transparent upstream relay" $
             (defaultMediaTypes <$> getOp "/npm/{package}/-/{filename}")

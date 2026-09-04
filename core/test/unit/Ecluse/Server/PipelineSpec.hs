@@ -139,6 +139,47 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
+    it "keeps a first-party packument off the public upstream, answering 404 on a private miss" $ do
+        (metricsPort, _decisions) <- recordingMetricsPort
+        rt <- mkRuntime metricsPort
+        hits <- newIORef (0 :: Int)
+        testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
+            base <- depsFor port
+            let serveUnder firstParty =
+                    captureServe
+                        npmPackumentContract
+                        rt
+                        (mountWith base{pdFirstParty = firstParty})
+                        (servePackument npmPackumentReplies leftpad defaultRequest)
+            -- The first-party serve runs first, against a cold metadata cache, so a zero count
+            -- means the public leg was never entered rather than answered from a cache entry.
+            firstParty <- serveUnder (const True)
+            statusCode (responseStatus firstParty) `shouldBe` 404
+            readIORef hits >>= (`shouldBe` 0)
+            -- The control: the same live upstream serves the same name once it is not first-party.
+            thirdParty <- serveUnder (const False)
+            statusCode (responseStatus thirdParty) `shouldBe` 200
+            readIORef hits >>= (`shouldSatisfy` (> 0))
+
+    it "keeps a first-party artifact off the public upstream, answering 404 after a private miss" $ do
+        (metricsPort, _decisions) <- recordingMetricsPort
+        rt <- mkRuntime metricsPort
+        hits <- newIORef (0 :: Int)
+        testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
+            base <- depsFor port
+            let serveUnder firstParty =
+                    captureServe
+                        npmTarballContract
+                        rt
+                        (mountWith base{pdFirstParty = firstParty})
+                        (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+            firstParty <- serveUnder (const True)
+            statusCode (responseStatus firstParty) `shouldBe` 404
+            readIORef hits >>= (`shouldBe` 0)
+            thirdParty <- serveUnder (const False)
+            statusCode (responseStatus thirdParty) `shouldBe` 200
+            readIORef hits >>= (`shouldSatisfy` (> 0))
+
     it "sheds packument work when metadata admission refuses" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
         -- No waiting room, so admission refuses the saturated attempt outright. These cases own the
@@ -309,6 +350,12 @@ upstreamApp req respond =
         _ -> respond (responseLBS status404 [] "")
   where
     host = maybe "localhost" snd (find ((== hHost) . fst) (requestHeaders req))
+
+{- | An upstream that counts every request before delegating. A first-party serve that reached
+the public leg would leave a count behind.
+-}
+countingUpstream :: IORef Int -> Application -> Application
+countingUpstream hits app req respond = modifyIORef' hits (+ 1) >> app req respond
 
 -- | The artifact bytes the upstream serves and the packument's @integrity@ commits to.
 artifactBytes :: ByteString

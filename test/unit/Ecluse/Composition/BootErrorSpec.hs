@@ -61,7 +61,7 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldNotSatisfy` infixed "AWS_ENDPOINT_URL_SQS"
         -- The mint-failure render tells a transient failure from a permanent one.
         renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
-        renderBootError (PublicationAllowMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW"
+        renderBootError (FirstPartyMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__FIRST_PARTY"
         renderBootError (PublishStaticCredentialNeedsEdge Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
         -- Each collision render names the offending key, the mount it collided with, and why.
         renderBootError (PublicationTargetOnPublicUpstream Npm PyPI "https://store.example.test")

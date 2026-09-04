@@ -60,6 +60,9 @@ npmServeDeps :: Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> [Prepared
 npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
     PackumentDeps
         { pdUpstreams = mountUpstreams [] privateBaseUrl publicBaseUrl mirror
+        , -- Deny by default, matching a mount that declares no namespaces. A spec pinning the
+          -- privilege record-updates this field.
+          pdFirstParty = const False
         , pdMountBaseUrl = "https://proxy.test"
         , pdRules = rules
         , pdAdditionalBlockedRanges = []

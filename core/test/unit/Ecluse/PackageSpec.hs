@@ -31,6 +31,22 @@ spec = do
                 s <- forAll (Gen.text (Range.linear 1 16) Gen.alphaNum)
                 mkScope ("@" <> s) === mkScope s
 
+    describe "PyPIPrefix" $ do
+        it "canonicalises a prefix, so one spelling has one verdict" $
+            mkPyPIPrefix "Acme_Tools" `shouldBe` mkPyPIPrefix "acme.tools"
+        it "refuses text no PyPI name can start with" $
+            -- An empty or separator-only prefix would cover every name on PyPI, and a
+            -- character outside PEP 503's alphabet covers none.
+            map mkPyPIPrefix ["", ".", "-_-", "*", "@acme", "acme/tools"] `shouldBe` replicate 6 Nothing
+        it "covers a name under the prefix, at the separator and no further" $
+            -- A prefix that ran past the separator would privilege acmeco, a name the
+            -- deployment does not own. The bare prefix is a name, not a family.
+            map (maybe False (`underPyPIPrefix` mkPackageName PyPI Nothing "acme-tools") . mkPyPIPrefix) ["acme", "acme-", "acme-tools", "acmeco"]
+                `shouldBe` [True, True, False, False]
+        it "covers only its own ecosystem" $
+            maybe False (`underPyPIPrefix` mkPackageName Npm Nothing "acme-tools") (mkPyPIPrefix "acme")
+                `shouldBe` False
+
     describe "mkPackageName" $ do
         it "renders a scoped npm package as @scope/name" $
             renderPackageName (mkPackageName Npm (Just (mkScope "myorg")) "thing")

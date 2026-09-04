@@ -142,6 +142,14 @@ data PackumentDeps = PackumentDeps
     a caller cannot build a gate that disagrees with the URLs it gates for. Read it through
     'pdPrivateBaseUrl', 'pdPublicBaseUrl', 'pdMirror', and 'pdTarballHostGate'.
     -}
+    , pdFirstParty :: PackageName -> Bool
+    {- ^ Whether a name belongs to a namespace this deployment owns, derived once at the
+    composition root from the mount's declaration and deny by default. A first-party name has
+    one authority, the private upstream: the public leg is never entered for it, so it is
+    never fetched, merged, or mirrored, and a private miss is a @404@. That closes dependency
+    confusion, where a public package registered under a name the deployment owns would
+    otherwise be served in place of the private one.
+    -}
     , pdMountBaseUrl :: Text
     {- ^ The mount's externally-visible base URL, under which served @dist.tarball@
     URLs are rewritten so artifacts are fetched back through the gate.
@@ -267,7 +275,7 @@ tarballHostHonoured origin deps =
         (pdAdditionalBlockedRanges deps)
 
 {- | The per-mount inputs the first-party publish handler needs, from the publication target
-endpoint to the publish-scope allow-list.
+endpoint to the first-party namespaces.
 
 The presence of these deps is the publish path's opt-in. A mount carries a 'PublishDeps' only
 when a publication target is configured, so @bindingPublishDeps@ being 'Nothing' is exactly
@@ -284,8 +292,9 @@ data PublishDeps = PublishDeps
     @npm publish@ is relayed to, as the https-only witness. The package path is appended to it.
     -}
     , pubAllowed :: PackageName -> Bool
-    {- ^ Whether this package may publish here, refused before any upstream write. Each ecosystem
-    derives it at the composition root, npm's from exact scope equality, deny by default.
+    {- ^ Whether this package may publish here, refused before any upstream write. It is the same
+    first-party predicate the serve path reads as 'pdFirstParty', derived once at the composition
+    root, deny by default.
     -}
     , pubStaticToken :: Maybe Secret
     {- ^ The static fallback credential (@ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN@) forwarded to the

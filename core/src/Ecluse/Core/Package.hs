@@ -26,6 +26,11 @@ module Ecluse.Core.Package (
     unScope,
     renderScope,
 
+    -- * PyPI name prefixes
+    PyPIPrefix,
+    mkPyPIPrefix,
+    underPyPIPrefix,
+
     -- * Package identity
     PackageName,
     mkPackageName,
@@ -81,7 +86,7 @@ module Ecluse.Core.Package (
 ) where
 
 import Data.Aeson (Value)
-import Data.Char (isAscii, isControl)
+import Data.Char (isAlphaNum, isAscii, isControl)
 import Data.Text qualified as T
 import Data.Text.Short (ShortText)
 import Data.Text.Short qualified as TS
@@ -194,6 +199,36 @@ normalisePyPI t =
         . filter (not . T.null)
         . T.splitOn "-"
         $ T.map (\c -> if c == '_' || c == '.' then '-' else c) (T.toLower t)
+
+{- | A PyPI name prefix, held in PEP 503 canonical form. PyPI has no structural namespace the
+way npm has a 'Scope', so a deployment that owns a family of distributions owns a prefix of
+their names.
+-}
+newtype PyPIPrefix = PyPIPrefix ShortText
+    deriving stock (Eq, Show)
+
+{- | Build a prefix, canonicalising it the way 'mkPackageName' canonicalises a name. 'Nothing'
+for text no PyPI name can start with: outside PEP 503's alphabet, or canonicalising to nothing,
+which would cover every name on PyPI.
+-}
+mkPyPIPrefix :: Text -> Maybe PyPIPrefix
+mkPyPIPrefix raw
+    | T.null canonical || not (T.all canonicalPyPIChar canonical) = Nothing
+    | otherwise = Just (PyPIPrefix (TS.fromText canonical))
+  where
+    canonical = normalisePyPI raw
+
+-- PEP 503's canonical alphabet, the form 'normalisePyPI' leaves a legal name in.
+canonicalPyPIChar :: Char -> Bool
+canonicalPyPIChar c = c == '-' || (isAscii c && isAlphaNum c)
+
+{- | Whether a name sits under a prefix. The match ends at PEP 503's separator, so @acme@ covers
+@acme-tools@ and not @acmeco@, which is a name the deployment does not own. The bare prefix is
+not itself covered: a deployment owning that distribution declares it as a name.
+-}
+underPyPIPrefix :: PyPIPrefix -> PackageName -> Bool
+underPyPIPrefix (PyPIPrefix prefix) name =
+    pkgEcosystem name == PyPI && TS.isPrefixOf (prefix <> "-") (pkgCanonical name)
 
 -- | Render a package name in its native wire form (the display name).
 renderPackageName :: PackageName -> Text

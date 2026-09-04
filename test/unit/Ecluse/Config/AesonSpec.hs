@@ -151,42 +151,55 @@ spec = describe "decodeDocument" $ do
         loadConfig [("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN", "t")] Nothing
             `shouldSatisfy` decodeErrorMentions "ECLUSE_MOUNTS__PYPI__MIRROR_TARGET_TOKEN"
 
-    it "rejects a malformed publicationAllow entry (a wrong separator folds into one dead scope), naming publicationAllow" $
+    it "rejects a malformed firstParty entry (a wrong separator folds into one dead scope), naming firstParty" $
         -- A stray separator would otherwise fold into a single unmatchable scope that
         -- passes the non-empty boot check, refusing every publish only at request time.
-        loadConfig [("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme;@beta")] Nothing
-            `shouldSatisfy` decodeErrorMentions "invalid scope in publicationAllow"
+        loadConfig [("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme;@beta")] Nothing
+            `shouldSatisfy` decodeErrorMentions "invalid scope in firstParty"
 
-    it "rejects a publicationAllow with an empty segment from a stray comma, naming publicationAllow" $
-        loadConfig [("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme,,@beta")] Nothing
-            `shouldSatisfy` decodeErrorMentions "invalid scope in publicationAllow"
+    it "rejects a firstParty with an empty segment from a stray comma, naming firstParty" $
+        loadConfig [("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme,,@beta")] Nothing
+            `shouldSatisfy` decodeErrorMentions "invalid scope in firstParty"
 
-    it "rejects an empty publicationAllow at load, naming publicationAllow" $
+    it "rejects an empty firstParty at load, naming firstParty" $
         -- A configured list that admits nothing would refuse every publish, so the load
         -- refuses it rather than binding a dead allow-list.
-        loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"publicationAllow\":\"\"}}}")
-            `shouldSatisfy` decodeErrorMentions "publicationAllow must name at least one scope"
+        loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{\"firstParty\":\"\"}}}")
+            `shouldSatisfy` decodeErrorMentions "firstParty must name at least one scope"
 
-    it "rejects publicationAllow on a mount whose ecosystem has no allow-list shape yet" $
-        -- Without the per-ecosystem arm the entries would parse as npm scopes, so the key
-        -- refuses at load and names the ecosystem it is unsupported for.
-        loadConfig pubUrlEnv (Just "{\"mounts\":{\"pypi\":{\"publicationAllow\":\"@acme\"}}}")
-            `shouldSatisfy` decodeErrorMentions "publicationAllow is not supported for pypi yet"
+    it "rejects firstParty on a mount whose ecosystem has no namespace shape yet" $
+        -- Without the per-ecosystem arm the entries would parse as another ecosystem's, so the
+        -- key refuses at load and names the ecosystem it is unsupported for.
+        loadConfig pubUrlEnv (Just "{\"mounts\":{\"rubygems\":{\"firstParty\":\"acme\"}}}")
+            `shouldSatisfy` decodeErrorMentions "firstParty is not supported for rubygems yet"
 
-    describe "a publicationAllow entry reads through npm's own scope grammar" $
+    it "rejects an empty PyPI firstParty at load, naming firstParty" $
+        loadConfig pubUrlEnv (Just "{\"mounts\":{\"pypi\":{\"firstParty\":\"\"}}}")
+            `shouldSatisfy` decodeErrorMentions "firstParty must name at least one distribution or prefix"
+
+    describe "a PyPI firstParty entry reads through PEP 503's name grammar" $
+        -- An entry no distribution name can equal privileges nothing, so it fails the load
+        -- rather than binding at request time. A bare @*@ would privilege every name on PyPI.
+        for_ pypiEntryVerdicts $ \(entry, valid) ->
+            it (show entry <> (if valid then " is an entry" else " is refused")) $
+                if valid
+                    then loadPyPIFirstParty entry `shouldSatisfy` isRight
+                    else loadPyPIFirstParty entry `shouldSatisfy` decodeErrorMentions "invalid entry in firstParty"
+
+    describe "a firstParty entry reads through npm's own scope grammar" $
         -- The allow-list and the request path must not disagree about what a scope is, so the
         -- entry goes through the same splitter the route and the projection use.
         for_ scopeEntryVerdicts $ \(entry, valid) ->
             it (show entry <> (if valid then " is a scope" else " is refused")) $
                 if valid
-                    then loadPublicationAllow entry `shouldSatisfy` isRight
-                    else loadPublicationAllow entry `shouldSatisfy` decodeErrorMentions "invalid scope in publicationAllow"
+                    then loadFirstParty entry `shouldSatisfy` isRight
+                    else loadFirstParty entry `shouldSatisfy` decodeErrorMentions "invalid scope in firstParty"
 
-    it "accepts a well-formed comma-separated publicationAllow (trimmed, leading sigil tolerated)" $
+    it "accepts a well-formed comma-separated firstParty (trimmed, leading sigil tolerated)" $
         case loadConfig
             ( pubUrlEnv
                 <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
-                   , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme, beta")
+                   , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme, beta")
                    ]
             )
             Nothing of
@@ -638,7 +651,7 @@ spec = describe "decodeDocument" $ do
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 
-{- Each publicationAllow entry the loader must agree with the npm route about: the leading sigil is
+{- Each firstParty entry the loader must agree with the npm route about: the leading sigil is
 optional, and anything that is not one usable path component is refused. -}
 scopeEntryVerdicts :: [(Text, Bool)]
 scopeEntryVerdicts =
@@ -650,13 +663,31 @@ scopeEntryVerdicts =
     , ("..", False)
     ]
 
--- Load a config whose npm mount allows exactly the given publicationAllow entry.
-loadPublicationAllow :: Text -> Either [ConfigError] Config
-loadPublicationAllow entry =
+{- Each PyPI firstParty entry the loader must refuse or accept. A trailing @*@ marks a prefix,
+and anything outside PEP 503's name alphabet, or that canonicalises to nothing, is refused. -}
+pypiEntryVerdicts :: [(Text, Bool)]
+pypiEntryVerdicts =
+    [ ("acme", True)
+    , ("Acme_Tools", True)
+    , ("acme-*", True)
+    , ("*", False)
+    , ("@acme", False)
+    , ("acme/tools", False)
+    , (".", False)
+    ]
+
+-- Load a config whose pypi mount declares exactly the given firstParty value.
+loadPyPIFirstParty :: Text -> Either [ConfigError] Config
+loadPyPIFirstParty entry =
+    loadConfig (pubUrlEnv <> [("ECLUSE_MOUNTS__PYPI__FIRST_PARTY", toString entry)]) Nothing
+
+-- Load a config whose npm mount allows exactly the given firstParty entry.
+loadFirstParty :: Text -> Either [ConfigError] Config
+loadFirstParty entry =
     loadConfig
         ( pubUrlEnv
             <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
-               , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", toString entry)
+               , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", toString entry)
                ]
         )
         Nothing

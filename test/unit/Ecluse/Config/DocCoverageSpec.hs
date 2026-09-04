@@ -62,7 +62,7 @@ documentedEnvVars =
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TOKEN_DURATION", "3600")
     , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://publish.example.test")
     , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN", "publish-token")
-    , ("ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW", "@acme")
+    , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")
     , ("ECLUSE_MOUNTS__NPM__INTEGRITY__MIN_TRUSTED", "sha256")
     , ("ECLUSE_MOUNTS__NPM__INTEGRITY__DIVERGENCE_POLICY", "warn")
     ]

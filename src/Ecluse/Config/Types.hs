@@ -18,7 +18,8 @@ module Ecluse.Config.Types (
     HttpScheme (..),
     splitHttpScheme,
     MirrorCredential (..),
-    PublicationAllow (..),
+    FirstParty (..),
+    PyPIFirstParty (..),
     MountIntegrity (..),
     MountConfig (..),
     AppConfig (..),
@@ -67,7 +68,7 @@ import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Config.Rule (PolicyError, RulePatch, renderPolicyError)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Package (Scope)
+import Ecluse.Core.Package (PackageName, PyPIPrefix, Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Rules.Types (PrecededRule)
@@ -127,15 +128,28 @@ data MirrorCredential
       MirrorStatic Secret
     deriving stock (Eq, Show)
 
--- The sum is closed and grows one arm per ecosystem, so it stays a data declaration.
-{- HLINT ignore PublicationAllow "Use newtype instead of data" -}
-
-{- | A mount's publication allow-list, one arm per ecosystem. An allow-list is read only in the
+{- | The namespaces a mount's deployment owns, one arm per ecosystem. An arm is read only in the
 shape its own registry names packages with, so a mount can never carry another ecosystem's.
+
+The privilege is one statement with three readers: only a first-party name may be published
+through the relay, a first-party name resolves from the private upstream alone, and a store
+sweep shields the versions the deployment published itself.
 -}
-data PublicationAllow
-    = -- | The npm scopes a client may publish under, at least one.
-      PublicationAllowNpmScopes (NonEmpty Scope)
+data FirstParty
+    = -- | The npm scopes the deployment owns, at least one.
+      FirstPartyNpmScopes (NonEmpty Scope)
+    | -- | The PyPI distributions and name prefixes the deployment owns, at least one.
+      FirstPartyPyPI (NonEmpty PyPIFirstParty)
+    deriving stock (Eq, Show)
+
+{- | One PyPI first-party declaration. PyPI carries no structural namespace, so a deployment
+either names a distribution it owns or the prefix its distributions share.
+-}
+data PyPIFirstParty
+    = -- | A distribution the deployment owns, matched on its PEP 503 canonical name.
+      PyPIOwnedName PackageName
+    | -- | A prefix the deployment owns, matched at PEP 503's separator boundary.
+      PyPIOwnedPrefix PyPIPrefix
     deriving stock (Eq, Show)
 
 {- | A mount's refinements of the global @integrity@ group, under its own @integrity@ key so the
@@ -163,7 +177,7 @@ data MountConfig = MountConfig
     , mntMirrorTokenDuration :: Maybe Natural
     , mntPublicationTarget :: Maybe RegistryUrl
     , mntPublicationTargetToken :: Maybe Secret
-    , mntPublicationAllow :: Maybe PublicationAllow
+    , mntFirstParty :: Maybe FirstParty
     , mntIntegrity :: MountIntegrity
     , mntAdditionalRules :: RulePatch
     }

@@ -69,7 +69,7 @@ The publication target adds the one client-driven write path. Écluse accepts a 
 trigger, content, and credential from the mirror write.
 
 - **Anti-shadowing guard (the load-bearing control).** Écluse refuses a publish whose name falls
-  outside the operator's `publicationAllow` list (for npm, scopes such as `@acme`). That stops a client
+  outside the mount's `firstParty` namespaces (for npm, scopes such as `@acme`). That stops a client
   publishing a name that shadows an existing public package, a dependency-confusion vector. The
   guard holds a **guard-name ≡ URL-path name ≡ every declared body name** invariant. The scope
   check keys on the URL-path name. An npm publish document declares its own identity (`_id`,
@@ -183,7 +183,11 @@ above the [protocol boundary](#registry-abstraction), as a pure, ecosystem-agnos
 wins a collision and the merge flags divergence whatever the fetch order. Only positional labels
 track which input a survivor came from, so the serve layer can index back to the raw document.
 
-- **Fetch in parallel.** Private (passthrough) and public (anonymous) concurrently.
+- **Fetch in parallel.** Private (passthrough) and public (anonymous) concurrently. A name inside
+  the mount's `firstParty` namespaces is the exception: it has one authority, so Écluse fetches the
+  private origin alone and a miss there is a `404`. A public package registered under a name the
+  deployment owns is a dependency-confusion attack, and refusing the public leg is what keeps the
+  guard's verdict the same at publish, at serve, and at reaping.
 - **Trust split by provenance.** Private versions enter unfiltered. The rules engine gates public
   versions first (see [Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)). The
   result is `trusted(private) ∪ filtered(public)`.

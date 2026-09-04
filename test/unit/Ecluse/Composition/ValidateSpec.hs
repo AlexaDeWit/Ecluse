@@ -9,9 +9,9 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (
     BootError (
+        FirstPartyMissing,
         MirrorTargetOnMountEndpoint,
         MissingAdapter,
-        PublicationAllowMissing,
         PublicationTargetOnPublicUpstream,
         PublishStaticCredentialNeedsEdge
     ),
@@ -23,15 +23,15 @@ import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPublications, vpSettings),
     VettedMount (vmEcosystem),
-    VettedPublication (vpubAllow, vpubStaticToken, vpubTarget),
+    VettedPublication (vpubFirstParty, vpubStaticToken, vpubTarget),
     vetBoot,
  )
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     AppConfig (cfgMounts),
     Config,
+    FirstParty (FirstPartyNpmScopes),
     MountConfig (mntMirrorTarget),
-    PublicationAllow (PublicationAllowNpmScopes),
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -62,7 +62,7 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
             Just publication -> do
                 registryUrlText (publicationTargetUrl (vpubTarget publication))
                     `shouldBe` "https://publish.example.test"
-                vpubAllow publication `shouldBe` PublicationAllowNpmScopes (pure (mkScope "acme"))
+                vpubFirstParty publication `shouldBe` FirstPartyNpmScopes (pure (mkScope "acme"))
                 fmap unSecret (vpubStaticToken publication) `shouldBe` Just "publish-write-token"
 
     it "clears no publication for a mount that declares no target, so PUT stays a 405" $ do
@@ -103,8 +103,8 @@ refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
             `shouldReturn` [MissingAdapter PyPI]
 
     it "refuses a publication target that leaves the anti-shadowing guard nothing to enforce" $
-        refusalsFor MirrorWriter (withoutAllow publishingEnv)
-            `shouldReturn` [PublicationAllowMissing Npm]
+        refusalsFor MirrorWriter (withoutFirstParty publishingEnv)
+            `shouldReturn` [FirstPartyMissing Npm]
 
     it "refuses a static publish credential with no verifiable inbound edge" $
         refusalsFor MirrorWriter staticPublishEnv
@@ -128,26 +128,26 @@ refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do
         -- policy and the endpoint rules would have said about the same configuration.
         let envVars =
                 overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
-                    withoutAllow (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://public.example.test/npm/" staticEnvVars)
+                    withoutFirstParty (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://public.example.test/npm/" staticEnvVars)
         refusalsFor MirrorWriter envVars
             `shouldReturn` [ MissingAdapter PyPI
-                           , PublicationAllowMissing Npm
+                           , FirstPartyMissing Npm
                            , PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/npm/"
                            ]
 
 -- | The npm mount publishing to a registry of its own, under the allow-list the guard enforces.
 publishingEnv :: [(String, String)]
 publishingEnv =
-    overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW" "@acme" $
+    overrideEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme" $
         overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://publish.example.test" staticEnvVars
 
 -- | 'publishingEnv' publishing under a static credential, which needs an inbound edge beside it.
 staticPublishEnv :: [(String, String)]
 staticPublishEnv = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN" "publish-write-token" publishingEnv
 
--- | Drop the publication allow-list, leaving the target the guard has nothing to check against.
-withoutAllow :: [(String, String)] -> [(String, String)]
-withoutAllow = filter ((/= "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW") . fst)
+-- | Drop the first-party declaration, leaving the target the guard has nothing to check against.
+withoutFirstParty :: [(String, String)] -> [(String, String)]
+withoutFirstParty = filter ((/= "ECLUSE_MOUNTS__NPM__FIRST_PARTY") . fst)
 
 -- | Every mount that declares a mirror target, which is what both store groups enumerate.
 mirroringMounts :: AppConfig -> [Ecosystem]

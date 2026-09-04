@@ -266,7 +266,7 @@ publishingEnv = publishingTo "https://publish.example.test"
 -- The npm mount publishing to the given target, with the allow-list the publish path needs.
 publishingTo :: String -> [(String, String)]
 publishingTo target =
-    overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW" "@acme" $
+    overrideEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme" $
         overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" target staticEnvVars
 
 -- The npm mount mirroring to the given target.

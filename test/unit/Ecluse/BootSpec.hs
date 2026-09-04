@@ -302,11 +302,11 @@ spec = do
         it "refuses a static publication token without an inbound edge with exit 2" $ do
             traverse_ (uncurry setEnv) runEnv
             setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET" "https://publish.example.test"
-            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW" "@acme"
+            setEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme"
             setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN" "publish-write-token"
             outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
             unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET"
-            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_ALLOW"
+            unsetEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY"
             unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN"
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left (ExitFailure 2)
