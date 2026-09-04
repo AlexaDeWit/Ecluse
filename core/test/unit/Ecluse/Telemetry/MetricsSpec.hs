@@ -22,6 +22,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Label (..),
     LabelKey,
     MirrorResult (..),
+    Provider (ProviderCodeArtifact, ProviderRegistry, ProviderVerdaccio),
     ReasonClass (..),
     breakerStateCode,
     labelKey,
@@ -148,6 +149,12 @@ renderSpec = describe "renderLabel" $ do
 
     it "carries the configured rule name as the one operator-bounded label" $
         renderLabel (LRule "min-age") `shouldBe` ("rule", "min-age")
+
+    it "spells each credential provider as the configuration spells its store tag" $ do
+        -- The value an operator declares a store under is the value their dashboard filters on.
+        renderLabel (LProvider ProviderRegistry) `shouldBe` ("provider", "registry")
+        renderLabel (LProvider ProviderCodeArtifact) `shouldBe` ("provider", "codeArtifact")
+        renderLabel (LProvider ProviderVerdaccio) `shouldBe` ("provider", "verdaccio")
 
     it "buckets a denial reason into a bounded class, never the message" $
         renderLabel (LReasonClass ReasonMissingIntegrity) `shouldBe` ("reason_class", "missing_integrity")

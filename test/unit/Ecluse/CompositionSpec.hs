@@ -101,7 +101,7 @@ a fixed clock, inert rule deps, and reporters that record nothing. -}
 testWiringPorts :: WiringPorts
 testWiringPorts =
     WiringPorts
-        { wpReporters = noCredentialReporters
+        { wpReporters = const noCredentialReporters
         , wpResolveAdapter = mountBindingFor
         , wpClock = pure fixedNow
         , wpRuleDeps = const inertRuleDeps

@@ -55,7 +55,9 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
   contradicting version, and the package and version go on the paired `WARNING` line, never on a
   label. See the [threat model](https://ecluse-proxy.com/docs/threat-model/).
 - `ecluse.credential.token.ttl.seconds` alarms a stuck refresh. `ecluse.credential.refresh` carries
-  (result, provider).
+  (result, provider). `provider` is the store the mount declared its mirror target under, one of
+  `registry`, `codeArtifact`, or `verdaccio`, spelled as the configuration spells the tag, so one
+  word filters a dashboard and names the key an operator would edit.
 - `ecluse.mirror.jobs.processed` carries (result), one of `published`, `failed`, or `discarded`.
   `discarded` is worth an alarm on its own. It means the worker retired a mirror job that the
   queue redelivered past its budget. That happens only when no dead-letter queue captured the job

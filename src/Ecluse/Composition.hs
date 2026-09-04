@@ -60,6 +60,7 @@ import Ecluse.Config (
     MountIntegrity (..),
     MountRegistries (..),
     ServerSettings (..),
+    StoreTag,
     Url,
     regMirrorTarget,
     regPrivateUpstream,
@@ -96,8 +97,8 @@ type ResolveAdapter = Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe M
 assembly without opening a listener.
 -}
 data WiringPorts = WiringPorts
-    { wpReporters :: CredentialReporters
-    -- ^ Where the credential providers record their mint breaker and refresh outcomes.
+    { wpReporters :: StoreTag -> CredentialReporters
+    -- ^ Where a store's credential provider records its mint breaker and refresh outcomes.
     , wpResolveAdapter :: ResolveAdapter
     -- ^ The ecosystem-to-binding resolver, 'Nothing' for an ecosystem this build ships no adapter for.
     , wpClock :: IO UTCTime
