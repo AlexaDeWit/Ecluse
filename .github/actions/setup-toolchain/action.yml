@@ -52,6 +52,18 @@ outputs:
       can skip `cabal update`. "false" on a restore-keys prefix fallback or a miss,
       and empty when cabal-cache is "false".
     value: ${{ steps.restore-cabal-store.outputs.cache-hit }}
+  cabal-version:
+    description: >-
+      The ecluse.cabal `version:` field. Every build-product cache key carries it as a
+      family segment, so a restore never brings an older package version's tree along.
+    value: ${{ steps.package-version.outputs.cabal-version }}
+  dist-cache-hit:
+    description: >-
+      "true" only on an exact key match on the dist-newstyle restore below, which happens
+      when a main run meets its own commit's entry: a re-run, or a scheduled run on an
+      unchanged head. "false" on a version-family prefix fallback or a miss, and empty
+      when cabal-cache is "false".
+    value: ${{ steps.restore-dist.outputs.cache-hit }}
 
 runs:
   using: composite
@@ -104,6 +116,19 @@ runs:
         save: ${{ inputs.save-nix-store == 'true' && github.ref == 'refs/heads/main' }}
         gc-max-store-size-linux: ${{ inputs.nix-gc-max-store-size }}
 
+    # Read once here, so every workflow keys its build-product caches the same way.
+    - name: Read the package version
+      id: package-version
+      shell: bash
+      run: |
+        version="$(sed -n 's/^version:[[:space:]]*//p' ecluse.cabal)"
+        version="${version//[[:space:]]/}"
+        if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "setup-toolchain: unrecognised ecluse.cabal version: '$version'" >&2
+          exit 1
+        fi
+        echo "cabal-version=$version" >> "$GITHUB_OUTPUT"
+
     # The key covers the dependency plan and deliberately not `**/*.cabal`: that
     # pattern churned a fresh ~0.6 GB entry on every commit that added a module.
     - name: Restore cabal store
@@ -116,13 +141,16 @@ runs:
         restore-keys: |
           cabal-store-${{ runner.os }}-
 
-    # Small and fast-moving, so a separate key from the store. A restore-keys fallback
-    # to an older entry recompiles only the changed local modules, never the closure.
+    # Small and fast-moving, so a separate key from the store. The key ends in the
+    # commit, so each main run saves a fresh entry instead of meeting one that already
+    # exists. A restore takes the newest entry of the version family through the prefix
+    # and recompiles only the changed local modules, never the closure.
     - name: Restore dist-newstyle
       if: inputs.cabal-cache == 'true'
+      id: restore-dist
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: dist-newstyle
-        key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+        key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.package-version.outputs.cabal-version }}-${{ github.sha }}
         restore-keys: |
-          dist-${{ runner.os }}-
+          dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.package-version.outputs.cabal-version }}-

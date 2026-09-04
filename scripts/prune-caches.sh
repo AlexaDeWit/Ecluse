@@ -27,11 +27,14 @@ selected="$(
       $1 == "" || $2 != "refs/heads/main" { next }
       {
         key = $3
-        # Group every epoch of one logical cache: strip a trailing hashFiles digest.
+        # Group every epoch of one logical cache: strip the commit, the version family,
+        # and the hashFiles digest a key ends in, in whichever of those it carries.
         prefix = key
-        if (prefix ~ /-[0-9a-f]+$/) {
+        while (1) {
+          if (prefix ~ /-v[0-9]+\.[0-9]+\.[0-9]+$/) { sub(/-v[0-9]+\.[0-9]+\.[0-9]+$/, "", prefix); continue }
           seg = prefix; sub(/.*-/, "", seg)
-          if (length(seg) >= 16) sub(/-[0-9a-f]+$/, "", prefix)
+          if (seg ~ /^[0-9a-f]+$/ && length(seg) >= 16) { sub(/-[0-9a-f]+$/, "", prefix); continue }
+          break
         }
         print prefix "\t" $4 "\t" $1 "\t" key "\t" $5
       }' \
