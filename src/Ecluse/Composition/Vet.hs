@@ -39,7 +39,7 @@ instance Functor Vet where
          in (advisories, fmap f outcome)
 
 {- 'Vet' has no 'Monad' instance on purpose: a bind would let one check's failure hide the next
-check's finding. '<*>' runs both sides whatever either decides, so one boot reports every one. -}
+check's finding. '<*>' runs both sides whatever either decides, so one boot reports every finding. -}
 instance Applicative Vet where
     pure a = Vet (const ([], Success a))
     Vet runF <*> Vet runA = Vet $ \role ->

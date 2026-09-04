@@ -64,7 +64,7 @@ The exit status states how a run ended, so an orchestrator can branch without pa
 |---|---|
 | `0` | Graceful shutdown: the drain completed and the services returned. |
 | `1` | A service exited abnormally. The last `ecluse: service exited:` line on standard error carries the detail. |
-| `2` | The boot aborted: Écluse refused the configuration, or could not build what it names in the live environment, and reported every problem. A configuration refusal fails identically on a restart without changes. A report that names a transient AWS or network fault may clear on retry. |
+| `2` | The boot aborted: Écluse refused the configuration, refused a role this build cannot run, or could not build what the configuration names in the live environment, and reported every problem. A configuration refusal fails identically on a restart without changes. A report that names a transient AWS or network fault may clear on retry. |
 | `3` | Something outside cancelled the run: a kill that bypassed the graceful path. |
 | `130` | The local-development halt (Ctrl-D on an interactive terminal). |
 

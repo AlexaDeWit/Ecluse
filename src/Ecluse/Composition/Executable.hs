@@ -82,7 +82,7 @@ planned cannot reach another role's runtime.
 data RoleWiring
     = -- | @ecluse proxy@, @ecluse proxy --no-worker@ and @ecluse mirror@.
       MirrorPipelineWiring MirrorWiring
-    | -- | @ecluse pilot@: nothing here needs a live environment yet.
+    | -- | @ecluse pilot@: it settles nothing a live environment decides.
       PilotWiring
 
 -- | What a mirror-pipeline role's arm settled, and all "Ecluse.Service" assembles its runtime from.

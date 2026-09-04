@@ -118,7 +118,7 @@ settle. The credential providers stay internal: a mount reaches one through the 
 resolveBootWiring :: WiringPorts -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
 resolveBootWiring ports limits publishBudget plan = do
     -- The mirror-write credential mints once, eagerly, so a misconfiguration fails at boot. Both
-    -- groups below consume the providers, so this step precedes them rather than accumulating.
+    -- groups below consume the providers, so this step runs before them, not alongside them.
     providersE <- initCredentialProviders (wpReporters ports) (map vmMount (vpMounts plan))
     case providersE of
         Left errs -> pure (Left errs)

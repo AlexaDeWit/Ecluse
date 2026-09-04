@@ -44,13 +44,13 @@
 # Banned in production. `throwString` stays permitted in the test suite. There it
 # simulates an upstream failure to exercise a catch path. The `within:` list names
 # every test module with a live use, so a re-introduction anywhere else is caught.
-# hlint matches the name as imported, so the `UnliftIO` re-export is listed beside
-# the defining module. A use through either spelling is caught.
+# hlint matches the name as imported, so the `UnliftIO` re-export is restricted too,
+# with no allowlist: a test imports it from the defining module.
 - functions:
     - {name: System.IO.Error.userError, within: [], message: "Stringly IOError: throw a typed Exception (e.g. a nullary type with an Exception instance), or return a domain value. See STYLE.md section 11."}
     - {name: UnliftIO.Exception.stringException, within: [], message: "Stringly exception: throw a typed Exception or return a domain value. See STYLE.md section 11."}
     - {name: UnliftIO.Exception.throwString, within: [Ecluse.Credential.Refresh.InternalSpec, Ecluse.EnvSpec, Ecluse.InFlightSpec, Ecluse.RegistryProtocolSpec, Ecluse.Rules.EffectfulSpec, Ecluse.RulesSpec, Ecluse.Server.Pipeline.PackumentSpec, Ecluse.Server.Pipeline.SharedSpec, Ecluse.Server.PipelineSpec], message: "Stringly exception: in production, throw a typed Exception or return a domain value (docs/style.md section 11). Permitted in tests to simulate an upstream failure."}
-    - {name: UnliftIO.throwString, within: [Ecluse.Credential.Refresh.InternalSpec, Ecluse.EnvSpec, Ecluse.InFlightSpec, Ecluse.RegistryProtocolSpec, Ecluse.Rules.EffectfulSpec, Ecluse.RulesSpec, Ecluse.Server.Pipeline.PackumentSpec, Ecluse.Server.Pipeline.SharedSpec, Ecluse.Server.PipelineSpec], message: "Stringly exception: in production, throw a typed Exception or return a domain value (docs/style.md section 11). Permitted in tests to simulate an upstream failure."}
+    - {name: UnliftIO.throwString, within: [], message: "Stringly exception: import throwString from UnliftIO.Exception, which the test allowlist names."}
 
 # --- Debugging leftovers: banned in committed code --------------------------
 - modules:
