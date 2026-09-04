@@ -8,8 +8,7 @@ The target URL decides. A CodeArtifact endpoint carries its mint identity in its
 its own write token. Any other host takes an operator-supplied static one, so a token can never
 pair with an endpoint it was not minted for. The load refuses the two degenerate arrangements:
 no static token where none is minted, and a static token beside a minted one. The Dredger, not
-the load, still refuses a CodeArtifact path that addresses no repository. #1147 replaces this
-derivation with a declared tag.
+the load, still refuses a CodeArtifact path that addresses no repository.
 -}
 module Ecluse.Config.Target (
     -- * The resolved value
@@ -114,10 +113,8 @@ repositoryOfPath format url = case pathSegments url of
 pathSegments :: Text -> [Text]
 pathSegments = filter (not . T.null) . T.splitOn "/" . registryPath
 
-{- | Parse a CodeArtifact endpoint host into its (domain, owner, region). The shape is
-@{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@, where @{owner}@ is the 12-digit
-account id after the __last__ hyphen, so a domain may itself contain hyphens. Any other host
-yields 'Nothing' and counts as a static-token target, never a bogus owner.
+{- | Parse @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ into (domain, owner, region). The owner is the
+12-digit account id after the __last__ hyphen, so a domain may carry them. Any other host is 'Nothing'.
 -}
 parseCodeArtifactHost :: Text -> Maybe (Text, Text, Text)
 parseCodeArtifactHost host =

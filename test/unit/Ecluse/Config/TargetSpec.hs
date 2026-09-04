@@ -77,9 +77,8 @@ mintSpec = describe "resolveStoreBackend (the target dictates the credential)" $
                     MintStatic _ -> True
                 Left _ -> False
 
-{- The control plane the same value carries: which store the Dredger may delete from, and why a
-target reaches none. A CodeArtifact path that addresses no repository stays the Dredger's refusal
-alone, so every role that never deletes still boots on it. -}
+{- A CodeArtifact path that addresses no repository stays the Dredger's refusal alone, so every
+role that never deletes still boots on it. -}
 controlSpec :: Spec
 controlSpec = describe "resolveStoreBackend (the control plane the target reaches)" $ do
     it "reads the domain, its owner, the region, and the repository from the endpoint" $ do

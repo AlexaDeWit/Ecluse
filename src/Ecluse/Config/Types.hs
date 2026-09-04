@@ -124,9 +124,7 @@ splitHttpScheme :: Text -> Maybe (HttpScheme, Text)
 splitHttpScheme raw =
     ((Https,) <$> T.stripPrefix "https://" raw) <|> ((Http,) <$> T.stripPrefix "http://" raw)
 
-{- | Which store backend serves a mount, derived from its mirror-target URL. #1147 makes it a
-declared tag and adds @verdaccio@.
--}
+-- | Which store backend serves a mount, derived from its mirror-target URL.
 data StoreTag
     = -- | Any host that speaks the ecosystem's protocol, authenticated by a static token.
       TagRegistry
@@ -151,7 +149,7 @@ data MintPlan
     deriving stock (Eq, Show)
 
 {- | Why a CodeArtifact target addresses no repository. Carried on the value rather than refused
-at load, because only @ecluse dredger@ needs it (#1147 moves the check to the load).
+at load, because only @ecluse dredger@ needs it.
 -}
 data CodeArtifactAbsence
     = -- | CodeArtifact has no package format for this ecosystem.

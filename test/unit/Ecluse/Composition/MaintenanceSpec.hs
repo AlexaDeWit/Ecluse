@@ -11,7 +11,7 @@ import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition.BootError (
     BootError (StoreMaintenanceUnavailable),
-    StoreMaintenanceReason (ClientBuildFailed),
+    StoreMaintenanceReason (ClientBuildFailed, CodeArtifactUnaddressable),
     renderBootError,
  )
 import Ecluse.Composition.Maintenance (
@@ -31,7 +31,7 @@ import Ecluse.Composition.Support (
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
-import Ecluse.Config (Config (configMounts), MountMap)
+import Ecluse.Config (CodeArtifactAbsence (NotRepositoryEndpoint), Config (configMounts), MountMap)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (casRepository)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
@@ -59,6 +59,14 @@ passSpec = describe "vetStoreBackends" $ do
                 err `shouldBe` noMaintenanceBackend
                 renderBootError err `shouldSatisfy` T.isInfixOf "ECLUSE_MOUNTS__NPM__MIRROR_TARGET"
             other -> expectationFailure ("expected the one maintenance refusal, got: " <> show other)
+
+    it "refuses the deleting role alone a CodeArtifact target whose path addresses no repository" $ do
+        -- The path check is the Dredger's, not the load's, so the writing role boots on the same
+        -- configuration the deleting role refuses.
+        mounts <- mountsFor (overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET" repositorylessEndpoint codeArtifactEnvVars)
+        runVet MirrorPruner (vetStoreBackends mounts)
+            `shouldBe` ([], Left [StoreMaintenanceUnavailable Npm (CodeArtifactUnaddressable (NotRepositoryEndpoint "npm"))])
+        runVet MirrorWriter (vetStoreBackends mounts) `shouldBe` ([], Right Map.empty)
 
     it "clears a writing role no backend, and neither refuses nor advises on a target it cannot sweep" $ do
         -- Only the Dredger deletes, so only its pass reads the rule. The checker still names
@@ -130,3 +138,7 @@ pypiEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com
 
 pypiInternalEndpoint :: (IsString s) => s
 pypiInternalEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/pypi/internal/"
+
+-- A CodeArtifact endpoint that stops at the format segment, so its path names no repository.
+repositorylessEndpoint :: (IsString s) => s
+repositorylessEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/"
