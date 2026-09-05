@@ -5,10 +5,10 @@
 {- | The documented operation view of a route, as plain OpenAPI-free data.
 
 'specsOf' erases an "Ecluse.Core.Server.Route".'Route' into the operations the OpenAPI spec
-needs. A write route contributes @PUT@ and a removal route @DELETE@. A read route contributes
-both @GET@ and its derived bodiless @HEAD@ operation. The capture type, builder, and typed
-response value disappear. Each operation's 'ResponseDoc's still come from the same
-'Ecluse.Core.Server.Contract.ResponseContract' runtime dispatch uses.
+needs. A write route contributes @PUT@, a submission route @POST@, and a removal route
+@DELETE@. A read route contributes both @GET@ and its derived bodiless @HEAD@ operation. The
+capture type, builder, and typed response value disappear. Each operation's 'ResponseDoc's
+still come from the same 'Ecluse.Core.Server.Contract.ResponseContract' runtime dispatch uses.
 -}
 module Ecluse.Core.Server.RouteSpec (
     -- * The documented view
@@ -23,12 +23,12 @@ module Ecluse.Core.Server.RouteSpec (
     catchAllSpecs,
 ) where
 
-import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, PUT))
+import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, POST, PUT))
 
 import Ecluse.Core.Server.Contract (RequestSpec, ResponseContract, ResponseDoc, bodilessContract, responseDocs)
 import Ecluse.Core.Server.Route (
     Capture (capDescription, capName),
-    MethodMatch (MethodDelete, MethodPut, MethodRead),
+    MethodMatch (MethodDelete, MethodPost, MethodPut, MethodRead),
     PatternSeg (SegCap, SegLit),
     Route (Route, routeContract, routeDescription, routeMethod, routeName, routeRequest, routeSegs, routeSummary),
     RouteName (RouteName, unRouteName),
@@ -90,6 +90,7 @@ specsOf
         operations = case matchedMethod of
             MethodRead -> [(GET, name, contract), (HEAD, headName name, bodilessContract contract)]
             MethodPut -> [(PUT, name, contract)]
+            MethodPost -> [(POST, name, contract)]
             MethodDelete -> [(DELETE, name, contract)]
 
         operationSpec (method, operationName, operationContract) =

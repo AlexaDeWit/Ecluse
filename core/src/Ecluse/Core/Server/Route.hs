@@ -46,7 +46,7 @@ module Ecluse.Core.Server.Route (
     isHead,
 ) where
 
-import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodHead, methodPut)
+import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodHead, methodPost, methodPut)
 
 import Ecluse.Core.Server.Context (
     MountRouter,
@@ -126,6 +126,8 @@ manifest can name the documented method. A method outside it matches no route an
 data MethodMatch
     = -- | The write method (@PUT@).
       MethodPut
+    | -- | The submission method (@POST@).
+      MethodPost
     | -- | The removal method (@DELETE@).
       MethodDelete
     | -- | The read methods (@GET@ and @HEAD@).
@@ -135,6 +137,7 @@ data MethodMatch
 -- | Whether a request method satisfies a route's 'MethodMatch'.
 methodMatches :: MethodMatch -> Method -> Bool
 methodMatches MethodPut m = m == methodPut
+methodMatches MethodPost m = m == methodPost
 methodMatches MethodDelete m = m == methodDelete
 methodMatches MethodRead m = m == methodGet || m == methodHead
 

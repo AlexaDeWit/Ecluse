@@ -5,7 +5,7 @@
 {- | The route-table builders, held against a table with no ecosystem in it.
 
 Every definition under test is engine glue an ecosystem's table calls rather than restates, so
-this module builds a two-route table out of nothing but the engine and asserts on that. It
+this module builds a three-route table out of nothing but the engine and asserts on that. It
 imports no registry module: if one were needed, the glue would not be shared.
 -}
 module Ecluse.Core.Server.RouteEngineSpec (spec) where
@@ -13,7 +13,7 @@ module Ecluse.Core.Server.RouteEngineSpec (spec) where
 import Network.HTTP.Types (status404)
 import Network.HTTP.Types.Method (
     Method,
-    StdMethod (GET, HEAD),
+    StdMethod (GET, HEAD, POST),
     methodDelete,
     methodGet,
     methodHead,
@@ -35,7 +35,7 @@ import Ecluse.Core.Server.Contract (
  )
 import Ecluse.Core.Server.Route (
     Capture (Capture),
-    MethodMatch (MethodRead),
+    MethodMatch (MethodPost, MethodRead),
     PatternSeg (SegCap, SegLit),
     Route (Route, routeName),
     RouteName (RouteName),
@@ -49,6 +49,7 @@ import Ecluse.Core.Server.RouteSpec (
     PathSeg (Param),
     RouteSpec (rsMethod, rsName, rsOutcomes, rsPattern),
     catchAllSpecs,
+    specsOf,
  )
 
 spec :: Spec
@@ -62,6 +63,14 @@ spec = do
             claimed methodPut ["-", "ping"] `shouldBe` Nothing
             claimed methodPost ["-", "ping"] `shouldBe` Nothing
             claimed methodDelete ["-", "ping"] `shouldBe` Nothing
+
+    describe "methodMatches" $ do
+        it "claims a POST route on POST" $
+            claimed methodPost ["-", "upload"] `shouldBe` Just (RouteName "upload")
+
+        it "claims a POST route on no other method" $
+            map (`claimed` ["-", "upload"]) [methodGet, methodHead, methodPut, methodDelete]
+                `shouldBe` [Nothing, Nothing, Nothing, Nothing]
 
     describe "safeSegment" $ do
         it "claims one leading segment and yields the tail" $
@@ -87,6 +96,11 @@ spec = do
             map isHead [methodGet, methodPut, methodPost, methodDelete]
                 `shouldBe` [False, False, False, False]
 
+    describe "specsOf" $
+        it "projects a POST route to one POST operation and no derived HEAD" $ do
+            map rsMethod (specsOf uploadRoute) `shouldBe` [POST]
+            map rsName (specsOf uploadRoute) `shouldBe` [RouteName "upload"]
+
     describe "catchAllSpecs" $ do
         it "documents the pair a mount needs, GET and its bodiless HEAD" $ do
             map rsMethod (toList catchAll) `shouldBe` [GET, HEAD]
@@ -105,7 +119,7 @@ spec = do
             map (map (isEmptyBody . responseBodySchema) . rsOutcomes) (toList catchAll)
                 `shouldBe` [[False], [True]]
 
--- The table under test: two routes built from nothing but the engine's own builders.
+-- The table under test: three routes built from nothing but the engine's own builders.
 
 data ToyCap
     = ToyName Text
@@ -113,7 +127,7 @@ data ToyCap
     deriving stock (Eq, Show)
 
 toyRoutes :: [Route ToyCap]
-toyRoutes = [pingRoute, fileRoute]
+toyRoutes = [pingRoute, fileRoute, uploadRoute]
 
 pingRoute :: Route ToyCap
 pingRoute =
@@ -142,6 +156,18 @@ fileRoute =
     buildFile _method = \case
         [ToyName _, ToyFile _] -> Just (AnswerLocally (responseValue [] ()))
         _ -> Nothing
+
+uploadRoute :: Route ToyCap
+uploadRoute =
+    Route
+        (RouteName "upload")
+        MethodPost
+        [SegLit "-", SegLit "upload"]
+        (answering (responseValue [] ()))
+        "Submit a file"
+        "Answered locally."
+        Nothing
+        (emptyContract status404 "A refusal.")
 
 capName :: Capture ToyCap
 capName = Capture "name" "The thing's name." (safeSegment ToyName)
