@@ -101,7 +101,7 @@ codeArtifactIdentityGroups :: [(Ecosystem, StoreTag, CodeArtifactConfig)] -> [(C
 codeArtifactIdentityGroups plans =
     Map.toAscList (Map.fromListWith merge [(ca, (tag, eco :| [])) | (eco, tag, ca) <- plans])
   where
-    -- One identity resolves under one tag, so every member agrees and the first one labels the group.
+    -- One identity resolves under one tag, so every member agrees and either labels the group.
     merge (tag, ecosystems) (_, more) = (tag, ecosystems <> more)
 
 -- A static mirror-target write provider from an operator-supplied token.
