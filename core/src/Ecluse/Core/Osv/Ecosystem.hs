@@ -42,9 +42,8 @@ osvEcosystemFor eco = OsvEcosystem{osvExportDirectory = exportDirectory, osvWire
         PyPI -> "PyPI"
         RubyGems -> "RubyGems"
 
-{- | The pair for a name a one-shot compile was given. A name this build serves resolves to
-'osvEcosystemFor', and any other spells itself on both halves, so an export beyond the mounted
-set still compiles.
+{- | The pair for a name a one-shot compile was given: a name this build serves resolves through
+'osvEcosystemFor', and any other spells itself on both halves.
 
 >>> osvEcosystemNamed "pypi"
 OsvEcosystem {osvExportDirectory = "PyPI", osvWireName = "pypi"}

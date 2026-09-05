@@ -20,7 +20,7 @@ import Ecluse.Core.Osv.Ecosystem (
 spec :: Spec
 spec = do
     describe "osvEcosystemFor -- osv.dev's spelling beside Ecluse's" $ do
-        it "spells npm the same on both halves, which is why one name carried both for so long" $
+        it "spells npm the same on both halves" $
             osvEcosystemFor Npm `shouldBe` OsvEcosystem{osvExportDirectory = "npm", osvWireName = "npm"}
 
         it "reads PyPI's export from osv.dev's capitalised directory" $

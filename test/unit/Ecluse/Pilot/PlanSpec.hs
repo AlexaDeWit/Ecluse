@@ -63,8 +63,6 @@ spec = do
             exportLoopPlan advisories [Npm] `shouldBe` Just (ExportTo store (Npm :| []))
 
         it "carries every mounted ecosystem, so a second mount earns its own artifact" $ do
-            -- The hardcoded npm cycle is what left a second mount's sync waiting forever on an
-            -- artifact nothing published.
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__URL", "s3://advisories/ecluse")]
             store <- storeAt "s3://advisories/ecluse"
             exportLoopPlan advisories [Npm, PyPI] `shouldBe` Just (ExportTo store (Npm :| [PyPI]))

@@ -50,10 +50,8 @@ data ExportLoopPlan
       ExportTo AdvisoryStoreUrl (NonEmpty Ecosystem)
     deriving stock (Eq, Show)
 
-{- | A configured store is the only thing that turns exporting on, as it is for the proxy's sync,
-and each mounted ecosystem earns an artifact. 'Nothing' is a store with no ecosystem to compile,
-which the boot refuses ("Ecluse.Composition.Executable") rather than running a Pilot that
-publishes nothing.
+{- | A configured store turns exporting on, as it does for the proxy's sync, and each mounted
+ecosystem earns an artifact. 'Nothing' is a store with no ecosystem to compile, which the boot refuses.
 -}
 exportLoopPlan :: AdvisoriesSettings -> [Ecosystem] -> Maybe ExportLoopPlan
 exportLoopPlan advisories ecosystems = case advUrl advisories of
