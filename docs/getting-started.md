@@ -87,4 +87,4 @@ section records the current layout and one project-specific pattern.
 
 For the module list, read the [published Haddock](https://ecluse-proxy.com/api/) module index and the
 root [`Ecluse`](../src/Ecluse.hs) synopsis. Tests mirror this hierarchy (e.g.
-`Ecluse.Core.Rules` → `core/test/unit/Ecluse/RulesSpec.hs`).
+`Ecluse.Core.Rules` → `core/test/unit/Ecluse/Core/RulesSpec.hs`).

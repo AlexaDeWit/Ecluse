@@ -134,7 +134,7 @@ case "$suite" in
       # flag. The integration tests cover it, and core-unit does not link it.
       ./core/src/Ecluse/Core/Security/Egress/DevHttp.hs
       # only the integration test suite covers servePublish
-      # (test/integration/Ecluse/Server/PublishSpec.hs).
+      # (test/integration/Ecluse/Core/Server/Pipeline/PublishIntegrationSpec.hs).
       ./core/src/Ecluse/Core/Server/Pipeline/Publish.hs
     )
     ;;
@@ -152,18 +152,18 @@ case "$suite" in
     # gating tier covers each one, merged into the Codecov total under its flag.
     unscoped=(
       # Ecluse.Runtime.Server and Ecluse.Runtime.Env exercise the shell's runServer
-      # and runWorker, so ServerSpec and EnvSpec live in ecluse-unit, which links
-      # the app library. The runtime-unit partition cannot link them. ecluse-unit
-      # covers both.
+      # and runWorker, so Ecluse.Runtime.ServerSpec and Ecluse.Runtime.EnvSpec live
+      # in ecluse-unit, which links the app library. The runtime-unit partition
+      # cannot link them. ecluse-unit covers both.
       ./runtime/src/Ecluse/Runtime/Server.hs
       ./runtime/src/Ecluse/Runtime/Env.hs
       # The composed application (shell fixtures) exercises the middleware pieces
-      # and health probes in that same ecluse-unit ServerSpec. The runtime-unit
-      # partition links only the drain and halt siblings, whose specs drive them
-      # directly.
+      # and health probes in that same ecluse-unit Ecluse.Runtime.ServerSpec. The
+      # runtime-unit partition links only the drain and halt siblings, whose specs
+      # drive them directly.
       ./runtime/src/Ecluse/Runtime/Server/Middleware.hs
       # only the integration tier exercises the S3 export adapter
-      # (test/integration/Ecluse/Pilot/S3ExportSpec.hs).
+      # (test/integration/Ecluse/Runtime/Pilot/ExportIntegrationSpec.hs).
       ./runtime/src/Ecluse/Runtime/Pilot/Export.hs
     )
     ;;

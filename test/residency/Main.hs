@@ -9,7 +9,7 @@ the isolation the measurement depends on.
 -}
 module Main (main) where
 
-import Ecluse.Server.TarballResidencySpec qualified as TarballResidencySpec
+import Ecluse.Core.Server.Pipeline.TarballResidencySpec qualified as TarballResidencySpec
 import Test.Hspec (hspec)
 
 main :: IO ()

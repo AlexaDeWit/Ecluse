@@ -475,7 +475,7 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
             `shouldBe` [True, True, False, False]
 
     it "dispatches the PyPI arm to PyPI's own predicate" $
-        -- The arm's matching rules are pinned in "Ecluse.Registry.PyPI.ProjectSpec". This row
+        -- The arm's matching rules are pinned in "Ecluse.Core.Registry.PyPI.ProjectSpec". This row
         -- proves the root hands the declaration to it rather than deciding anything itself.
         map (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . pypiName) ["acme-tools", "beta"]
             `shouldBe` [True, False]
