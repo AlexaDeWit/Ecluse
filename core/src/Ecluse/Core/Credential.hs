@@ -29,6 +29,7 @@ that wraps a per-cloud token mint lives in "Ecluse.Core.Credential.Refresh".
 module Ecluse.Core.Credential (
     -- * Provider handle
     CredentialProvider (..),
+    mintSecret,
 
     -- * Tokens
     AuthToken (..),
@@ -115,3 +116,9 @@ refreshes, so it fits a registry reached with a long-lived credential.
 -}
 staticProvider :: AuthToken -> CredentialProvider
 staticProvider token = CredentialProvider{currentToken = pure token}
+
+{- | The secret a provider's current token carries, for a caller that presents it and reads no
+expiry. It refreshes behind the provider, so a long-lived caller mints per use.
+-}
+mintSecret :: CredentialProvider -> IO Secret
+mintSecret = fmap authSecret . currentToken

@@ -31,7 +31,7 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), PublishRelayResponse (PublishRelayResponse))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishCanonicaliseName, publishDeclaredNames, publishRelay))
-import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
 import Ecluse.Core.Server.Context (
@@ -113,12 +113,11 @@ publishWithDeps replies deps clientToken name request respond
     -- The publication target as one origin. The posture is passthrough: the publisher's own
     -- token rides, and the static fallback applies only when the client presented none.
     publicationTarget rt =
-        OriginClient
-            { ocBaseUrl = pubTargetUrl deps
-            , ocManager = srPrivateManager rt
-            , ocToken = clientToken <|> pubStaticToken deps
-            , ocLimits = pubLimits deps
-            }
+        originClient
+            (pubLimits deps)
+            (srPrivateManager rt)
+            (pubTargetUrl deps)
+            (clientToken <|> pubStaticToken deps)
 
     -- The per-request body cap as a 'boundedRead' bound. 'boundedRead' consults only
     -- 'maxBodyBytes', so the response budget's other 'Limits' fields do not matter here.

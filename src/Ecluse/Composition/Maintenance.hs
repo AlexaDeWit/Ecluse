@@ -52,7 +52,7 @@ import Ecluse.Config (
     storeTagName,
  )
 import Ecluse.Config.Resolve (mountKeyRef)
-import Ecluse.Core.Credential (AuthToken (authSecret), CredentialProvider, Secret, currentToken)
+import Ecluse.Core.Credential (CredentialProvider, Secret, mintSecret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
@@ -79,7 +79,7 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolStore (..), newProtocolMaintenance)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
-import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -242,18 +242,12 @@ buildStoreMaintenance ports limits cleared = do
 minted per read, because a store that mints its own hands out a short-lived one. -}
 storeManifestRead :: StorePorts -> Limits -> ClearedBackend -> Manager -> StoreManifestRead
 storeManifestRead ports limits cleared manager name = do
-    token <- traverse (fmap authSecret . currentToken) (spCredential ports)
+    token <- traverse mintSecret (spCredential ports)
     first storeFaultOfMetadata
         <$> cbFetchManifest cleared (spTracing ports) (storeOrigin limits cleared manager token) name
 
 storeOrigin :: Limits -> ClearedBackend -> Manager -> Maybe Secret -> OriginClient
-storeOrigin limits cleared manager token =
-    OriginClient
-        { ocBaseUrl = cbUrl cleared
-        , ocManager = manager
-        , ocToken = token
-        , ocLimits = limits
-        }
+storeOrigin limits cleared manager = originClient limits manager (cbUrl cleared)
 
 {- The maintenance calls are not the proxy's data plane, so this manager carries none of its
 tracing, exactly as the vendor client's own does not. -}
