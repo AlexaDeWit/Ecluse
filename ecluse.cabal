@@ -664,93 +664,93 @@ test-suite ecluse-core-unit
   main-is:            Spec.hs
   hs-source-dirs:     core/test/unit
   other-modules:
-    Ecluse.BreakerSpec
-    Ecluse.CredentialSpec
-    Ecluse.Credential.Refresh.InternalSpec
-    Ecluse.Cve.AcceptanceSpec
-    Ecluse.Cve.SlotSpec
-    Ecluse.CveSpec
-    Ecluse.EcosystemSpec
-    Ecluse.InFlightSpec
-    Ecluse.Json.LenientSpec
-    Ecluse.Json.SelectiveSpec
-    Ecluse.Package.AdmissionSpec
-    Ecluse.Package.FilterSpec
-    Ecluse.Package.IntegritySpec
-    Ecluse.Package.MergeSpec
-    Ecluse.Osv.AdvisorySpec
-    Ecluse.Osv.CompileSpec
-    Ecluse.Osv.EpssSpec
-    Ecluse.Osv.RetrySpec
-    Ecluse.Osv.SchemaSpec
-    Ecluse.Package.HashSpec
-    Ecluse.PackageSpec
-    Ecluse.Queue.MemorySpec
+    Ecluse.Core.BreakerSpec
+    Ecluse.Core.Credential.Refresh.InternalSpec
+    Ecluse.Core.CredentialSpec
+    Ecluse.Core.Cve.AcceptanceSpec
+    Ecluse.Core.Cve.SlotSpec
+    Ecluse.Core.CveSpec
+    Ecluse.Core.EcosystemSpec
+    Ecluse.Core.InFlightSpec
+    Ecluse.Core.Json.LenientSpec
+    Ecluse.Core.Json.SelectiveSpec
+    Ecluse.Core.Osv.AdvisorySpec
+    Ecluse.Core.Osv.CompileSpec
+    Ecluse.Core.Osv.EpssSpec
+    Ecluse.Core.Osv.RetrySpec
+    Ecluse.Core.Osv.SchemaSpec
+    Ecluse.Core.Package.AdmissionSpec
+    Ecluse.Core.Package.FilterSpec
+    Ecluse.Core.Package.HashSpec
+    Ecluse.Core.Package.IntegritySpec
+    Ecluse.Core.Package.MergeSpec
+    Ecluse.Core.PackageSpec
+    Ecluse.Core.Queue.MemorySpec
+    Ecluse.Core.QueueSpec
+    Ecluse.Core.Registry.AdapterSpec
+    Ecluse.Core.Registry.CachedDocumentSpec
+    Ecluse.Core.Registry.Maintenance.ProtocolSpec
+    Ecluse.Core.Registry.MaintenanceSpec
+    Ecluse.Core.Registry.Npm.CredentialSpec
+    Ecluse.Core.Registry.Npm.FilterSpec
+    Ecluse.Core.Registry.Npm.MaintenanceSpec
+    Ecluse.Core.Registry.Npm.MetadataSpec
+    Ecluse.Core.Registry.Npm.ProjectSpec
+    Ecluse.Core.Registry.Npm.PublishSpec
+    Ecluse.Core.Registry.Npm.RequestSpec
+    Ecluse.Core.Registry.Npm.RouteSpec
+    Ecluse.Core.Registry.Npm.RouteTableSpec
+    Ecluse.Core.Registry.Npm.ServeSpec
+    Ecluse.Core.Registry.Npm.WireSpec
+    Ecluse.Core.Registry.NpmSpec
+    Ecluse.Core.Registry.PublishSpec
+    Ecluse.Core.Registry.PyPI.ProjectSpec
+    Ecluse.Core.Registry.RequestSpec
+    Ecluse.Core.Registry.WireSupportSpec
+    Ecluse.Core.Rules.EffectfulSpec
+    Ecluse.Core.RulesSpec
+    Ecluse.Core.Security.AuthoritySpec
+    Ecluse.Core.Security.EgressSpec
+    Ecluse.Core.Security.HostSpec
+    Ecluse.Core.Security.IpLiteralSpec
+    Ecluse.Core.Security.LimitsSpec
+    Ecluse.Core.SecuritySpec
+    Ecluse.Core.Server.Admission.BytesSpec
+    Ecluse.Core.Server.AdmissionSpec
+    Ecluse.Core.Server.Cache.StoreSpec
+    Ecluse.Core.Server.CacheSpec
+    Ecluse.Core.Server.ConditionalSpec
+    Ecluse.Core.Server.FaultSpec
+    Ecluse.Core.Server.MetadataSpec
+    Ecluse.Core.Server.PathSpec
+    Ecluse.Core.Server.Pipeline.InternalSpec
+    Ecluse.Core.Server.Pipeline.PackumentSpec
+    Ecluse.Core.Server.Pipeline.Tarball.RelaySpec
+    Ecluse.Core.Server.Pipeline.TarballSpec
+    Ecluse.Core.Server.PipelineSpec
+    Ecluse.Core.Server.ResponseSpec
+    Ecluse.Core.Server.StreamSpec
+    Ecluse.Core.Server.UpstreamSpec
+    Ecluse.Core.SupervisionSpec
+    Ecluse.Core.Telemetry.MetricsSpec
+    Ecluse.Core.TextSpec
+    Ecluse.Core.Version.TokenSpec
+    Ecluse.Core.VersionOrderingSpec
+    Ecluse.Core.VersionSpec
+    Ecluse.Core.WireSpec
+    Ecluse.Core.Worker.IntegritySpec
+    Ecluse.Core.Worker.JobSpec
+    Ecluse.Core.Worker.LivenessSpec
+    Ecluse.Core.Worker.LoopSpec
+    Ecluse.Core.Worker.RealiseSpec
     Ecluse.Queue.Support
-    Ecluse.QueueSpec
-    Ecluse.Registry.AdapterSpec
-    Ecluse.Registry.CachedDocumentSpec
-    Ecluse.Registry.MaintenanceSpec
-    Ecluse.Registry.Maintenance.ProtocolSpec
-    Ecluse.Registry.NpmSpec
-    Ecluse.Registry.Npm.CredentialSpec
-    Ecluse.Registry.Npm.FilterSpec
-    Ecluse.Registry.Npm.MaintenanceSpec
-    Ecluse.Registry.Npm.MetadataSpec
-    Ecluse.Registry.Npm.ProjectSpec
-    Ecluse.Registry.Npm.PublishSpec
-    Ecluse.Registry.Npm.RequestSpec
-    Ecluse.Registry.Npm.RouteSpec
-    Ecluse.Registry.Npm.RouteTableSpec
-    Ecluse.Registry.Npm.ServeSpec
-    Ecluse.Registry.Npm.WireSpec
-    Ecluse.Registry.PublishSpec
-    Ecluse.Registry.PyPI.ProjectSpec
-    Ecluse.Registry.RequestSpec
-    Ecluse.Registry.WireSupportSpec
-    Ecluse.Test.Registry.Pypi.WireSpec
-    Ecluse.Test.Registry.Rubygems.WireSpec
-    Ecluse.Rules.EffectfulSpec
-    Ecluse.RulesSpec
-    Ecluse.SecuritySpec
-    Ecluse.Security.AuthoritySpec
-    Ecluse.Security.EgressSpec
-    Ecluse.Security.HostSpec
-    Ecluse.Security.IpLiteralSpec
-    Ecluse.Security.LimitsSpec
-    Ecluse.Server.CacheSpec
-    Ecluse.Server.Cache.StoreSpec
-    Ecluse.Server.ConditionalSpec
-    Ecluse.Server.FaultSpec
-    Ecluse.Server.MetadataSpec
-    Ecluse.Server.Pipeline.InternalSpec
-    Ecluse.Server.Pipeline.Tarball.RelaySpec
-    Ecluse.Server.Pipeline.TarballSpec
-    Ecluse.Server.Pipeline.PackumentSpec
-    Ecluse.Server.Admission.BytesSpec
-    Ecluse.Server.AdmissionSpec
-    Ecluse.Server.PipelineSpec
-    Ecluse.Server.ResponseSpec
-    Ecluse.Server.PathSpec
-    Ecluse.Server.StreamSpec
-    Ecluse.Server.UpstreamSpec
-    Ecluse.SupervisionSpec
-    Ecluse.Telemetry.MetricsSpec
     Ecluse.Test.Container.ImageSpec
     Ecluse.Test.LogSpec
     Ecluse.Test.MaintenanceSpec
+    Ecluse.Test.Registry.Pypi.WireSpec
+    Ecluse.Test.Registry.Rubygems.WireSpec
     Ecluse.Test.RegistryCaptureSpec
     Ecluse.Test.SupportLinkageSpec
-    Ecluse.TextSpec
-    Ecluse.VersionOrderingSpec
-    Ecluse.VersionSpec
-    Ecluse.Version.TokenSpec
-    Ecluse.WireSpec
-    Ecluse.Worker.IntegritySpec
-    Ecluse.Worker.JobSpec
-    Ecluse.Worker.LivenessSpec
-    Ecluse.Worker.LoopSpec
-    Ecluse.Worker.RealiseSpec
     Ecluse.Worker.Support
     Ecluse.Worker.Support.Fixtures
     Ecluse.Worker.Support.Runtime
@@ -842,14 +842,14 @@ test-suite ecluse-unit
     Ecluse.Config.TypesSpec
     Ecluse.ConfigSpec
     Ecluse.Cve.SyncSpec
-    Ecluse.EnvSpec
     Ecluse.ManifestSpec
     Ecluse.MirrorSpec
     Ecluse.Pilot.PlanSpec
     Ecluse.PilotSpec
-    Ecluse.ProxySpec
-    Ecluse.RuntimeSpec
-    Ecluse.ServerSpec
+    Ecluse.RtsSpec
+    Ecluse.Runtime.EnvSpec
+    Ecluse.Runtime.ServerMountSpec
+    Ecluse.Runtime.ServerSpec
     Ecluse.ServiceSpec
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
@@ -928,21 +928,21 @@ test-suite ecluse-runtime-unit
   main-is:            Spec.hs
   hs-source-dirs:     runtime/test/unit
   other-modules:
-    Ecluse.Credential.CodeArtifactSpec
-    Ecluse.Cve.SyncSpec
-    Ecluse.Maintenance.CodeArtifact.DecideSpec
-    Ecluse.Maintenance.CodeArtifactSpec
-    Ecluse.LogSpec
-    Ecluse.Queue.SqsSpec
-    Ecluse.Server.DrainSpec
-    Ecluse.Server.HaltSpec
-    Ecluse.Telemetry.CorrelationSpec
-    Ecluse.Telemetry.InstrumentsSpec
-    Ecluse.Telemetry.ReportersSpec
-    Ecluse.Telemetry.ResolveSpec
-    Ecluse.Telemetry.ScrapeSpec
-    Ecluse.Telemetry.TracingSpec
-    Ecluse.TelemetrySpec
+    Ecluse.Runtime.Credential.CodeArtifactSpec
+    Ecluse.Runtime.Cve.SyncSpec
+    Ecluse.Runtime.LogSpec
+    Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec
+    Ecluse.Runtime.Maintenance.CodeArtifactSpec
+    Ecluse.Runtime.Queue.SqsSpec
+    Ecluse.Runtime.Server.DrainSpec
+    Ecluse.Runtime.Server.HaltSpec
+    Ecluse.Runtime.Telemetry.CorrelationSpec
+    Ecluse.Runtime.Telemetry.InstrumentsSpec
+    Ecluse.Runtime.Telemetry.ReportersSpec
+    Ecluse.Runtime.Telemetry.ResolveSpec
+    Ecluse.Runtime.Telemetry.ScrapeSpec
+    Ecluse.Runtime.Telemetry.TracingSpec
+    Ecluse.Runtime.TelemetrySpec
     Paths_ecluse
 
   autogen-modules:    Paths_ecluse
@@ -997,27 +997,27 @@ test-suite ecluse-integration
   main-is:            Spec.hs
   hs-source-dirs:     test/integration
   other-modules:
-    Ecluse.AwsEndToEndSpec
-    Ecluse.CveSyncSpec
+    Ecluse.AwsEndToEndIntegrationSpec
+    Ecluse.Core.Security.EgressIntegrationSpec
+    Ecluse.Core.Server.Pipeline.OriginIntegrationSpec
+    Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec
+    Ecluse.Core.Server.Pipeline.PublishIntegrationSpec
+    Ecluse.Core.Server.Pipeline.SharedIntegrationSpec
+    Ecluse.Core.Server.Pipeline.TarballIntegrationSpec
+    Ecluse.Core.Server.PipelineIntegrationSpec
+    Ecluse.Core.Worker.LoopIntegrationSpec
     Ecluse.Integration.Collector
     Ecluse.Integration.Ministack
     Ecluse.Integration.WorkerLoop
-    Ecluse.MirrorQueueSpec
-    Ecluse.Security.EgressOriginSpec
-    Ecluse.Server.GracefulShutdownSpec
-    Ecluse.Server.Pipeline.OriginSpec
-    Ecluse.Server.Pipeline.PackumentSpec
-    Ecluse.Server.Pipeline.SharedSpec
-    Ecluse.Server.Pipeline.TarballSpec
+    Ecluse.Runtime.Cve.SyncIntegrationSpec
+    Ecluse.Runtime.Pilot.ExportIntegrationSpec
+    Ecluse.Runtime.Queue.SqsIntegrationSpec
+    Ecluse.Runtime.Server.GracefulShutdownIntegrationSpec
+    Ecluse.Runtime.Telemetry.InstrumentsIntegrationSpec
+    Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec
+    Ecluse.Runtime.Telemetry.TracingIntegrationSpec
     Ecluse.Server.Pipeline.TestSupport
-    Ecluse.Server.PipelineSpec
-    Ecluse.Server.PublishSpec
-    Ecluse.TelemetryMetricsSpec
-    Ecluse.TelemetryScrapeSpec
-    Ecluse.TelemetryTracingSpec
-    Ecluse.Test.SupportLinkageSpec
-    Ecluse.WorkerSpec
-    Ecluse.Pilot.S3ExportSpec
+    Ecluse.Test.SupportLinkageIntegrationSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
@@ -1068,8 +1068,8 @@ test-suite ecluse-residency
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
   other-modules:
+    Ecluse.Core.Server.Pipeline.TarballResidencySpec
     Ecluse.Server.Pipeline.TestSupport
-    Ecluse.Server.TarballResidencySpec
 
   build-depends:
     , aeson             >=2.2 && <2.4
@@ -1104,12 +1104,12 @@ test-suite ecluse-smoke
   main-is:            Spec.hs
   hs-source-dirs:     test/smoke
   other-modules:
-    Ecluse.Credential.CodeArtifactSpec
-    Ecluse.Pilot.OsvOracleSpec
-    Ecluse.RegistryProtocolSpec
-    Ecluse.SecurityResolverOracleSpec
-    Ecluse.Test.SupportLinkageSpec
-    Ecluse.VersionOraclesSpec
+    Ecluse.Core.Registry.NpmSmokeSpec
+    Ecluse.Core.Security.HostSmokeSpec
+    Ecluse.Core.VersionSmokeSpec
+    Ecluse.PilotSmokeSpec
+    Ecluse.Runtime.Credential.CodeArtifactSmokeSpec
+    Ecluse.Test.SupportLinkageSmokeSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
@@ -1156,8 +1156,8 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness.Proxy
     Ecluse.E2E.Harness.Types
     Ecluse.E2E.Harness.Verdaccio
-    Ecluse.E2E.SuiteSpec
-    Ecluse.Test.SupportLinkageSpec
+    Ecluse.E2ESpec
+    Ecluse.Test.SupportLinkageE2ESpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:

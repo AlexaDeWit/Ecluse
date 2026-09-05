@@ -8,7 +8,7 @@
 #   * RubyGems -> Ruby `Gem::Version`   (built in)
 #
 # The output is committed, and the PURE, GATING unit test consumes it
-# (test/unit/Ecluse/VersionOrderingSpec.hs). This script needs the reference
+# (core/test/unit/Ecluse/Core/VersionOrderingSpec.hs). This script needs the reference
 # tools, which the Nix dev shell provides. Run it only when the curated version
 # lists below change. The non-gating smoke test re-checks the same comparisons
 # live, against whatever tools are installed. See

@@ -34,9 +34,16 @@ enforces the split:
   `runServer`/`runWorker`, which is why the `Ecluse.Runtime.Server` and
   `Ecluse.Runtime.Env` specs live here.
 
-Each tests its tree in isolation, mirrored under `core/test/unit`, `runtime/test/unit`,
-and `test/unit`. Run all three: `cabal test ecluse-core-unit ecluse-runtime-unit
-ecluse-unit`.
+Each tests its tree in isolation, mirrored under `core/test/unit`, `runtime/test/unit`, and
+`test/unit`. A spec module is the tested module's full name with `Spec` appended, and its file sits
+at the tested module's path under the suite's source directory, library prefix included, so
+`Ecluse.Core.Cve.Slot` is tested by `core/test/unit/Ecluse/Core/Cve/SlotSpec.hs`, module
+`Ecluse.Core.Cve.SlotSpec`. The prefix stays in the name, so a spec states which library it tests
+without the reader knowing which suite holds it. A suite outside the unit tier puts its tier token
+before `Spec`: `IntegrationSpec`, `E2ESpec`, `SmokeSpec`, `ResidencySpec`. The integration spec for
+`Ecluse.Core.Server.Pipeline.Tarball` is therefore
+`Ecluse.Core.Server.Pipeline.TarballIntegrationSpec`, and the unit spec beside it keeps the bare
+`Spec`. Run all three: `cabal test ecluse-core-unit ecluse-runtime-unit ecluse-unit`.
 
 ## Integration tests: `ecluse-integration` (gating)
 

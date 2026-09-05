@@ -286,7 +286,7 @@ holdForLongPublish receipt =
 
 {- | The visibility window one publish gets before its message could redeliver mid-write, sized to
 upload the largest artifact the memory plan admits (512 MiB) over a 2 MiB-per-second link.
-@Ecluse.Worker.LivenessSpec@ pins it under the liveness staleness bound so the two cannot drift.
+@Ecluse.Core.Worker.LivenessSpec@ pins it under the liveness staleness bound so the two cannot drift.
 -}
 workerPublishVisibilityBudget :: Seconds
 workerPublishVisibilityBudget = Seconds 300

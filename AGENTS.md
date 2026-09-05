@@ -52,8 +52,12 @@ only after explicit architect kickoff. The team lead never merges or pushes to `
 
 ## Project structure and code conventions
 
-- The layout is in [`README.md`, Project structure](README.md#project-structure). Tests mirror
-  library paths (`src/Foo/Bar.hs` -> `test/Foo/BarSpec.hs`).
+- The layout is in [`README.md`, Project structure](README.md#project-structure). A spec module is
+  the tested module's full name with `Spec` appended, and its file sits at the tested module's path
+  under the suite's source directory: `core/src/Ecluse/Core/Cve/Slot.hs` is tested by
+  `core/test/unit/Ecluse/Core/Cve/SlotSpec.hs`, module `Ecluse.Core.Cve.SlotSpec`. A suite outside
+  the unit tier puts its tier token before `Spec`: `IntegrationSpec`, `E2ESpec`, `SmokeSpec`,
+  `ResidencySpec`.
 - Follow [`docs/style.md`](docs/style.md) for Haskell and [`docs/haddock.md`](docs/haddock.md) for
   Haddock. Organise vertically by capability. Keep effects at the application edge.
 - Write prose, comments, commits, and PRs in Canadian English (`behaviour`, `colour`, `licence` as a
