@@ -15,6 +15,7 @@ module Ecluse.Core.Registry.Maintenance.Protocol (
     newProtocolMaintenance,
 ) where
 
+import Data.Conduit (ConduitT, yield)
 import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (Secret)
@@ -41,6 +42,7 @@ import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
+    NamePrefix,
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
@@ -53,6 +55,8 @@ import Ecluse.Core.Registry.Maintenance (
     VersionPresence (VersionServed),
     chunksOfCeiling,
     deleteAll,
+    inBucket,
+    noNameAlphabet,
     storeRefusal,
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken))
@@ -87,17 +91,19 @@ newProtocolMaintenance :: ProtocolStore -> StoreMaintenance
 newProtocolMaintenance store =
     StoreMaintenance
         { storeFacts = protocolFacts (psBackendName store)
-        , enumeratePackages = listPackages store
+        , listPackagesIn = listBucket store
         , enumerateVersions = listVersions store
         , deleteVersions = deleteStoredVersions store
         , -- The protocol spells no request that reports what a delete would do without doing it.
           rehearseDelete = Nothing
         , verifyConsent = pure (Right (consentVerdict store))
         , classifyStore = pure (Right (storeClass store))
+        , -- The protocol writes nothing but a publish, so a walk over this store keeps no cursor.
+          storeCursor = Nothing
         }
 
-{- The store re-admits a version published again after a delete, and has applied the delete by
-the time it answers. -}
+{- The store re-admits a version published again after a delete, and has applied it by the time it
+answers. It reports no alphabet: the listing below reads one document whole, bucket or no bucket. -}
 protocolFacts :: Text -> StoreFacts
 protocolFacts backend =
     StoreFacts
@@ -105,6 +111,7 @@ protocolFacts backend =
         , factDeleteCeiling = deleteCeiling
         , factRefill = RefillPermitted
         , factCompletion = CompletesOnCall
+        , factNameAlphabet = noNameAlphabet
         }
 
 {- The delete edit addresses the document revision it was formed from, and applying one changes
@@ -123,6 +130,14 @@ storeClass :: ProtocolStore -> StoreClass
 storeClass store
     | psPermitDeletion store = StoreDestroyable
     | otherwise = StorePreserved (psConsentDescriptor store)
+
+{- One bucket of the store's names, as the single page its one listing document holds. The
+protocol spells no prefix filter, so the bucket is applied to what came back. -}
+listBucket :: ProtocolStore -> NamePrefix -> ConduitT () [PackageName] IO (Maybe StoreFault)
+listBucket store prefix =
+    lift (listPackages store) >>= \case
+        Left fault -> pure (Just fault)
+        Right names -> Nothing <$ yield (filter (inBucket prefix) names)
 
 listPackages :: ProtocolStore -> IO (Either StoreFault [PackageName])
 listPackages store =

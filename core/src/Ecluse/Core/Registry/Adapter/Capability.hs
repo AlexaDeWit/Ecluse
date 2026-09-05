@@ -39,7 +39,7 @@ import Ecluse.Core.Registry (
     UrlFormationError,
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
-import Ecluse.Core.Registry.Maintenance (StoreRefusal)
+import Ecluse.Core.Registry.Maintenance (NameAlphabet, StoreRefusal)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
@@ -126,6 +126,10 @@ data AdapterMaintenance = AdapterMaintenance
     -- ^ How the protocol enumerates a store's packages, where it can.
     , maintenanceVersionDelete :: Maybe VersionDelete
     -- ^ How the protocol deletes one version, where it can.
+    , maintenanceAlphabet :: NameAlphabet
+    {- ^ The characters a name may begin with under this ecosystem's own grammar, which is what
+    partitions a store's name space into the buckets a full walk covers one at a time.
+    -}
     }
 
 {- | Reading every package a store holds. The protocol's own listing endpoint, which a public

@@ -31,6 +31,12 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     describeRepositoryRequest,
     listTagsRequest,
 
+    -- * The walk cursor
+    cursorTagKey,
+    cursorTagRequest,
+    cursorUntagRequest,
+    cursorOfTags,
+
     -- * Responses
     packagesOfPage,
     versionsOfPage,
@@ -58,7 +64,7 @@ import Lens.Micro ((.~), (?~), (^.))
 import Network.HTTP.Types (Header, statusCode)
 import Network.HTTP.Types.Header (hRetryAfter)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Fault (
     RetryAfter (RetryAfter),
     TransportCause (TransportProtocol),
@@ -71,6 +77,8 @@ import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
+    NameAlphabet,
+    NamePrefix,
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryDelayed, RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
@@ -80,6 +88,8 @@ import Ecluse.Core.Registry.Maintenance (
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoved),
     VersionPresence (VersionServed, VersionWithdrawn),
+    parseNamePrefix,
+    renderNamePrefix,
     storeRefusal,
  )
 import Ecluse.Core.Text (nonBlank, readDecimalText)
@@ -122,16 +132,17 @@ repository's per-format endpoint.
 formatToken :: CodeArtifactFormat -> Text
 formatToken (CodeArtifactFormat _ token) = CA.fromPackageFormat token
 
-{- | What CodeArtifact does: it re-admits a version published again after a delete, and has
-applied the delete by the time it answers.
+{- | What CodeArtifact does: it re-admits a version published again after a delete, and has applied
+it by the time it answers. The alphabet is the mount ecosystem's, whose grammar spells the names.
 -}
-codeArtifactFacts :: StoreFacts
-codeArtifactFacts =
+codeArtifactFacts :: NameAlphabet -> StoreFacts
+codeArtifactFacts alphabet =
     StoreFacts
-        { factBackend = "codeartifact"
+        { factBackend = "codeArtifact"
         , factDeleteCeiling = deleteCeiling
         , factRefill = RefillPermitted
         , factCompletion = CompletesOnCall
+        , factNameAlphabet = alphabet
         }
 
 -- | The most versions one @DeletePackageVersions@ call accepts.
@@ -150,12 +161,15 @@ reads as none, so an empty string cannot become an empty scope.
 packageNameFrom :: Ecosystem -> Maybe Text -> Text -> PackageName
 packageNameFrom eco namespace = mkPackageName eco (mkScope <$> (nonBlank =<< namespace))
 
--- | List one page of the store's packages, continuing from a page token when there is one.
-listPackagesRequest :: CodeArtifactStore -> Maybe Text -> CA.ListPackages
-listPackagesRequest store token =
+{- | One page of one bucket, continuing from a page token when there is one. @packagePrefix@
+matches the package component alone and never a namespace, and the empty bucket filters nothing.
+-}
+listPackagesRequest :: CodeArtifactStore -> NamePrefix -> Maybe Text -> CA.ListPackages
+listPackagesRequest store prefix token =
     CA.newListPackages (casDomain store) (casRepository store)
         & (CAL.listPackages_domainOwner ?~ casDomainOwner store)
         & (CAL.listPackages_format ?~ formatTokenOf store)
+        & (CAL.listPackages_packagePrefix .~ nonBlank (renderNamePrefix prefix))
         & (CAL.listPackages_nextToken .~ token)
 
 -- | List one page of a package's versions, continuing from a page token when there is one.
@@ -189,6 +203,33 @@ describeRepositoryRequest store =
 -- | Read a repository's tags, which is where CodeArtifact carries the consent marker.
 listTagsRequest :: Text -> CA.ListTagsForResource
 listTagsRequest = CA.newListTagsForResource
+
+{- | The one tag key the Dredger writes, per ecosystem, so two mounts sharing one repository as
+their mirror target keep their own walk. The grant admits this prefix and nothing else.
+-}
+cursorTagKey :: Ecosystem -> Text
+cursorTagKey eco = "ecluse-dredger-cursor-" <> ecosystemName eco
+
+{- | Record a completed bucket. @TagResource@ adds and updates the keys it names and replaces no
+others, so this cannot disturb the consent tag beside it.
+-}
+cursorTagRequest :: Ecosystem -> Text -> NamePrefix -> CA.TagResource
+cursorTagRequest eco arn prefix =
+    CA.newTagResource arn
+        & (CAL.tagResource_tags .~ [CA.newTag (cursorTagKey eco) (renderNamePrefix prefix)])
+
+-- | Forget the walk, which a completed one does.
+cursorUntagRequest :: Ecosystem -> Text -> CA.UntagResource
+cursorUntagRequest eco arn =
+    CA.newUntagResource arn & (CAL.untagResource_tagKeys .~ [cursorTagKey eco])
+
+{- | The bucket a repository's tags record, 'Nothing' when none is recorded or when the recorded
+one is no prefix this alphabet spells, which is how an alphabet change restarts the walk.
+-}
+cursorOfTags :: NameAlphabet -> Ecosystem -> [CA.Tag] -> Maybe NamePrefix
+cursorOfTags alphabet eco tags = do
+    tag <- find ((== cursorTagKey eco) . (^. CAL.tag_key)) tags
+    parseNamePrefix alphabet =<< nonBlank (tag ^. CAL.tag_value)
 
 {- | The description @DescribeRepository@ carried. It is optional on the wire, and a verdict
 on a repository the store did not describe would be invented rather than read.

@@ -4,6 +4,8 @@
 
 module Ecluse.Test.MaintenanceSpec (spec) where
 
+import Data.Conduit (runConduit, (.|))
+import Data.Conduit.List qualified as CL
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
@@ -17,12 +19,15 @@ import Ecluse.Core.Registry.Maintenance (
     RefillPosture (RefillRefused),
     RetryAdvice (RetryWorthwhile),
     StoreClass (StorePreserved),
+    StoreCursor (..),
     StoreFacts (..),
     StoreFault (..),
     StoreMaintenance (..),
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoving, VersionUnreached),
     VersionPresence (VersionServed, VersionWithdrawn),
+    collectPages,
+    noNameAlphabet,
     storeRefusal,
  )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
@@ -31,16 +36,28 @@ import Ecluse.Test.Maintenance (
     FakeStoreConfig (..),
     defaultFakeStoreConfig,
     newFakeStore,
+    withBucket,
  )
 
-{- The fake is the handle's second implementation, so these cases assert the contract carries a backend
+{- The fake is the handle's third implementation, so these cases assert the contract carries a backend
 nothing like CodeArtifact: a two-version ceiling, a late-finishing delete, and no re-publication. -}
 spec :: Spec
 spec = do
     describe "the fake store's enumeration" $ do
         it "lists the packages it was seeded with" $ do
             handle <- seeded
-            enumeratePackages handle `shouldReturn` Right [plainName, scopedName]
+            listWholeStore handle `shouldReturn` Right [plainName, scopedName]
+
+        it "cuts the listing into pages, so nothing downstream holds the store whole" $ do
+            store <- newFakeStore seededConfig{fakePageSize = 1}
+            pages <- pagesOf (fakeMaintenance store)
+            pages `shouldBe` [[plainName], [scopedName]]
+
+        it "buckets by the name's base component, so a namespace never decides the bucket" $ do
+            handle <- seeded
+            listBucketOf handle "l" `shouldReturn` Right [plainName]
+            listBucketOf handle "c" `shouldReturn` Right [scopedName]
+            listBucketOf handle "b" `shouldReturn` Right []
 
         it "lists a package's versions with what the store still serves" $ do
             handle <- seeded
@@ -92,6 +109,27 @@ spec = do
             factDeleteCeiling facts `shouldBe` AtMost 2
             factRefill facts `shouldBe` RefillRefused
             factCompletion facts `shouldBe` CompletesLater
+            factNameAlphabet facts `shouldBe` noNameAlphabet
+
+    describe "the fake store's walk cursor" $ do
+        it "reads back the bucket it was told the walk completed" $ do
+            store <- newFakeStore seededConfig
+            withBucket "l" $ \completed -> withCursor store $ \cursor -> do
+                readCursor cursor `shouldReturn` Right Nothing
+                writeCursor cursor completed `shouldReturn` Right ()
+                readCursor cursor `shouldReturn` Right (Just completed)
+                readFakeCursor store `shouldReturn` Just completed
+
+        it "forgets the walk when it is cleared, so the next one starts over" $ do
+            store <- newFakeStore seededConfig
+            withBucket "l" $ \completed -> withCursor store $ \cursor -> do
+                writeCursor cursor completed `shouldReturn` Right ()
+                clearCursor cursor `shouldReturn` Right ()
+                readCursor cursor `shouldReturn` Right Nothing
+
+        it "offers none at all on the arm a store with nowhere to write one takes" $ do
+            store <- newFakeStore seededConfig{fakeKeepsCursor = False}
+            isNothing (storeCursor (fakeMaintenance store)) `shouldBe` True
 
     describe "the fake store's rehearsal" $ do
         it "reports the outcomes a delete would give, and deletes nothing" $ do
@@ -109,7 +147,7 @@ spec = do
     describe "the fake store under a fault" $ do
         it "faults every read" $ do
             store <- newFakeStore seededConfig{fakeFault = Just aFault}
-            enumeratePackages (fakeMaintenance store) `shouldReturn` Left aFault
+            listWholeStore (fakeMaintenance store) `shouldReturn` Left aFault
             enumerateVersions (fakeMaintenance store) plainName `shouldReturn` Left aFault
             verifyConsent (fakeMaintenance store) `shouldReturn` Left aFault
             classifyStore (fakeMaintenance store) `shouldReturn` Left aFault
@@ -123,6 +161,10 @@ spec = do
                 `shouldBe` ["1.0.0", "1.1.0"]
   where
     seeded = fakeMaintenance <$> newFakeStore seededConfig
+
+    withCursor store act = case storeCursor (fakeMaintenance store) of
+        Nothing -> expectationFailure "the fake store keeps a walk cursor by default"
+        Just cursor -> act cursor
 
     isRefusal = \case
         VersionRefused _ -> True
@@ -142,6 +184,18 @@ seededConfig =
   where
     served raw = StoredVersion (version raw) VersionServed
     withdrawn raw = StoredVersion (version raw) VersionWithdrawn
+
+-- The one bucket a store with no alphabet offers, which covers everything it holds.
+listWholeStore :: StoreMaintenance -> IO (Either StoreFault [PackageName])
+listWholeStore handle = listBucketOf handle ""
+
+listBucketOf :: StoreMaintenance -> Text -> IO (Either StoreFault [PackageName])
+listBucketOf handle raw = withBucket raw (collectPages . listPackagesIn handle)
+
+pagesOf :: StoreMaintenance -> IO [[PackageName]]
+pagesOf handle =
+    withBucket "" $ \everything ->
+        runConduit (void (listPackagesIn handle everything) .| CL.consume)
 
 scopedName :: PackageName
 scopedName = mkPackageName Npm (Just (mkScope "babel")) "core"

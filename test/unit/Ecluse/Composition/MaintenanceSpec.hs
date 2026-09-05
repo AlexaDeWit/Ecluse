@@ -42,14 +42,18 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMaintenance), adapterFor)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (AdapterMaintenance, maintenanceListing, maintenanceVersionDelete))
+import Ecluse.Core.Registry.Adapter.Capability (
+    AdapterMaintenance (AdapterMaintenance, maintenanceAlphabet, maintenanceListing, maintenanceVersionDelete),
+ )
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
+    NameAlphabet,
     RefillPosture (RefillPermitted),
     StoreFacts (..),
     StoreMaintenance (storeFacts, verifyConsent),
+    noNameAlphabet,
  )
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
@@ -90,6 +94,13 @@ passSpec = describe "vetStoreBackends" $ do
     it "clears nothing and refuses nothing for a mount that declares no mirror target" $ do
         mounts <- mountsFor (withoutMirrorTargetUrl (withoutMirrorTargetToken staticEnvVars))
         clearsNothing (vetted MirrorPruner mounts) `shouldBe` True
+
+    it "clears a vendor store with no alphabet when this build ships the ecosystem no adapter" $ do
+        -- Unreachable through a real boot, which refuses that mount as MissingAdapter first. The
+        -- store still clears, walked as one bucket, rather than the pass inventing an alphabet.
+        mounts <- mountsFor codeArtifactEnvVars
+        fmap (map clearedAlphabet . Map.elems) (snd (runVet MirrorPruner (vetStoreBackends noAdapter mounts)))
+            `shouldBe` Right [noNameAlphabet]
 
 {- The protocol arm: a store with no vendor control plane, swept through the ecosystem's own
 verbs. Consent and the ecosystem's verbs are separate refusals, and the writing role reads neither. -}
@@ -198,11 +209,28 @@ instance Exception NoStoreClient
 vetted :: RegistryRole -> MountMap -> ([Text], Either [BootError] (Map Ecosystem ClearedBackend))
 vetted role mounts = runVet role (vetStoreBackends adapterFor mounts)
 
+-- | An ecosystem this build ships no adapter for at all.
+noAdapter :: ResolveMaintenanceAdapter
+noAdapter _ = Nothing
+
+-- | The bucket alphabet a cleared vendor store carries, and 'noNameAlphabet' for any other arm.
+clearedAlphabet :: ClearedBackend -> NameAlphabet
+clearedAlphabet = \case
+    ClearedCodeArtifact _ alphabet -> alphabet
+    ClearedProtocol{} -> noNameAlphabet
+
 -- | This build's adapters with their maintenance slice emptied: an ecosystem that fills neither verb.
 withoutMaintenance :: ResolveMaintenanceAdapter
 withoutMaintenance eco =
     adapterFor eco <&> \adapter ->
-        adapter{adapterMaintenance = AdapterMaintenance{maintenanceListing = Nothing, maintenanceVersionDelete = Nothing}}
+        adapter
+            { adapterMaintenance =
+                AdapterMaintenance
+                    { maintenanceListing = Nothing
+                    , maintenanceVersionDelete = Nothing
+                    , maintenanceAlphabet = noNameAlphabet
+                    }
+            }
 
 -- Whether a cleared backend is the protocol arm, which is what a Verdaccio target resolves to.
 protocolArm :: ClearedBackend -> Bool

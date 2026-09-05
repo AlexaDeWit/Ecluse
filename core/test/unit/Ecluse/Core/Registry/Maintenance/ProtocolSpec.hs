@@ -37,6 +37,8 @@ import Ecluse.Core.Registry.Maintenance (
     StoredVersion (storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed),
+    collectPages,
+    noNameAlphabet,
     refusalCode,
  )
 import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolStore (..), newProtocolMaintenance)
@@ -46,6 +48,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLim
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Stub (
     Captured (capBody, capMethod, capPath),
@@ -73,6 +76,14 @@ factsSpec = describe "what the backend supplies without a call" $ do
             factRefill facts `shouldBe` RefillPermitted
             factCompletion facts `shouldBe` CompletesOnCall
 
+    it "partitions its name space into nothing, because one read answers the whole listing" $
+        withStore True answerNothing $ \handle _ ->
+            factNameAlphabet (storeFacts handle) `shouldBe` noNameAlphabet
+
+    it "keeps no walk cursor, because the protocol writes nothing but a publish" $
+        withStore True answerNothing $ \handle _ ->
+            isNothing (storeCursor handle) `shouldBe` True
+
     it "offers no rehearsal, because the protocol spells no dry-run request" $
         withStore True answerNothing $ \handle _ ->
             isNothing (rehearseDelete handle) `shouldBe` True
@@ -91,12 +102,17 @@ enumerationSpec :: Spec
 enumerationSpec = describe "enumeration over the protocol's own reads" $ do
     it "reads the store's packages from the listing it answers 200 to" $
         withStore True answerStore $ \handle stub -> do
-            enumeratePackages handle `shouldReturn` Right [unscopedNpm "leftpad", unscopedNpm "rightpad"]
+            listWholeStore handle `shouldReturn` Right [unscopedNpm "leftpad", unscopedNpm "rightpad"]
             calls stub `shouldReturn` [("GET", "/-/all")]
+
+    it "answers a bucket with the names under it, filtering what the listing brought back" $
+        withStore True answerStore $ \handle _ -> do
+            listBucketOf handle "l" `shouldReturn` Right [unscopedNpm "leftpad"]
+            listBucketOf handle "r" `shouldReturn` Right [unscopedNpm "rightpad"]
 
     it "faults with RetryFutile on a store that does not answer the listing" $
         withStore True answerNothing $ \handle _ ->
-            (fmap faultRetry . leftToMaybe <$> enumeratePackages handle)
+            (fmap faultRetry . leftToMaybe <$> listWholeStore handle)
                 `shouldReturn` Just RetryFutile
 
     it "reads a package's versions through the presence probe, all served" $
@@ -111,17 +127,17 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
 
     it "faults when a listing answers 200 with a body that is no listing at all" $
         withStore True (answerAll status200 "[\"leftpad\"]") $ \handle _ ->
-            faultDetail <$> enumeratePackages handle
+            faultDetail <$> listWholeStore handle
                 `shouldReturn` Just "the store's package listing did not parse"
 
     it "faults with RetryFutile when the listing crosses the origin's response bound" $
         withBoundedStore tinyBodyBound answerStore $ \handle _ ->
-            (fmap faultRetry . leftToMaybe <$> enumeratePackages handle)
+            (fmap faultRetry . leftToMaybe <$> listWholeStore handle)
                 `shouldReturn` Just RetryFutile
 
     it "reports an unreachable store as a transport fault, with the advice that cause carries" $ do
         handle <- unreachableStore
-        outcome <- enumeratePackages handle
+        outcome <- listWholeStore handle
         fmap (tfCause . faultTransport) (leftToMaybe outcome) `shouldBe` Just TransportUnreachable
         fmap faultRetry (leftToMaybe outcome) `shouldBe` Just RetryWorthwhile
 
@@ -267,6 +283,15 @@ consentKey = "set mounts.npm.mirrorTarget.verdaccio.permitDeletion to true"
 
 leftpad :: PackageName
 leftpad = unscopedNpm "leftpad"
+
+-- The one bucket a leaf with no alphabet offers, which covers everything the store holds.
+listWholeStore :: StoreMaintenance -> IO (Either StoreFault [PackageName])
+listWholeStore handle = listBucketOf handle ""
+
+{- One bucket by the spelling a store filter would carry, so the filter the leaf applies is
+drivable even though it advertises no alphabet of its own. -}
+listBucketOf :: StoreMaintenance -> Text -> IO (Either StoreFault [PackageName])
+listBucketOf handle raw = withBucket raw (collectPages . listPackagesIn handle)
 
 version :: Text -> Version
 version = mkVersion Npm

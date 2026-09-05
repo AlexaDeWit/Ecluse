@@ -58,11 +58,11 @@ import Ecluse.Core.Registry.Adapter (
     publishCodec,
  )
 import Ecluse.Core.Registry.Adapter.Capability (
-    AdapterMaintenance (maintenanceListing, maintenanceVersionDelete),
+    AdapterMaintenance (maintenanceAlphabet, maintenanceListing, maintenanceVersionDelete),
     StoreListing,
     VersionDelete,
  )
-import Ecluse.Core.Registry.Maintenance (StoreMaintenance)
+import Ecluse.Core.Registry.Maintenance (NameAlphabet, StoreMaintenance, noNameAlphabet)
 import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolStore (..), newProtocolMaintenance)
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Registry.Publish (PublishCodec)
@@ -75,8 +75,10 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
 issues one, so a handle that can delete is built for no store that pass did not clear.
 -}
 data ClearedBackend
-    = -- | A CodeArtifact repository, deleted through the vendor's own control plane.
-      ClearedCodeArtifact CodeArtifactStore
+    = {- | A CodeArtifact repository, deleted through the vendor's own control plane, with the
+      alphabet its full walk partitions the repository's names by.
+      -}
+      ClearedCodeArtifact CodeArtifactStore NameAlphabet
     | -- | A store with no vendor control plane, deleted through the ecosystem protocol.
       ClearedProtocol ClearedProtocolStore
 
@@ -127,7 +129,7 @@ vetStoreBackends resolveAdapter mounts = clearedFor <$> vetRole <* traverse_ (ru
 -- The store a resolved backend lets the Dredger delete from, or why this build reaches none.
 sweepableStore :: Maybe RegistryAdapter -> Ecosystem -> MirrorTarget -> Either StoreMaintenanceReason ClearedBackend
 sweepableStore mAdapter eco target = case sbControl backend of
-    ControlCodeArtifact store -> Right (ClearedCodeArtifact store)
+    ControlCodeArtifact store -> Right (ClearedCodeArtifact store alphabet)
     ControlNone -> Left (NoControlPlane (sbTag backend))
     ControlProtocol token consent -> do
         -- Consent is the operator's own key, so it is reported ahead of what this build ships.
@@ -152,6 +154,11 @@ sweepableStore mAdapter eco target = case sbControl backend of
     backend :: StoreBackend
     backend = mtBackend target
 
+    {- The same pass refuses an ecosystem this build ships no adapter for ('MissingAdapter'), so
+    the unpartitioned walk this stands in for is unreachable rather than a quiet degradation. -}
+    alphabet :: NameAlphabet
+    alphabet = maybe noNameAlphabet (maintenanceAlphabet . adapterMaintenance) mAdapter
+
 {- | How a boot builds one store's maintenance handle, under the response bound the plan resolved.
 Injected, as the queue builder is, so a spec drives the pruner's arm without an AWS identity.
 -}
@@ -162,7 +169,7 @@ way, and a protocol store dials its endpoint over a manager of its own, as that 
 -}
 buildStoreMaintenance :: BuildStoreMaintenance
 buildStoreMaintenance limits = \case
-    ClearedCodeArtifact store -> newCodeArtifactMaintenance store
+    ClearedCodeArtifact store alphabet -> newCodeArtifactMaintenance alphabet store
     ClearedProtocol store -> newProtocolMaintenance . protocolStore limits store <$> protocolManager
 
 {- The maintenance control plane is not the data plane, so this manager carries no data-plane
