@@ -111,24 +111,35 @@ reevaluateThenMirror :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
 reevaluateThenMirror receipt job = do
     policies <- asks wrPolicies
     case Map.lookup (pkgEcosystem (jobPackage job)) policies of
-        Nothing ->
-            -- Structurally unreachable: only an activated ecosystem enqueues jobs, and
-            -- activation implies a bundle. Kept as the fail-closed drop.
-            pure (Dropped ("no rule policy is configured for the " <> ecosystemName (pkgEcosystem (jobPackage job)) <> " ecosystem; refusing to mirror " <> renderJob job))
+        -- Structurally unreachable: only an activated ecosystem enqueues jobs, and activation
+        -- implies a bundle. Kept as the fail-closed drop.
+        Nothing -> pure (Dropped (noPolicyReason job))
         Just policy
             -- An operator can declare the namespace after the enqueue, so the privilege is read
             -- ahead of the mirror probe: the public leg is never entered for a name it owns.
-            | wpFirstParty policy (jobPackage job) ->
-                pure (Dropped ("this deployment owns the namespace of " <> renderJob job <> "; refusing to mirror public content under a first-party name"))
-            | otherwise ->
-                alreadyMirrored policy job >>= \case
-                    True -> do
-                        logFM InfoS (ls ("already present at the mirror target, acking without re-publish: " <> renderJob job))
-                        pure Succeeded
-                    False ->
-                        reevaluatePolicy policy job >>= \case
-                            Right admitted -> mirrorArtifact policy receipt job admitted
-                            Left outcome -> pure outcome
+            | wpFirstParty policy (jobPackage job) -> pure (Dropped (firstPartyReason job))
+            | otherwise -> mirrorUnlessPresent policy receipt job
+
+noPolicyReason :: MirrorJob -> Text
+noPolicyReason job =
+    "no rule policy is configured for the "
+        <> ecosystemName (pkgEcosystem (jobPackage job))
+        <> " ecosystem; refusing to mirror "
+        <> renderJob job
+
+firstPartyReason :: MirrorJob -> Text
+firstPartyReason job =
+    "this deployment owns the namespace of "
+        <> renderJob job
+        <> "; refusing to mirror public content under a first-party name"
+
+mirrorUnlessPresent :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
+mirrorUnlessPresent policy receipt job =
+    alreadyMirrored policy job >>= \case
+        True -> do
+            logFM InfoS (ls ("already present at the mirror target, acking without re-publish: " <> renderJob job))
+            pure Succeeded
+        False -> reevaluatePolicy policy job >>= either pure (mirrorArtifact policy receipt job)
 
 {- Confirm presence positively only: a fetch fault or an unparseable body answers 'False', so the
 job falls through to the full gated pipeline. The probe never admits an unvetted job. -}
@@ -149,28 +160,33 @@ trust boundary. Then re-run current policy through 'Ecluse.Core.Package.Admissio
 reevaluatePolicy :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome MirrorArtifact)
 reevaluatePolicy policy job
     | not (wpArtifactHostHonoured policy (hostPortAddress (registryUrlText (jobArtifactUrl job)))) =
-        pure (Left (Dropped ("the tarball-host policy refuses the artifact host of " <> renderJob job <> " (" <> jobArtifactAuthority job <> "); refusing to fetch or mirror it")))
-    | otherwise = do
-        evaluation <- liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job))
-        case evaluation of
-            VersionMetadataUnavailable ->
-                pure (Left (retryOrDrop (versionTransience evaluation) ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job)))
-            VersionMissing ->
-                pure (Left (retryOrDrop (versionTransience evaluation) ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version")))
-            VersionPresent details -> do
-                -- The back-fill path emits no per-decision audit line, so the
-                -- audit-only advisory ETag is not resolved for its context.
-                ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
-                admission <-
-                    liftIO
-                        ( admitArtifact
-                            ctx
-                            (wpRules policy)
-                            (wpMinIntegrity policy)
-                            (jobArtifactFilename job)
-                            details
-                        )
-                pure (outcomeOfAdmission job admission)
+        pure (Left (Dropped (artifactHostReason job)))
+    | otherwise =
+        liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job)) >>= admitEvaluation policy job
+
+artifactHostReason :: MirrorJob -> Text
+artifactHostReason job =
+    "the tarball-host policy refuses the artifact host of "
+        <> renderJob job
+        <> " ("
+        <> jobArtifactAuthority job
+        <> "); refusing to fetch or mirror it"
+
+-- A version the upstream no longer offers, or cannot describe, never reaches the rules.
+admitEvaluation :: WorkerPolicy -> MirrorJob -> VersionEvaluation -> WorkerM (Either JobOutcome MirrorArtifact)
+admitEvaluation policy job evaluation = case evaluation of
+    VersionMetadataUnavailable ->
+        pure (Left (unresolved ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job)))
+    VersionMissing ->
+        pure (Left (unresolved ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version")))
+    VersionPresent details -> do
+        -- The back-fill path emits no per-decision audit line, so the audit-only advisory ETag
+        -- is not resolved for its context.
+        ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
+        admission <- liftIO (admitArtifact ctx (wpRules policy) (wpMinIntegrity policy) (jobArtifactFilename job) details)
+        pure (outcomeOfAdmission job admission)
+  where
+    unresolved = retryOrDrop (versionTransience evaluation)
 
 {- | Render the shared 'ArtifactAdmission' as the descriptor to publish, or the outcome the queue
 realises. 'admissionTransience' alone splits retry from drop, so no path can diverge from the gate.
@@ -225,8 +241,6 @@ outcomeOfFetchFault render fault = verdict (render fault)
         FetchBoundExceeded _ -> DeadLettered
         FetchTransport _ -> Retried
 
--- A tampered artifact must never reach the private upstream, which later serves it without the
--- rules, so the bytes are verified against the re-admitted digests before any publish.
 mirrorArtifact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> MirrorArtifact -> WorkerM JobOutcome
 mirrorArtifact policy receipt job admitted = do
     logFM DebugS (ls ("fetching artifact bytes from " <> jobArtifactAuthority job))
@@ -235,12 +249,7 @@ mirrorArtifact policy receipt job admitted = do
         -- 'outcomeOfFetchFault' makes the terminal-versus-transient split, and
         -- 'processMessage' logs the reason at the queue-realisation site.
         Left fault -> pure (outcomeOfFetchFault (artifactFetchReason job) fault)
-        Right bytes ->
-            case verifyIntegrity (maHashes admitted) bytes of
-                IntegrityMismatch detail -> do
-                    logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
-                    pure (Dropped ("integrity mismatch: " <> detail))
-                IntegrityVerified -> publishVerified policy receipt job admitted bytes
+        Right bytes -> publishIfIntact policy receipt job admitted bytes
 
 -- The client's rendered exception would print the request path, query, and headers, so a
 -- transport reason names only the authority and the cause.
@@ -250,13 +259,14 @@ artifactFetchReason job = \case
     FetchBoundExceeded limitErr -> "artifact exceeded the response bound: " <> show limitErr
     FetchTransport fault -> "artifact fetch from " <> jobArtifactAuthority job <> " failed: " <> show (tfCause fault)
 
--- The mirror target is operator-configured, so its rendered transport detail is diagnosable
--- rather than attacker-supplied.
-publishFaultReason :: FetchFault -> Text
-publishFaultReason = \case
-    FetchUrlUnformable urlErr -> "unformable publish URL: " <> renderUrlFormationError urlErr
-    FetchBoundExceeded limitErr -> "the publication target's response exceeded the response bound: " <> show limitErr
-    FetchTransport fault -> "publish transport failure: " <> show fault
+-- A tampered artifact must never reach the private upstream, which later serves it without the
+-- rules, so the bytes are verified against the re-admitted digests before any publish.
+publishIfIntact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
+publishIfIntact policy receipt job admitted bytes = case verifyIntegrity (maHashes admitted) bytes of
+    IntegrityMismatch detail -> do
+        logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
+        pure (Dropped ("integrity mismatch: " <> detail))
+    IntegrityVerified -> publishVerified policy receipt job admitted bytes
 
 -- Publish already-verified bytes to the mirror target. The publish document is assembled from the
 -- re-admitted descriptor, so no queue-payload text reaches the trusted-tier packument.
@@ -268,20 +278,31 @@ publishVerified policy receipt job admitted bytes = do
     -- histogram whichever way the registry responds.
     (result, seconds) <- timedSeconds (liftIO (mpPublishArtifact (wpPublish policy) (jobPackage job) (jobVersion job) admitted bytes))
     liftIO (wmpMirrorPublishDuration metrics seconds)
-    case result of
-        Right () -> do
-            logFM InfoS (ls ("mirrored artifact published: " <> renderJob job))
-            pure Succeeded
-        Left (PublishRejected err) -> do
-            releaseForRetry receipt
-            pure (Retried ("registry rejected publish: " <> show err))
-        Left (PublishFetch fault) -> case outcomeOfFetchFault publishFaultReason fault of
-            -- Reset the hold only when a redelivery is actually coming. A terminal outcome is
-            -- acked or dead-lettered, so there is nothing to hasten and the hold can stand.
-            Retried reason -> do
-                releaseForRetry receipt
-                pure (Retried reason)
-            outcome -> pure outcome
+    outcomeOfPublish receipt job result
+
+-- Reset the hold only when a redelivery is actually coming. A terminal outcome is acked or
+-- dead-lettered, so there is nothing to hasten and the hold can stand.
+outcomeOfPublish :: ReceiptHandle -> MirrorJob -> Either PublishFault () -> WorkerM JobOutcome
+outcomeOfPublish receipt job = \case
+    Right () -> do
+        logFM InfoS (ls ("mirrored artifact published: " <> renderJob job))
+        pure Succeeded
+    Left (PublishRejected err) -> retryAfterRelease ("registry rejected publish: " <> show err)
+    Left (PublishFetch fault) -> case outcomeOfFetchFault publishFaultReason fault of
+        Retried reason -> retryAfterRelease reason
+        outcome -> pure outcome
+  where
+    retryAfterRelease reason = do
+        releaseForRetry receipt
+        pure (Retried reason)
+
+-- The mirror target is operator-configured, so its rendered transport detail is diagnosable
+-- rather than attacker-supplied.
+publishFaultReason :: FetchFault -> Text
+publishFaultReason = \case
+    FetchUrlUnformable urlErr -> "unformable publish URL: " <> renderUrlFormationError urlErr
+    FetchBoundExceeded limitErr -> "the publication target's response exceeded the response bound: " <> show limitErr
+    FetchTransport fault -> "publish transport failure: " <> show fault
 
 -- Hold the message past its visibility window before a publish that may run long. A mid-publish
 -- redelivery only wastes a re-fetch, so a failed extend is swallowed, never failing the job.
