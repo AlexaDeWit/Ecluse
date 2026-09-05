@@ -25,6 +25,10 @@ spec = do
         it "drops leading and trailing separators" $
             normalisePyPI "_acme." `shouldBe` "acme"
 
+        it "yields the empty key for empty and separator-only input" $
+            for_ ["", "._-"] $ \spelling ->
+                normalisePyPI spelling `shouldBe` ""
+
         it "leaves a name already in canonical form alone" $
             normalisePyPI "acme-tools" `shouldBe` "acme-tools"
 

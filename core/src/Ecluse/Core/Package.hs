@@ -182,8 +182,8 @@ mkPackageName eco ns raw =
         Just s -> renderScope s <> "/" <> raw
         Nothing -> raw
 
-{- | Normalise a display name into its canonical matching key for an ecosystem. Each
-ecosystem's grammar lives in its own module.
+{- | Normalise a display name into its canonical matching key for an ecosystem. An
+ecosystem with a normalisation grammar keeps it in its own module.
 -}
 canonicalise :: Ecosystem -> Text -> Text
 canonicalise = \case
