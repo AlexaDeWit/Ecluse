@@ -5,14 +5,17 @@
 module Ecluse.Core.Package.InvalidEntrySpec (spec) where
 
 import Data.Aeson (Value (Array, Number, String), object, (.=))
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Test.Hspec
 
 import Ecluse.Core.Package.InvalidEntry (
     InvalidEntry (invalidKey, invalidReason, invalidValue),
-    InvalidEntryKind (InvalidVersionManifest),
+    InvalidEntryKind (InvalidDistTag, InvalidIndexFile, InvalidVersionListing, InvalidVersionManifest),
+    dropCountsByKind,
     mkInvalidEntry,
+    renderInvalidEntryKind,
  )
 
 {- | The one builder for a dropped entry. The record reaches an operator log line, so a
@@ -22,6 +25,7 @@ spec :: Spec
 spec = do
     redactionSpec
     passthroughSpec
+    bucketingSpec
 
 redactionSpec :: Spec
 redactionSpec = describe "mkInvalidEntry (URL redaction)" $ do
@@ -56,6 +60,30 @@ passthroughSpec = describe "mkInvalidEntry (non-URL values)" $ do
 
     it "records the reason verbatim" $
         invalidReason (entryWith (Number 5)) `shouldBe` "expected an object"
+
+{- | The bucketing the neutral serve path reads. It keys on the arm's label, so a second
+ecosystem's kinds reach the operator log without a case in the shared path.
+-}
+bucketingSpec :: Spec
+bucketingSpec = describe "dropCountsByKind" $ do
+    it "counts each kind under its own label" $
+        dropCountsByKind (map dropOf [InvalidVersionManifest, InvalidDistTag, InvalidVersionManifest])
+            `shouldBe` Map.fromList [("dist-tag", 1), ("version-manifest", 2)]
+
+    it "buckets a second ecosystem's kinds the same way, with no npm bucket" $
+        dropCountsByKind (map dropOf [InvalidIndexFile, InvalidVersionListing, InvalidIndexFile])
+            `shouldBe` Map.fromList [("index-file", 2), ("version-listing", 1)]
+
+    it "reports no buckets for a document that dropped nothing" $
+        dropCountsByKind [] `shouldBe` Map.empty
+
+    it "gives every kind a distinct label" $
+        let kinds = [InvalidVersionManifest, InvalidDistTag, InvalidIndexFile, InvalidVersionListing]
+         in length (ordNub (map renderInvalidEntryKind kinds)) `shouldBe` length kinds
+
+-- | Record a drop of the given kind, holding the key, value, and reason fixed.
+dropOf :: InvalidEntryKind -> InvalidEntry
+dropOf kind = mkInvalidEntry kind "2.0.0" (Number 1) "reason"
 
 -- | Record a drop of the given value, holding the kind, key, and reason fixed.
 entryWith :: Value -> InvalidEntry

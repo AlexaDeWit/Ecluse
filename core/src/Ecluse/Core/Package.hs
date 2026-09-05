@@ -85,6 +85,8 @@ module Ecluse.Core.Package (
     InvalidEntry (invalidKind, invalidKey, invalidValue, invalidReason),
     mkInvalidEntry,
     InvalidEntryKind (..),
+    renderInvalidEntryKind,
+    dropCountsByKind,
 ) where
 
 import Data.Char (isAscii, isControl)
@@ -112,7 +114,9 @@ import Ecluse.Core.Package.Hash (
 import Ecluse.Core.Package.InvalidEntry (
     InvalidEntry (invalidKey, invalidKind, invalidReason, invalidValue),
     InvalidEntryKind (..),
+    dropCountsByKind,
     mkInvalidEntry,
+    renderInvalidEntryKind,
  )
 import Ecluse.Core.Package.Pep503 (normalisePyPI)
 import Ecluse.Core.Version (Version)

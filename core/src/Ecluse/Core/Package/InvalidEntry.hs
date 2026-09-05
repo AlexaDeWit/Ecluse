@@ -10,7 +10,10 @@ authority ('Ecluse.Core.Security.Authority.authorityLabel'), so no userinfo and 
 query string survives into the entry. Hiding the constructor is what makes that
 unrepresentable to bypass.
 
-Each ecosystem's projection contributes its own 'InvalidEntryKind' arms.
+Each ecosystem's projection contributes its own 'InvalidEntryKind' arms. The neutral serve
+path never branches on them: it buckets through 'dropCountsByKind', whose labels come from
+'renderInvalidEntryKind' beside the arms, so a new ecosystem's kinds reach the operator log
+without a case anywhere else.
 -}
 module Ecluse.Core.Package.InvalidEntry (
     -- * A dropped entry
@@ -19,10 +22,13 @@ module Ecluse.Core.Package.InvalidEntry (
 
     -- * Which kind of entry dropped
     InvalidEntryKind (..),
+    renderInvalidEntryKind,
+    dropCountsByKind,
 ) where
 
 import Data.Aeson (Value (Array, Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Vector qualified as V
 
@@ -77,9 +83,11 @@ redactUrlText raw
     | "://" `T.isInfixOf` raw = authorityLabel raw
     | otherwise = raw
 
-{- | Which kind of registry-document entry a dropped 'InvalidEntry' came from. A version
-manifest drop removes a serve candidate, fail-closed for that one version. A dist-tag or
-publish-time drop loses only that advisory datum, and the version still resolves.
+{- | Which kind of registry-document entry a dropped 'InvalidEntry' came from. A dropped
+manifest or index file removes a serve candidate, fail-closed for that one version or file.
+The advisory kinds lose only their own datum, and the version still resolves.
+
+The arms are per-ecosystem by construction, so a new ecosystem adds its own beside these.
 -}
 data InvalidEntryKind
     = -- | A @versions@ entry whose manifest did not project (no @dist@\/@tarball@, an unusable @version@).
@@ -88,4 +96,26 @@ data InvalidEntryKind
       InvalidDistTag
     | -- | A @time@ entry, keyed by a present version, that was not a decodable instant.
       InvalidPublishTime
+    | -- | A Simple-index file entry that did not project (no name or location, an unusable digest).
+      InvalidIndexFile
+    | -- | A versions-listing entry that was not a usable version string.
+      InvalidVersionListing
     deriving stock (Eq, Ord, Show)
+
+{- | The operator-facing label for a drop kind. It is the bucket key an operator filters on, so
+it is held stable as this text rather than the constructor name.
+-}
+renderInvalidEntryKind :: InvalidEntryKind -> Text
+renderInvalidEntryKind = \case
+    InvalidVersionManifest -> "version-manifest"
+    InvalidDistTag -> "dist-tag"
+    InvalidPublishTime -> "publish-time"
+    InvalidIndexFile -> "index-file"
+    InvalidVersionListing -> "version-listing"
+
+{- | How many entries dropped under each kind's label. Only the kinds actually seen appear, so
+a document's drop profile carries no bucket its ecosystem has no entries for.
+-}
+dropCountsByKind :: [InvalidEntry] -> Map Text Int
+dropCountsByKind entries =
+    Map.fromListWith (+) [(renderInvalidEntryKind (invalidKind e), 1) | e <- entries]
