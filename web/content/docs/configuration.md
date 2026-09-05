@@ -157,7 +157,7 @@ names with a public one.
 | --- | --- |
 | Publish | Only a first-party name may be published through the relay. Every other name is a `403`. |
 | Serve | A first-party name resolves from `privateUpstream` alone. Écluse never fetches it from `publicUpstream` and never merges a public document into it. A private miss is a `404`. |
-| Mirror | Nothing first-party is mirrored, because nothing first-party is fetched from the public leg. A job already on the queue when you declare the namespace is dropped, not mirrored, once the worker reaches it. |
+| Mirror | Nothing first-party is mirrored, because nothing first-party is fetched from the public leg. The worker drops, and does not mirror, a job that was already on the queue when you declared the namespace. |
 
 The shape follows the ecosystem, and an empty or malformed list is refused at boot.
 

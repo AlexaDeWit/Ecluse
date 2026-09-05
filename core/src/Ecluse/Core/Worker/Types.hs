@@ -81,8 +81,7 @@ mirror write reach only its own ecosystem's declared mirror target.
 data WorkerPolicy = WorkerPolicy
     { wpFirstParty :: PackageName -> Bool
     {- ^ Whether a name belongs to a namespace this deployment owns, the predicate the serve
-    and publish paths read ('Ecluse.Core.Server.Context.pdFirstParty'). A job queued before
-    the declaration drops here, before any public request.
+    and publish paths read ('Ecluse.Core.Server.Context.pdFirstParty').
     -}
     , wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
     {- ^ Resolve and project one version's metadata through the guarded public origin,
