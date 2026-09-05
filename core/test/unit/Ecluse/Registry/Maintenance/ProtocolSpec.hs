@@ -12,12 +12,14 @@ import Data.Aeson (Object, Value (Object), decodeStrict, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
-import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Data.Text qualified as T
+import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (Status, status200, status201, status404, status500, status503)
 import Test.Hspec
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), tfCause, tfDetail)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (maintenanceListing, maintenanceVersionDelete),
@@ -28,12 +30,12 @@ import Ecluse.Core.Registry.Maintenance (
     DeleteCeiling (AtMost),
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryFutile, RetryWorthwhile),
-    StoreClass (StoreDestroyable),
+    StoreClass (StoreDestroyable, StorePreserved),
     StoreFacts (..),
-    StoreFault (faultRetry),
+    StoreFault (faultRetry, faultTransport),
     StoreMaintenance (..),
     StoredVersion (storedPresence, storedVersion),
-    VersionOutcome (VersionRefused, VersionRemoved),
+    VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed),
     refusalCode,
  )
@@ -41,7 +43,7 @@ import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolStore (..), newProtoco
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (unscopedNpm)
@@ -53,6 +55,7 @@ import Ecluse.Test.Stub (
     stubLocalhostUrl,
     withRoutedStub,
  )
+import Ecluse.Test.Wai (freePort, localhost)
 
 spec :: Spec
 spec = do
@@ -80,8 +83,9 @@ factsSpec = describe "what the backend supplies without a call" $ do
             classifyStore handle `shouldReturn` Right StoreDestroyable
 
     it "withholds consent, naming the key, when the store carries none" $
-        withStore False answerNothing $ \handle _ ->
+        withStore False answerNothing $ \handle _ -> do
             verifyConsent handle `shouldReturn` Right (ConsentWithheld consentKey)
+            classifyStore handle `shouldReturn` Right (StorePreserved consentKey)
 
 enumerationSpec :: Spec
 enumerationSpec = describe "enumeration over the protocol's own reads" $ do
@@ -104,6 +108,22 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
     it "reads a package the store no longer holds as holding no versions" $
         withStore True answerNothing $ \handle _ ->
             enumerateVersions handle leftpad `shouldReturn` Right []
+
+    it "faults when a listing answers 200 with a body that is no listing at all" $
+        withStore True (answerAll status200 "[\"leftpad\"]") $ \handle _ ->
+            faultDetail <$> enumeratePackages handle
+                `shouldReturn` Just "the store's package listing did not parse"
+
+    it "faults with RetryFutile when the listing crosses the origin's response bound" $
+        withBoundedStore tinyBodyBound answerStore $ \handle _ ->
+            (fmap faultRetry . leftToMaybe <$> enumeratePackages handle)
+                `shouldReturn` Just RetryFutile
+
+    it "reports an unreachable store as a transport fault, with the advice that cause carries" $ do
+        handle <- unreachableStore
+        outcome <- enumeratePackages handle
+        fmap (tfCause . faultTransport) (leftToMaybe outcome) `shouldBe` Just TransportUnreachable
+        fmap faultRetry (leftToMaybe outcome) `shouldBe` Just RetryWorthwhile
 
     it "advises another attempt when a read fails server-side, unlike an absent listing" $
         withStore True (answerAll status503 "{}") $ \handle _ ->
@@ -152,39 +172,95 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
             outcomes <- deleteVersions handle leftpad [version "1.0.0"]
             map (refusedAs . snd) outcomes `shouldBe` [Just "NOT_FOUND"]
 
-{- Build the handle over a stub and run the assertion against both. npm fills the maintenance
-slice, so an empty verb here is a wiring fault the case reports rather than works around. -}
+    it "carries the verb's own refusal out, sending neither write" $
+        withStore True answerStore $ \handle stub -> do
+            outcomes <- deleteVersions handle leftpad [version "9.9.9"]
+            map (refusedAs . snd) outcomes `shouldBe` [Just "VERSION_ABSENT"]
+            calls stub `shouldReturn` [("GET", "/leftpad")]
+
+    it "leaves a version unreached, never removed, when a fault stops the sequence part-way" $
+        -- The bound admits the document and the edit and refuses the answer to the tarball
+        -- delete, which is the one fault a caller must not read as a completed removal.
+        withBoundedStore midSequenceBound answerOversizedDelete $ \handle stub -> do
+            outcomes <- deleteVersions handle leftpad [version "1.0.0"]
+            map (unreachedRetry . snd) outcomes `shouldBe` [Just RetryFutile]
+            map fst <$> calls stub `shouldReturn` ["GET", "PUT", "DELETE"]
+
+-- Build the handle over a stub and run the assertion against both.
 withStore ::
     Bool ->
     (Captured -> (Status, LBS.ByteString)) ->
     (StoreMaintenance -> Stub -> IO a) ->
     IO a
-withStore permitted answer action =
+withStore permitted = withStoreUnder permitted defaultLimits
+
+withStoreUnder ::
+    Bool ->
+    Limits ->
+    (Captured -> (Status, LBS.ByteString)) ->
+    (StoreMaintenance -> Stub -> IO a) ->
+    IO a
+withStoreUnder permitted limits answer action =
     withRoutedStub reply $ \stub -> do
         manager <- newManager defaultManagerSettings
-        listing <- required "listing" (maintenanceListing npmMaintenance)
-        delete <- required "version delete" (maintenanceVersionDelete npmMaintenance)
-        let origin =
-                OriginClient
-                    { ocBaseUrl = loopbackRegistryUrl (stubLocalhostUrl stub)
-                    , ocManager = manager
-                    , ocToken = Just (mkSecret "write-token")
-                    , ocLimits = defaultLimits
-                    }
-            store =
-                ProtocolStore
-                    { psOrigin = origin
-                    , psListing = listing
-                    , psDelete = delete
-                    , psCodec = npmPublishCodec
-                    , psBackendName = "verdaccio"
-                    , psPermitDeletion = permitted
-                    , psConsentDescriptor = consentKey
-                    }
+        store <- protocolStore permitted (originAt manager limits (stubLocalhostUrl stub))
         action (newProtocolMaintenance store) stub
   where
     reply captured = let (status, body) = answer captured in (status, [], body)
+
+originAt :: Manager -> Limits -> Text -> OriginClient
+originAt manager limits baseUrl =
+    OriginClient
+        { ocBaseUrl = loopbackRegistryUrl baseUrl
+        , ocManager = manager
+        , ocToken = Just (mkSecret "write-token")
+        , ocLimits = limits
+        }
+
+{- npm fills the maintenance slice, so an empty verb here is a wiring fault the case reports
+rather than works around. -}
+protocolStore :: Bool -> OriginClient -> IO ProtocolStore
+protocolStore permitted origin = do
+    listing <- required "listing" (maintenanceListing npmMaintenance)
+    delete <- required "version delete" (maintenanceVersionDelete npmMaintenance)
+    pure
+        ProtocolStore
+            { psOrigin = origin
+            , psListing = listing
+            , psDelete = delete
+            , psCodec = npmPublishCodec
+            , psBackendName = "verdaccio"
+            , psPermitDeletion = permitted
+            , psConsentDescriptor = consentKey
+            }
+  where
     required verb = maybe (fail ("npm fills no " <> verb <> " verb")) pure
+
+{- | 'withStore' under a caller-chosen response bound, for the fail-closed read that refuses a
+body larger than the origin admits.
+-}
+withBoundedStore ::
+    Limits ->
+    (Captured -> (Status, LBS.ByteString)) ->
+    (StoreMaintenance -> Stub -> IO a) ->
+    IO a
+withBoundedStore = withStoreUnder True
+
+-- | A handle whose origin addresses a port nothing is listening on.
+unreachableStore :: IO StoreMaintenance
+unreachableStore = do
+    port <- freePort
+    manager <- newManager defaultManagerSettings
+    newProtocolMaintenance <$> protocolStore True (originAt manager defaultLimits (localhost port))
+
+{- The listing body is larger than this, so the bounded read refuses it rather than truncating
+what the sweep would then act on. -}
+tinyBodyBound :: Limits
+tinyBodyBound = defaultLimits{maxBodyBytes = 8}
+
+-- Wide enough for the packument and the edit's answer, narrower than the tarball delete's.
+midSequenceBound :: Limits
+midSequenceBound = defaultLimits{maxBodyBytes = 4096}
 
 consentKey :: Text
 consentKey = "set mounts.npm.mirrorTarget.verdaccio.permitDeletion to true"
@@ -200,6 +276,14 @@ answerStore :: Captured -> (Status, LBS.ByteString)
 answerStore captured = case (capMethod captured, capPath captured) of
     ("GET", "/-/all") -> (status200, encode listingDocument)
     ("GET", _) -> (status200, encode packumentDocument)
+    _ -> (status201, "{\"ok\":true}")
+
+{- The store answers the tarball delete with a body past the bound. The delete reached it, so
+the version's fate is unknown, which is what the sequence's fault arm must report.  -}
+answerOversizedDelete :: Captured -> (Status, LBS.ByteString)
+answerOversizedDelete captured = case capMethod captured of
+    "GET" -> (status200, encode packumentDocument)
+    "DELETE" -> (status201, LBS.replicate 20000 0x61)
     _ -> (status201, "{\"ok\":true}")
 
 -- The store refuses the packument edit, so the tarball delete must never be sent.
@@ -258,7 +342,17 @@ keysUnder key document = case KeyMap.lookup key document of
         Object inner -> Just inner
         _ -> Nothing
 
+-- The fault's diagnostic text, cut at the store's own message so the assertion reads the subject.
+faultDetail :: Either StoreFault a -> Maybe Text
+faultDetail outcome =
+    T.takeWhile (/= ':') . tfDetail . faultTransport <$> leftToMaybe outcome
+
 refusedAs :: VersionOutcome -> Maybe Text
 refusedAs = \case
     VersionRefused refusal -> Just (refusalCode refusal)
+    _ -> Nothing
+
+unreachedRetry :: VersionOutcome -> Maybe RetryAdvice
+unreachedRetry = \case
+    VersionUnreached fault -> Just (faultRetry fault)
     _ -> Nothing

@@ -16,7 +16,9 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Maintenance (
     ClearedBackend (ClearedCodeArtifact, ClearedProtocol),
+    ClearedProtocolStore (cpsConsent),
     ResolveMaintenanceAdapter,
+    buildStoreMaintenance,
     planStoreMaintenance,
     vetStoreBackends,
  )
@@ -32,10 +34,23 @@ import Ecluse.Composition.Support (
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
-import Ecluse.Config (Config (configMounts), MountMap, StoreTag (TagVerdaccio))
+import Ecluse.Config (
+    Config (configMounts),
+    DeletionConsent (DeletionWithheld),
+    MountMap,
+    StoreTag (TagVerdaccio),
+ )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMaintenance), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (AdapterMaintenance, maintenanceListing, maintenanceVersionDelete))
+import Ecluse.Core.Registry.Maintenance (
+    CompletionNotion (CompletesOnCall),
+    ConsentVerdict (ConsentGranted, ConsentWithheld),
+    DeleteCeiling (AtMost),
+    RefillPosture (RefillPermitted),
+    StoreFacts (..),
+    StoreMaintenance (storeFacts, verifyConsent),
+ )
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
 
@@ -43,6 +58,7 @@ spec :: Spec
 spec = do
     passSpec
     protocolSpec
+    buildSpec
     planSpec
 
 {- The rule as the boot applies it: over the loaded mounts, under each role. The deleting role
@@ -112,6 +128,38 @@ protocolSpec = describe "vetStoreBackends -- a store swept through the ecosystem
         clearsNothing (vetted MirrorWriter withheld) `shouldBe` True
         consenting <- mountsFor (verdaccioEnv "true")
         clearsNothing (runVet MirrorWriter (vetStoreBackends withoutMaintenance consenting)) `shouldBe` True
+
+{- The live build of a protocol store's handle. It opens a connection to nothing, so the facts
+and the verdicts it supplies are readable without a store to dial. -}
+buildSpec :: Spec
+buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosystem protocol" $ do
+    it "supplies the backend's standing facts under the tag the store was declared with" $ do
+        handle <- protocolHandleFor id
+        let facts = storeFacts handle
+        factBackend facts `shouldBe` "verdaccio"
+        factDeleteCeiling facts `shouldBe` AtMost 1
+        factRefill facts `shouldBe` RefillPermitted
+        factCompletion facts `shouldBe` CompletesOnCall
+
+    it "grants consent on the store the pass cleared" $ do
+        handle <- protocolHandleFor id
+        verifyConsent handle `shouldReturn` Right ConsentGranted
+
+    it "withholds it, naming the key an operator sets, on a store carrying none" $ do
+        handle <- protocolHandleFor (\store -> store{cpsConsent = DeletionWithheld})
+        verifyConsent handle >>= \case
+            Right (ConsentWithheld descriptor) ->
+                descriptor `shouldSatisfy` T.isInfixOf "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION"
+            other -> expectationFailure ("expected a withheld verdict, got: " <> show other)
+
+{- The handle the live builder makes for the cleared Verdaccio store, under a caller's edit of
+the witness the pass issued. -}
+protocolHandleFor :: (ClearedProtocolStore -> ClearedProtocolStore) -> IO StoreMaintenance
+protocolHandleFor edit = do
+    cleared <- clearedBackendsFor (verdaccioEnv "true")
+    case Map.elems cleared of
+        [ClearedProtocol store] -> buildStoreMaintenance defaultLimits (ClearedProtocol (edit store))
+        other -> fail ("expected one cleared protocol store, got " <> show (length other))
 
 {- The environment tier over the cleared backends. It builds one handle per store, and its
 refusals accumulate rather than stopping at the first store whose client cannot be built. -}
