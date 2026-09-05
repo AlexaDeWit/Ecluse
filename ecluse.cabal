@@ -698,6 +698,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.CachedDocumentSpec
     Ecluse.Core.Registry.Maintenance.ProtocolSpec
     Ecluse.Core.Registry.MaintenanceSpec
+    Ecluse.Core.Registry.MetadataSpec
     Ecluse.Core.Registry.Npm.CredentialSpec
     Ecluse.Core.Registry.Npm.FilterSpec
     Ecluse.Core.Registry.Npm.MaintenanceSpec

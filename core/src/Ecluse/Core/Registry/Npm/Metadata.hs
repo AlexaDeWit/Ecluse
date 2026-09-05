@@ -53,13 +53,14 @@ import Ecluse.Core.Package (
     PackageName,
  )
 import Ecluse.Core.Package.Filter (enforceArtifactScheme, enforceArtifactSchemeDetails)
-import Ecluse.Core.Registry (RegistryResponse (responseBody))
+import Ecluse.Core.Registry (FetchFault, RegistryResponse)
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient,
-    MetadataError (MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
+    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     digestOf,
+    fetchThenProject,
  )
 import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Project (
@@ -88,7 +89,7 @@ import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Metadata (ManifestCaching, newMetadataClient)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
-import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
+import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
 {- | Build a per-request read handle for the npm protocol over one origin's fetch
@@ -108,18 +109,10 @@ newNpmMetadataClient ::
 newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch origin =
     newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchNpmManifest tracing origin) (fetchNpmVersion tracing origin)
 
-{- Fetch a package's full packument once under the fetch span, then run a pure projection over
-the wire bytes under the decode span. Both npm read operations differ only in that projection. -}
-fetchThenProject ::
-    TracingPort ->
-    OriginClient ->
-    PackageName ->
-    (ByteString -> Either MetadataError a) ->
-    IO (Either MetadataError a)
-fetchThenProject tracing origin name project =
-    spanMetadataFetch tracing name (fetchMetadataFormBounded origin Full noValidators name) >>= \case
-        Left fault -> pure (Left (MetadataFetch fault))
-        Right response -> spanMetadataDecode tracing name (pure (project (responseBody response)))
+{- The one npm metadata read: the full packument, bounded against the origin's response budget.
+Both npm read operations fetch it and differ only in the projection they run over the bytes. -}
+fetchNpmPackument :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
+fetchNpmPackument origin = fetchMetadataFormBounded origin Full noValidators
 
 {- | Fetch a package's full packument and project it into a 'Manifest': the typed view, the
 raw document, and the wire bytes' 'ContentDigest'.
@@ -130,7 +123,7 @@ strict body that read produced, the one place the wire bytes exist.
 -}
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
 fetchNpmManifest tracing origin name =
-    fetchThenProject tracing origin name $ \body ->
+    fetchThenProject tracing (fetchNpmPackument origin) name $ \body ->
         manifestOf (digestOf body) . first (enforceArtifactScheme (originBaseUrl origin))
             <$> projectNpmManifest (ocLimits origin) name body
   where
@@ -167,7 +160,7 @@ a forwarded miss.
 -}
 fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
 fetchNpmVersion tracing origin name version =
-    fetchThenProject tracing origin name $
+    fetchThenProject tracing (fetchNpmPackument origin) name $
         fmap (>>= enforceArtifactSchemeDetails (originBaseUrl origin)) . projectNpmVersion (ocLimits origin) name version
 
 {- The origin's base URL as characters, for the scheme normalisation that must still
