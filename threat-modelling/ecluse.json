@@ -871,7 +871,7 @@
             "id": "0ec10e5e-0000-4000-8000-000000000022",
             "data": {
               "name": "Credential provider",
-              "description": "It mints and refreshes the mirror-target write token under the container or task role, through CodeArtifact GetAuthorizationToken, with single-flight and a breaker. This is \u00c9cluse's only standing credential.",
+              "description": "It holds each mirroring mount's write credential for that mount's mirror target, built from the store the target's tag names. A CodeArtifact store mints and refreshes a short-lived token under the container or task role, with single-flight and a breaker, and identities that coincide share one provider. Every other store carries the operator's static token. This is \u00c9cluse's only standing credential.",
               "type": "tm.Process",
               "isTrustBoundary": false,
               "outOfScope": false,
@@ -1248,7 +1248,7 @@
             "id": "0ec10e5e-0000-4000-8000-000000000032",
             "data": {
               "name": "Registry C:\npull-through read endpoint",
-              "description": "The trusted private-upstream read view (ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM). It is a pull-through aggregator over the first-party store (A) and the mirror store (B), and it is what the proxy reads.",
+              "description": "The trusted private-upstream read view, declared under the mount's `privateUpstream` with the tag that names its store. It is a pull-through aggregator over the first-party store (A) and the mirror store (B), and it is what the proxy reads.",
               "type": "tm.Store",
               "isTrustBoundary": false,
               "outOfScope": false,
@@ -2230,7 +2230,7 @@
                   "title": "Mirror-write credential is a standing privilege over the trusted store",
                   "type": "Elevation of privilege",
                   "description": "The mirror worker holds \u00c9cluse's only standing self-minted credential. It carries write access to the mirror store (Registry B), which feeds the trusted read path. A worker compromise, or any bypass of the admission gate, could write attacker-chosen bytes into the trusted store and poison future reads.",
-                  "mitigation": "Containment of this standing privilege rests on least-privilege IAM on the container or task role: write to Registry B only. A CodeArtifact token bears the role's own permissions, so this is an IAM policy rather than a token-level scope. Minting from the container role beats static credentials, and the TTL is minimal, capped by CodeArtifact at 12h. The publish runs with redirectCount=0, because attachCredential attaches the mint token and finalises the request through finaliseRequest. The mirror queue sits inside the same trust boundary and is isolated and managed at the infrastructure level. A job is unauthenticated data that directs the worker to fetch and publish, so queue-send access is equivalent to trusted-write access. Scope the queue's IAM so only the serve role enqueues (SendMessage) and only the worker receives and acks. \u00c9cluse relies on access control for message authenticity, deliberately, rather than on signatures. That is the standard pattern for an internal single-producer, single-consumer queue. The worker's own attack surface is small. It hashes the fetched bytes and forwards them unchanged, with no decompression and no tarball parsing. A malicious artifact is therefore a poor code-execution vector. The dist.integrity check is anti-tamper-in-transit and anti-downgrade. It fails closed when the strongest present digest is in an uncomputable algorithm, and never downgrades to a forgeable weaker one. It proves the bytes match the upstream's asserted digest, so it catches back-fill corruption but not a hostile upstream or a worker compromise. Admission-gate soundness therefore bounds the poisoning of future reads, together with the role's blast radius and queue access control, not the integrity check. The trusted store is only as clean as what the gate admits, and only the gate may enqueue. A serve-only mount, with no mirrorTarget declared, removes this surface entirely. It holds and mints no write credential, and with zero mirrored mounts the process builds no mirror queue and starts no worker.",
+                  "mitigation": "Containment of this standing privilege rests on least privilege at the store. Under the `codeArtifact` tag the write token is minted from the container or task role and bears that role's own permissions, so containment is an access policy scoped write-only to the mirror store rather than a token-level scope, and the lifetime is short, capped by CodeArtifact at 12h. Under `registry` and `verdaccio` the write is the operator's static token, so containment is an account of the store's own: a dedicated user whose package rights cover the mirror store and nothing else. A store whose only control plane is the ecosystem protocol offers no split between writing and deleting, so on such a store this one credential also removes versions, and a compromise of the worker can empty the mirror as well as poison it. The publish runs with redirectCount=0, because attachCredential attaches the mint token and finalises the request through finaliseRequest. The mirror queue sits inside the same trust boundary and is isolated and managed at the infrastructure level. A job is unauthenticated data that directs the worker to fetch and publish, so queue-send access is equivalent to trusted-write access. Scope the queue's IAM so only the serve role enqueues (SendMessage) and only the worker receives and acks. \u00c9cluse relies on access control for message authenticity, deliberately, rather than on signatures. That is the standard pattern for an internal single-producer, single-consumer queue. The worker's own attack surface is small. It hashes the fetched bytes and forwards them unchanged, with no decompression and no tarball parsing. A malicious artifact is therefore a poor code-execution vector. The dist.integrity check is anti-tamper-in-transit and anti-downgrade. It fails closed when the strongest present digest is in an uncomputable algorithm, and never downgrades to a forgeable weaker one. It proves the bytes match the upstream's asserted digest, so it catches back-fill corruption but not a hostile upstream or a worker compromise. Admission-gate soundness therefore bounds the poisoning of future reads, together with the role's blast radius and queue access control, not the integrity check. The trusted store is only as clean as what the gate admits, and only the gate may enqueue. A serve-only mount, with no mirrorTarget declared, removes this surface entirely. It holds and mints no write credential, and with zero mirrored mounts the process builds no mirror queue and starts no worker.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000107"
                 },
@@ -2240,8 +2240,8 @@
                   "severity": "Medium",
                   "title": "Mirror-write credential can be sent to a misconfigured registry target",
                   "type": "Information disclosure",
-                  "description": "A minted CodeArtifact write token is a live bearer credential scoped to a domain. If an operator could choose the write credential and the mirror-target endpoint independently, the two could diverge. They could point the mirror target at one registry while the token was minted for another. That would disclose the bearer to an endpoint that could log or replay it.",
-                  "mitigation": "\u00c9cluse derives the mirror-write credential from the mirror-target URL rather than from separate configuration, so the two cannot diverge. A CodeArtifact endpoint mints a token scoped to the domain parsed from that same host. \u00c9cluse writes to any other host with an operator-supplied static token. No configuration expresses a CodeArtifact identity independent of the target, so a minted token can never reach an endpoint it was not scoped for. The divergence class is unrepresentable. Config load rejects both a non-CodeArtifact target with no static token and a CodeArtifact target that also carries a static token. The boot also refuses a mirror target that shares a host with any mount's public upstream, so the write credential cannot be aimed at a public registry. Least-privilege IAM also scopes the container role write-only to the intended mirror store, as defence in depth. A serve-only mount declares no mirror target and holds no mirror-write credential, so this surface does not exist there.",
+                  "description": "A mirror-write credential is a live bearer token. Under the minting tag it is minted and scoped to a domain, and under the others it is the operator's static token. If an operator could choose the write credential and the mirror-target endpoint independently, the two could diverge. They could point the mirror target at one registry while the token was minted for another. That would disclose the bearer to an endpoint that could log or replay it.",
+                  "mitigation": "An endpoint declares its store as a tag, and the load validates the URL against that tag, so the credential and the endpoint are one declaration rather than two. Under `codeArtifact` the mint identity is parsed from the target's own host, and the tag admits no static token. Under `registry` and `verdaccio` the tag requires the operator's static token and mints nothing. The schema refuses a token key under the minting tag and a missing token key under a non-minting one, so a divergent pair is unrepresentable. Validation refuses a `codeArtifact` URL whose host is not a CodeArtifact endpoint, and on a mirror target one whose path is not the repository endpoint for the mount's own ecosystem, so a token minted for one domain reaches no other, and each refusal names the key. Two endpoints that name one registry under different tags refuse for every role, because one store has one backend, so no deployment holds two beliefs about which credential authenticates a store. An environment layer fills keys under a tag and never switches one, so a second tag on an endpoint refuses as such. The boot also refuses a mirror target that shares a host with any mount's public upstream, so the write credential cannot be aimed at a public registry. Least privilege at the store scopes the write to the intended mirror store, as defence in depth. A serve-only mount declares no mirror target and holds no mirror-write credential, so this surface does not exist there.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000111"
                 }
@@ -3095,8 +3095,8 @@
                   "severity": "High",
                   "title": "Dredger container-role privilege escalation",
                   "type": "Elevation of privilege",
-                  "description": "Dredger holds a standing high privilege over Registry B: delete-only. An attacker who compromised Dredger could wipe the whole registry.",
-                  "mitigation": "Dredger exposes only the liveness and readiness probes. Least-privilege IAM scopes it delete-only on Registry B. It prefers container-role minting over static secrets. The delete credential must be scoped by policy to the mirror repository alone, with no permission over the private upstream or the publication target. The operator consent marker is deliberately distinct from the credential's capability, so holding the credential is not by itself permission to delete.",
+                  "description": "Dredger holds a standing privilege to delete from the mirror store (Registry B). An attacker who compromised Dredger could wipe that store. What bounds the privilege depends on the store. A store with its own access control can grant delete without write. A store whose only control plane is the ecosystem protocol offers no such split, so its delete runs over the same token that writes the mirror.",
+                  "mitigation": "Dredger takes no ingress and exposes only its liveness and readiness probes. On a store with its own access control the delete credential is scoped by policy to the mirror repository alone, with no permission over the private upstream or the publication target, and a credential minted from the container role is preferred over a static secret. On a store with no such control, least privilege is an account of the store's own: a dedicated user whose package rights cover the mirror store and nothing else. The operator consent marker is deliberately distinct from the credential's capability, so holding the credential is not by itself permission to delete.",
                   "modelType": "STRIDE",
                   "id": "c12bddfe-96d4-47c6-92e0-a961abadb5b2"
                 },
@@ -3118,7 +3118,7 @@
                   "title": "Accidental permanent deletion of registry data",
                   "type": "Elevation of privilege",
                   "description": "Dredger issues permanent hard deletions against the mirror registry. Misconfigured, or pointed at the wrong registry, it destroys data permanently.",
-                  "mitigation": "Dredger must verify explicit operator consent before it runs any destructive action, and again at the start of every cycle. Consent is a marker the operator attaches to the store itself and Dredger reads through the registry adapter, for example a resource tag on a CodeArtifact repository. It must fail closed when the marker is absent or unreadable, and the refusal must log a backend-specific descriptor that tells the operator how to attach consent. The dredger role also refuses to boot when a mount's mirrorTarget matches any mount's publicationTarget or privateUpstream by full registry URL. A hardcoded minimum pause between chunks, a per-cycle deletion cap, and a dry-run mode limit the damage a single cycle can do.",
+                  "mitigation": "Dredger verifies explicit operator consent before any destructive action, and again at the start of every cycle, so withdrawing the marker halts the next cycle without a restart. Consent is read through the store backend's own maintenance handle, never through the ecosystem adapter, because the marker is a fact of the store and not of the protocol it speaks. Its form is fixed per tag. A `codeArtifact` store carries a resource tag on the repository, key `ecluse-dredger-consent`, value `true`, read with a read-only permission. A `verdaccio` store carries `permitDeletion: true` under the tag in the mount's own configuration. A `registry` store has no consent form and no control plane, so the Dredger refuses it at boot and names the tag. Consent fails closed. An absent, unreadable, or errored marker refuses that store, and the refusal logs the backend's own descriptor telling the operator how to attach consent. Consent is deliberately distinct from the credential's capability, so holding a credential that can delete is not by itself permission to delete. The dredger role also refuses to boot when a mount's mirrorTarget matches any mount's privateUpstream, or its own mount's publicationTarget, by full registry URL. A hardcoded minimum pause between chunks, a per-cycle deletion cap, and a dry-run mode limit the damage a single cycle can do.",
                   "modelType": "STRIDE",
                   "id": "0b32b3e5-74f1-421c-8c9b-92a24fd2a00b"
                 },
@@ -3132,6 +3132,17 @@
                   "mitigation": "Dredger's deletion logic must sweep in chunked batches under a request-budget ceiling. Pacing scales to the size of the store against a target cycle window, so a large store spreads its work instead of bursting, and a hardcoded minimum pause separates chunks. Backoff must honour the retry delays the registry asks for. A per-cycle deletion cap halts the cycle with an error, which bounds any single runaway sweep.",
                   "modelType": "STRIDE",
                   "id": "0c922ee5-3ac6-4a85-89de-91feecf0f9f7"
+                },
+                {
+                  "number": 104,
+                  "status": "Accepted",
+                  "severity": "Medium",
+                  "title": "Configured deletion consent stays valid when the store it names changes",
+                  "type": "Elevation of privilege",
+                  "description": "Consent to delete is a marker on the store itself, so pointing the Dredger at a store nobody consented for fails the check. The `verdaccio` tag carries consent as `permitDeletion: true`, a key in the mount's own configuration, so it travels with the deployment rather than with the store. An operator who re-points the `verdaccio:` mirror target at a different Verdaccio store keeps a configuration that still says yes, and the Dredger reads consent for a store nobody granted it for. The same key carries the store's classification, so a re-pointed target is also read as standalone.",
+                  "mitigation": "Risk treatment: accepted as a development-store exception, 2026-09-04. Verdaccio is a development and test store, and nobody runs a package proxy in front of a package proxy in production, so the exception is bounded to that tag and exists on no other. Verdaccio serves no marker a protocol read could carry, and no protocol read can see whether such a store refills itself from an uplink, so the operator's own key is the only evidence either way and consent and classification are one key. The collision refusal is the misdirection guard that remains. The dredger role refuses to boot when a mount's mirrorTarget matches any mount's privateUpstream, or its own mount's publicationTarget, by full registry URL, and every role refuses two endpoints that name one registry under different tags. Residual: a re-pointed `verdaccio:` target that collides with no other declared endpoint still carries consent, and the Dredger deletes from it.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000127"
                 }
               ]
             }
@@ -3154,7 +3165,19 @@
               "outOfScope": false,
               "reasonOutOfScope": "",
               "hasOpenThreats": false,
-              "threats": [],
+              "threats": [
+                {
+                  "number": 105,
+                  "status": "Mitigated",
+                  "severity": "Medium",
+                  "title": "Store-supplied path components steer a credential-bearing delete",
+                  "type": "Elevation of privilege",
+                  "description": "Removing one version from a protocol-only store is an edit over the store's own package document. \u00c9cluse reads that document, takes the revision marker and the artifact's file name out of it, and puts both into the URLs of a `PUT` and a `DELETE` that carry the mirror-write token. \u00c9cluse authored neither value, and a publisher supplies the tarball location the file name is taken from. A component holding a separator, a dot-dot, or a control character could steer either request at another path on the store.",
+                  "mitigation": "Both components parse against the same deny-by-default component gate the serve path applies, which refuses an empty component, a bare dot or dot-dot, and any component holding a slash, a backslash, or a control character. A file name that fails the gate falls back to the conventional name built from the package and the version, and a revision marker that fails it refuses that one version rather than forming a request. The build then percent-encodes every component it interpolates and keeps only the unreserved set verbatim, so safety rests on encode-on-build and not on the gate alone. Every request is formed against the store's own base URL, which is https-only with certificate validation, and it reaches the wire through the single credential-attach point that pins the redirect count to zero, so no hop can move a credential-bearing write after the request is formed. The document is read under the response-size bound, so an oversized answer ends the read. Residual: the gate is structural, so a name that is a valid component but not the version's own artifact still forms a delete against this one store, bounded by the mirror store the credential reaches.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000128"
+                }
+              ],
               "isEncrypted": true,
               "isPublicNetwork": false
             }
@@ -3210,6 +3233,6 @@
     ],
     "diagramTop": 1,
     "reviewer": "",
-    "threatTop": 28
+    "threatTop": 105
   }
 }
