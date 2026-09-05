@@ -610,7 +610,7 @@
               "isTrustBoundary": false,
               "outOfScope": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": true,
+              "hasOpenThreats": false,
               "threats": [
                 {
                   "number": 1,
@@ -2217,7 +2217,7 @@
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": true,
+              "hasOpenThreats": false,
               "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
@@ -2458,8 +2458,8 @@
             ],
             "id": "4e565871-45cc-4987-abba-24859ee2cf60",
             "source": {
-              "x": 1480,
-              "y": 860
+              "cell": "7528590e-7392-46c4-9b8c-7ca872d63590",
+              "port": "93ae4ace-7467-4d70-8031-903c8147193f"
             },
             "target": {
               "cell": "f1646094-9885-422a-b7e7-7888c72905ef",
@@ -2670,7 +2670,7 @@
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": true,
+              "hasOpenThreats": false,
               "handlesCardPayment": false,
               "handlesGoodsOrServices": false,
               "isWebApplication": false,
@@ -3118,7 +3118,7 @@
                   "title": "Accidental permanent deletion of registry data",
                   "type": "Elevation of privilege",
                   "description": "Dredger issues permanent hard deletions against the mirror registry. Misconfigured, or pointed at the wrong registry, it destroys data permanently.",
-                  "mitigation": "Dredger verifies explicit operator consent before any destructive action, and again at the start of every cycle, so withdrawing the marker halts the next cycle without a restart. Consent is read through the store backend's own maintenance handle, never through the ecosystem adapter, because the marker is a fact of the store and not of the protocol it speaks. Its form is fixed per tag. A `codeArtifact` store carries a resource tag on the repository, key `ecluse-dredger-consent`, value `true`, read with a read-only permission. A `verdaccio` store carries `permitDeletion: true` under the tag in the mount's own configuration. A `registry` store has no consent form and no control plane, so the Dredger refuses it at boot and names the tag. Consent fails closed. An absent, unreadable, or errored marker refuses that store, and the refusal logs the backend's own descriptor telling the operator how to attach consent. Consent is deliberately distinct from the credential's capability, so holding a credential that can delete is not by itself permission to delete. The dredger role also refuses to boot when a mount's mirrorTarget matches any mount's privateUpstream, or its own mount's publicationTarget, by full registry URL. A hardcoded minimum pause between chunks, a per-cycle deletion cap, and a dry-run mode limit the damage a single cycle can do.",
+                  "mitigation": "Dredger verifies explicit operator consent before any destructive action, and again at the start of every cycle, so withdrawing the marker halts the next cycle without a restart. Consent is read through the store backend's own maintenance handle, never through the ecosystem adapter, because the marker is a fact of the store and not of the protocol it speaks. Its form is fixed per tag. A `codeArtifact` store carries a resource tag on the repository, key `ecluse-dredger-consent`, value `true`, read with a read-only permission. A `verdaccio` store carries `permitDeletion: true` under the tag in the mount's own configuration. A `registry` store has no consent form and no control plane, so the Dredger refuses it at boot and names the tag. Consent fails closed. An absent, unreadable, or errored marker refuses that store, and the refusal logs the backend's own descriptor telling the operator how to attach consent. Consent is deliberately distinct from the credential's capability, so holding a credential that can delete is not by itself permission to delete. The dredger role also refuses to boot when a mount's mirrorTarget matches any mount's privateUpstream, or its own mount's publicationTarget, by full registry URL. Every role refuses a mirror target on another mount's publicationTarget. A hardcoded minimum pause between chunks, a per-cycle deletion cap, and a dry-run mode limit the damage a single cycle can do.",
                   "modelType": "STRIDE",
                   "id": "0b32b3e5-74f1-421c-8c9b-92a24fd2a00b"
                 },
@@ -3140,7 +3140,7 @@
                   "title": "Configured deletion consent stays valid when the store it names changes",
                   "type": "Elevation of privilege",
                   "description": "Consent to delete is a marker on the store itself, so pointing the Dredger at a store nobody consented for fails the check. The `verdaccio` tag carries consent as `permitDeletion: true`, a key in the mount's own configuration, so it travels with the deployment rather than with the store. An operator who re-points the `verdaccio:` mirror target at a different Verdaccio store keeps a configuration that still says yes, and the Dredger reads consent for a store nobody granted it for. The same key carries the store's classification, so a re-pointed target is also read as standalone.",
-                  "mitigation": "Risk treatment: accepted as a development-store exception, 2026-09-04. Verdaccio is a development and test store, and nobody runs a package proxy in front of a package proxy in production, so the exception is bounded to that tag and exists on no other. Verdaccio serves no marker a protocol read could carry, and no protocol read can see whether such a store refills itself from an uplink, so the operator's own key is the only evidence either way and consent and classification are one key. The collision refusal is the misdirection guard that remains. The dredger role refuses to boot when a mount's mirrorTarget matches any mount's privateUpstream, or its own mount's publicationTarget, by full registry URL, and every role refuses two endpoints that name one registry under different tags. Residual: a re-pointed `verdaccio:` target that collides with no other declared endpoint still carries consent, and the Dredger deletes from it.",
+                  "mitigation": "Risk treatment: accepted as a development-store exception, 2026-09-04. Verdaccio is a development and test store, and nobody runs a package proxy in front of a package proxy in production, so the exception is bounded to that tag and exists on no other. Verdaccio serves no marker a protocol read could carry, and no protocol read can see whether such a store refills itself from an uplink, so the operator's own key is the only evidence either way and consent and classification are one key. The collision refusal is the misdirection guard that remains. The dredger role refuses to boot when a mount's mirrorTarget matches any mount's privateUpstream, or its own mount's publicationTarget, by full registry URL, and every role refuses two endpoints that name one registry under different tags. Every role refuses a mirror target on another mount's publicationTarget. Residual: a re-pointed `verdaccio:` target that collides with no other declared endpoint still carries consent, and the Dredger deletes from it.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000127"
                 }
@@ -3172,7 +3172,7 @@
                   "severity": "Medium",
                   "title": "Store-supplied path components steer a credential-bearing delete",
                   "type": "Elevation of privilege",
-                  "description": "Removing one version from a protocol-only store is an edit over the store's own package document. \u00c9cluse reads that document, takes the revision marker and the artifact's file name out of it, and puts both into the URLs of a `PUT` and a `DELETE` that carry the mirror-write token. \u00c9cluse authored neither value, and a publisher supplies the tarball location the file name is taken from. A component holding a separator, a dot-dot, or a control character could steer either request at another path on the store.",
+                  "description": "Removing one version from a protocol-only store is an edit over the store's own package document. \u00c9cluse reads that document, takes the revision marker and the artifact's file name out of it, puts the revision into the URLs of a `PUT` and a `DELETE`, and the file name into the `DELETE`, both carrying the mirror-write token. \u00c9cluse authored neither value, and a publisher supplies the tarball location the file name is taken from. A component holding a separator, a dot-dot, or a control character could steer either request at another path on the store.",
                   "mitigation": "Both components parse against the same deny-by-default component gate the serve path applies, which refuses an empty component, a bare dot or dot-dot, and any component holding a slash, a backslash, or a control character. A file name that fails the gate falls back to the conventional name built from the package and the version, and a revision marker that fails it refuses that one version rather than forming a request. The build then percent-encodes every component it interpolates and keeps only the unreserved set verbatim, so safety rests on encode-on-build and not on the gate alone. Every request is formed against the store's own base URL, which is https-only with certificate validation, and it reaches the wire through the single credential-attach point that pins the redirect count to zero, so no hop can move a credential-bearing write after the request is formed. The document is read under the response-size bound, so an oversized answer ends the read. Residual: the gate is structural, so a name that is a valid component but not the version's own artifact still forms a delete against this one store, bounded by the mirror store the credential reaches.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000128"
