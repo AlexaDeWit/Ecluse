@@ -190,8 +190,8 @@ manifestInfo =
                 \it is not served."
         }
 
-{- | The hand-authored component schemas an ecosystem's documented bodies name. Only a mounted
-ecosystem's entries reach the rendered components, so a @$ref@ has no way to dangle.
+{- | The hand-authored component schemas an ecosystem's documented bodies name. The rendered
+components carry the mounted ecosystems' entries and no others.
 -}
 ownedSchemas :: Ecosystem -> [(Text, Schema)]
 ownedSchemas = \case
@@ -325,11 +325,8 @@ responseFrom doc =
             , _responseContent = bodyContent (responseBodySchema doc)
             }
 
-{- | The OpenAPI content behind a body's 'BodySchema'. __Total__ over the closed body vocabulary.
-Each arm documents the media type the serve path names for that body, so the two cannot diverge.
-
-A 'SchemaJson' body renders from the /same/ @autodocodec@ codec the serve path encodes with, so the
-documented schema and the wire format cannot diverge either.
+{- | The OpenAPI content behind a body's 'BodySchema'. Each arm renders the media type, and a
+codec body the schema, that the serve path itself uses, so the document cannot drift from the wire.
 -}
 bodyContent :: BodySchema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 bodyContent = \case

@@ -66,6 +66,20 @@ module Ecluse.Core.Registry.Npm.Route (
 import Autodocodec (JSONCodec, object, pureCodec)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
+import Network.HTTP.Types (
+    Method,
+    hContentType,
+    status200,
+    status304,
+    status401,
+    status403,
+    status404,
+    status500,
+    status501,
+    status502,
+    status503,
+ )
+
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, unscopedName)
 import Ecluse.Core.Registry.Npm.Project (projectName)
@@ -112,19 +126,6 @@ import Ecluse.Core.Server.Route (
  )
 import Ecluse.Core.Server.RouteSpec (ParamSpec (ParamSpec), RouteSpec, catchAllSpecs, specsOf)
 import Ecluse.Core.Version (Version, mkVersion)
-import Network.HTTP.Types (
-    Method,
-    hContentType,
-    status200,
-    status304,
-    status401,
-    status403,
-    status404,
-    status500,
-    status501,
-    status502,
-    status503,
- )
 
 {- | npm's mount router. The first route that claims the request decides it, and a request no
 route claims takes the deny-by-default @404@ ('npmNotFound').
@@ -480,9 +481,8 @@ capPackage =
             segs -> fmap (first NpmPackage) (takePackage segs)
         )
 
-{- | The artifact-file capture: one segment, accepted only when 'safeSegment' admits it. The
-coordinate parse (the @.tgz@ basename and the version) is 'tarballCoordinate''s, applied in
-'buildTarball'.
+{- | The artifact-file capture. The coordinate parse (the @.tgz@ basename and the version) is
+'tarballCoordinate''s, applied in 'buildTarball'.
 -}
 capFilename :: Capture NpmCap
 capFilename =

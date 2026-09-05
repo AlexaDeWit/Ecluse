@@ -175,9 +175,8 @@ documentedJsonContract :: Status -> Text -> Text -> ResponseContract (ResponseVa
 documentedJsonContract status description schema =
     mediaContract status description (SchemaDocumented applicationJson schema)
 
-{- | One exact response whose bytes the handler assembles, served under the media type its
-'BodySchema' names and documented as that same type. A schema that names no media type
-('SchemaEmpty', 'SchemaPassthrough') emits no body.
+{- | One exact response, served under the media type its 'BodySchema' names and documented as
+that same type. A schema naming no media type ('SchemaEmpty', 'SchemaPassthrough') emits no body.
 -}
 mediaContract :: Status -> Text -> BodySchema -> ResponseContract (ResponseValue LByteString)
 mediaContract status description schema =

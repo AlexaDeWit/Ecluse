@@ -110,9 +110,8 @@ specsOf
 headName :: RouteName -> RouteName
 headName name = RouteName (unRouteName name <> ".head")
 
-{- | The @GET@ and @HEAD@ pair documenting a mount's deny-by-default catch-all. It is the absence
-of a match rather than a route, so no 'Ecluse.Core.Server.Route.Route' carries it and every
-ecosystem's table appends it, differing only in the refusal contract and the path parameter.
+{- | The @GET@ and @HEAD@ pair documenting a mount's deny-by-default catch-all. It is the
+absence of a match rather than a route, so no 'Route' carries it and each table appends it.
 -}
 catchAllSpecs :: ResponseContract r -> ParamSpec -> NonEmpty RouteSpec
 catchAllSpecs contract param = catchAllGet :| [catchAllHead]

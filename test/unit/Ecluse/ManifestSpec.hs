@@ -155,9 +155,8 @@ spec = do
         responses = _operationResponses op
         exact = InsOrd.elems (_responsesResponses responses)
 
-{- | The agreement cases for one registered ecosystem: every operation its adapter declares is
-rendered under the method it declares, and no operation documents one status twice. Generic in
-the ecosystem, so a second adapter is held to the same agreement the day it registers.
+{- | The agreement cases for one registered ecosystem, generic in it so a second adapter is held
+to the same agreement the day it registers.
 -}
 agreesWithClassifier :: Ecosystem -> Spec
 agreesWithClassifier eco =
