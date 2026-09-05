@@ -291,7 +291,7 @@ publishRequest =
     RequestSpec
         "The npm publish document (the version manifest plus the base64-encoded tarball in `_attachments`)."
         True
-        (SchemaDocumented publishDocumentSchema)
+        (SchemaDocumented "application/json" publishDocumentSchema)
 
 -- The empty-object codec: encodes @()@ to @{}@ and documents an empty object schema.
 emptyObjectCodec :: JSONCodec ()

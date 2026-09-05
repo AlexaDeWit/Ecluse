@@ -123,7 +123,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
 import Ecluse.Core.Server.Contract (
-    BodySchema (SchemaDocumented, SchemaEmpty, SchemaJson, SchemaOpaque, SchemaPassthrough),
+    BodySchema (SchemaDocumented, SchemaEmpty, SchemaJson, SchemaOpaque, SchemaPassthrough, SchemaText),
     RequestSpec (reqDescription, reqRequired, reqSchema),
     ResponseDoc (responseBodySchema, responseDescription, responseStatus),
     ResponseStatus (DefaultResponse, ExactResponse),
@@ -319,16 +319,18 @@ responseFrom doc =
             }
 
 {- | The OpenAPI content behind a body's 'BodySchema'. __Total__ over the closed body vocabulary.
+Each arm documents the media type the serve path names for that body, so the two cannot diverge.
 
 A 'SchemaJson' body renders from the /same/ @autodocodec@ codec the serve path encodes with, so the
-documented schema and the wire format cannot diverge.
+documented schema and the wire format cannot diverge either.
 -}
 bodyContent :: BodySchema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 bodyContent = \case
     SchemaEmpty -> mempty
     SchemaOpaque media -> mediaContent (mediaTypeOf media) (Inline binarySchema)
-    SchemaJson c -> jsonContent (Inline (schemaViaCodec c))
-    SchemaDocumented name -> jsonContent (Ref (Reference name))
+    SchemaText media -> mediaContent (mediaTypeOf media) (Inline (stringSchema Nothing))
+    SchemaJson media c -> mediaContent (mediaTypeOf media) (Inline (schemaViaCodec c))
+    SchemaDocumented media name -> mediaContent (mediaTypeOf media) (Ref (Reference name))
     SchemaPassthrough -> mediaContent "*/*" (Inline binarySchema)
 
 mediaTypeOf :: ByteString -> MediaType
@@ -355,9 +357,6 @@ pathParam name description =
         , _paramDescription = Just description
         , _paramSchema = Just (Inline (stringSchema Nothing))
         }
-
-jsonContent :: Referenced Schema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
-jsonContent = mediaContent "application/json"
 
 mediaContent :: MediaType -> Referenced Schema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 mediaContent mediaType ref = InsOrd.singleton mediaType ((mempty :: MediaTypeObject){_mediaTypeObjectSchema = Just ref})

@@ -9,7 +9,9 @@ OpenAPI documentation.
 A 'ResponseContract' is indexed by the value a handler must produce. Its constructor is
 private: callers can only build one from the leaf contracts in this module and combine
 those leaves with 'chooseContract'. Each leaf owns both its 'ResponseDoc' and the function
-that renders its payload, so those two interpretations cannot be supplied separately.
+that renders its payload, so those two interpretations cannot be supplied separately. The
+served media type is one of them: a leaf reads it off the 'BodySchema' it documents, so the
+type on the wire and the type in the manifest are one spelling.
 
 The route layer existentially packages a contract with a handler producing that
 contract's response type. The runtime gives the handler only the corresponding typed
@@ -40,7 +42,9 @@ module Ecluse.Core.Server.Contract (
     ResponseValue,
     responseValue,
     jsonContract,
+    mediaJsonContract,
     documentedJsonContract,
+    mediaContract,
     emptyContract,
 
     -- * Open response leaves
@@ -65,16 +69,20 @@ import Data.Aeson qualified as Aeson
 import Network.HTTP.Types (Header, Status, hContentType)
 import Network.Wai (Response, StreamingBody, responseLBS, responseStream)
 
--- | The structural shape of a response body, kept OpenAPI-free in the core.
+{- | The structural shape of a response body and the media type it is served under, kept
+OpenAPI-free in the core.
+-}
 data BodySchema
     = -- | No body at all.
       SchemaEmpty
     | -- | Opaque bytes under one known media type.
       SchemaOpaque ByteString
-    | -- | JSON encoded from the same codec the manifest renders as a schema.
-      forall a. SchemaJson (JSONCodec a)
-    | -- | An imperatively assembled JSON document with a named manifest schema.
-      SchemaDocumented Text
+    | -- | Text under one known media type.
+      SchemaText ByteString
+    | -- | Encoded from the same codec the manifest renders as a schema.
+      forall a. SchemaJson ByteString (JSONCodec a)
+    | -- | An imperatively assembled document with a named manifest schema.
+      SchemaDocumented ByteString Text
     | -- | An upstream-controlled body under an upstream-controlled media type.
       SchemaPassthrough
 
@@ -147,11 +155,17 @@ chooseContract left right =
 
 -- | One exact JSON response, encoded through the codec its manifest schema uses.
 jsonContract :: Status -> Text -> JSONCodec a -> ResponseContract (ResponseValue a)
-jsonContract status description codec =
+jsonContract = mediaJsonContract applicationJson
+
+{- | One exact response encoded through its codec and served under @media@, for a JSON-family
+media type an ecosystem names itself.
+-}
+mediaJsonContract :: ByteString -> Status -> Text -> JSONCodec a -> ResponseContract (ResponseValue a)
+mediaJsonContract media status description codec =
     ResponseContract
-        { contractDocs = [ResponseDoc (ExactResponse status) description (SchemaJson codec)]
+        { contractDocs = [ResponseDoc (ExactResponse status) description (SchemaJson media codec)]
         , contractRender = \(ResponseValue headers value) ->
-            Answer status headers (JsonAnswer (encodeBody codec value))
+            Answer status headers (MediaAnswer media (encodeBody codec value))
         }
 
 {- | One exact JSON response whose bytes are assembled imperatively and whose schema is
@@ -159,10 +173,32 @@ the named hand-authored component in the manifest.
 -}
 documentedJsonContract :: Status -> Text -> Text -> ResponseContract (ResponseValue LByteString)
 documentedJsonContract status description schema =
+    mediaContract status description (SchemaDocumented applicationJson schema)
+
+{- | One exact response whose bytes the handler assembles, served under the media type its
+'BodySchema' names and documented as that same type. A schema that names no media type
+('SchemaEmpty', 'SchemaPassthrough') emits no body.
+-}
+mediaContract :: Status -> Text -> BodySchema -> ResponseContract (ResponseValue LByteString)
+mediaContract status description schema =
     ResponseContract
-        { contractDocs = [ResponseDoc (ExactResponse status) description (SchemaDocumented schema)]
-        , contractRender = \(ResponseValue headers bytes) -> Answer status headers (JsonAnswer bytes)
+        { contractDocs = [ResponseDoc (ExactResponse status) description schema]
+        , contractRender = \(ResponseValue headers bytes) ->
+            Answer status headers (maybe NoAnswerBody (`MediaAnswer` bytes) (bodyMediaType schema))
         }
+
+-- The media type a body is served under, absent for a body this leaf does not put on the wire.
+bodyMediaType :: BodySchema -> Maybe ByteString
+bodyMediaType = \case
+    SchemaEmpty -> Nothing
+    SchemaOpaque media -> Just media
+    SchemaText media -> Just media
+    SchemaJson media _ -> Just media
+    SchemaDocumented media _ -> Just media
+    SchemaPassthrough -> Nothing
+
+applicationJson :: ByteString
+applicationJson = "application/json"
 
 -- | One exact bodiless response.
 emptyContract :: Status -> Text -> ResponseContract (ResponseValue ())
@@ -249,8 +285,7 @@ encodeBody codec = Aeson.encode . toJSONVia codec
 data Answer = Answer Status [Header] AnswerBody
 
 data AnswerBody
-    = JsonAnswer LByteString
-    | MediaAnswer ByteString LByteString
+    = MediaAnswer ByteString LByteString
     | MediaStreamAnswer ByteString StreamingBody
     | RawAnswer LByteString
     | RawStreamAnswer StreamingBody
@@ -261,7 +296,6 @@ withoutAnswerBody (Answer status headers body) =
     Answer status (contentTypeOf body <> headers) NoAnswerBody
   where
     contentTypeOf = \case
-        JsonAnswer _ -> [(hContentType, "application/json")]
         MediaAnswer media _ -> [(hContentType, media)]
         MediaStreamAnswer media _ -> [(hContentType, media)]
         RawAnswer _ -> []
@@ -270,7 +304,6 @@ withoutAnswerBody (Answer status headers body) =
 
 answerToResponse :: Answer -> Response
 answerToResponse (Answer status headers body) = case body of
-    JsonAnswer bytes -> responseLBS status ((hContentType, "application/json") : headers) bytes
     MediaAnswer media bytes -> responseLBS status ((hContentType, media) : headers) bytes
     MediaStreamAnswer media stream -> responseStream status ((hContentType, media) : headers) stream
     RawAnswer bytes -> responseLBS status headers bytes
