@@ -588,6 +588,7 @@ library ecluse-test-support
     Ecluse.Test.RegistryCapture
     Ecluse.Test.Rules
     Ecluse.Test.Server.Cache
+    Ecluse.Test.Server.Route
     Ecluse.Test.Server.Transform
     Ecluse.Test.Stub
     Ecluse.Test.Support
@@ -722,6 +723,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Cache.StoreSpec
     Ecluse.Core.Server.CacheSpec
     Ecluse.Core.Server.ConditionalSpec
+    Ecluse.Core.Server.ContractSpec
     Ecluse.Core.Server.FaultSpec
     Ecluse.Core.Server.MetadataSpec
     Ecluse.Core.Server.PathSpec
@@ -731,6 +733,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Pipeline.TarballSpec
     Ecluse.Core.Server.PipelineSpec
     Ecluse.Core.Server.ResponseSpec
+    Ecluse.Core.Server.RouteEngineSpec
     Ecluse.Core.Server.StreamSpec
     Ecluse.Core.Server.UpstreamSpec
     Ecluse.Core.SupervisionSpec
@@ -765,6 +768,7 @@ test-suite ecluse-core-unit
     , ecluse:ecluse-test-support
     , aeson             >=2.2 && <2.4
     , amazonka          ^>=2.0
+    , autodocodec       ^>=0.5
     , bytestring        ^>=0.12
     , containers        ^>=0.7
     , crypton           >=1.0 && <1.2
@@ -903,6 +907,7 @@ test-suite ecluse-unit
     , retry             ^>=0.9
     , text              ^>=2.1
     , time              ^>=1.12
+    , universe-base     ^>=1.1
     , unliftio          ^>=0.2.25
     , wai               ^>=3.2
     , wai-extra         ^>=3.1

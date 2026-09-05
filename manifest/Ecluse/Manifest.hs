@@ -119,11 +119,11 @@ import Network.HTTP.Media (MediaType)
 import Network.HTTP.Types.Method (StdMethod (..))
 import Network.HTTP.Types.Status (statusCode)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
 import Ecluse.Core.Server.Contract (
-    BodySchema (SchemaDocumented, SchemaEmpty, SchemaJson, SchemaOpaque, SchemaPassthrough),
+    BodySchema (SchemaDocumented, SchemaEmpty, SchemaJson, SchemaOpaque, SchemaPassthrough, SchemaText),
     RequestSpec (reqDescription, reqRequired, reqSchema),
     ResponseDoc (responseBodySchema, responseDescription, responseStatus),
     ResponseStatus (DefaultResponse, ExactResponse),
@@ -163,10 +163,12 @@ buildOpenApi src =
         { _openApiInfo = manifestInfo
         , _openApiServers = [server]
         , _openApiPaths = pathsFrom (concatMap ecosystemRouteSpecs (toList (manifestEcosystems src)))
-        , _openApiComponents = (mempty :: Components){_componentsSchemas = ownedSchemas}
+        , _openApiComponents = (mempty :: Components){_componentsSchemas = componentSchemas}
         , _openApiTags = InsOrdSet.fromList (map ecosystemTag (toList (manifestEcosystems src)))
         }
   where
+    componentSchemas = InsOrd.fromList (concatMap ownedSchemas (toList (manifestEcosystems src)))
+
     server =
         Server
             { _serverUrl = manifestBaseUrl src
@@ -188,12 +190,17 @@ manifestInfo =
                 \it is not served."
         }
 
-ownedSchemas :: InsOrd.InsOrdHashMap Text Schema
-ownedSchemas =
-    InsOrd.fromList
+{- | The hand-authored component schemas an ecosystem's documented bodies name. The rendered
+components carry the mounted ecosystems' entries and no others.
+-}
+ownedSchemas :: Ecosystem -> [(Text, Schema)]
+ownedSchemas = \case
+    Npm ->
         [ (synthesizedPackumentSchemaName, synthesizedPackumentSchema)
         , (publishDocumentSchemaName, publishDocumentSchema)
         ]
+    PyPI -> []
+    RubyGems -> []
 
 -- | The tag for an ecosystem (the manifest groups operations by mount).
 ecosystemTag :: Ecosystem -> Tag
@@ -318,17 +325,16 @@ responseFrom doc =
             , _responseContent = bodyContent (responseBodySchema doc)
             }
 
-{- | The OpenAPI content behind a body's 'BodySchema'. __Total__ over the closed body vocabulary.
-
-A 'SchemaJson' body renders from the /same/ @autodocodec@ codec the serve path encodes with, so the
-documented schema and the wire format cannot diverge.
+{- | The OpenAPI content behind a body's 'BodySchema'. Each arm renders the media type, and a
+codec body the schema, that the serve path itself uses, so the document cannot drift from the wire.
 -}
 bodyContent :: BodySchema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 bodyContent = \case
     SchemaEmpty -> mempty
     SchemaOpaque media -> mediaContent (mediaTypeOf media) (Inline binarySchema)
-    SchemaJson c -> jsonContent (Inline (schemaViaCodec c))
-    SchemaDocumented name -> jsonContent (Ref (Reference name))
+    SchemaText media -> mediaContent (mediaTypeOf media) (Inline (stringSchema Nothing))
+    SchemaJson media c -> mediaContent (mediaTypeOf media) (Inline (schemaViaCodec c))
+    SchemaDocumented media name -> mediaContent (mediaTypeOf media) (Ref (Reference name))
     SchemaPassthrough -> mediaContent "*/*" (Inline binarySchema)
 
 mediaTypeOf :: ByteString -> MediaType
@@ -355,9 +361,6 @@ pathParam name description =
         , _paramDescription = Just description
         , _paramSchema = Just (Inline (stringSchema Nothing))
         }
-
-jsonContent :: Referenced Schema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
-jsonContent = mediaContent "application/json"
 
 mediaContent :: MediaType -> Referenced Schema -> InsOrd.InsOrdHashMap MediaType MediaTypeObject
 mediaContent mediaType ref = InsOrd.singleton mediaType ((mempty :: MediaTypeObject){_mediaTypeObjectSchema = Just ref})

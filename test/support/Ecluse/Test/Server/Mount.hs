@@ -6,32 +6,29 @@
 
 The module name follows this support library's @Ecluse.X -> Ecluse.Test.X@ convention.
 
-'npmServeDeps' is the one shared builder for an npm mount's 'PackumentDeps'. It fills the
-standard production wiring once: npm's own metadata and artifact capability records, the
-derived tarball-host gate, and the policy defaults. Each call site passes only its own axes,
-the two upstream base URLs, the mirror plan, the prepared rules, and the clock, and
-record-updates the few fields unique to it: the mount base URL, the egress former, an inbound
-token. Every affected suite and the load bench build their deps through it, so a
-'PackumentDeps' schema change lands in one place.
+'serveDepsFor' is the one shared builder for a mount's 'PackumentDeps'. It takes the ecosystem's
+adapter and fills the standard production wiring once: that adapter's metadata and artifact
+capability records, the derived tarball-host gate, and the policy defaults. A call site passes
+only its own axes and record-updates the few fields unique to it, so a 'PackumentDeps' schema
+change lands in one place. 'npmServeDeps' and 'inertPackumentDeps' are npm's aliases.
 
-'inertPackumentDeps' is a complete but __unreachable__ 'PackumentDeps': every upstream it
-names is a closed port. A 'Ecluse.Core.Server.Context.MountBinding' always carries
-packument dependencies. A mount exists only for an ecosystem with a registered adapter,
-and the composition root builds the deps from that adapter. A spec that never drives the
-data plane must therefore still supply them. This fixture is that supply: enough to bind
-a mount, and nothing that answers.
+== The inert deps
 
-A spec that /does/ drive the data plane builds its own deps through 'npmServeDeps'
-against a live stub upstream. This fixture is for the specs that only care about routing,
-the meta-routes, the edge gate, or the publish path.
+'inertDepsFor' is complete but __unreachable__: every upstream it names is a closed port. A
+'Ecluse.Core.Server.Context.MountBinding' always carries packument dependencies, so a spec that
+never drives the data plane must still supply them. A spec that /does/ drive it builds its own
+through 'serveDepsFor' against a live stub upstream.
 
-'withPrivateBaseUrl', 'overPrivateBaseUrl', 'withMirrorPlan', and 'withEcosystemHosts'
-are how a fixture varies an upstream. Each one rebinds the deps' whole upstream cluster
-through 'mountUpstreams', so the tarball-host gate re-derives with the URL. A fixture
-cannot express a stale gate, because the cluster's constructor is private and its
-selectors are not exported. See "Ecluse.Core.Server.Upstream".
+== Varying an upstream
+
+'withPrivateBaseUrl', 'overPrivateBaseUrl', 'withMirrorPlan', and 'withEcosystemHosts' each
+rebind the deps' whole upstream cluster through 'mountUpstreams', so the tarball-host gate
+re-derives with the URL. A fixture cannot express a stale gate, because the cluster's
+constructor is private and its selectors are not exported. See "Ecluse.Core.Server.Upstream".
 -}
 module Ecluse.Test.Server.Mount (
+    serveDepsFor,
+    inertDepsFor,
     npmServeDeps,
     inertPackumentDeps,
     withPrivateBaseUrl,
@@ -53,11 +50,11 @@ import Ecluse.Core.Server.Context (PackumentDeps (..), pdMirror, pdPrivateBaseUr
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit), mountUpstreams)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity)
 
-{- | An npm mount's serve dependencies over 'Ecluse.Core.Registry.Npm.Adapter.npmAdapter'.
-The upstreams, mirror plan, rules, and clock are parameters, and the rest carry defaults.
+{- | A mount's serve dependencies over @adapter@. The upstreams, mirror plan, rules, and clock
+are parameters, and the rest carry defaults.
 -}
-npmServeDeps :: Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
-npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
+serveDepsFor :: RegistryAdapter -> Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
+serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
     PackumentDeps
         { pdUpstreams = mountUpstreams [] privateBaseUrl publicBaseUrl mirror
         , -- Deny by default, matching a mount that declares no namespaces. A spec pinning the
@@ -74,19 +71,23 @@ npmServeDeps privateBaseUrl publicBaseUrl mirror rules clock =
         , pdMinIntegrity = defaultMinIntegrity
         , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
         , pdDivergencePolicy = Warn
-        , pdMetadata = adapterMetadata npmAdapter
-        , pdArtifact = adapterArtifact npmAdapter
+        , pdMetadata = adapterMetadata adapter
+        , pdArtifact = adapterArtifact adapter
         , pdEgressUrl = mkRegistryUrl
         }
+
+-- | 'serveDepsFor' over 'Ecluse.Core.Registry.Npm.Adapter.npmAdapter'.
+npmServeDeps :: Maybe RegistryUrl -> RegistryUrl -> MirrorServePlan -> [PreparedRule] -> IO UTCTime -> PackumentDeps
+npmServeDeps = serveDepsFor npmAdapter
 
 {- | A mount's serve dependencies wired to nowhere: a closed loopback port for every base URL, an
 empty rule set, and a fixed clock. It is complete enough to bind a
 'Ecluse.Core.Server.Context.MountBinding', but a packument or artifact request through it fails to
 connect instead of reaching an upstream.
 -}
-inertPackumentDeps :: PackumentDeps
-inertPackumentDeps =
-    (npmServeDeps (Just closedPort) closedPort (MirrorOnAdmit closedPort) [] (pure fixedNow))
+inertDepsFor :: RegistryAdapter -> PackumentDeps
+inertDepsFor adapter =
+    (serveDepsFor adapter (Just closedPort) closedPort (MirrorOnAdmit closedPort) [] (pure fixedNow))
         { pdMountBaseUrl = "http://proxy.invalid"
         }
   where
@@ -96,6 +97,10 @@ inertPackumentDeps =
 
     fixedNow :: UTCTime
     fixedNow = UTCTime (fromGregorian 2020 1 1) 0
+
+-- | 'inertDepsFor' over 'Ecluse.Core.Registry.Npm.Adapter.npmAdapter'.
+inertPackumentDeps :: PackumentDeps
+inertPackumentDeps = inertDepsFor npmAdapter
 
 {- | Rebind a fixture's upstreams with the private base URL replaced. The rebind drops any declared
 ecosystem artifact hosts, so a fixture that wants both applies 'withEcosystemHosts' last.

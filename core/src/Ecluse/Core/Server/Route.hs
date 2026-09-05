@@ -39,12 +39,22 @@ module Ecluse.Core.Server.Route (
     -- * Routing a request
     routerOf,
     matchRoute,
+
+    -- * Building a route table
+    answering,
+    safeSegment,
+    isHead,
 ) where
 
 import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodHead, methodPut)
 
-import Ecluse.Core.Server.Context (MountRouter, ResponseAction, RouteAction (RouteAction))
+import Ecluse.Core.Server.Context (
+    MountRouter,
+    ResponseAction (AnswerLocally),
+    RouteAction (RouteAction),
+ )
 import Ecluse.Core.Server.Contract (RequestSpec, ResponseContract, bodilessContract)
+import Ecluse.Core.Server.Path (isSafeComponent)
 
 {- | One route: how it matches, what it does, and what it documents.
 
@@ -140,7 +150,7 @@ routerOf notFound routes method segments =
     maybe (fallbackFor method notFound) snd (matchRoute routes method segments)
   where
     fallbackFor requested (RouteAction contract action)
-        | requested == methodHead = RouteAction (bodilessContract contract) action
+        | isHead requested = RouteAction (bodilessContract contract) action
         | otherwise = RouteAction contract action
 
 {- | The route that claims a request, and the action it names: the first route whose method
@@ -160,7 +170,7 @@ matchRoute routes method segments =
         | otherwise = Nothing
 
     contractFor requested
-        | requested == methodHead = bodilessContract
+        | isHead requested = bodilessContract
         | otherwise = id
 
 {- Requires exact consumption: a leftover request segment, or a template segment with nothing
@@ -174,3 +184,21 @@ consumeSegs (SegCap c : ps) ss = do
     (v, rest) <- capConsume c ss
     (v :) <$> consumeSegs ps rest
 consumeSegs _ _ = Nothing
+
+{- | A 'routeBuild' that answers with one fixed value whatever the method and captures. The
+literal routes an ecosystem answers itself, rather than through the data plane, are built with it.
+-}
+answering :: response -> Method -> [v] -> Maybe (ResponseAction response)
+answering answer _method _captures = Just (AnswerLocally answer)
+
+{- | A 'capConsume' that claims one leading segment, and only when it is a safe path component.
+A traversal, separator, or control character therefore fails the match before the value exists.
+-}
+safeSegment :: (Text -> v) -> [Text] -> Maybe (v, [Text])
+safeSegment build = \case
+    seg : rest | isSafeComponent seg -> Just (build seg, rest)
+    _ -> Nothing
+
+-- | Whether a request is the bodiless read. A @HEAD@ is a variation of its @GET@, not a route.
+isHead :: Method -> Bool
+isHead = (== methodHead)
