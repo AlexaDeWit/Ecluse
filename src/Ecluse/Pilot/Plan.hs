@@ -37,20 +37,28 @@ import Ecluse.Config (
     advisoryStoreBucket,
     unUrl,
  )
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (CompileSources (..))
+import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory), osvEcosystemNamed)
 
--- | What the scheduled export loop does with the resolved advisory settings.
+-- | What the scheduled export loop does with the advisory settings and the mounted ecosystems.
 data ExportLoopPlan
     = -- | No advisory store is configured, so the loop idles and exports nothing.
       ExportIdle
-    | -- | Compile and upload to this store, one cycle per cadence.
-      ExportTo AdvisoryStoreUrl
+    | -- | Compile and upload one artifact per ecosystem to this store, each on its own cadence.
+      ExportTo AdvisoryStoreUrl (NonEmpty Ecosystem)
     deriving stock (Eq, Show)
 
--- | A configured store is the only thing that turns exporting on, as it is for the proxy's sync.
-exportLoopPlan :: AdvisoriesSettings -> ExportLoopPlan
-exportLoopPlan = maybe ExportIdle ExportTo . advUrl
+{- | A configured store is the only thing that turns exporting on, as it is for the proxy's sync,
+and each mounted ecosystem earns an artifact. 'Nothing' is a store with no ecosystem to compile,
+which the boot refuses ("Ecluse.Composition.Executable") rather than running a Pilot that
+publishes nothing.
+-}
+exportLoopPlan :: AdvisoriesSettings -> [Ecosystem] -> Maybe ExportLoopPlan
+exportLoopPlan advisories ecosystems = case advUrl advisories of
+    Nothing -> Just ExportIdle
+    Just store -> ExportTo store <$> nonEmpty ecosystems
 
 {- | The delay between export cycles. The config decoder bounds @compileInterval@ to
 @maxBound \`div\` 1000000@ seconds, so this conversion cannot wrap to a negative delay.
@@ -70,10 +78,10 @@ secondsToMicros seconds = round seconds * 1000000
 {- | The upstreams a scheduled cycle reads, both configured keys so a moved or mirrored feed
 never needs a new binary.
 -}
-configuredSources :: AdvisoriesSettings -> Text -> CompileSources
-configuredSources advisories ecosystem =
+configuredSources :: AdvisoriesSettings -> OsvEcosystem -> CompileSources
+configuredSources advisories eco =
     CompileSources
-        { csOsvExportUrl = osvExportUrl (unUrl (advOsvExportBaseUrl advisories)) ecosystem
+        { csOsvExportUrl = osvExportUrl (unUrl (advOsvExportBaseUrl advisories)) (osvExportDirectory eco)
         , csEpssFeedUrl = toString (unUrl (advEpssFeedUrl advisories))
         }
 
@@ -87,14 +95,14 @@ compileSources advisories opts =
         , csEpssFeedUrl = fromMaybe (csEpssFeedUrl configured) (pcoEpssSource opts)
         }
   where
-    configured = configuredSources advisories (pcoEcosystem opts)
+    configured = configuredSources advisories (osvEcosystemNamed (pcoEcosystem opts))
 
 -- | Options for the one-shot @ecluse pilot compile@ mode.
 data PilotCompileOptions = PilotCompileOptions
     { pcoEcosystem :: Text
     , pcoSource :: Maybe String
     {- ^ Overrides the export URL. 'Nothing' selects the configured export
-    base for the ecosystem ('osvExportUrl' under @osvExportBaseUrl@).
+    base under osv.dev's spelling of the ecosystem ('osvExportUrl' under @osvExportBaseUrl@).
     -}
     , pcoEpssSource :: Maybe String
     -- ^ Overrides the EPSS feed URL. 'Nothing' selects the configured @epssFeedUrl@.

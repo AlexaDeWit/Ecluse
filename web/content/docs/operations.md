@@ -27,8 +27,9 @@ Readiness is deliberately lenient about public-upstream reachability, so a trans
 pull a healthy pod from rotation. The starting-up case is the one to plan for. With an advisory
 store configured, that startup gate also waits for each ecosystem's first advisory sync, a
 one-way flip that never flaps back. Give a cold pod room for that first database download: a
-Kubernetes `startupProbe`, or a readiness `failureThreshold` sized for it. Mounting an ecosystem
-whose artifact Pilot never publishes leaves the pod never ready.
+Kubernetes `startupProbe`, or a readiness `failureThreshold` sized for it. Pilot publishes an
+artifact for every ecosystem the configuration mounts, and readiness waits for each one's first
+sync.
 
 The npm liveness probe `GET /npm/-/ping` answers locally with `200 {}`. `GET /npm/-/v1/search`
 returns `501` by design, because search is a discovery convenience, not an install path.

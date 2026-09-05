@@ -12,16 +12,39 @@ import System.Directory (doesFileExist)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
+import UnliftIO (timeout)
+import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition.Support (expectAppConfig)
-import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), runPilotCompile)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros))
+import Ecluse.Pilot (PilotCompileOptions (..), PilotUploadUnconfigured (..), runPilotCompile, superviseExportCycles)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Test.Log (newTestLogEnv)
+import Ecluse.Test.Log (newTestLogEnv, runQuietKatip)
 import Ecluse.Test.OsvDb (epssFixtureFile)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
 spec :: Spec
 spec = do
+    describe "superviseExportCycles (one supervised cycle loop per ecosystem)" $
+        it "keeps a faulting ecosystem's backoff off every other ecosystem's cadence" $ do
+            -- The schedule is a five-second fixed retry, so a shared loop would let the healthy
+            -- ecosystem tick at most once inside the window. Its own loop ticks throughout.
+            faulted <- newIORef (0 :: Int)
+            healthy <- newIORef (0 :: Int)
+            let schedule = BackoffSchedule{bsBaseMicros = 5_000_000, bsCapMicros = 5_000_000}
+                cycleFor Npm = do
+                    atomicModifyIORef' faulted (\n -> (n + 1, ()))
+                    throwIO FeedDown
+                cycleFor _ = do
+                    atomicModifyIORef' healthy (\n -> (n + 1, ()))
+                    threadDelay 1_000
+            _ <- timeout 200_000 (runQuietKatip (superviseExportCycles schedule (Npm :| [PyPI]) cycleFor))
+            readIORef healthy >>= (`shouldSatisfy` (>= 5))
+            -- The faulting pass spends its own cadence and nothing else's.
+            readIORef faulted `shouldReturn` 1
+
     describe "runPilotCompile (one-shot compile mode)" $ do
         it "compiles a served OSV zip into the requested directory and returns the artifact's path" $ do
             le <- newTestLogEnv
@@ -92,6 +115,12 @@ spec = do
                     opts = (compileOptions unreachable unreachable outDir){pcoUpload = True}
                 runPilotCompile le telemetryDisabled Nothing appCfg opts
                     `shouldThrow` (== PilotUploadUnconfigured)
+
+-- | The upstream outage one ecosystem's cycle suffers while the other keeps compiling.
+data FeedDown = FeedDown
+    deriving stock (Show)
+
+instance Exception FeedDown
 
 -- No listener answers here, so a fetch that starts fails rather than reaching an upstream.
 unreachable :: Text

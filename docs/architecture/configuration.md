@@ -271,9 +271,10 @@ settle the mount wiring, the advisory sync, and the queue backend there, and one
 refusal all of that earns. `ecluse dredger` plans the client it would sweep each cleared mirror
 store with there, so a store whose client cannot be built reports at the gate rather than on the
 first call against it, and then refuses: this build carries no sweep, and a role with no coherent
-runtime behaviour gets no runtime. `ecluse pilot` settles nothing a live environment decides today, and a refusal it
-later needs is spent at the same gate. So an executable plan carries the role's own wiring, and a
-boot spends its last refusal in one place whichever role it started.
+runtime behaviour gets no runtime. `ecluse pilot` settles its export loop there, one compile cycle
+per mounted ecosystem, and refuses on the same principle where an advisory store is configured and
+no mount is. So an executable plan carries the role's own wiring, and a boot spends its last
+refusal in one place whichever role it started.
 
 Nothing downstream of an executable plan refuses to boot. Holding one means the assembly below it
 only builds and allocates, so a role's runtime cannot reject a configuration the boot already

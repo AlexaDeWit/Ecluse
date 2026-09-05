@@ -19,6 +19,7 @@ import Ecluse.Composition.BootError (
         CodeArtifactMintFailed,
         MirrorQueueUnavailable,
         MissingAdapter,
+        PilotWithoutEcosystem,
         StoreMaintenanceUnavailable,
         StorePrunerWithoutSweep
     ),
@@ -43,6 +44,7 @@ import Ecluse.Composition.Types (
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Queue (noMirrorQueue)
 import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
+import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo))
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
@@ -143,16 +145,35 @@ spec = describe "planExecutable" $ do
     it "plans the pilot through the same phase, on its own arm" $ do
         -- Nothing here needs a live environment, so ports that refuse outright leave the role
         -- clearing exactly as working ones do. The gate still stands ahead of it, which is
-        -- where a refusal it later needs is spent.
+        -- where the Pilot's own refusal is spent.
         pilot <- expectExecutable BootWithoutPipeline (\_ _ _ -> Nothing) refusingQueue refusingStore
         plannedArm (epRoleWiring pilot) `shouldBe` "pilot"
         bpRole (epBootPlan pilot) `shouldBe` BootWithoutPipeline
+        -- No advisory store is configured here, so the export loop idles.
+        expectPilotPlan pilot >>= (`shouldBe` ExportIdle)
+
+    it "carries the vetted mounts the pilot compiles an artifact for" $ do
+        -- The same list the advisory sync reads, so the Pilot publishes to the key each
+        -- ecosystem's sync polls rather than to npm's alone.
+        pilot <- expectExecutableWith advisoryStoreEnv BootWithoutPipeline mountBindingFor inertQueue inertStore
+        plan <- expectPilotPlan pilot
+        case plan of
+            ExportTo _ ecosystems -> ecosystems `shouldBe` Npm :| []
+            ExportIdle -> expectationFailure "expected a configured store to turn the export loop on"
+
+    it "refuses a pilot with an advisory store and no mount to compile for" $ do
+        -- A role with no coherent runtime behaviour gets no runtime: the store is configured,
+        -- so every cycle would publish nothing at all.
+        outcome <- planWith unmountedAdvisoryEnv BootWithoutPipeline mountBindingFor inertQueue inertStore
+        case outcome of
+            Right _ -> expectationFailure "expected the pilot arm to refuse"
+            Left errs -> errs `shouldBe` [PilotWithoutEcosystem]
 
 -- | Which arm of the phase a plan came back through, so an assertion names it rather than a shape.
 plannedArm :: RoleWiring -> Text
 plannedArm = \case
     MirrorPipelineWiring _ -> "mirror pipeline"
-    PilotWiring -> "pilot"
+    PilotWiring _ -> "pilot"
 
 -- | A queue builder that allocates nothing, for the arms whose refusals are elsewhere.
 inertQueue :: BuildMirrorQueue
@@ -198,6 +219,19 @@ unwritableAdvisoryEnv =
 advisoryDataDir :: (IsString s) => s
 advisoryDataDir = "/dev/null/ecluse-advisories"
 
+-- | The shipped mount over a configured advisory store, so the pilot's arm has work to plan.
+advisoryStoreEnv :: [(String, String)]
+advisoryStoreEnv = overrideEnv "ECLUSE_ADVISORIES__URL" advisoryStoreUrl staticEnvVars
+
+{- | An advisory store with no mount declared under it. The proxy would serve nothing and the
+Pilot would compile nothing, which is the pilot arm's own refusal.
+-}
+unmountedAdvisoryEnv :: [(String, String)]
+unmountedAdvisoryEnv = [("ECLUSE_ADVISORIES__URL", advisoryStoreUrl)]
+
+advisoryStoreUrl :: String
+advisoryStoreUrl = "s3://advisories.example.test/ecluse"
+
 -- | Plan a boot over 'staticEnvVars' for one role, through the given ports.
 planFor :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> BuildStoreMaintenance -> IO (Either [BootError] ExecutablePlan)
 planFor = planWith staticEnvVars
@@ -230,6 +264,12 @@ expectExecutableWith :: [(String, String)] -> BootRole -> ResolveAdapter -> Buil
 expectExecutableWith envVars role resolveAdapter buildQueue buildStore =
     planWith envVars role resolveAdapter buildQueue buildStore
         >>= either (\errs -> fail ("planning refused: " <> show errs)) pure
+
+-- | The pilot arm's export loop, failing the test on any other arm.
+expectPilotPlan :: ExecutablePlan -> IO ExportLoopPlan
+expectPilotPlan plan = case epRoleWiring plan of
+    PilotWiring exportPlan -> pure exportPlan
+    other -> fail ("expected the pilot arm, got the " <> toString (plannedArm other) <> " arm")
 
 -- | The mirror-pipeline arm of a plan, failing the test on any other arm.
 expectMirrorWiring :: ExecutablePlan -> IO MirrorWiring
