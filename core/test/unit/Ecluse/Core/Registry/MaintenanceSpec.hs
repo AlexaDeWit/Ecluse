@@ -52,7 +52,7 @@ bucketSpec = do
         it "reads no prefix from a spelling the alphabet does not carry" $
             parseNamePrefix (mkNameAlphabet "abc") "az" `shouldBe` Nothing
 
-        it "reads no prefix from a repeated character the alphabet dropped" $
+        it "still reads a prefix after a repeated character was dropped" $
             fmap renderNamePrefix (parseNamePrefix (mkNameAlphabet "aab") "ab") `shouldBe` Just "ab"
 
         it "reads the empty prefix under any alphabet, because it filters nothing" $ do

@@ -143,10 +143,8 @@ fakeStoreCursor config cursor
 orFault :: FakeStoreConfig -> IO a -> IO (Either StoreFault a)
 orFault config action = maybe (Right <$> action) (pure . Left) (fakeFault config)
 
-{- | Run an assertion over the bucket one spelling names, read through the same parser a store's
-cursor is read through. The alphabet is built to carry that spelling, so a refusal here means the
-prefix vocabulary changed under the spec rather than that the spec asked for something impossible.
-The empty spelling names the bucket that covers a whole store.
+{- | Run an assertion over the bucket one spelling names, through the parser a cursor read uses.
+The alphabet carries the spelling, so a refusal means the prefix vocabulary changed under the spec.
 -}
 withBucket :: Text -> (NamePrefix -> IO a) -> IO a
 withBucket raw act = case parseNamePrefix (mkNameAlphabet (toString raw)) raw of

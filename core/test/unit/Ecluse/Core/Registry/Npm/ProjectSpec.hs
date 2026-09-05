@@ -87,10 +87,6 @@ nameGrammarSpec = describe "projectName -- the one npm name grammar" $ do
     it "reads an unscoped name whole" $
         projectName "left-pad" `shouldBe` Right (mkPackageName Npm Nothing "left-pad")
 
-{- | The charset boundary under the grammar: no codepoint above U+007F and no ASCII control
-character parses, whatever Unicode class it belongs to.
--}
-
 {- The characters a name may begin with, which the store walk partitions a name space by. They are
 sieved out of ASCII by this module's own grammar, so these cases pin the sieve against the parser. -}
 leadCharacterSpec :: Spec
@@ -105,6 +101,9 @@ leadCharacterSpec = describe "npmNameLeadChars" $ do
     it "admits exactly the characters a one-character name parses under" $
         filter (isLeft . projectName . T.singleton) npmNameLeadChars `shouldBe` []
 
+{- | The charset boundary under the grammar: no codepoint above U+007F and no ASCII control
+character parses, whatever Unicode class it belongs to.
+-}
 asciiBoundarySpec :: Spec
 asciiBoundarySpec = describe "projectName -- the ASCII boundary" $ do
     it "refuses a Hangul filler, an invisible that is no format character" $ do
