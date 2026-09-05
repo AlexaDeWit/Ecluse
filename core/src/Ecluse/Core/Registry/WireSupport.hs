@@ -15,10 +15,10 @@ into the domain model, shared by every ecosystem's projection
   @versions@\/@dist-tags@\/@time@ maps, or an array-shaped index's file list, which
   supplies each element's key itself.
 * __Name agreement__. 'checkNameAgreement' checks that the name an upstream self-reports
-  agrees with the name the proxy resolved from the route. The requested name is the
-  validation authority, never a rewrite. A disagreement carries the reported name
-  verbatim, so the caller can drop that origin's contribution as untrusted for this
-  request.
+  agrees with the name the proxy resolved from the route, and carries what was projected
+  through on agreement. The requested name is the validation authority, never a rewrite. A
+  disagreement carries the reported name verbatim and no payload, so the caller cannot
+  serve a contribution the origin is untrusted for.
 -}
 module Ecluse.Core.Registry.WireSupport (
     -- * Per-entry lenient degradation
@@ -26,7 +26,7 @@ module Ecluse.Core.Registry.WireSupport (
     partitionLenientList,
 
     -- * Name agreement
-    NameAgreement (..),
+    Projection (..),
     checkNameAgreement,
 ) where
 
@@ -63,14 +63,15 @@ partitionLenient :: InvalidEntryKind -> (Value -> Either String a) -> Map Text V
 partitionLenient kind decode =
     first Map.fromDistinctAscList . partitionLenientList kind decode . Map.toAscList
 
-{- | The outcome of checking an upstream's self-reported name against the requested name. The
-requested name validates the document. It never rewrites it.
+{- | What an upstream document projected into, once its self-reported name has been checked
+against the requested one. The requested name validates the document. It never rewrites it, and
+a mismatch carries no payload, so a disagreeing origin's contribution is unrepresentable.
 -}
-data NameAgreement
-    = -- | The self-reported name agreed with the request.
-      NameAgrees
-    | -- | The self-reported name __disagreed__, reporting this /different/ name (carried verbatim for the audit log).
-      NameDisagrees Text
+data Projection a
+    = -- | The self-reported name agreed with the request, carrying what was projected.
+      Projected a
+    | -- | The document self-reported this /different/ name (carried verbatim for the audit log).
+      NameMismatch Text
     deriving stock (Eq, Show)
 
 {- | Check an upstream's self-reported 'PackageName' against the requested one through
@@ -78,7 +79,7 @@ ecosystem-aware 'PackageName' equality, never a byte compare an encoding variant
 A disagreement carries the reported name so the caller can drop that origin's contribution, and
 the proxy never substitutes the name.
 -}
-checkNameAgreement :: PackageName -> PackageName -> NameAgreement
-checkNameAgreement requestedName reportedName
-    | reportedName == requestedName = NameAgrees
-    | otherwise = NameDisagrees (renderPackageName reportedName)
+checkNameAgreement :: PackageName -> PackageName -> a -> Projection a
+checkNameAgreement requestedName reportedName projected
+    | reportedName == requestedName = Projected projected
+    | otherwise = NameMismatch (renderPackageName reportedName)

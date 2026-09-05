@@ -63,7 +63,6 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Project (
-    Projection (NameMismatch, Projected),
     parsePackageInfoFromValue,
     projectName,
     projectVersionEntry,
@@ -76,7 +75,7 @@ import Ecluse.Core.Registry.Npm.SelectiveDecode (
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits))
 import Ecluse.Core.Registry.Request (noValidators)
-import Ecluse.Core.Registry.WireSupport (NameAgreement (NameAgrees, NameDisagrees), checkNameAgreement)
+import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected), checkNameAgreement)
 import Ecluse.Core.Security (
     LimitError (TooDeeplyNested),
     Limits,
@@ -187,13 +186,13 @@ unprojectable version yields 'Nothing'.
 -}
 projectNpmVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
 projectNpmVersion limits name version body = do
-    selected <- first (selectiveError limits) (selectVersionFromPackument (maxNestingDepth limits) version body)
+    decoded <- first (selectiveError limits) (selectVersionFromPackument (maxNestingDepth limits) version body)
     -- The self-reported name is the validation authority (anti-shadowing), checked before the
     -- version-count backstop, as 'projectNpmManifest' does.
-    reported <- validateReportedName (svName selected)
-    case checkNameAgreement name reported of
-        NameDisagrees other -> Left (MetadataNameMismatch other)
-        NameAgrees -> pass
+    reported <- validateReportedName (svName decoded)
+    selected <- case checkNameAgreement name reported decoded of
+        NameMismatch other -> Left (MetadataNameMismatch other)
+        Projected agreed -> Right agreed
     first MetadataBoundExceeded (checkVersionCountOf limits (svVersionCount selected))
     publishedAt <- parsePublishTime (svTime selected)
     -- 'mkVersion' over the requested version's rendered key matches the whole-document path,

@@ -18,7 +18,7 @@ import Ecluse.Core.Package (
     mkScope,
  )
 import Ecluse.Core.Registry.WireSupport (
-    NameAgreement (NameAgrees, NameDisagrees),
+    Projection (NameMismatch, Projected),
     checkNameAgreement,
     partitionLenient,
     partitionLenientList,
@@ -75,18 +75,19 @@ partitionLenientListSpec = describe "partitionLenientList" $ do
 
 checkNameAgreementSpec :: Spec
 checkNameAgreementSpec = describe "checkNameAgreement" $ do
-    it "agrees when the reported name matches the request" $
-        checkNameAgreement (unscopedNpm "left-pad") (unscopedNpm "left-pad") `shouldBe` NameAgrees
+    it "carries the projected payload through when the reported name matches the request" $
+        checkNameAgreement (unscopedNpm "left-pad") (unscopedNpm "left-pad") (1 :: Int)
+            `shouldBe` Projected 1
 
     it "disagrees when the reported bare name differs, carrying the reported name" $
-        checkNameAgreement (unscopedNpm "left-pad") (unscopedNpm "evil-pad")
-            `shouldBe` NameDisagrees "evil-pad"
+        checkNameAgreement (unscopedNpm "left-pad") (unscopedNpm "evil-pad") (1 :: Int)
+            `shouldBe` NameMismatch "evil-pad"
 
     it "disagrees on a differing scope even when the bare name matches" $
         -- Ecosystem-aware equality compares the whole name, scope included, so the same
         -- bare name under a different scope is the anti-shadowing disagreement.
-        checkNameAgreement (scoped "one" "x") (scoped "two" "x")
-            `shouldBe` NameDisagrees "@two/x"
+        checkNameAgreement (scoped "one" "x") (scoped "two" "x") (1 :: Int)
+            `shouldBe` NameMismatch "@two/x"
 
 -- | Decode a JSON value as an 'Int', the per-entry decode the partition drives.
 decodeInt :: Value -> Either String Int

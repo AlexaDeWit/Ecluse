@@ -40,12 +40,12 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Project (
-    Projection (NameMismatch, Projected),
     parsePackageInfoFromValue,
     parseVersionList,
     projectName,
     projectScope,
  )
+import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Json (genJsonText, genKey, genValue)
 import Ecluse.Test.Package (unsafeHash, unscopedNpm)

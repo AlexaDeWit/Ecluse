@@ -32,7 +32,8 @@ establishing it needs a signature fetch this pure projection does not perform.
 == Name as a validation input
 
 The requested 'PackageName' is the validation authority for the served packument's name,
-never a rewrite of it. A document that self-reports a different name is a 'NameMismatch', so
+never a rewrite of it. A document that self-reports a different name projects into the shared
+'Ecluse.Core.Registry.WireSupport.Projection' mismatch and carries no packument, so
 the caller can treat that origin as untrusted for this request, and an absent name is a
 'ParseError' instead. 'projectName' is also the one splitter for npm identifiers: the route,
 the URL rewrite, the publish guard, and the queue decode all read a name through it, so one
@@ -56,7 +57,6 @@ module Ecluse.Core.Registry.Npm.Project (
     projectVersionEntry,
 
     -- * Name validation
-    Projection (..),
     projectName,
     projectScope,
 ) where
@@ -99,7 +99,7 @@ import Ecluse.Core.Registry.Npm.Wire (
  )
 import Ecluse.Core.Registry.Npm.Wire qualified as Wire
 import Ecluse.Core.Registry.WireSupport (
-    NameAgreement (NameAgrees, NameDisagrees),
+    Projection,
     checkNameAgreement,
     partitionLenient,
  )
@@ -167,31 +167,19 @@ instance FromJSON VersionEntry where
     parseJSON v =
         withObject "npm version object" (\o -> VersionEntry <$> parseJSON v <*> o .:? "_npmUser") v
 
-{- | The outcome of projecting an upstream packument against the requested package name.
-The requested name validates the document and is never substituted into it.
--}
-data Projection
-    = -- | The document decoded and its self-reported name matched the request.
-      Projected PackageInfo
-    | -- | The document decoded but self-reported this /different/ name (carried verbatim for the audit log).
-      NameMismatch Text
-    deriving stock (Eq, Show)
-
 {- | Project an already-decoded packument @Value@ into a 'Projection' for the requested package,
 reusing that parse instead of the bytes. A @Value@ that is not a packument gives a 'ParseError'.
 -}
-parsePackageInfoFromValue :: PackageName -> Value -> Either ParseError Projection
+parsePackageInfoFromValue :: PackageName -> Value -> Either ParseError (Projection PackageInfo)
 parsePackageInfoFromValue requestedName value =
     decodePackumentValue value >>= projectValidated requestedName
 
 {- Validate a decoded packument's self-reported name against the request. An absent or empty
 upstream name fails as a 'ParseError'. -}
-projectValidated :: PackageName -> WirePackument -> Either ParseError Projection
+projectValidated :: PackageName -> WirePackument -> Either ParseError (Projection PackageInfo)
 projectValidated requestedName pkmt = do
     info <- projectPackageInfo pkmt
-    pure $ case checkNameAgreement requestedName (infoName info) of
-        NameAgrees -> Projected info
-        NameDisagrees reported -> NameMismatch reported
+    pure (checkNameAgreement requestedName (infoName info) info)
 
 -- Project a 'WirePackument' into 'PackageInfo', taking the upstream's self-reported name.
 -- 'projectValidated' owns checking that name against the request.

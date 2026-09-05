@@ -23,7 +23,8 @@ import Ecluse.Core.Package (
     PackageName,
     renderPackageName,
  )
-import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue)
+import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (
     LimitError (..),
     Limits (..),
