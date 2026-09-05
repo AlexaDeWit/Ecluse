@@ -17,8 +17,10 @@ import System.FilePath (takeFileName)
 import System.IO.Error (catchIOError)
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite, osvToRow)
+import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
 import Ecluse.Core.Osv.Types (UpperBound (..))
@@ -40,7 +42,7 @@ spec = describe "SQLite OSV Compilation" $ do
         (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
         dbFile <- withStub status200 zipData $ \stub ->
             withStub status200 epssData $ \epssStub ->
-                runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" "npm" (sourcesOf stub epssStub "/sample.zip"))
+                runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/sample.zip"))
 
         conn <- open dbFile
         rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity, epss_score FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Double, Maybe Double)]
@@ -96,13 +98,38 @@ spec = describe "SQLite OSV Compilation" $ do
         let action =
                 withStub status200 zipData $ \stub ->
                     withStub status200 epssData $ \epssStub ->
-                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" "npm" (sourcesOf stub epssStub "/all.zip"))
+                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip"))
         action `shouldThrow` (\(PilotIngestAborted _) -> True)
 
         -- The abandoned pass still records its tally, and its run reads as aborted, so an
         -- operator alarms on a feed that keeps failing to compile.
         recorded <- readRecorded
         recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 20)] [CompileAborted]
+
+    it "reads osv.dev's spelling and writes Ecluse's, for an ecosystem that spells them apart" $ do
+        -- osv.dev files PyPI advisories under "PyPI" and stamps that spelling on the affected
+        -- package. The sync reads "pypi". One name for both would either drop every row or
+        -- publish an artifact acceptance refuses, so this pins the two halves together.
+        zipData <-
+            osvZipOf
+                [("pypi-advisory.json", "{\"id\":\"GHSA-pypi\",\"affected\":[{\"package\":{\"name\":\"requests\",\"ecosystem\":\"PyPI\"},\"versions\":[\"1.0.0\"]}]}")]
+        epssData <- LBS.readFile epssFixtureFile
+        (metrics, _) <- recordingAdvisoryCompileMetricsPort
+        dbFile <- withStub status200 zipData $ \stub ->
+            withStub status200 epssData $ \epssStub ->
+                runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor PyPI) (sourcesOf stub epssStub "/all.zip"))
+
+        conn <- open dbFile
+        rows <- query_ conn "SELECT package_name FROM package_vulnerability_ranges" :: IO [Only Text]
+        metaRows <- query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)]
+        close conn
+        catchIOError (removeFile dbFile) (const $ pure ())
+
+        -- The row survived the filter, so the filter matched on osv.dev's spelling.
+        map fromOnly rows `shouldBe` ["requests"]
+        -- The key and the meta row are what the proxy's sync polls and what acceptance compares.
+        takeFileName dbFile `shouldBe` "pypi-osv-schema3.db"
+        Map.lookup "ecosystem" (Map.fromList metaRows) `shouldBe` Just "pypi"
 
     it "fails the pass when the EPSS feed answers non-2xx, so nothing reaches the export" $ do
         -- A 404 is permanent, so the fetch gives up at once rather than spending the backoff
@@ -112,7 +139,7 @@ spec = describe "SQLite OSV Compilation" $ do
         let action =
                 withStub status200 zipData $ \stub ->
                     withStub status404 LBS.empty $ \epssStub ->
-                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" "npm" (sourcesOf stub epssStub "/all.zip"))
+                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip"))
         action `shouldThrow` anyException
 
     describe "osvToRow" $ do

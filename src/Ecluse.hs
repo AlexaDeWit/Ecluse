@@ -169,7 +169,7 @@ startPlannedRole bootEnv = do
             >>= orExit renderBootErrors
     case epRoleWiring plan of
         MirrorPipelineWiring mirror -> withServiceRuntime bootEnv plan mirror runMirrorPipeline
-        PilotWiring -> runPilot bootEnv
+        PilotWiring exportPlan -> runPilot bootEnv exportPlan
 
 {- Pick the entry point the assembled runtime's own role names. Both halves run over the one
 assembly, so the dedicated worker composes the wiring the serve path embeds. -}

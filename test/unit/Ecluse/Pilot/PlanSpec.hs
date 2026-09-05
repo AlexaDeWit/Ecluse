@@ -10,7 +10,9 @@ import Test.Hspec
 import Ecluse.Composition.Support (expectAppConfig)
 import Ecluse.Config (AdvisoriesSettings, AdvisoryStoreUrl, AppConfig (cfgAdvisories))
 import Ecluse.Config.AdvisoryStore (mkAdvisoryStoreUrl)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Compile (CompileSources (..))
+import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
 import Ecluse.Pilot.Plan (
     ExportLoopPlan (ExportIdle, ExportTo),
     PilotCompileOptions (..),
@@ -46,15 +48,28 @@ bareOptions =
 
 spec :: Spec
 spec = do
-    describe "exportLoopPlan -- whether the scheduled loop exports at all" $ do
+    describe "exportLoopPlan -- whether the scheduled loop exports at all, and for what" $ do
         it "idles on the shipped defaults, which configure no store" $ do
             advisories <- advisoriesWith []
-            exportLoopPlan advisories `shouldBe` ExportIdle
+            exportLoopPlan advisories [Npm] `shouldBe` Just ExportIdle
+
+        it "idles with no mount either, because the store is what turns exporting on" $ do
+            advisories <- advisoriesWith []
+            exportLoopPlan advisories [] `shouldBe` Just ExportIdle
 
         it "exports to the configured store, the one thing that turns it on" $ do
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__URL", "s3://advisories/ecluse")]
             store <- storeAt "s3://advisories/ecluse"
-            exportLoopPlan advisories `shouldBe` ExportTo store
+            exportLoopPlan advisories [Npm] `shouldBe` Just (ExportTo store (Npm :| []))
+
+        it "carries every mounted ecosystem, so a second mount earns its own artifact" $ do
+            advisories <- advisoriesWith [("ECLUSE_ADVISORIES__URL", "s3://advisories/ecluse")]
+            store <- storeAt "s3://advisories/ecluse"
+            exportLoopPlan advisories [Npm, PyPI] `shouldBe` Just (ExportTo store (Npm :| [PyPI]))
+
+        it "plans nothing for a configured store with no mount, which the boot refuses" $ do
+            advisories <- advisoriesWith [("ECLUSE_ADVISORIES__URL", "s3://advisories/ecluse")]
+            exportLoopPlan advisories [] `shouldBe` Nothing
 
     describe "exportCadenceMicros -- the delay between cycles" $ do
         it "converts the shipped hourly interval to microseconds" $ do
@@ -79,35 +94,37 @@ spec = do
     describe "configuredSources -- the upstreams a scheduled cycle reads" $ do
         it "builds the ecosystem's export URL under the configured base" $ do
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://osv.example.test")]
-            csOsvExportUrl (configuredSources advisories "npm")
+            csOsvExportUrl (configuredSources advisories (osvEcosystemFor Npm))
                 `shouldBe` "https://osv.example.test/npm/all.zip"
 
         it "reads the EPSS feed from its own key, not the export base" $ do
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__EPSS_FEED_URL", "https://epss.example.test/scores.csv.gz")]
-            csEpssFeedUrl (configuredSources advisories "npm")
+            csEpssFeedUrl (configuredSources advisories (osvEcosystemFor Npm))
                 `shouldBe` "https://epss.example.test/scores.csv.gz"
 
-        it "spells the export path per ecosystem, so a second ecosystem needs no new key" $ do
+        it "spells the export path as osv.dev does, not as the mount key does" $ do
+            -- osv.dev files the PyPI export under "PyPI". Reaching for the mount key would
+            -- fetch a directory that does not exist.
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://osv.example.test")]
-            csOsvExportUrl (configuredSources advisories "pypi")
-                `shouldBe` "https://osv.example.test/pypi/all.zip"
+            csOsvExportUrl (configuredSources advisories (osvEcosystemFor PyPI))
+                `shouldBe` "https://osv.example.test/PyPI/all.zip"
 
     describe "compileSources -- a one-shot run's overrides over the configured pair" $ do
         it "takes both feeds from config when the run overrides neither" $ do
             advisories <- advisoriesWith []
-            compileSources advisories bareOptions `shouldBe` configuredSources advisories "npm"
+            compileSources advisories bareOptions `shouldBe` configuredSources advisories (osvEcosystemFor Npm)
 
         it "overrides the export URL alone, leaving the EPSS feed configured" $ do
             advisories <- advisoriesWith []
             let opts = bareOptions{pcoSource = Just "https://pinned.example.test/all.zip"}
             compileSources advisories opts
-                `shouldBe` (configuredSources advisories "npm"){csOsvExportUrl = "https://pinned.example.test/all.zip"}
+                `shouldBe` (configuredSources advisories (osvEcosystemFor Npm)){csOsvExportUrl = "https://pinned.example.test/all.zip"}
 
         it "overrides the EPSS feed alone, leaving the export URL configured" $ do
             advisories <- advisoriesWith []
             let opts = bareOptions{pcoEpssSource = Just "https://pinned.example.test/epss.csv.gz"}
             compileSources advisories opts
-                `shouldBe` (configuredSources advisories "npm"){csEpssFeedUrl = "https://pinned.example.test/epss.csv.gz"}
+                `shouldBe` (configuredSources advisories (osvEcosystemFor Npm)){csEpssFeedUrl = "https://pinned.example.test/epss.csv.gz"}
 
         it "overrides both when the run pins both" $ do
             advisories <- advisoriesWith []

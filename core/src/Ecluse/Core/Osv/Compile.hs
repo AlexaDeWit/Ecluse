@@ -23,6 +23,7 @@ import UnliftIO.Exception (bracket, throwIO)
 
 import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
+import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory, osvWireName))
 import Ecluse.Core.Osv.Epss (fetchEpssScores, maxEpssFeedBytes)
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Core.Osv.Schema (MetaKey (..), metaTableDdl, osvDbFileName, osvSchemaEpoch, rangesTableDdl, renderMetaKey)
@@ -64,9 +65,10 @@ The pass records its tallies and its verdict through @metrics@, which the caller
 ecosystem it compiles. A fault that escapes the stream records neither, so the supervision above
 reports an abandoned pass instead.
 -}
-compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> Text -> CompileSources -> m FilePath
-compileOsvToSqlite metrics mTracerProvider outDir ecosystem sources = do
-    let dbFile = outDir </> osvDbFileName ecosystem
+compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> CompileSources -> m FilePath
+compileOsvToSqlite metrics mTracerProvider outDir eco sources = do
+    let ecosystem = osvWireName eco
+        dbFile = outDir </> osvDbFileName ecosystem
     logFM InfoS (ls ("Compiling OSV data for " <> ecosystem <> " to " <> toText dbFile))
 
     liftIO $ createDirectoryIfMissing True outDir
@@ -96,7 +98,7 @@ compileOsvToSqlite metrics mTracerProvider outDir ecosystem sources = do
                     liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
                     runConduit $
                         streamOsvUrl mTracerProvider ingest (csOsvExportUrl sources)
-                            .| CL.filter ((== ecosystem) . extEcosystem)
+                            .| CL.filter ((== osvExportDirectory eco) . extEcosystem)
                             .| CL.chunksOf 2000
                             .| sinkSqlite conn
 

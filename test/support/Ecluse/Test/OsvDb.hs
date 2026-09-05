@@ -17,7 +17,9 @@ module Ecluse.Test.OsvDb (
 import Network.HTTP.Types.Status (status200)
 import System.IO.Temp (withSystemTempDirectory)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite)
+import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
 import Ecluse.Test.Osv (CorpusVersion, osvCorpusZip, runOsvTestM)
 import Ecluse.Test.Port (noopAdvisoryCompileMetricsPort)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
@@ -45,7 +47,7 @@ withFixtureOsvDb v use = do
                             noopAdvisoryCompileMetricsPort
                             Nothing
                             dir
-                            "npm"
+                            (osvEcosystemFor Npm)
                             CompileSources
                                 { csOsvExportUrl = toString (stubBaseUrl osvStub) <> "/all.zip"
                                 , csEpssFeedUrl = toString (stubBaseUrl epssStub) <> "/epss_scores-current.csv.gz"

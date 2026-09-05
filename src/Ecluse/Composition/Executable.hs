@@ -31,7 +31,7 @@ import Ecluse.Composition (
     resolveBootWiring,
  )
 import Ecluse.Composition.BootError (
-    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, StorePrunerWithoutSweep),
+    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, PilotWithoutEcosystem, StorePrunerWithoutSweep),
     refuseOnThrow,
  )
 import Ecluse.Composition.Credential (CredentialProviders, noCredentialProviders, providerLabel)
@@ -55,7 +55,7 @@ import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpSettings),
     VettedMount (vmEcosystem, vmMount),
  )
-import Ecluse.Config (Mount, StoreTag)
+import Ecluse.Config (AppConfig (cfgAdvisories), Mount, StoreTag)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
@@ -63,6 +63,7 @@ import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule))
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Cve.Sync (CveSyncHandle, cveRuleDepsFor, katipFaultReporter, planCveSync)
+import Ecluse.Pilot.Plan (ExportLoopPlan, exportLoopPlan)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
     deferredBreakerReporter,
@@ -86,8 +87,8 @@ planned cannot reach another role's runtime.
 data RoleWiring
     = -- | @ecluse proxy@, @ecluse proxy --no-worker@ and @ecluse mirror@.
       MirrorPipelineWiring MirrorWiring
-    | -- | @ecluse pilot@: it settles nothing a live environment decides.
-      PilotWiring
+    | -- | @ecluse pilot@: the export loop the advisory settings and the vetted mounts name.
+      PilotWiring ExportLoopPlan
 
 -- | What a mirror-pipeline role's arm settled, and all "Ecluse.Service" assembles its runtime from.
 data MirrorWiring = MirrorWiring
@@ -133,7 +134,7 @@ planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials buildSt
             <$> planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan
     -- This build carries no sweep, so the arm plans its handles and then refuses.
     BootStorePruner -> planPrunerWiring tracing buildCredentials buildStore bootPlan
-    BootWithoutPipeline -> pure (Right (executablePlan PilotWiring))
+    BootWithoutPipeline -> pure (executablePlan . PilotWiring <$> pilotExportPlan (bpValidated bootPlan))
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}
 
@@ -159,6 +160,14 @@ this environment refuses reports beside it rather than the refusal standing alon
 idlePrunerRefusal :: Either [BootError] a -> Either [BootError] b -> Either [BootError] ExecutablePlan
 idlePrunerRefusal credentials stores =
     Left (fromLeft [] credentials <> fromLeft [] stores <> [StorePrunerWithoutSweep])
+
+{- The Pilot publishes one artifact per vetted mount, so a configured store with no mount leaves
+it nothing to compile, and a role with no runtime behaviour refuses rather than idling. -}
+pilotExportPlan :: ValidatedPlan -> Either [BootError] ExportLoopPlan
+pilotExportPlan validated = maybeToRight [PilotWithoutEcosystem] (exportLoopPlan advisories mounted)
+  where
+    advisories = cfgAdvisories (vpSettings validated)
+    mounted = map vmEcosystem (vpMounts validated)
 
 {- The mirror pipeline's arm: the advisory sync, the queue backend, and the mount wiring. The three
 refusable steps accumulate, so one launch reports every one rather than the earliest alone. -}

@@ -124,6 +124,11 @@ renderBootErrorSpec = describe "renderBootError" $
         -- The idle-Dredger refusal names the capability this build lacks, not a key to fix.
         renderBootError StorePrunerWithoutSweep
             `shouldSatisfy` infixed "this build carries no Dredger sweep, so ecluse dredger refuses to start rather than run idle"
+        -- The idle-Pilot refusal names both keys: the one that is set and the ones that are not.
+        renderBootError PilotWithoutEcosystem
+            `shouldSatisfy` infixed "ECLUSE_ADVISORIES__URL is set but no mount is declared"
+        renderBootError PilotWithoutEcosystem
+            `shouldSatisfy` infixed "ECLUSE_MOUNTS__<ECOSYSTEM>__"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay

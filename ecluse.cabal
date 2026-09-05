@@ -113,6 +113,7 @@ library ecluse-core
     Ecluse.Core.Json.Selective
     Ecluse.Core.Osv.Advisory
     Ecluse.Core.Osv.Compile
+    Ecluse.Core.Osv.Ecosystem
     Ecluse.Core.Osv.Epss
     Ecluse.Core.Osv.Retry
     Ecluse.Core.Osv.Schema
@@ -681,6 +682,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Json.SelectiveSpec
     Ecluse.Core.Osv.AdvisorySpec
     Ecluse.Core.Osv.CompileSpec
+    Ecluse.Core.Osv.EcosystemSpec
     Ecluse.Core.Osv.EpssSpec
     Ecluse.Core.Osv.RetrySpec
     Ecluse.Core.Osv.SchemaSpec
