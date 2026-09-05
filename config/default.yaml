@@ -61,6 +61,12 @@ limits:
   # The bounds the memory plan does not size, so they stay a pinned policy stance rather
   # than a machine property. The first two bound document shape, not bytes.
   maxVersionCount: 100000
+  # The artifacts one package may carry across all its versions. One version can hold
+  # many files, so this bounds the projection cost and residency the version count does
+  # not reach. It counts files, not bytes: maxArtifactBytes below caps how large a single
+  # artifact the mirror worker will fetch. npm carries one artifact per version, so on an
+  # npm mount this never refuses a document the version count has not refused already.
+  maxArtifactCount: 100000
   maxNestingDepth: 64
   # Refuse to download an advisory database larger than this many bytes (512 MiB). The
   # declared length fails fast and the streaming download enforces the cap. It bounds a

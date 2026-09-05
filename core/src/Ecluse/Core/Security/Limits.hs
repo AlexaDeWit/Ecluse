@@ -9,9 +9,9 @@ that keeps hostile or oversized input from exhausting resources.
 
 A 'Limits' budget bounds the algorithmic-complexity DoS a hostile or compromised
 upstream can inflict. 'boundedRead' aborts a streamed body past 'maxBodyBytes', and
-'checkVersionCount' \/ 'checkNestingDepth' reject an oversized or deeply-nested parsed
-document. Every limit fails closed: exceeding one yields 'Left', never a truncated or
-partial result.
+'checkVersionCount' \/ 'checkArtifactCount' \/ 'checkNestingDepth' reject an oversized or
+deeply-nested parsed document. Every limit fails closed: exceeding one yields 'Left', never
+a truncated or partial result.
 -}
 module Ecluse.Core.Security.Limits (
     -- * Response bounds
@@ -21,6 +21,7 @@ module Ecluse.Core.Security.Limits (
     boundedRead,
     checkVersionCount,
     checkVersionCountOf,
+    checkArtifactCount,
     checkNestingDepth,
     withinNestingBudget,
 ) where
@@ -33,14 +34,14 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Data.Vector qualified as V
 
-import Ecluse.Core.Package (PackageInfo, infoVersions)
+import Ecluse.Core.Package (PackageInfo, infoVersions, pkgArtifacts)
 
 {- | Resource budget for a single upstream response. Every field is a hard ceiling enforced
 fail-closed: a breach aborts with a 'LimitError' rather than a truncated result, so a hostile
 upstream cannot inflict an algorithmic-complexity DoS.
 
-'maxVersionCount' is a defence-in-depth backstop behind the pre-decode 'maxBodyBytes' cap. It
-refuses an over-versioned packument after projection.
+'maxVersionCount' and 'maxArtifactCount' are defence-in-depth backstops behind the pre-decode
+'maxBodyBytes' cap. They refuse an over-versioned or over-populated document after projection.
 -}
 data Limits = Limits
     { maxBodyBytes :: Int
@@ -48,8 +49,13 @@ data Limits = Limits
     Applies to the metadata path only: the proxy streams artifacts rather than buffering them.
     -}
     , maxVersionCount :: Int
-    {- ^ Largest number of versions a parsed packument may carry
+    {- ^ Largest number of versions a parsed document may carry
     ('checkVersionCount'). Bounds per-version rule evaluation.
+    -}
+    , maxArtifactCount :: Int
+    {- ^ Largest number of artifacts a parsed document may carry across all its versions
+    ('checkArtifactCount'). One version can hold many artifacts, so this bounds the
+    projection and residency cost 'maxVersionCount' does not reach.
     -}
     , maxNestingDepth :: Int
     {- ^ Deepest JSON nesting a decoded document may reach ('checkNestingDepth').
@@ -58,14 +64,16 @@ data Limits = Limits
     }
     deriving stock (Eq, Show)
 
-{- | Defaults for 'Limits': a 12 MiB metadata body, 100k versions, and 64 nesting levels.
-Generous for real registry documents, and tight enough to fail closed on pathological input.
+{- | Defaults for 'Limits': a 12 MiB metadata body, 100k versions, 100k artifacts, and 64
+nesting levels. Generous for real registry documents, and tight enough to fail closed on
+pathological input.
 -}
 defaultLimits :: Limits
 defaultLimits =
     Limits
         { maxBodyBytes = 12 * 1024 * 1024
         , maxVersionCount = 100_000
+        , maxArtifactCount = 100_000
         , maxNestingDepth = 64
         }
 
@@ -77,6 +85,10 @@ data LimitError
       count seen and the ceiling.
       -}
       TooManyVersions Int Int
+    | {- | The document carried more than 'maxArtifactCount' artifacts across its
+      versions. Carries the count seen and the ceiling.
+      -}
+      TooManyArtifacts Int Int
     | -- | JSON nesting exceeded 'maxNestingDepth'. Carries the ceiling.
       TooDeeplyNested Int
     deriving stock (Eq, Show)
@@ -122,6 +134,22 @@ checkVersionCountOf limits count
     | otherwise = Right ()
   where
     cap = maxVersionCount limits
+
+{- | Reject a parsed document carrying more than 'maxArtifactCount' artifacts across all its
+versions, returning it unchanged when within budget.
+
+It runs beside 'checkVersionCount' and after it, so an over-versioned document is still named
+by its version count. A version's artifact set is what drives projection cost and residency in
+an ecosystem that publishes many files per version, which the version count alone does not
+bound.
+-}
+checkArtifactCount :: Limits -> PackageInfo -> Either LimitError PackageInfo
+checkArtifactCount limits info
+    | seen > cap = Left (TooManyArtifacts seen cap)
+    | otherwise = Right info
+  where
+    cap = maxArtifactCount limits
+    seen = Map.foldl' (\acc details -> acc + length (pkgArtifacts details)) 0 (infoVersions info)
 
 {- | Reject a decoded JSON document nested deeper than 'maxNestingDepth', returning it
 unchanged when within budget.

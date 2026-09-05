@@ -80,6 +80,7 @@ import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected), c
 import Ecluse.Core.Security (
     LimitError (TooDeeplyNested),
     Limits,
+    checkArtifactCount,
     checkNestingDepth,
     checkVersionCount,
     checkVersionCountOf,
@@ -136,8 +137,8 @@ path's response bounds and name validation. Pure and total.
 
 The raw 'Value' is the nesting-checked document the typed view was projected from, so both
 describe one parse. A decode failure or an absent\/undecodable name is 'MetadataUndecodable'.
-A self-reported /different/ name is 'MetadataNameMismatch'. A nesting-depth or version-count
-breach is 'MetadataBoundExceeded'.
+A self-reported /different/ name is 'MetadataNameMismatch'. A nesting-depth, version-count, or
+artifact-count breach is 'MetadataBoundExceeded'.
 -}
 projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
 projectNpmManifest limits name body = do
@@ -147,7 +148,8 @@ projectNpmManifest limits name body = do
         Left _ -> Left MetadataUndecodable
         Right (NameMismatch reported) -> Left (MetadataNameMismatch reported)
         Right (Projected projected) -> Right projected
-    boundedInfo <- first MetadataBoundExceeded (checkVersionCount limits info)
+    versionBounded <- first MetadataBoundExceeded (checkVersionCount limits info)
+    boundedInfo <- first MetadataBoundExceeded (checkArtifactCount limits versionBounded)
     pure (boundedInfo, bounded)
 
 {- Fetch a package's full packument and project __only the requested version__ into its

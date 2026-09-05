@@ -254,7 +254,7 @@ spec = describe "resolveMemoryPlan" $ do
     bareCache = CacheSettings{csTtl = 60, csMaxEntries = Nothing, csMaxBytes = Nothing}
 
     bareLimits :: LimitsSettings
-    bareLimits = LimitsSettings{limMaxResponseBytes = Nothing, limMaxVersionCount = 100000, limMaxNestingDepth = 64, limMaxAdvisoryDatabaseBytes = 536870912, limMaxRequestBytes = Nothing, limMaxArtifactBytes = Nothing}
+    bareLimits = LimitsSettings{limMaxResponseBytes = Nothing, limMaxVersionCount = 100000, limMaxArtifactCount = 100000, limMaxNestingDepth = 64, limMaxAdvisoryDatabaseBytes = 536870912, limMaxRequestBytes = Nothing, limMaxArtifactBytes = Nothing}
 
     bareQueue :: QueueSettings
     bareQueue = QueueSettings{qsUrl = Nothing, qsMaxMemoryDepth = Nothing, qsMaxReceiveCount = 5}

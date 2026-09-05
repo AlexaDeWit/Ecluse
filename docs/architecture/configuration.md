@@ -122,8 +122,8 @@ mirror-artifact cap goes first, to zero, so the background back-fill leg gives w
 hot path. The cache goes next, also to zero, and each step logs a loud warning. The boot and
 `check-config` alike refuse only an explicit override that breaks the plan.
 
-The structural hostile-input counts (`maxVersionCount`, `maxNestingDepth`) stay pinned policy. They
-bound document shape, not bytes, and do not scale with RAM. The resolution is role-agnostic and
+The structural hostile-input counts (`maxVersionCount`, `maxArtifactCount`, `maxNestingDepth`) stay
+pinned policy. They bound document shape, not bytes, and do not scale with RAM. The resolution is role-agnostic and
 binds proxy, Pilot, and Dredger alike. The Operator Manual carries the [per-pod
 arithmetic](https://ecluse-proxy.com/docs/operations/#appendix-runtime-sizing-arithmetic).
 

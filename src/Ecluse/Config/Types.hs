@@ -345,6 +345,10 @@ when unset ("Ecluse.Composition.MemoryPlan"), a configured value winning, and th
 data LimitsSettings = LimitsSettings
     { limMaxResponseBytes :: Maybe Int
     , limMaxVersionCount :: Int
+    , limMaxArtifactCount :: Int
+    {- ^ The per-package artifact fan-out cap. It bounds document shape rather than bytes, so
+    the memory plan does not size it and it stays pinned.
+    -}
     , limMaxNestingDepth :: Int
     , limMaxAdvisoryDatabaseBytes :: Int
     {- ^ The advisory-database download cap. It bounds a stream to disk rather than a heap

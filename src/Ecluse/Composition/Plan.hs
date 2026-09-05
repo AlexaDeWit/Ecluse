@@ -64,14 +64,14 @@ import Ecluse.Composition.Vet (decided, runVet)
 import Ecluse.Config (
     AppConfig (cfgCache, cfgLimits, cfgMounts, cfgQueue, cfgRuntime),
     Config (configApp),
-    LimitsSettings (limMaxNestingDepth, limMaxVersionCount),
+    LimitsSettings (limMaxArtifactCount, limMaxNestingDepth, limMaxVersionCount),
     MountConfig (mntPublicationTarget),
     RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
     mountPostureLines,
     resolvedKeyProvenance,
  )
 import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv, ambientS3Endpoint)
-import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount))
+import Ecluse.Core.Security (Limits (Limits, maxArtifactCount, maxBodyBytes, maxNestingDepth, maxVersionCount))
 import Ecluse.Core.Server.Cache (CacheConfig)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Rts (EffectiveRuntimePlan)
@@ -216,6 +216,7 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
             Limits
                 { maxBodyBytes = mpMaxResponseBytes memoryPlan
                 , maxVersionCount = limMaxVersionCount (cfgLimits app)
+                , maxArtifactCount = limMaxArtifactCount (cfgLimits app)
                 , maxNestingDepth = limMaxNestingDepth (cfgLimits app)
                 }
         , bpCacheConfig = planCacheConfig (cfgCache app) memoryPlan

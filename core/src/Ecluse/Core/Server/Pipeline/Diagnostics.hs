@@ -48,7 +48,10 @@ import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, Fet
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
  )
-import Ecluse.Core.Security (LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions), authorityLabel)
+import Ecluse.Core.Security (
+    LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions),
+    authorityLabel,
+ )
 import Ecluse.Core.Server.Context (Handler)
 import Ecluse.Core.Server.Pipeline.Internal (
     logDecodeFailure,
@@ -96,6 +99,7 @@ logBreach name err =
     (boundName, observed, cap) = case err of
         BodyTooLarge c -> ("body-size", "over " <> show c <> " bytes", show c <> " bytes")
         TooManyVersions seen c -> ("version-count", show seen, show c)
+        TooManyArtifacts seen c -> ("artifact-count", show seen, show c)
         TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
 
 {- | Log a cross-upstream integrity divergence (threat #11) at 'WarningS' and meter it: a public
