@@ -9,7 +9,7 @@ import Test.Hspec
 
 import Ecluse.Core.Breaker (Breaker (Closed, Open), BreakerReporter (BreakerReporter))
 import Ecluse.Core.Credential.Refresh (RefreshReporter (onRefreshFailed, onRefreshSucceeded))
-import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
+import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (ProviderCodeArtifact))
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Telemetry.Instruments (newMetrics)
 import Ecluse.Runtime.Telemetry.Reporters (
@@ -28,7 +28,7 @@ spec = describe "Ecluse.Telemetry.Reporters" $ do
         it "records nothing before installation, and nothing through the no-op meter after" $ do
             deferred <- newDeferredMetrics
             let BreakerReporter reportBreaker = deferredBreakerReporter deferred CredentialMint
-                refresh = deferredRefreshReporter deferred CodeArtifact
+                refresh = deferredRefreshReporter deferred ProviderCodeArtifact
             -- Uninstalled: every reporter is inert and total (no throw, no SDK).
             reportBreaker (Open anInstant)
             onRefreshSucceeded refresh (Just 3600)

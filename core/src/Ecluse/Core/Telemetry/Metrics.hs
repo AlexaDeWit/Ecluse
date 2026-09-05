@@ -13,19 +13,12 @@ fixed-domain enum.
 
 == Bounded labels
 
-The label vocabulary is a closed sum, 'Label', whose every constructor pairs a
-bounded-domain key with a bounded value. The high-cardinality identifiers (@package@,
-@version@, @scope@, and a denial @message@) have no constructor here at all. Nothing can
-make them a metric label, because the type system forbids it. They live on spans and the
-structured log line ("Ecluse.Log") instead, which is where an operator debugs a specific
-decision. The one operator-bounded label is @rule@, a rule's configured name. A
-deployment defines a small, fixed set of rules, so configuration bounds that label
-rather than an enum. It is the sole label carrying free text.
-
-'renderLabel' projects a 'Label' to its @(key, value)@ wire pair, and 'metricAttributes'
-materialises a label list into the OpenTelemetry 'Attributes' an instrument is recorded
-with. The catalogue and the cardinality rule are described in
-@docs\/architecture\/observability.md@.
+'Label' is a closed sum pairing a bounded-domain key with a bounded value. The
+high-cardinality identifiers (@package@, @version@, @scope@, a denial @message@) have no
+constructor, so the type system keeps them off a metric. They ride the spans and the
+structured log line ("Ecluse.Log") instead. The exception is @rule@, a rule's configured
+name, bounded by a deployment's small fixed rule set rather than by an enum, and the sole
+label carrying free text. @docs\/architecture\/observability.md@ holds the catalogue.
 -}
 module Ecluse.Core.Telemetry.Metrics (
     -- * The metric-name catalogue
@@ -260,8 +253,10 @@ data StatusClass = Status2xx | Status3xx | Status4xx | Status5xx | StatusOther
 
 instance Universe StatusClass where universe = universeGeneric
 
--- | The outbound-credential provider a refresh\/ttl signal concerns.
-data Provider = CodeArtifact | Static | GcpArtifactRegistry
+{- | The store a mirror-write credential's refresh\/ttl signal concerns: one value per store tag
+the configuration admits, so a dashboard and a mount's declaration spell the same word.
+-}
+data Provider = ProviderRegistry | ProviderCodeArtifact | ProviderVerdaccio
     deriving stock (Eq, Generic, Show)
 
 instance Universe Provider where universe = universeGeneric
@@ -499,9 +494,9 @@ labelValue = \case
         DropOversize -> "oversize"
         DropMalformed -> "malformed"
     LProvider p -> case p of
-        CodeArtifact -> "codeartifact"
-        Static -> "static"
-        GcpArtifactRegistry -> "gcp-artifact-registry"
+        ProviderRegistry -> "registry"
+        ProviderCodeArtifact -> "codeArtifact"
+        ProviderVerdaccio -> "verdaccio"
     LCause c -> case c of
         Timeout -> "timeout"
         Connection -> "connection"

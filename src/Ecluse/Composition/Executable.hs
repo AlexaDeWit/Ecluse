@@ -33,6 +33,7 @@ import Ecluse.Composition.BootError (
     BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, StorePrunerWithoutSweep),
     refuseOnThrow,
  )
+import Ecluse.Composition.Credential (providerLabel)
 import Ecluse.Composition.Maintenance (BuildStoreMaintenance, planStoreMaintenance)
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpMaxRequestBytes, mpPublishTenant, mpQueueMemoryMaxDepth),
@@ -53,11 +54,12 @@ import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpSettings),
     VettedMount (vmEcosystem),
  )
+import Ecluse.Config (StoreTag)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
-import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact))
+import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule))
 import Ecluse.Cve.Sync (CveSyncHandle, cveRuleDepsFor, katipFaultReporter, planCveSync)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
@@ -205,10 +207,10 @@ planPublishBudget memoryPlan =
         bodyBudget <- newByteAdmission (ptAggregateBytes tenant)
         pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes memoryPlan}
 
--- Where the mirror-write credential providers record their mint breaker and refresh outcomes.
-credentialReportersOver :: DeferredMetrics -> CredentialReporters
-credentialReportersOver deferredMetrics =
+-- Where a store's mirror-write credential provider records its mint breaker and refresh outcomes.
+credentialReportersOver :: DeferredMetrics -> StoreTag -> CredentialReporters
+credentialReportersOver deferredMetrics tag =
     CredentialReporters
         { crBreakerReporter = deferredBreakerReporter deferredMetrics CredentialMint
-        , crRefreshReporter = deferredRefreshReporter deferredMetrics CodeArtifact
+        , crRefreshReporter = deferredRefreshReporter deferredMetrics (providerLabel tag)
         }

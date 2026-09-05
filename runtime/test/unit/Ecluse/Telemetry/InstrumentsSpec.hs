@@ -22,7 +22,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Decision (Admit, Deny, Unavailable),
     Label (LEcosystem),
     MirrorResult (Failed, Published),
-    Provider (CodeArtifact, GcpArtifactRegistry, Static),
+    Provider (ProviderCodeArtifact, ProviderRegistry, ProviderVerdaccio),
     ReasonClass (ReasonMissingIntegrity, ReasonPolicy),
     StatusClass (Status2xx, Status5xx),
     Tier (Effectful, Structural),
@@ -91,10 +91,10 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         recordMirrorEnqueueFailure m
         traverse_ (recordMirrorJobProcessed m) [Published, Failed]
         recordMirrorPublishDuration m 2.5
-        recordCredentialRefresh m CodeArtifact Refreshed
-        recordCredentialRefresh m Static RefreshFailed
-        recordCredentialRefresh m GcpArtifactRegistry Refreshed
-        recordCredentialTokenTtl m CodeArtifact 3600
+        recordCredentialRefresh m ProviderCodeArtifact Refreshed
+        recordCredentialRefresh m ProviderRegistry RefreshFailed
+        recordCredentialRefresh m ProviderVerdaccio Refreshed
+        recordCredentialTokenTtl m ProviderCodeArtifact 3600
         traverse_
             (recordAdvisorySyncAttempt m Npm)
             [AdvisorySwapped, AdvisoryUnchanged, AdvisoryNonePublished, AdvisoryFetchFailed, AdvisoryRefused]

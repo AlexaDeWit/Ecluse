@@ -152,7 +152,7 @@ expectValidated config =
 expectProviders :: Config -> IO CredentialProviders
 expectProviders config = do
     plan <- expectValidated config
-    initCredentialProviders noCredentialReporters (map vmMount (vpMounts plan))
+    initCredentialProviders (const noCredentialReporters) (map vmMount (vpMounts plan))
         >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
 
 -- | Build a 'Config' from an env and an optional document, failing the test on a policy error.
