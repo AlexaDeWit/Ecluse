@@ -4,28 +4,42 @@
 
 module Ecluse.Core.Registry.PublishSpec (spec) where
 
+import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Network.HTTP.Client qualified as Client
-import Network.HTTP.Types.Status (status200)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Network.HTTP.Types (Header, Status)
+import Network.HTTP.Types.Header (hLocation)
+import Network.HTTP.Types.Status (status200, status302)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
+import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     PublishFault (PublishFetch),
+    UrlFormationError (UnparseableUrl),
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeMetadata, mpPublishArtifact),
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
-    PublishCodec (pcProbeRequest, pcPublishRequest),
+    PublishCodec (..),
     newMirrorPublish,
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Package (v1_0_0)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd)
-import Ecluse.Test.Stub (Stub, headerValue, lastCaptured, stubBaseUrl, withStub)
+import Ecluse.Test.Stub (
+    Captured (capPath),
+    Stub,
+    allCaptured,
+    headerValue,
+    lastCaptured,
+    stubBaseUrl,
+    withRoutedStub,
+    withStub,
+ )
 
 spec :: Spec
 spec = do
@@ -113,6 +127,55 @@ spec = do
                     Client.redirectCount request `shouldBe` 0
                     lookup "Authorization" (Client.requestHeaders request) `shouldBe` Just "Bearer tok"
 
+    describe "the transport seals whatever a codec hands it" $ do
+        it "refuses to chase a redirect the codec's own probe request would have followed" $
+            -- A codec formed outside the shared entry keeps http-client's default
+            -- redirectCount of 10, so only the transport's re-seal stops the hop.
+            withRoutedStub (redirectFrom "/probe") $ \stub -> do
+                publish <- unsealedPublishAt stub
+                _ <- mpProbeMetadata publish isOdd
+                servedPaths stub `shouldReturn` ["/probe"]
+
+        it "refuses to chase a redirect on the write leg, where the bearer rides" $
+            withRoutedStub (redirectFrom "/write") $ \stub -> do
+                publish <- unsealedPublishAt stub
+                _ <- mpPublishArtifact publish isOdd v1_0_0 dummyArtifact "bytes"
+                servedPaths stub `shouldReturn` ["/write"]
+
+        it "identifies the proxy on the wire, whatever headers the codec set" $
+            withStub status200 "{}" $ \stub -> do
+                publish <- unsealedPublishAt stub
+                _ <- mpProbeMetadata publish isOdd
+                captured <- lastCaptured stub
+                headerValue "User-Agent" captured `shouldBe` Just userAgent
+
+{- A codec that forms its requests with @http-client@ directly, as a second ecosystem's author
+may. It composes no shared attach, so its requests arrive unsealed. -}
+unsealedCodec :: PublishCodec
+unsealedCodec =
+    PublishCodec
+        { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
+        , pcParseVersionList = const (Right [])
+        , pcPublishRequest = \targetUrl _token _name _version _artifact _bytes ->
+            unsealed (targetUrl <> "/write")
+        , pcPublishOutcome = const (Right ())
+        }
+  where
+    unsealed url = maybe (Left (UnparseableUrl url)) Right (Client.parseRequest (toString url))
+
+unsealedPublishAt :: Stub -> IO MirrorPublish
+unsealedPublishAt stub = publishWith unsealedCodec (stubBaseUrl stub)
+
+-- Answer one path with a 302 elsewhere on the same stub, so a followed hop shows up as a
+-- second served path.
+redirectFrom :: ByteString -> Captured -> (Status, [Header], LBS.ByteString)
+redirectFrom source cap
+    | capPath cap == source = (status302, [(hLocation, "/redirected")], "")
+    | otherwise = (status200, [], "{}")
+
+servedPaths :: Stub -> IO [ByteString]
+servedPaths stub = fmap capPath <$> allCaptured stub
+
 -- The marriage against a stub with a mint that counts its calls and answers a
 -- fixed token, so the per-call mint is observable.
 mintCountingPublish :: Stub -> IO (MirrorPublish, IORef Int)
@@ -125,12 +188,16 @@ mintCountingPublish stub = do
         transport = MirrorTransport{ptManager = manager, ptMintToken = mint, ptLimits = defaultLimits}
     pure (newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec, mints)
 
--- The anonymous marriage against an arbitrary target URL.
+-- The anonymous marriage of npm's codec against an arbitrary target URL.
 publishAt :: Text -> IO MirrorPublish
-publishAt targetUrl = do
+publishAt = publishWith npmPublishCodec
+
+-- The anonymous marriage of one codec against an arbitrary target URL.
+publishWith :: PublishCodec -> Text -> IO MirrorPublish
+publishWith codec targetUrl = do
     manager <- Client.newManager Client.defaultManagerSettings
     let transport = MirrorTransport{ptManager = manager, ptMintToken = pure Nothing, ptLimits = defaultLimits}
-    pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) npmPublishCodec)
+    pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) codec)
 
 isUrlUnformableFetch :: Either FetchFault a -> Bool
 isUrlUnformableFetch = \case

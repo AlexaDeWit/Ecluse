@@ -14,15 +14,14 @@ import Control.Monad.Catch (MonadMask)
 import Data.Conduit.List qualified as CL
 import Data.Time (getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Data.Version (showVersion)
 import Database.SQLite.Simple
 import Katip (KatipContext, Severity (..), SimpleLogPayload, katipAddContext, logFM, ls, sl)
-import Paths_ecluse (version)
 import System.Directory (createDirectoryIfMissing, removeFile)
 import System.FilePath ((</>))
 import System.IO.Error (catchIOError)
 import UnliftIO.Exception (bracket, throwIO)
 
+import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Epss (fetchEpssScores, maxEpssFeedBytes)
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
@@ -179,7 +178,7 @@ writeMeta conn ecosystem sources = do
     executeMany
         conn
         "INSERT INTO meta (key, value) VALUES (?, ?)"
-        [ (renderMetaKey MetaPilotVersion, toText (showVersion version))
+        [ (renderMetaKey MetaPilotVersion, productVersion)
         , (renderMetaKey MetaEcosystem, ecosystem)
         , (renderMetaKey MetaBuiltAt, toText (iso8601Show now))
         , (renderMetaKey MetaSourceUrl, toText (csOsvExportUrl sources))

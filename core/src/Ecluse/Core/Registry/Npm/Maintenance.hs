@@ -24,7 +24,6 @@ module Ecluse.Core.Registry.Npm.Maintenance (
 import Data.Aeson (Object, Value (Object, String), decodeStrict, encode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Text qualified as T
 import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
 import Network.HTTP.Types.Header (hAccept, hContentType)
 
@@ -55,7 +54,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocToken))
 import Ecluse.Core.Registry.Request (joinPath, noValidators)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent)
-import Ecluse.Core.Text (nonBlank)
+import Ecluse.Core.Text (nonBlank, urlFilename)
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, renderVersion)
 
 -- | npm's maintenance slice. It fills both verbs, so an npm mount is sweepable.
@@ -230,13 +229,9 @@ tarballFilename name version manifest =
   where
     conventional = unscopedName name <> "-" <> renderVersion version <> ".tgz"
 
-{- The last path segment of @dist.tarball@, which the store chose and Écluse never validated.
-A query or fragment is no part of the filename, so both are cut before the segment is taken. -}
+{- The filename of @dist.tarball@, which the store chose and Écluse never validated. -}
 distTarballSegment :: Value -> Maybe Text
-distTarballSegment manifest = lastSegment . T.takeWhile inPath <$> tarballUrl manifest
-  where
-    inPath ch = ch /= '?' && ch /= '#'
-    lastSegment = T.takeWhileEnd (/= '/')
+distTarballSegment manifest = urlFilename =<< tarballUrl manifest
 
 tarballUrl :: Value -> Maybe Text
 tarballUrl = \case

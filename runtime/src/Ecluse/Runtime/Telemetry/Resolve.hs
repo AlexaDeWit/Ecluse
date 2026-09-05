@@ -94,9 +94,7 @@ import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
-import Data.Version (showVersion)
 import GHC.Exts qualified as Exts
-import Paths_ecluse (version)
 import System.Environment (setEnv)
 
 import Katip (LogEnv, Severity (WarningS))
@@ -105,6 +103,7 @@ import OpenTelemetry.Baggage qualified as Baggage
 import OpenTelemetry.Exporter.Span (ExportResult (..))
 import OpenTelemetry.Internal.Logging (setGlobalErrorHandler)
 
+import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Runtime.Log (moduleLog)
 
@@ -168,7 +167,7 @@ resolveTelemetry environment =
     ResolvedTelemetry
         { rtServiceName = fromMaybe defaultServiceName serviceName
         , rtEnvironment = deploymentEnvironment
-        , rtVersion = lk "DD_VERSION" <|> attr "service.version" <|> Just buildVersion
+        , rtVersion = lk "DD_VERSION" <|> attr "service.version" <|> Just productVersion
         , rtEndpoint = endpoint
         }
   where
@@ -201,9 +200,6 @@ resolveTelemetry environment =
 
 defaultServiceName :: Text
 defaultServiceName = "ecluse"
-
-buildVersion :: Text
-buildVersion = toText (showVersion version)
 
 defaultEndpointUrl :: Text
 defaultEndpointUrl = "http://localhost:4318"

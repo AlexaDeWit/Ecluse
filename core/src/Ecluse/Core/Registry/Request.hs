@@ -2,23 +2,17 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Ecosystem-agnostic request mechanics shared by every registry adapter's request
-layer. It holds the redirect-pin finaliser every credential-bearing request must pass
-through, the conditional-GET validators, and the opaque-artifact request core that
-streams a body byte-for-byte. It also holds URL parsing into a typed
-'UrlFormationError' and the empty-base-guarded path join.
-
-An adapter supplies only its ecosystem's protocol facts (its media types, its path
-encoding, its credential presentation). The request formation itself is uniform across
-npm, PyPI, and RubyGems: pinning the redirect count, marking an artifact
-non-decompressing, relaying validators, and parsing a URL. It therefore lives here
-rather than in any one ecosystem's namespace. This module carries the presentation an
-adapter declares ('CredentialMapping') but never spells it. The encoding half is opaque,
-and 'attachCredential' is the only way to run one, so every attach composes through the
-pin.
+{- | Ecosystem-agnostic request mechanics shared by every registry adapter's request layer:
+the finaliser every outbound request passes through, the conditional-GET validators, the
+opaque-artifact request core that streams a body byte-for-byte, URL parsing into a typed
+'UrlFormationError', and the empty-base-guarded path join. An adapter supplies only its
+ecosystem's protocol facts: its media types, its path encoding, its credential presentation.
+'sealRequest' holds the outbound invariants and 'parseRequestEither' applies it, so an
+adapter cannot obtain an unsealed 'Request' from this module at all.
 -}
 module Ecluse.Core.Registry.Request (
     -- * Request finalisation
+    sealRequest,
     finaliseRequest,
 
     -- * Credential presentation
@@ -40,41 +34,42 @@ module Ecluse.Core.Registry.Request (
 
 import Data.Text qualified as T
 import Network.HTTP.Client (Request (decompress, redirectCount, requestHeaders), parseRequest)
-import Network.HTTP.Types.Header (HeaderName, RequestHeaders, hIfModifiedSince, hIfNoneMatch)
+import Network.HTTP.Types.Header (HeaderName, RequestHeaders, hIfModifiedSince, hIfNoneMatch, hUserAgent)
 
+import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Text (joinUrlPath)
 
-{- | Finalise a data-plane request: pin @redirectCount = 0@, then apply the ecosystem's injected
-credential attach. Every adapter's request builder funnels through here, so __Écluse never
-follows an upstream redirect__, on the credentialed and the anonymous plane alike.
+{- | Seal the outbound invariants onto a request: pin @redirectCount = 0@ and add the
+proxy's @User-Agent@ unless one is set. Idempotent, so several formation steps yield one pin
+and one header. 'parseRequestEither' seals what it parses and "Ecluse.Core.Registry.Publish"
+re-seals what a codec hands it. A followed redirect could re-send a credential cross-host or
+steer an anonymous fetch past the host allowlist; the threat model records both.
+-}
+sealRequest :: Request -> Request
+sealRequest request =
+    request
+        { redirectCount = 0
+        , requestHeaders = identify (requestHeaders request)
+        }
+  where
+    identify headers
+        | any ((== hUserAgent) . fst) headers = headers
+        | otherwise = (hUserAgent, userAgent) : headers
 
-Two dangers it forecloses:
-
-\* __Credential leakage__ (credentialed plane). The http-client default @redirectCount = 10@
-re-sends the @Authorization@ header to the redirect's @Location@, and
-@shouldStripHeaderOnRedirect@ does not strip it cross-host. A hostile or misconfigured upstream
-could @302@ a forwarded or minted credential to an attacker-chosen host, worst of all on the
-trusted private manager.
-
-\* __SSRF via redirect__ (anonymous plane). The proxy enforces the host allowlist when it builds
-the URL, not per redirect hop. Following a @302@ would let an allowlisted upstream steer an
-anonymous fetch to any host, an internal or cloud-metadata address included.
-
-The accepted consequence: a read returns an upstream CDN's @3xx@ to the serve path rather than
-chasing it. Écluse honours the packument's @dist.tarball@ location explicitly instead, gated by
-the egress policy.
+{- | Apply the ecosystem's injected credential attach, then seal the result through
+'sealRequest'. The attach runs first, so it cannot reopen redirect following.
 -}
 finaliseRequest :: (Request -> Request) -> Request -> Request
-finaliseRequest attach request = (attach request){redirectCount = 0}
+finaliseRequest attach = sealRequest . attach
 
 {- | One ecosystem's credential presentation: how it recovers a client's credential from
 presented headers, and how it carries one on an outbound request. The recovery yields the token
 __text__, so an attach re-encodes rather than replaying a header verbatim.
 
-The constructor is hidden and 'attachCredential' is the only way to run the encoding, so every
-attach composes through 'finaliseRequest' and the redirect pin holds by construction.
+The constructor is hidden and 'attachCredential' is the only way to run the encoding, so no
+adapter spells its own attach point.
 -}
 data CredentialMapping = CredentialMapping
     { credentialRecover :: RequestHeaders -> Maybe Secret
@@ -104,7 +99,7 @@ credentialMapping recover header render =
         }
 
 {- | Attach a credential to an outbound request under the mapping's own header, then finalise it
-through 'finaliseRequest'. A 'Nothing' attaches no header, and the redirect pin still applies.
+through 'finaliseRequest'. A 'Nothing' attaches no header, and the seal still applies.
 -}
 attachCredential :: CredentialMapping -> Maybe Secret -> Request -> Request
 attachCredential mapping token = finaliseRequest $ case token of
@@ -165,11 +160,11 @@ joinPath baseUrl path
     | T.null baseUrl = Left EmptyBaseUrl
     | otherwise = Right (joinUrlPath baseUrl path)
 
-{- The URL comes from configuration and an already-safe name, so a parse failure here is a
-configuration fault.
+{- | Parse a URL into the sealed request every adapter builds from ('sealRequest'). The URL comes
+from configuration and an already-safe name, so a parse failure here is a configuration fault.
 -}
 parseRequestEither :: Text -> Either UrlFormationError Request
 parseRequestEither url =
     case parseRequest (toString url) of
-        Just request -> Right request
+        Just request -> Right (sealRequest request)
         Nothing -> Left (UnparseableUrl url)
