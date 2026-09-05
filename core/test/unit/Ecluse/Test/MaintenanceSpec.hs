@@ -11,13 +11,13 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
-import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesLater),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
     RefillPosture (RefillRefused),
-    RetryAdvice (RetryWorthwhile),
+    RetryAdvice (RetryFutile, RetryWorthwhile),
     StoreClass (StorePreserved),
     StoreCursor (..),
     StoreFacts (..),
@@ -30,6 +30,7 @@ import Ecluse.Core.Registry.Maintenance (
     noNameAlphabet,
     storeRefusal,
  )
+import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Maintenance (
     FakeStore (..),
@@ -38,6 +39,7 @@ import Ecluse.Test.Maintenance (
     newFakeStore,
     withBucket,
  )
+import Ecluse.Test.Package (sampleManifest)
 
 {- The fake is the handle's third implementation, so these cases assert the contract carries a backend
 nothing like CodeArtifact: a two-version ceiling, a late-finishing delete, and no re-publication. -}
@@ -68,6 +70,22 @@ spec = do
         it "lists nothing for a package it does not hold" $ do
             handle <- seeded
             enumerateVersions handle (mkPackageName Npm Nothing "absent") `shouldReturn` Right []
+
+    describe "the fake store's manifest read" $ do
+        it "answers the manifest it was seeded with, projected as the rules engine reads one" $ do
+            handle <- seeded
+            outcome <- readStoreManifest handle plainName
+            fmap (Map.keys . infoVersions . manifestInfo) outcome `shouldBe` Right ["1.0.0", "1.1.0"]
+
+        it "faults for a package it holds no manifest for, which keeps every version" $ do
+            handle <- seeded
+            (fmap faultRetry . leftToMaybe <$> readStoreManifest handle scopedName)
+                `shouldReturn` Just RetryFutile
+
+        it "answers the configured fault ahead of anything it holds" $ do
+            store <- newFakeStore seededConfig{fakeFault = Just aFault}
+            (leftToMaybe <$> readStoreManifest (fakeMaintenance store) plainName)
+                `shouldReturn` Just aFault
 
     describe "the fake store's deletion" $ do
         it "removes a held version and reports the operation still running" $ do
@@ -180,6 +198,8 @@ seededConfig =
                 [ (plainName, [served "1.0.0", withdrawn "1.1.0"])
                 , (scopedName, [served "7.0.0"])
                 ]
+        , -- Only one of the two seeded packages carries a manifest, so both read arms are drivable.
+          fakeManifests = Map.singleton plainName (sampleManifest plainName (map version ["1.0.0", "1.1.0"]))
         }
   where
     served raw = StoredVersion (version raw) VersionServed

@@ -16,6 +16,7 @@ import Ecluse.Composition (
 import Ecluse.Composition.BootError (
     BootError (
         AdvisorySyncUnavailable,
+        CodeArtifactMintFailed,
         MirrorQueueUnavailable,
         MissingAdapter,
         StoreMaintenanceUnavailable,
@@ -23,7 +24,9 @@ import Ecluse.Composition.BootError (
     ),
     StoreMaintenanceReason (ClientBuildFailed),
  )
+import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Executable (
+    BuildCredentials,
     BuildMirrorQueue,
     ExecutablePlan (epBootPlan, epRoleWiring),
     MirrorWiring (mwBootWiring, mwCveSync, mwRole),
@@ -43,6 +46,7 @@ import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Port (passthroughTracingPort)
 
 {- | Tests the boot's effectful planning phase. Every role plans through it, and every refusal a
 live environment can settle is spent there, so a yielded plan is one nothing downstream rejects.
@@ -120,6 +124,22 @@ spec = describe "planExecutable" $ do
                 detail `shouldSatisfy` T.isInfixOf "NoCredentials"
             Left errs -> expectationFailure ("expected the handle refusal then the sweep refusal, got: " <> show errs)
 
+    it "reports a mirror-write mint the live environment refuses, ahead of the sweep refusal" $ do
+        -- The Dredger reads and deletes through the mirror write's own credential, so it mints
+        -- at boot exactly as the proxy does, and an identity that cannot answer refuses here.
+        outcome <- planUnder codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingCredentials inertStore
+        case outcome of
+            Right _ -> expectationFailure "expected the planning phase to refuse"
+            Left errs -> errs `shouldBe` [CodeArtifactMintFailed "no identity answered", StorePrunerWithoutSweep]
+
+    it "reports a refused mint and a store client it cannot build together" $ do
+        -- Both halves plan before the refusal folds in, so one launch names every problem.
+        outcome <- planUnder codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingCredentials refusingStore
+        case outcome of
+            Right _ -> expectationFailure "expected the planning phase to refuse"
+            Left [CodeArtifactMintFailed _, StoreMaintenanceUnavailable Npm (ClientBuildFailed _), StorePrunerWithoutSweep] -> pass
+            Left errs -> expectationFailure ("expected the mint, the handle, then the sweep refusal, got: " <> show errs)
+
     it "plans the pilot through the same phase, on its own arm" $ do
         -- Nothing here needs a live environment, so ports that refuse outright leave the role
         -- clearing exactly as working ones do. The gate still stands ahead of it, which is
@@ -146,11 +166,19 @@ refusingQueue _ _ _ = throwIO NoCredentials
 
 -- | A store builder that hands out the in-memory fake, so the pruner's arm reaches no cloud.
 inertStore :: BuildStoreMaintenance
-inertStore _ _ = fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
+inertStore _ _ _ = fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
 
 -- | A store builder that throws as @amazonka@ does when it discovers no credentials.
 refusingStore :: BuildStoreMaintenance
-refusingStore _ _ = throwIO NoCredentials
+refusingStore _ _ _ = throwIO NoCredentials
+
+-- | A credential build that mints nothing, so a case reaches no cloud.
+inertCredentials :: BuildCredentials
+inertCredentials _ _ = pure (Right noCredentialProviders)
+
+-- | A credential build that refuses, as a mint against an identity that cannot answer does.
+refusingCredentials :: BuildCredentials
+refusingCredentials _ _ = pure (Left [CodeArtifactMintFailed "no identity answered"])
 
 -- | The typed stand-in for amazonka's credential-discovery failure.
 data NoCredentials = NoCredentials
@@ -176,11 +204,22 @@ planFor = planWith staticEnvVars
 
 -- | 'planFor' over a named environment layer, for a refusal 'staticEnvVars' cannot reach.
 planWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> BuildStoreMaintenance -> IO (Either [BootError] ExecutablePlan)
-planWith envVars role resolveAdapter buildQueue buildStore = do
+planWith envVars role resolveAdapter buildQueue = planUnder envVars role resolveAdapter buildQueue inertCredentials
+
+-- | 'planWith' over a chosen credential build, for the deleting role's own mint.
+planUnder ::
+    [(String, String)] ->
+    BootRole ->
+    ResolveAdapter ->
+    BuildMirrorQueue ->
+    BuildCredentials ->
+    BuildStoreMaintenance ->
+    IO (Either [BootError] ExecutablePlan)
+planUnder envVars role resolveAdapter buildQueue buildCredentials buildStore = do
     config <- expectConfig envVars Nothing
     bootPlan <- expectPlanFor role envVars Nothing config noCeiling
     logEnv <- newTestLogEnv
-    planExecutable logEnv resolveAdapter buildQueue buildStore bootPlan
+    planExecutable logEnv passthroughTracingPort resolveAdapter buildQueue buildCredentials buildStore bootPlan
 
 -- | 'planFor', failing the test on a refusal.
 expectExecutable :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> BuildStoreMaintenance -> IO ExecutablePlan

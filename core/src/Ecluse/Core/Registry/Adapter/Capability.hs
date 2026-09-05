@@ -40,7 +40,7 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Maintenance (NameAlphabet, StoreRefusal)
-import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
+import Ecluse.Core.Registry.Metadata (Manifest, MetadataClient, MetadataError)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
@@ -73,6 +73,11 @@ data AdapterMetadata = AdapterMetadata
     -}
     , metadataSerialise :: CachedDoc -> LByteString
     -- ^ Encode an assembled served document ('CachedDoc') to its wire bytes.
+    , metadataFetchManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
+    {- ^ Fetch and project one package's full manifest from an origin, the raw read
+    'metadataNewClient' leads into the serve path's caching and metrics. A caller that wants
+    neither, such as a store sweep, reads through this instead of building a client.
+    -}
     }
 
 {- | The ecosystem's artifact request formation, by conventional filename or authoritative URL.

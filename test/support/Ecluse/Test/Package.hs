@@ -53,11 +53,15 @@ module Ecluse.Test.Package (
     artifactWith,
     sampleDetails,
     detailsWith,
+    sampleManifest,
 ) where
 
 import Crypto.Hash (Blake2b_512, Digest, SHA1, SHA256, SHA384, SHA512, hash, hashlazy)
+import Data.Aeson (Value (Object))
 import Data.ByteArray (ByteArrayAccess)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
+
+import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
@@ -68,6 +72,7 @@ import Ecluse.Core.Package (
     Hash,
     HashAlg (SHA256),
     PackageDetails (..),
+    PackageInfo (..),
     PackageName,
     Trust (Untrusted),
     mkHash,
@@ -80,9 +85,11 @@ import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
+import Ecluse.Core.Registry.CachedDocument (npmCached)
+import Ecluse.Core.Registry.Metadata (Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw), digestOf)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Server.Path (Filename, mkFilename)
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
 {- HLINT ignore unsafeHash "Avoid restricted function" -}
 
@@ -223,3 +230,20 @@ artifactWith hs = sampleArtifact{artHashes = hs}
 -- | 'sampleDetails' whose sole artifact carries the given integrity digests.
 detailsWith :: PackageName -> Version -> [Hash] -> PackageDetails
 detailsWith name version hs = (sampleDetails name version){pkgArtifacts = artifactWith hs :| []}
+
+{- | A full manifest carrying the named versions, for a read boundary that answers one. Only the
+typed view carries meaning: the raw document is empty, because no case here re-serialises it.
+-}
+sampleManifest :: PackageName -> [Version] -> Manifest
+sampleManifest name versions =
+    Manifest
+        { manifestInfo =
+            PackageInfo
+                { infoName = name
+                , infoVersions = Map.fromList [(renderVersion v, sampleDetails name v) | v <- versions]
+                , infoDistTags = Map.empty
+                , infoInvalidEntries = []
+                }
+        , manifestRaw = fst npmCached (Object mempty)
+        , manifestDigest = digestOf ""
+        }

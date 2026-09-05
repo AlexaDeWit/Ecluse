@@ -38,9 +38,11 @@ import Ecluse.Core.Registry.Maintenance (
     mkNameAlphabet,
     noNameAlphabet,
     parseNamePrefix,
+    storeFaultOfMetadata,
     storeRefusal,
     unreachedBatch,
  )
+import Ecluse.Core.Registry.Metadata (Manifest, MetadataError (MetadataUndecodable))
 import Ecluse.Core.Version (Version)
 
 -- | What a fake store holds and answers with.
@@ -56,6 +58,8 @@ data FakeStoreConfig = FakeStoreConfig
     -- ^ How many names one listing page carries, so a caller's paging is drivable.
     , fakeKeepsCursor :: Bool
     -- ^ Whether the store offers a walk cursor, the arm a protocol-only store does not take.
+    , fakeManifests :: Map PackageName Manifest
+    -- ^ The metadata the store serves per package. A package absent here reads as undecodable.
     }
 
 {- | A consenting, destroyable, empty store whose facts take the arm CodeArtifact does not: a small
@@ -78,6 +82,7 @@ defaultFakeStoreConfig =
         , fakeFault = Nothing
         , fakePageSize = 2
         , fakeKeepsCursor = True
+        , fakeManifests = Map.empty
         }
 
 -- | A fake store: the handle a caller drives, and the state a test asserts against.
@@ -100,6 +105,7 @@ newFakeStore config = do
                     , listPackagesIn = listBucket config contents
                     , enumerateVersions = \name ->
                         orFault config (Map.findWithDefault [] name <$> readIORef contents)
+                    , readStoreManifest = pure . readSeededManifest config
                     , deleteVersions = \name versions -> case fakeFault config of
                         Just fault -> pure (unreachedBatch fault versions)
                         Nothing -> atomicModifyIORef' contents (removeVersions name versions)
@@ -138,6 +144,17 @@ fakeStoreCursor config cursor
                 , writeCursor = orFault config . writeIORef cursor . Just
                 , clearCursor = orFault config (writeIORef cursor Nothing)
                 }
+
+{- The metadata the store was seeded with. A package it holds no manifest for reads as a store
+that answered with something no manifest could be projected from, which keeps every version. -}
+readSeededManifest :: FakeStoreConfig -> PackageName -> Either StoreFault Manifest
+readSeededManifest config name =
+    case fakeFault config of
+        Just fault -> Left fault
+        Nothing ->
+            maybeToRight
+                (storeFaultOfMetadata MetadataUndecodable)
+                (Map.lookup name (fakeManifests config))
 
 -- Every read answers the configured fault instead, when there is one.
 orFault :: FakeStoreConfig -> IO a -> IO (Either StoreFault a)
