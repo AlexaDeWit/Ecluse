@@ -21,6 +21,7 @@ import Ecluse.Core.Registry.WireSupport (
     NameAgreement (NameAgrees, NameDisagrees),
     checkNameAgreement,
     partitionLenient,
+    partitionLenientList,
  )
 import Ecluse.Test.Package (unscopedNpm)
 
@@ -30,6 +31,7 @@ import Ecluse.Test.Package (unscopedNpm)
 spec :: Spec
 spec = do
     partitionLenientSpec
+    partitionLenientListSpec
     checkNameAgreementSpec
 
 partitionLenientSpec :: Spec
@@ -48,6 +50,28 @@ partitionLenientSpec = describe "partitionLenient" $ do
         -- "bravo" decodes. "alpha" and "charlie" do not, and must surface in that order.
         map invalidKey (snd (partitionLenient InvalidDistTag decodeInt manyBad))
             `shouldBe` ["alpha", "charlie"]
+
+{- | The list form, driven over a PEP 691 @files@ array rather than an npm map. The caller
+pairs each element with its own key, which for a file index is its @filename@.
+-}
+partitionLenientListSpec :: Spec
+partitionLenientListSpec = describe "partitionLenientList" $ do
+    it "keeps the entries that decode, in input order" $
+        fst (partitionLenientList InvalidVersionManifest decodeInt keyedFiles)
+            `shouldBe` [("acme-1.0.tar.gz", 1), ("acme-1.1-py3-none-any.whl", 3)]
+
+    it "drops the undecodable entry, recording its kind, key, and value" $ do
+        let dropped = snd (partitionLenientList InvalidVersionManifest decodeInt keyedFiles)
+        map invalidKind dropped `shouldBe` [InvalidVersionManifest]
+        map invalidKey dropped `shouldBe` ["acme-1.0-py3-none-any.whl"]
+        map invalidValue dropped `shouldBe` [String "nope"]
+
+    it "lists dropped entries in input order, not key order" $
+        map invalidKey (snd (partitionLenientList InvalidDistTag decodeInt outOfOrderDrops))
+            `shouldBe` ["charlie", "alpha"]
+
+    it "reads an empty list as no entries either way" $
+        partitionLenientList InvalidDistTag decodeInt [] `shouldBe` ([] :: [(Text, Int)], [])
 
 checkNameAgreementSpec :: Spec
 checkNameAgreementSpec = describe "checkNameAgreement" $ do
@@ -76,6 +100,20 @@ mixed =
         , ("2.0.0", String "nope")
         , ("3.0.0", Number 3)
         ]
+
+{- | A PEP 691 file list, each element already paired with its @filename@ key, with one
+element the per-entry decode rejects.
+-}
+keyedFiles :: [(Text, Value)]
+keyedFiles =
+    [ ("acme-1.0.tar.gz", Number 1)
+    , ("acme-1.0-py3-none-any.whl", String "nope")
+    , ("acme-1.1-py3-none-any.whl", Number 3)
+    ]
+
+-- | Two undecodable entries whose keys descend, so input order and key order disagree.
+outOfOrderDrops :: [(Text, Value)]
+outOfOrderDrops = [("charlie", String "x"), ("bravo", Number 2), ("alpha", String "y")]
 
 -- | A raw entry map with two undecodable entries out of key order, to pin the drop order.
 manyBad :: Map Text Value
