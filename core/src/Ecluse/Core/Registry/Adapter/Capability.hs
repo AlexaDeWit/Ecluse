@@ -118,10 +118,8 @@ data AdapterPublish = AdapterPublish
     -}
     }
 
-{- | The ecosystem's store maintenance verbs: how a store that speaks this protocol is walked
-and deleted from. Each is 'Nothing' for a protocol that has no such verb, and a Dredger
-against a store with no vendor control plane refuses that mount rather than sweeping blind.
-The backend leaf that drives them is "Ecluse.Core.Registry.Maintenance.Protocol".
+{- | The ecosystem's store maintenance verbs, which "Ecluse.Core.Registry.Maintenance.Protocol"
+drives. Each is 'Nothing' for a protocol that spells no such verb, and the Dredger then refuses.
 -}
 data AdapterMaintenance = AdapterMaintenance
     { maintenanceListing :: Maybe StoreListing
@@ -142,9 +140,8 @@ data StoreListing = StoreListing
     -}
     }
 
-{- | Deleting one version from a store, as the sequence of requests the protocol spells it
-with. It names its own document read because the edit needs the store's whole current
-document, revision marker included, which an install-optimised metadata read may omit.
+{- | Deleting one version, as the request sequence the protocol spells it with. It names its own
+document read, because an install-optimised metadata read may omit the revision the edit needs.
 -}
 data VersionDelete = VersionDelete
     { deleteDocumentRequest :: OriginClient -> PackageName -> Either UrlFormationError Request

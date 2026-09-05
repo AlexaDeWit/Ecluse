@@ -96,8 +96,8 @@ protocolSpec = describe "vetStoreBackends -- a store swept through the ecosystem
             `shouldSatisfy` any (T.isInfixOf "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION")
 
     it "refuses the deleting role an ecosystem whose protocol spells no delete" $ do
-        -- A PyPI mount cannot reach this yet, so the adapter arrives injected: the rule is
-        -- what refuses, and it must not turn on which ecosystem the mount names.
+        -- The rule must not turn on which ecosystem the mount names, so the adapter is
+        -- injected and the refusal is the rule's own rather than the registry's.
         mounts <- mountsFor (verdaccioEnv "true")
         refusalsOf (runVet MirrorPruner (vetStoreBackends withoutMaintenance mounts))
             `shouldBe` Just [StoreMaintenanceUnavailable Npm NoProtocolMaintenance]
@@ -150,7 +150,7 @@ instance Exception NoStoreClient
 vetted :: RegistryRole -> MountMap -> ([Text], Either [BootError] (Map Ecosystem ClearedBackend))
 vetted role mounts = runVet role (vetStoreBackends adapterFor mounts)
 
--- | This build's adapters with their maintenance slice emptied, as a PyPI adapter will arrive.
+-- | This build's adapters with their maintenance slice emptied: an ecosystem that fills neither verb.
 withoutMaintenance :: ResolveMaintenanceAdapter
 withoutMaintenance eco =
     adapterFor eco <&> \adapter ->

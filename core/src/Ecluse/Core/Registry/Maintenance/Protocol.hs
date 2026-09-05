@@ -36,7 +36,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     StoreListing (listingParse, listingRequest),
     VersionDelete (deleteDocumentRequest, deleteRequests),
  )
-import Ecluse.Core.Registry.Exchange (boundedExchange)
+import Ecluse.Core.Registry.Exchange (boundedExchange, formThen)
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
@@ -151,7 +151,7 @@ listVersions store name =
         Right (status, body)
             | status == 404 -> Right []
             | isApplied status -> first (parseFault "version list") (served body)
-            | otherwise -> Left (documentUnavailable "version list" status)
+            | otherwise -> Left (readFault "version list" status)
   where
     served body = map stored <$> pcParseVersionList (psCodec store) (RegistryResponse body)
     stored version = StoredVersion{storedVersion = version, storedPresence = VersionServed}
@@ -164,16 +164,18 @@ deleteStoredVersions store name versions =
 and send each in turn. A refusal is this version's alone, and a fault ends the whole run. -}
 deleteChunk :: ProtocolStore -> PackageName -> [Version] -> IO (Either StoreFault [(Version, VersionOutcome)])
 deleteChunk store name = \case
-    [] -> pure (Right [])
-    version : _ ->
+    [version] ->
         sendFormed store (deleteDocumentRequest (psDelete store) (psOrigin store) name) >>= \case
             Left fault -> pure (Left fault)
             Right (status, body)
                 | status == 404 -> pure (refused version absentDocument)
-                | not (isApplied status) -> pure (Left (documentUnavailable "document" status))
+                | not (isApplied status) -> pure (Left (readFault "document" status))
                 | otherwise -> applyDelete store name version body
+    -- 'deleteCeiling' splits to one, so a wider chunk refuses whole rather than losing its tail.
+    chunk -> pure (Right [(version, VersionRefused oversizedChunk) | version <- chunk])
   where
     absentDocument = storeRefusal "NOT_FOUND" "the store holds no document for this package"
+    oversizedChunk = storeRefusal "CEILING_EXCEEDED" "this protocol deletes one version per call"
 
 -- Form the version's request sequence over the fetched document, then send it.
 applyDelete :: ProtocolStore -> PackageName -> Version -> ByteString -> IO (Either StoreFault [(Version, VersionOutcome)])
@@ -218,7 +220,7 @@ send store request =
 
 -- Send a request the adapter formed, folding a formation failure into the same channel.
 sendFormed :: ProtocolStore -> Either UrlFormationError Request -> IO (Either StoreFault (Int, ByteString))
-sendFormed store = either (pure . Left . unformableFault) (send store)
+sendFormed store = formThen unformableFault (send store)
 
 originBase :: ProtocolStore -> Text
 originBase = registryUrlText . ocBaseUrl . psOrigin
@@ -234,9 +236,15 @@ parseFault :: Text -> ParseError -> StoreFault
 parseFault subject err =
     protocolFault ("the store's " <> subject <> " did not parse: " <> parseErrorMessage err)
 
-documentUnavailable :: Text -> Int -> StoreFault
-documentUnavailable subject status =
-    protocolFault ("the store answered the " <> subject <> " read with HTTP " <> show status)
+{- A read the store answered outside the applied class. A server-side failure clears on its
+own, and every other status reads the same way on the next cycle. -}
+readFault :: Text -> Int -> StoreFault
+readFault subject status =
+    StoreFault
+        { faultTransport =
+            transportFault TransportProtocol ("the store answered the " <> subject <> " read with HTTP " <> show status)
+        , faultRetry = if status >= 500 then RetryWorthwhile else RetryFutile
+        }
 
 unformableFault :: UrlFormationError -> StoreFault
 unformableFault err =

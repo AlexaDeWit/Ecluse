@@ -125,6 +125,30 @@ deleteSequenceSpec = describe "the version delete verb" $ do
     it "refuses a version the packument does not hold" $
         refusalOf (encoded twoVersions) (version "9.9.9") `shouldReturn` Just "VERSION_ABSENT"
 
+    it "ignores a dist.tarball segment that is a traversal, addressing the conventional name" $ do
+        -- The store chose this string. A bare @..@ would address the package itself once a
+        -- normalising hop in front of the store collapsed the path.
+        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/..") leftpad (version "1.0.0")
+        Client.path tarball `shouldBe` "/leftpad/-/leftpad-1.0.0.tgz/-rev/3-abc"
+
+    it "ignores a dist.tarball segment carrying a control character" $ do
+        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/a\rb.tgz") leftpad (version "1.0.0")
+        Client.path tarball `shouldBe` "/leftpad/-/leftpad-1.0.0.tgz/-rev/3-abc"
+
+    it "neutralises a percent-encoded separator on the way out rather than at the gate" $ do
+        -- The gate is structural, so a live escape survives it. Encode-on-build is what makes
+        -- the segment inert, and this pins that the two together leave nothing addressable.
+        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/..%2Fx") leftpad (version "1.0.0")
+        Client.path tarball `shouldBe` "/leftpad/-/..%252Fx/-rev/3-abc"
+
+    it "reads the filename off a tarball URL carrying a query or fragment" $ do
+        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/leftpad-1.0.0.tgz?sig=abc") leftpad (version "1.0.0")
+        Client.path tarball `shouldBe` "/leftpad/-/leftpad-1.0.0.tgz/-rev/3-abc"
+
+    it "refuses a revision that is no safe path component" $
+        refusalOf (encoded (withRevision ".." twoVersions)) (version "1.0.0")
+            `shouldReturn` Just "NO_REVISION"
+
 {- Every formation under test is pure and opens no connection, so one manager serves the whole
 suite and it depends on no live listener. -}
 storeOrigin :: IO OriginClient
@@ -194,6 +218,19 @@ without :: Key.Key -> Value -> Value
 without key = \case
     Object document -> Object (KeyMap.delete key document)
     other -> other
+
+withRevision :: Text -> Value -> Value
+withRevision revision = \case
+    Object document -> Object (KeyMap.insert "_rev" (String revision) document)
+    other -> other
+
+-- A one-version packument whose only interesting field is the tarball URL the store wrote.
+tarballAt :: Text -> Value
+tarballAt url =
+    packument
+        "leftpad"
+        ["latest" .= ("1.0.0" :: Text)]
+        [("1.0.0", object ["dist" .= object ["tarball" .= url]])]
 
 -- Two versions, the deleted one also carrying an @old@ dist-tag beside @latest@.
 twoVersions :: Value

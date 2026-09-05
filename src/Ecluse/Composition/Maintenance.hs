@@ -37,7 +37,7 @@ import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (Severity (Ignore, Refuse), Vet, rule, vetRole)
 import Ecluse.Config (
     ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
-    DeletionConsent (DeletionWithheld),
+    DeletionConsent (DeletionPermitted, DeletionWithheld),
     MirrorTarget (mtBackend, mtUrl),
     Mount (mountRegistries),
     MountMap,
@@ -88,6 +88,8 @@ data ClearedProtocolStore = ClearedProtocolStore
     , cpsToken :: Secret
     , cpsTag :: StoreTag
     -- ^ The tag the store was declared under, which names the backend and its consent key.
+    , cpsConsent :: DeletionConsent
+    -- ^ What the operator wrote under that key, which the handle's own verdict reads.
     , cpsEcosystem :: Ecosystem
     , cpsListing :: StoreListing
     , cpsDelete :: VersionDelete
@@ -139,6 +141,7 @@ sweepableStore mAdapter eco target = case sbControl backend of
                     { cpsUrl = mtUrl target
                     , cpsToken = token
                     , cpsTag = sbTag backend
+                    , cpsConsent = consent
                     , cpsEcosystem = eco
                     , cpsListing = listing
                     , cpsDelete = delete
@@ -150,8 +153,7 @@ sweepableStore mAdapter eco target = case sbControl backend of
     backend = mtBackend target
 
 {- | How a boot builds one store's maintenance handle, under the response bound the plan resolved.
-Injected, as the queue builder is, so a spec drives the pruner's arm of the planning phase without
-discovering an AWS identity.
+Injected, as the queue builder is, so a spec drives the pruner's arm without an AWS identity.
 -}
 type BuildStoreMaintenance = Limits -> ClearedBackend -> IO StoreMaintenance
 
@@ -186,7 +188,7 @@ protocolStore limits store manager =
         , psDelete = cpsDelete store
         , psCodec = cpsCodec store
         , psBackendName = storeTagName (cpsTag store)
-        , psPermitDeletion = True
+        , psPermitDeletion = cpsConsent store == DeletionPermitted
         , psConsentDescriptor = consentDescriptor (cpsEcosystem store) (cpsTag store)
         }
 

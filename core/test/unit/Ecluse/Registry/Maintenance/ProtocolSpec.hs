@@ -13,7 +13,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types.Status (Status, status200, status201, status404, status500)
+import Network.HTTP.Types.Status (Status, status200, status201, status404, status500, status503)
 import Test.Hspec
 
 import Ecluse.Core.Credential (mkSecret)
@@ -27,7 +27,7 @@ import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
     RefillPosture (RefillPermitted),
-    RetryAdvice (RetryFutile),
+    RetryAdvice (RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable),
     StoreFacts (..),
     StoreFault (faultRetry),
@@ -104,6 +104,11 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
     it "reads a package the store no longer holds as holding no versions" $
         withStore True answerNothing $ \handle _ ->
             enumerateVersions handle leftpad `shouldReturn` Right []
+
+    it "advises another attempt when a read fails server-side, unlike an absent listing" $
+        withStore True (answerAll status503 "{}") $ \handle _ ->
+            (fmap faultRetry . leftToMaybe <$> enumerateVersions handle leftpad)
+                `shouldReturn` Just RetryWorthwhile
 
 deletionSpec :: Spec
 deletionSpec = describe "deletion over the protocol's own request sequence" $ do
@@ -205,7 +210,10 @@ answerRefusingEdit captured = case capMethod captured of
 
 -- A store holding nothing: the listing, the packument, and every read answer 404.
 answerNothing :: Captured -> (Status, LBS.ByteString)
-answerNothing = const (status404, "{}")
+answerNothing = answerAll status404 "{}"
+
+answerAll :: Status -> LBS.ByteString -> Captured -> (Status, LBS.ByteString)
+answerAll status body = const (status, body)
 
 listingDocument :: Value
 listingDocument =

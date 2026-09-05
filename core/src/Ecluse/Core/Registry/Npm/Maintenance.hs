@@ -54,7 +54,7 @@ import Ecluse.Core.Registry.Npm.Request (
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocToken))
 import Ecluse.Core.Registry.Request (joinPath, noValidators)
 import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Server.Path (encodeComponent)
+import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, renderVersion)
 
@@ -151,9 +151,9 @@ decodePackument body =
 not check it, and a registry that does would apply the edit to a document nobody read. -}
 revisionOf :: Object -> Either StoreRefusal Text
 revisionOf packument = case KeyMap.lookup "_rev" packument of
-    Just (String revision) | not (T.null revision) -> Right revision
+    Just (String revision) | isSafeComponent revision -> Right revision
     _ ->
-        Left (storeRefusal "NO_REVISION" "the store's packument carries no _rev, so no edit can address it")
+        Left (storeRefusal "NO_REVISION" "the store's packument carries no _rev an edit can address")
 
 versionsOf :: Object -> Either StoreRefusal Object
 versionsOf packument = case KeyMap.lookup "versions" packument of
@@ -226,15 +226,23 @@ greatestVersion = foldl' keepGreater Nothing
 version from, and npm's conventional name stands in when the manifest carries none. -}
 tarballFilename :: PackageName -> Version -> Value -> Text
 tarballFilename name version manifest =
-    fromMaybe conventional (nonBlank =<< distTarballSegment manifest)
+    fromMaybe conventional (mfilter isSafeComponent (nonBlank =<< distTarballSegment manifest))
   where
     conventional = unscopedName name <> "-" <> renderVersion version <> ".tgz"
 
+{- The last path segment of @dist.tarball@, which the store chose and Écluse never validated.
+A query or fragment is no part of the filename, so both are cut before the segment is taken. -}
 distTarballSegment :: Value -> Maybe Text
-distTarballSegment = \case
+distTarballSegment manifest = lastSegment . T.takeWhile inPath <$> tarballUrl manifest
+  where
+    inPath ch = ch /= '?' && ch /= '#'
+    lastSegment = T.takeWhileEnd (/= '/')
+
+tarballUrl :: Value -> Maybe Text
+tarballUrl = \case
     Object manifest -> case KeyMap.lookup "dist" manifest of
         Just (Object dist) -> case KeyMap.lookup "tarball" dist of
-            Just (String url) -> Just (T.takeWhileEnd (/= '/') url)
+            Just (String url) -> Just url
             _ -> Nothing
         _ -> Nothing
     _ -> Nothing
