@@ -188,7 +188,7 @@ an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format
 | Advisory store | Platform | S3 |
 | Workload identity and token source | Deployment credentials, read by the store's mint | STS, through the task or instance role |
 | Package store | Store, per mount | CodeArtifact under the `codeArtifact` tag, any host that speaks the ecosystem's protocol under `registry`, and Verdaccio, the development store, under `verdaccio` |
-| Store maintenance | Store, per mount | The CodeArtifact control plane. A `registry` or a `verdaccio` store carries none, so `ecluse dredger` refuses a mirror target under either tag and names the tag |
+| Store maintenance | Store, per mount | The CodeArtifact control plane, or, for a `verdaccio` store, the ecosystem protocol's own listing and unpublish requests. A `registry` store carries none, so `ecluse dredger` refuses a mirror target under that tag and names it |
 
 ### The credential mint
 
