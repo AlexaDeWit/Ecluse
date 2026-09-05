@@ -30,18 +30,29 @@ it.
     resolution.
 
 The engine names @aeson@'s token types and a depth budget only, with no registry or package
-concept. Each JSON ecosystem layers its own key-selection walk on top. The npm packument selector
-is "Ecluse.Core.Registry.Npm.SelectiveDecode".
+concept. Each JSON ecosystem layers its own selection walk on top: 'findInRecord' for a keyed
+document, 'collectFromArray' for a file-list one. The npm packument selector is
+"Ecluse.Core.Registry.Npm.SelectiveDecode".
 -}
 module Ecluse.Core.Json.Selective (
     -- * Refusal vocabulary
     SelectiveError (..),
 
-    -- * Bounded token-walk primitives
+    -- * Bounded selection
     findInRecord,
+    collectFromArray,
     materialiseWithinBudget,
+
+    -- * Container guards
     withRecord,
+    withArray,
+
+    -- * Bounded skips
     skipValue,
+    skipArray,
+    skipRecord,
+
+    -- * End of input
     trailingWhitespace,
 ) where
 
@@ -83,6 +94,23 @@ findInRecord childBudget target = go Nothing 0
                 go (Just value) (count + 1) cont
             | otherwise -> skipValue childBudget valueToks >>= go found (count + 1)
 
+{- | Collect the picked items out of an array, deciding by position so a rejected item's tokens
+are skipped unallocated. Returns the picked values in order, the raw count of items scanned,
+and the array's continuation. @budget@ is the depth budget the items sit at. The scan runs to
+the array's end, so a malformed or over-deep unpicked item still refuses the decode.
+-}
+collectFromArray :: Int -> (Int -> Bool) -> TkArray k String -> Either SelectiveError ([Value], Int, k)
+collectFromArray budget pick = go [] 0
+  where
+    go picked !count = \case
+        TkArrayEnd cont -> Right (reverse picked, count, cont)
+        TkArrayErr _ -> Left SelectiveUndecodable
+        TkItem valueToks
+            | pick count -> do
+                (value, cont) <- materialiseWithinBudget budget valueToks
+                go (value : picked) (count + 1) cont
+            | otherwise -> skipValue budget valueToks >>= go picked (count + 1)
+
 {- | Materialise one value from its tokens, bounded at @budget@. It is the same 'Value'
 decode a whole-document path uses. Route every 'Value' a selective walk builds through
 here, so each passes the same depth gate.
@@ -102,7 +130,16 @@ withRecord budget toks k
     | budget < 1 = Left SelectiveTooDeeplyNested
     | otherwise = case toks of
         TkRecordOpen rec -> k rec
-        TkErr _ -> Left SelectiveUndecodable
+        _ -> Left SelectiveUndecodable
+
+{- | Run @k@ on an array token. Refuse a non-array value, and refuse the container outright when
+the depth budget is already spent, because an array is itself one level.
+-}
+withArray :: Int -> Tokens k String -> (TkArray k String -> Either SelectiveError a) -> Either SelectiveError a
+withArray budget toks k
+    | budget < 1 = Left SelectiveTooDeeplyNested
+    | otherwise = case toks of
+        TkArrayOpen arr -> k arr
         _ -> Left SelectiveUndecodable
 
 {- | Consume one value's tokens without allocating a 'Value', returning the continuation.
@@ -116,18 +153,17 @@ skipValue budget toks
         TkLit _ cont -> Right cont
         TkText _ cont -> Right cont
         TkNumber _ cont -> Right cont
-        TkArrayOpen arr -> skipArray (budget - 1) arr
+        TkArrayOpen{} -> withArray budget toks (skipArray (budget - 1))
         TkRecordOpen rec -> skipRecord (budget - 1) rec
         TkErr _ -> Left SelectiveUndecodable
 
--- Skip an array's items (each at @budget@), returning the continuation after its end.
+{- | Skip an array's items (each at @budget@), returning the continuation after its end. It is
+'collectFromArray' picking none of them.
+-}
 skipArray :: Int -> TkArray k String -> Either SelectiveError k
-skipArray budget = \case
-    TkItem toks -> skipValue budget toks >>= skipArray budget
-    TkArrayEnd cont -> Right cont
-    TkArrayErr _ -> Left SelectiveUndecodable
+skipArray budget arr = (\(_, _, cont) -> cont) <$> collectFromArray budget (const False) arr
 
--- Skip a record's values (each at @budget@), returning the continuation after its end.
+-- | Skip a record's values (each at @budget@), returning the continuation after its end.
 skipRecord :: Int -> TkRecord k String -> Either SelectiveError k
 skipRecord budget = \case
     TkPair _ toks -> skipValue budget toks >>= skipRecord budget
