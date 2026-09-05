@@ -19,9 +19,9 @@ patch. Everything else is deny by default and opt-in by name.
 If you run a private registry, Écluse reads it first and passes your own packages through
 untouched. Any https registry that speaks the ecosystem's protocol serves in that role. Écluse can
 also mirror each admitted public version into a registry you nominate, so a mirrored version
-survives a public outage or yank. For an AWS CodeArtifact mirror target Écluse mints the short-lived
-write token itself, and any other host takes a static token you supply. Écluse hosts no packages
-itself.
+survives a public outage or yank. You declare each registry under a tag that names the store behind
+it. A mirror target under the `codeArtifact` tag mints its own short-lived write token, and the
+other tags take a static token you supply. Écluse hosts no packages itself.
 
 Écluse ships as one container image with four roles:
 

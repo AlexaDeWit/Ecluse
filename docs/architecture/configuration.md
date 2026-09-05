@@ -30,9 +30,9 @@ tags on the endpoint and refuses as such: a layer fills keys under a tag, it nev
 And two endpoints that name one registry under different tags refuse for every role, because one
 store has one backend.
 
-Secrets never live in the structured config. A token is always an environment variable. A
-cloud-managed registry derives a short-lived token from ambient cloud credentials (see
-[Outbound registry credentials](#outbound-registry-credentials)).
+Secrets never live in the structured config. A token is always an environment variable. A mirror
+target under the minting tag holds none: the worker mints a short-lived token from ambient cloud
+credentials instead (see [Outbound registry credentials](#outbound-registry-credentials)).
 
 ### Registry endpoints must be https
 
@@ -68,16 +68,21 @@ carrying userinfo, a query string, or a fragment at load, and the error names th
 lets the boot-time configuration echo, the endpoint-collision warnings, and the mount posture lines
 print a configured endpoint as written.
 
-The mirror-write credential follows the **tag the mirror target declares**, and the load checks the
-URL against that tag, so Écluse can never pair a credential with an endpoint it was not scoped for.
-The `codeArtifact` tag requires a host of the shape
+The tag is the declaration: it names the store behind an endpoint, and the load checks the URL
+against it, so Écluse can never pair a credential with an endpoint it was not scoped for. The
+`codeArtifact` tag requires a host of the shape
 `{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`, which encodes the whole mint identity, so
 the worker mints a short-lived token scoped to that domain and the tag admits no static one. The
-two non-minting tags each require a `token` under the target.
+two non-minting tags each require a `token` under a mirror target.
+
+A tag never moves the credential posture. Reads stay per-caller passthrough under every tag, the
+public upstream stays anonymous, the mirror write stays Écluse's one standing credential, and a
+`publicationTarget` token stays the fallback Écluse forwards only when the publishing client sends
+none.
 
 The CodeArtifact mint is per
 domain, so mounts whose resolved identities coincide share one
-[`CredentialProvider`](cloud-backends.md#credential-provider): one mint, one refresh, one breaker.
+[`CredentialProvider`](cloud-backends.md#the-credential-mint): one mint, one refresh, one breaker.
 
 ### Outbound egress safety
 

@@ -12,9 +12,8 @@ any package reaches a build. It hosts no packages itself. The name is French for
 lock: the controlled passage every dependency clears before a build. The goal is
 resilience, limiting the blast radius of a bad publish, not malware detection.
 
-Écluse is not a registry. It delegates storage to the operator's backend (AWS
-CodeArtifact today). It enforces policy on what it fetches from the public registry, and on
-what it mirrors from it.
+Écluse is not a registry. It delegates storage to the store each mount declares. It enforces
+policy on what it fetches from the public registry, and on what it mirrors from it.
 
 ## The stack at a glance
 
@@ -25,11 +24,12 @@ observability is opt-in OpenTelemetry over OTLP.
 ## System overview
 
 A single Écluse binary runs the HTTP server and an in-process mirror worker over a shared,
-handle-based `Env`. The data plane (metadata and artifact bytes) is `http-client`. The
-control plane (queue, token mint) sits behind the
-[`MirrorQueue`](architecture/cloud-backends.md#cloud-backends) and
-[`CredentialProvider`](architecture/cloud-backends.md#credential-provider) handles. Solid edges are
-synchronous request-path work. Dotted edges are best-effort or asynchronous.
+handle-based `Env`. The data plane (metadata and artifact bytes) is `http-client`. The control
+plane (queue, token mint, store maintenance) sits behind the [three backend
+handles](architecture/cloud-backends.md#cloud-backends), one on the platform axis and two on a
+mount's store. The diagram draws the proxy process, which builds the queue and the mint. The
+store-maintenance handle belongs to `ecluse dredger`. Solid edges are synchronous request-path
+work. Dotted edges are best-effort or asynchronous.
 
 ```mermaid
 flowchart LR
@@ -47,12 +47,12 @@ flowchart LR
     subgraph registries["Registries (npm protocol)"]
         PRIV["Private upstream<br/>e.g. CodeArtifact"]
         PUB["Public upstream<br/>registry.npmjs.org"]
-        MIRROR["Mirror target<br/>managed npm registry"]
+        MIRROR["Mirror target<br/>hosted npm registry"]
         PUBT["Publication target<br/>first-party publishes (opt-in)"]
     end
 
     subgraph handles["Cloud handles"]
-        QUEUE["MirrorQueue<br/>SQS / Pub/Sub"]
+        QUEUE["MirrorQueue<br/>SQS / in-memory"]
         CRED["CredentialProvider<br/>mint + refresh token"]
     end
 
@@ -122,7 +122,7 @@ flowchart TD
 | [Registry model](architecture/registry-model.md) | The four registry roles (two reads, two writes), the domain vocabulary, and the registry abstraction. |
 | [Web layer](architecture/web-layer.md) | Raw-WAI front door: routing, mounts, the OpenAPI spec, the control/data-plane split, streaming, and graceful shutdown. |
 | [Rules engine and responses](architecture/rules-engine.md) | Deny-by-default evaluation, the rule tiers, the CVE subsystem, and denial responses. |
-| [Cloud backends and mirroring](architecture/cloud-backends.md) | The mirror queue and the two cloud handles (`MirrorQueue`, `CredentialProvider`). AWS. |
+| [Cloud backends and mirroring](architecture/cloud-backends.md) | The mirror queue, the platform and store axes, the two store kinds, and the three handles (`MirrorQueue`, `CredentialProvider`, `StoreMaintenance`). |
 | [Configuration and authentication](architecture/configuration.md) | Environment config, outbound registry credentials, and inbound client auth. |
 | [Security posture](architecture/security.md) | The trust assumptions the threat model rests on, the credential posture, and the two floors that fail closed. |
 | [Threat model](https://ecluse-proxy.com/docs/threat-model/) | The STRIDE register, generated from the Threat Dragon model (`threat-modelling/ecluse.json`). The single source of truth for the system's threats. |
