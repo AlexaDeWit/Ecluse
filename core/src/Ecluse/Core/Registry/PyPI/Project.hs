@@ -8,8 +8,8 @@ is the PyPI counterpart of 'Ecluse.Core.Registry.Npm.Project.projectScope' and
 'Ecluse.Core.Registry.Npm.Publish.npmPublishAllowed'.
 
 PyPI carries no structural namespace, so a deployment either names a distribution or owns a prefix
-of its distributions' names. Every entry and every candidate reads through the PEP 503 canonicaliser
-'Ecluse.Core.Package.normalisePyPI', so one spelling has one verdict.
+of its distributions' names. Every entry and every candidate reads through the package module's
+canonicaliser 'Ecluse.Core.Package.canonicalise', so one spelling has one verdict.
 -}
 module Ecluse.Core.Registry.PyPI.Project (
     -- * Name prefixes
@@ -29,7 +29,7 @@ import Data.Text.Short (ShortText)
 import Data.Text.Short qualified as TS
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Package (PackageName, mkPackageName, normalisePyPI, pkgCanonical, pkgEcosystem)
+import Ecluse.Core.Package (PackageName, canonicalise, mkPackageName, pkgCanonical, pkgEcosystem)
 import Ecluse.Core.Registry (ParseError (..))
 
 {- | A PyPI name prefix in PEP 503 canonical form. PyPI has no structural namespace like npm's
@@ -46,9 +46,9 @@ mkPyPIPrefix raw
     | T.null canonical || not (T.all canonicalPyPIChar canonical) = Nothing
     | otherwise = Just (PyPIPrefix (TS.fromText canonical))
   where
-    canonical = normalisePyPI raw
+    canonical = canonicalise PyPI raw
 
--- PEP 503's canonical alphabet, the form 'normalisePyPI' leaves a legal name in.
+-- PEP 503's canonical alphabet, the form the PyPI canonicaliser leaves a legal name in.
 canonicalPyPIChar :: Char -> Bool
 canonicalPyPIChar c = c == '-' || (isAscii c && isAlphaNum c)
 

@@ -123,6 +123,7 @@ library ecluse-core
     Ecluse.Core.Package.Hash
     Ecluse.Core.Package.Integrity
     Ecluse.Core.Package.Merge
+    Ecluse.Core.Package.Pep503
     Ecluse.Core.Queue
     Ecluse.Core.Queue.Memory
     Ecluse.Core.Registry
@@ -684,6 +685,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Package.HashSpec
     Ecluse.Core.Package.IntegritySpec
     Ecluse.Core.Package.MergeSpec
+    Ecluse.Core.Package.Pep503Spec
     Ecluse.Core.PackageSpec
     Ecluse.Core.Queue.MemorySpec
     Ecluse.Core.QueueSpec
