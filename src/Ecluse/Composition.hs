@@ -78,7 +78,7 @@ import Ecluse.Core.Registry.Adapter (
     artifactHosts,
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
-import Ecluse.Core.Registry.PyPI.Project (pypiFirstPartyName)
+import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)

@@ -2,13 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Core.Registry.PyPI.ProjectSpec (spec) where
+module Ecluse.Core.Registry.PyPI.FirstPartySpec (spec) where
 
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Registry.PyPI.Project (
+import Ecluse.Core.Registry.PyPI.FirstParty (
     PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix),
     mkPyPIPrefix,
     projectFirstPartyEntry,
