@@ -64,23 +64,8 @@ module Ecluse.Core.Registry.Npm.Route (
 ) where
 
 import Autodocodec (JSONCodec, object, pureCodec)
+import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
-import Network.HTTP.Types (
-    Method,
-    hContentType,
-    methodHead,
-    status200,
-    status304,
-    status401,
-    status403,
-    status404,
-    status500,
-    status501,
-    status502,
-    status503,
- )
-import Network.HTTP.Types.Method (StdMethod (GET, HEAD))
-
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, unscopedName)
 import Ecluse.Core.Registry.Npm.Project (projectName)
@@ -99,7 +84,6 @@ import Ecluse.Core.Server.Contract (
     ResponseContract,
     ResponseValue,
     VariableResponse,
-    bodilessContract,
     chooseContract,
     documentedJsonContract,
     emptyContract,
@@ -107,12 +91,11 @@ import Ecluse.Core.Server.Contract (
     jsonContract,
     passthroughContract,
     passthroughResponse,
-    responseDocs,
     responseValue,
     variableOpaqueContract,
     variableResponse,
  )
-import Ecluse.Core.Server.Path (Filename, isSafeComponent, mkFilename)
+import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), headPackument, servePackument)
 import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
 import Ecluse.Core.Server.Pipeline.Tarball (TarballReplies (..), headTarball, serveTarball)
@@ -122,10 +105,26 @@ import Ecluse.Core.Server.Route (
     PatternSeg (SegCap, SegLit),
     Route (Route),
     RouteName (RouteName),
+    answering,
+    isHead,
     routerOf,
+    safeSegment,
  )
-import Ecluse.Core.Server.RouteSpec (ParamSpec (ParamSpec), PathSeg (Param), RouteSpec (RouteSpec), specsOf)
+import Ecluse.Core.Server.RouteSpec (ParamSpec (ParamSpec), RouteSpec, catchAllSpecs, specsOf)
 import Ecluse.Core.Version (Version, mkVersion)
+import Network.HTTP.Types (
+    Method,
+    hContentType,
+    status200,
+    status304,
+    status401,
+    status403,
+    status404,
+    status500,
+    status501,
+    status502,
+    status503,
+ )
 
 {- | npm's mount router. The first route that claims the request decides it, and a request no
 route claims takes the deny-by-default @404@ ('npmNotFound').
@@ -407,10 +406,6 @@ npmPublishReplies =
             variableResponse status headers (encodeBody npmErrorCodec (NpmError message))
         }
 
--- A route answered locally, whatever the method and captures (the literal meta-routes).
-answering :: response -> Method -> [NpmCap] -> Maybe (ResponseAction response)
-answering answer _method _captures = Just (AnswerLocally answer)
-
 -- @\/-\/ping@: answered locally with @200 {}@.
 pingAnswer :: ResponseValue ()
 pingAnswer = responseValue [] ()
@@ -463,9 +458,6 @@ buildTarball method = \case
   where
     perimeterFallback = tarballError npmTarballReplies status500 [] "internal server error"
 
-isHead :: Method -> Bool
-isHead = (== methodHead)
-
 {- | The captured values npm's routes produce: a parsed package unit, or a raw
 safety-checked segment (an artifact file name, a dist-tag). Builders consume them positionally.
 -}
@@ -488,9 +480,9 @@ capPackage =
             segs -> fmap (first NpmPackage) (takePackage segs)
         )
 
-{- | The artifact-file capture: one segment, accepted only when it is a safe component
-('isSafeComponent'). The coordinate parse (the @.tgz@ basename and the version) is
-'tarballCoordinate''s, applied in 'buildTarball'.
+{- | The artifact-file capture: one segment, accepted only when 'safeSegment' admits it. The
+coordinate parse (the @.tgz@ basename and the version) is 'tarballCoordinate''s, applied in
+'buildTarball'.
 -}
 capFilename :: Capture NpmCap
 capFilename =
@@ -499,8 +491,8 @@ capFilename =
         "The artifact's on-the-wire file name, e.g. `lodash-4.17.21.tgz`."
         (safeSegment NpmFilename)
 
-{- | The dist-tag capture: one segment, accepted only when it is a safe component
-('isSafeComponent'). Both tagged routes answer @501@, so nothing downstream reads the tag.
+{- | The dist-tag capture: one segment, accepted only when 'safeSegment' admits it. Both tagged
+routes answer @501@, so nothing downstream reads the tag.
 -}
 capTag :: Capture NpmCap
 capTag =
@@ -508,12 +500,6 @@ capTag =
         "tag"
         "The dist-tag name, e.g. `latest`."
         (safeSegment NpmTag)
-
--- Consume one leading segment as a capture value, only when it is a safe component.
-safeSegment :: (Text -> NpmCap) -> [Text] -> Maybe (NpmCap, [Text])
-safeSegment build = \case
-    seg : rest | isSafeComponent seg -> Just (build seg, rest)
-    _ -> Nothing
 
 {- Peel the leading package unit off a path, returning its 'PackageName' and the remaining
 segments. The route parses no name of its own: 'projectName' owns the npm name grammar. -}
@@ -548,34 +534,9 @@ tarballCoordinate name file =
 same 'npmRoutes' the router runs, plus the synthetic deny-by-default catch-all.
 -}
 npmRouteSpecs :: NonEmpty RouteSpec
-npmRouteSpecs = unsupportedGetSpec :| (unsupportedHeadSpec : concatMap specsOf npmRoutes)
-
-{- | The synthetic spec for the deny-by-default catch-all. It is the absence of a match, not a
-route, so it has no record in 'npmRoutes' and the manifest documents it explicitly.
--}
-unsupportedGetSpec :: RouteSpec
-unsupportedGetSpec =
-    RouteSpec
-        (RouteName "unsupported")
-        GET
-        [Param unsupportedParam]
-        "Deny by default (unsupported path)"
-        "Any request under this mount matched by none of the routes above is denied with `404` -- \
-        \deny by default at the routing layer."
-        Nothing
-        (responseDocs unsupportedContract)
-
-unsupportedHeadSpec :: RouteSpec
-unsupportedHeadSpec =
-    RouteSpec
-        (RouteName "unsupported.head")
-        HEAD
-        [Param unsupportedParam]
-        "Deny by default (unsupported path)"
-        "Any HEAD request under this mount matched by none of the routes above is denied with `404` \
-        \and no response body."
-        Nothing
-        (responseDocs (bodilessContract unsupportedContract))
+npmRouteSpecs =
+    catchAllSpecs unsupportedContract unsupportedParam
+        `NE.appendList` concatMap specsOf npmRoutes
 
 unsupportedParam :: ParamSpec
 unsupportedParam = ParamSpec "unsupportedPath" "Any path under this mount matched by none of the routes above."

@@ -731,6 +731,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Pipeline.TarballSpec
     Ecluse.Core.Server.PipelineSpec
     Ecluse.Core.Server.ResponseSpec
+    Ecluse.Core.Server.RouteEngineSpec
     Ecluse.Core.Server.StreamSpec
     Ecluse.Core.Server.UpstreamSpec
     Ecluse.Core.SupervisionSpec

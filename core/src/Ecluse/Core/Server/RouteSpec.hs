@@ -18,11 +18,14 @@ module Ecluse.Core.Server.RouteSpec (
 
     -- * Projection from a route
     specsOf,
+
+    -- * The synthetic catch-all
+    catchAllSpecs,
 ) where
 
 import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, PUT))
 
-import Ecluse.Core.Server.Contract (RequestSpec, ResponseDoc, bodilessContract, responseDocs)
+import Ecluse.Core.Server.Contract (RequestSpec, ResponseContract, ResponseDoc, bodilessContract, responseDocs)
 import Ecluse.Core.Server.Route (
     Capture (capDescription, capName),
     MethodMatch (MethodDelete, MethodPut, MethodRead),
@@ -100,7 +103,38 @@ specsOf
                 , rsOutcomes = responseDocs operationContract
                 }
 
-        headName routeName' = RouteName (unRouteName routeName' <> ".head")
-
         paramOf (SegLit text) = Lit text
         paramOf (SegCap capture) = Param (ParamSpec (capName capture) (capDescription capture))
+
+-- The @HEAD@ projection's operation name, derived so it cannot collide with its @GET@.
+headName :: RouteName -> RouteName
+headName name = RouteName (unRouteName name <> ".head")
+
+{- | The @GET@ and @HEAD@ pair documenting a mount's deny-by-default catch-all. It is the absence
+of a match rather than a route, so no 'Ecluse.Core.Server.Route.Route' carries it and every
+ecosystem's table appends it, differing only in the refusal contract and the path parameter.
+-}
+catchAllSpecs :: ResponseContract r -> ParamSpec -> NonEmpty RouteSpec
+catchAllSpecs contract param = catchAllGet :| [catchAllHead]
+  where
+    catchAllGet =
+        RouteSpec
+            (RouteName "unsupported")
+            GET
+            [Param param]
+            "Deny by default (unsupported path)"
+            "Any request under this mount matched by none of the routes above is denied with `404` -- \
+            \deny by default at the routing layer."
+            Nothing
+            (responseDocs contract)
+
+    catchAllHead =
+        RouteSpec
+            (headName (RouteName "unsupported"))
+            HEAD
+            [Param param]
+            "Deny by default (unsupported path)"
+            "Any HEAD request under this mount matched by none of the routes above is denied with `404` \
+            \and no response body."
+            Nothing
+            (responseDocs (bodilessContract contract))
