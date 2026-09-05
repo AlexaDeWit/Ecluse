@@ -53,17 +53,17 @@ import Ecluse.Core.Package (
     PackageName,
  )
 import Ecluse.Core.Package.Filter (enforceArtifactScheme, enforceArtifactSchemeDetails)
-import Ecluse.Core.Registry (RegistryResponse (responseBody))
+import Ecluse.Core.Registry (FetchFault, RegistryResponse)
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient,
-    MetadataError (MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
+    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     digestOf,
+    fetchThenProject,
  )
 import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Project (
-    Projection (NameMismatch, Projected),
     parsePackageInfoFromValue,
     projectName,
     projectVersionEntry,
@@ -76,10 +76,11 @@ import Ecluse.Core.Registry.Npm.SelectiveDecode (
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits))
 import Ecluse.Core.Registry.Request (noValidators)
-import Ecluse.Core.Registry.WireSupport (NameAgreement (NameAgrees, NameDisagrees), checkNameAgreement)
+import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected), checkNameAgreement)
 import Ecluse.Core.Security (
     LimitError (TooDeeplyNested),
     Limits,
+    checkArtifactCount,
     checkNestingDepth,
     checkVersionCount,
     checkVersionCountOf,
@@ -89,7 +90,7 @@ import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Metadata (ManifestCaching, newMetadataClient)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
-import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
+import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
 {- | Build a per-request read handle for the npm protocol over one origin's fetch
@@ -109,18 +110,10 @@ newNpmMetadataClient ::
 newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch origin =
     newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchNpmManifest tracing origin) (fetchNpmVersion tracing origin)
 
-{- Fetch a package's full packument once under the fetch span, then run a pure projection over
-the wire bytes under the decode span. Both npm read operations differ only in that projection. -}
-fetchThenProject ::
-    TracingPort ->
-    OriginClient ->
-    PackageName ->
-    (ByteString -> Either MetadataError a) ->
-    IO (Either MetadataError a)
-fetchThenProject tracing origin name project =
-    spanMetadataFetch tracing name (fetchMetadataFormBounded origin Full noValidators name) >>= \case
-        Left fault -> pure (Left (MetadataFetch fault))
-        Right response -> spanMetadataDecode tracing name (pure (project (responseBody response)))
+{- The one npm metadata read: the full packument, bounded against the origin's response budget.
+Both npm read operations fetch it and differ only in the projection they run over the bytes. -}
+fetchNpmPackument :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
+fetchNpmPackument origin = fetchMetadataFormBounded origin Full noValidators
 
 {- | Fetch a package's full packument and project it into a 'Manifest': the typed view, the
 raw document, and the wire bytes' 'ContentDigest'.
@@ -131,7 +124,7 @@ strict body that read produced, the one place the wire bytes exist.
 -}
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
 fetchNpmManifest tracing origin name =
-    fetchThenProject tracing origin name $ \body ->
+    fetchThenProject tracing (fetchNpmPackument origin) name $ \body ->
         manifestOf (digestOf body) . first (enforceArtifactScheme (originBaseUrl origin))
             <$> projectNpmManifest (ocLimits origin) name body
   where
@@ -144,8 +137,8 @@ path's response bounds and name validation. Pure and total.
 
 The raw 'Value' is the nesting-checked document the typed view was projected from, so both
 describe one parse. A decode failure or an absent\/undecodable name is 'MetadataUndecodable'.
-A self-reported /different/ name is 'MetadataNameMismatch'. A nesting-depth or version-count
-breach is 'MetadataBoundExceeded'.
+A self-reported /different/ name is 'MetadataNameMismatch'. A nesting-depth, version-count, or
+artifact-count breach is 'MetadataBoundExceeded'.
 -}
 projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
 projectNpmManifest limits name body = do
@@ -155,7 +148,8 @@ projectNpmManifest limits name body = do
         Left _ -> Left MetadataUndecodable
         Right (NameMismatch reported) -> Left (MetadataNameMismatch reported)
         Right (Projected projected) -> Right projected
-    boundedInfo <- first MetadataBoundExceeded (checkVersionCount limits info)
+    versionBounded <- first MetadataBoundExceeded (checkVersionCount limits info)
+    boundedInfo <- first MetadataBoundExceeded (checkArtifactCount limits versionBounded)
     pure (boundedInfo, bounded)
 
 {- Fetch a package's full packument and project __only the requested version__ into its
@@ -168,7 +162,7 @@ a forwarded miss.
 -}
 fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
 fetchNpmVersion tracing origin name version =
-    fetchThenProject tracing origin name $
+    fetchThenProject tracing (fetchNpmPackument origin) name $
         fmap (>>= enforceArtifactSchemeDetails (originBaseUrl origin)) . projectNpmVersion (ocLimits origin) name version
 
 {- The origin's base URL as characters, for the scheme normalisation that must still
@@ -187,13 +181,13 @@ unprojectable version yields 'Nothing'.
 -}
 projectNpmVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
 projectNpmVersion limits name version body = do
-    selected <- first (selectiveError limits) (selectVersionFromPackument (maxNestingDepth limits) version body)
+    decoded <- first (selectiveError limits) (selectVersionFromPackument (maxNestingDepth limits) version body)
     -- The self-reported name is the validation authority (anti-shadowing), checked before the
     -- version-count backstop, as 'projectNpmManifest' does.
-    reported <- validateReportedName (svName selected)
-    case checkNameAgreement name reported of
-        NameDisagrees other -> Left (MetadataNameMismatch other)
-        NameAgrees -> pass
+    reported <- validateReportedName (svName decoded)
+    selected <- case checkNameAgreement name reported decoded of
+        NameMismatch other -> Left (MetadataNameMismatch other)
+        Projected agreed -> Right agreed
     first MetadataBoundExceeded (checkVersionCountOf limits (svVersionCount selected))
     publishedAt <- parsePublishTime (svTime selected)
     -- 'mkVersion' over the requested version's rendered key matches the whole-document path,

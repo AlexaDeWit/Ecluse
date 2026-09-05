@@ -10,6 +10,10 @@ place and re-serialises it. 'fetchVersionMetadata' never re-serialises, which is
 mount make it the cheap path (a smaller endpoint, or a selective parse) without changing this
 boundary. Both are total: a failure comes back as a 'MetadataError' __value__, the upstream
 exchange's own faults included ('MetadataFetch').
+
+'fetchThenProject' is the shape both operations take on every mount: fetch the document under
+the fetch span, then run a pure projection over its bytes under the decode span. A mount
+supplies the fetch action and the projection, and never the span or the fault fold.
 -}
 module Ecluse.Core.Registry.Metadata (
     -- * The read handle
@@ -20,6 +24,9 @@ module Ecluse.Core.Registry.Metadata (
     ContentDigest,
     digestOf,
     digestBytes,
+
+    -- * The fetch-then-project step
+    fetchThenProject,
 
     -- * Errors
     MetadataError (..),
@@ -34,10 +41,11 @@ import Crypto.Hash (Digest, SHA256, hash)
 import Data.ByteArray qualified as BA
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
-import Ecluse.Core.Registry (FetchFault)
+import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError)
+import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version)
 
 {- | A SHA-256 digest of one origin's wire body: the exact bytes the mount decoded a
@@ -79,6 +87,20 @@ data MetadataClient = MetadataClient
     without that version (a forwarded @404@), unlike a 'MetadataError' (a transient @503@).
     -}
     }
+
+{- | Fetch one package's metadata document under the fetch span, then project its wire bytes
+under the decode span. An exchange fault folds to 'MetadataFetch' before the projection runs.
+-}
+fetchThenProject ::
+    TracingPort ->
+    (PackageName -> IO (Either FetchFault RegistryResponse)) ->
+    PackageName ->
+    (ByteString -> Either MetadataError a) ->
+    IO (Either MetadataError a)
+fetchThenProject tracing fetch name project =
+    spanMetadataFetch tracing name (fetch name) >>= \case
+        Left fault -> pure (Left (MetadataFetch fault))
+        Right response -> spanMetadataDecode tracing name (pure (project (responseBody response)))
 
 {- | Why a metadata fetch could not yield a usable result. Each cause is a value the serve
 path maps onto its own response, so a name mismatch (the anti-shadowing defence) never

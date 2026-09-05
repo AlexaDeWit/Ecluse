@@ -4,7 +4,7 @@
 
 module Ecluse.Core.Package.FilterSpec (spec) where
 
-import Data.Aeson (Value (String), encode)
+import Data.Aeson (Value (String))
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -20,7 +20,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     Artifact (artUrl),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
-    InvalidEntry (invalidKind, invalidValue),
+    InvalidEntry (invalidKind, invalidReason, invalidValue),
     InvalidEntryKind (InvalidVersionManifest),
     PackageDetails (..),
     PackageInfo (..),
@@ -270,12 +270,24 @@ enforceArtifactSchemeSpec = describe "enforceArtifactScheme (https-only artifact
         -- An upstream-supplied dist.tarball can carry a credential in its userinfo or a
         -- signed query string. The drop-tracking WARNING line renders the recorded value,
         -- so the filter keeps only the authority.
-        let enforced = enforceArtifactScheme httpsUpstream (infoWithArtifact "http://deploy:hunter2@evil.test/x?sig=abc")
-            recorded = map invalidValue (infoInvalidEntries enforced)
-            rendered = decodeUtf8 (encode recorded) :: Text
-        recorded `shouldBe` [String "evil.test:443"]
-        rendered `shouldSatisfy` (not . T.isInfixOf "hunter2")
-        rendered `shouldSatisfy` (not . T.isInfixOf "sig=abc")
+        let enforced = enforceArtifactScheme httpsUpstream (infoWithArtifact credentialedTarball)
+        map invalidValue (infoInvalidEntries enforced) `shouldBe` [String "evil.test:443"]
+        droppedText enforced `shouldSatisfy` (not . T.isInfixOf "hunter2")
+        droppedText enforced `shouldSatisfy` (not . T.isInfixOf "sig=abc")
+
+    it "keeps the credential out of the drop reason as well as the value" $
+        -- The WARNING line renders the reason beside the value, and the refusal reason is
+        -- the other place the offending URL could reach it.
+        map invalidReason (infoInvalidEntries (enforceArtifactScheme httpsUpstream (infoWithArtifact credentialedTarball)))
+            `shouldBe` ["dist.tarball is http on a host other than the upstream registry: evil.test:443"]
+
+    for_ credentialedSpellings $ \(label, url) ->
+        it ("reduces a " <> label <> " artifact URL, which carries no scheme to key on") $ do
+            -- 'mkInvalidEntry' recognises a URL by its scheme separator, so the filter, whose
+            -- input is known to be a URL, reduces these spellings itself.
+            let enforced = enforceArtifactScheme httpsUpstream (infoWithArtifact url)
+            droppedText enforced `shouldSatisfy` (not . T.isInfixOf "hunter2")
+            droppedText enforced `shouldSatisfy` (not . T.isInfixOf "sig=abc")
 
     it "leaves artifact URLs untouched for a non-https (loopback) upstream" $
         urlOf (enforceArtifactScheme "http://127.0.0.1:8080" (infoWithArtifact "http://127.0.0.1:8080/thing/-/thing-1.0.0.tgz"))
@@ -300,6 +312,23 @@ enforceArtifactSchemeDetailsSpec = describe "enforceArtifactSchemeDetails (singl
     it "leaves the version untouched for a non-https (loopback) upstream" $
         urlOf (enforceArtifactSchemeDetails "http://127.0.0.1:8080" (detailsWithArtifact "http://127.0.0.1:8080/thing-1.0.0.tgz"))
             `shouldBe` Just "http://127.0.0.1:8080/thing-1.0.0.tgz"
+
+-- | A dropped artifact URL carrying a credential in its userinfo and a signature in its query.
+credentialedTarball :: Text
+credentialedTarball = "http://deploy:hunter2@evil.test/x?sig=abc"
+
+{- | The same credential in the two spellings that carry no scheme separator, so the generic
+drop-record redaction has nothing to key on.
+-}
+credentialedSpellings :: [(String, Text)]
+credentialedSpellings =
+    [ ("scheme-less", "deploy:hunter2@evil.test/x?sig=abc")
+    , ("protocol-relative", "//deploy:hunter2@evil.test/x?sig=abc")
+    ]
+
+-- | Every dropped entry of a filtered document as one rendered blob, the way a log line reads it.
+droppedText :: PackageInfo -> Text
+droppedText = show . infoInvalidEntries
 
 -- | A one-version 'PackageInfo' whose sole artifact carries the given URL.
 infoWithArtifact :: Text -> PackageInfo

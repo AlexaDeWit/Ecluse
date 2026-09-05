@@ -58,7 +58,7 @@ fixedNow = UTCTime (fromGregorian 2026 6 23) 0
 
 -- | The resolved 'Limits' the composition root would pass in.
 testLimits :: Limits
-testLimits = Limits{maxBodyBytes = 12582912, maxVersionCount = 100000, maxNestingDepth = 64}
+testLimits = Limits{maxBodyBytes = 12582912, maxVersionCount = 100000, maxArtifactCount = 100000, maxNestingDepth = 64}
 
 -- | A pinned file-descriptor soft limit, so both connection-pool sizings are deterministic.
 fdLimit :: Int

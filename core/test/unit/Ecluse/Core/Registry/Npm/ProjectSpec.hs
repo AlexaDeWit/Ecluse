@@ -38,14 +38,14 @@ import Ecluse.Core.Package (
     mkScope,
     pkgCanonical,
  )
-import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Project (
-    Projection (NameMismatch, Projected),
     parsePackageInfoFromValue,
     parseVersionList,
     projectName,
     projectScope,
  )
+import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Json (genJsonText, genKey, genValue)
 import Ecluse.Test.Package (unsafeHash, unscopedNpm)
@@ -66,6 +66,7 @@ spec = do
     versionListSpec
     versionLevelLeniencySpec
     gracefulDegradationSpec
+    dropRedactionSpec
     totalitySpec
 
 {- | 'projectName' is the one npm splitter. The shared 'NpmFixture.npmNameVerdicts' table is
@@ -104,6 +105,13 @@ asciiBoundarySpec = describe "projectName -- the ASCII boundary" $ do
 
     it "refuses an accented letter, so the boundary is the charset and not a blocklist" $
         projectName "caf\xE9" `shouldSatisfy` isLeft
+
+    it "phrases each refusal in npm's own wording, so the shared floor is invisible to a caller" $ do
+        -- The floor returns a neutral reason. These are the three npm spellings it maps onto,
+        -- one per refusal arm, and they are what an operator reads.
+        refusalOf "caf\xE9" `shouldBe` Just "non-ASCII npm name component: \"caf\\233\""
+        refusalOf "a/b/c" `shouldBe` Just "unusable npm name component: \"a/b/c\""
+        refusalOf "@acme/" `shouldBe` Just "empty npm name component"
 
     it "refuses an ASCII control character, at the low end and at DEL" $ do
         projectName "left\x01\&pad" `shouldSatisfy` isLeft
@@ -445,6 +453,23 @@ gracefulDegradationSpec = describe "graceful per-entry degradation with typed dr
         info <- projectInfoOf malformedBookkeepingTimePackument
         filter ((== InvalidPublishTime) . invalidKind) (infoInvalidEntries info) `shouldBe` []
 
+{- | A dropped version manifest carries the whole version object, @dist.tarball@ included, and
+that record reaches an operator log line. A private index can put a credential in that URL.
+-}
+dropRedactionSpec :: Spec
+dropRedactionSpec = describe "drop-tracking redaction (a credentialed tarball URL)" $ do
+    it "records the dropped manifest's tarball authority, never its URL" $ do
+        info <- projectInfoOf credentialedDropPackument
+        let rendered = show (infoInvalidEntries info) :: Text
+        map invalidKey (infoInvalidEntries info) `shouldBe` ["2.0.0"]
+        rendered `shouldSatisfy` (not . T.isInfixOf "hunter2")
+        rendered `shouldSatisfy` (not . T.isInfixOf "sig=abc")
+        rendered `shouldSatisfy` T.isInfixOf "r:443"
+
+    it "still serves the sound version beside it" $ do
+        info <- projectInfoOf credentialedDropPackument
+        Map.keys (infoVersions info) `shouldBe` ["1.0.0"]
+
 {- | The live projection eats untrusted upstream JSON, so both entries must be total: an arbitrary
 input may never make them bottom. Each property fully evaluates the result, so a partial function
 anywhere in the projection surfaces as a caught exception rather than a pass.
@@ -670,6 +695,15 @@ gracefulDegradationPackument =
     \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\",\"dist\":5}},\
     \\"time\":{\"created\":\"2018-01-01T00:00:00.000Z\",\"1.0.0\":\"not-a-date\"}}"
 
+{- | A packument whose @2.0.0@ manifest omits @name@, so it drops while still carrying a
+@dist.tarball@ with credential userinfo and a signed query string.
+-}
+credentialedDropPackument :: ByteString
+credentialedDropPackument =
+    "{\"name\":\"mix\",\"versions\":{\
+    \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/mix/-/mix-1.0.0.tgz\"}},\
+    \\"2.0.0\":{\"version\":\"2.0.0\",\"dist\":{\"tarball\":\"https://deploy:hunter2@r/mix/-/mix-2.0.0.tgz?sig=abc\"}}}}"
+
 {- | A packument with a sound version and a malformed @created@ bookkeeping time.
 The projection must not record it as an 'InvalidPublishTime': @created@ is not a publish time.
 -}
@@ -751,6 +785,13 @@ routeNameOf v = npmName (nameOf v)
 {- | Project a packument body into its 'PackageInfo' through the live 'parsePackageInfoFromValue'
 the serve path runs, validating against the body's own self-reported name.
 -}
+
+-- | The refusal text 'projectName' gives a name, or 'Nothing' when the name parses.
+refusalOf :: Text -> Maybe Text
+refusalOf raw = case projectName raw of
+    Left (ParseError message) -> Just message
+    Right _ -> Nothing
+
 projectInfoOf :: ByteString -> IO PackageInfo
 projectInfoOf body = decodeJsonOrFail body >>= projectedInfo
 

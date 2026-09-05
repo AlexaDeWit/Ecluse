@@ -32,7 +32,8 @@ establishing it needs a signature fetch this pure projection does not perform.
 == Name as a validation input
 
 The requested 'PackageName' is the validation authority for the served packument's name,
-never a rewrite of it. A document that self-reports a different name is a 'NameMismatch', so
+never a rewrite of it. A document that self-reports a different name projects into the shared
+'Ecluse.Core.Registry.WireSupport.Projection' mismatch and carries no packument, so
 the caller can treat that origin as untrusted for this request, and an absent name is a
 'ParseError' instead. 'projectName' is also the one splitter for npm identifiers: the route,
 the URL rewrite, the publish guard, and the queue decode all read a name through it, so one
@@ -44,8 +45,9 @@ malformed scoped name rather than an unscoped one.
 Each part of a name parses against npm's own __error tier__, the rules invalid for every
 package, legacy included: the allowlist that survives @encodeURIComponent@ unchanged (letters,
 digits, and @-_.!~*'()@), no leading period, hyphen, or underscore, and neither reserved name
-(@node_modules@, @favicon.ico@). It sits on 'isAsciiNameComponent', the charset boundary Écluse
-holds ecosystem-wide, so nothing non-ASCII or invisible enters by construction. npm's __warning
+(@node_modules@, @favicon.ico@). It sits on
+'Ecluse.Core.Registry.WireSupport.parseNameComponent', the non-empty, ASCII, path-safe floor
+Écluse holds ecosystem-wide, so nothing invisible or path-unsafe enters by construction. npm's __warning
 tier__ still parses, because real legacy names use it: capitals (@JSONStream@) and @~'!()*@. A
 name over 214 characters never parses, counted whole including any scope prefix, as npm counts it.
 -}
@@ -56,7 +58,6 @@ module Ecluse.Core.Registry.Npm.Project (
     projectVersionEntry,
 
     -- * Name validation
-    Projection (..),
     projectName,
     projectScope,
 ) where
@@ -77,7 +78,7 @@ import Ecluse.Core.Package (
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     Hash,
     HashAlg (SHA1),
-    InvalidEntry (..),
+    InvalidEntry (invalidKey),
     InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
     PackageDetails (..),
     PackageInfo (..),
@@ -85,7 +86,6 @@ import Ecluse.Core.Package (
     Person (..),
     Scope,
     Trust (TrustUnknown),
-    isAsciiNameComponent,
     mkHash,
     mkPackageName,
     mkScope,
@@ -99,11 +99,12 @@ import Ecluse.Core.Registry.Npm.Wire (
  )
 import Ecluse.Core.Registry.Npm.Wire qualified as Wire
 import Ecluse.Core.Registry.WireSupport (
-    NameAgreement (NameAgrees, NameDisagrees),
+    NameRefusal (NameEmpty, NameNotAscii, NameUnsafeComponent),
+    Projection,
     checkNameAgreement,
+    parseNameComponent,
     partitionLenient,
  )
-import Ecluse.Core.Server.Path (isSafeComponent)
 import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
@@ -167,31 +168,19 @@ instance FromJSON VersionEntry where
     parseJSON v =
         withObject "npm version object" (\o -> VersionEntry <$> parseJSON v <*> o .:? "_npmUser") v
 
-{- | The outcome of projecting an upstream packument against the requested package name.
-The requested name validates the document and is never substituted into it.
--}
-data Projection
-    = -- | The document decoded and its self-reported name matched the request.
-      Projected PackageInfo
-    | -- | The document decoded but self-reported this /different/ name (carried verbatim for the audit log).
-      NameMismatch Text
-    deriving stock (Eq, Show)
-
 {- | Project an already-decoded packument @Value@ into a 'Projection' for the requested package,
 reusing that parse instead of the bytes. A @Value@ that is not a packument gives a 'ParseError'.
 -}
-parsePackageInfoFromValue :: PackageName -> Value -> Either ParseError Projection
+parsePackageInfoFromValue :: PackageName -> Value -> Either ParseError (Projection PackageInfo)
 parsePackageInfoFromValue requestedName value =
     decodePackumentValue value >>= projectValidated requestedName
 
 {- Validate a decoded packument's self-reported name against the request. An absent or empty
 upstream name fails as a 'ParseError'. -}
-projectValidated :: PackageName -> WirePackument -> Either ParseError Projection
+projectValidated :: PackageName -> WirePackument -> Either ParseError (Projection PackageInfo)
 projectValidated requestedName pkmt = do
     info <- projectPackageInfo pkmt
-    pure $ case checkNameAgreement requestedName (infoName info) of
-        NameAgrees -> Projected info
-        NameDisagrees reported -> NameMismatch reported
+    pure (checkNameAgreement requestedName (infoName info) info)
 
 -- Project a 'WirePackument' into 'PackageInfo', taking the upstream's self-reported name.
 -- 'projectValidated' owns checking that name against the request.
@@ -348,22 +337,28 @@ projectScope raw = do
   where
     bare = fromMaybe raw (T.stripPrefix "@" raw)
 
-{- One component of an npm name, the scope or the bare name. It reaches an interpolated upstream
-URL, so an unsafe spelling must never parse. 'projectName' and 'projectScope' own the length cap. -}
+{- One component of an npm name, the scope or the bare name. It sits on the shared name floor
+and adds npm's own grammar. 'projectName' and 'projectScope' own the length cap. -}
 nameComponent :: Text -> Either ParseError Text
-nameComponent component
-    | T.null component = Left (ParseError "empty npm name component")
-    | not (isAsciiNameComponent component) =
-        Left (ParseError ("non-ASCII npm name component: " <> show component))
-    | usableComponent component = Right component
-    | otherwise = Left (ParseError ("unusable npm name component: " <> show component))
+nameComponent component = do
+    onFloor <- first (refusalText component) (parseNameComponent component)
+    if usableComponent onFloor
+        then Right onFloor
+        else Left (ParseError ("unusable npm name component: " <> show component))
 
-{- npm's error tier for one name part, the rules invalid for every package, legacy included: the
-allowlist @encodeURIComponent@ leaves unchanged, no leading @.@\/@-@\/@_@, neither reserved name. -}
+-- npm's own wording for each way the shared floor refuses a component.
+refusalText :: Text -> NameRefusal -> ParseError
+refusalText component = \case
+    NameEmpty -> ParseError "empty npm name component"
+    NameNotAscii -> ParseError ("non-ASCII npm name component: " <> show component)
+    NameUnsafeComponent -> ParseError ("unusable npm name component: " <> show component)
+
+{- npm's error tier for one name part on top of the floor, the rules invalid for every package,
+legacy included: the allowlist @encodeURIComponent@ leaves unchanged, no leading @.@\/@-@\/@_@,
+neither reserved name. -}
 usableComponent :: Text -> Bool
 usableComponent component =
-    isSafeComponent component
-        && T.all npmNameChar component
+    T.all npmNameChar component
         && T.take 1 component `notElem` [".", "-", "_"]
         && T.toLower component `notElem` reservedNames
 

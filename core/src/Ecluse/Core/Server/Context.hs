@@ -163,8 +163,9 @@ data PackumentDeps = PackumentDeps
     -}
     , pdLimits :: Limits
     {- ^ The response-bound budget enforced on every upstream metadata fetch and decode: the
-    body-size, version-count, and JSON-nesting ceilings of 'Ecluse.Core.Security.Limits'
-    (@ECLUSE_LIMITS__MAX_RESPONSE_BYTES@, @ECLUSE_LIMITS__MAX_VERSION_COUNT@,
+    body-size, version-count, artifact-count, and JSON-nesting ceilings of
+    'Ecluse.Core.Security.Limits' (@ECLUSE_LIMITS__MAX_RESPONSE_BYTES@,
+    @ECLUSE_LIMITS__MAX_VERSION_COUNT@, @ECLUSE_LIMITS__MAX_ARTIFACT_COUNT@,
     @ECLUSE_LIMITS__MAX_NESTING_DEPTH@). A breach degrades the contribution to nothing, so a
     pathological upstream document is refused, never partially served (security.md invariant 4).
     -}

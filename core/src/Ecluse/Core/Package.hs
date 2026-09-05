@@ -4,10 +4,11 @@
 
 {- | The package domain model: the ecosystem-agnostic vocabulary the rules engine reasons
 over. A registry adapter (npm, PyPI, RubyGems) projects its wire responses into these types,
-so nothing above the registry layer sees a registry-specific structure. Three pieces live in
+so nothing above the registry layer sees a registry-specific structure. Five pieces live in
 sibling modules and are only named here: 'Ecosystem' in "Ecluse.Core.Ecosystem", 'Version' in
-"Ecluse.Core.Version", and the integrity-digest vocabulary in "Ecluse.Core.Package.Hash",
-re-exported in full.
+"Ecluse.Core.Version", the PEP 503 grammar in "Ecluse.Core.Package.Pep503", and the
+integrity-digest and drop-tracking vocabularies in "Ecluse.Core.Package.Hash" and
+"Ecluse.Core.Package.InvalidEntry", both re-exported in full.
 
 == Design principles
 
@@ -79,11 +80,15 @@ module Ecluse.Core.Package (
 
     -- * Packument-level view
     PackageInfo (..),
-    InvalidEntry (..),
+
+    -- * Dropped entries
+    InvalidEntry (invalidKind, invalidKey, invalidValue, invalidReason),
+    mkInvalidEntry,
     InvalidEntryKind (..),
+    renderInvalidEntryKind,
+    dropCountsByKind,
 ) where
 
-import Data.Aeson (Value)
 import Data.Char (isAscii, isControl)
 import Data.Text qualified as T
 import Data.Text.Short (ShortText)
@@ -105,6 +110,13 @@ import Ecluse.Core.Package.Hash (
     sriAlgorithm,
     sriBody,
     sriPrefix,
+ )
+import Ecluse.Core.Package.InvalidEntry (
+    InvalidEntry (invalidKey, invalidKind, invalidReason, invalidValue),
+    InvalidEntryKind (..),
+    dropCountsByKind,
+    mkInvalidEntry,
+    renderInvalidEntryKind,
  )
 import Ecluse.Core.Package.Pep503 (normalisePyPI)
 import Ecluse.Core.Version (Version)
@@ -363,40 +375,4 @@ data PackageInfo = PackageInfo
     appear here: a version's own publish time lives on 'PackageDetails.pkgPublishedAt'.
     -}
     }
-    deriving stock (Eq, Show)
-
-{- | A single packument entry a registry projection __dropped__ as malformed rather than
-failing the entire document. It is kept so the drop is observable: an operator can see that
-an upstream served a malformed entry, and which one.
--}
-data InvalidEntry = InvalidEntry
-    { invalidKind :: InvalidEntryKind
-    -- ^ Which kind of packument entry the projection dropped.
-    , invalidKey :: Text
-    {- ^ The map key the dropped entry sat under: the raw version string for a
-    version manifest or publish time, the tag name for a dist-tag.
-    -}
-    , invalidValue :: Value
-    {- ^ The __offending value__, so an operator can see what the upstream sent rather than
-    only a reason string. Render it at log time, truncating if it is large. A projection
-    reduces a __URL__ value to its authority before recording the entry
-    ('Ecluse.Core.Security.Authority.authorityLabel'): this record reaches a log line, and an
-    upstream-supplied @dist.tarball@ can carry a credential in its userinfo or query string.
-    -}
-    , invalidReason :: Text
-    -- ^ Why the entry could not be projected (the decode error), for the operator log.
-    }
-    deriving stock (Eq, Show)
-
-{- | Which kind of registry-document entry a dropped 'InvalidEntry' came from. A version
-manifest drop removes a serve candidate, fail-closed for that one version. A dist-tag or
-publish-time drop loses only that advisory datum, and the version still resolves.
--}
-data InvalidEntryKind
-    = -- | A @versions@ entry whose manifest did not project (no @dist@\/@tarball@, an unusable @version@).
-      InvalidVersionManifest
-    | -- | A @dist-tags@ entry whose target was not a usable version string.
-      InvalidDistTag
-    | -- | A @time@ entry, keyed by a present version, that was not a decodable instant.
-      InvalidPublishTime
     deriving stock (Eq, Show)

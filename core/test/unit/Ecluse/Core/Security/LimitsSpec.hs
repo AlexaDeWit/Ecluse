@@ -23,11 +23,13 @@ import Ecluse.Core.Package (
     PackageName,
     renderPackageName,
  )
-import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue)
+import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (
     LimitError (..),
     Limits (..),
     boundedRead,
+    checkArtifactCount,
     checkNestingDepth,
     checkVersionCount,
     checkVersionCountOf,
@@ -56,6 +58,7 @@ spec :: Spec
 spec = do
     boundedReadSpec
     versionCountSpec
+    artifactCountSpec
     nestingDepthSpec
     realPackumentSpec
     propertiesSpec
@@ -136,6 +139,33 @@ versionCountSpec = describe "checkVersionCount" $ do
     it "applies the same ceiling through checkVersionCountOf, on a bare count" $ do
         checkVersionCountOf limits 3 `shouldBe` Right ()
         checkVersionCountOf limits 4 `shouldBe` Left (TooManyVersions 4 3)
+
+{- | The artifact fan-out bound beside the version bound. A version can carry many artifacts,
+so the two counts diverge and the artifact one is what drives projection cost and residency.
+-}
+artifactCountSpec :: Spec
+artifactCountSpec = describe "checkArtifactCount" $ do
+    let limits = defaultLimits{maxArtifactCount = 4}
+
+    it "passes a document within the artifact budget (returns it unchanged)" $
+        checkArtifactCount limits (packumentWith 4) `shouldBe` Right (packumentWith 4)
+
+    it "rejects a document with too many artifacts, fail-closed" $
+        checkArtifactCount limits (packumentWith 5) `shouldBe` Left (TooManyArtifacts 5 4)
+
+    it "passes a document carrying no versions at all" $
+        checkArtifactCount limits (packumentWith 0) `shouldBe` Right (packumentWith 0)
+
+    it "counts every version's artifacts, not the versions" $ do
+        -- Two versions carrying three artifacts each breach a budget the version count clears.
+        let fanned = fanOutTo 3 (packumentWith 2)
+        checkArtifactCount limits fanned `shouldBe` Left (TooManyArtifacts 6 4)
+        checkVersionCount limits fanned `shouldBe` Right fanned
+
+    it "leaves a one-artifact-per-version document at its version count" $
+        -- npm publishes one tarball per version, so the two bounds coincide there and this
+        -- one never refuses a document the version bound has not refused already.
+        checkArtifactCount defaultLimits (packumentWith 25) `shouldBe` Right (packumentWith 25)
 
 nestingDepthSpec :: Spec
 nestingDepthSpec = describe "checkNestingDepth" $ do
@@ -256,6 +286,15 @@ nestArray :: Int -> Value
 nestArray n
     | n <= 1 = Number 1
     | otherwise = Array (V.singleton (nestArray (n - 1)))
+
+{- | Repeat every version's artifact @n@ times, the fan-out an ecosystem that publishes many
+files per version produces.
+-}
+fanOutTo :: Int -> PackageInfo -> PackageInfo
+fanOutTo n info =
+    info{infoVersions = Map.map fanned (infoVersions info)}
+  where
+    fanned d = d{pkgArtifacts = sconcat (fromList (replicate n (pkgArtifacts d)))}
 
 packumentWith :: Int -> PackageInfo
 packumentWith n =

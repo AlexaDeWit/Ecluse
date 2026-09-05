@@ -123,6 +123,7 @@ library ecluse-core
     Ecluse.Core.Package.Filter
     Ecluse.Core.Package.Hash
     Ecluse.Core.Package.Integrity
+    Ecluse.Core.Package.InvalidEntry
     Ecluse.Core.Package.Merge
     Ecluse.Core.Package.Pep503
     Ecluse.Core.Queue
@@ -687,6 +688,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Package.FilterSpec
     Ecluse.Core.Package.HashSpec
     Ecluse.Core.Package.IntegritySpec
+    Ecluse.Core.Package.InvalidEntrySpec
     Ecluse.Core.Package.MergeSpec
     Ecluse.Core.Package.Pep503Spec
     Ecluse.Core.PackageSpec
@@ -696,6 +698,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.CachedDocumentSpec
     Ecluse.Core.Registry.Maintenance.ProtocolSpec
     Ecluse.Core.Registry.MaintenanceSpec
+    Ecluse.Core.Registry.MetadataSpec
     Ecluse.Core.Registry.Npm.CredentialSpec
     Ecluse.Core.Registry.Npm.FilterSpec
     Ecluse.Core.Registry.Npm.MaintenanceSpec
@@ -729,6 +732,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.FaultSpec
     Ecluse.Core.Server.MetadataSpec
     Ecluse.Core.Server.PathSpec
+    Ecluse.Core.Server.Pipeline.DiagnosticsSpec
     Ecluse.Core.Server.Pipeline.InternalSpec
     Ecluse.Core.Server.Pipeline.PackumentSpec
     Ecluse.Core.Server.Pipeline.Tarball.RelaySpec

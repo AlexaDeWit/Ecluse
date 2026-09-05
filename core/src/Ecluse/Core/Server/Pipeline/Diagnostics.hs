@@ -32,9 +32,10 @@ import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
 import Ecluse.Core.Package (
     HashAlg,
     InvalidEntry (invalidKey, invalidKind, invalidReason, invalidValue),
-    InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
     PackageName,
+    dropCountsByKind,
     renderHashAlg,
+    renderInvalidEntryKind,
     renderPackageName,
  )
 import Ecluse.Core.Package.Merge (
@@ -47,7 +48,10 @@ import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, Fet
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
  )
-import Ecluse.Core.Security (LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions), authorityLabel)
+import Ecluse.Core.Security (
+    LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions),
+    authorityLabel,
+ )
 import Ecluse.Core.Server.Context (Handler)
 import Ecluse.Core.Server.Pipeline.Internal (
     logDecodeFailure,
@@ -95,6 +99,7 @@ logBreach name err =
     (boundName, observed, cap) = case err of
         BodyTooLarge c -> ("body-size", "over " <> show c <> " bytes", show c <> " bytes")
         TooManyVersions seen c -> ("version-count", show seen, show c)
+        TooManyArtifacts seen c -> ("artifact-count", show seen, show c)
         TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
 
 {- | Log a cross-upstream integrity divergence (threat #11) at 'WarningS' and meter it: a public
@@ -140,7 +145,8 @@ renderHash (file, alg, body) = file <> " " <> maybe "none" renderHashAlg alg <> 
 {- | Log at 'WarningS' the malformed packument entries the projection dropped rather than failing
 the whole document. The rest is still served, so this is an observability signal, not a refusal.
 The line carries the raw value the upstream sent, truncated and capped to 'maxRenderedDrops' so a
-flood cannot bloat it. The serve path calls it once per real fetch, inside the cache leader.
+flood cannot bloat it, and buckets the counts by drop kind, so a new ecosystem's kinds appear
+without a change here. The serve path calls it once per real fetch, inside the cache leader.
 -}
 logInvalidEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
 logInvalidEntries name baseUrl entries =
@@ -151,22 +157,11 @@ logInvalidEntries name baseUrl entries =
         sl "module" pipelineModule
             <> sl "package" (renderPackageName name)
             <> sl "upstream" (authorityLabel baseUrl)
-            <> sl "droppedVersionManifests" manifests
-            <> sl "droppedDistTags" distTags
-            <> sl "droppedPublishTimes" publishTimes
+            <> sl "droppedByKind" (dropCountsByKind entries)
             <> sl "droppedEntries" (map renderDroppedEntry (take maxRenderedDrops entries))
 
-    (manifests, distTags, publishTimes, entriesLen) =
-        foldl'
-            accumulateDropCounts
-            (0 :: Int, 0 :: Int, 0 :: Int, 0 :: Int)
-            entries
-
-    accumulateDropCounts (m, d, p, l) e =
-        case invalidKind e of
-            InvalidVersionManifest -> (m + 1, d, p, l + 1)
-            InvalidDistTag -> (m, d + 1, p, l + 1)
-            InvalidPublishTime -> (m, d, p + 1, l + 1)
+    entriesLen :: Int
+    entriesLen = length entries
 
     message :: Text
     message =
@@ -177,7 +172,7 @@ logInvalidEntries name baseUrl entries =
 -- (truncated) so the offending bytes stay visible.
 renderDroppedEntry :: InvalidEntry -> Text
 renderDroppedEntry e =
-    renderInvalidKind (invalidKind e)
+    renderInvalidEntryKind (invalidKind e)
         <> " "
         <> invalidKey e
         <> " = "
@@ -185,12 +180,6 @@ renderDroppedEntry e =
         <> " ("
         <> invalidReason e
         <> ")"
-
-renderInvalidKind :: InvalidEntryKind -> Text
-renderInvalidKind = \case
-    InvalidVersionManifest -> "version-manifest"
-    InvalidDistTag -> "dist-tag"
-    InvalidPublishTime -> "publish-time"
 
 -- The raw value as compact JSON, truncated to 'maxRenderedValueChars': only that many
 -- characters are ever forced, so a huge value never balloons the log line.

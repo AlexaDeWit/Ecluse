@@ -17,9 +17,10 @@ showInstancesSpec = describe "Show instances" $ do
     it "renders LimitError values" $ do
         show (BodyTooLarge 10) `shouldBe` ("BodyTooLarge 10" :: Text)
         show (TooManyVersions 4 3) `shouldBe` ("TooManyVersions 4 3" :: Text)
+        show (TooManyArtifacts 5 4) `shouldBe` ("TooManyArtifacts 5 4" :: Text)
         show (TooDeeplyNested 3) `shouldBe` ("TooDeeplyNested 3" :: Text)
     it "renders Limits" $
         show defaultLimits
-            `shouldBe` ( "Limits {maxBodyBytes = 12582912, maxVersionCount = 100000, maxNestingDepth = 64}" ::
+            `shouldBe` ( "Limits {maxBodyBytes = 12582912, maxVersionCount = 100000, maxArtifactCount = 100000, maxNestingDepth = 64}" ::
                             Text
                        )
