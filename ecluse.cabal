@@ -150,7 +150,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Origin
     Ecluse.Core.Registry.Publish
-    Ecluse.Core.Registry.PyPI.Project
+    Ecluse.Core.Registry.PyPI.FirstParty
     Ecluse.Core.Registry.Request
     Ecluse.Core.Registry.WireSupport
     Ecluse.Core.Rules
@@ -583,7 +583,7 @@ library ecluse-test-support
     Ecluse.Test.Port
     Ecluse.Test.Queue
     Ecluse.Test.Registry.Npm
-    Ecluse.Test.Registry.Pypi.Wire
+    Ecluse.Test.Registry.PyPI.Wire
     Ecluse.Test.Registry.Rubygems.Wire
     Ecluse.Test.RegistryCapture
     Ecluse.Test.Rules
@@ -707,7 +707,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.WireSpec
     Ecluse.Core.Registry.NpmSpec
     Ecluse.Core.Registry.PublishSpec
-    Ecluse.Core.Registry.PyPI.ProjectSpec
+    Ecluse.Core.Registry.PyPI.FirstPartySpec
     Ecluse.Core.Registry.RequestSpec
     Ecluse.Core.Registry.WireSupportSpec
     Ecluse.Core.Rules.EffectfulSpec
@@ -752,7 +752,7 @@ test-suite ecluse-core-unit
     Ecluse.Test.Container.ImageSpec
     Ecluse.Test.LogSpec
     Ecluse.Test.MaintenanceSpec
-    Ecluse.Test.Registry.Pypi.WireSpec
+    Ecluse.Test.Registry.PyPI.WireSpec
     Ecluse.Test.Registry.Rubygems.WireSpec
     Ecluse.Test.RegistryCaptureSpec
     Ecluse.Test.SupportLinkageSpec

@@ -20,7 +20,7 @@ The decoder is __lenient__: a document with no @releases@ object yields an empty
 not a decode failure. A partial or unexpected body therefore parses to "no versions"
 instead of throwing.
 -}
-module Ecluse.Test.Registry.Pypi.Wire (
+module Ecluse.Test.Registry.PyPI.Wire (
     ProjectJson (..),
     projectVersions,
 ) where

@@ -5,7 +5,7 @@
 {- | The RubyGems registry __wire__ JSON, decoded into a typed model for the
 version-capture oracles.
 
-This is __oracle apparatus__ mirroring "Ecluse.Test.Registry.Pypi.Wire". It decodes a live
+This is __oracle apparatus__ mirroring "Ecluse.Test.Registry.PyPI.Wire". It decodes a live
 RubyGems response as far as the one shape the capture path reads. That shape is the
 published version strings of the @\/api\/v1\/versions\/{gem}.json@ response, a JSON array
 with one entry per version. "Ecluse.Test.RegistryCapture" dispatches a RubyGems capture

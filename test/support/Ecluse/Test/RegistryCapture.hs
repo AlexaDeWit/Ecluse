@@ -45,7 +45,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Project (parseVersionList)
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Registry.Pypi.Wire qualified as Pypi
+import Ecluse.Test.Registry.PyPI.Wire qualified as PyPI
 import Ecluse.Test.Registry.Rubygems.Wire qualified as Rubygems
 
 {- | The curated package catalogue: the per-ecosystem smoke names and the
@@ -142,7 +142,7 @@ decode for that ecosystem.
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
 parseRegistryVersions eco body = case eco of
     Npm -> rightToMaybe (map renderVersion <$> parseVersionList (RegistryResponse (BSL.toStrict body)))
-    PyPI -> Pypi.projectVersions <$> decode' body
+    PyPI -> PyPI.projectVersions <$> decode' body
     RubyGems -> Rubygems.listingVersions <$> decode' body
   where
     decode' :: (FromJSON a) => LByteString -> Maybe a

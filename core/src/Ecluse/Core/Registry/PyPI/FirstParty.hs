@@ -11,7 +11,7 @@ PyPI carries no structural namespace, so a deployment either names a distributio
 of its distributions' names. Every entry and every candidate reads through the package module's
 canonicaliser 'Ecluse.Core.Package.canonicalise', so one spelling has one verdict.
 -}
-module Ecluse.Core.Registry.PyPI.Project (
+module Ecluse.Core.Registry.PyPI.FirstParty (
     -- * Name prefixes
     PyPIPrefix,
     mkPyPIPrefix,

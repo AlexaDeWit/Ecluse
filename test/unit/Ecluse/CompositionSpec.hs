@@ -47,7 +47,7 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
-import Ecluse.Core.Registry.PyPI.Project (PyPIFirstParty (PyPIOwnedName))
+import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
@@ -475,7 +475,7 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
             `shouldBe` [True, True, False, False]
 
     it "dispatches the PyPI arm to PyPI's own predicate" $
-        -- The arm's matching rules are pinned in "Ecluse.Core.Registry.PyPI.ProjectSpec". This row
+        -- The arm's matching rules are pinned in "Ecluse.Core.Registry.PyPI.FirstPartySpec". This row
         -- proves the root hands the declaration to it rather than deciding anything itself.
         map (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . pypiName) ["acme-tools", "beta"]
             `shouldBe` [True, False]
