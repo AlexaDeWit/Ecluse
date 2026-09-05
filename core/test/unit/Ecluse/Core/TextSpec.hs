@@ -12,11 +12,11 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Core.Text (afterFirst, joinUrlPath, lastPathSegment, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash)
+import Ecluse.Core.Text (afterFirst, joinUrlPath, nonBlank, readDecimalText, readHexText, renderIso8601Utc, stripTrailingSlash, urlFilename)
 
 {- | Tests for the shared text helpers. They pin the promises callers depend on: absence and
-trimming in 'nonBlank', every trailing slash dropped from a URL base, 'lastPathSegment'
-after the final slash, the text after a needle's first occurrence in 'afterFirst', the one
+trimming in 'nonBlank', every trailing slash dropped from a URL base, the query- and
+fragment-free filename 'urlFilename' takes, the text after a needle's first occurrence in 'afterFirst', the one
 accepted spelling of a digit run, and 'renderIso8601Utc' byte-for-byte equal to 'iso8601Show'.
 -}
 spec :: Spec
@@ -24,7 +24,7 @@ spec = do
     nonBlankSpec
     trailingSlashSpec
     joinUrlPathSpec
-    lastPathSegmentSpec
+    urlFilenameSpec
     afterFirstSpec
     readDecimalTextSpec
     readHexTextSpec
@@ -133,19 +133,38 @@ joinUrlPathSpec = describe "joinUrlPath" $ do
     it "appends the path verbatim" $
         joinUrlPath "https://host" "@scope%2Fname" `shouldBe` "https://host/@scope%2Fname"
 
-lastPathSegmentSpec :: Spec
-lastPathSegmentSpec = describe "lastPathSegment" $ do
+urlFilenameSpec :: Spec
+urlFilenameSpec = describe "urlFilename" $ do
     it "returns the segment after the last slash" $
-        lastPathSegment "https://host/thing/-/thing-1.0.0.tgz" `shouldBe` Just "thing-1.0.0.tgz"
+        urlFilename "https://host/thing/-/thing-1.0.0.tgz" `shouldBe` Just "thing-1.0.0.tgz"
 
     it "returns the whole string when it carries no slash" $
-        lastPathSegment "thing-1.0.0.tgz" `shouldBe` Just "thing-1.0.0.tgz"
+        urlFilename "thing-1.0.0.tgz" `shouldBe` Just "thing-1.0.0.tgz"
 
     it "is absent when the string ends in a slash" $
-        lastPathSegment "https://host/thing/" `shouldBe` Nothing
+        urlFilename "https://host/thing/" `shouldBe` Nothing
 
     it "is absent for the empty string" $
-        lastPathSegment "" `shouldBe` Nothing
+        urlFilename "" `shouldBe` Nothing
+
+    it "drops a query string, as a presigned artifact URL carries" $
+        urlFilename "https://cdn.host/f/thing-1.0.0.tgz?X-Amz-Signature=deadbeef"
+            `shouldBe` Just "thing-1.0.0.tgz"
+
+    it "drops a fragment, as a PEP 503 file URL carries" $
+        urlFilename "https://files.host/f/thing-1.0.0.tar.gz#sha256=deadbeef"
+            `shouldBe` Just "thing-1.0.0.tar.gz"
+
+    it "drops both when the URL carries a query and a fragment" $
+        urlFilename "https://cdn.host/f/thing-1.0.0.tgz?sig=abc#sha256=deadbeef"
+            `shouldBe` Just "thing-1.0.0.tgz"
+
+    it "cuts the query before the final slash, so a slash inside it cannot become the filename" $
+        urlFilename "https://cdn.host/f/thing-1.0.0.tgz?redirect=https://evil.host/other.tgz"
+            `shouldBe` Just "thing-1.0.0.tgz"
+
+    it "is absent when the path ends in a slash before the query" $
+        urlFilename "https://cdn.host/f/?sig=abc" `shouldBe` Nothing
 
 renderIso8601Spec :: Spec
 renderIso8601Spec = describe "renderIso8601Utc" $ do

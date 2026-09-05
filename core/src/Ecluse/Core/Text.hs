@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Small pure text helpers shared across the codebase, so the blank-value,
-URL-path-join, last-path-segment, scheme-split, and digit-run idioms have a single
+URL-path-join, URL-filename, scheme-split, and digit-run idioms have a single
 definition rather than several near-identical re-spellings. It also holds the hot-path
 ISO-8601 instant renderer the serve path uses ('renderIso8601Utc'). This module depends
 on nothing else in @Ecluse@, so any module may import it without risking an import cycle.
@@ -12,7 +12,7 @@ module Ecluse.Core.Text (
     nonBlank,
     stripTrailingSlash,
     joinUrlPath,
-    lastPathSegment,
+    urlFilename,
     afterFirst,
     registryPath,
     readDecimalText,
@@ -47,13 +47,15 @@ slashes the base writes. It appends the path verbatim, and neither encodes nor v
 joinUrlPath :: Text -> Text -> Text
 joinUrlPath b path = stripTrailingSlash b <> "/" <> path
 
-{- | The text after the final slash, or the whole string when it carries none.
-'Nothing' when that segment is empty, so a caller supplies its own fallback.
+{- | The text after a URL's final slash, once any query or fragment is cut, or 'Nothing' when
+that is empty. A presigned signature or a @#sha256=@ fragment therefore never lands in a filename.
 -}
-lastPathSegment :: Text -> Maybe Text
-lastPathSegment url =
-    let afterLastSlash = snd (T.breakOnEnd "/" url)
-     in if T.null afterLastSlash then Nothing else Just afterLastSlash
+urlFilename :: Text -> Maybe Text
+urlFilename url =
+    let filename = T.takeWhileEnd (/= '/') (T.takeWhile inPath url)
+     in if T.null filename then Nothing else Just filename
+  where
+    inPath ch = ch /= '?' && ch /= '#'
 
 {- | The text after @needle@'s first occurrence, or all of @hay@ if absent. The scheme separator
 matches first, so a crafted "https://169.254.169.254/x?u=https://ok" gates on the host dialled.

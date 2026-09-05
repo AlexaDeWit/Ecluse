@@ -85,7 +85,7 @@ import Data.Map.Strict qualified as Map
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpSurvivors, mpTime), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Npm.Project (projectName)
-import Ecluse.Core.Text (joinUrlPath, lastPathSegment, renderIso8601Utc)
+import Ecluse.Core.Text (joinUrlPath, renderIso8601Utc, urlFilename)
 import Ecluse.Core.Version (renderVersion)
 
 {- | Whether an upstream-controlled packument @name@ is safe to interpolate into a rewritten
@@ -95,8 +95,8 @@ safeName :: Text -> Bool
 safeName = isRight . projectName
 
 {- | Rewrite one version object's @dist.tarball@ to @{prefix}\/-\/{file}@, so the client
-fetches the artifact back through this mount. The @{file}@ is the tarball URL's last path
-segment, kept verbatim so the bytes a client integrity-checks do not change.
+fetches the artifact back through this mount. The @{file}@ is the tarball URL's filename,
+kept verbatim so the bytes a client integrity-checks do not change.
 
 Total, lossless, and idempotent: a version with no @dist@, no @tarball@ string, or no
 filename segment is left unchanged, and every unmodelled key is relayed.
@@ -110,14 +110,14 @@ rewriteVersion prefix = \case
     other -> other
 
 {- | Rewrite a @dist@ object's @tarball@ to @{prefix}\/-\/{file}@, where @file@ is
-the existing URL's last path segment. A @dist@ with no string @tarball@, or a
-tarball with no filename segment, is left unchanged.
+the existing URL's filename. A @dist@ with no string @tarball@, or a tarball with
+no filename, is left unchanged.
 -}
 rewriteDist :: Text -> Value -> Value
 rewriteDist prefix = \case
     Object dist
         | Just url <- stringField "tarball" dist
-        , Just file <- lastPathSegment url ->
+        , Just file <- urlFilename url ->
             Object (KeyMap.insert "tarball" (String (prefix <> "/-/" <> file)) dist)
     other -> other
 

@@ -104,7 +104,7 @@ import Ecluse.Core.Registry.WireSupport (
     partitionLenient,
  )
 import Ecluse.Core.Server.Path (isSafeComponent)
-import Ecluse.Core.Text (lastPathSegment)
+import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
 {- The packument as this projection reads it: the wire fields plus the per-version @_npmUser@
@@ -307,11 +307,11 @@ projectArtifact version dist =
     sriHashes = maybe [] (either (const []) toList . mkSriHashes) (distIntegrity dist)
     sha1Hash = distShasum dist >>= toHash SHA1
 
-{- The tarball's filename: the URL's last path segment, falling back to
-@\<version\>.tgz@ when the URL ends in a slash or has no segment. -}
+{- The tarball's filename, falling back to @\<version\>.tgz@ when the URL ends in a
+slash or names no file. -}
 tarballFilename :: Text -> Version -> Text
 tarballFilename url version =
-    fromMaybe (renderVersion version <> ".tgz") (lastPathSegment url)
+    fromMaybe (renderVersion version <> ".tgz") (urlFilename url)
 
 projectDistTags :: WirePackument -> Map Text Version
 projectDistTags = Map.map (mkVersion Npm) . wpDistTags
