@@ -94,7 +94,7 @@ spec = describe "graceful shutdown -- drain in-flight work" $ do
             afterStop `shouldSatisfy` isLeft
 
 {- Run an 'Application' on a free loopback port with the graceful-shutdown settings
-'Ecluse.Server.runServer' uses. The install handler captures Warp's @closeSocket@ into an
+'Ecluse.Runtime.Server.runWarp' uses. The install handler captures Warp's @closeSocket@ into an
 MVar rather than an OS signal handler, so the test triggers the drain deterministically.
 -}
 withListener ::
@@ -104,7 +104,7 @@ withListener ::
     IO a
 withListener app drainTimeoutSeconds k = do
     -- Release the discovered port so Warp opens and owns the listen socket that the captured
-    -- @closeSocket@ then closes, the way 'Ecluse.Server.runServer' wires it.
+    -- @closeSocket@ then closes, the way 'Ecluse.Runtime.Server.runWarp' wires it.
     port <- freePort
     closeSocketVar <- newEmptyMVar
     let settings =
