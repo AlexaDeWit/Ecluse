@@ -17,8 +17,8 @@ import Ecluse.Composition.BootError (
     ),
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
-import Ecluse.Composition.Maintenance (clearedBackend)
 import Ecluse.Composition.Support (
+    clearedRepository,
     codeArtifactEnvVars,
     codeArtifactMirrorUrl,
     expectConfig,
@@ -46,7 +46,6 @@ import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (casRepository))
 
 {- | Tests the boot's validate phase: the four groups a role's pass runs, and the plan a cleared
 configuration reifies from. The groups compose with '<*>', so one run reports all of them.
@@ -102,7 +101,7 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
         advisories `shouldBe` []
         fmap (Map.keys . vpMirrorStores) outcome `shouldBe` Right []
   where
-    repositoryOf = casRepository . clearedBackend
+    repositoryOf = fromMaybe "<not a CodeArtifact store>" . clearedRepository
 
 refusalSpec :: Spec
 refusalSpec = describe "vetBoot -- the refusals its four groups earn" $ do

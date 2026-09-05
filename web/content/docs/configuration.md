@@ -139,7 +139,8 @@ forwarded only when the publishing client sends none, which every tag admits.
 
 `permitDeletion: true` is your consent for `ecluse dredger` to delete from a Verdaccio store, and
 it exists on no other tag. Without it the Dredger refuses that store, and every other role ignores
-the key.
+the key. Verdaccio has no vendor API, so the Dredger sweeps it with the ecosystem protocol's own
+listing and unpublish requests rather than a control plane of its own.
 
 Two rules govern how the layers combine. A layer fills keys under a tag, it never switches one: an
 environment variable written under a tag your document did not use leaves the endpoint carrying two

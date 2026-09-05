@@ -146,11 +146,11 @@ refusingQueue _ _ _ = throwIO NoCredentials
 
 -- | A store builder that hands out the in-memory fake, so the pruner's arm reaches no cloud.
 inertStore :: BuildStoreMaintenance
-inertStore _ = fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
+inertStore _ _ = fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
 
 -- | A store builder that throws as @amazonka@ does when it discovers no credentials.
 refusingStore :: BuildStoreMaintenance
-refusingStore _ = throwIO NoCredentials
+refusingStore _ _ = throwIO NoCredentials
 
 -- | The typed stand-in for amazonka's credential-discovery failure.
 data NoCredentials = NoCredentials

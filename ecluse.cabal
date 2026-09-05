@@ -132,11 +132,13 @@ library ecluse-core
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Maintenance
+    Ecluse.Core.Registry.Maintenance.Protocol
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Adapter
     Ecluse.Core.Registry.Npm.Credential
     Ecluse.Core.Registry.Npm.Filter
+    Ecluse.Core.Registry.Npm.Maintenance
     Ecluse.Core.Registry.Npm.Metadata
     Ecluse.Core.Registry.Npm.Project
     Ecluse.Core.Registry.Npm.Publish
@@ -689,9 +691,11 @@ test-suite ecluse-core-unit
     Ecluse.Registry.AdapterSpec
     Ecluse.Registry.CachedDocumentSpec
     Ecluse.Registry.MaintenanceSpec
+    Ecluse.Registry.Maintenance.ProtocolSpec
     Ecluse.Registry.NpmSpec
     Ecluse.Registry.Npm.CredentialSpec
     Ecluse.Registry.Npm.FilterSpec
+    Ecluse.Registry.Npm.MaintenanceSpec
     Ecluse.Registry.Npm.MetadataSpec
     Ecluse.Registry.Npm.ProjectSpec
     Ecluse.Registry.Npm.PublishSpec

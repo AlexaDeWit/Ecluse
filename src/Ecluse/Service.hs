@@ -5,11 +5,9 @@
 {- | The assembly every mirror-pipeline role runs over: the composition-root 'Env' and the
 services derived from it.
 
-'withServiceRuntime' builds from the 'ExecutablePlan' the boot already gated: it allocates the
-runtime-edge handles and hands a role the mounts and worker bundles its 'MirrorWiring' carries.
-Nothing here refuses to boot, because every refusal is spent by then. "Ecluse.Proxy" adds the
-front door over it and "Ecluse.Mirror" runs the worker alone, so the dedicated worker is the same
-worker the serve path embeds rather than a second copy of it.
+'withServiceRuntime' builds from the 'ExecutablePlan' the boot already gated, so nothing here
+refuses to boot. "Ecluse.Proxy" adds the front door over it and "Ecluse.Mirror" runs the worker
+alone, so the dedicated worker is the same worker the serve path embeds, not a second copy.
 -}
 module Ecluse.Service (
     -- * The role-shared runtime
@@ -27,7 +25,6 @@ module Ecluse.Service (
 import Data.Map.Strict qualified as Map
 import GHC.Conc (setNumCapabilities)
 import Katip (LogEnv, SimpleLogPayload, katipAddNamespace, runKatipContextT)
-import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 
 import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), logBootWarning, logRuleBootOrder)
@@ -46,7 +43,7 @@ import Ecluse.Composition.MirrorRole (enqueuesJobs, spawnsWorker)
 import Ecluse.Composition.Plan (
     BootPlan (bpCacheConfig, bpMemoryPlan, bpMirrorRuntime, bpPrivateConnections, bpPublicConnections, bpValidated),
  )
-import Ecluse.Composition.Sizing (connectionPoolSettings)
+import Ecluse.Composition.Sizing (newPooledManager)
 import Ecluse.Composition.Sizing qualified as Composition
 import Ecluse.Composition.Types (MirrorRole)
 import Ecluse.Composition.Validate (ValidatedPlan (vpSettings))
@@ -149,8 +146,8 @@ withServiceRuntime bootEnv plan mirror action = do
     -- client's credential. Https-only egress closes the SSRF and resolve-to-internal class.
     publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
     privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
-    manager <- newManager (connectionPoolSettings (bpPublicConnections bootPlan) publicSettings)
-    privateManager <- newManager (connectionPoolSettings (bpPrivateConnections bootPlan) privateSettings)
+    manager <- newPooledManager (bpPublicConnections bootPlan) publicSettings
+    privateManager <- newPooledManager (bpPrivateConnections bootPlan) privateSettings
     withEnvWithAdmission serveAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.

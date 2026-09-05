@@ -2,25 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The ecosystem adapter registry: resolve an 'Ecosystem' to its registered
-capability record.
-
-The registry answers "which ecosystems does this binary support?", independent of
-anything an operator configures. That keeps three situations distinct:
-
-* An ecosystem the build does not support resolves to 'Nothing' here.
-* A supported ecosystem with no mount configured is not activated. No error,
-  nothing served under its prefix.
-* A __configured__ ecosystem that resolves to 'Nothing' is the composition
-  root's loud missing-adapter boot error, never a half-wired mount.
-
-'adapterFor' is a total case over the closed 'Ecosystem' sum, one arm per
-constructor. A new ecosystem is therefore additive: it brings its own adapter
-module (npm's is "Ecluse.Core.Registry.Npm.Adapter") and gains an arm here. It
-touches neither another ecosystem's code nor the core engine. Only the composition
-root consumes the adapter. The root resolves it once per activation and carries its
-metadata, artifact, and publish records onto each consuming pipeline's dependency
-record whole. The pipelines never import this module.
+{- | The ecosystem adapter registry: resolve an 'Ecosystem' to its registered capability
+record. It answers which ecosystems this binary supports, independent of what an operator
+configures, which keeps an unsupported ecosystem and an unconfigured one distinct: the first
+resolves to 'Nothing' here, and the second is simply never activated. A __configured__
+ecosystem that resolves to 'Nothing' is the composition root's loud missing-adapter boot
+error, never a half-wired mount. Only that root consumes an adapter: it resolves one per
+activation and carries the capability records onto each pipeline's dependency record whole.
 -}
 module Ecluse.Core.Registry.Adapter (
     -- * The capability record
@@ -29,6 +17,7 @@ module Ecluse.Core.Registry.Adapter (
     AdapterMetadata (..),
     AdapterArtifact (..),
     AdapterPublish (..),
+    AdapterMaintenance (..),
 
     -- * Registration
     adapterFor,

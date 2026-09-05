@@ -21,11 +21,13 @@ module Ecluse.Core.Registry.Adapter.Types (
     AdapterMetadata (..),
     AdapterArtifact (..),
     AdapterPublish (..),
+    AdapterMaintenance (..),
 ) where
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (..),
+    AdapterMaintenance (..),
     AdapterMetadata (..),
     AdapterPublish (..),
  )
@@ -51,6 +53,10 @@ data RegistryAdapter = RegistryAdapter
     , adapterPublish :: AdapterPublish
     {- ^ The publish capability: the first-party relay, the name canonicaliser, the declared-name
     extractor, and the mirror write's protocol codec.
+    -}
+    , adapterMaintenance :: AdapterMaintenance
+    {- ^ The store maintenance verbs, for a store whose only control plane is this protocol.
+    Either verb may be absent, and a Dredger against such a store then refuses the mount.
     -}
     }
 

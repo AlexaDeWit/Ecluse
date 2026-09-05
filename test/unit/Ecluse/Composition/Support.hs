@@ -14,6 +14,7 @@ module Ecluse.Composition.Support (
     codeArtifactMirrorUrl,
     codeArtifactEnvVars,
     noMaintenanceBackend,
+    clearedRepository,
     malformedAwsEndpoint,
     withoutMirrorTargetUrl,
     withoutMirrorTargetToken,
@@ -34,6 +35,7 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
+import Ecluse.Composition.Maintenance (ClearedBackend (ClearedCodeArtifact, ClearedProtocol))
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
     BootPlan,
@@ -47,6 +49,7 @@ import Ecluse.Config (AppConfig, Config (configApp), StoreTag (TagRegistry), loa
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Security (Limits (..))
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (casRepository)
 import Ecluse.Test.Credential (noCredentialReporters)
 
 -- | A fixed clock for the injected 'pdNow', never advanced (no timing here).
@@ -110,6 +113,12 @@ codeArtifactEnvVars =
 -- | The deleting role's refusal of 'staticEnvVars', whose mirror target no backend here sweeps.
 noMaintenanceBackend :: BootError
 noMaintenanceBackend = StoreMaintenanceUnavailable Npm (NoControlPlane TagRegistry)
+
+-- | The repository a cleared CodeArtifact store addresses, 'Nothing' for any other arm.
+clearedRepository :: ClearedBackend -> Maybe Text
+clearedRepository = \case
+    ClearedCodeArtifact store -> Just (casRepository store)
+    ClearedProtocol{} -> Nothing
 
 -- | Drop the registry mirror-target URL, so a test can declare its own target under any tag.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]
