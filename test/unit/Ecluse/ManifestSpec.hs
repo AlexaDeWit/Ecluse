@@ -4,12 +4,15 @@
 
 module Ecluse.ManifestSpec (spec) where
 
+import Prelude hiding (universe)
+
 import Data.Aeson (Value (Object), decode)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.HashMap.Strict.InsOrd qualified as InsOrd
 import Data.HashSet.InsOrd qualified as InsOrdSet
 import Data.List (nub)
 import Data.Text qualified as T
+import Data.Universe.Class (Universe (universe))
 
 import Data.OpenApi (
     Components (_componentsSchemas),
@@ -23,12 +26,13 @@ import Data.OpenApi (
     _pathItemDelete,
     _pathItemGet,
     _pathItemHead,
+    _pathItemPost,
     _pathItemPut,
  )
-import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, PUT), renderStdMethod)
+import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, POST, PUT), renderStdMethod)
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), prefixFor)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
 import Ecluse.Core.Registry.Npm.Route (npmRoutes)
@@ -36,6 +40,7 @@ import Ecluse.Core.Server.Contract (ResponseDoc (responseStatus))
 import Ecluse.Core.Server.Route (matchRoute)
 import Ecluse.Core.Server.RouteSpec (RouteSpec (rsMethod, rsOutcomes))
 import Ecluse.Manifest (
+    ManifestSource (manifestEcosystems),
     buildOpenApi,
     canonicalManifestSource,
     publishDocumentSchemaName,
@@ -74,32 +79,22 @@ spec = do
             -- does not depend on insertion order.
             map offsetOf topKeys `shouldBe` sort (map offsetOf topKeys)
 
-    -- The manifest's specs are the documentation projection ('specOf') of the same
-    -- RoutePatterns the classifier routes on, so paths and methods agree by construction.
-    -- These cases assert that the projection reaches the rendered document.
+    -- The manifest's specs are the documentation projection ('specsOf') of the same route
+    -- records the classifier routes on, so paths and methods agree by construction. These
+    -- cases assert that the projection reaches the rendered document, for every adapter this
+    -- build registers rather than for npm alone.
     describe "documented routes correspond to the live classifier" $ do
-        it "the npm mount exposes a route grammar" $
-            null npmSpecs `shouldBe` False
-
-        it "each documented route is rendered under its declared method" $
-            for_ npmSpecs $ \rs ->
-                (lookupPath rs >>= operationForMethod (rsMethod rs)) `shouldSatisfy` isJust
-
-        it "each operation has one document per response key" $
-            for_ npmSpecs $ \rs -> do
-                let keys = map responseStatus (rsOutcomes rs)
-                keys `shouldBe` nub keys
+        for_ registeredEcosystems agreesWithClassifier
 
         it "the manifest's path keys are exactly the rendered route templates" $
-            sort (InsOrd.keys (_openApiPaths doc))
-                `shouldBe` sort (ordNub (map renderedKey npmSpecs))
+            sort (InsOrd.keys (_openApiPaths agreementDoc))
+                `shouldBe` sort (ordNub (concatMap renderedKeys (toList registeredEcosystems)))
 
+    describe "documented statuses and boundaries" $ do
         it "a path claimed by no documented route denies by default" $
             -- The catch-all the manifest documents is real: no route in the table claims
             -- this path, so the router answers it with the deny-by-default 404.
             isJust (matchRoute npmRoutes (renderStdMethod GET) ["not", "a", "known", "route"]) `shouldBe` False
-
-    describe "documented statuses and boundaries" $ do
         it "Search carries 501" $
             (statusCodes <$> getOp "/npm/-/v1/search") `shouldBe` Just [501]
         it "the dist-tag read, write, and removal all carry 501" $ do
@@ -140,26 +135,6 @@ spec = do
     deleteOp :: FilePath -> Maybe Operation
     deleteOp p = InsOrd.lookup p (_openApiPaths doc) >>= _pathItemDelete
 
-    -- The npm mount's declarative route grammar, resolved through the same adapter
-    -- registry the composition root mounts and the manifest renders.
-    npmSpecs :: [RouteSpec]
-    npmSpecs = maybe [] (toList . serveRoutes . adapterServe) (adapterFor Npm)
-
-    -- A spec's manifest path key, rendered the way the manifest renders it.
-    renderedKey :: RouteSpec -> FilePath
-    renderedKey = toString . routePathKey (prefixFor Npm)
-
-    lookupPath :: RouteSpec -> Maybe PathItem
-    lookupPath rs = InsOrd.lookup (renderedKey rs) (_openApiPaths doc)
-
-    operationForMethod :: StdMethod -> PathItem -> Maybe Operation
-    operationForMethod = \case
-        GET -> _pathItemGet
-        HEAD -> _pathItemHead
-        PUT -> _pathItemPut
-        DELETE -> _pathItemDelete
-        _ -> const Nothing
-
     statusCodes :: Operation -> [Int]
     statusCodes = sort . InsOrd.keys . _responsesResponses . _operationResponses
 
@@ -179,3 +154,59 @@ spec = do
       where
         responses = _operationResponses op
         exact = InsOrd.elems (_responsesResponses responses)
+
+{- | The agreement cases for one registered ecosystem: every operation its adapter declares is
+rendered under the method it declares, and no operation documents one status twice. Generic in
+the ecosystem, so a second adapter is held to the same agreement the day it registers.
+-}
+agreesWithClassifier :: Ecosystem -> Spec
+agreesWithClassifier eco =
+    describe (toString (ecosystemName eco)) $ do
+        it "exposes a route grammar" $
+            null specs `shouldBe` False
+
+        it "each documented route is rendered under its declared method" $
+            for_ specs $ \rs ->
+                (lookupPath rs >>= operationForMethod (rsMethod rs)) `shouldSatisfy` isJust
+
+        it "each operation has one document per response key" $
+            for_ specs $ \rs -> do
+                let keys = map responseStatus (rsOutcomes rs)
+                keys `shouldBe` nub keys
+  where
+    specs = specsFor eco
+    lookupPath rs = InsOrd.lookup (renderedKeyFor eco rs) (_openApiPaths agreementDoc)
+
+{- | Every ecosystem this build registers an adapter for. npm heads the list because 'adapterFor'
+answers for it unconditionally, which keeps the value non-empty without a partial construction.
+-}
+registeredEcosystems :: NonEmpty Ecosystem
+registeredEcosystems = Npm :| filter registeredBeside universe
+  where
+    registeredBeside eco = eco /= Npm && isJust (adapterFor eco)
+
+{- | The document the agreement cases read: the canonical source widened to every registered
+adapter, so a newly registered one is checked before the canonical mount list catches up.
+-}
+agreementDoc :: OpenApi
+agreementDoc = buildOpenApi canonicalManifestSource{manifestEcosystems = registeredEcosystems}
+
+-- An ecosystem's declarative route grammar, through the same registry the composition root mounts.
+specsFor :: Ecosystem -> [RouteSpec]
+specsFor eco = maybe [] (toList . serveRoutes . adapterServe) (adapterFor eco)
+
+-- An ecosystem's manifest path keys, rendered the way the manifest renders them.
+renderedKeys :: Ecosystem -> [FilePath]
+renderedKeys eco = map (renderedKeyFor eco) (specsFor eco)
+
+renderedKeyFor :: Ecosystem -> RouteSpec -> FilePath
+renderedKeyFor eco = toString . routePathKey (prefixFor eco)
+
+operationForMethod :: StdMethod -> PathItem -> Maybe Operation
+operationForMethod = \case
+    GET -> _pathItemGet
+    HEAD -> _pathItemHead
+    POST -> _pathItemPost
+    PUT -> _pathItemPut
+    DELETE -> _pathItemDelete
+    _ -> const Nothing

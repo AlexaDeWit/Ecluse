@@ -119,7 +119,7 @@ import Network.HTTP.Media (MediaType)
 import Network.HTTP.Types.Method (StdMethod (..))
 import Network.HTTP.Types.Status (statusCode)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
 import Ecluse.Core.Server.Contract (
@@ -163,10 +163,12 @@ buildOpenApi src =
         { _openApiInfo = manifestInfo
         , _openApiServers = [server]
         , _openApiPaths = pathsFrom (concatMap ecosystemRouteSpecs (toList (manifestEcosystems src)))
-        , _openApiComponents = (mempty :: Components){_componentsSchemas = ownedSchemas}
+        , _openApiComponents = (mempty :: Components){_componentsSchemas = componentSchemas}
         , _openApiTags = InsOrdSet.fromList (map ecosystemTag (toList (manifestEcosystems src)))
         }
   where
+    componentSchemas = InsOrd.fromList (concatMap ownedSchemas (toList (manifestEcosystems src)))
+
     server =
         Server
             { _serverUrl = manifestBaseUrl src
@@ -188,12 +190,17 @@ manifestInfo =
                 \it is not served."
         }
 
-ownedSchemas :: InsOrd.InsOrdHashMap Text Schema
-ownedSchemas =
-    InsOrd.fromList
+{- | The hand-authored component schemas an ecosystem's documented bodies name. Only a mounted
+ecosystem's entries reach the rendered components, so a @$ref@ has no way to dangle.
+-}
+ownedSchemas :: Ecosystem -> [(Text, Schema)]
+ownedSchemas = \case
+    Npm ->
         [ (synthesizedPackumentSchemaName, synthesizedPackumentSchema)
         , (publishDocumentSchemaName, publishDocumentSchema)
         ]
+    PyPI -> []
+    RubyGems -> []
 
 -- | The tag for an ecosystem (the manifest groups operations by mount).
 ecosystemTag :: Ecosystem -> Tag
