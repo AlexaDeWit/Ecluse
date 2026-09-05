@@ -28,7 +28,6 @@ import Ecluse.Core.Registry (
     ParseError (parseErrorMessage),
     RegistryResponse (RegistryResponse),
     UrlFormationError,
-    renderUrlFormationError,
  )
 import Ecluse.Core.Registry.Adapter.Capability (
     StoreListing (listingParse, listingRequest),
@@ -55,8 +54,10 @@ import Ecluse.Core.Registry.Maintenance (
     deleteAll,
     inBucket,
     noNameAlphabet,
+    protocolFault,
     storeFaultOfFetch,
     storeRefusal,
+    unformableFault,
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Registry.Publish (PublishCodec (pcParseVersionList, pcProbeRequest))
@@ -262,11 +263,3 @@ readFault subject status =
             transportFault TransportProtocol ("the store answered the " <> subject <> " read with HTTP " <> show status)
         , faultRetry = if status >= 500 then RetryWorthwhile else RetryFutile
         }
-
-unformableFault :: UrlFormationError -> StoreFault
-unformableFault err =
-    protocolFault ("the store's request could not be formed: " <> renderUrlFormationError err)
-
-protocolFault :: Text -> StoreFault
-protocolFault detail =
-    StoreFault{faultTransport = transportFault TransportProtocol detail, faultRetry = RetryFutile}

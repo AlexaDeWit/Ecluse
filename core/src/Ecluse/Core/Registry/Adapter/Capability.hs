@@ -13,6 +13,7 @@ same records. The split is what makes both directions typeable.
 module Ecluse.Core.Registry.Adapter.Capability (
     -- * Metadata
     AdapterMetadata (..),
+    ManifestFetch,
 
     -- * Artifact requests
     AdapterArtifact (..),
@@ -73,12 +74,14 @@ data AdapterMetadata = AdapterMetadata
     -}
     , metadataSerialise :: CachedDoc -> LByteString
     -- ^ Encode an assembled served document ('CachedDoc') to its wire bytes.
-    , metadataFetchManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
-    {- ^ Fetch and project one package's full manifest from an origin, the raw read
-    'metadataNewClient' leads into the serve path's caching and metrics. A caller that wants
-    neither, such as a store sweep, reads through this instead of building a client.
-    -}
+    , metadataFetchManifest :: ManifestFetch
+    -- ^ The raw read under 'metadataNewClient', without its caching and metrics, for a store sweep.
     }
+
+{- | Fetching and projecting one package's full manifest from an origin. Every failure is a
+'MetadataError' value, as it is through the client built over it.
+-}
+type ManifestFetch = TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
 
 {- | The ecosystem's artifact request formation, by conventional filename or authoritative URL.
 The serve deps and the worker bundle share it ('Ecluse.Core.Server.Context.pdArtifact').

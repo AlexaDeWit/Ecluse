@@ -137,9 +137,8 @@ planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials buildSt
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}
 
-{- The deleting role's arm: the credential its stores answer to, then a handle per store. The
-credential is the mirror write's own, so a sweep and a mirror write cannot reach one store as two
-identities. Both halves plan before the refusal folds in, so one launch reports every problem. -}
+{- The deleting role's arm: the credential its stores answer to, then a handle per store. Both
+halves plan before the refusal folds in, so one launch reports every problem. -}
 planPrunerWiring :: TracingPort -> BuildCredentials -> BuildStoreMaintenance -> BootPlan -> IO (Either [BootError] ExecutablePlan)
 planPrunerWiring tracing buildCredentials buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics

@@ -40,6 +40,8 @@ module Ecluse.Core.Registry.Maintenance (
     StoreManifestRead,
     storeFaultOfFetch,
     storeFaultOfMetadata,
+    protocolFault,
+    unformableFault,
 
     -- * Deletion
     VersionOutcome (..),
@@ -80,7 +82,11 @@ import Ecluse.Core.Fault (
     transportRetryable,
  )
 import Ecluse.Core.Package (PackageName, unscopedName)
-import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), renderUrlFormationError)
+import Ecluse.Core.Registry (
+    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    UrlFormationError,
+    renderUrlFormationError,
+ )
 import Ecluse.Core.Registry.Metadata (
     Manifest,
     MetadataError (MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
@@ -371,8 +377,7 @@ storeFaultOfFetch = \case
             , faultRetry = if transportRetryable (tfCause fault) then RetryWorthwhile else RetryFutile
             }
     FetchBoundExceeded _ -> protocolFault "the store's answer crossed the response-size bound"
-    FetchUrlUnformable err ->
-        protocolFault ("the store's request could not be formed: " <> renderUrlFormationError err)
+    FetchUrlUnformable err -> unformableFault err
 
 {- | Fold a manifest read's failure into the maintenance vocabulary. Only the transport half can
 clear on its own: a document that did not decode decodes the same way on the next attempt.
@@ -385,7 +390,12 @@ storeFaultOfMetadata = \case
     MetadataNameMismatch reported ->
         protocolFault ("the store's metadata reported another package's name: " <> reported)
 
--- A fault in the store's own answer, which the next attempt reproduces.
+-- | A URL the store's own coordinates could not form, reduced to its authority.
+unformableFault :: UrlFormationError -> StoreFault
+unformableFault err =
+    protocolFault ("the store's request could not be formed: " <> renderUrlFormationError err)
+
+-- | A fault in the store's own answer, which the next attempt reproduces.
 protocolFault :: Text -> StoreFault
 protocolFault detail =
     StoreFault{faultTransport = transportFault TransportProtocol detail, faultRetry = RetryFutile}

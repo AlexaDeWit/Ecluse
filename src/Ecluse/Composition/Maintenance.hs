@@ -55,7 +55,6 @@ import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Core.Credential (AuthToken (authSecret), CredentialProvider, Secret, currentToken)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
-import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
@@ -67,6 +66,7 @@ import Ecluse.Core.Registry.Adapter (
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (maintenanceAlphabet, maintenanceListing, maintenanceVersionDelete),
     AdapterMetadata (metadataFetchManifest),
+    ManifestFetch,
     StoreListing,
     VersionDelete,
  )
@@ -78,7 +78,7 @@ import Ecluse.Core.Registry.Maintenance (
     storeFaultOfMetadata,
  )
 import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolStore (..), newProtocolMaintenance)
-import Ecluse.Core.Registry.Metadata (Manifest, MetadataError (MetadataFetch))
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security (Limits)
@@ -95,7 +95,7 @@ data ClearedBackend = ClearedBackend
     -- ^ Where the store answers, which is both what a sweep reads and what it deletes from.
     , cbAlphabet :: NameAlphabet
     -- ^ The characters a full walk partitions this store's names by.
-    , cbFetchManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
+    , cbFetchManifest :: ManifestFetch
     {- ^ The mount ecosystem's own manifest read, which the root leads over the store's endpoint
     rather than over the public upstream.
     -}
@@ -202,7 +202,7 @@ sweepableStore mAdapter eco target = cleared <$> control
             )
 
 -- The read a store cleared without an adapter would make, which no boot reaches.
-absentManifestRead :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
+absentManifestRead :: ManifestFetch
 absentManifestRead _ _ _ =
     pure (Left (MetadataFetch (FetchTransport (transportFault TransportProtocol absentAdapterDetail))))
 
