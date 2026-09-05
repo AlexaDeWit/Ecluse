@@ -126,7 +126,8 @@ advisories:
   # sets no working directory, and a relative one would land in an unwritable root.
   dataDir: "/var/lib/ecluse/advisories"
   # Base URL of the per-ecosystem OSV advisory exports Pilot compiles from
-  # (<base>/<ecosystem>/all.zip). Override it if the upstream moves or you mirror it.
+  # (<base>/<ecosystem>/all.zip, where <ecosystem> is osv.dev's own spelling rather than the
+  # mounts key: npm, PyPI). Override it if the upstream moves or you mirror it.
   # A new URL must never require a new Écluse binary. Allowlist this host for Pilot's
   # egress, not osv.dev.
   osvExportBaseUrl: "https://osv-vulnerabilities.storage.googleapis.com"
