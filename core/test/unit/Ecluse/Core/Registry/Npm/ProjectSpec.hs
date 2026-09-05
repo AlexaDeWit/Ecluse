@@ -66,6 +66,7 @@ spec = do
     versionListSpec
     versionLevelLeniencySpec
     gracefulDegradationSpec
+    dropRedactionSpec
     totalitySpec
 
 {- | 'projectName' is the one npm splitter. The shared 'NpmFixture.npmNameVerdicts' table is
@@ -445,6 +446,23 @@ gracefulDegradationSpec = describe "graceful per-entry degradation with typed dr
         info <- projectInfoOf malformedBookkeepingTimePackument
         filter ((== InvalidPublishTime) . invalidKind) (infoInvalidEntries info) `shouldBe` []
 
+{- | A dropped version manifest carries the whole version object, @dist.tarball@ included, and
+that record reaches an operator log line. A private index can put a credential in that URL.
+-}
+dropRedactionSpec :: Spec
+dropRedactionSpec = describe "drop-tracking redaction (a credentialed tarball URL)" $ do
+    it "records the dropped manifest's tarball authority, never its URL" $ do
+        info <- projectInfoOf credentialedDropPackument
+        let rendered = show (infoInvalidEntries info) :: Text
+        map invalidKey (infoInvalidEntries info) `shouldBe` ["2.0.0"]
+        rendered `shouldSatisfy` (not . T.isInfixOf "hunter2")
+        rendered `shouldSatisfy` (not . T.isInfixOf "sig=abc")
+        rendered `shouldSatisfy` T.isInfixOf "r:443"
+
+    it "still serves the sound version beside it" $ do
+        info <- projectInfoOf credentialedDropPackument
+        Map.keys (infoVersions info) `shouldBe` ["1.0.0"]
+
 {- | The live projection eats untrusted upstream JSON, so both entries must be total: an arbitrary
 input may never make them bottom. Each property fully evaluates the result, so a partial function
 anywhere in the projection surfaces as a caught exception rather than a pass.
@@ -669,6 +687,15 @@ gracefulDegradationPackument =
     \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/mix/-/mix-1.0.0.tgz\"}},\
     \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\",\"dist\":5}},\
     \\"time\":{\"created\":\"2018-01-01T00:00:00.000Z\",\"1.0.0\":\"not-a-date\"}}"
+
+{- | A packument whose @2.0.0@ manifest omits @name@, so it drops while still carrying a
+@dist.tarball@ with credential userinfo and a signed query string.
+-}
+credentialedDropPackument :: ByteString
+credentialedDropPackument =
+    "{\"name\":\"mix\",\"versions\":{\
+    \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/mix/-/mix-1.0.0.tgz\"}},\
+    \\"2.0.0\":{\"version\":\"2.0.0\",\"dist\":{\"tarball\":\"https://deploy:hunter2@r/mix/-/mix-2.0.0.tgz?sig=abc\"}}}}"
 
 {- | A packument with a sound version and a malformed @created@ bookkeeping time.
 The projection must not record it as an 'InvalidPublishTime': @created@ is not a publish time.

@@ -74,14 +74,14 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Package (
     Artifact (artUrl),
-    InvalidEntry (..),
     InvalidEntryKind (InvalidVersionManifest),
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoInvalidEntries, infoVersions),
+    mkInvalidEntry,
     pkgVersion,
  )
 import Ecluse.Core.Rules.Types (Decision (Admitted))
-import Ecluse.Core.Security (authorityLabel, hostAddress)
+import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
 import Ecluse.Core.Version (Version, renderVersion, selectLatest)
 
@@ -166,9 +166,7 @@ enforceArtifactScheme upstreamBaseUrl info =
         case resolveDetails upstreamHost details of
             Right ok -> (Map.insert rawVersion ok keptAcc, dropAcc)
             Left (reason, badUrl) ->
-                -- The offending URL is upstream-supplied and reaches a log line, so the record
-                -- keeps only its authority ('authorityLabel').
-                (keptAcc, InvalidEntry InvalidVersionManifest rawVersion (String (authorityLabel badUrl)) reason : dropAcc)
+                (keptAcc, mkInvalidEntry InvalidVersionManifest rawVersion (String badUrl) reason : dropAcc)
 
 {- | The single-version form of 'enforceArtifactScheme', for the selective decode path.
 'Nothing' means the artifact URL is non-https and not upgradeable, so the version drops.

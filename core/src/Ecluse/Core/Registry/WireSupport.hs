@@ -31,9 +31,10 @@ import Data.Aeson (Value)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (
-    InvalidEntry (InvalidEntry),
+    InvalidEntry,
     InvalidEntryKind,
     PackageName,
+    mkInvalidEntry,
     renderPackageName,
  )
 
@@ -47,7 +48,7 @@ partitionLenient kind decode =
   where
     step key value (kept, dropped) = case decode value of
         Right a -> (Map.insert key a kept, dropped)
-        Left err -> (kept, InvalidEntry kind key value (toText err) : dropped)
+        Left err -> (kept, mkInvalidEntry kind key value (toText err) : dropped)
 
 {- | The outcome of checking an upstream's self-reported name against the requested name. The
 requested name validates the document. It never rewrites it.

@@ -123,6 +123,7 @@ library ecluse-core
     Ecluse.Core.Package.Filter
     Ecluse.Core.Package.Hash
     Ecluse.Core.Package.Integrity
+    Ecluse.Core.Package.InvalidEntry
     Ecluse.Core.Package.Merge
     Ecluse.Core.Package.Pep503
     Ecluse.Core.Queue
@@ -687,6 +688,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Package.FilterSpec
     Ecluse.Core.Package.HashSpec
     Ecluse.Core.Package.IntegritySpec
+    Ecluse.Core.Package.InvalidEntrySpec
     Ecluse.Core.Package.MergeSpec
     Ecluse.Core.Package.Pep503Spec
     Ecluse.Core.PackageSpec
