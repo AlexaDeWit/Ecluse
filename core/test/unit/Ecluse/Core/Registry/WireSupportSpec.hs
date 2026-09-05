@@ -12,7 +12,7 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     InvalidEntry (invalidKey, invalidKind, invalidValue),
-    InvalidEntryKind (InvalidDistTag, InvalidVersionManifest),
+    InvalidEntryKind (InvalidDistTag, InvalidIndexFile, InvalidVersionManifest),
     PackageName,
     mkPackageName,
     mkScope,
@@ -60,12 +60,12 @@ pairs each element with its own key, which for a file index is its @filename@.
 partitionLenientListSpec :: Spec
 partitionLenientListSpec = describe "partitionLenientList" $ do
     it "keeps the entries that decode, in input order" $
-        fst (partitionLenientList InvalidVersionManifest decodeInt keyedFiles)
+        fst (partitionLenientList InvalidIndexFile decodeInt keyedFiles)
             `shouldBe` [("acme-1.0.tar.gz", 1), ("acme-1.1-py3-none-any.whl", 3)]
 
     it "drops the undecodable entry, recording its kind, key, and value" $ do
-        let dropped = snd (partitionLenientList InvalidVersionManifest decodeInt keyedFiles)
-        map invalidKind dropped `shouldBe` [InvalidVersionManifest]
+        let dropped = snd (partitionLenientList InvalidIndexFile decodeInt keyedFiles)
+        map invalidKind dropped `shouldBe` [InvalidIndexFile]
         map invalidKey dropped `shouldBe` ["acme-1.0-py3-none-any.whl"]
         map invalidValue dropped `shouldBe` [String "nope"]
 

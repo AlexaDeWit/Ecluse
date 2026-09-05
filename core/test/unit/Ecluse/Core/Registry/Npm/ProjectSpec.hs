@@ -38,7 +38,7 @@ import Ecluse.Core.Package (
     mkScope,
     pkgCanonical,
  )
-import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Project (
     parsePackageInfoFromValue,
     parseVersionList,
@@ -105,6 +105,13 @@ asciiBoundarySpec = describe "projectName -- the ASCII boundary" $ do
 
     it "refuses an accented letter, so the boundary is the charset and not a blocklist" $
         projectName "caf\xE9" `shouldSatisfy` isLeft
+
+    it "phrases each refusal in npm's own wording, so the shared floor is invisible to a caller" $ do
+        -- The floor returns a neutral reason. These are the three npm spellings it maps onto,
+        -- one per refusal arm, and they are what an operator reads.
+        refusalOf "caf\xE9" `shouldBe` Just "non-ASCII npm name component: \"caf\\233\""
+        refusalOf "a/b/c" `shouldBe` Just "unusable npm name component: \"a/b/c\""
+        refusalOf "@acme/" `shouldBe` Just "empty npm name component"
 
     it "refuses an ASCII control character, at the low end and at DEL" $ do
         projectName "left\x01\&pad" `shouldSatisfy` isLeft
@@ -778,6 +785,13 @@ routeNameOf v = npmName (nameOf v)
 {- | Project a packument body into its 'PackageInfo' through the live 'parsePackageInfoFromValue'
 the serve path runs, validating against the body's own self-reported name.
 -}
+
+-- | The refusal text 'projectName' gives a name, or 'Nothing' when the name parses.
+refusalOf :: Text -> Maybe Text
+refusalOf raw = case projectName raw of
+    Left (ParseError message) -> Just message
+    Right _ -> Nothing
+
 projectInfoOf :: ByteString -> IO PackageInfo
 projectInfoOf body = decodeJsonOrFail body >>= projectedInfo
 

@@ -89,6 +89,12 @@ collectFromArraySpec = describe "collectFromArray" $ do
     it "runs the scan to the array's end, so a malformed unpicked item still refuses" $
         collectTop 5 (== 0) "[1,]" `shouldBe` Left SelectiveUndecodable
 
+    it "refuses a malformed array structure past a picked item (a missing comma)" $
+        collectTop 5 (== 0) "[1 2]" `shouldBe` Left SelectiveUndecodable
+
+    it "refuses a malformed array structure past an unpicked item" $
+        collectTop 5 (const False) "[1 2]" `shouldBe` Left SelectiveUndecodable
+
     it "depth-bounds a picked item at the item budget" $
         collectTop 1 (== 0) "[[1]]" `shouldBe` Left SelectiveTooDeeplyNested
 

@@ -40,8 +40,7 @@ newtype PyPIPrefix = PyPIPrefix ShortText
     deriving stock (Eq, Show)
 
 {- | Build a prefix through the canonicaliser 'mkPackageName' uses, over the shared name floor.
-'Nothing' for text no PyPI name can start with, or that canonicalises to nothing and would cover
-every name.
+'Nothing' for text no PyPI name can start with, or that would cover every name.
 -}
 mkPyPIPrefix :: Text -> Maybe PyPIPrefix
 mkPyPIPrefix raw = do

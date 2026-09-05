@@ -136,12 +136,8 @@ checkVersionCountOf limits count
     cap = maxVersionCount limits
 
 {- | Reject a parsed document carrying more than 'maxArtifactCount' artifacts across all its
-versions, returning it unchanged when within budget.
-
-It runs beside 'checkVersionCount' and after it, so an over-versioned document is still named
-by its version count. A version's artifact set is what drives projection cost and residency in
-an ecosystem that publishes many files per version, which the version count alone does not
-bound.
+versions. It runs after 'checkVersionCount', so an over-versioned document is still named by
+its version count.
 -}
 checkArtifactCount :: Limits -> PackageInfo -> Either LimitError PackageInfo
 checkArtifactCount limits info

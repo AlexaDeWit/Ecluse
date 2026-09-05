@@ -12,7 +12,13 @@ import Test.Hspec
 
 import Ecluse.Core.Package.InvalidEntry (
     InvalidEntry (invalidKey, invalidReason, invalidValue),
-    InvalidEntryKind (InvalidDistTag, InvalidIndexFile, InvalidVersionListing, InvalidVersionManifest),
+    InvalidEntryKind (
+        InvalidDistTag,
+        InvalidIndexFile,
+        InvalidPublishTime,
+        InvalidVersionListing,
+        InvalidVersionManifest
+    ),
     dropCountsByKind,
     mkInvalidEntry,
     renderInvalidEntryKind,
@@ -78,7 +84,13 @@ bucketingSpec = describe "dropCountsByKind" $ do
         dropCountsByKind [] `shouldBe` Map.empty
 
     it "gives every kind a distinct label" $
-        let kinds = [InvalidVersionManifest, InvalidDistTag, InvalidIndexFile, InvalidVersionListing]
+        let kinds =
+                [ InvalidVersionManifest
+                , InvalidDistTag
+                , InvalidPublishTime
+                , InvalidIndexFile
+                , InvalidVersionListing
+                ]
          in length (ordNub (map renderInvalidEntryKind kinds)) `shouldBe` length kinds
 
 -- | Record a drop of the given kind, holding the key, value, and reason fixed.

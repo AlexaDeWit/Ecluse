@@ -18,8 +18,8 @@ steps. It defends three boundaries:
 
 * How much an upstream may cost. A 'Limits' budget bounds the algorithmic-complexity
   DoS a hostile or compromised upstream can inflict. 'boundedRead' aborts a streamed
-  body past 'maxBodyBytes', and 'checkVersionCount' \/ 'checkNestingDepth' reject an
-  oversized or deeply-nested parsed document. Every limit fails closed: exceeding one
+  body past 'maxBodyBytes', and 'checkVersionCount' \/ 'checkArtifactCount' \/
+  'checkNestingDepth' reject an oversized or deeply-nested parsed document. Every limit fails closed: exceeding one
   yields 'Left', never a truncated or partial result.
 
 The functions are pure and total. The streamed-body guard ('boundedRead') is

@@ -78,7 +78,7 @@ import Ecluse.Core.Package (
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     Hash,
     HashAlg (SHA1),
-    InvalidEntry (..),
+    InvalidEntry (invalidKey),
     InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
     PackageDetails (..),
     PackageInfo (..),

@@ -4,16 +4,10 @@
 
 {- | The drop-tracking vocabulary a registry projection records a malformed entry in.
 
-'mkInvalidEntry' is the only builder, because the record reaches an operator log line and an
-upstream-supplied value can carry a credential. It reduces every URL-shaped string to its
-authority ('Ecluse.Core.Security.Authority.authorityLabel'), so no userinfo and no signed
-query string survives into the entry. Hiding the constructor is what makes that
-unrepresentable to bypass.
-
-Each ecosystem's projection contributes its own 'InvalidEntryKind' arms. The neutral serve
-path never branches on them: it buckets through 'dropCountsByKind', whose labels come from
-'renderInvalidEntryKind' beside the arms, so a new ecosystem's kinds reach the operator log
-without a case anywhere else.
+The record reaches an operator log line and an upstream-supplied value can carry a credential,
+so 'mkInvalidEntry' is the only builder and the constructor stays hidden. Each ecosystem
+contributes its own 'InvalidEntryKind' arms, and the neutral serve path buckets them through
+'dropCountsByKind' rather than branching on them.
 -}
 module Ecluse.Core.Package.InvalidEntry (
     -- * A dropped entry
@@ -55,9 +49,8 @@ data InvalidEntry = InvalidEntry
     }
     deriving stock (Eq, Show)
 
-{- | Record a dropped entry, reducing every URL in the key and the value to its authority.
-An upstream-supplied @dist.tarball@ or PEP 691 @url@ can carry a credential in its userinfo
-or a signature in its query string, and this record reaches a log line.
+{- | Record a dropped entry, reducing every URL in the key and the value to its authority: an
+upstream-supplied artifact location can carry a credential, and this record reaches a log line.
 -}
 mkInvalidEntry :: InvalidEntryKind -> Text -> Value -> Text -> InvalidEntry
 mkInvalidEntry kind key value reason =
@@ -84,10 +77,7 @@ redactUrlText raw
     | otherwise = raw
 
 {- | Which kind of registry-document entry a dropped 'InvalidEntry' came from. A dropped
-manifest or index file removes a serve candidate, fail-closed for that one version or file.
-The advisory kinds lose only their own datum, and the version still resolves.
-
-The arms are per-ecosystem by construction, so a new ecosystem adds its own beside these.
+manifest or index file loses a serve candidate; an advisory kind loses only its own datum.
 -}
 data InvalidEntryKind
     = -- | A @versions@ entry whose manifest did not project (no @dist@\/@tarball@, an unusable @version@).

@@ -40,7 +40,6 @@ module Ecluse.Core.Registry.WireSupport (
 
 import Data.Aeson (Value)
 import Data.Map.Strict qualified as Map
-
 import Data.Text qualified as T
 
 import Ecluse.Core.Package (
@@ -53,12 +52,8 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Server.Path (isSafeComponent)
 
-{- | Partition a list of keyed raw entries into the ones that decode and the ones that do not.
-Each dropped entry carries its key, its offending 'Value', and the decode error as the reason,
-built through the redacting 'mkInvalidEntry'. Both lists hold the input order.
-
-An array-shaped format pairs each element with its own key first (a file's @filename@), so a
-drop still names the entry an operator has to look at.
+{- | Partition a list of keyed raw entries into the ones that decode and the ones that do not,
+in input order. An array-shaped format pairs each element with its own key first.
 -}
 partitionLenientList :: InvalidEntryKind -> (Value -> Either String a) -> [(Text, Value)] -> ([(Text, a)], [InvalidEntry])
 partitionLenientList kind decode =
@@ -75,9 +70,8 @@ partitionLenient :: InvalidEntryKind -> (Value -> Either String a) -> Map Text V
 partitionLenient kind decode =
     first Map.fromDistinctAscList . partitionLenientList kind decode . Map.toAscList
 
-{- | What an upstream document projected into, once its self-reported name has been checked
-against the requested one. The requested name validates the document. It never rewrites it, and
-a mismatch carries no payload, so a disagreeing origin's contribution is unrepresentable.
+{- | What an upstream document projected into, once its self-reported name has been checked.
+A mismatch carries no payload, so a disagreeing origin's contribution is unrepresentable.
 -}
 data Projection a
     = -- | The self-reported name agreed with the request, carrying what was projected.
@@ -107,11 +101,8 @@ data NameRefusal
     deriving stock (Eq, Show)
 
 {- | Parse one component of a package name against the floor every ecosystem shares: non-empty,
-ASCII ('Ecluse.Core.Package.isAsciiNameComponent'), and safe to interpolate into an upstream URL
-('Ecluse.Core.Server.Path.isSafeComponent'). An ecosystem's own grammar runs on the result.
-
-The three travel together here because a parser that clears only one of them still reaches an
-upstream URL.
+ASCII, and safe to interpolate into an upstream URL. A parser that clears one and skips another
+still reaches that URL, which is why the three travel together.
 -}
 parseNameComponent :: Text -> Either NameRefusal Text
 parseNameComponent component

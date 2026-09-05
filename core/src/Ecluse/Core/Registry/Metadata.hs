@@ -88,12 +88,9 @@ data MetadataClient = MetadataClient
     -}
     }
 
-{- | Fetch one package's metadata document under the fetch span, then run a pure projection
-over its wire bytes under the decode span. An exchange fault folds to 'MetadataFetch', so a
-mount's projection only ever sees a body.
-
-Every mount's read operations differ in the fetch action and the projection alone, so each
-passes those two and inherits the spans and the fault fold from here.
+{- | Fetch one package's metadata document under the fetch span, then project its wire bytes
+under the decode span. An exchange fault folds to 'MetadataFetch', so a projection sees a body
+or nothing.
 -}
 fetchThenProject ::
     TracingPort ->

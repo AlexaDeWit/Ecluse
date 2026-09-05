@@ -95,9 +95,8 @@ findInRecord childBudget target = go Nothing 0
             | otherwise -> skipValue childBudget valueToks >>= go found (count + 1)
 
 {- | Collect the picked items out of an array, deciding by position so a rejected item's tokens
-are skipped unallocated. Returns the picked values in order, the raw count of items scanned,
-and the array's continuation. @budget@ is the depth budget the items sit at. The scan runs to
-the array's end, so a malformed or over-deep unpicked item still refuses the decode.
+are skipped unallocated. The scan runs to the array's end, so a malformed or over-deep unpicked
+item still refuses the decode.
 -}
 collectFromArray :: Int -> (Int -> Bool) -> TkArray k String -> Either SelectiveError ([Value], Int, k)
 collectFromArray budget pick = go [] 0
