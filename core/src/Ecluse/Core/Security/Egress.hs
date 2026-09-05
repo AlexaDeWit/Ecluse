@@ -47,7 +47,7 @@ module Ecluse.Core.Security.Egress (
 
 import Data.Text qualified as T
 
-import Ecluse.Core.Security (hostAddress)
+import Ecluse.Core.Security (authorityLabel, hostAddress)
 import Ecluse.Core.Security.Egress.Internal (RegistryUrl, mkConfiguredRegistryUrl, mkRegistryUrl, registryUrlText)
 
 {- | Resolve a packument's @dist.tarball@ URL against the https-only egress policy, given the bare
@@ -57,6 +57,9 @@ An @http:\/\/@ target on the packument's own host is upgraded to https, the lega
 registry that still advertises plaintext artifact URLs on its own host. Any other plaintext target
 is refused. This normalises a scheme and authorises nothing: the @host:port@ allowlist and the
 same-authority tarball policy still gate the resolved target at serve time.
+
+A refusal names the offending URL's authority alone, never the URL, because the reason reaches an
+operator log line and an upstream-supplied @dist.tarball@ can carry a credential.
 -}
 resolveTarballUrl :: Text -> Text -> Either Text RegistryUrl
 resolveTarballUrl upstreamHost url
@@ -64,8 +67,8 @@ resolveTarballUrl upstreamHost url
     | "http://" `T.isPrefixOf` lowered =
         if hostAddress url == upstreamHost
             then mkRegistryUrl ("https://" <> T.drop httpSchemeChars url)
-            else Left ("dist.tarball is http on a host other than the upstream registry: " <> url)
-    | otherwise = Left ("dist.tarball is not an https URL: " <> url)
+            else Left ("dist.tarball is http on a host other than the upstream registry: " <> authorityLabel url)
+    | otherwise = Left ("dist.tarball is not an https URL: " <> authorityLabel url)
   where
     lowered = T.toLower url
     -- The character count of the "http://" prefix. Dropping it from the original @url@, not

@@ -81,7 +81,7 @@ import Ecluse.Core.Package (
     pkgVersion,
  )
 import Ecluse.Core.Rules.Types (Decision (Admitted))
-import Ecluse.Core.Security (hostAddress)
+import Ecluse.Core.Security (authorityLabel, hostAddress)
 import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
 import Ecluse.Core.Version (Version, renderVersion, selectLatest)
 
@@ -166,7 +166,9 @@ enforceArtifactScheme upstreamBaseUrl info =
         case resolveDetails upstreamHost details of
             Right ok -> (Map.insert rawVersion ok keptAcc, dropAcc)
             Left (reason, badUrl) ->
-                (keptAcc, mkInvalidEntry InvalidVersionManifest rawVersion (String badUrl) reason : dropAcc)
+                -- The URL is known to be one here, so it is reduced whatever its spelling:
+                -- 'mkInvalidEntry' recognises only a scheme-bearing string.
+                (keptAcc, mkInvalidEntry InvalidVersionManifest rawVersion (String (authorityLabel badUrl)) reason : dropAcc)
 
 {- | The single-version form of 'enforceArtifactScheme', for the selective decode path.
 'Nothing' means the artifact URL is non-https and not upgradeable, so the version drops.

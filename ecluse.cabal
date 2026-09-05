@@ -732,6 +732,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.FaultSpec
     Ecluse.Core.Server.MetadataSpec
     Ecluse.Core.Server.PathSpec
+    Ecluse.Core.Server.Pipeline.DiagnosticsSpec
     Ecluse.Core.Server.Pipeline.InternalSpec
     Ecluse.Core.Server.Pipeline.PackumentSpec
     Ecluse.Core.Server.Pipeline.Tarball.RelaySpec
