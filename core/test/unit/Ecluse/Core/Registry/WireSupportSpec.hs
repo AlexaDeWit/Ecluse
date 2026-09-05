@@ -18,8 +18,10 @@ import Ecluse.Core.Package (
     mkScope,
  )
 import Ecluse.Core.Registry.WireSupport (
+    NameRefusal (NameEmpty, NameNotAscii, NameUnsafeComponent),
     Projection (NameMismatch, Projected),
     checkNameAgreement,
+    parseNameComponent,
     partitionLenient,
     partitionLenientList,
  )
@@ -33,6 +35,7 @@ spec = do
     partitionLenientSpec
     partitionLenientListSpec
     checkNameAgreementSpec
+    parseNameComponentSpec
 
 partitionLenientSpec :: Spec
 partitionLenientSpec = describe "partitionLenient" $ do
@@ -88,6 +91,33 @@ checkNameAgreementSpec = describe "checkNameAgreement" $ do
         -- bare name under a different scope is the anti-shadowing disagreement.
         checkNameAgreement (scoped "one" "x") (scoped "two" "x") (1 :: Int)
             `shouldBe` NameMismatch "@two/x"
+
+{- | The floor every ecosystem's name grammar sits on. Each ecosystem adds its own rules on
+top, so only the three shared refusals are pinned here.
+-}
+parseNameComponentSpec :: Spec
+parseNameComponentSpec = describe "parseNameComponent" $ do
+    it "admits an ordinary component unchanged" $
+        parseNameComponent "left-pad" `shouldBe` Right "left-pad"
+
+    it "refuses an empty component" $
+        parseNameComponent "" `shouldBe` Left NameEmpty
+
+    it "refuses a non-ASCII component" $
+        parseNameComponent "caf\233" `shouldBe` Left NameNotAscii
+
+    it "refuses an ASCII control character" $
+        parseNameComponent "left\tpad" `shouldBe` Left NameNotAscii
+
+    it "refuses a path separator, which would reach an upstream URL as structure" $
+        parseNameComponent "a/b" `shouldBe` Left NameUnsafeComponent
+
+    it "refuses a backslash separator" $
+        parseNameComponent "a\\b" `shouldBe` Left NameUnsafeComponent
+
+    it "refuses the traversal components" $ do
+        parseNameComponent "." `shouldBe` Left NameUnsafeComponent
+        parseNameComponent ".." `shouldBe` Left NameUnsafeComponent
 
 -- | Decode a JSON value as an 'Int', the per-entry decode the partition drives.
 decodeInt :: Value -> Either String Int

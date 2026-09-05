@@ -31,6 +31,7 @@ import Data.Text.Short qualified as TS
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (PackageName, canonicalise, mkPackageName, pkgCanonical, pkgEcosystem)
 import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.WireSupport (parseNameComponent)
 
 {- | A PyPI name prefix in PEP 503 canonical form. PyPI has no structural namespace like npm's
 'Ecluse.Core.Package.Scope', so a deployment owns a prefix of its distributions' names.
@@ -38,15 +39,15 @@ import Ecluse.Core.Registry (ParseError (..))
 newtype PyPIPrefix = PyPIPrefix ShortText
     deriving stock (Eq, Show)
 
-{- | Build a prefix through the canonicaliser 'mkPackageName' uses. 'Nothing' for text no PyPI name
-can start with, or that canonicalises to nothing and would cover every name.
+{- | Build a prefix through the canonicaliser 'mkPackageName' uses, over the shared name floor.
+'Nothing' for text no PyPI name can start with, or that canonicalises to nothing and would cover
+every name.
 -}
 mkPyPIPrefix :: Text -> Maybe PyPIPrefix
-mkPyPIPrefix raw
-    | T.null canonical || not (T.all canonicalPyPIChar canonical) = Nothing
-    | otherwise = Just (PyPIPrefix (TS.fromText canonical))
-  where
-    canonical = canonicalise PyPI raw
+mkPyPIPrefix raw = do
+    canonical <- rightToMaybe (parseNameComponent (canonicalise PyPI raw))
+    guard (T.all canonicalPyPIChar canonical)
+    pure (PyPIPrefix (TS.fromText canonical))
 
 -- PEP 503's canonical alphabet, the form the PyPI canonicaliser leaves a legal name in.
 canonicalPyPIChar :: Char -> Bool

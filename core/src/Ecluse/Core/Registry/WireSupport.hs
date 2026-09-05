@@ -14,6 +14,10 @@ into the domain model, shared by every ecosystem's projection
   Every ecosystem's element-wise-lenient axis layers its own decode on top: npm's
   @versions@\/@dist-tags@\/@time@ maps, or an array-shaped index's file list, which
   supplies each element's key itself.
+* __The name floor__. 'parseNameComponent' is the non-empty, ASCII, path-safe trio every
+  captured or wire-declared name component must clear before it reaches an interpolated
+  upstream URL. Each ecosystem's grammar sits on it and adds only its own rules, so no
+  parser can reach a URL having checked one of the three and forgotten another.
 * __Name agreement__. 'checkNameAgreement' checks that the name an upstream self-reports
   agrees with the name the proxy resolved from the route, and carries what was projected
   through on agreement. The requested name is the validation authority, never a rewrite. A
@@ -28,18 +32,26 @@ module Ecluse.Core.Registry.WireSupport (
     -- * Name agreement
     Projection (..),
     checkNameAgreement,
+
+    -- * The name floor
+    NameRefusal (..),
+    parseNameComponent,
 ) where
 
 import Data.Aeson (Value)
 import Data.Map.Strict qualified as Map
 
+import Data.Text qualified as T
+
 import Ecluse.Core.Package (
     InvalidEntry,
     InvalidEntryKind,
     PackageName,
+    isAsciiNameComponent,
     mkInvalidEntry,
     renderPackageName,
  )
+import Ecluse.Core.Server.Path (isSafeComponent)
 
 {- | Partition a list of keyed raw entries into the ones that decode and the ones that do not.
 Each dropped entry carries its key, its offending 'Value', and the decode error as the reason,
@@ -83,3 +95,27 @@ checkNameAgreement :: PackageName -> PackageName -> a -> Projection a
 checkNameAgreement requestedName reportedName projected
     | reportedName == requestedName = Projected projected
     | otherwise = NameMismatch (renderPackageName reportedName)
+
+-- | Why a name component did not clear the floor every ecosystem's grammar sits on.
+data NameRefusal
+    = -- | The component was empty, so it names nothing.
+      NameEmpty
+    | -- | The component carried a non-ASCII or control codepoint, which renders two names as one.
+      NameNotAscii
+    | -- | The component was not a safe path component (a separator, a dot-dot, a control byte).
+      NameUnsafeComponent
+    deriving stock (Eq, Show)
+
+{- | Parse one component of a package name against the floor every ecosystem shares: non-empty,
+ASCII ('Ecluse.Core.Package.isAsciiNameComponent'), and safe to interpolate into an upstream URL
+('Ecluse.Core.Server.Path.isSafeComponent'). An ecosystem's own grammar runs on the result.
+
+The three travel together here because a parser that clears only one of them still reaches an
+upstream URL.
+-}
+parseNameComponent :: Text -> Either NameRefusal Text
+parseNameComponent component
+    | T.null component = Left NameEmpty
+    | not (isAsciiNameComponent component) = Left NameNotAscii
+    | not (isSafeComponent component) = Left NameUnsafeComponent
+    | otherwise = Right component

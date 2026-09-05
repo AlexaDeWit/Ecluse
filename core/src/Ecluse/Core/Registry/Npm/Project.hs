@@ -45,8 +45,9 @@ malformed scoped name rather than an unscoped one.
 Each part of a name parses against npm's own __error tier__, the rules invalid for every
 package, legacy included: the allowlist that survives @encodeURIComponent@ unchanged (letters,
 digits, and @-_.!~*'()@), no leading period, hyphen, or underscore, and neither reserved name
-(@node_modules@, @favicon.ico@). It sits on 'isAsciiNameComponent', the charset boundary Écluse
-holds ecosystem-wide, so nothing non-ASCII or invisible enters by construction. npm's __warning
+(@node_modules@, @favicon.ico@). It sits on
+'Ecluse.Core.Registry.WireSupport.parseNameComponent', the non-empty, ASCII, path-safe floor
+Écluse holds ecosystem-wide, so nothing invisible or path-unsafe enters by construction. npm's __warning
 tier__ still parses, because real legacy names use it: capitals (@JSONStream@) and @~'!()*@. A
 name over 214 characters never parses, counted whole including any scope prefix, as npm counts it.
 -}
@@ -85,7 +86,6 @@ import Ecluse.Core.Package (
     Person (..),
     Scope,
     Trust (TrustUnknown),
-    isAsciiNameComponent,
     mkHash,
     mkPackageName,
     mkScope,
@@ -99,11 +99,12 @@ import Ecluse.Core.Registry.Npm.Wire (
  )
 import Ecluse.Core.Registry.Npm.Wire qualified as Wire
 import Ecluse.Core.Registry.WireSupport (
+    NameRefusal (NameEmpty, NameNotAscii, NameUnsafeComponent),
     Projection,
     checkNameAgreement,
+    parseNameComponent,
     partitionLenient,
  )
-import Ecluse.Core.Server.Path (isSafeComponent)
 import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
@@ -336,22 +337,28 @@ projectScope raw = do
   where
     bare = fromMaybe raw (T.stripPrefix "@" raw)
 
-{- One component of an npm name, the scope or the bare name. It reaches an interpolated upstream
-URL, so an unsafe spelling must never parse. 'projectName' and 'projectScope' own the length cap. -}
+{- One component of an npm name, the scope or the bare name. It sits on the shared name floor
+and adds npm's own grammar. 'projectName' and 'projectScope' own the length cap. -}
 nameComponent :: Text -> Either ParseError Text
-nameComponent component
-    | T.null component = Left (ParseError "empty npm name component")
-    | not (isAsciiNameComponent component) =
-        Left (ParseError ("non-ASCII npm name component: " <> show component))
-    | usableComponent component = Right component
-    | otherwise = Left (ParseError ("unusable npm name component: " <> show component))
+nameComponent component = do
+    onFloor <- first (refusalText component) (parseNameComponent component)
+    if usableComponent onFloor
+        then Right onFloor
+        else Left (ParseError ("unusable npm name component: " <> show component))
 
-{- npm's error tier for one name part, the rules invalid for every package, legacy included: the
-allowlist @encodeURIComponent@ leaves unchanged, no leading @.@\/@-@\/@_@, neither reserved name. -}
+-- npm's own wording for each way the shared floor refuses a component.
+refusalText :: Text -> NameRefusal -> ParseError
+refusalText component = \case
+    NameEmpty -> ParseError "empty npm name component"
+    NameNotAscii -> ParseError ("non-ASCII npm name component: " <> show component)
+    NameUnsafeComponent -> ParseError ("unusable npm name component: " <> show component)
+
+{- npm's error tier for one name part on top of the floor, the rules invalid for every package,
+legacy included: the allowlist @encodeURIComponent@ leaves unchanged, no leading @.@\/@-@\/@_@,
+neither reserved name. -}
 usableComponent :: Text -> Bool
 usableComponent component =
-    isSafeComponent component
-        && T.all npmNameChar component
+    T.all npmNameChar component
         && T.take 1 component `notElem` [".", "-", "_"]
         && T.toLower component `notElem` reservedNames
 
