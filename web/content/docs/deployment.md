@@ -296,7 +296,7 @@ upgrades a plaintext `dist.tarball` to https on its own host. A plaintext URL on
 drops the version from the listing. An https URL on a host the gate does not permit stays listed
 and is refused with a `403` when a client asks for the artifact. No configuration widens that.
 
-**Écluse identifies itself on every outbound request.** The `User-Agent` is `ecluse/<version>`,
+**Écluse identifies itself on every registry and mirror-target request.** The `User-Agent` is `ecluse/<version>`,
 naming the running build. An upstream, a WAF, or a forward proxy that filters on the agent has to
 allow it.
 

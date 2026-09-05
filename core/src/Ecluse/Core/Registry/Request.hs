@@ -41,28 +41,11 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Text (joinUrlPath)
 
-{- | Seal the outbound invariants onto a data-plane request: pin @redirectCount = 0@, and
-identify the proxy with a @User-Agent@ unless one is already set. It is idempotent, so a
-request that passes several formation steps carries one pin and one identity header.
-'parseRequestEither' seals what it parses and "Ecluse.Core.Registry.Publish" re-seals whatever
-a codec hands it, so __Écluse never follows an upstream redirect__, on the credentialed and
-the anonymous plane alike.
-
-Two dangers the pin forecloses:
-
-\* __Credential leakage__ (credentialed plane). The http-client default @redirectCount = 10@
-re-sends the @Authorization@ header to the redirect's @Location@, and
-@shouldStripHeaderOnRedirect@ does not strip it cross-host. A hostile or misconfigured upstream
-could @302@ a forwarded or minted credential to an attacker-chosen host, worst of all on the
-trusted private manager.
-
-\* __SSRF via redirect__ (anonymous plane). The proxy enforces the host allowlist when it builds
-the URL, not per redirect hop. Following a @302@ would let an allowlisted upstream steer an
-anonymous fetch to any host, an internal or cloud-metadata address included.
-
-The accepted consequence: a read returns an upstream CDN's @3xx@ to the serve path rather than
-chasing it. Écluse honours the packument's @dist.tarball@ location explicitly instead, gated by
-the egress policy.
+{- | Seal the outbound invariants onto a request: pin @redirectCount = 0@ and add the
+proxy's @User-Agent@ unless one is set. Idempotent, so several formation steps yield one pin
+and one header. 'parseRequestEither' seals what it parses and "Ecluse.Core.Registry.Publish"
+re-seals what a codec hands it. A followed redirect could re-send a credential cross-host or
+steer an anonymous fetch past the host allowlist; the threat model records both.
 -}
 sealRequest :: Request -> Request
 sealRequest request =

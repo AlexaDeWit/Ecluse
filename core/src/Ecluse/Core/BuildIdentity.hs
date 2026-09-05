@@ -3,12 +3,10 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The proxy's own identity: the product name, the version the build declares, and the
-@User-Agent@ every outbound request carries. The version is read from @Paths_ecluse@, so it
-follows the @version:@ field of @ecluse.cabal@ that VERSIONING.md makes authoritative.
-
-This is proxy identity rather than any ecosystem's protocol fact, so it lives outside every
-adapter namespace. The module depends on nothing else in @Ecluse@, so any module may import
-it without risking an import cycle.
+@User-Agent@ every registry and mirror-target request carries. The version is read from
+@Paths_ecluse@, so it follows the @version:@ field of @ecluse.cabal@. Proxy identity is no
+ecosystem's protocol fact, so it lives outside every adapter namespace and imports nothing
+from @Ecluse@.
 -}
 module Ecluse.Core.BuildIdentity (
     productName,
