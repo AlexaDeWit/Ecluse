@@ -52,6 +52,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Test.Package (unsafeFilename, unsafeHash, unscopedNpm, validSha1)
+import Ecluse.Test.Server.Route (genPathSegmentFrom, genSegmentName)
 
 {- | Each npm name a splitter must agree on, paired with whether it names a package. A bare
 @\@foo@ is a malformed scoped name, not an unscoped one, so it is refused everywhere.
@@ -220,22 +221,13 @@ defaultNpmConfig baseUrl manager =
 
 -- | A URL path of arbitrary segments, at the length a router's property explores.
 genPathSegments :: Gen [Text]
-genPathSegments = Gen.list (Range.linear 0 4) genPathSegment
+genPathSegments = Gen.list (Range.linear 0 4) genNpmPathSegment
 
-{- | One path segment. The weights keep every arm a router property samples: plain names,
-scoped names, the literal pool, and free text over the punctuation a path carries.
+{- | One path segment. npm's scoped names are its own arm, and the shared generator supplies the
+plain-name, literal-pool, and free-text arms at the same weights.
 -}
-genPathSegment :: Gen Text
-genPathSegment =
-    Gen.frequency
-        [ (5, genSegmentName)
-        , (2, genScopedSegmentName)
-        , (4, Gen.element pathSegmentPool)
-        , (4, Gen.text (Range.linear 0 8) (Gen.element segmentChars))
-        ]
-
-genSegmentName :: Gen Text
-genSegmentName = Gen.text (Range.linear 1 8) (Gen.frequency [(8, Gen.alphaNum), (2, Gen.element ['.', '-', '_'])])
+genNpmPathSegment :: Gen Text
+genNpmPathSegment = Gen.frequency [(2, genScopedSegmentName), (13, genPathSegmentFrom npmPathLiterals)]
 
 genScopedSegmentName :: Gen Text
 genScopedSegmentName = do
@@ -245,27 +237,17 @@ genScopedSegmentName = do
         , (\base -> "@" <> scope <> "/" <> base) <$> genSegmentName
         ]
 
--- Traversal, separator, control, and extension fragments a segment must never be trusted with,
--- alongside the real names and route words a table has to keep matching.
-pathSegmentPool :: [Text]
-pathSegmentPool =
-    [ ""
-    , "."
-    , ".."
-    , "-"
-    , "-foo"
-    , "@"
+-- The scoped-name shapes, real names, and route words npm's table has to keep matching, beside
+-- the traversal, separator, and control fragments the shared generator builds in.
+npmPathLiterals :: [Text]
+npmPathLiterals =
+    [ "@"
     , "@/x"
     , "@scope"
     , "@scope/"
     , "@scope/pkg"
-    , "a/b"
-    , "a\\b"
-    , "a\tb"
-    , "a\0b"
     , "../evil.tgz"
     , "x.tgz"
-    , "foo/bar"
     , "lodash"
     , "pkg"
     , "ping"
@@ -274,6 +256,3 @@ pathSegmentPool =
     , "lodash-1.0.0.tgz"
     , "code-frame-7.0.0.tgz"
     ]
-
-segmentChars :: String
-segmentChars = ['a', 'b', 'c', 'n', 'p', 'm', '@', '-', '/', '.', '%', ' ', '1', '2', '3', '4']
