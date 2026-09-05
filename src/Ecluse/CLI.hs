@@ -8,11 +8,10 @@ module Ecluse.CLI (
     execCLI,
 ) where
 
-import Data.Version (showVersion)
 import Options.Applicative
-import Paths_ecluse (version)
 
 import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
+import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Pilot (PilotCompileOptions (..))
 
 data AppCommand
@@ -73,4 +72,4 @@ execCLI =
                 <> header "ecluse - a configurable policy gate for package registries"
             )
   where
-    versionOption = infoOption (showVersion version) (long "version" <> help "Show version")
+    versionOption = infoOption (toString productVersion) (long "version" <> help "Show version")
