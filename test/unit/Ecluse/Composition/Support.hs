@@ -125,7 +125,7 @@ noMaintenanceBackend = StoreMaintenanceUnavailable Npm (NoControlPlane TagRegist
 -- | The repository a cleared CodeArtifact store addresses, 'Nothing' for any other arm.
 clearedRepository :: ClearedBackend -> Maybe Text
 clearedRepository = \case
-    ClearedCodeArtifact store -> Just (casRepository store)
+    ClearedCodeArtifact store _ -> Just (casRepository store)
     ClearedProtocol{} -> Nothing
 
 -- | Drop the registry mirror-target URL, so a test can declare its own target under any tag.

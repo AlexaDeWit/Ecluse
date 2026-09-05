@@ -20,16 +20,22 @@ import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
+    NameAlphabet,
+    NamePrefix,
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryFutile),
     StoreClass (StoreDestroyable, StorePreserved),
+    StoreCursor (..),
     StoreFacts (..),
     StoreFault (..),
     StoreMaintenance (..),
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed),
+    mkNameAlphabet,
     refusalCode,
+    renderNamePrefix,
+    wholeNameSpace,
  )
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact (
@@ -42,9 +48,11 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     codeArtifactFormat,
     consentTagKey,
     consentTagValue,
+    cursorTagKey,
  )
+import Ecluse.Test.Maintenance (drainPages, oneBucket)
 
-{- | The CodeArtifact handle's facts and the sequencing around its five calls, driven over 'ControlPlane'
+{- | The CodeArtifact handle's facts and the sequencing around its calls, driven over 'ControlPlane'
 answers built from @amazonka@'s own types. Each decision is covered in "Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec".
 -}
 spec :: Spec
@@ -60,12 +68,13 @@ handleCases store = do
     deleteCases store
     consentCases store
     classificationCases store
+    cursorCases store
 
 factCases :: CodeArtifactStore -> Spec
 factCases store = describe "the CodeArtifact handle's standing facts" $ do
     it "names the backend the Dredger's boot line records" $ do
         facts <- factsFor store
-        factBackend facts `shouldBe` "codeartifact"
+        factBackend facts `shouldBe` "codeArtifact"
 
     it "accepts 100 versions per destructive call" $ do
         facts <- factsFor store
@@ -79,6 +88,10 @@ factCases store = describe "the CodeArtifact handle's standing facts" $ do
         facts <- factsFor store
         factCompletion facts `shouldBe` CompletesOnCall
 
+    it "carries the alphabet it was built with, which is the mount ecosystem's own" $ do
+        facts <- factsFor store
+        factNameAlphabet facts `shouldBe` testAlphabet
+
     it "offers no rehearsal, because CodeArtifact has no call that reports one" $ do
         handle <- handleFor store
         isJust (rehearseDelete handle) `shouldBe` False
@@ -89,25 +102,39 @@ enumerationCases store = describe "the handle's paged enumerations" $ do
         tokens <- newIORef []
         answer <- answersFrom [packagesPage (Just "p2") ["lodash"], packagesPage Nothing ["axios"]]
         let plane = inertPlane{cpListPackages = \request -> record tokens (request ^. CAL.listPackages_nextToken) >> answer}
-        outcome <- enumeratePackages (maintenanceFor store plane)
+        outcome <- listBucket store plane wholeNameSpace
         fmap (map renderPackageName) outcome `shouldBe` Right ["lodash", "axios"]
         readIORef tokens `shouldReturn` [Nothing, Just "p2"]
 
     it "reads a package page carrying no packages field as an empty page" $ do
         let plane = inertPlane{cpListPackages = \_ -> pure (Right (CA.newListPackagesResponse 200))}
-        enumeratePackages (maintenanceFor store plane) `shouldReturn` Right []
+        listBucket store plane wholeNameSpace `shouldReturn` Right []
+
+    it "sends the bucket as the listing's own package prefix, so the store does the filtering" $ do
+        prefixes <- newIORef []
+        answer <- answersFrom [packagesPage Nothing ["lodash"]]
+        let plane = inertPlane{cpListPackages = \request -> record prefixes (request ^. CAL.listPackages_packagePrefix) >> answer}
+        _ <- listBucket store plane (bucket 'l')
+        readIORef prefixes `shouldReturn` [Just "l"]
+
+    it "sends no prefix at all for the bucket that covers the whole store" $ do
+        prefixes <- newIORef []
+        answer <- answersFrom [packagesPage Nothing ["lodash"]]
+        let plane = inertPlane{cpListPackages = \request -> record prefixes (request ^. CAL.listPackages_packagePrefix) >> answer}
+        _ <- listBucket store plane wholeNameSpace
+        readIORef prefixes `shouldReturn` [Nothing]
 
     it "pages a package's versions to exhaustion, sending back the token the last page returned" $ do
         tokens <- newIORef []
         answer <- answersFrom [versionsPage (Just "v2") ["1.0.0"], versionsPage Nothing ["1.1.0"]]
         let plane = inertPlane{cpListVersions = \request -> record tokens (request ^. CAL.listPackageVersions_nextToken) >> answer}
-        outcome <- enumerateVersions (maintenanceFor store plane) aPackage
+        outcome <- enumerateVersions (handleOver store plane) aPackage
         outcome `shouldBe` Right [served "1.0.0", served "1.1.0"]
         readIORef tokens `shouldReturn` [Nothing, Just "v2"]
 
     it "reads a version page carrying no versions field as an empty page" $ do
         let plane = inertPlane{cpListVersions = \_ -> pure (Right (CA.newListPackageVersionsResponse 200))}
-        enumerateVersions (maintenanceFor store plane) aPackage `shouldReturn` Right []
+        enumerateVersions (handleOver store plane) aPackage `shouldReturn` Right []
 
 deleteCases :: CodeArtifactStore -> Spec
 deleteCases store = describe "the handle's chunked delete" $ do
@@ -120,19 +147,19 @@ deleteCases store = describe "the handle's chunked delete" $ do
                         record sizes (length submitted)
                         pure (Right (allRemoved submitted))
                     }
-        outcomes <- deleteVersions (maintenanceFor store plane) aPackage (versionRun 101)
+        outcomes <- deleteVersions (handleOver store plane) aPackage (versionRun 101)
         readIORef sizes `shouldReturn` [100, 1]
         map snd outcomes `shouldBe` replicate 101 VersionRemoved
 
     it "refuses a version the store answered for neither way, never reports it removed" $ do
         let plane = inertPlane{cpDeleteVersions = \_ -> pure (Right (CA.newDeletePackageVersionsResponse 200))}
-        outcomes <- deleteVersions (maintenanceFor store plane) aPackage (versionRun 2)
+        outcomes <- deleteVersions (handleOver store plane) aPackage (versionRun 2)
         map (refusalCodeOf . snd) outcomes `shouldBe` replicate 2 (Just "UNREPORTED")
 
     it "stops at the first faulted chunk and marks every submitted version unreached" $ do
         calls <- newIORef (0 :: Int)
         let plane = inertPlane{cpDeleteVersions = \_ -> modifyIORef' calls (+ 1) >> pure (Left storeUnreachable)}
-        outcomes <- deleteVersions (maintenanceFor store plane) aPackage (versionRun 101)
+        outcomes <- deleteVersions (handleOver store plane) aPackage (versionRun 101)
         readIORef calls `shouldReturn` 1
         map snd outcomes `shouldBe` replicate 101 (VersionUnreached storeUnreachable)
 
@@ -177,6 +204,73 @@ classificationCases store = describe "the handle's store classification" $ do
         verdict <- classifyUnder store (Right (CA.newDescribeRepositoryResponse 200))
         first detailOf verdict `shouldBe` Left "the store described no repository"
 
+cursorCases :: CodeArtifactStore -> Spec
+cursorCases store = describe "the handle's walk cursor" $ do
+    it "offers one, because a repository tag is somewhere to keep it" $
+        isJust (storeCursor (handleOver store inertPlane)) `shouldBe` True
+
+    it "reads back the bucket the cursor tag records, describing the repository first" $ do
+        calls <- newIORef []
+        let plane =
+                inertPlane
+                    { cpDescribeRepository = \_ -> record calls "describe" >> pure (Right describedWithArn)
+                    , cpListTags = \_ -> record calls "tags" >> pure (Right (taggedWith [markerTag, cursorTag "l"]))
+                    }
+        outcome <- withCursor store plane readCursor
+        fmap (fmap renderNamePrefix) outcome `shouldBe` Right (Just "l")
+        readIORef calls `shouldReturn` (["describe", "tags"] :: [Text])
+
+    it "reads no cursor from a repository carrying the consent tag alone" $ do
+        let plane =
+                inertPlane
+                    { cpDescribeRepository = \_ -> pure (Right describedWithArn)
+                    , cpListTags = \_ -> pure (Right (taggedWith [markerTag]))
+                    }
+        outcome <- withCursor store plane readCursor
+        outcome `shouldBe` Right Nothing
+
+    it "writes exactly the one cursor key, so the consent tag stays out of its reach" $ do
+        written <- newIORef []
+        let plane =
+                inertPlane
+                    { cpDescribeRepository = \_ -> pure (Right describedWithArn)
+                    , cpTagResource = \request -> do
+                        record written (map (^. CAL.tag_key) (request ^. CAL.tagResource_tags))
+                        pure (Right (CA.newTagResourceResponse 200))
+                    }
+        outcome <- withCursor store plane (`writeCursor` bucket 'l')
+        outcome `shouldBe` Right ()
+        readIORef written `shouldReturn` [[cursorTagKey Npm]]
+        cursorTagKey Npm `shouldNotBe` consentTagKey
+
+    it "clears the walk by removing that one key and no other" $ do
+        removed <- newIORef []
+        let plane =
+                inertPlane
+                    { cpDescribeRepository = \_ -> pure (Right describedWithArn)
+                    , cpUntagResource = \request -> do
+                        record removed (request ^. CAL.untagResource_tagKeys)
+                        pure (Right (CA.newUntagResourceResponse 200))
+                    }
+        outcome <- withCursor store plane clearCursor
+        outcome `shouldBe` Right ()
+        readIORef removed `shouldReturn` [[cursorTagKey Npm]]
+
+    it "reports a describe that did not land, and writes nothing after it" $ do
+        let plane = inertPlane{cpDescribeRepository = \_ -> pure (Left storeUnreachable)}
+        outcome <- withCursor store plane (`writeCursor` bucket 'l')
+        outcome `shouldBe` Left storeUnreachable
+
+{- Run one cursor call over a wired plane. The handle offers a cursor on every CodeArtifact
+repository, so a case that finds none has found a regression rather than a backend arm. -}
+withCursor :: CodeArtifactStore -> ControlPlane -> (StoreCursor -> IO a) -> IO a
+withCursor store plane act = case storeCursor (handleOver store plane) of
+    Nothing -> fail "the CodeArtifact handle offers a walk cursor"
+    Just cursor -> act cursor
+
+cursorTag :: Text -> CA.Tag
+cursorTag = CA.newTag (cursorTagKey Npm)
+
 -- | Read the consent verdict over a plane that records the order of the two calls.
 consentUnder ::
     CodeArtifactStore ->
@@ -185,7 +279,7 @@ consentUnder ::
     Either StoreFault CA.ListTagsForResourceResponse ->
     IO (Either StoreFault ConsentVerdict)
 consentUnder store calls described tagged =
-    verifyConsent . maintenanceFor store $
+    verifyConsent . handleOver store $
         inertPlane
             { cpDescribeRepository = \_ -> record calls "describe" >> pure described
             , cpListTags = \_ -> record calls "tags" >> pure tagged
@@ -194,7 +288,7 @@ consentUnder store calls described tagged =
 -- | Classify the store over a plane whose describe call answers with the given outcome.
 classifyUnder :: CodeArtifactStore -> Either StoreFault CA.DescribeRepositoryResponse -> IO (Either StoreFault StoreClass)
 classifyUnder store described =
-    classifyStore (maintenanceFor store inertPlane{cpDescribeRepository = \_ -> pure described})
+    classifyStore (handleOver store inertPlane{cpDescribeRepository = \_ -> pure described})
 
 {- Every call answers with a fault naming itself, so a case wires only the fields it drives and a
 call it did not expect reads as a failure rather than a silent success. -}
@@ -206,6 +300,8 @@ inertPlane =
         , cpDeleteVersions = unexpected "DeletePackageVersions"
         , cpListTags = unexpected "ListTagsForResource"
         , cpDescribeRepository = unexpected "DescribeRepository"
+        , cpTagResource = unexpected "TagResource"
+        , cpUntagResource = unexpected "UntagResource"
         }
   where
     unexpected name _ = pure (Left (faultSaying ("the spec wired no " <> name <> " answer")))
@@ -298,10 +394,24 @@ versionRun n = [mkVersion Npm ("1.0." <> show i) | i <- [1 .. n]]
 factsFor :: CodeArtifactStore -> IO StoreFacts
 factsFor store = storeFacts <$> handleFor store
 
+{- A two-character alphabet over the names these cases seed, so the bucket the handle sends is
+readable without this spec knowing an ecosystem's grammar. -}
+testAlphabet :: NameAlphabet
+testAlphabet = mkNameAlphabet "al"
+
+handleOver :: CodeArtifactStore -> ControlPlane -> StoreMaintenance
+handleOver = maintenanceFor testAlphabet
+
+bucket :: Char -> NamePrefix
+bucket = oneBucket
+
+listBucket :: CodeArtifactStore -> ControlPlane -> NamePrefix -> IO (Either StoreFault [PackageName])
+listBucket store plane = drainPages . listPackagesIn (handleOver store plane)
+
 -- Dummy static credentials: the handle is held and read, never sent anywhere.
 handleFor :: CodeArtifactStore -> IO StoreMaintenance
 handleFor store =
-    maintenanceForEnv store
+    maintenanceForEnv testAlphabet store
         <$> AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))
 
 npmStore :: Maybe CodeArtifactStore

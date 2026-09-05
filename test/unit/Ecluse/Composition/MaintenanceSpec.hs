@@ -42,7 +42,9 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMaintenance), adapterFor)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (AdapterMaintenance, maintenanceListing, maintenanceVersionDelete))
+import Ecluse.Core.Registry.Adapter.Capability (
+    AdapterMaintenance (AdapterMaintenance, maintenanceAlphabet, maintenanceListing, maintenanceVersionDelete),
+ )
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
@@ -50,6 +52,7 @@ import Ecluse.Core.Registry.Maintenance (
     RefillPosture (RefillPermitted),
     StoreFacts (..),
     StoreMaintenance (storeFacts, verifyConsent),
+    noNameAlphabet,
  )
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
@@ -202,7 +205,14 @@ vetted role mounts = runVet role (vetStoreBackends adapterFor mounts)
 withoutMaintenance :: ResolveMaintenanceAdapter
 withoutMaintenance eco =
     adapterFor eco <&> \adapter ->
-        adapter{adapterMaintenance = AdapterMaintenance{maintenanceListing = Nothing, maintenanceVersionDelete = Nothing}}
+        adapter
+            { adapterMaintenance =
+                AdapterMaintenance
+                    { maintenanceListing = Nothing
+                    , maintenanceVersionDelete = Nothing
+                    , maintenanceAlphabet = noNameAlphabet
+                    }
+            }
 
 -- Whether a cleared backend is the protocol arm, which is what a Verdaccio target resolves to.
 protocolArm :: ClearedBackend -> Bool

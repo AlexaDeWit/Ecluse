@@ -25,9 +25,13 @@ import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 import Lens.Micro ((^.))
 
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict,
+    NameAlphabet,
+    NamePrefix,
+    StoreCursor (..),
     StoreFault,
     StoreMaintenance (..),
     StoredVersion,
@@ -35,6 +39,7 @@ import Ecluse.Core.Registry.Maintenance (
     chunksOfCeiling,
     deleteAll,
     pageAll,
+    pageSource,
  )
 import Ecluse.Core.Version (Version)
 import Ecluse.Runtime.Aws.Env (newAwsEnv)
@@ -46,6 +51,9 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     classifyStoreFault,
     codeArtifactFacts,
     consentOfTags,
+    cursorOfTags,
+    cursorTagRequest,
+    cursorUntagRequest,
     deleteCeiling,
     deleteRequest,
     describeRepositoryRequest,
@@ -59,8 +67,8 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     versionsOfPage,
  )
 
-{- | The five control-plane calls this leaf makes, one field each, so the sequencing around them
-is drivable from response values of @amazonka@'s own types.
+{- | The control-plane calls this leaf makes, one field each, so the sequencing around them is
+drivable from response values of @amazonka@'s own types.
 -}
 data ControlPlane = ControlPlane
     { cpListPackages :: CA.ListPackages -> IO (Either StoreFault CA.ListPackagesResponse)
@@ -68,21 +76,23 @@ data ControlPlane = ControlPlane
     , cpDeleteVersions :: CA.DeletePackageVersions -> IO (Either StoreFault CA.DeletePackageVersionsResponse)
     , cpListTags :: CA.ListTagsForResource -> IO (Either StoreFault CA.ListTagsForResourceResponse)
     , cpDescribeRepository :: CA.DescribeRepository -> IO (Either StoreFault CA.DescribeRepositoryResponse)
+    , cpTagResource :: CA.TagResource -> IO (Either StoreFault CA.TagResourceResponse)
+    , cpUntagResource :: CA.UntagResource -> IO (Either StoreFault CA.UntagResourceResponse)
     }
 
 {- | Build the maintenance handle for one CodeArtifact repository, with AWS credentials
 discovered the standard way (environment, credentials file, web identity, container role,
 instance role).
 -}
-newCodeArtifactMaintenance :: CodeArtifactStore -> IO StoreMaintenance
-newCodeArtifactMaintenance store =
-    maintenanceForEnv store <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+newCodeArtifactMaintenance :: NameAlphabet -> CodeArtifactStore -> IO StoreMaintenance
+newCodeArtifactMaintenance alphabet store =
+    maintenanceForEnv alphabet store <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
 
 {- | Build the handle over a caller-supplied @amazonka@ 'AWS.Env'. Exposed so a test can hold the
 handle, and the facts it supplies, without discovering an ambient AWS identity.
 -}
-maintenanceForEnv :: CodeArtifactStore -> AWS.Env -> StoreMaintenance
-maintenanceForEnv store env = maintenanceFor store (controlPlaneFor env)
+maintenanceForEnv :: NameAlphabet -> CodeArtifactStore -> AWS.Env -> StoreMaintenance
+maintenanceForEnv alphabet store env = maintenanceFor alphabet store (controlPlaneFor env)
 
 -- | Every call sent over one env, with the AWS error folded into a 'StoreFault'.
 controlPlaneFor :: AWS.Env -> ControlPlane
@@ -93,28 +103,31 @@ controlPlaneFor env =
         , cpDeleteVersions = sendStore env
         , cpListTags = sendStore env
         , cpDescribeRepository = sendStore env
+        , cpTagResource = sendStore env
+        , cpUntagResource = sendStore env
         }
 
 -- | Build the handle over a caller-supplied 'ControlPlane', which is all the effects it has.
-maintenanceFor :: CodeArtifactStore -> ControlPlane -> StoreMaintenance
-maintenanceFor store plane =
+maintenanceFor :: NameAlphabet -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
+maintenanceFor alphabet store plane =
     StoreMaintenance
-        { storeFacts = codeArtifactFacts
-        , enumeratePackages = pageAll (packagePage plane store)
+        { storeFacts = codeArtifactFacts alphabet
+        , listPackagesIn = pageSource . packagePage plane store
         , enumerateVersions = pageAll . versionPage plane store
         , deleteVersions = deleteChunks plane store
         , -- CodeArtifact has no call that reports what a delete would do without doing it.
           rehearseDelete = Nothing
         , verifyConsent = readConsent plane store
         , classifyStore = fmap (fmap classifyRepository) (describeStore plane store)
+        , storeCursor = Just (walkCursor alphabet plane store)
         }
 
 sendStore :: (AWS.AWSRequest a) => AWS.Env -> a -> IO (Either StoreFault (AWS.AWSResponse a))
 sendStore = sendClassified classifyStoreFault
 
-packagePage :: ControlPlane -> CodeArtifactStore -> Maybe Text -> IO (Either StoreFault (Maybe Text, [PackageName]))
-packagePage plane store token =
-    fmap page <$> cpListPackages plane (listPackagesRequest store token)
+packagePage :: ControlPlane -> CodeArtifactStore -> NamePrefix -> Maybe Text -> IO (Either StoreFault (Maybe Text, [PackageName]))
+packagePage plane store prefix token =
+    fmap page <$> cpListPackages plane (listPackagesRequest store prefix token)
   where
     page response =
         ( response ^. CAL.listPackagesResponse_nextToken
@@ -146,17 +159,37 @@ deleteChunks plane store name versions =
     send batch =
         fmap (foldDeleteResponse batch) <$> cpDeleteVersions plane (deleteRequest store name batch)
 
--- The consent marker is a tag on the repository, and a tag read is addressed by ARN, so
--- the description comes first.
+-- The consent marker is a tag on the repository, so the ARN comes first.
 readConsent :: ControlPlane -> CodeArtifactStore -> IO (Either StoreFault ConsentVerdict)
 readConsent plane store =
+    withRepositoryArn plane store $ \arn ->
+        fmap (consentOfTags . tagsOfResponse) <$> cpListTags plane (listTagsRequest arn)
+
+{- The walk cursor is a second tag on the same repository, the only one this leaf writes. Its
+three calls address the repository by ARN, exactly as the consent read does. -}
+walkCursor :: NameAlphabet -> ControlPlane -> CodeArtifactStore -> StoreCursor
+walkCursor alphabet plane store =
+    StoreCursor
+        { readCursor = withRepositoryArn plane store $ \arn ->
+            fmap (cursorOfTags alphabet eco . tagsOfResponse) <$> cpListTags plane (listTagsRequest arn)
+        , writeCursor = \prefix -> withRepositoryArn plane store $ \arn ->
+            void <$> cpTagResource plane (cursorTagRequest eco arn prefix)
+        , clearCursor = withRepositoryArn plane store $ \arn ->
+            void <$> cpUntagResource plane (cursorUntagRequest eco arn)
+        }
+  where
+    eco :: Ecosystem
+    eco = formatEcosystem (casFormat store)
+
+-- A tag call is addressed by ARN, which only the repository description carries.
+withRepositoryArn :: ControlPlane -> CodeArtifactStore -> (Text -> IO (Either StoreFault a)) -> IO (Either StoreFault a)
+withRepositoryArn plane store act =
     describeStore plane store >>= \case
         Left fault -> pure (Left fault)
-        Right description -> case arnOfDescription description of
-            Left fault -> pure (Left fault)
-            Right arn -> fmap tags <$> cpListTags plane (listTagsRequest arn)
-  where
-    tags response = consentOfTags (fromMaybe [] (response ^. CAL.listTagsForResourceResponse_tags))
+        Right description -> either (pure . Left) act (arnOfDescription description)
+
+tagsOfResponse :: CA.ListTagsForResourceResponse -> [CA.Tag]
+tagsOfResponse response = fromMaybe [] (response ^. CAL.listTagsForResourceResponse_tags)
 
 describeStore :: ControlPlane -> CodeArtifactStore -> IO (Either StoreFault CA.RepositoryDescription)
 describeStore plane store =

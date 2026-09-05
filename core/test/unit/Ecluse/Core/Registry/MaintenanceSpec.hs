@@ -4,11 +4,14 @@
 
 module Ecluse.Core.Registry.MaintenanceSpec (spec) where
 
+import Data.Conduit (fuseUpstream, runConduit, (.|))
+import Data.Conduit.List qualified as CL
 import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout), tfCause, transportFault)
+import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Registry.Maintenance (
     DeleteCeiling (AtMost, NoCeiling),
     RetryAdvice (RetryFutile, RetryWorthwhile),
@@ -16,20 +19,86 @@ import Ecluse.Core.Registry.Maintenance (
     VersionOutcome (VersionRemoved, VersionUnreached),
     chunksOfCeiling,
     deleteAll,
+    extendBucket,
+    inBucket,
+    initialBuckets,
+    mkNameAlphabet,
+    noNameAlphabet,
     pageAll,
+    pageSource,
+    parseNamePrefix,
     refusalCode,
     refusalDetail,
+    renderNamePrefix,
     storeRefusal,
     unreachedBatch,
+    wholeNameSpace,
  )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
 spec :: Spec
 spec = do
     vocabularySpec
+    bucketSpec
     pagingSpec
     chunkingSpec
     deleteDriveSpec
+
+bucketSpec :: Spec
+bucketSpec = do
+    describe "initialBuckets" $ do
+        it "gives one bucket per character of the alphabet, in the order it was built with" $
+            map renderNamePrefix (toList (initialBuckets (mkNameAlphabet "abc")))
+                `shouldBe` ["a", "b", "c"]
+
+        it "drops a repeated character, so no name lands in two buckets" $
+            length (initialBuckets (mkNameAlphabet "aab")) `shouldBe` 2
+
+        it "gives the one bucket that covers everything when the alphabet has no characters" $
+            initialBuckets noNameAlphabet `shouldBe` wholeNameSpace :| []
+
+    describe "the buckets against the names they partition" $ do
+        it "puts every name the alphabet leads into exactly one bucket" $
+            map (bucketsHolding names) names `shouldBe` replicate (length names) 1
+
+        it "reads a name by its base component, so a namespace never decides the bucket" $ do
+            inBucket (bucketOf 'c') scopedName `shouldBe` True
+            inBucket (bucketOf 'b') scopedName `shouldBe` False
+
+        it "holds every name in the one bucket an empty alphabet offers" $
+            map (inBucket (onlyBucket noNameAlphabet)) names
+                `shouldBe` replicate (length names) True
+
+    describe "extendBucket" $ do
+        it "narrows a bucket by one character of the alphabet at a time" $
+            map renderNamePrefix (extendBucket (mkNameAlphabet "ab") (bucketOf 'a'))
+                `shouldBe` ["aa", "ab"]
+
+        it "narrows nothing under an alphabet with no characters" $
+            extendBucket noNameAlphabet (bucketOf 'a') `shouldBe` []
+
+    describe "parseNamePrefix" $ do
+        it "reads back a prefix the alphabet spells" $
+            fmap renderNamePrefix (parseNamePrefix (mkNameAlphabet "abc") "ab") `shouldBe` Just "ab"
+
+        it "reads no prefix from a spelling the alphabet does not carry" $
+            parseNamePrefix (mkNameAlphabet "abc") "az" `shouldBe` Nothing
+
+        it "reads the empty prefix under any alphabet, because it filters nothing" $
+            fmap renderNamePrefix (parseNamePrefix (mkNameAlphabet "abc") "") `shouldBe` Just ""
+  where
+    -- Every name the seeded set holds, one per bucket the alphabet below leads.
+    names = [unscoped "apple", unscoped "banana", scopedName]
+
+    alphabet = mkNameAlphabet "abc"
+
+    bucketOf lead = onlyBucket (mkNameAlphabet [lead])
+
+    onlyBucket built = case initialBuckets built of
+        prefix :| _ -> prefix
+
+    bucketsHolding held name =
+        length [() | b <- toList (initialBuckets alphabet), inBucket b name, name `elem` held]
 
 vocabularySpec :: Spec
 vocabularySpec = do
@@ -52,7 +121,35 @@ vocabularySpec = do
             unreachedBatch aFault [] `shouldBe` []
 
 pagingSpec :: Spec
-pagingSpec = describe "pageAll" $ do
+pagingSpec = do
+    pageSourceSpec
+    pageAllSpec
+
+pageSourceSpec :: Spec
+pageSourceSpec = describe "pageSource" $ do
+    it "hands each page out as it arrives rather than the listing whole" $ do
+        fetch <- pagesFrom [(Just "p2", ["a"]), (Nothing, ["b", "c"])]
+        pagesOf fetch `shouldReturn` [["a"], ["b", "c"]]
+
+    it "ends with no fault when the store walked the listing to its end" $ do
+        fetch <- pagesFrom [(Nothing, ["a"])]
+        faultEnding fetch `shouldReturn` Nothing
+
+    it "hands out the pages that did arrive, then ends with the fault that stopped it" $ do
+        -- A fresh fetch per walk, because the fixture hands each page out once.
+        let faulting = do
+                fetch <- pagesFrom [(Just "p2", ["a"])]
+                pure $ \token -> if isJust token then pure (Left aFault) else fetch token
+        (faulting >>= pagesOf) `shouldReturn` [["a"]]
+        (faulting >>= faultEnding) `shouldReturn` Just aFault
+
+    it "ends with a fault on a store that hands back a token it already gave" $ do
+        fetch <- pagesFrom [(Just "p2", ["a"]), (Just "p2", ["b"])]
+        outcome <- faultEnding fetch
+        fmap faultRetry outcome `shouldBe` Just RetryFutile
+
+pageAllSpec :: Spec
+pageAllSpec = describe "pageAll" $ do
     it "walks every page in order and returns one listing" $ do
         fetch <- pagesFrom [(Just "p2", ["a"]), (Just "p3", ["b"]), (Nothing, ["c"])]
         pageAll fetch `shouldReturn` Right ["a", "b", "c"]
@@ -151,6 +248,20 @@ recordingSender sent faultOn batch = do
             else Right [(v, VersionRemoved) | v <- batch]
 
 -- A fetch that answers from a fixed page sequence, so a listing walk is drivable in IO.
+-- Every page a source handed out, discarding the fault the stream ended with.
+pagesOf :: (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text]))) -> IO [[Text]]
+pagesOf fetch = runConduit (void (pageSource fetch) .| CL.consume)
+
+-- The fault a source ended with, discarding the pages it handed out on the way.
+faultEnding :: (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text]))) -> IO (Maybe StoreFault)
+faultEnding fetch = runConduit (fuseUpstream (pageSource fetch) CL.sinkNull)
+
+unscoped :: Text -> PackageName
+unscoped = mkPackageName Npm Nothing
+
+scopedName :: PackageName
+scopedName = mkPackageName Npm (Just (mkScope "babel")) "core"
+
 pagesFrom :: [(Maybe Text, [Text])] -> IO (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text])))
 pagesFrom pages = do
     remaining <- newIORef pages

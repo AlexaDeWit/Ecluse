@@ -2,14 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The store maintenance handle: enumerate what a mirror store holds, and delete
-versions from it. Enumeration and deletion are backend operations rather than ecosystem
-ones, because the npm wire protocol has no enumeration at all and a managed registry
-deletes through its own control plane. So the handle sits beside
-"Ecluse.Core.Registry.Adapter" instead of inside it, one value per backend, resolved at
-the Dredger's composition root. Every backend-varying fact is a value the handle
-supplies rather than a branch a sweep takes, so a new backend is one more handle and no
-change here.
+{- | The store maintenance handle: enumerate what a mirror store holds, and delete versions
+from it. Enumeration and deletion are backend operations rather than ecosystem ones, because a
+package protocol may spell no enumeration at all and a managed registry deletes through its own
+control plane. So the handle sits beside "Ecluse.Core.Registry.Adapter" instead of inside it,
+one value per backend, resolved at the Dredger's composition root. Every backend-varying fact
+is a value the handle supplies rather than a branch a sweep takes, so a new backend is one more
+handle and no change here.
 -}
 module Ecluse.Core.Registry.Maintenance (
     -- * The handle
@@ -25,6 +24,21 @@ module Ecluse.Core.Registry.Maintenance (
     StoredVersion (..),
     VersionPresence (..),
 
+    -- * The name space, walked in buckets
+    NameAlphabet,
+    mkNameAlphabet,
+    noNameAlphabet,
+    NamePrefix,
+    wholeNameSpace,
+    renderNamePrefix,
+    parseNamePrefix,
+    initialBuckets,
+    extendBucket,
+    inBucket,
+
+    -- * Walk resumption
+    StoreCursor (..),
+
     -- * Deletion
     VersionOutcome (..),
     StoreRefusal,
@@ -34,6 +48,7 @@ module Ecluse.Core.Registry.Maintenance (
     unreachedBatch,
 
     -- * Backend-neutral drives
+    pageSource,
     pageAll,
     chunksOfCeiling,
     deleteAll,
@@ -47,7 +62,10 @@ module Ecluse.Core.Registry.Maintenance (
     RetryAdvice (..),
 ) where
 
+import Data.Conduit (ConduitT, fuseBoth, runConduit, yield)
+import Data.Conduit.List qualified as CL
 import Data.Set qualified as Set
+import Data.Text qualified as T
 
 import Ecluse.Core.Fault (
     RetryAfter,
@@ -56,7 +74,7 @@ import Ecluse.Core.Fault (
     boundedDetail,
     transportFault,
  )
-import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Package (PackageName, unscopedName)
 import Ecluse.Core.Version (Version)
 
 {- | The maintenance capabilities of one mirror store. Like the other handles, the
@@ -65,12 +83,13 @@ effectful fields return __'IO', not @App@__, so an adapter never imports the pro
 data StoreMaintenance = StoreMaintenance
     { storeFacts :: StoreFacts
     -- ^ What the backend does, readable without a call.
-    , enumeratePackages :: IO (Either StoreFault [PackageName])
-    {- ^ Every package the store holds. The adapter pages to exhaustion, so a caller
-    sees a complete listing or a fault, never a page token.
+    , listPackagesIn :: NamePrefix -> ConduitT () [PackageName] IO (Maybe StoreFault)
+    {- ^ The packages in one bucket of the name space, a page at a time, so nothing holds the
+    listing whole. The stream ends with the fault that stopped it, or 'Nothing' when the
+    bucket was walked to its end.
     -}
     , enumerateVersions :: PackageName -> IO (Either StoreFault [StoredVersion])
-    -- ^ Every version the store holds for one package, paged the same way.
+    -- ^ Every version the store holds for one package, paged to exhaustion.
     , deleteVersions :: PackageName -> [Version] -> IO [(Version, VersionOutcome)]
     {- ^ Delete versions of one package. The adapter splits the batch to its own ceiling,
     so any size is accepted and every version handed over gets exactly one outcome back.
@@ -83,6 +102,10 @@ data StoreMaintenance = StoreMaintenance
     -- ^ Whether the operator has marked this store for deletion.
     , classifyStore :: IO (Either StoreFault StoreClass)
     -- ^ Whether deleting from this store destroys anything.
+    , storeCursor :: Maybe StoreCursor
+    {- ^ Where a full walk resumes after a restart, for a backend with somewhere to keep it.
+    'Nothing' starts every walk from the first bucket.
+    -}
     }
 
 {- | The backend's standing behaviour, fixed for the life of the handle. A sweep reads
@@ -97,6 +120,8 @@ data StoreFacts = StoreFacts
     -- ^ What the backend does with a re-publication of a deleted version.
     , factCompletion :: CompletionNotion
     -- ^ When a delete is finished relative to the call that asked for it.
+    , factNameAlphabet :: NameAlphabet
+    -- ^ The characters this store's name space is partitioned into buckets by.
     }
     deriving stock (Eq, Show)
 
@@ -146,6 +171,76 @@ data VersionPresence
     | -- | The store lists the version but no longer serves it.
       VersionWithdrawn
     deriving stock (Eq, Show)
+
+{- | The characters a bucket prefix is built from: the leading characters of the names the
+mount's ecosystem admits, which the composition root reads off that ecosystem's adapter.
+-}
+newtype NameAlphabet = NameAlphabet [Char]
+    deriving stock (Eq, Show)
+
+-- | Build an alphabet, dropping repeats and keeping the order given.
+mkNameAlphabet :: [Char] -> NameAlphabet
+mkNameAlphabet = NameAlphabet . ordNub
+
+{- | The alphabet of a store whose listing carries no filter to partition it by. It yields the
+one bucket that covers everything, so such a store is a walk of one pass and not a special case.
+-}
+noNameAlphabet :: NameAlphabet
+noNameAlphabet = NameAlphabet []
+
+{- | One bucket of a store's name space: a prefix of a package name's __base component__, the
+part after any namespace, because that is the component a store's own listing filters on.
+-}
+newtype NamePrefix = NamePrefix Text
+    deriving stock (Eq, Ord, Show)
+
+{- | The bucket that covers a whole store: the empty prefix, which filters nothing. It is the one
+bucket an alphabet with no characters offers.
+-}
+wholeNameSpace :: NamePrefix
+wholeNameSpace = NamePrefix ""
+
+-- | The prefix as a store filter and a walk cursor spell it. Empty stands for no filter at all.
+renderNamePrefix :: NamePrefix -> Text
+renderNamePrefix (NamePrefix raw) = raw
+
+{- | Read a prefix back, 'Nothing' for one this alphabet cannot spell. A cursor written under a
+different alphabet then reads as none, and the walk restarts rather than resuming out of reach.
+-}
+parseNamePrefix :: NameAlphabet -> Text -> Maybe NamePrefix
+parseNamePrefix (NameAlphabet chars) raw
+    | T.all (`elem` chars) raw = Just (NamePrefix raw)
+    | otherwise = Nothing
+
+{- | The buckets a full walk covers. They are disjoint and their union is the whole store, so a
+walk that completes every one of them has seen every package.
+-}
+initialBuckets :: NameAlphabet -> NonEmpty NamePrefix
+initialBuckets (NameAlphabet chars) =
+    maybe (wholeNameSpace :| []) (fmap (NamePrefix . T.singleton)) (nonEmpty chars)
+
+{- | The narrower buckets that cover one bucket, for a listing that outgrew its budget. An
+alphabet with no characters can narrow nothing, so it yields none.
+-}
+extendBucket :: NameAlphabet -> NamePrefix -> [NamePrefix]
+extendBucket (NameAlphabet chars) (NamePrefix raw) =
+    [NamePrefix (raw <> T.singleton ch) | ch <- chars]
+
+-- | Whether a name falls in a bucket, for a store whose listing has no prefix filter of its own.
+inBucket :: NamePrefix -> PackageName -> Bool
+inBucket (NamePrefix raw) name = raw `T.isPrefixOf` unscopedName name
+
+{- | Where a full walk resumes: the last bucket it completed, kept in whatever the backend has
+to keep it in. A restart re-does at most the bucket that was in flight.
+-}
+data StoreCursor = StoreCursor
+    { readCursor :: IO (Either StoreFault (Maybe NamePrefix))
+    -- ^ The bucket the last run completed, 'Nothing' when no walk is under way.
+    , writeCursor :: NamePrefix -> IO (Either StoreFault ())
+    -- ^ Record a completed bucket, replacing whatever was recorded before.
+    , clearCursor :: IO (Either StoreFault ())
+    -- ^ Forget the walk, which a completed one does so the next starts from the first bucket.
+    }
 
 -- | What became of one version a caller asked to delete.
 data VersionOutcome
@@ -221,23 +316,36 @@ data RetryAdvice
       RetryDelayed RetryAfter
     deriving stock (Eq, Show)
 
-{- | Walk a paged listing to exhaustion. A store that returns a page token it has already
-handed out would page forever, so that reads as a fault rather than a short listing.
+{- | Walk a paged listing a page at a time, ending with the fault that stopped it. A store that
+returns a page token it has already handed out would page forever, so that ends the walk too.
+-}
+pageSource ::
+    (Monad m) =>
+    (Maybe Text -> m (Either StoreFault (Maybe Text, [a]))) ->
+    ConduitT i [a] m (Maybe StoreFault)
+pageSource fetch = go Set.empty Nothing
+  where
+    go seen token =
+        lift (fetch token) >>= \case
+            Left fault -> pure (Just fault)
+            Right (next, page) -> do
+                yield page
+                case next of
+                    Nothing -> pure Nothing
+                    Just following
+                        | Set.member following seen -> pure (Just (repeatedTokenFault following))
+                        | otherwise -> go (Set.insert following seen) (Just following)
+
+{- | Walk a paged listing to exhaustion, for a listing one caller can hold: a package's versions,
+never a store's packages. A faulted walk yields the fault alone, never the pages before it.
 -}
 pageAll ::
     (Monad m) =>
     (Maybe Text -> m (Either StoreFault (Maybe Text, [a]))) ->
     m (Either StoreFault [a])
-pageAll fetch = go Set.empty Nothing []
+pageAll fetch = outcome <$> runConduit (fuseBoth (pageSource fetch) CL.consume)
   where
-    go seen token pages =
-        fetch token >>= \case
-            Left fault -> pure (Left fault)
-            Right (next, page) -> case next of
-                Nothing -> pure (Right (concat (reverse (page : pages))))
-                Just following
-                    | Set.member following seen -> pure (Left (repeatedTokenFault following))
-                    | otherwise -> go (Set.insert following seen) (Just following) (page : pages)
+    outcome (mFault, pages) = maybe (Right (concat pages)) Left mFault
 
 -- A cycle in the store's own paging, which the next attempt reproduces.
 repeatedTokenFault :: Text -> StoreFault

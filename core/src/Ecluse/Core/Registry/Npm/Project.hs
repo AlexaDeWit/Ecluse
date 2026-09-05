@@ -60,6 +60,7 @@ module Ecluse.Core.Registry.Npm.Project (
     -- * Name validation
     projectName,
     projectScope,
+    npmNameLeadChars,
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, withObject, (.!=), (.:?))
@@ -369,6 +370,12 @@ npmNameChar ch = isAsciiUpper ch || isAsciiLower ch || isDigit ch || ch `elem` n
   where
     npmNameSpecials :: [Char]
     npmNameSpecials = "-_.!~*'()"
+
+{- | Every character an npm package name may begin with, sieved out of ASCII by the grammar
+above so the store walk's bucket alphabet cannot drift from what this module parses.
+-}
+npmNameLeadChars :: [Char]
+npmNameLeadChars = [ch | ch <- ['\0' .. '\127'], npmNameChar ch, usableComponent (T.singleton ch)]
 
 -- The two names npm refuses outright, each because it collides with a path npm itself writes.
 reservedNames :: [Text]
