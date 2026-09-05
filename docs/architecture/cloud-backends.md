@@ -158,7 +158,24 @@ abstraction](registry-model.md#registry-abstraction):
    npm wire protocol has no enumeration and a hosted registry deletes through its own control
    plane. Every fact that varies by store is a value the handle supplies: the batch ceiling for a
    destructive call, whether a deleted version can be published again, the backend's own dry run
-   where it has one, and whether a delete finishes before the call answers.
+   where it has one, whether a delete finishes before the call answers, the characters its name
+   space partitions by, and whether it has somewhere to keep a walk cursor.
+
+### Walking a store
+
+The handle lists a store one bucket of its name space at a time, as a stream of pages, so nothing
+downstream holds a listing whole and a large store costs the same memory as a small one. A bucket is
+a prefix of a package name's base component, the part after any namespace, because that is the
+component a store's own listing filters on. The characters those prefixes are built from come from
+the mount's ecosystem, whose grammar decides what a name may begin with. A store whose listing
+carries no filter takes the one bucket that covers everything, so it is one pass rather than a
+special case.
+
+A walk over a whole store resumes where it stopped only where the store has somewhere to record
+that. CodeArtifact keeps the record in one repository tag, keyed per ecosystem, which is the only
+thing `ecluse dredger` ever writes to a store. A store reached through the ecosystem protocol alone
+has no such place: its listing is one document, read whole on every pass, so a walk over it starts
+from the first bucket after a restart.
 
 ### The two store kinds
 
@@ -189,6 +206,7 @@ an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format
 | Workload identity and token source | Deployment credentials, read by the store's mint | STS, through the task or instance role |
 | Package store | Store, per mount | CodeArtifact under the `codeArtifact` tag, any host that speaks the ecosystem's protocol under `registry`, and Verdaccio, the development store, under `verdaccio` |
 | Store maintenance | Store, per mount | The CodeArtifact control plane, or, for a `verdaccio` store, the ecosystem protocol's own listing and unpublish requests. A `registry` store carries none, so `ecluse dredger` refuses a mirror target under that tag and names it |
+| Walk cursor | Store, per mount | One CodeArtifact repository tag per ecosystem. A `verdaccio` store keeps none, so a full walk over it does not resume |
 
 ### The credential mint
 
