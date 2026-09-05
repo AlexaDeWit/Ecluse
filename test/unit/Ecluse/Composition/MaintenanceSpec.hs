@@ -14,10 +14,13 @@ import Ecluse.Composition.BootError (
     StoreMaintenanceReason (ClientBuildFailed, DeletionNotPermitted, NoProtocolMaintenance),
     renderBootError,
  )
+import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Maintenance (
-    ClearedBackend (ClearedCodeArtifact, ClearedProtocol),
+    ClearedBackend (cbAlphabet, cbControl, cbFetchManifest),
+    ClearedControl (ClearedCodeArtifact, ClearedProtocol),
     ClearedProtocolStore (cpsConsent),
     ResolveMaintenanceAdapter,
+    StorePorts (..),
     buildStoreMaintenance,
     planStoreMaintenance,
     vetStoreBackends,
@@ -41,6 +44,9 @@ import Ecluse.Config (
     StoreTag (TagVerdaccio),
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
+import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Adapter (RegistryAdapter (adapterMaintenance), adapterFor)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (AdapterMaintenance, maintenanceAlphabet, maintenanceListing, maintenanceVersionDelete),
@@ -51,12 +57,19 @@ import Ecluse.Core.Registry.Maintenance (
     DeleteCeiling (AtMost),
     NameAlphabet,
     RefillPosture (RefillPermitted),
+    RetryAdvice (RetryWorthwhile),
     StoreFacts (..),
-    StoreMaintenance (storeFacts, verifyConsent),
+    StoreFault (faultRetry),
+    StoreMaintenance (readStoreManifest, storeFacts, verifyConsent),
     noNameAlphabet,
  )
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
+import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Package (unsafeRegistryUrl, unscopedNpm)
+import Ecluse.Test.Port (passthroughTracingPort)
+import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 
 spec :: Spec
 spec = do
@@ -101,6 +114,16 @@ passSpec = describe "vetStoreBackends" $ do
         mounts <- mountsFor codeArtifactEnvVars
         fmap (map clearedAlphabet . Map.elems) (snd (runVet MirrorPruner (vetStoreBackends noAdapter mounts)))
             `shouldBe` Right [noNameAlphabet]
+
+    it "clears that store a read that reports the absent adapter rather than one that invents one" $ do
+        mounts <- mountsFor codeArtifactEnvVars
+        manager <- newManager defaultManagerSettings
+        case snd (runVet MirrorPruner (vetStoreBackends noAdapter mounts)) of
+            Right cleared | [backend] <- Map.elems cleared -> do
+                outcome <- cbFetchManifest backend passthroughTracingPort (nowhere manager) aPackage
+                leftToMaybe outcome
+                    `shouldBe` Just (MetadataFetch (FetchTransport (transportFault TransportProtocol absentRead)))
+            other -> expectationFailure ("expected one cleared store, got: " <> show (void other))
 
 {- The protocol arm: a store with no vendor control plane, swept through the ecosystem's own
 verbs. Consent and the ecosystem's verbs are separate refusals, and the writing role reads neither. -}
@@ -152,6 +175,13 @@ buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosyst
         factRefill facts `shouldBe` RefillPermitted
         factCompletion facts `shouldBe` CompletesOnCall
 
+    it "reads a manifest over the store's own endpoint, not the public upstream" $ do
+        -- The endpoint answers nothing, so the read reaching the network at all is what this
+        -- shows: the handle carries the ecosystem's codec rather than an absent read.
+        handle <- protocolHandleFor id
+        (fmap faultRetry . leftToMaybe <$> readStoreManifest handle aPackage)
+            `shouldReturn` Just RetryWorthwhile
+
     it "grants consent on the store the pass cleared" $ do
         handle <- protocolHandleFor id
         verifyConsent handle `shouldReturn` Right ConsentGranted
@@ -169,8 +199,33 @@ protocolHandleFor :: (ClearedProtocolStore -> ClearedProtocolStore) -> IO StoreM
 protocolHandleFor edit = do
     cleared <- clearedBackendsFor (verdaccioEnv "true")
     case Map.elems cleared of
-        [ClearedProtocol store] -> buildStoreMaintenance defaultLimits (ClearedProtocol (edit store))
+        [backend] -> buildStoreMaintenance anonymousPorts defaultLimits (edited backend)
         other -> fail ("expected one cleared protocol store, got " <> show (length other))
+  where
+    edited backend = case cbControl backend of
+        ClearedProtocol store -> backend{cbControl = ClearedProtocol (edit store)}
+        ClearedCodeArtifact{} -> backend
+
+{- The ports a handle is built over when no live process supplies them: a passthrough tracing
+port, and no credential, which the store's origin then presents none of. -}
+anonymousPorts :: StorePorts
+anonymousPorts = StorePorts{spTracing = passthroughTracingPort, spCredential = Nothing}
+
+aPackage :: PackageName
+aPackage = unscopedNpm "leftpad"
+
+-- An origin the absent read never dials, because it answers before it forms a request.
+nowhere :: Manager -> OriginClient
+nowhere manager =
+    OriginClient
+        { ocBaseUrl = unsafeRegistryUrl "https://store.invalid/"
+        , ocManager = manager
+        , ocToken = Nothing
+        , ocLimits = defaultLimits
+        }
+
+absentRead :: Text
+absentRead = "this build serves the mount's ecosystem no metadata read"
 
 {- The environment tier over the cleared backends. It builds one handle per store, and its
 refusals accumulate rather than stopping at the first store whose client cannot be built. -}
@@ -178,13 +233,25 @@ planSpec :: Spec
 planSpec = describe "planStoreMaintenance" $ do
     it "builds one handle per cleared store, keyed by the mount that declares it" $ do
         backends <- clearedBackendsFor twoStoreEnv
-        outcome <- planStoreMaintenance (\_ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig) defaultLimits backends
+        outcome <-
+            planStoreMaintenance
+                (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
+                passthroughTracingPort
+                noCredentialProviders
+                defaultLimits
+                backends
         fmap Map.keys outcome `shouldBe` Right (Map.keys backends)
 
     it "reports a refusal for every store whose client the environment cannot build" $ do
         backends <- clearedBackendsFor twoStoreEnv
         Map.keys backends `shouldBe` [Npm, PyPI]
-        outcome <- planStoreMaintenance (\_ _ -> throwIO NoStoreClient) defaultLimits backends
+        outcome <-
+            planStoreMaintenance
+                (\_ _ _ -> throwIO NoStoreClient)
+                passthroughTracingPort
+                noCredentialProviders
+                defaultLimits
+                backends
         case outcome of
             Right _ -> expectationFailure "expected both store builds to refuse"
             Left errs ->
@@ -215,9 +282,7 @@ noAdapter _ = Nothing
 
 -- | The bucket alphabet a cleared vendor store carries, and 'noNameAlphabet' for any other arm.
 clearedAlphabet :: ClearedBackend -> NameAlphabet
-clearedAlphabet = \case
-    ClearedCodeArtifact _ alphabet -> alphabet
-    ClearedProtocol{} -> noNameAlphabet
+clearedAlphabet = cbAlphabet
 
 -- | This build's adapters with their maintenance slice emptied: an ecosystem that fills neither verb.
 withoutMaintenance :: ResolveMaintenanceAdapter
@@ -234,7 +299,7 @@ withoutMaintenance eco =
 
 -- Whether a cleared backend is the protocol arm, which is what a Verdaccio target resolves to.
 protocolArm :: ClearedBackend -> Bool
-protocolArm = \case
+protocolArm cleared = case cbControl cleared of
     ClearedProtocol{} -> True
     ClearedCodeArtifact{} -> False
 

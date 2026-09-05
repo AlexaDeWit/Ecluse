@@ -34,6 +34,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreCursor (..),
     StoreFault,
     StoreMaintenance (..),
+    StoreManifestRead,
     StoredVersion,
     VersionOutcome,
     chunksOfCeiling,
@@ -84,15 +85,17 @@ data ControlPlane = ControlPlane
 discovered the standard way (environment, credentials file, web identity, container role,
 instance role).
 -}
-newCodeArtifactMaintenance :: NameAlphabet -> CodeArtifactStore -> IO StoreMaintenance
-newCodeArtifactMaintenance alphabet store =
-    maintenanceForEnv alphabet store <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+newCodeArtifactMaintenance :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
+newCodeArtifactMaintenance alphabet readManifest store =
+    maintenanceForEnv alphabet readManifest store
+        <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
 
 {- | Build the handle over a caller-supplied @amazonka@ 'AWS.Env'. Exposed so a test can hold the
 handle, and the facts it supplies, without discovering an ambient AWS identity.
 -}
-maintenanceForEnv :: NameAlphabet -> CodeArtifactStore -> AWS.Env -> StoreMaintenance
-maintenanceForEnv alphabet store env = maintenanceFor alphabet store (controlPlaneFor env)
+maintenanceForEnv :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> AWS.Env -> StoreMaintenance
+maintenanceForEnv alphabet readManifest store env =
+    maintenanceFor alphabet readManifest store (controlPlaneFor env)
 
 -- | Every call sent over one env, with the AWS error folded into a 'StoreFault'.
 controlPlaneFor :: AWS.Env -> ControlPlane
@@ -107,13 +110,16 @@ controlPlaneFor env =
         , cpUntagResource = sendStore env
         }
 
--- | Build the handle over a caller-supplied 'ControlPlane', which is all the effects it has.
-maintenanceFor :: NameAlphabet -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
-maintenanceFor alphabet store plane =
+{- | Build the handle over a caller-supplied 'ControlPlane' and the manifest read the root
+assembled, which together are every effect it has.
+-}
+maintenanceFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
+maintenanceFor alphabet readManifest store plane =
     StoreMaintenance
         { storeFacts = codeArtifactFacts alphabet
         , listPackagesIn = pageSource . packagePage plane store
         , enumerateVersions = pageAll . versionPage plane store
+        , readStoreManifest = readManifest
         , deleteVersions = deleteChunks plane store
         , -- CodeArtifact has no call that reports what a delete would do without doing it.
           rehearseDelete = Nothing

@@ -36,6 +36,13 @@ module Ecluse.Core.Registry.Maintenance (
     -- * Walk resumption
     StoreCursor (..),
 
+    -- * Reading a package's metadata from the store
+    StoreManifestRead,
+    storeFaultOfFetch,
+    storeFaultOfMetadata,
+    protocolFault,
+    unformableFault,
+
     -- * Deletion
     VersionOutcome (..),
     StoreRefusal,
@@ -70,9 +77,20 @@ import Ecluse.Core.Fault (
     TransportCause (TransportProtocol),
     TransportFault,
     boundedDetail,
+    tfCause,
     transportFault,
+    transportRetryable,
  )
 import Ecluse.Core.Package (PackageName, unscopedName)
+import Ecluse.Core.Registry (
+    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    UrlFormationError,
+    renderUrlFormationError,
+ )
+import Ecluse.Core.Registry.Metadata (
+    Manifest,
+    MetadataError (MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
+ )
 import Ecluse.Core.Version (Version)
 
 {- | The maintenance capabilities of one mirror store. Like the other handles, the
@@ -87,6 +105,10 @@ data StoreMaintenance = StoreMaintenance
     -}
     , enumerateVersions :: PackageName -> IO (Either StoreFault [StoredVersion])
     -- ^ Every version the store holds for one package, paged to exhaustion.
+    , readStoreManifest :: StoreManifestRead
+    {- ^ One package's metadata as this store serves it, through the ecosystem's own codec and
+    the store's own credential. Every stored version is projected out of this one read.
+    -}
     , deleteVersions :: PackageName -> [Version] -> IO [(Version, VersionOutcome)]
     {- ^ Delete versions of one package. The adapter splits the batch to its own ceiling,
     so any size is accepted and every version handed over gets exactly one outcome back.
@@ -338,6 +360,45 @@ repeatedTokenFault token =
             transportFault TransportProtocol ("the store handed back a page token it had already given: " <> token)
         , faultRetry = RetryFutile
         }
+
+{- | Reading one package's metadata from a store. The composition root assembles it from the
+mount's ecosystem and the store's endpoint, so no backend leaf speaks a package protocol.
+-}
+type StoreManifestRead = PackageName -> IO (Either StoreFault Manifest)
+
+{- | Fold a data-plane read fault into the maintenance vocabulary. A malformed answer, an
+oversized body, and an unformable URL all read the same way next cycle, so none is worth another try.
+-}
+storeFaultOfFetch :: FetchFault -> StoreFault
+storeFaultOfFetch = \case
+    FetchTransport fault ->
+        StoreFault
+            { faultTransport = fault
+            , faultRetry = if transportRetryable (tfCause fault) then RetryWorthwhile else RetryFutile
+            }
+    FetchBoundExceeded _ -> protocolFault "the store's answer crossed the response-size bound"
+    FetchUrlUnformable err -> unformableFault err
+
+{- | Fold a manifest read's failure into the maintenance vocabulary. Only the transport half can
+clear on its own: a document that did not decode decodes the same way on the next attempt.
+-}
+storeFaultOfMetadata :: MetadataError -> StoreFault
+storeFaultOfMetadata = \case
+    MetadataFetch fault -> storeFaultOfFetch fault
+    MetadataBoundExceeded _ -> protocolFault "the store's metadata crossed a structural bound"
+    MetadataUndecodable -> protocolFault "the store's metadata did not decode into a manifest"
+    MetadataNameMismatch reported ->
+        protocolFault ("the store's metadata reported another package's name: " <> reported)
+
+-- | A URL the store's own coordinates could not form, reduced to its authority.
+unformableFault :: UrlFormationError -> StoreFault
+unformableFault err =
+    protocolFault ("the store's request could not be formed: " <> renderUrlFormationError err)
+
+-- | A fault in the store's own answer, which the next attempt reproduces.
+protocolFault :: Text -> StoreFault
+protocolFault detail =
+    StoreFault{faultTransport = transportFault TransportProtocol detail, faultRetry = RetryFutile}
 
 {- | Split a batch into chunks the backend's destructive call accepts. A ceiling below one
 would divide the batch forever, so it takes one item at a time instead.

@@ -110,6 +110,7 @@ import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
 import Ecluse.Composition.BootError (renderBootErrors)
+import Ecluse.Composition.Credential (initCredentialProviders)
 import Ecluse.Composition.Executable (
     RoleWiring (MirrorPipelineWiring, PilotWiring),
     epRoleWiring,
@@ -126,6 +127,7 @@ import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Mirror
 import Ecluse.Pilot
 import Ecluse.Proxy
+import Ecluse.Runtime.Telemetry.Tracing (tracingPortOf)
 import Ecluse.Service
 
 run :: IO ()
@@ -156,7 +158,14 @@ the one phase, so this is where a boot spends its last refusal whichever role it
 startPlannedRole :: BootEnv -> IO ()
 startPlannedRole bootEnv = do
     plan <-
-        planExecutable (beLogEnv bootEnv) mountBindingFor buildMirrorQueue buildStoreMaintenance (beBootPlan bootEnv)
+        planExecutable
+            (beLogEnv bootEnv)
+            (tracingPortOf (beTelemetry bootEnv))
+            mountBindingFor
+            buildMirrorQueue
+            initCredentialProviders
+            buildStoreMaintenance
+            (beBootPlan bootEnv)
             >>= orExit renderBootErrors
     case epRoleWiring plan of
         MirrorPipelineWiring mirror -> withServiceRuntime bootEnv plan mirror runMirrorPipeline

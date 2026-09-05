@@ -28,6 +28,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (..),
     StoreFault (..),
     StoreMaintenance (..),
+    StoreManifestRead,
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed),
@@ -90,6 +91,10 @@ factCases store = describe "the CodeArtifact handle's standing facts" $ do
     it "carries the alphabet it was built with, which is the mount ecosystem's own" $ do
         facts <- factsFor store
         factNameAlphabet facts `shouldBe` testAlphabet
+
+    it "reads a manifest through the read it was handed, never through the control plane" $ do
+        outcome <- readStoreManifest (handleOver store inertPlane) aPackage
+        fmap detailOf (leftToMaybe outcome) `shouldBe` Just "the spec wired no manifest read"
 
     it "offers no rehearsal, because CodeArtifact has no call that reports one" $ do
         handle <- handleFor store
@@ -430,7 +435,12 @@ testAlphabet :: NameAlphabet
 testAlphabet = mkNameAlphabet "al"
 
 handleOver :: CodeArtifactStore -> ControlPlane -> StoreMaintenance
-handleOver = maintenanceFor testAlphabet
+handleOver = maintenanceFor testAlphabet unwiredRead
+
+{- The manifest read is the composition root's, not this leaf's, so these cases hand it one that
+reports being unwired rather than one that reaches a store. -}
+unwiredRead :: StoreManifestRead
+unwiredRead _ = pure (Left (faultSaying "the spec wired no manifest read"))
 
 listBucket :: CodeArtifactStore -> ControlPlane -> Text -> IO (Either StoreFault [PackageName])
 listBucket store plane raw =
@@ -439,7 +449,7 @@ listBucket store plane raw =
 -- Dummy static credentials: the handle is held and read, never sent anywhere.
 handleFor :: CodeArtifactStore -> IO StoreMaintenance
 handleFor store =
-    maintenanceForEnv testAlphabet store
+    maintenanceForEnv testAlphabet unwiredRead store
         <$> AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))
 
 npmStore :: Maybe CodeArtifactStore

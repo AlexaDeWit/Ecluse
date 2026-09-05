@@ -13,6 +13,7 @@ key, and AWS mints per domain, so identities that coincide share one provider an
 module Ecluse.Composition.Credential (
     -- * Global credential providers
     CredentialProviders,
+    noCredentialProviders,
     initCredentialProviders,
     initializedEcosystems,
     lookupProvider,
@@ -48,6 +49,12 @@ import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig, newCodeArtifa
 an ecosystem absent from the keyset has an unresolved credential reference.
 -}
 newtype CredentialProviders = CredentialProviders (Map Ecosystem CredentialProvider)
+
+{- | No initialised providers: what a boot half that refused before it built any carries onward,
+so the halves after it still plan and still report what they refuse.
+-}
+noCredentialProviders :: CredentialProviders
+noCredentialProviders = CredentialProviders Map.empty
 
 {- | The @provider@ metric label a store's credential signals record under. It reads as the
 configuration spells the tag, so a dashboard series and a mount's declaration are one word.

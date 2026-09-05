@@ -15,6 +15,7 @@ module Ecluse.Composition.Executable (
     RoleWiring (..),
     MirrorWiring (mwRole, mwBootWiring, mwCveSync, mwQueue, mwDeferredMetrics),
     BuildMirrorQueue,
+    BuildCredentials,
     planExecutable,
 ) where
 
@@ -33,7 +34,7 @@ import Ecluse.Composition.BootError (
     BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, StorePrunerWithoutSweep),
     refuseOnThrow,
  )
-import Ecluse.Composition.Credential (providerLabel)
+import Ecluse.Composition.Credential (CredentialProviders, noCredentialProviders, providerLabel)
 import Ecluse.Composition.Maintenance (BuildStoreMaintenance, planStoreMaintenance)
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpMaxRequestBytes, mpPublishTenant, mpQueueMemoryMaxDepth),
@@ -52,14 +53,15 @@ import Ecluse.Composition.Types (
  )
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpSettings),
-    VettedMount (vmEcosystem),
+    VettedMount (vmEcosystem, vmMount),
  )
-import Ecluse.Config (StoreTag)
+import Ecluse.Config (Mount, StoreTag)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule))
+import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Cve.Sync (CveSyncHandle, cveRuleDepsFor, katipFaultReporter, planCveSync)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
@@ -108,32 +110,55 @@ so a spec can drive this phase's refusals without reaching a cloud.
 -}
 type BuildMirrorQueue = LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 
+{- | How a boot builds the mirror-write credential providers. Injected, as the queue and store
+builders are, so a spec drives this phase without minting against a cloud.
+-}
+type BuildCredentials = (StoreTag -> CredentialReporters) -> [Mount] -> IO (Either [BootError] CredentialProviders)
+
 {- | Plan the runtime the cleared plan's role starts, or report every refusal only a live
 environment can settle. Each role has one arm here, and a refusal is spent once for all of them.
 -}
 planExecutable ::
     LogEnv ->
+    TracingPort ->
     ResolveAdapter ->
     BuildMirrorQueue ->
+    BuildCredentials ->
     BuildStoreMaintenance ->
     BootPlan ->
     IO (Either [BootError] ExecutablePlan)
-planExecutable logEnv resolveAdapter buildQueue buildStore bootPlan = case bpRole bootPlan of
+planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials buildStore bootPlan = case bpRole bootPlan of
     BootMirrorPipeline role ->
         fmap (executablePlan . MirrorPipelineWiring)
             <$> planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan
     -- This build carries no sweep, so the arm plans its handles and then refuses.
-    BootStorePruner ->
-        idlePrunerRefusal
-            <$> planStoreMaintenance buildStore (bpLimits bootPlan) (vpMirrorStores (bpValidated bootPlan))
+    BootStorePruner -> planPrunerWiring tracing buildCredentials buildStore bootPlan
     BootWithoutPipeline -> pure (Right (executablePlan PilotWiring))
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}
 
-{- The refusal is folded in after the handles are planned, so a store whose client cannot be built
-reports beside it rather than the refusal standing alone. -}
-idlePrunerRefusal :: Either [BootError] a -> Either [BootError] ExecutablePlan
-idlePrunerRefusal outcome = Left (fromLeft [] outcome <> [StorePrunerWithoutSweep])
+{- The deleting role's arm: the credential its stores answer to, then a handle per store. Both
+halves plan before the refusal folds in, so one launch reports every problem. -}
+planPrunerWiring :: TracingPort -> BuildCredentials -> BuildStoreMaintenance -> BootPlan -> IO (Either [BootError] ExecutablePlan)
+planPrunerWiring tracing buildCredentials buildStore bootPlan = do
+    deferredMetrics <- newDeferredMetrics
+    credentials <- buildCredentials (credentialReportersOver deferredMetrics) prunerMounts
+    stores <-
+        planStoreMaintenance
+            buildStore
+            tracing
+            (fromRight noCredentialProviders credentials)
+            (bpLimits bootPlan)
+            (vpMirrorStores (bpValidated bootPlan))
+    pure (idlePrunerRefusal credentials stores)
+  where
+    prunerMounts = map vmMount (vpMounts (bpValidated bootPlan))
+
+{- The refusal is folded in after the credential and the handles are planned, so a mint or a client
+this environment refuses reports beside it rather than the refusal standing alone. -}
+idlePrunerRefusal :: Either [BootError] a -> Either [BootError] b -> Either [BootError] ExecutablePlan
+idlePrunerRefusal credentials stores =
+    Left (fromLeft [] credentials <> fromLeft [] stores <> [StorePrunerWithoutSweep])
 
 {- The mirror pipeline's arm: the advisory sync, the queue backend, and the mount wiring. The three
 refusable steps accumulate, so one launch reports every one rather than the earliest alone. -}

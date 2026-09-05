@@ -10,8 +10,9 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout), tfCause, transportFault)
+import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout), tfCause, tfDetail, transportFault)
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Maintenance (
     DeleteCeiling (AtMost, NoCeiling),
     RetryAdvice (RetryFutile, RetryWorthwhile),
@@ -29,15 +30,22 @@ import Ecluse.Core.Registry.Maintenance (
     refusalCode,
     refusalDetail,
     renderNamePrefix,
+    storeFaultOfFetch,
+    storeFaultOfMetadata,
     storeRefusal,
     unreachedBatch,
  )
+import Ecluse.Core.Registry.Metadata (
+    MetadataError (MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
+ )
+import Ecluse.Core.Security (LimitError (TooManyVersions))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Maintenance (withBucket)
 
 spec :: Spec
 spec = do
     vocabularySpec
+    readFaultSpec
     bucketSpec
     pagingSpec
     chunkingSpec
@@ -75,6 +83,35 @@ bucketSpec = do
                 map (inBucket everything) names `shouldBe` replicate (length names) True
   where
     names = [unscoped "apple", unscoped "banana", scopedName]
+
+{- The two folds a store's reads go through. Only the transport half of either clears on its own,
+so everything else advises against a second attempt in the same cycle. -}
+readFaultSpec :: Spec
+readFaultSpec = do
+    describe "storeFaultOfFetch" $ do
+        it "keeps a retryable transport cause worth another attempt" $
+            faultRetry (storeFaultOfFetch (FetchTransport (transportFault TransportTimeout "no answer")))
+                `shouldBe` RetryWorthwhile
+
+        it "stops on a transport cause the next attempt reproduces" $
+            faultRetry (storeFaultOfFetch (FetchTransport (transportFault TransportProtocol "malformed")))
+                `shouldBe` RetryFutile
+
+    describe "storeFaultOfMetadata" $ do
+        it "carries the transport half's own advice through" $
+            faultRetry (storeFaultOfMetadata (MetadataFetch (FetchTransport (transportFault TransportTimeout "no answer"))))
+                `shouldBe` RetryWorthwhile
+
+        it "stops on a document that did not decode, whatever the store answers next" $
+            map (faultRetry . storeFaultOfMetadata) undecodableArms
+                `shouldBe` replicate (length undecodableArms) RetryFutile
+
+        it "names the package a mismatched document reported, for the audit line" $
+            tfDetail (faultTransport (storeFaultOfMetadata (MetadataNameMismatch "other")))
+                `shouldSatisfy` T.isInfixOf "other"
+  where
+    undecodableArms =
+        [MetadataUndecodable, MetadataNameMismatch "other", MetadataBoundExceeded (TooManyVersions 9 4)]
 
 vocabularySpec :: Spec
 vocabularySpec = do

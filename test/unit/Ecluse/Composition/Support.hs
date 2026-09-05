@@ -36,7 +36,10 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
-import Ecluse.Composition.Maintenance (ClearedBackend (ClearedCodeArtifact, ClearedProtocol))
+import Ecluse.Composition.Maintenance (
+    ClearedBackend (cbControl),
+    ClearedControl (ClearedCodeArtifact, ClearedProtocol),
+ )
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
     BootPlan,
@@ -124,8 +127,8 @@ noMaintenanceBackend = StoreMaintenanceUnavailable Npm (NoControlPlane TagRegist
 
 -- | The repository a cleared CodeArtifact store addresses, 'Nothing' for any other arm.
 clearedRepository :: ClearedBackend -> Maybe Text
-clearedRepository = \case
-    ClearedCodeArtifact store _ -> Just (casRepository store)
+clearedRepository cleared = case cbControl cleared of
+    ClearedCodeArtifact store -> Just (casRepository store)
     ClearedProtocol{} -> Nothing
 
 -- | Drop the registry mirror-target URL, so a test can declare its own target under any tag.

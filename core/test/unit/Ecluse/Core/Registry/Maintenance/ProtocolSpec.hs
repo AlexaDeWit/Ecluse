@@ -12,6 +12,7 @@ import Data.Aeson (Object, Value (Object), decodeStrict, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (Status, status200, status201, status404, status500, status503)
@@ -20,7 +21,7 @@ import Test.Hspec
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), tfCause, tfDetail)
-import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (maintenanceListing, maintenanceVersionDelete),
  )
@@ -34,15 +35,19 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (..),
     StoreFault (faultRetry, faultTransport),
     StoreMaintenance (..),
+    StoreManifestRead,
     StoredVersion (storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed),
     collectPages,
     noNameAlphabet,
     refusalCode,
+    storeFaultOfMetadata,
  )
 import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolStore (..), newProtocolMaintenance)
+import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
+import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
@@ -50,6 +55,7 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Stub (
     Captured (capBody, capMethod, capPath),
     Stub,
@@ -120,6 +126,34 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
             stored <- enumerateVersions handle leftpad
             fmap (map storedVersion) stored `shouldBe` Right [version "1.0.0", version "2.0.0"]
             fmap (map storedPresence) stored `shouldBe` Right [VersionServed, VersionServed]
+
+    it "reads the store's own manifest for a package, projected through the ecosystem's codec" $
+        withStore True answerStore $ \handle stub -> do
+            outcome <- readStoreManifest handle leftpad
+            fmap (Map.keys . infoVersions . manifestInfo) outcome `shouldBe` Right ["1.0.0", "2.0.0"]
+            calls stub `shouldReturn` [("GET", "/leftpad")]
+
+    it "carries the store's own write credential on the manifest read" $
+        withStore True answerStore $ \handle stub -> do
+            _ <- readStoreManifest handle leftpad
+            sent <- allCaptured stub
+            map (headerValue "Authorization") sent `shouldBe` [Just "Bearer write-token"]
+
+    it "reads every answer it cannot project as one fault, because the read keeps no status" $ do
+        -- The shared metadata read drops the status, so an absent package and a server-side
+        -- failure both arrive as a document that did not project. Either way the version keeps.
+        withStore True answerNothing $ \handle _ ->
+            (fmap faultRetry . leftToMaybe <$> readStoreManifest handle leftpad)
+                `shouldReturn` Just RetryFutile
+        withStore True (answerAll status503 "{}") $ \handle _ ->
+            (fmap faultRetry . leftToMaybe <$> readStoreManifest handle leftpad)
+                `shouldReturn` Just RetryFutile
+
+    it "advises another attempt when the store never answered the manifest read at all" $ do
+        handle <- unreachableStore
+        outcome <- readStoreManifest handle leftpad
+        fmap (tfCause . faultTransport) (leftToMaybe outcome) `shouldBe` Just TransportUnreachable
+        fmap faultRetry (leftToMaybe outcome) `shouldBe` Just RetryWorthwhile
 
     it "reads a package the store no longer holds as holding no versions" $
         withStore True answerNothing $ \handle _ ->
@@ -242,6 +276,7 @@ protocolStore permitted origin = do
     pure
         ProtocolStore
             { psOrigin = origin
+            , psReadManifest = readManifestOver origin
             , psListing = listing
             , psDelete = delete
             , psCodec = npmPublishCodec
@@ -251,6 +286,12 @@ protocolStore permitted origin = do
             }
   where
     required verb = maybe (fail ("npm fills no " <> verb <> " verb")) pure
+
+{- The read the composition root assembles for a protocol store: the ecosystem's own manifest
+fetch over the store's endpoint, with its failures folded into the maintenance vocabulary. -}
+readManifestOver :: OriginClient -> StoreManifestRead
+readManifestOver origin name =
+    first storeFaultOfMetadata <$> fetchNpmManifest passthroughTracingPort origin name
 
 {- | 'withStore' under a caller-chosen response bound, for the fail-closed read that refuses a
 body larger than the origin admits.

@@ -59,7 +59,7 @@ import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchFullManifest),
     MetadataError (MetadataNameMismatch),
  )
-import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl), originClient)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
@@ -220,5 +220,4 @@ withPublicMetadataClient rt deps baseUrl =
 the credential posture the caller decided. The artifact path forms its request through it too.
 -}
 mountOrigin :: PackumentDeps -> Manager -> RegistryUrl -> Maybe Secret -> OriginClient
-mountOrigin deps manager baseUrl token =
-    OriginClient{ocBaseUrl = baseUrl, ocManager = manager, ocToken = token, ocLimits = pdLimits deps}
+mountOrigin deps = originClient (pdLimits deps)

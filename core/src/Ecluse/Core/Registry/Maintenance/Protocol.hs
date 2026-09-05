@@ -21,17 +21,13 @@ import Network.HTTP.Client (Request)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Fault (
     TransportCause (TransportProtocol),
-    tfCause,
     transportFault,
-    transportRetryable,
  )
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     ParseError (parseErrorMessage),
     RegistryResponse (RegistryResponse),
     UrlFormationError,
-    renderUrlFormationError,
  )
 import Ecluse.Core.Registry.Adapter.Capability (
     StoreListing (listingParse, listingRequest),
@@ -49,6 +45,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (..),
     StoreFault (..),
     StoreMaintenance (..),
+    StoreManifestRead,
     StoreRefusal,
     StoredVersion (StoredVersion, storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved),
@@ -57,7 +54,10 @@ import Ecluse.Core.Registry.Maintenance (
     deleteAll,
     inBucket,
     noNameAlphabet,
+    protocolFault,
+    storeFaultOfFetch,
     storeRefusal,
+    unformableFault,
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Registry.Publish (PublishCodec (pcParseVersionList, pcProbeRequest))
@@ -76,6 +76,8 @@ data ProtocolStore = ProtocolStore
     {- ^ The ecosystem's publish codec, whose presence probe already reads a store's version
     list for the mirror worker.
     -}
+    , psReadManifest :: StoreManifestRead
+    -- ^ One package's metadata as this store serves it, assembled at the composition root.
     , psBackendName :: Text
     -- ^ The store backend's name, which the boot line records the Dredger's blast radius as.
     , psPermitDeletion :: Bool
@@ -93,6 +95,7 @@ newProtocolMaintenance store =
         { storeFacts = protocolFacts (psBackendName store)
         , listPackagesIn = listBucket store
         , enumerateVersions = listVersions store
+        , readStoreManifest = psReadManifest store
         , deleteVersions = deleteStoredVersions store
         , -- The protocol spells no request that reports what a delete would do without doing it.
           rehearseDelete = Nothing
@@ -260,23 +263,3 @@ readFault subject status =
             transportFault TransportProtocol ("the store answered the " <> subject <> " read with HTTP " <> show status)
         , faultRetry = if status >= 500 then RetryWorthwhile else RetryFutile
         }
-
-unformableFault :: UrlFormationError -> StoreFault
-unformableFault err =
-    protocolFault ("the store's request could not be formed: " <> renderUrlFormationError err)
-
-{- A malformed answer, an oversized body, and an unformable URL all read the same way on the
-next cycle, so none of them is worth another attempt. -}
-storeFaultOfFetch :: FetchFault -> StoreFault
-storeFaultOfFetch = \case
-    FetchTransport fault ->
-        StoreFault
-            { faultTransport = fault
-            , faultRetry = if transportRetryable (tfCause fault) then RetryWorthwhile else RetryFutile
-            }
-    FetchBoundExceeded _ -> protocolFault "the store's answer crossed the response-size bound"
-    FetchUrlUnformable err -> unformableFault err
-
-protocolFault :: Text -> StoreFault
-protocolFault detail =
-    StoreFault{faultTransport = transportFault TransportProtocol detail, faultRetry = RetryFutile}

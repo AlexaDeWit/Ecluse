@@ -12,6 +12,7 @@ pipeline are the only builders: nothing here is derived, and nothing is cached.
 -}
 module Ecluse.Core.Registry.Origin (
     OriginClient (..),
+    originClient,
 ) where
 
 import Network.HTTP.Client (Manager)
@@ -35,3 +36,10 @@ data OriginClient = OriginClient
     past 'Ecluse.Core.Security.maxBodyBytes'.
     -}
     }
+
+{- | One origin from the four things that name it. Its builders take the bound first, because a
+caller usually holds one bound and reaches several origins under it.
+-}
+originClient :: Limits -> Manager -> RegistryUrl -> Maybe Secret -> OriginClient
+originClient limits manager baseUrl token =
+    OriginClient{ocBaseUrl = baseUrl, ocManager = manager, ocToken = token, ocLimits = limits}
