@@ -11,6 +11,7 @@ module Ecluse.Composition.Support (
     fdLimit,
     noCeiling,
     staticEnvVars,
+    scopedName,
     codeArtifactMirrorUrl,
     codeArtifactEnvVars,
     noMaintenanceBackend,
@@ -47,6 +48,7 @@ import Ecluse.Composition.Validate (ValidatedPlan (vpMounts), VettedMount (vmMou
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig, Config (configApp), StoreTag (TagRegistry), loadConfig, renderConfigError)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Security (Limits (..))
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (casRepository)
@@ -89,6 +91,12 @@ staticEnvVars =
     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "mirror-write-token")
     ]
+
+{- | 'Ecluse.Test.Package.thingName' under the given scope, for the specs that read a
+first-party predicate. The unscoped counterpart is @thingName@ itself.
+-}
+scopedName :: Text -> PackageName
+scopedName scope = mkPackageName Npm (Just (mkScope scope)) "thing"
 
 {- | An ambient @AWS_ENDPOINT_URL@ carrying userinfo, which the egress guard refuses. Both entry
 points must report it, and neither may echo the credential it holds.

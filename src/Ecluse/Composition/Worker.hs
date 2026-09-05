@@ -35,6 +35,7 @@ import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
     PackumentDeps,
     pdArtifact,
+    pdFirstParty,
     pdLimits,
     pdMetadata,
     pdMinIntegrity,
@@ -96,7 +97,10 @@ dropped-entry logs, because the worker logs its re-evaluation outcome per job. -
 workerPolicyFor :: Env -> PackumentDeps -> MirrorPublish -> Int -> WorkerPolicy
 workerPolicyFor env deps publish artifactMaxBytes =
     WorkerPolicy
-        { wpResolveVersion = fetchVersionDetails client
+        { -- The mount's own first-party predicate, so the worker refuses a name the
+          -- deployment owns exactly as the serve and publish paths do.
+          wpFirstParty = pdFirstParty deps
+        , wpResolveVersion = fetchVersionDetails client
         , wpRules = pdRules deps
         , wpMinIntegrity = pdMinIntegrity deps
         , wpArtifactHostHonoured =

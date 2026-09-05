@@ -9,15 +9,17 @@ import Test.Hspec
 
 import Ecluse (mountBindingFor)
 import Ecluse.Composition (PublishTarget (ptEcosystem), planMounts, planPublishTargets)
-import Ecluse.Composition.Support (expectConfig, expectProviders, expectValidated, fixedNow, staticEnvVars, testLimits)
+import Ecluse.Composition.Support (expectConfig, expectProviders, expectValidated, fixedNow, overrideEnv, scopedName, staticEnvVars, testLimits)
 import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Publish (MirrorTransport (ptLimits))
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
-import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), PackumentDeps (pdLimits, pdMinIntegrity))
-import Ecluse.Core.Worker (WorkerPolicy (wpArtifactLimits, wpMinIntegrity, wpNow))
+import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), PackumentDeps (pdFirstParty, pdLimits, pdMinIntegrity))
+import Ecluse.Core.Worker (WorkerPolicy (wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpNow))
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Test.Support (newTestEnv)
+import Ecluse.Test.Package (thingName)
 import Ecluse.Test.Rules (inertRuleDeps)
 
 {- | Tests for the composition root's worker bundle construction. Construction only, no network:
@@ -42,6 +44,19 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
                 wpMinIntegrity policy `shouldBe` pdMinIntegrity deps
                 now <- wpNow policy
                 now `shouldBe` fixedNow
+
+    it "carries the mount's own first-party predicate onto the bundle" $ do
+        -- The worker is a consumer of the one privilege, so a job for a declared namespace is
+        -- refused at ingest exactly as the serve and publish paths refuse the name.
+        (env, bindings, targets) <- composedFixturesFrom firstPartyEnvVars testLimits
+        deps <- case bindings of
+            [binding] -> pure (bindingPackumentDeps binding)
+            _ -> fail "expected exactly one served binding"
+        case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
+            Nothing -> expectationFailure "expected an npm bundle"
+            Just policy -> do
+                map (wpFirstParty policy) names `shouldBe` [True, False, False]
+                map (wpFirstParty policy) names `shouldBe` map (pdFirstParty deps) names
 
     it "contributes no bundle for an ecosystem without a resolved publish target" $ do
         -- The bundle is whole or absent: without a publish target there is no mirror
@@ -72,6 +87,16 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         ptLimits transport `shouldBe` pdLimits deps
         ptLimits transport `shouldNotBe` defaultLimits
 
+-- 'staticEnvVars' with one declared npm namespace, so the wiring assertion reads a
+-- predicate that owns something rather than the deny-by-default constant.
+firstPartyEnvVars :: [(String, String)]
+firstPartyEnvVars = overrideEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme" staticEnvVars
+
+-- An owned name, a lookalike, and an unscoped one: the rows the bundle and the serve deps
+-- are compared over.
+names :: [PackageName]
+names = [scopedName "acme", scopedName "evil", thingName]
+
 -- A distinctive artifact fetch cap, so the thread-through assertion pins the exact
 -- value the composition root would pass rather than any incidental default.
 testArtifactCap :: Int
@@ -89,8 +114,13 @@ composedFixtures = composedFixturesWith testLimits
 -- 'composedFixtures' with an explicit resolved 'Limits', so a test can pin that a plan-resolved
 -- bound, not the shipped default, reaches the wiring.
 composedFixturesWith :: Limits -> IO (Env, [MountBinding], [PublishTarget])
-composedFixturesWith limits = do
-    config <- expectConfig staticEnvVars Nothing
+composedFixturesWith = composedFixturesFrom staticEnvVars
+
+-- 'composedFixturesWith' over a caller-supplied environment, so a test composes a mount whose
+-- configuration differs from the minimal one.
+composedFixturesFrom :: [(String, String)] -> Limits -> IO (Env, [MountBinding], [PublishTarget])
+composedFixturesFrom envVars limits = do
+    config <- expectConfig envVars Nothing
     providers <- expectProviders config
     plan <- expectValidated config
     bindings <-

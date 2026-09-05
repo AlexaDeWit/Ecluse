@@ -8,7 +8,9 @@ mirrored packages.
 The worker is the consumer end of the demand-driven mirror queue (see
 "Ecluse.Core.Queue"). The consume loop long-polls the queue and resolves each received
 job's __ecosystem bundle__ ('WorkerPolicy', keyed by the job's own ecosystem). A job
-whose ecosystem carries no bundle is fail-closed. Through that bundle the loop:
+whose ecosystem carries no bundle is fail-closed, and so is one for a name the deployment
+owns ('wpFirstParty'): the queue outlives a namespace declaration, so the privilege is read
+here before any public request. Otherwise, through that bundle the loop:
 
 1. __probes__ the mirror target for the job's version and acks a confirmed-present
    duplicate outright. Demand-driven enqueue means a fleet-wide install of a novel

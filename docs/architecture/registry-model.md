@@ -187,7 +187,9 @@ track which input a survivor came from, so the serve layer can index back to the
   the mount's `firstParty` namespaces is the exception: it has one authority, so Écluse fetches the
   private origin alone and a miss there is a `404`. A public package registered under a name the
   deployment owns is a dependency-confusion attack, and refusing the public leg is what keeps one
-  verdict on a name wherever the privilege is read.
+  verdict on a name wherever the privilege is read. The mirror worker reads that same predicate, so
+  a job enqueued before the declaration drops before any public request rather than mirroring public
+  content under an owned name.
 - **Trust split by provenance.** Private versions enter unfiltered. The rules engine gates public
   versions first (see [Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)). The
   result is `trusted(private) ∪ filtered(public)`.

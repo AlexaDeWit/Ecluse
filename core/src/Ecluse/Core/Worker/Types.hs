@@ -79,7 +79,11 @@ breaker state. The publish capability is the mount's own, so a job's presence pr
 mirror write reach only its own ecosystem's declared mirror target.
 -}
 data WorkerPolicy = WorkerPolicy
-    { wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
+    { wpFirstParty :: PackageName -> Bool
+    {- ^ Whether a name belongs to a namespace this deployment owns, the predicate the serve
+    and publish paths read ('Ecluse.Core.Server.Context.pdFirstParty').
+    -}
+    , wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
     {- ^ Resolve and project one version's metadata through the guarded public origin,
     classifying the outcome ('Ecluse.Core.Registry.Metadata.fetchVersionDetails').
     Total by type: the fetch reports every failure, transport included, in its typed

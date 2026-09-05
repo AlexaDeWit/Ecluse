@@ -385,6 +385,47 @@ spec = do
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 
+    describe "processJob: the first-party privilege" $ do
+        -- A namespace declared after the enqueue, so the queue still holds a job for a name the
+        -- deployment now owns. 'refusingResolver' throws if the metadata re-fetch is reached.
+        let ownedPolicies = withFirstParty (const True) (npmPolicies refusingResolver [admitRule])
+
+        it "drops a job whose name the deployment owns, making no public request" $
+            -- 'unreachableUrl' would surface a Retried had the artifact bytes been fetched.
+            withRuntimePolicies ownedPolicies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob receipt job)
+                -- The reason is the audit line the terminal path logs, so it names the package,
+                -- the version, and why the job was retired.
+                case outcome of
+                    Dropped reason -> do
+                        reason `shouldSatisfy` T.isInfixOf "thing@1.0.0"
+                        reason `shouldSatisfy` T.isInfixOf "first-party"
+                    other -> expectationFailure ("expected a Dropped outcome for a first-party name, got " <> show other)
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "drops a first-party job the mirror target already lists, rather than acking it as present" $
+            -- The privilege is read ahead of the dedup probe, so a name the deployment owns can
+            -- never take the already-mirrored short circuit and report success.
+            withRuntimeRegistry (\logRef -> mirrorListingPublish logRef (Right ()) [ver]) ownedPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob receipt job)
+                outcome `shouldSatisfy` isDropped
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "mirrors a job whose name the deployment does not own (deny by default, unchanged)" $
+            -- The control case: the same wiring under a predicate that owns nothing still
+            -- re-evaluates, fetches, and publishes.
+            withUpstream $ \url ->
+                withRuntimePolicies (withFirstParty (const False) admitPolicies) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    published <- plDocuments <$> readIORef logRef
+                    length published `shouldBe` 1
+
     describe "processJob: the mirror-presence dedup probe" $ do
         -- The default 'recordingPublish' answers the probe with an unparseable body (the
         -- absent posture), so every other test in this file already covers that
