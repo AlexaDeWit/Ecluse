@@ -3,9 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Request shaping and URL building for the npm data plane. The ecosystem-agnostic
-mechanics (the redirect-pin finaliser, conditional-GET validators, URL parsing, the path
-join, the opaque-artifact request core) live in "Ecluse.Core.Registry.Request". This
-module holds only npm's own protocol facts and composes them through that shared home.
+mechanics (the outbound seal, conditional-GET validators, URL parsing, the path join, the
+opaque-artifact request core) live in "Ecluse.Core.Registry.Request". This module holds
+only npm's own protocol facts and composes them through that shared home.
 
 Three details of the wire protocol are load-bearing and handled here:
 
@@ -163,10 +163,7 @@ encodePackagePath name = case pkgNamespace name of
     Just scope -> "@" <> encodeComponent (unScope scope) <> "%2F" <> encodeComponent (unscopedName name)
     Nothing -> encodeComponent (renderPackageName name)
 
-{- Attach the injected credential under npm's presentation through
-'Ecluse.Core.Registry.Request.attachCredential', which pins @redirectCount = 0@ and holds that
-invariant's rationale. Every npm builder reaches the wire through this, anonymous requests
-included.
--}
+-- Attach the injected credential under npm's presentation. The redirect pin and the proxy
+-- identity belong to Ecluse.Core.Registry.Request, which seals every request it parses.
 withToken :: Maybe Secret -> Request -> Request
 withToken = attachCredential npmCredential

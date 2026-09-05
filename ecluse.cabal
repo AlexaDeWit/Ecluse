@@ -98,6 +98,7 @@ library ecluse-core
   hs-source-dirs:  core/src
   exposed-modules:
     Ecluse.Core.Breaker
+    Ecluse.Core.BuildIdentity
     Ecluse.Core.Credential
     Ecluse.Core.Credential.Refresh
     Ecluse.Core.Credential.Refresh.Internal
@@ -666,6 +667,7 @@ test-suite ecluse-core-unit
   hs-source-dirs:     core/test/unit
   other-modules:
     Ecluse.Core.BreakerSpec
+    Ecluse.Core.BuildIdentitySpec
     Ecluse.Core.Credential.Refresh.InternalSpec
     Ecluse.Core.CredentialSpec
     Ecluse.Core.Cve.AcceptanceSpec

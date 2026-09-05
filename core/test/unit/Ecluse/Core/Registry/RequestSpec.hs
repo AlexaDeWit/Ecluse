@@ -6,7 +6,7 @@ module Ecluse.Core.Registry.RequestSpec (spec) where
 
 import Data.List (lookup)
 import Network.HTTP.Client qualified as Client
-import Network.HTTP.Types.Header (RequestHeaders, hIfModifiedSince, hIfNoneMatch)
+import Network.HTTP.Types.Header (RequestHeaders, hIfModifiedSince, hIfNoneMatch, hUserAgent)
 import Test.Hspec (
     Spec,
     describe,
@@ -16,6 +16,7 @@ import Test.Hspec (
     shouldSatisfy,
  )
 
+import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Registry.Request (
@@ -30,11 +31,13 @@ import Ecluse.Core.Registry.Request (
     joinPath,
     noValidators,
     parseRequestEither,
+    sealRequest,
  )
 import Ecluse.Test.Support (parseRequestOrFail)
 
 spec :: Spec
 spec = do
+    sealRequestSpec
     finaliseRequestSpec
     credentialMappingSpec
     artifactByUrlSpec
@@ -62,10 +65,10 @@ credentialMappingSpec = describe "a credential mapping carries one ecosystem's p
         lookup "Authorization" (Client.requestHeaders (attachCredential schemedMapping (Just (mkSecret "tok-abc")) req))
             `shouldBe` Just "Token tok-abc"
 
-    it "attaches no header when the request is anonymous" $ do
+    it "attaches no credential header when the request is anonymous" $ do
         req <- parseRequestOrFail "https://reg.test/x"
-        Client.requestHeaders (attachCredential apiKeyMapping Nothing req)
-            `shouldBe` Client.requestHeaders req
+        lookup "X-Api-Key" (Client.requestHeaders (attachCredential apiKeyMapping Nothing req))
+            `shouldBe` Nothing
 
     it "pins the redirect count with the credential attached (the attach cannot bypass it)" $ do
         req <- parseRequestOrFail "https://reg.test/x"
@@ -74,6 +77,24 @@ credentialMappingSpec = describe "a credential mapping carries one ecosystem's p
     it "pins the redirect count on an anonymous request too" $ do
         req <- parseRequestOrFail "https://reg.test/x"
         Client.redirectCount (attachCredential apiKeyMapping Nothing req) `shouldBe` 0
+
+sealRequestSpec :: Spec
+sealRequestSpec = describe "sealRequest carries the outbound invariants onto every request" $ do
+    it "disables redirect following (redirectCount 0)" $ do
+        req <- parseRequestOrFail "https://reg.test/x"
+        Client.redirectCount (sealRequest req) `shouldBe` 0
+
+    it "identifies the proxy with the shared User-Agent" $ do
+        req <- parseRequestOrFail "https://reg.test/x"
+        lookup hUserAgent (Client.requestHeaders (sealRequest req)) `shouldBe` Just userAgent
+
+    it "sets the User-Agent once, however many formation steps re-apply the seal" $ do
+        req <- parseRequestOrFail "https://reg.test/x"
+        userAgents (sealRequest (sealRequest (sealRequest req))) `shouldBe` [userAgent]
+
+    it "leaves a User-Agent the caller already set in place" $ do
+        req <- parseRequestOrFail "https://reg.test/x"
+        userAgents (sealRequest (withAgent "other/1.0" req)) `shouldBe` ["other/1.0"]
 
 finaliseRequestSpec :: Spec
 finaliseRequestSpec = describe "finaliseRequest pins the redirect count for every request" $ do
@@ -158,6 +179,24 @@ parseSpec = describe "parseRequestEither maps a parse failure to UrlFormationErr
         parseRequestEither "not a url with spaces"
             `shouldSatisfy` urlErrorWas (UnparseableUrl "not a url with spaces")
 
+    it "seals what it parses, so no adapter obtains an unpinned request from the shared entry" $
+        case parseRequestEither "https://reg.test/x" of
+            Left err -> fail ("expected a parseable URL: " <> show err)
+            Right req -> do
+                Client.redirectCount req `shouldBe` 0
+                lookup hUserAgent (Client.requestHeaders req) `shouldBe` Just userAgent
+
+    it "holds the pin and one User-Agent under a credential attach, with no adapter involved" $
+        -- The whole credentialed request is built from the shared entry and a presentation no
+        -- registered ecosystem owns, so nothing here rides on an adapter's own builder.
+        case parseRequestEither "https://reg.test/x" of
+            Left err -> fail ("expected a parseable URL: " <> show err)
+            Right req -> do
+                let credentialed = attachCredential apiKeyMapping (Just (mkSecret "tok-abc")) req
+                Client.redirectCount credentialed `shouldBe` 0
+                userAgents credentialed `shouldBe` [userAgent]
+                lookup "X-Api-Key" (Client.requestHeaders credentialed) `shouldBe` Just "tok-abc"
+
 {- | A presentation that carries a raw token on a header it names itself. These cases
 therefore drive the mapping vocabulary, not any registered ecosystem's scheme.
 -}
@@ -172,6 +211,13 @@ therefore comes from the mapping, not from a scheme the code assumes.
 -}
 schemedMapping :: CredentialMapping
 schemedMapping = credentialMapping recoverApiKey "Authorization" (\secret -> "Token " <> encodeUtf8 (unSecret secret))
+
+-- Every User-Agent a request carries, so a case can assert the header is set exactly once.
+userAgents :: Client.Request -> [ByteString]
+userAgents request = [value | (name, value) <- Client.requestHeaders request, name == hUserAgent]
+
+withAgent :: ByteString -> Client.Request -> Client.Request
+withAgent value req = req{Client.requestHeaders = (hUserAgent, value) : Client.requestHeaders req}
 
 addAuth :: ByteString -> Client.Request -> Client.Request
 addAuth value req = req{Client.requestHeaders = ("Authorization", value) : Client.requestHeaders req}

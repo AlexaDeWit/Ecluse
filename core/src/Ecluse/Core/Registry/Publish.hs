@@ -3,13 +3,13 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The mirror-write capability: a shared publish transport, an adapter-provided protocol codec,
-and the married 'MirrorPublish' handle a worker bundle carries. The split follows what genuinely
-varies per ecosystem. The 'PublishCodec' is protocol: it assembles and shapes the request and
-says what the registry's status answer means. The 'MirrorTransport' is everything else, so a new
-ecosystem contributes a codec and never a transport. Both effectful operations report failure as
-a __value__, 'FetchFault' on the probe and 'PublishFault' on the write, so the worker's decisions
-stay total at the call site. The codec carries no authentication: the transport mints the bearer
-per call, and the codec attaches it at its single attach point.
+and the married 'MirrorPublish' handle a worker bundle carries. The 'PublishCodec' is protocol:
+it assembles and shapes the request and says what the registry's status answer means. The
+'MirrorTransport' is everything else, so a new ecosystem contributes a codec and never a
+transport. It mints the bearer per call, which the codec attaches at its single attach point,
+and it seals every request a codec returns, so no codec can ship a mirror write that follows a
+redirect. Both effectful operations report failure as a __value__, 'FetchFault' on the probe and
+'PublishFault' on the write, so the worker's decisions stay total at the call site.
 -}
 module Ecluse.Core.Registry.Publish (
     -- * The adapter's protocol codec
@@ -36,6 +36,7 @@ import Ecluse.Core.Registry (
     UrlFormationError,
  )
 import Ecluse.Core.Registry.Exchange (boundedExchange, boundedFetch, formThen)
+import Ecluse.Core.Registry.Request (sealRequest)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (Version)
@@ -103,15 +104,15 @@ newMirrorPublish transport target codec =
     -- rather than at every formation.
     targetUrl = registryUrlText target
 
--- Execute the codec's probe read over the transport: mint, form, dial, and read
--- the body bounded, with every failure folded into the typed 'FetchFault' channel.
+-- Execute the codec's probe read over the transport: mint, form, seal, dial, and read the
+-- body bounded, with every failure folded into the typed 'FetchFault' channel.
 probeMetadata :: MirrorTransport -> Text -> PublishCodec -> PackageName -> IO (Either FetchFault RegistryResponse)
 probeMetadata transport targetUrl codec name = do
     token <- ptMintToken transport
     formThen
         FetchUrlUnformable
         (boundedFetch (ptManager transport) (ptLimits transport))
-        (pcProbeRequest codec targetUrl token name)
+        (sealRequest <$> pcProbeRequest codec targetUrl token name)
 
 publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
 publishArtifact transport targetUrl codec name version artifact bytes = do
@@ -119,7 +120,7 @@ publishArtifact transport targetUrl codec name version artifact bytes = do
     formThen
         (PublishFetch . FetchUrlUnformable)
         (writeArtifact transport codec)
-        (pcPublishRequest codec targetUrl token name version artifact bytes)
+        (sealRequest <$> pcPublishRequest codec targetUrl token name version artifact bytes)
 
 -- Read the codec's verdict from the answered status. The 'const' projection drops the
 -- target's body, which the write has no use for, and the exchange bounds it either way.
