@@ -3,22 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | npm's entry in the ecosystem adapter registry: the
-'Ecluse.Core.Registry.Adapter.Types.RegistryAdapter' assembled from the existing
-npm modules.
-
-Pure assembly, with no protocol logic of its own. Every field is a function an npm
-module already exports:
-
-* The path grammar ("Ecluse.Core.Registry.Npm.Route").
-* The denial renderer ("Ecluse.Core.Registry.Npm.Serve").
-* The credential presentation ("Ecluse.Core.Registry.Npm.Credential").
-* The metadata client and the served packument assembly
-  ("Ecluse.Core.Registry.Npm.Metadata", "Ecluse.Core.Registry.Npm.Filter").
-* The artifact request builders ("Ecluse.Core.Registry.Npm.Request").
-* The publish relay ("Ecluse.Core.Registry.Npm").
-* The mirror-write codec, with the body-name extractor the anti-shadowing guard
-  reads through ("Ecluse.Core.Registry.Npm.Publish").
-* The name canonicaliser ("Ecluse.Core.Registry.Npm.Project").
+'Ecluse.Core.Registry.Adapter.Types.RegistryAdapter' assembled from the existing npm modules.
+Pure assembly, with no protocol logic of its own: every field names a function one of the
+@Ecluse.Core.Registry.Npm.*@ modules already exports.
 -}
 module Ecluse.Core.Registry.Npm.Adapter (
     npmAdapter,
@@ -35,6 +22,7 @@ import Ecluse.Core.Registry.Adapter.Types (
 import Ecluse.Core.Registry.Npm (relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
+import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Publish (declaredNames, npmPublishCodec)
@@ -75,4 +63,5 @@ npmAdapter =
                 , publishDeclaredNames = declaredNames
                 , publishCodec = npmPublishCodec
                 }
+        , adapterMaintenance = npmMaintenance
         }

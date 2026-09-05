@@ -11,6 +11,7 @@ module Ecluse.Test.Stub (
     allCaptured,
     withStub,
     withStubHeaders,
+    withRoutedStub,
     stubConfig,
     headerValue,
 ) where
@@ -85,7 +86,14 @@ withStub status = withStubHeaders status []
 reader decompresses, so a test can assert the bounded read bounds /decompressed/ size, not wire size.
 -}
 withStubHeaders :: Status -> [Header] -> LBS.ByteString -> (Stub -> IO a) -> IO a
-withStubHeaders status extraHeaders body action = do
+withStubHeaders status extraHeaders body =
+    withRoutedStub (const (status, extraHeaders, body))
+
+{- | 'withStub' answering each request from what it captured, so a test can drive a sequence of
+different calls against one origin. The reply is chosen after the request is recorded.
+-}
+withRoutedStub :: (Captured -> (Status, [Header], LBS.ByteString)) -> (Stub -> IO a) -> IO a
+withRoutedStub reply action = do
     captured <- newIORef []
     let app :: Application
         app waiReq respond = do
@@ -97,6 +105,7 @@ withStubHeaders status extraHeaders body action = do
                         , capHeaders = requestHeaders waiReq
                         , capBody = LBS.toStrict bodyBytes
                         }
+                (status, extraHeaders, body) = reply cap
             atomicModifyIORef' captured (\seen -> (cap : seen, ()))
             respond (responseLBS status extraHeaders body)
     testWithApplication (pure app) $ \port ->

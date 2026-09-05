@@ -132,6 +132,12 @@ data BootError
 data StoreMaintenanceReason
     = -- | The mount's store tag names no control plane this build implements.
       NoControlPlane StoreTag
+    | -- | The mount's store carries no operator consent to delete from it.
+      DeletionNotPermitted StoreTag
+    | {- | The store's only control plane is the ecosystem protocol, which spells no package
+      listing or version delete.
+      -}
+      NoProtocolMaintenance
     | -- | Building the cleared backend's client against the live environment threw.
       ClientBuildFailed Text
     deriving stock (Eq, Show)
@@ -236,13 +242,23 @@ renderBootError = \case
     StoreMaintenanceUnavailable eco reason ->
         mountKeyRef eco "mirrorTarget"
             <> " has no usable store maintenance backend: "
-            <> renderStoreMaintenanceReason reason
+            <> renderStoreMaintenanceReason eco reason
             <> " (the Dredger deletes from every mount's mirror target, so it refuses rather than starting against a store it cannot sweep)"
     StorePrunerWithoutSweep ->
         "this build carries no Dredger sweep, so ecluse dredger refuses to start rather than run idle: run a role this build has work for"
 
-renderStoreMaintenanceReason :: StoreMaintenanceReason -> Text
-renderStoreMaintenanceReason = \case
+renderStoreMaintenanceReason :: Ecosystem -> StoreMaintenanceReason -> Text
+renderStoreMaintenanceReason eco = \case
     NoControlPlane tag ->
         "its target is a " <> storeTagName tag <> " store, which carries no store maintenance backend this build can sweep"
+    DeletionNotPermitted tag ->
+        "its target is a "
+            <> storeTagName tag
+            <> " store and "
+            <> mountKeyRef eco ("mirrorTarget." <> storeTagName tag <> ".permitDeletion")
+            <> " is not set: that key is your consent for the Dredger to delete from this store"
+    NoProtocolMaintenance ->
+        "its store has no control plane, and the "
+            <> ecosystemName eco
+            <> " protocol carries no package listing or version delete for one"
     ClientBuildFailed detail -> "building its client failed: " <> detail

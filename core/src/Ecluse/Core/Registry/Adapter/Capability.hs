@@ -2,13 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The three ecosystem capability slices a consuming pipeline's dependency record
-__embeds__: the metadata read and assembly, the artifact request formation, and the publish
-path. Nothing here holds a URL, a credential, a limit, or a policy.
+{- | The ecosystem capability slices a consuming pipeline's dependency record __embeds__: the
+metadata read and assembly, the artifact request formation, the publish path, and the store
+maintenance verbs. Nothing here holds a URL, a credential, a limit, or a policy.
 
-They sit below the serve surface because the deps records carry them as fields, while the
-fourth slice ('Ecluse.Core.Registry.Adapter.Types.AdapterServe') names the routing knot
-defined over those same records. The split is what makes both directions typeable.
+They sit below the serve surface because the deps records carry them as fields, while
+'Ecluse.Core.Registry.Adapter.Types.AdapterServe' names the routing knot defined over those
+same records. The split is what makes both directions typeable.
 -}
 module Ecluse.Core.Registry.Adapter.Capability (
     -- * Metadata
@@ -19,6 +19,11 @@ module Ecluse.Core.Registry.Adapter.Capability (
 
     -- * Publish
     AdapterPublish (..),
+
+    -- * Store maintenance
+    AdapterMaintenance (..),
+    StoreListing (..),
+    VersionDelete (..),
 ) where
 
 import Network.HTTP.Client (Request)
@@ -28,10 +33,13 @@ import Ecluse.Core.Package (InvalidEntry, PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
     FetchFault,
+    ParseError,
     PublishRelayResponse,
+    RegistryResponse,
     UrlFormationError,
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
+import Ecluse.Core.Registry.Maintenance (StoreRefusal)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
@@ -39,6 +47,7 @@ import Ecluse.Core.Server.Metadata (ManifestCaching)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
+import Ecluse.Core.Version (Version)
 
 {- | The ecosystem's metadata capability: reading a package's metadata from an origin,
 assembling the served document, and encoding it ('Ecluse.Core.Server.Context.pdMetadata').
@@ -106,5 +115,47 @@ data AdapterPublish = AdapterPublish
     {- ^ The mirror write's protocol codec: publish document assembly, request formation, the
     probe's request and version-list projection, and the status semantics. Protocol only: the
     manager, credential mint, and fault classification belong to the shared transport.
+    -}
+    }
+
+{- | The ecosystem's store maintenance verbs: how a store that speaks this protocol is walked
+and deleted from. Each is 'Nothing' for a protocol that has no such verb, and a Dredger
+against a store with no vendor control plane refuses that mount rather than sweeping blind.
+The backend leaf that drives them is "Ecluse.Core.Registry.Maintenance.Protocol".
+-}
+data AdapterMaintenance = AdapterMaintenance
+    { maintenanceListing :: Maybe StoreListing
+    -- ^ How the protocol enumerates a store's packages, where it can.
+    , maintenanceVersionDelete :: Maybe VersionDelete
+    -- ^ How the protocol deletes one version, where it can.
+    }
+
+{- | Reading every package a store holds. The protocol's own listing endpoint, which a public
+registry may well refuse: a listing that does not answer @200@ is the caller's fault to report.
+-}
+data StoreListing = StoreListing
+    { listingRequest :: OriginClient -> Either UrlFormationError Request
+    -- ^ Form the listing read against the store.
+    , listingParse :: ByteString -> Either ParseError [PackageName]
+    {- ^ Project a listing body onto the names it holds. An entry this ecosystem cannot parse
+    as a name is dropped, because Écluse could serve it no better than it can sweep it.
+    -}
+    }
+
+{- | Deleting one version from a store, as the sequence of requests the protocol spells it
+with. It names its own document read because the edit needs the store's whole current
+document, revision marker included, which an install-optimised metadata read may omit.
+-}
+data VersionDelete = VersionDelete
+    { deleteDocumentRequest :: OriginClient -> PackageName -> Either UrlFormationError Request
+    -- ^ Form the read of the document the delete requests are built from.
+    , deleteRequests ::
+        OriginClient ->
+        PackageName ->
+        Version ->
+        RegistryResponse ->
+        Either StoreRefusal (NonEmpty Request)
+    {- ^ Form the ordered requests that remove one version, or say why the fetched document
+    admits none. Every request must be sent, in this order, for the version to be gone.
     -}
     }

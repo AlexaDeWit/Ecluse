@@ -90,7 +90,7 @@ vetBoot config =
         <$> vetMounts config
         <*> vetPublishPolicy app
         <*> vetEndpoints (cfgMounts app)
-        <*> vetStoreBackends (configMounts config)
+        <*> vetStoreBackends adapterFor (configMounts config)
   where
     app = configApp config
 

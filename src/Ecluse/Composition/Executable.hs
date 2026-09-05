@@ -123,7 +123,7 @@ planExecutable logEnv resolveAdapter buildQueue buildStore bootPlan = case bpRol
     -- This build carries no sweep, so the arm plans its handles and then refuses.
     BootStorePruner ->
         idlePrunerRefusal
-            <$> planStoreMaintenance buildStore (vpMirrorStores (bpValidated bootPlan))
+            <$> planStoreMaintenance buildStore (bpLimits bootPlan) (vpMirrorStores (bpValidated bootPlan))
     BootWithoutPipeline -> pure (Right (executablePlan PilotWiring))
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}

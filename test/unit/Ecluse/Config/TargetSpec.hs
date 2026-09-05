@@ -16,7 +16,7 @@ import Ecluse.Config (
     AppConfig (cfgMounts),
     Config (configApp, configMounts),
     ConfigError,
-    ControlPlane (ControlCodeArtifact, ControlNone),
+    ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
     DeletionConsent (DeletionPermitted, DeletionWithheld),
     MintPlan (MintCodeArtifact, MintStatic),
     MirrorTarget (mtBackend),
@@ -222,14 +222,14 @@ backendSpec = describe "the store backend a mirror target resolves to" $ do
             ControlCodeArtifact store -> do
                 casRepository store `shouldBe` "mirror"
                 formatToken (casFormat store) `shouldBe` "npm"
-            ControlNone -> expectationFailure "expected a CodeArtifact control plane"
+            other -> expectationFailure ("expected a CodeArtifact control plane, got: " <> show other)
 
     it "resolves verdaccio to a static credential carrying the declared deletion consent" $ do
         permitted <- backendFor [decl "mirrorTarget" "verdaccio" verdaccioWriteKeys]
         permitted `shouldBe` BackendVerdaccio (mkSecret "write-token") DeletionPermitted
         sbTag permitted `shouldBe` TagVerdaccio
         sbMint permitted `shouldBe` MintStatic (mkSecret "write-token")
-        sbControl permitted `shouldBe` ControlNone
+        sbControl permitted `shouldBe` ControlProtocol (mkSecret "write-token") DeletionPermitted
 
     it "withholds deletion consent on a verdaccio store that never declares it" $ do
         backend <- backendFor [decl "mirrorTarget" "verdaccio" [url verdaccioUrl, field "token" "write-token"]]

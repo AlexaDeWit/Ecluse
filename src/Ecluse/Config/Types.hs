@@ -215,6 +215,10 @@ data MintPlan
 data ControlPlane
     = -- | The CodeArtifact repository the target addresses, which the load has vetted.
       ControlCodeArtifact CodeArtifactStore
+    | {- | A store with no vendor control plane, swept through the ecosystem protocol's own
+      verbs: its write token, and the operator's consent to delete from it.
+      -}
+      ControlProtocol Secret DeletionConsent
     | -- | The tag names no control plane this build implements.
       ControlNone
     deriving stock (Eq, Show)
@@ -250,7 +254,7 @@ sbControl :: StoreBackend -> ControlPlane
 sbControl = \case
     BackendRegistry{} -> ControlNone
     BackendCodeArtifact _ store -> ControlCodeArtifact store
-    BackendVerdaccio{} -> ControlNone
+    BackendVerdaccio token consent -> ControlProtocol token consent
 
 {- | The namespaces a mount's deployment owns, one arm per ecosystem, read only in that registry's own naming
 shape. Every consumer of the privilege derives its predicate from this one value.

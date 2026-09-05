@@ -2,17 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The config-derived runtime sizings of the composition root: serve-admission
-capacity, the two connection-pool sizes, the file-descriptor datapoint behind them,
-and the mirror-enqueue buffer tunables. A separate partition of the heap ceiling
-covers the byte-valued bounds ("Ecluse.Composition.MemoryPlan").
+{- | The config-derived runtime sizings of the composition root: serve-admission capacity,
+the two connection-pool sizes and the managers built under them, and the mirror-enqueue
+buffer tunables. The byte-valued bounds live in "Ecluse.Composition.MemoryPlan".
 
-Each resolution is a pure function of the validated configuration, plus, for the
-pools, the process file-descriptor limit 'openFileSoftLimit' reads once. That read is
-the module's only effect: nothing here opens a socket or reads a clock. An explicit
-config value always wins, and 'resolveSized' pairs the result with the boot-log line
-naming its provenance. The composition root applies the results when it builds the
-managers and the admission gate.
+Each resolution is a pure function of the validated configuration plus the process
+file-descriptor limit. An explicit config value always wins, and 'resolveSized' pairs the
+result with the boot-log line naming its provenance.
 -}
 module Ecluse.Composition.Sizing (
     -- * A resolved bound and its boot-log line
@@ -20,6 +16,7 @@ module Ecluse.Composition.Sizing (
     renderSized,
 
     -- * Connection pools and admission
+    newPooledManager,
     connectionPoolSettings,
     resolveServeAdmission,
     resolvePrivateConnections,
@@ -32,7 +29,7 @@ module Ecluse.Composition.Sizing (
 ) where
 
 import Data.Ord (clamp)
-import Network.HTTP.Client (ManagerSettings (managerConnCount))
+import Network.HTTP.Client (Manager, ManagerSettings (managerConnCount), newManager)
 import System.Posix.Resource (Resource (ResourceOpenFiles), ResourceLimit (ResourceLimit, ResourceLimitInfinity, ResourceLimitUnknown), ResourceLimits (softLimit), getResourceLimit)
 
 {- | A resolved bound and its boot-log line: an explicit config value wins, else the
@@ -52,6 +49,12 @@ renderSized subject value explicit computedClause =
     subject <> " " <> show value <> " (" <> provenance <> ")"
   where
     provenance = if isJust explicit then "from config" else computedClause
+
+{- | Open an HTTP manager under an explicit per-host connection bound. Every manager the
+composition root builds comes from here, so one pool bound applies whatever dials through it.
+-}
+newPooledManager :: Int -> ManagerSettings -> IO Manager
+newPooledManager connections = newManager . connectionPoolSettings connections
 
 {- | Apply an explicit per-host connection bound to an HTTP manager's settings. Callers
 apply it after telemetry instrumentation, so it cannot discard the instrumented hooks.
