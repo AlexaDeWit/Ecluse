@@ -101,8 +101,7 @@ data NameRefusal
     deriving stock (Eq, Show)
 
 {- | Parse one component of a package name against the floor every ecosystem shares: non-empty,
-ASCII, and safe to interpolate into an upstream URL. A parser that clears one and skips another
-still reaches that URL, which is why the three travel together.
+ASCII, and safe to interpolate into an upstream URL. The three travel together because one skip reaches that URL.
 -}
 parseNameComponent :: Text -> Either NameRefusal Text
 parseNameComponent component

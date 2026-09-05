@@ -89,8 +89,7 @@ data MetadataClient = MetadataClient
     }
 
 {- | Fetch one package's metadata document under the fetch span, then project its wire bytes
-under the decode span. An exchange fault folds to 'MetadataFetch', so a projection sees a body
-or nothing.
+under the decode span. An exchange fault folds to 'MetadataFetch' before the projection runs.
 -}
 fetchThenProject ::
     TracingPort ->
