@@ -102,9 +102,8 @@ newProtocolMaintenance store =
           storeCursor = Nothing
         }
 
-{- The store re-admits a version published again after a delete, and has applied the delete by
-the time it answers. It reports no alphabet, because the listing below reads one whole document
-however narrow the bucket, so partitioning it would multiply that read and resume nothing. -}
+{- The store re-admits a version published again after a delete, and has applied it by the time it
+answers. It reports no alphabet: the listing below reads one document whole, bucket or no bucket. -}
 protocolFacts :: Text -> StoreFacts
 protocolFacts backend =
     StoreFacts

@@ -21,7 +21,6 @@ import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
     NameAlphabet,
-    NamePrefix,
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryFutile),
     StoreClass (StoreDestroyable, StorePreserved),
@@ -32,10 +31,10 @@ import Ecluse.Core.Registry.Maintenance (
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed),
+    collectPages,
     mkNameAlphabet,
     refusalCode,
     renderNamePrefix,
-    wholeNameSpace,
  )
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact (
@@ -50,7 +49,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     consentTagValue,
     cursorTagKey,
  )
-import Ecluse.Test.Maintenance (drainPages, oneBucket)
+import Ecluse.Test.Maintenance (withBucket)
 
 {- | The CodeArtifact handle's facts and the sequencing around its calls, driven over 'ControlPlane'
 answers built from @amazonka@'s own types. Each decision is covered in "Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec".
@@ -102,26 +101,26 @@ enumerationCases store = describe "the handle's paged enumerations" $ do
         tokens <- newIORef []
         answer <- answersFrom [packagesPage (Just "p2") ["lodash"], packagesPage Nothing ["axios"]]
         let plane = inertPlane{cpListPackages = \request -> record tokens (request ^. CAL.listPackages_nextToken) >> answer}
-        outcome <- listBucket store plane wholeNameSpace
+        outcome <- listBucket store plane ""
         fmap (map renderPackageName) outcome `shouldBe` Right ["lodash", "axios"]
         readIORef tokens `shouldReturn` [Nothing, Just "p2"]
 
     it "reads a package page carrying no packages field as an empty page" $ do
         let plane = inertPlane{cpListPackages = \_ -> pure (Right (CA.newListPackagesResponse 200))}
-        listBucket store plane wholeNameSpace `shouldReturn` Right []
+        listBucket store plane "" `shouldReturn` Right []
 
     it "sends the bucket as the listing's own package prefix, so the store does the filtering" $ do
         prefixes <- newIORef []
         answer <- answersFrom [packagesPage Nothing ["lodash"]]
         let plane = inertPlane{cpListPackages = \request -> record prefixes (request ^. CAL.listPackages_packagePrefix) >> answer}
-        _ <- listBucket store plane (bucket 'l')
+        _ <- listBucket store plane "l"
         readIORef prefixes `shouldReturn` [Just "l"]
 
     it "sends no prefix at all for the bucket that covers the whole store" $ do
         prefixes <- newIORef []
         answer <- answersFrom [packagesPage Nothing ["lodash"]]
         let plane = inertPlane{cpListPackages = \request -> record prefixes (request ^. CAL.listPackages_packagePrefix) >> answer}
-        _ <- listBucket store plane wholeNameSpace
+        _ <- listBucket store plane ""
         readIORef prefixes `shouldReturn` [Nothing]
 
     it "pages a package's versions to exhaustion, sending back the token the last page returned" $ do
@@ -216,9 +215,10 @@ cursorCases store = describe "the handle's walk cursor" $ do
                     { cpDescribeRepository = \_ -> record calls "describe" >> pure (Right describedWithArn)
                     , cpListTags = \_ -> record calls "tags" >> pure (Right (taggedWith [markerTag, cursorTag "l"]))
                     }
-        outcome <- withCursor store plane readCursor
-        fmap (fmap renderNamePrefix) outcome `shouldBe` Right (Just "l")
-        readIORef calls `shouldReturn` (["describe", "tags"] :: [Text])
+        withCursor store plane $ \cursor -> do
+            outcome <- readCursor cursor
+            fmap (fmap renderNamePrefix) outcome `shouldBe` Right (Just "l")
+            readIORef calls `shouldReturn` (["describe", "tags"] :: [Text])
 
     it "reads no cursor from a repository carrying the consent tag alone" $ do
         let plane =
@@ -226,8 +226,7 @@ cursorCases store = describe "the handle's walk cursor" $ do
                     { cpDescribeRepository = \_ -> pure (Right describedWithArn)
                     , cpListTags = \_ -> pure (Right (taggedWith [markerTag]))
                     }
-        outcome <- withCursor store plane readCursor
-        outcome `shouldBe` Right Nothing
+        withCursor store plane $ \cursor -> readCursor cursor `shouldReturn` Right Nothing
 
     it "writes exactly the one cursor key, so the consent tag stays out of its reach" $ do
         written <- newIORef []
@@ -238,10 +237,10 @@ cursorCases store = describe "the handle's walk cursor" $ do
                         record written (map (^. CAL.tag_key) (request ^. CAL.tagResource_tags))
                         pure (Right (CA.newTagResourceResponse 200))
                     }
-        outcome <- withCursor store plane (`writeCursor` bucket 'l')
-        outcome `shouldBe` Right ()
-        readIORef written `shouldReturn` [[cursorTagKey Npm]]
-        cursorTagKey Npm `shouldNotBe` consentTagKey
+        withBucket "l" $ \completed -> withCursor store plane $ \cursor -> do
+            writeCursor cursor completed `shouldReturn` Right ()
+            readIORef written `shouldReturn` [[cursorTagKey Npm]]
+            cursorTagKey Npm `shouldNotBe` consentTagKey
 
     it "clears the walk by removing that one key and no other" $ do
         removed <- newIORef []
@@ -252,20 +251,51 @@ cursorCases store = describe "the handle's walk cursor" $ do
                         record removed (request ^. CAL.untagResource_tagKeys)
                         pure (Right (CA.newUntagResourceResponse 200))
                     }
-        outcome <- withCursor store plane clearCursor
-        outcome `shouldBe` Right ()
-        readIORef removed `shouldReturn` [[cursorTagKey Npm]]
+        withCursor store plane $ \cursor -> do
+            clearCursor cursor `shouldReturn` Right ()
+            readIORef removed `shouldReturn` [[cursorTagKey Npm]]
 
     it "reports a describe that did not land, and writes nothing after it" $ do
         let plane = inertPlane{cpDescribeRepository = \_ -> pure (Left storeUnreachable)}
-        outcome <- withCursor store plane (`writeCursor` bucket 'l')
-        outcome `shouldBe` Left storeUnreachable
+        withBucket "l" $ \completed -> withCursor store plane $ \cursor ->
+            writeCursor cursor completed `shouldReturn` Left storeUnreachable
+
+    it "refuses a description carrying no ARN rather than address a tag call to an invented one" $ do
+        let plane = inertPlane{cpDescribeRepository = \_ -> pure (Right describedWithoutArn)}
+        withCursor store plane $ \cursor ->
+            first detailOf <$> readCursor cursor
+                `shouldReturn` Left "the store described the repository without an ARN"
+
+    it "reports a tag read that did not land" $ do
+        let plane =
+                inertPlane
+                    { cpDescribeRepository = \_ -> pure (Right describedWithArn)
+                    , cpListTags = \_ -> pure (Left storeUnreachable)
+                    }
+        withCursor store plane $ \cursor -> readCursor cursor `shouldReturn` Left storeUnreachable
+
+    it "reports a cursor write that did not land" $ do
+        let plane =
+                inertPlane
+                    { cpDescribeRepository = \_ -> pure (Right describedWithArn)
+                    , cpTagResource = \_ -> pure (Left storeUnreachable)
+                    }
+        withBucket "l" $ \completed -> withCursor store plane $ \cursor ->
+            writeCursor cursor completed `shouldReturn` Left storeUnreachable
+
+    it "reports a clear that did not land, so a halted walk keeps the cursor it had" $ do
+        let plane =
+                inertPlane
+                    { cpDescribeRepository = \_ -> pure (Right describedWithArn)
+                    , cpUntagResource = \_ -> pure (Left storeUnreachable)
+                    }
+        withCursor store plane $ \cursor -> clearCursor cursor `shouldReturn` Left storeUnreachable
 
 {- Run one cursor call over a wired plane. The handle offers a cursor on every CodeArtifact
 repository, so a case that finds none has found a regression rather than a backend arm. -}
-withCursor :: CodeArtifactStore -> ControlPlane -> (StoreCursor -> IO a) -> IO a
+withCursor :: CodeArtifactStore -> ControlPlane -> (StoreCursor -> Expectation) -> Expectation
 withCursor store plane act = case storeCursor (handleOver store plane) of
-    Nothing -> fail "the CodeArtifact handle offers a walk cursor"
+    Nothing -> expectationFailure "the CodeArtifact handle offers a walk cursor"
     Just cursor -> act cursor
 
 cursorTag :: Text -> CA.Tag
@@ -402,11 +432,9 @@ testAlphabet = mkNameAlphabet "al"
 handleOver :: CodeArtifactStore -> ControlPlane -> StoreMaintenance
 handleOver = maintenanceFor testAlphabet
 
-bucket :: Char -> NamePrefix
-bucket = oneBucket
-
-listBucket :: CodeArtifactStore -> ControlPlane -> NamePrefix -> IO (Either StoreFault [PackageName])
-listBucket store plane = drainPages . listPackagesIn (handleOver store plane)
+listBucket :: CodeArtifactStore -> ControlPlane -> Text -> IO (Either StoreFault [PackageName])
+listBucket store plane raw =
+    withBucket raw (collectPages . listPackagesIn (handleOver store plane))
 
 -- Dummy static credentials: the handle is held and read, never sent anywhere.
 handleFor :: CodeArtifactStore -> IO StoreMaintenance

@@ -40,6 +40,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Project (
+    npmNameLeadChars,
     parsePackageInfoFromValue,
     parseVersionList,
     projectName,
@@ -58,6 +59,7 @@ They drive 'parsePackageInfoFromValue', the same projection the serve path runs 
 spec :: Spec
 spec = do
     nameGrammarSpec
+    leadCharacterSpec
     asciiBoundarySpec
     npmValidatorRefusalSpec
     nameValidationSpec
@@ -88,6 +90,21 @@ nameGrammarSpec = describe "projectName -- the one npm name grammar" $ do
 {- | The charset boundary under the grammar: no codepoint above U+007F and no ASCII control
 character parses, whatever Unicode class it belongs to.
 -}
+
+{- The characters a name may begin with, which the store walk partitions a name space by. They are
+sieved out of ASCII by this module's own grammar, so these cases pin the sieve against the parser. -}
+leadCharacterSpec :: Spec
+leadCharacterSpec = describe "npmNameLeadChars" $ do
+    it "omits the three leading characters npm's validator refuses" $
+        filter (`elem` npmNameLeadChars) ['.', '-', '_'] `shouldBe` []
+
+    it "carries the letters and digits every real name starts with" $
+        filter (`notElem` npmNameLeadChars) (['a' .. 'z'] <> ['A' .. 'Z'] <> ['0' .. '9'])
+            `shouldBe` []
+
+    it "admits exactly the characters a one-character name parses under" $
+        filter (isLeft . projectName . T.singleton) npmNameLeadChars `shouldBe` []
+
 asciiBoundarySpec :: Spec
 asciiBoundarySpec = describe "projectName -- the ASCII boundary" $ do
     it "refuses a Hangul filler, an invisible that is no format character" $ do

@@ -172,8 +172,8 @@ carries no filter takes the one bucket that covers everything, so it is one pass
 special case.
 
 A walk over a whole store resumes where it stopped only where the store has somewhere to record
-that. CodeArtifact keeps the record in one repository tag, keyed per ecosystem, which is the only
-thing `ecluse dredger` ever writes to a store. A store reached through the ecosystem protocol alone
+that. CodeArtifact keeps the record in one repository tag, keyed per ecosystem, which is the only tag
+`ecluse dredger` writes. A store reached through the ecosystem protocol alone
 has no such place: its listing is one document, read whole on every pass, so a walk over it starts
 from the first bucket after a restart.
 

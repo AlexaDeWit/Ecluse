@@ -28,7 +28,6 @@ import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
-    NamePrefix,
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
@@ -38,9 +37,9 @@ import Ecluse.Core.Registry.Maintenance (
     StoredVersion (storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed),
+    collectPages,
     noNameAlphabet,
     refusalCode,
-    wholeNameSpace,
  )
 import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolStore (..), newProtocolMaintenance)
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
@@ -49,7 +48,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLim
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Maintenance (drainPages, oneBucket)
+import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Stub (
     Captured (capBody, capMethod, capPath),
@@ -108,8 +107,8 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
 
     it "answers a bucket with the names under it, filtering what the listing brought back" $
         withStore True answerStore $ \handle _ -> do
-            listBucketOf handle 'l' `shouldReturn` Right [unscopedNpm "leftpad"]
-            listBucketOf handle 'r' `shouldReturn` Right [unscopedNpm "rightpad"]
+            listBucketOf handle "l" `shouldReturn` Right [unscopedNpm "leftpad"]
+            listBucketOf handle "r" `shouldReturn` Right [unscopedNpm "rightpad"]
 
     it "faults with RetryFutile on a store that does not answer the listing" $
         withStore True answerNothing $ \handle _ ->
@@ -287,15 +286,12 @@ leftpad = unscopedNpm "leftpad"
 
 -- The one bucket a leaf with no alphabet offers, which covers everything the store holds.
 listWholeStore :: StoreMaintenance -> IO (Either StoreFault [PackageName])
-listWholeStore handle = listBucket handle wholeNameSpace
+listWholeStore handle = listBucketOf handle ""
 
-{- One narrower bucket, so the filter the leaf applies is drivable even though it advertises no
-alphabet of its own. -}
-listBucketOf :: StoreMaintenance -> Char -> IO (Either StoreFault [PackageName])
-listBucketOf handle = listBucket handle . oneBucket
-
-listBucket :: StoreMaintenance -> NamePrefix -> IO (Either StoreFault [PackageName])
-listBucket handle = drainPages . listPackagesIn handle
+{- One bucket by the spelling a store filter would carry, so the filter the leaf applies is
+drivable even though it advertises no alphabet of its own. -}
+listBucketOf :: StoreMaintenance -> Text -> IO (Either StoreFault [PackageName])
+listBucketOf handle raw = withBucket raw (collectPages . listPackagesIn handle)
 
 version :: Text -> Version
 version = mkVersion Npm

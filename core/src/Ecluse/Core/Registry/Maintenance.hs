@@ -29,11 +29,8 @@ module Ecluse.Core.Registry.Maintenance (
     mkNameAlphabet,
     noNameAlphabet,
     NamePrefix,
-    wholeNameSpace,
     renderNamePrefix,
     parseNamePrefix,
-    initialBuckets,
-    extendBucket,
     inBucket,
 
     -- * Walk resumption
@@ -49,6 +46,7 @@ module Ecluse.Core.Registry.Maintenance (
 
     -- * Backend-neutral drives
     pageSource,
+    collectPages,
     pageAll,
     chunksOfCeiling,
     deleteAll,
@@ -84,9 +82,8 @@ data StoreMaintenance = StoreMaintenance
     { storeFacts :: StoreFacts
     -- ^ What the backend does, readable without a call.
     , listPackagesIn :: NamePrefix -> ConduitT () [PackageName] IO (Maybe StoreFault)
-    {- ^ The packages in one bucket of the name space, a page at a time, so nothing holds the
-    listing whole. The stream ends with the fault that stopped it, or 'Nothing' when the
-    bucket was walked to its end.
+    {- ^ The packages in one bucket of the name space, a page at a time. The stream ends with the
+    fault that stopped it, or 'Nothing' when the bucket was walked to its end.
     -}
     , enumerateVersions :: PackageName -> IO (Either StoreFault [StoredVersion])
     -- ^ Every version the store holds for one package, paged to exhaustion.
@@ -182,8 +179,8 @@ newtype NameAlphabet = NameAlphabet [Char]
 mkNameAlphabet :: [Char] -> NameAlphabet
 mkNameAlphabet = NameAlphabet . ordNub
 
-{- | The alphabet of a store whose listing carries no filter to partition it by. It yields the
-one bucket that covers everything, so such a store is a walk of one pass and not a special case.
+{- | The alphabet of a store whose listing carries no filter to partition it by. Such a store is
+walked as the one bucket that covers everything, rather than as a special case.
 -}
 noNameAlphabet :: NameAlphabet
 noNameAlphabet = NameAlphabet []
@@ -193,12 +190,6 @@ part after any namespace, because that is the component a store's own listing fi
 -}
 newtype NamePrefix = NamePrefix Text
     deriving stock (Eq, Ord, Show)
-
-{- | The bucket that covers a whole store: the empty prefix, which filters nothing. It is the one
-bucket an alphabet with no characters offers.
--}
-wholeNameSpace :: NamePrefix
-wholeNameSpace = NamePrefix ""
 
 -- | The prefix as a store filter and a walk cursor spell it. Empty stands for no filter at all.
 renderNamePrefix :: NamePrefix -> Text
@@ -211,20 +202,6 @@ parseNamePrefix :: NameAlphabet -> Text -> Maybe NamePrefix
 parseNamePrefix (NameAlphabet chars) raw
     | T.all (`elem` chars) raw = Just (NamePrefix raw)
     | otherwise = Nothing
-
-{- | The buckets a full walk covers. They are disjoint and their union is the whole store, so a
-walk that completes every one of them has seen every package.
--}
-initialBuckets :: NameAlphabet -> NonEmpty NamePrefix
-initialBuckets (NameAlphabet chars) =
-    maybe (wholeNameSpace :| []) (fmap (NamePrefix . T.singleton)) (nonEmpty chars)
-
-{- | The narrower buckets that cover one bucket, for a listing that outgrew its budget. An
-alphabet with no characters can narrow nothing, so it yields none.
--}
-extendBucket :: NameAlphabet -> NamePrefix -> [NamePrefix]
-extendBucket (NameAlphabet chars) (NamePrefix raw) =
-    [NamePrefix (raw <> T.singleton ch) | ch <- chars]
 
 -- | Whether a name falls in a bucket, for a store whose listing has no prefix filter of its own.
 inBucket :: NamePrefix -> PackageName -> Bool
@@ -336,6 +313,14 @@ pageSource fetch = go Set.empty Nothing
                         | Set.member following seen -> pure (Just (repeatedTokenFault following))
                         | otherwise -> go (Set.insert following seen) (Just following)
 
+{- | Collect a page stream whole, for a listing one caller can hold. A store's packages go through
+'pageSource' a page at a time instead, so nothing downstream holds a store listing whole.
+-}
+collectPages :: (Monad m) => ConduitT () [a] m (Maybe StoreFault) -> m (Either StoreFault [a])
+collectPages source = outcome <$> runConduit (fuseBoth source CL.consume)
+  where
+    outcome (mFault, pages) = maybe (Right (concat pages)) Left mFault
+
 {- | Walk a paged listing to exhaustion, for a listing one caller can hold: a package's versions,
 never a store's packages. A faulted walk yields the fault alone, never the pages before it.
 -}
@@ -343,9 +328,7 @@ pageAll ::
     (Monad m) =>
     (Maybe Text -> m (Either StoreFault (Maybe Text, [a]))) ->
     m (Either StoreFault [a])
-pageAll fetch = outcome <$> runConduit (fuseBoth (pageSource fetch) CL.consume)
-  where
-    outcome (mFault, pages) = maybe (Right (concat pages)) Left mFault
+pageAll = collectPages . pageSource
 
 -- A cycle in the store's own paging, which the next attempt reproduces.
 repeatedTokenFault :: Text -> StoreFault

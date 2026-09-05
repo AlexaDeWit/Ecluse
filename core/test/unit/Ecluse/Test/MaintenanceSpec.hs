@@ -16,7 +16,6 @@ import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesLater),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
-    NamePrefix,
     RefillPosture (RefillRefused),
     RetryAdvice (RetryWorthwhile),
     StoreClass (StorePreserved),
@@ -27,18 +26,17 @@ import Ecluse.Core.Registry.Maintenance (
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoving, VersionUnreached),
     VersionPresence (VersionServed, VersionWithdrawn),
+    collectPages,
     noNameAlphabet,
     storeRefusal,
-    wholeNameSpace,
  )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Maintenance (
     FakeStore (..),
     FakeStoreConfig (..),
     defaultFakeStoreConfig,
-    drainPages,
     newFakeStore,
-    oneBucket,
+    withBucket,
  )
 
 {- The fake is the handle's third implementation, so these cases assert the contract carries a backend
@@ -52,14 +50,14 @@ spec = do
 
         it "cuts the listing into pages, so nothing downstream holds the store whole" $ do
             store <- newFakeStore seededConfig{fakePageSize = 1}
-            pages <- collectPages (fakeMaintenance store)
+            pages <- pagesOf (fakeMaintenance store)
             pages `shouldBe` [[plainName], [scopedName]]
 
         it "buckets by the name's base component, so a namespace never decides the bucket" $ do
             handle <- seeded
-            listBucketOf handle 'l' `shouldReturn` Right [plainName]
-            listBucketOf handle 'c' `shouldReturn` Right [scopedName]
-            listBucketOf handle 'b' `shouldReturn` Right []
+            listBucketOf handle "l" `shouldReturn` Right [plainName]
+            listBucketOf handle "c" `shouldReturn` Right [scopedName]
+            listBucketOf handle "b" `shouldReturn` Right []
 
         it "lists a package's versions with what the store still serves" $ do
             handle <- seeded
@@ -116,16 +114,16 @@ spec = do
     describe "the fake store's walk cursor" $ do
         it "reads back the bucket it was told the walk completed" $ do
             store <- newFakeStore seededConfig
-            withCursor store $ \cursor -> do
+            withBucket "l" $ \completed -> withCursor store $ \cursor -> do
                 readCursor cursor `shouldReturn` Right Nothing
-                writeCursor cursor (bucket 'l') `shouldReturn` Right ()
-                readCursor cursor `shouldReturn` Right (Just (bucket 'l'))
-                readFakeCursor store `shouldReturn` Just (bucket 'l')
+                writeCursor cursor completed `shouldReturn` Right ()
+                readCursor cursor `shouldReturn` Right (Just completed)
+                readFakeCursor store `shouldReturn` Just completed
 
         it "forgets the walk when it is cleared, so the next one starts over" $ do
             store <- newFakeStore seededConfig
-            withCursor store $ \cursor -> do
-                writeCursor cursor (bucket 'l') `shouldReturn` Right ()
+            withBucket "l" $ \completed -> withCursor store $ \cursor -> do
+                writeCursor cursor completed `shouldReturn` Right ()
                 clearCursor cursor `shouldReturn` Right ()
                 readCursor cursor `shouldReturn` Right Nothing
 
@@ -189,16 +187,15 @@ seededConfig =
 
 -- The one bucket a store with no alphabet offers, which covers everything it holds.
 listWholeStore :: StoreMaintenance -> IO (Either StoreFault [PackageName])
-listWholeStore handle = drainPages (listPackagesIn handle wholeNameSpace)
+listWholeStore handle = listBucketOf handle ""
 
-listBucketOf :: StoreMaintenance -> Char -> IO (Either StoreFault [PackageName])
-listBucketOf handle = drainPages . listPackagesIn handle . oneBucket
+listBucketOf :: StoreMaintenance -> Text -> IO (Either StoreFault [PackageName])
+listBucketOf handle raw = withBucket raw (collectPages . listPackagesIn handle)
 
-collectPages :: StoreMaintenance -> IO [[PackageName]]
-collectPages handle = runConduit (void (listPackagesIn handle wholeNameSpace) .| CL.consume)
-
-bucket :: Char -> NamePrefix
-bucket = oneBucket
+pagesOf :: StoreMaintenance -> IO [[PackageName]]
+pagesOf handle =
+    withBucket "" $ \everything ->
+        runConduit (void (listPackagesIn handle everything) .| CL.consume)
 
 scopedName :: PackageName
 scopedName = mkPackageName Npm (Just (mkScope "babel")) "core"

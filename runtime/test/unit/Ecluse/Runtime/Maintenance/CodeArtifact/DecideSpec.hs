@@ -26,7 +26,6 @@ import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, renderPackageNa
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
-    NamePrefix,
     RetryAdvice (RetryDelayed, RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
     StoreFault (..),
@@ -37,7 +36,6 @@ import Ecluse.Core.Registry.Maintenance (
     refusalCode,
     refusalDetail,
     renderNamePrefix,
-    wholeNameSpace,
  )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
@@ -68,7 +66,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     repositoryOfResponse,
     versionsOfPage,
  )
-import Ecluse.Test.Maintenance (oneBucket)
+import Ecluse.Test.Maintenance (withBucket)
 
 spec :: Spec
 spec = do
@@ -156,22 +154,27 @@ noNpmFormat = it "has a CodeArtifact format for npm" $ expectationFailure "npm r
 
 requestCases :: CodeArtifactStore -> Spec
 requestCases store = do
-    it "addresses a package listing by domain, owner, repository, and format" $ do
-        let request = listPackagesRequest store wholeNameSpace Nothing
-        request ^. CAL.listPackages_domain `shouldBe` "acme"
-        request ^. CAL.listPackages_repository `shouldBe` "mirror"
-        request ^. CAL.listPackages_domainOwner `shouldBe` Just "111122223333"
-        request ^. CAL.listPackages_format `shouldBe` Just CA.PackageFormat_Npm
-        request ^. CAL.listPackages_nextToken `shouldBe` Nothing
+    it "addresses a package listing by domain, owner, repository, and format" $
+        withBucket "" $ \everything -> do
+            let request = listPackagesRequest store everything Nothing
+            request ^. CAL.listPackages_domain `shouldBe` "acme"
+            request ^. CAL.listPackages_repository `shouldBe` "mirror"
+            request ^. CAL.listPackages_domainOwner `shouldBe` Just "111122223333"
+            request ^. CAL.listPackages_format `shouldBe` Just CA.PackageFormat_Npm
+            request ^. CAL.listPackages_nextToken `shouldBe` Nothing
 
     it "carries the page token onto the next listing call" $
-        listPackagesRequest store wholeNameSpace (Just "page-2") ^. CAL.listPackages_nextToken `shouldBe` Just "page-2"
+        withBucket "" $ \everything ->
+            listPackagesRequest store everything (Just "page-2") ^. CAL.listPackages_nextToken
+                `shouldBe` Just "page-2"
 
     it "filters the listing by the bucket, on the package component the prefix matches" $
-        listPackagesRequest store (bucket 'c') Nothing ^. CAL.listPackages_packagePrefix `shouldBe` Just "c"
+        withBucket "c" $ \prefix ->
+            listPackagesRequest store prefix Nothing ^. CAL.listPackages_packagePrefix `shouldBe` Just "c"
 
     it "sends no prefix for the bucket that covers the whole repository" $
-        listPackagesRequest store wholeNameSpace Nothing ^. CAL.listPackages_packagePrefix `shouldBe` Nothing
+        withBucket "" $ \everything ->
+            listPackagesRequest store everything Nothing ^. CAL.listPackages_packagePrefix `shouldBe` Nothing
 
     it "addresses a version listing by the package's namespace and base name" $ do
         let request = listVersionsRequest store scopedName (Just "page-2")
@@ -339,9 +342,6 @@ npmStore = coordinates <$> codeArtifactFormat Npm
             , casFormat = format
             }
 
-bucket :: Char -> NamePrefix
-bucket = oneBucket
-
 scopedName :: PackageName
 scopedName = mkPackageName Npm (Just (mkScope "babel")) "core"
 
@@ -373,11 +373,12 @@ cursorSpec = describe "the walk cursor's tag" $ do
     it "keeps the cursor key out of the consent key, so one grant cannot reach the other" $
         cursorTagKey Npm `shouldNotBe` consentTagKey
 
-    it "writes the completed bucket under that one key alone" $ do
-        let request = cursorTagRequest Npm repositoryArn (bucket 'c')
-        request ^. CAL.tagResource_resourceArn `shouldBe` repositoryArn
-        map (^. CAL.tag_key) (request ^. CAL.tagResource_tags) `shouldBe` [cursorTagKey Npm]
-        map (^. CAL.tag_value) (request ^. CAL.tagResource_tags) `shouldBe` ["c"]
+    it "writes the completed bucket under that one key alone" $
+        withBucket "c" $ \completed -> do
+            let request = cursorTagRequest Npm repositoryArn completed
+            request ^. CAL.tagResource_resourceArn `shouldBe` repositoryArn
+            map (^. CAL.tag_key) (request ^. CAL.tagResource_tags) `shouldBe` [cursorTagKey Npm]
+            map (^. CAL.tag_value) (request ^. CAL.tagResource_tags) `shouldBe` ["c"]
 
     it "clears the walk by removing that one key alone" $ do
         let request = cursorUntagRequest Npm repositoryArn

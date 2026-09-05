@@ -132,9 +132,8 @@ repository's per-format endpoint.
 formatToken :: CodeArtifactFormat -> Text
 formatToken (CodeArtifactFormat _ token) = CA.fromPackageFormat token
 
-{- | What CodeArtifact does: it re-admits a version published again after a delete, and has
-applied the delete by the time it answers. The alphabet is the mount's ecosystem's own, because
-the listing filter below matches on a package name and the ecosystem's grammar spells those.
+{- | What CodeArtifact does: it re-admits a version published again after a delete, and has applied
+it by the time it answers. The alphabet is the mount ecosystem's, whose grammar spells the names.
 -}
 codeArtifactFacts :: NameAlphabet -> StoreFacts
 codeArtifactFacts alphabet =
@@ -162,9 +161,8 @@ reads as none, so an empty string cannot become an empty scope.
 packageNameFrom :: Ecosystem -> Maybe Text -> Text -> PackageName
 packageNameFrom eco namespace = mkPackageName eco (mkScope <$> (nonBlank =<< namespace))
 
-{- | List one page of one bucket of the store's packages, continuing from a page token when
-there is one. @packagePrefix@ matches the package component alone, never a namespace, which is
-why a bucket is a prefix of a name's base component. The empty bucket filters nothing.
+{- | One page of one bucket, continuing from a page token when there is one. @packagePrefix@
+matches the package component alone and never a namespace, and the empty bucket filters nothing.
 -}
 listPackagesRequest :: CodeArtifactStore -> NamePrefix -> Maybe Text -> CA.ListPackages
 listPackagesRequest store prefix token =
@@ -207,8 +205,7 @@ listTagsRequest :: Text -> CA.ListTagsForResource
 listTagsRequest = CA.newListTagsForResource
 
 {- | The one tag key the Dredger writes, per ecosystem, so two mounts sharing one repository as
-their mirror target keep their own walk. The grant admits this prefix and nothing else, which
-leaves the consent key out of reach.
+their mirror target keep their own walk. The grant admits this prefix and nothing else.
 -}
 cursorTagKey :: Ecosystem -> Text
 cursorTagKey eco = "ecluse-dredger-cursor-" <> ecosystemName eco

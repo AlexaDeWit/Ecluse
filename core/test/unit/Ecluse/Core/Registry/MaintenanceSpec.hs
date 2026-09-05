@@ -18,10 +18,9 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFault (..),
     VersionOutcome (VersionRemoved, VersionUnreached),
     chunksOfCeiling,
+    collectPages,
     deleteAll,
-    extendBucket,
     inBucket,
-    initialBuckets,
     mkNameAlphabet,
     noNameAlphabet,
     pageAll,
@@ -32,9 +31,9 @@ import Ecluse.Core.Registry.Maintenance (
     renderNamePrefix,
     storeRefusal,
     unreachedBatch,
-    wholeNameSpace,
  )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Test.Maintenance (withBucket)
 
 spec :: Spec
 spec = do
@@ -46,37 +45,6 @@ spec = do
 
 bucketSpec :: Spec
 bucketSpec = do
-    describe "initialBuckets" $ do
-        it "gives one bucket per character of the alphabet, in the order it was built with" $
-            map renderNamePrefix (toList (initialBuckets (mkNameAlphabet "abc")))
-                `shouldBe` ["a", "b", "c"]
-
-        it "drops a repeated character, so no name lands in two buckets" $
-            length (initialBuckets (mkNameAlphabet "aab")) `shouldBe` 2
-
-        it "gives the one bucket that covers everything when the alphabet has no characters" $
-            initialBuckets noNameAlphabet `shouldBe` wholeNameSpace :| []
-
-    describe "the buckets against the names they partition" $ do
-        it "puts every name the alphabet leads into exactly one bucket" $
-            map (bucketsHolding names) names `shouldBe` replicate (length names) 1
-
-        it "reads a name by its base component, so a namespace never decides the bucket" $ do
-            inBucket (bucketOf 'c') scopedName `shouldBe` True
-            inBucket (bucketOf 'b') scopedName `shouldBe` False
-
-        it "holds every name in the one bucket an empty alphabet offers" $
-            map (inBucket (onlyBucket noNameAlphabet)) names
-                `shouldBe` replicate (length names) True
-
-    describe "extendBucket" $ do
-        it "narrows a bucket by one character of the alphabet at a time" $
-            map renderNamePrefix (extendBucket (mkNameAlphabet "ab") (bucketOf 'a'))
-                `shouldBe` ["aa", "ab"]
-
-        it "narrows nothing under an alphabet with no characters" $
-            extendBucket noNameAlphabet (bucketOf 'a') `shouldBe` []
-
     describe "parseNamePrefix" $ do
         it "reads back a prefix the alphabet spells" $
             fmap renderNamePrefix (parseNamePrefix (mkNameAlphabet "abc") "ab") `shouldBe` Just "ab"
@@ -84,21 +52,29 @@ bucketSpec = do
         it "reads no prefix from a spelling the alphabet does not carry" $
             parseNamePrefix (mkNameAlphabet "abc") "az" `shouldBe` Nothing
 
-        it "reads the empty prefix under any alphabet, because it filters nothing" $
+        it "reads no prefix from a repeated character the alphabet dropped" $
+            fmap renderNamePrefix (parseNamePrefix (mkNameAlphabet "aab") "ab") `shouldBe` Just "ab"
+
+        it "reads the empty prefix under any alphabet, because it filters nothing" $ do
             fmap renderNamePrefix (parseNamePrefix (mkNameAlphabet "abc") "") `shouldBe` Just ""
+            fmap renderNamePrefix (parseNamePrefix noNameAlphabet "") `shouldBe` Just ""
+
+    describe "inBucket" $ do
+        it "reads a name by its base component, so a namespace never decides the bucket" $
+            withBucket "c" $ \prefix -> do
+                inBucket prefix scopedName `shouldBe` True
+                inBucket prefix (unscoped "banana") `shouldBe` False
+
+        it "puts a name under exactly one of two buckets that do not overlap" $
+            withBucket "a" $ \a -> withBucket "b" $ \b ->
+                map (\name -> (inBucket a name, inBucket b name)) names
+                    `shouldBe` [(True, False), (False, True), (False, False)]
+
+        it "holds every name in the bucket that covers a whole store" $
+            withBucket "" $ \everything ->
+                map (inBucket everything) names `shouldBe` replicate (length names) True
   where
-    -- Every name the seeded set holds, one per bucket the alphabet below leads.
     names = [unscoped "apple", unscoped "banana", scopedName]
-
-    alphabet = mkNameAlphabet "abc"
-
-    bucketOf lead = onlyBucket (mkNameAlphabet [lead])
-
-    onlyBucket built = case initialBuckets built of
-        prefix :| _ -> prefix
-
-    bucketsHolding held name =
-        length [() | b <- toList (initialBuckets alphabet), inBucket b name, name `elem` held]
 
 vocabularySpec :: Spec
 vocabularySpec = do
@@ -150,6 +126,12 @@ pageSourceSpec = describe "pageSource" $ do
 
 pageAllSpec :: Spec
 pageAllSpec = describe "pageAll" $ do
+    it "is the page source collected whole, so the two share one fold" $ do
+        walked <- pagesFrom [(Just "p2", ["a"]), (Nothing, ["b"])]
+        collected <- pagesFrom [(Just "p2", ["a"]), (Nothing, ["b"])]
+        outcome <- pageAll walked
+        collectedPages collected `shouldReturn` outcome
+
     it "walks every page in order and returns one listing" $ do
         fetch <- pagesFrom [(Just "p2", ["a"]), (Just "p3", ["b"]), (Nothing, ["c"])]
         pageAll fetch `shouldReturn` Right ["a", "b", "c"]
@@ -251,6 +233,10 @@ recordingSender sent faultOn batch = do
 -- Every page a source handed out, discarding the fault the stream ended with.
 pagesOf :: (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text]))) -> IO [[Text]]
 pagesOf fetch = runConduit (void (pageSource fetch) .| CL.consume)
+
+-- | 'collectPages' over a page source, which is what 'pageAll' folds a paged fetch through.
+collectedPages :: (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text]))) -> IO (Either StoreFault [Text])
+collectedPages = collectPages . pageSource
 
 -- The fault a source ended with, discarding the pages it handed out on the way.
 faultEnding :: (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text]))) -> IO (Maybe StoreFault)

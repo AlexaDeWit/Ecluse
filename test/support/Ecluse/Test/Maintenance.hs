@@ -13,11 +13,10 @@ module Ecluse.Test.Maintenance (
     FakeStoreConfig (..),
     defaultFakeStoreConfig,
     newFakeStore,
-    drainPages,
-    oneBucket,
+    withBucket,
 ) where
 
-import Data.Conduit (ConduitT, fuseBoth, runConduit, (.|))
+import Data.Conduit (ConduitT, (.|))
 import Data.Conduit.List qualified as CL
 import Data.Map.Strict qualified as Map
 
@@ -36,9 +35,9 @@ import Ecluse.Core.Registry.Maintenance (
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoving),
     inBucket,
-    initialBuckets,
     mkNameAlphabet,
     noNameAlphabet,
+    parseNamePrefix,
     storeRefusal,
     unreachedBatch,
  )
@@ -59,9 +58,8 @@ data FakeStoreConfig = FakeStoreConfig
     -- ^ Whether the store offers a walk cursor, the arm a protocol-only store does not take.
     }
 
-{- | A consenting, destroyable, empty store whose facts take the arm CodeArtifact does not:
-a small ceiling, no re-publication, a delete that finishes after the call, and a name space
-its listing cannot partition.
+{- | A consenting, destroyable, empty store whose facts take the arm CodeArtifact does not: a small
+ceiling, no re-publication, a late-finishing delete, and a name space its listing cannot partition.
 -}
 defaultFakeStoreConfig :: FakeStoreConfig
 defaultFakeStoreConfig =
@@ -145,22 +143,15 @@ fakeStoreCursor config cursor
 orFault :: FakeStoreConfig -> IO a -> IO (Either StoreFault a)
 orFault config action = maybe (Right <$> action) (pure . Left) (fakeFault config)
 
-{- | The bucket one leading character names, for a spec driving a store's own prefix filter without
-spelling an ecosystem's whole grammar.
+{- | Run an assertion over the bucket one spelling names, read through the same parser a store's
+cursor is read through. The alphabet is built to carry that spelling, so a refusal here means the
+prefix vocabulary changed under the spec rather than that the spec asked for something impossible.
+The empty spelling names the bucket that covers a whole store.
 -}
-oneBucket :: Char -> NamePrefix
-oneBucket lead = case initialBuckets (mkNameAlphabet [lead]) of
-    prefix :| _ -> prefix
-
-{- | Collect a page stream whole, for a spec asserting over a bucket's names rather than over the
-paging itself. It mirrors 'Ecluse.Core.Registry.Maintenance.pageAll' and stays here on purpose:
-the sweep consumes a page at a time, so the handle's own module offers nothing that materialises
-a store listing.
--}
-drainPages :: ConduitT () [a] IO (Maybe StoreFault) -> IO (Either StoreFault [a])
-drainPages source = outcome <$> runConduit (fuseBoth source CL.consume)
-  where
-    outcome (mFault, pages) = maybe (Right (concat pages)) Left mFault
+withBucket :: Text -> (NamePrefix -> IO a) -> IO a
+withBucket raw act = case parseNamePrefix (mkNameAlphabet (toString raw)) raw of
+    Nothing -> fail ("no bucket spells " <> toString raw)
+    Just prefix -> act prefix
 
 {- Drop the named versions and report one outcome each. A version the store does not hold
 is refused rather than reported gone, so a caller cannot mistake a miss for a delete. -}
