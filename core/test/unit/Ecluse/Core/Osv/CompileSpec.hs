@@ -8,6 +8,9 @@ and local HTTP stubs.
 -}
 module Ecluse.Core.Osv.CompileSpec (spec) where
 
+import Conduit (runResourceT)
+import Data.Aeson (decodeStrict, object, (.:), (.=))
+import Data.Aeson.Types (parseMaybe)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
@@ -17,7 +20,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Data.Version (showVersion)
 import Database.SQLite.Simple
-import Katip (LogEnv, closeScribes)
+import Katip (LogEnv, closeScribes, runKatipContextT)
 import OpenTelemetry.Attributes (fromAttribute, lookupAttribute)
 import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
 import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, forceFlushTracerProvider)
@@ -43,7 +46,7 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
  )
-import Ecluse.Test.Log (captureStdout, jsonLogEnv)
+import Ecluse.Test.Log (captureStdout, jsonLogEnv, lineMessage)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvTestM, runOsvTestMWith)
 import Ecluse.Test.OsvDb (epssFixtureFile)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
@@ -122,11 +125,7 @@ spec = describe "SQLite OSV Compilation" $ do
     it "aborts the compile without publishing when the drop rate is systemic" $ do
         -- 20 malformed entries to one good one trips the systemic-drop breaker. The breaker must
         -- abandon the run rather than finalise an artifact that silently omits most advisories.
-        zipData <-
-            osvZipOf
-                ( [("mal-" <> show i <> ".json", "this is not valid json") | i <- [1 .. 20 :: Int]]
-                    <> [("good.json", "{\"id\":\"GHSA-ok\",\"affected\":[{\"package\":{\"name\":\"ok\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\"]}]}")]
-                )
+        zipData <- systemicDropZip
         epssData <- LBS.readFile epssFixtureFile
         (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
         let action =
@@ -245,11 +244,12 @@ spec = describe "SQLite OSV Compilation" $ do
 
     describe "compile traces"
         $ for_
-            [ ("accepted", Npm, LBS.readFile "test/unit/fixtures/osv/sample.zip", Nothing)
-            , ("empty", Npm, osvZipOf [], Just "zero relevant advisory rows, compile abandoned")
-            , ("wrong ecosystem", PyPI, LBS.readFile "test/unit/fixtures/osv/sample.zip", Just "zero relevant advisory rows, compile abandoned")
+            [ ("accepted", Npm, LBS.readFile "test/unit/fixtures/osv/sample.zip", Nothing, 1, 0)
+            , ("empty", Npm, osvZipOf [], Just "zero relevant advisory rows, compile abandoned", 0, 0)
+            , ("wrong ecosystem", PyPI, LBS.readFile "test/unit/fixtures/osv/sample.zip", Just "zero relevant advisory rows, compile abandoned", 1, 0)
+            , ("systemic drops", Npm, systemicDropZip, Just "systemic advisory drop rate, compile abandoned", 1, 20)
             ]
-        $ \(label, ecosystem, zipSource, refusal) ->
+        $ \(label, ecosystem, zipSource, refusal, accepted, malformed) ->
             it ("records the " <> label <> " verdict without source credentials") $
                 withSystemTempDirectory "ecluse-compile-trace" $ \outDir -> do
                     zipData <- zipSource
@@ -260,9 +260,26 @@ spec = describe "SQLite OSV Compilation" $ do
                     withCredentialSource "OSV" zipData $ \source ->
                         withCredentialSource "EPSS" epssData $ \epssSource -> do
                             let compile = compileOsvToSqlite metrics (Just tracerProvider) outDir (osvEcosystemFor ecosystem) (CompileSources source epssSource)
-                            _ <- captureStdout' $ \logEnv -> case refusal of
-                                Nothing -> void (runOsvTestMWith logEnv compile)
-                                Just _ -> runOsvTestMWith logEnv compile `shouldThrow` (\(PilotIngestAborted _) -> True)
+                                runCompile logEnv = runKatipContextT logEnv () mempty (runResourceT compile)
+                            (_, logged) <- captureStdout' $ \logEnv -> case refusal of
+                                Nothing -> void (runCompile logEnv)
+                                Just _ -> runCompile logEnv `shouldThrow` (\(PilotIngestAborted _) -> True)
+                            let prefix = if isNothing refusal then "Compiled " else "Aborting OSV compile "
+                                summaries = filter (maybe False (T.isPrefixOf prefix) . lineMessage) (T.lines logged)
+                                ecosystemText = if ecosystem == Npm then "npm" else "pypi" :: Text
+                                fields =
+                                    [ "ecosystem" .= ecosystemText
+                                    , "accepted" .= (accepted :: Int)
+                                    , "dropped_oversize" .= (0 :: Int)
+                                    , "dropped_malformed" .= (malformed :: Int)
+                                    , "unorderable" .= (0 :: Int)
+                                    ]
+                                        <> ["row_count" .= (1 :: Int) | isNothing refusal]
+                            length summaries `shouldBe` 1
+                            for_ summaries $ \line -> do
+                                let loggedObject = decodeStrict (encodeUtf8 line)
+                                (loggedObject >>= parseMaybe (.: "data")) `shouldBe` Just (object fields)
+                                (loggedObject >>= parseMaybe (.: "sev")) `shouldBe` Just (if isNothing refusal then "Info" else "Error" :: Text)
                             _ <- forceFlushTracerProvider tracerProvider Nothing
                             spans <- readIORef spansRef >>= traverse (readIORef . spanHot)
                             let compiled = filter ((== "ecluse.pilot.osv.compile") . hotName) spans
@@ -273,9 +290,9 @@ spec = describe "SQLite OSV Compilation" $ do
                                 for_
                                     [ ("ecluse.osv.ecosystem", Just (if ecosystem == Npm then "npm" else "pypi"))
                                     , ("ecluse.osv.source_host", Just (authorityLabel (toText source)))
-                                    , ("ecluse.osv.accepted", Just (if label == "empty" then "0" else "1"))
+                                    , ("ecluse.osv.accepted", Just (show accepted))
                                     , ("ecluse.osv.dropped_oversize", Just "0")
-                                    , ("ecluse.osv.dropped_malformed", Just "0")
+                                    , ("ecluse.osv.dropped_malformed", Just (show malformed))
                                     , ("ecluse.osv.unorderable", Just "0")
                                     , ("ecluse.osv.row_count", if isNothing refusal then Just "1" else Nothing)
                                     ]
@@ -297,6 +314,13 @@ spec = describe "SQLite OSV Compilation" $ do
         it "carries an unscored segment's null epss_score through" $
             osvToRow (ExtractedOsv "pkg" "npm" "GHSA-row" Nothing Unbounded Nothing Nothing)
                 `shouldBe` ("pkg", "GHSA-row", Nothing, Nothing, Nothing, Nothing, Nothing)
+
+systemicDropZip :: IO LByteString
+systemicDropZip =
+    osvZipOf
+        ( [("mal-" <> show i <> ".json", "this is not valid json") | i <- [1 .. 20 :: Int]]
+            <> [("good.json", "{\"id\":\"GHSA-ok\",\"affected\":[{\"package\":{\"name\":\"ok\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\"]}]}")]
+        )
 
 captureStdout' :: (LogEnv -> IO a) -> IO (a, Text)
 captureStdout' body = do
