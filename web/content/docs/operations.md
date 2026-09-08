@@ -23,6 +23,11 @@ verdict the status code carries, and `lastPoll`, the mirror worker's last succes
 ISO 8601 instant. A process that runs no mirror worker reports `lastPoll` as `null`. Alert on the
 `503`, and read `lastPoll` when you want to see a loop slowing before it crosses the threshold.
 
+Embedded and dedicated mirror workers have 660 seconds from heartbeat creation to complete
+their first successful poll. After that allowance, `/livez` answers `503` until the worker makes
+progress. `lastPoll` stays `null` until a successful poll or completed job. Each success restarts
+the same allowance, so later stalls also fail liveness after 660 seconds without progress.
+
 Readiness is deliberately lenient about public-upstream reachability, so a transient blip does not
 pull a healthy pod from rotation. The starting-up case is the one to plan for. With an advisory
 store configured, that startup gate also waits for each ecosystem's first advisory sync, a

@@ -24,8 +24,10 @@ import Ecluse.Core.Worker (
     workerPublishVisibilityBudget,
     wrHeartbeat,
  )
+import Ecluse.Core.Worker.Liveness (newWorkerHeartbeatWithClock)
 import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Support (newTestClock)
 import Ecluse.Worker.Support
 
 spec :: Spec
@@ -35,16 +37,11 @@ spec = do
             withRuntime (Right ()) $ \runtime _queue _logRef -> do
                 pollBefore <- lastPoll (wrHeartbeat runtime)
                 pollBefore `shouldBe` Nothing
-                -- Even an empty long-poll is a healthy poll, so the heartbeat must advance from
-                -- 'Nothing'.
                 _ <- timeout 200000 (runWM runtime (workerLoop testSupervision))
                 pollAfter <- lastPoll (wrHeartbeat runtime)
                 pollAfter `shouldSatisfy` isJust
 
         it "advances the heartbeat after each job in a batch, so a long batch cannot starve /livez" $
-            -- 'processBatch' beats the heartbeat after each completed job, not once before the
-            -- whole batch. A single pre-batch beat lets a healthy worker grinding through large
-            -- artifacts read as stalled, and a liveness probe then kills the pod mid-publish.
             withUpstream $ \url -> do
                 heartbeat <- newWorkerHeartbeat
                 seen <- newIORef []
@@ -64,25 +61,52 @@ spec = do
                     runWM runtime (processBatch messages)
                     snapshots <- reverse <$> readIORef seen
                     length snapshots `shouldBe` 3
-                    -- Every job after the first published against an already-advanced
-                    -- heartbeat: the beat is per job, not once for the batch.
                     drop 1 snapshots `shouldSatisfy` all isJust
-                    -- Distinct instants (not one shared pre-batch beat) confirm each job
-                    -- advanced it in turn.
                     let advanced = catMaybes snapshots
                     length advanced `shouldSatisfy` (>= 2)
                     ordNub advanced `shouldBe` advanced
     describe "heartbeatHealthy (the /livez staleness rule)" $ do
-        it "is healthy before the first poll (the worker is starting, not stalled)" $
-            heartbeatHealthy epoch Nothing `shouldBe` True
+        it "is healthy at the startup deadline before the first poll" $
+            heartbeatHealthy (addUTCTime workerHeartbeatStaleAfter epoch) epoch Nothing `shouldBe` True
+
+        it "is unhealthy after the startup deadline before the first poll" $
+            heartbeatHealthy (addUTCTime (workerHeartbeatStaleAfter + 1) epoch) epoch Nothing `shouldBe` False
 
         it "is healthy for a poll within the staleness window" $
-            heartbeatHealthy (addUTCTime 10 epoch) (Just epoch) `shouldBe` True
+            heartbeatHealthy (addUTCTime 10 epoch) epoch (Just epoch) `shouldBe` True
 
         it "is unhealthy once the last poll is staler than the threshold" $
-            heartbeatHealthy (addUTCTime (workerHeartbeatStaleAfter + 1) epoch) (Just epoch)
+            heartbeatHealthy (addUTCTime (workerHeartbeatStaleAfter + 1) epoch) epoch (Just epoch)
                 `shouldBe` False
     describe "heartbeatLivenessNow (the verdict a running loop's probe renders)" $ do
+        it "expires startup after failed receives without inventing successful progress" $ do
+            (clock, setClock) <- newTestClock epoch
+            heartbeat <- newWorkerHeartbeatWithClock clock
+            calls <- newIORef (0 :: Int)
+            queue <- faultingReceiveQueue calls
+            withWiredRuntimeHeartbeat heartbeat queue admitPolicies noopWorkerMetricsPort $ \runtime -> do
+                _ <- timeout 200000 (runWM runtime (workerLoop testSupervision))
+                readIORef calls >>= (`shouldSatisfy` (> 0))
+            let deadline = addUTCTime workerHeartbeatStaleAfter epoch
+            setClock deadline
+            heartbeatLivenessNow heartbeat `shouldReturn` alwaysLive
+            setClock (addUTCTime 1 deadline)
+            heartbeatLivenessNow heartbeat `shouldReturn` Liveness False Nothing
+            lastPoll heartbeat `shouldReturn` Nothing
+
+        it "recovers after expired startup and measures later stalls from successful progress" $ do
+            (clock, setClock) <- newTestClock epoch
+            heartbeat <- newWorkerHeartbeatWithClock clock
+            let recoveredAt = addUTCTime (workerHeartbeatStaleAfter + 1) epoch
+            setClock recoveredAt
+            heartbeatLivenessNow heartbeat `shouldReturn` Liveness False Nothing
+            clock >>= recordPoll heartbeat
+            heartbeatLivenessNow heartbeat `shouldReturn` Liveness True (Just recoveredAt)
+            setClock (addUTCTime workerHeartbeatStaleAfter recoveredAt)
+            heartbeatLivenessNow heartbeat `shouldReturn` Liveness True (Just recoveredAt)
+            setClock (addUTCTime (workerHeartbeatStaleAfter + 1) recoveredAt)
+            heartbeatLivenessNow heartbeat `shouldReturn` Liveness False (Just recoveredAt)
+
         it "reports the poll instant beside the verdict, so a probe can show staleness" $ do
             heartbeat <- newWorkerHeartbeat
             now <- getCurrentTime
@@ -100,7 +124,6 @@ spec = do
             let stale = addUTCTime (negate (workerHeartbeatStaleAfter + 60)) now
             recordPoll heartbeat stale
             liveness <- heartbeatLivenessNow heartbeat
-            -- The stale instant still rides along: an orchestrator sees how far behind it is.
             liveness `shouldBe` Liveness{liveHealthy = False, liveLastPoll = Just stale}
 
     describe "alwaysLive (the verdict of a process running no loop)" $
@@ -109,9 +132,5 @@ spec = do
 
     describe "workerHeartbeatStaleAfter -- the staleness budget covers one job's worst case" $
         it "exceeds a fetch and a publish of the maximum artifact (each the publish-visibility budget)" $ do
-            -- The budget must clear one job's worst case: a fetch and then a publish of the 512 MiB
-            -- cap, each no faster than 'workerPublishVisibilityBudget'. Lowering the staleness
-            -- budget below the two, or raising the publish budget past half of it, reopens the mid-
-            -- batch liveness kill.
             let Seconds budget = workerPublishVisibilityBudget
             workerHeartbeatStaleAfter `shouldSatisfy` (> fromIntegral (2 * budget))
