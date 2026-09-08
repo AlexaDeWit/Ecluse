@@ -328,26 +328,26 @@ spec = describe "decodeDocument" $ do
         for_ ["ECLUSE_INTEGRITY__DIVERGENCE_POLICY", "ECLUSE_MOUNTS__NPM__INTEGRITY__DIVERGENCE_POLICY"] $ \key -> do
             for_ ["warn", " WARN "] $ \value ->
                 it ("accepts the old alarm-only value at " <> key <> ": " <> value) $
-                    loadConfig [(key, value)] Nothing `shouldSatisfy` isRight
+                    loadConfig (pubUrlEnv <> [(key, value)]) Nothing `shouldSatisfy` isRight
             for_ ["fail-closed", "FAIL_CLOSED", "  FailClosed  "] $ \value ->
                 it ("refuses the removed value at " <> key <> ": " <> value) $
-                    loadConfig [(key, value)] Nothing
+                    loadConfig (pubUrlEnv <> [(key, value)]) Nothing
                         `shouldSatisfy` decodeErrorMentions "Remove this setting after accepting private preference"
             it ("rejects an unknown value at " <> key) $
-                loadConfig [(key, "drop")] Nothing
+                loadConfig (pubUrlEnv <> [(key, "drop")]) Nothing
                     `shouldSatisfy` decodeErrorMentions "divergencePolicy"
         for_ ["{\"integrity\":{\"divergencePolicy\":\"fail-closed\"}}", "{\"mounts\":{\"npm\":{\"integrity\":{\"divergencePolicy\":\"fail-closed\"}}}}"] $ \document ->
             it ("refuses a removed value in a document: " <> show document) $
-                loadConfig [] (Just document)
+                loadConfig pubUrlEnv (Just document)
                     `shouldSatisfy` decodeErrorMentions "Remove this setting after accepting private preference"
         for_ ["{\"integrity\":{\"divergencePolicy\":true}}", "{\"mounts\":{\"npm\":{\"integrity\":{\"divergencePolicy\":5}}}}"] $ \document ->
             it ("rejects a non-string legacy value: " <> show document) $
-                loadConfig [] (Just document) `shouldSatisfy` decodeErrorMentions "expected a string"
+                loadConfig pubUrlEnv (Just document) `shouldSatisfy` decodeErrorMentions "expected a string"
         it "accepts absent legacy keys" $
             loadConfig [] Nothing `shouldSatisfy` isRight
         for_ ["{\"integrity\":{\"divergencePolicy\":null}}", "{\"mounts\":{\"npm\":{\"integrity\":{\"divergencePolicy\":null}}}}"] $ \document ->
             it ("treats a null legacy key as absent: " <> show document) $
-                loadConfig [] (Just document) `shouldSatisfy` isRight
+                loadConfig pubUrlEnv (Just document) `shouldSatisfy` isRight
 
     it "leaves the runtime posture unset when the shipped defaults are all that apply" $ do
         -- Every runtime key unset: the boot resolves cores down its ladder, and the ladder's
