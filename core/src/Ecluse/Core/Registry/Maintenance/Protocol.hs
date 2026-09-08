@@ -19,6 +19,7 @@ import Ecluse.Core.Fault (
     TransportCause (TransportProtocol),
     transportFault,
  )
+import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
     ParseError (parseErrorMessage),
@@ -142,15 +143,18 @@ listPackages store =
             | status == 200 -> first (parseFault "package listing") (listingParse (psListing store) body)
             | otherwise -> Left (listingUnavailable status)
 
-{- A store that answers the listing with anything but 200 implements no enumeration, and the
-next cycle reads the same, so the sweep stops rather than retrying. -}
 listingUnavailable :: Int -> StoreFault
 listingUnavailable status =
-    protocolFault
-        ( "the store answered the package listing with HTTP "
-            <> show status
-            <> ": it serves no enumeration this sweep can walk"
-        )
+    StoreFault
+        { faultTransport =
+            transportFault
+                TransportProtocol
+                ( "the store answered the package listing with HTTP "
+                    <> show status
+                    <> if status == 404 then ": it serves no enumeration this sweep can walk" else ""
+                )
+        , faultRetry = if isRetryableStatusCode status then RetryWorthwhile else RetryFutile
+        }
 
 {- The presence probe's read, which already projects a store's version list for the mirror
 worker. A store that holds no document for a package holds no versions of it either. -}
@@ -187,7 +191,6 @@ deleteChunk store name = \case
     absentDocument = storeRefusal "NOT_FOUND" "the store holds no document for this package"
     oversizedChunk = storeRefusal "CEILING_EXCEEDED" "this protocol deletes one version per call"
 
--- Form the version's request sequence over the fetched document, then send it.
 applyDelete :: ProtocolStore -> PackageName -> Version -> Int -> ByteString -> IO (Either StoreFault [(Version, VersionOutcome)])
 applyDelete store name version status body =
     case deleteRequests (psDelete store) (psOrigin store) name version (RegistryResponse status body) of
@@ -220,7 +223,6 @@ sendSequence store = go (1 :: Int)
 refused :: Version -> StoreRefusal -> Either StoreFault [(Version, VersionOutcome)]
 refused version refusal = Right [(version, VersionRefused refusal)]
 
--- Everything the store answers is read bounded, with the status kept beside the body.
 send :: ProtocolStore -> Request -> IO (Either StoreFault (Int, ByteString))
 send store request =
     first storeFaultOfFetch
@@ -228,7 +230,6 @@ send store request =
   where
     origin = psOrigin store
 
--- Send a request the adapter formed, folding a formation failure into the same channel.
 sendFormed :: ProtocolStore -> Either UrlFormationError Request -> IO (Either StoreFault (Int, ByteString))
 sendFormed store = formThen unformableFault (send store)
 
@@ -238,7 +239,6 @@ originBase = registryUrlText . ocBaseUrl . psOrigin
 originToken :: ProtocolStore -> Maybe Secret
 originToken = fmap credSecret . ocToken . psOrigin
 
--- A store applied what was asked when it answered in the 2xx class, whichever code it chose.
 isApplied :: Int -> Bool
 isApplied status = status >= 200 && status < 300
 
@@ -246,8 +246,7 @@ parseFault :: Text -> ParseError -> StoreFault
 parseFault subject err =
     protocolFault ("the store's " <> subject <> " did not parse: " <> parseErrorMessage err)
 
-{- A read the store answered outside the applied class. A server-side failure clears on its
-own, and every other status reads the same way on the next cycle. -}
+-- Version and document reads retain their server-error-only retry policy.
 readFault :: Text -> Int -> StoreFault
 readFault subject status =
     StoreFault

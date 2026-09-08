@@ -2,18 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @http-client@ edge of the transport-fault vocabulary: fold the library's
-exception type into "Ecluse.Core.Fault" at an adapter boundary.
-
-Every HTTP-speaking adapter faces the same 'Network.HTTP.Client.HttpException': the
-npm registry client directly, and the AWS adapters through @amazonka@'s
-transport-error channel. The classification therefore lives once, here, rather than
-per adapter. The module sits beside "Ecluse.Core.Fault" as a leaf. It imports the
-client library, never any capability module. The queue, the registry, and the
-advisory sync can all reach it without crossing one another.
+{- | Shared HTTP fault classification for registry, queue, and advisory adapters.
+Client exceptions become "Ecluse.Core.Fault" values at the adapter boundary.
 -}
 module Ecluse.Core.Fault.Http (
     classifyTransport,
+    isRetryableStatusCode,
 ) where
 
 import Network.HTTP.Client (
@@ -36,10 +30,7 @@ import Ecluse.Core.Fault (
  )
 import Ecluse.Core.Text (displayExceptionT)
 
-{- | Classify an @http-client@ exception into the core transport vocabulary
-("Ecluse.Core.Fault"), at the one edge where the library's exception type is in scope.
-It recognises a TLS refusal by the typed @tls@ exception, never by matching rendered text.
--}
+-- | Classify a client exception, recognising TLS failures by type rather than rendered text.
 classifyTransport :: HttpException -> TransportFault
 classifyTransport err = transportFault (causeOf err) (displayExceptionT err)
   where
@@ -57,3 +48,7 @@ classifyTransport err = transportFault (causeOf err) (displayExceptionT err)
                 | otherwise -> TransportProtocol
             _ -> TransportProtocol
         InvalidUrlException _ _ -> TransportProtocol
+
+-- | Whether an HTTP status signals a temporary failure: server errors, timeout, or throttling.
+isRetryableStatusCode :: Int -> Bool
+isRetryableStatusCode code = code >= 500 || code == 408 || code == 429

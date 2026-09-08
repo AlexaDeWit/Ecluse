@@ -3,22 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Backoff for Pilot's periodic advisory-source fetches.
-
-Pilot pulls the npm advisory export and the EPSS feed on a schedule. Either upstream can
-be unreachable, throttle the caller, or return 5xx. A naive retry-immediately loop would
-then hammer it from a single egress (NAT) address and invite an aggressive rate-limit
-or an outright ban. A transient fetch failure therefore retries under a /truncated
-exponential backoff with full jitter/. Each wait grows exponentially from a base
-delay. A cap stops it running away, the "truncated" part. Randomising the wait across
-the interval @[0, cap]@ keeps many Pilots from resynchronising onto the upstream at
-once. A bound on the number of retries makes the loop terminate and hand control back
-to the outer sync-interval loop rather than spinning.
-
-Only /transient/ faults retry. A response that carries a status code decides on the
-code: 5xx and the throttling 408 and 429 retry. Every other 'HttpException' folds into
-the shared transport vocabulary ("Ecluse.Core.Fault"), and 'transportRetryable' decides
-it. A clean 4xx is a permanent client-side error and a corrupt archive is a parse
-fault. Retrying neither helps, so both fail fast.
+Bounded exponential waits with full jitter limit repeated load during upstream failures.
+"Ecluse.Core.Fault.Http" classifies HTTP failures shared with registry adapters.
 -}
 module Ecluse.Core.Osv.Retry (
     -- * Policy
@@ -53,35 +39,20 @@ import Network.HTTP.Client (
 import Network.HTTP.Types.Status (statusCode)
 
 import Ecluse.Core.Fault (TransportFault (tfCause), transportRetryable)
-import Ecluse.Core.Fault.Http (classifyTransport)
+import Ecluse.Core.Fault.Http (classifyTransport, isRetryableStatusCode)
 
-{- | The shipped advisory-source backoff: full jitter from a 1s base to a 60s ceiling, over
-five retries (six attempts at most). The loop is finite, and the worst case waits under
-two minutes before the fetch gives up to the outer sync loop.
--}
+-- | Full jitter from a 1s base to a 60s ceiling, with five retries (six attempts).
 defaultOsvRetryPolicy :: (MonadIO m) => RetryPolicyM m
 defaultOsvRetryPolicy = limitRetries 5 <> capDelay 60_000_000 (fullJitterBackoff 1_000_000)
 
-{- | Is this HTTP status worth retrying? A 5xx may clear, and 408 and 429 are explicit
-"back off and come back" signals. Every other code is permanent, so a retry cannot fix it.
--}
-isRetryableStatusCode :: Int -> Bool
-isRetryableStatusCode code = code >= 500 || code == 408 || code == 429
-
-{- | Should a fetch that threw this 'HttpException' retry? A status-code failure asks
-'isRetryableStatusCode'. Every other exception folds into the shared transport
-vocabulary, where 'transportRetryable' owns the decision for every caller.
--}
+-- | Classify status failures by HTTP code and other exceptions by transport cause.
 isRetryableHttpException :: HttpException -> Bool
 isRetryableHttpException = \case
     HttpExceptionRequest _ (StatusCodeException response _) ->
         isRetryableStatusCode (statusCode (responseStatus response))
     other -> transportRetryable (tfCause (classifyTransport other))
 
-{- | Run an advisory-source fetch under a "Control.Retry" policy. A transient 'HttpException'
-retries until the budget is spent, then the original exception is re-thrown to the
-caller. Any other fault, a corrupt-archive parse error for example, propagates unretried.
--}
+-- | Retry temporary HTTP failures within the policy budget. Other failures propagate immediately.
 withOsvRetry :: (MonadMask m, KatipContext m) => RetryPolicyM m -> m a -> m a
 withOsvRetry policy fetch =
     recovering policy [retryHandler] (const fetch)

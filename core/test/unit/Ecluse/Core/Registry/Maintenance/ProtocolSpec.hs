@@ -12,12 +12,12 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
-import Network.HTTP.Types.Status (Status, status200, status201, status404, status500, status503)
+import Network.HTTP.Types.Status (Status, status200, status201, status404, status408, status429, status500, status503, statusCode)
 import Test.Hspec
 
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Fault (TransportCause (TransportUnreachable), tfCause, tfDetail)
+import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportUnreachable), tfCause, tfDetail)
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (maintenanceListing, maintenanceVersionDelete),
@@ -114,10 +114,20 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
             listBucketOf handle "l" `shouldReturn` Right [unscopedNpm "leftpad"]
             listBucketOf handle "r" `shouldReturn` Right [unscopedNpm "rightpad"]
 
-    it "faults with RetryFutile on a store that does not answer the listing" $
-        withStore True answerNothing $ \handle _ ->
-            (fmap faultRetry . leftToMaybe <$> listWholeStore handle)
-                `shouldReturn` Just RetryFutile
+    forM_ [status404, status408, status429, status503] $ \listingStatus ->
+        it ("preserves HTTP " <> show (statusCode listingStatus) <> " in a listing fault without replaying the read") $
+            withStore True (answerAll listingStatus "{}") $ \handle stub -> do
+                outcome <- listWholeStore handle
+                let unsupported = listingStatus == status404
+                    diagnostic =
+                        "the store answered the package listing with HTTP "
+                            <> show (statusCode listingStatus)
+                            <> if unsupported then ": it serves no enumeration this sweep can walk" else ""
+                fmap (tfDetail . faultTransport) (leftToMaybe outcome) `shouldBe` Just diagnostic
+                fmap (tfCause . faultTransport) (leftToMaybe outcome) `shouldBe` Just TransportProtocol
+                fmap faultRetry (leftToMaybe outcome)
+                    `shouldBe` Just (if unsupported then RetryFutile else RetryWorthwhile)
+                calls stub `shouldReturn` [("GET", "/-/all")]
 
     it "reads a package's versions through the presence probe, all served" $
         withStore True answerStore $ \handle _ -> do
@@ -252,7 +262,6 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
             map (unreachedRetry . snd) outcomes `shouldBe` [Just RetryFutile]
             map fst <$> calls stub `shouldReturn` ["GET", "PUT", "DELETE"]
 
--- Build the handle over a stub and run the assertion against both.
 withStore ::
     Bool ->
     (Captured -> (Status, LBS.ByteString)) ->
@@ -409,7 +418,6 @@ packumentWithVersions held authority =
 capAuthority :: Captured -> Text
 capAuthority = selfBaseUrlOf . capHeaders
 
--- The document the store's first packument edit carried.
 editedPackument :: Stub -> IO Object
 editedPackument stub = do
     sent <- filter ((== "PUT") . capMethod) <$> allCaptured stub
