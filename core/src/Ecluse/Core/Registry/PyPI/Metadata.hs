@@ -18,7 +18,8 @@ module Ecluse.Core.Registry.PyPI.Metadata (
 ) where
 
 import Data.Aeson (Value, eitherDecodeStrict, parseJSON)
-import Data.Aeson.Types (parseMaybe)
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (parseEither, parseMaybe)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (
@@ -47,10 +48,11 @@ import Ecluse.Core.Registry.PyPI.Project (
  )
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
 import Ecluse.Core.Registry.PyPI.SelectiveDecode (
-    SelectedFiles (sfFileCount, sfFiles, sfName),
+    SelectedFiles (sfFileCount, sfFiles, sfMeta, sfName),
     SelectiveError (SelectiveTooDeeplyNested, SelectiveUndecodable),
     selectFilesFromIndex,
  )
+import Ecluse.Core.Registry.PyPI.Wire (checkApiVersion)
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected), checkNameAgreement)
 import Ecluse.Core.Security (
@@ -71,9 +73,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, renderVersion)
 
-{- | Build a per-request read handle over one origin, with
-'Ecluse.Core.Server.Metadata.newMetadataClient' wiring caching, metrics, and logs around it.
--}
+-- | Build an origin read handle with shared caching and telemetry.
 newPyPIMetadataClient ::
     TracingPort ->
     MetricsPort ->
@@ -87,8 +87,6 @@ newPyPIMetadataClient ::
 newPyPIMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch origin =
     newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchPyPIManifest tracing origin) (fetchPyPIVersion tracing origin)
 
-{- The one PyPI metadata read: the Simple index, bounded against the origin's response budget.
-Both read operations fetch it and differ only in the projection they run over the bytes. -}
 fetchSimpleIndex :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
 fetchSimpleIndex origin name =
     formThen
@@ -96,9 +94,7 @@ fetchSimpleIndex origin name =
         (boundedFetch (ocManager origin) (ocLimits origin))
         (simpleIndexRequest (registryUrlText (ocBaseUrl origin)) (ocToken origin) noValidators name)
 
-{- | Fetch a project's Simple index into a 'Manifest', bounded against the origin's response budget.
-The digest is computed here, the one place the wire bytes exist.
--}
+-- | Fetch a bounded Simple index with the digest that scopes its cached document.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
 fetchPyPIManifest tracing origin name =
     fetchThenProject tracing (fetchSimpleIndex origin) name $ \body ->
@@ -112,9 +108,7 @@ fetchPyPIManifest tracing origin name =
             , manifestDigest = digest
             }
 
-{- | Project a fetched index's bytes into @(manifest, raw document)@, both readings of one
-nesting-checked parse. Pure and total, with each refusal its own 'MetadataError'.
--}
+-- | Project a nesting-checked index and retain its raw document for assembly.
 projectPyPIIndex :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
 projectPyPIIndex limits name body = do
     value <- first (const MetadataUndecodable) (eitherDecodeStrict body)
@@ -133,12 +127,11 @@ fetchPyPIVersion tracing origin name version =
     fetchThenProject tracing (fetchSimpleIndex origin) name $
         fmap (>>= enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin)) . projectPyPIVersion (ocLimits origin) name version
 
-{- | Project a fetched index's bytes into one release's 'PackageDetails', without decoding the other
-releases' files. Pure, total, and the outcome the whole-document path reaches.
--}
+-- | Project one release after the full path's protocol check, retaining original file positions.
 projectPyPIVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
 projectPyPIVersion limits name version body = do
     decoded <- first (selectiveError limits) (selectFilesFromIndex (maxNestingDepth limits) belongsToRelease body)
+    first (const MetadataUndecodable) (parseEither checkApiVersion (maybe mempty (KeyMap.singleton "meta") (sfMeta decoded)))
     -- The self-reported name is the validation authority (anti-shadowing), checked before the
     -- count backstop, as 'projectPyPIIndex' does.
     reported <- validateReportedName (sfName decoded)
@@ -151,8 +144,6 @@ projectPyPIVersion limits name version body = do
     belongsToRelease filename = fileVersionKey name filename == Just wanted
     wanted = renderVersion version
 
--- The document's self-reported name, folded to the same 'MetadataUndecodable' the whole-document
--- decode reaches for an absent, non-string, or malformed name.
 validateReportedName :: Maybe Value -> Either MetadataError PackageName
 validateReportedName = \case
     Nothing -> Left MetadataUndecodable
@@ -160,18 +151,12 @@ validateReportedName = \case
         Nothing -> Left MetadataUndecodable
         Just raw -> first (const MetadataUndecodable) (projectName raw)
 
-{- PyPI's declared artifact authorities, derived once from the same list the adapter hands the
-tarball-host gate, so the projection and the download gate read one set. -}
 pypiArtifactAuthorities :: AllowedHostPorts
 pypiArtifactAuthorities = ecosystemArtifactAuthorities pypiArtifactHosts
 
-{- The origin's base URL as characters, for the location reduction that must still recognise a
-non-https (dev loopback) upstream and leave its file URLs alone. -}
 originBaseUrl :: OriginClient -> Text
 originBaseUrl = registryUrlText . ocBaseUrl
 
--- Map a selective-decode refusal onto the 'MetadataError' the whole-document path raises for
--- the same cause.
 selectiveError :: Limits -> SelectiveError -> MetadataError
 selectiveError limits = \case
     SelectiveUndecodable -> MetadataUndecodable
