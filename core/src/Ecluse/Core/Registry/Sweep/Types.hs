@@ -2,9 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | What one mirror sweep is made of, and how it reports. Every effect the cycle reaches the
-running system through arrives here as a value, so the cycle holds no backend branch and a
-second backend is one more handle.
+{- | The mirror sweep's inputs, effects, and cycle state.
+Store operations arrive through "Ecluse.Core.Registry.Maintenance" handles.
 -}
 module Ecluse.Core.Registry.Sweep.Types (
     -- * What a sweep runs over
@@ -261,16 +260,17 @@ renderStoreFault fault = renderTransportCause (tfCause transport) <> ": " <> tfD
   where
     transport = faultTransport fault
 
-{- | The running totals of one cycle. The issued count is what the cycle handed over for
-deletion, which is what the cap bounds, and the tally is what the backend then reported.
--}
+-- | Cycle totals and pacing. The issued count bounds attempts, while the tally records outcomes.
 data SweepState = SweepState
     { stTally :: IORef SweepTally
     , stIssued :: IORef Int
+    , stChunkProgress :: IORef Int
+    -- ^ Names examined in the current chunk, shared across pages, buckets, and mounts.
     }
 
+-- | Start a cycle with no counts or pending chunk pause.
 newSweepState :: IO SweepState
-newSweepState = SweepState <$> newIORef mempty <*> newIORef 0
+newSweepState = SweepState <$> newIORef mempty <*> newIORef 0 <*> newIORef 0
 
 -- | Count one version's disposition, in the cycle tally and at the metrics port together.
 record :: SweepPorts -> SweepState -> SweepResult -> IO ()
