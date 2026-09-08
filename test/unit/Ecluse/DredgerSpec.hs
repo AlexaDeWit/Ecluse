@@ -171,15 +171,15 @@ advisoryAgeSpec = describe "runDredger advisory database ages" $
                         CveDb{cveDbLookup = fakeCveLookup [], cveDbClose = pass, cveDbMeta = []}
             for_ handles $ \(_, handle) -> install handle "first-generation"
             threadDelay 1_100_000
-            before <- advisoryAgePoints meterEnv
-            map fst before `shouldMatchList` map (metricAttributes . pure . LEcosystem) [Npm, PyPI]
-            map snd before `shouldSatisfy` all (>= 1)
+            initialPoints <- advisoryAgePoints meterEnv
+            map fst initialPoints `shouldMatchList` map (metricAttributes . pure . LEcosystem) [Npm, PyPI]
+            map snd initialPoints `shouldSatisfy` all (>= 1)
             for_ handles $ \(eco, handle) ->
                 when (eco == Npm) (install handle "next-generation")
-            after <- advisoryAgePoints meterEnv
-            map fst after `shouldMatchList` map fst before
+            swappedPoints <- advisoryAgePoints meterEnv
+            map fst swappedPoints `shouldMatchList` map fst initialPoints
             let ages eco points = [age | (attrs, age) <- points, attrs == metricAttributes [LEcosystem eco]]
-            case (ages Npm after, ages PyPI after, ages PyPI before) of
+            case (ages Npm swappedPoints, ages PyPI swappedPoints, ages PyPI initialPoints) of
                 ([npmAge], [pypiAge], [oldPypiAge]) -> do
                     npmAge `shouldSatisfy` (< pypiAge)
                     pypiAge `shouldSatisfy` (>= oldPypiAge)
