@@ -170,11 +170,11 @@ allocationSpec = describe "entry selection allocation growth" $
                 kept <- expectRight (maybeToRight ("empty allocation fixture" :: Text) (nonEmpty admitted))
                 let plan = basePlan{mpArtifacts = Map.singleton "1" kept}
                 _ <- evaluate (T.length (show (source, plan)))
-                before <- getAllocationCounter
+                allocationBefore <- getAllocationCounter
                 served <- evaluate (sum [T.length version + T.length value | (version, value) <- overlaySurvivors id (Map.singleton 0 source) plan])
-                after <- getAllocationCounter
+                allocationAfter <- getAllocationCounter
                 served `shouldBe` count * 10
-                let allocated = before - after
+                let allocated = allocationBefore - allocationAfter
                 putTextLn ("entry selection " <> toText label <> ": entries=" <> show count <> ", allocated_bytes=" <> show allocated)
                 allocated `shouldSatisfy` (> 0)
                 pure allocated
