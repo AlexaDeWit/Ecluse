@@ -22,4 +22,4 @@ projectJsonSnapshot project value = do
 
 -- | Scope a synthetic domain fixture to its textual representation, without a wire adapter.
 syntheticSnapshot :: (Show a) => a -> Snapshot a
-syntheticSnapshot value = Snapshot (digestOf (encodeUtf8 (show value))) value
+syntheticSnapshot value = Snapshot (digestOf (encodeUtf8 (show value :: Text))) value

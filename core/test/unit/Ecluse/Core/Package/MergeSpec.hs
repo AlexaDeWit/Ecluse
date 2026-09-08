@@ -61,10 +61,7 @@ overrides it where a test needs distinct cross-source instants.
 t0 :: UTCTime
 t0 = UTCTime (fromGregorian 2026 1 1) 0
 
-{- | Build a single-package packument from @(rawVersion, integrityDigests)@ pairs. Its
-@latest@ points at the lexically-highest version, so a lone source is already a fixed
-point of the merge's @latest@ reconciliation.
--}
+-- A lone source keeps its lexically highest version as the fixture's latest tag.
 packumentWith :: [(Text, [Hash])] -> PackageInfo
 packumentWith vs =
     PackageInfo

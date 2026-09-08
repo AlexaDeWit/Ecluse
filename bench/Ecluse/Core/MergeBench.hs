@@ -2,15 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Work-per-request benches for packument merging ("Ecluse.Core.Package.Merge"): the
-union of a trusted and a gated upstream's versions into one document. The merge runs
-the shared-algorithm integrity divergence check over that union.
-
-The realistic benches merge two copies of each corpus package, the collision-heavy case
-the divergence check works on. They report the merge cost across the real distribution of
-version-set sizes. A synthetic bench scales the version count and asserts the merge stays
-linear, the guard against an accidentally quadratic union. The synthetic generator serves
-__only__ this complexity-scaling assertion.
+{- | Measure merging overlapping source snapshots from the corpus and synthetic fixtures.
+Snapshot construction stays outside the measured merge operation.
 -}
 module Ecluse.Core.MergeBench (
     benchmarks,
@@ -30,25 +23,24 @@ import Ecluse.Core.Package.Merge (
     Provenance (GatedSource, TrustedSource),
     mergePackuments,
  )
+import Ecluse.Core.Snapshot (Snapshot (Snapshot), digestOf)
+import Ecluse.Test.Snapshot (syntheticSnapshot)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf)
 
 -- | The merge benches: realistic over the corpus, scaled over synthetic versions.
 benchmarks :: [LoadedEntry] -> Benchmark
 benchmarks loaded =
     bgroup "package.mergePackuments" $
-        [ bench (entryName le) (whnf mergeDepth (entryInfo le))
-        | le <- loaded
+        [ bench (entryName le) (whnf mergeDepth (Snapshot (digestOf bytes) (entryInfo le)))
+        | le@(_, bytes, _) <- loaded
         ]
             <> [ notWorseThanLinear
                     "scales linearly in version count"
                     (64, 8192)
-                    (syntheticPackageInfo . fromIntegral)
+                    (syntheticSnapshot . syntheticPackageInfo . fromIntegral)
                     mergeDepth
                ]
 
-{- | Merge a packument with a gated copy of itself, forcing the plan by counting survivors.
-Two overlapping sources is the collision-heavy case the divergence check works on.
--}
-mergeDepth :: PackageInfo -> Int
+mergeDepth :: Snapshot PackageInfo -> Int
 mergeDepth info =
     maybe 0 (Map.size . mpSurvivors) (mergePackuments [(TrustedSource, info), (GatedSource, info)])
