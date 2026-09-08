@@ -83,6 +83,11 @@ The current npm mirror writer omits dependency and executable fields from its pu
 [#1205](https://github.com/AlexaDeWit/Ecluse/issues/1205) tracks that defect. Until corrected,
 do not assume a fresh install from the mirror reproduces the public package's dependency metadata.
 
+Before publication, the mirror worker verifies fetched bytes against the current admitted
+metadata. For npm `dist.integrity`, any matching SRI alternative at the strongest algorithm
+permits publication, regardless of token order. A matching weaker digest cannot rescue a
+stronger-algorithm mismatch. This alternative rule applies only to SRI components.
+
 ### The policy
 
 The policy is deny by default: a public version reaches a build only when a rule admits it. Rules
