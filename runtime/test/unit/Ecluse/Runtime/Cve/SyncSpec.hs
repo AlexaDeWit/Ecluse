@@ -11,6 +11,7 @@ import Conduit (runConduit, yieldMany, (.|))
 import Control.Concurrent.STM (check)
 import Data.Aeson (Value (String))
 import Data.Conduit.Combinators qualified as C
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
@@ -29,7 +30,6 @@ import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, newCveSlot, withSlotL
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Osv.Schema (osvDbFileName, osvSchemaEpoch)
-import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
 import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty), newSweepState)
@@ -57,7 +57,7 @@ import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFak
 import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta)
 import Ecluse.Test.Osv.Withdrawal (withdrawalZip)
 import Ecluse.Test.OsvDb (withOsvZipDb)
-import Ecluse.Test.Package (sampleDetails, sampleManifest)
+import Ecluse.Test.Package (sampleDetails, sampleManifest, unscopedNpm)
 import Ecluse.Test.Port (
     noopAdvisorySyncMetricsPort,
     passthroughAdvisorySyncTracingPort,
@@ -188,20 +188,20 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                         ("withdrawal-only" `elem` names) `shouldBe` active
                 for_ [cvss, epss] $ \rule -> do
                     for_ ["1.0.0", "4.0.0"] $ \version -> do
-                        verdict <- evalRule deps ctx rule (sampleDetails (mkPackageName Npm "withdrawal-only") (mkVersion version))
+                        verdict <- evalRule deps ctx rule (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm version))
                         case verdict of
                             Deny _ -> active `shouldBe` True
                             NoDecision _ -> active `shouldBe` False
                             other -> expectationFailure ("unexpected withdrawal denial verdict: " <> show other)
                     for_ ["withdrawal-overlap", "corpus-vuln"] $ \name -> do
-                        verdict <- evalRule deps ctx rule (sampleDetails (mkPackageName Npm name) (mkVersion "1.0.0"))
+                        verdict <- evalRule deps ctx rule (sampleDetails (unscopedNpm name) (mkVersion Npm "1.0.0"))
                         verdict `shouldSatisfy` \case
                             Deny _ -> True
                             _ -> False
                     sweepWithdrawal deps ctx rule False "withdrawal-only" `shouldReturn` not active
                     sweepWithdrawal deps ctx rule False "withdrawal-overlap" `shouldReturn` False
                     sweepWithdrawal deps ctx rule True "withdrawal-overlap" `shouldReturn` True
-                fixVerdict <- evalRule deps ctx AllowIfRemediatesCve (sampleDetails (mkPackageName Npm "withdrawal-only") (mkVersion "2.0.0"))
+                fixVerdict <- evalRule deps ctx AllowIfRemediatesCve (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm "2.0.0"))
                 case fixVerdict of
                     Allow _ -> active `shouldBe` True
                     NoDecision _ -> active `shouldBe` False
@@ -210,8 +210,8 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
 
 sweepWithdrawal :: RuleDeps -> EvalContext -> Rule -> Bool -> Text -> IO Bool
 sweepWithdrawal deps ctx rule firstParty rawName = do
-    let name = mkPackageName Npm rawName
-        version = mkVersion "1.0.0"
+    let name = unscopedNpm rawName
+        version = mkVersion Npm "1.0.0"
         stored = [StoredVersion version VersionServed]
     store <-
         newFakeStore
