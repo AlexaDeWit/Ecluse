@@ -46,7 +46,7 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
  )
-import Ecluse.Test.Log (captureStdout, jsonLogEnv, lineMessage)
+import Ecluse.Test.Log (captureStdout, jsonLogEnv)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvTestM, runOsvTestMWith)
 import Ecluse.Test.OsvDb (epssFixtureFile)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
@@ -265,7 +265,8 @@ spec = describe "SQLite OSV Compilation" $ do
                                 Nothing -> void (runCompile logEnv)
                                 Just _ -> runCompile logEnv `shouldThrow` (\(PilotIngestAborted _) -> True)
                             let prefix = if isNothing refusal then "Compiled " else "Aborting OSV compile "
-                                summaries = filter (maybe False (T.isPrefixOf prefix) . lineMessage) (T.lines logged)
+                                -- jsonLogEnv uses Katip's "msg" field.
+                                summaries = filter (maybe False (T.isPrefixOf prefix) . parseMaybe (.: "msg")) (mapMaybe (decodeStrict . encodeUtf8) (T.lines logged))
                                 ecosystemText = if ecosystem == Npm then "npm" else "pypi" :: Text
                                 fields =
                                     [ "ecosystem" .= ecosystemText
@@ -276,10 +277,9 @@ spec = describe "SQLite OSV Compilation" $ do
                                     ]
                                         <> ["row_count" .= (1 :: Int) | isNothing refusal]
                             length summaries `shouldBe` 1
-                            for_ summaries $ \line -> do
-                                let loggedObject = decodeStrict (encodeUtf8 line)
-                                (loggedObject >>= parseMaybe (.: "data")) `shouldBe` Just (object fields)
-                                (loggedObject >>= parseMaybe (.: "sev")) `shouldBe` Just (if isNothing refusal then "Info" else "Error" :: Text)
+                            for_ summaries $ \loggedObject -> do
+                                parseMaybe (.: "data") loggedObject `shouldBe` Just (object fields)
+                                parseMaybe (.: "sev") loggedObject `shouldBe` Just (if isNothing refusal then "Info" else "Error" :: Text)
                             _ <- forceFlushTracerProvider tracerProvider Nothing
                             spans <- readIORef spansRef >>= traverse (readIORef . spanHot)
                             let compiled = filter ((== "ecluse.pilot.osv.compile") . hotName) spans
