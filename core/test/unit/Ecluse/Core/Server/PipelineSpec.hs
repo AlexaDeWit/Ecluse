@@ -8,7 +8,10 @@ Admission lifetime cases connect sweep deletions to the next private request.
 -}
 module Ecluse.Core.Server.PipelineSpec (spec) where
 
-import Data.Aeson (Value, encode, (.=))
+import Data.Aeson (Value (Object, String), eitherDecode, eitherDecodeStrict, encode, object, (.=))
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -20,7 +23,8 @@ import Network.HTTP.Types (hContentType, status200, status304, status401, status
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mkSecret, unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Package (HashAlg (SHA512), PackageName, mkPackageName)
+import Ecluse.Core.Package.Integrity (mkMinIntegrity)
 import Ecluse.Core.Registry.Maintenance (ConsentVerdict (ConsentWithheld), StoreClass (StorePreserved), StoredVersion (StoredVersion), VersionPresence (VersionServed))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (
@@ -57,25 +61,26 @@ import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents), FakeStoreConfig (fakeClass, fakeConsent, fakeContents, fakeManifests), defaultFakeStoreConfig, newFakeStore)
-import Ecluse.Test.Package (sampleDetails, sampleManifest, sriSha512Of, unsafeFilename)
+import Ecluse.Test.Package (hexSha1Of, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, versionSpec, versionValue)
+import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, inertRuleDeps, isUndecidable)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (npmServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, testPacing)
 import Network.HTTP.Types.Header (RequestHeaders, hHost)
-import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
+import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
-import Network.Wai.Internal (ResponseReceived (ResponseReceived))
+import Network.Wai.Internal (Response (ResponseBuilder), ResponseReceived (ResponseReceived))
 import Test.Hspec
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (bracket, throwIO)
 
 -- | Pin client responses and metrics, including trusted reads after a policy change.
 spec :: Spec
 spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)" $ do
     admissionLifetimeSpec
+    divergenceEvidenceSpec
 
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
         it ("records private artifact HTTP " <> show (statusCode upstreamStatus) <> " as " <> show expected <> " for GET and HEAD") $
@@ -97,24 +102,6 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
-
-    it "logs and meters a cross-upstream integrity divergence, still serving the trusted copy" $
-        testWithApplication (pure upstreamApp) $ \publicPort ->
-            testWithApplication (pure divergentPrivateApp) $ \privatePort -> do
-                (metricsPort, divergences) <- recordingDivergenceMetricsPort
-                rt <- mkRuntime metricsPort
-                baseDeps <- depsFor publicPort
-                let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) baseDeps
-                logged <- captureStdout $ do
-                    logEnv <- jsonLogEnv
-                    resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
-                    statusCode (responseStatus resp) `shouldBe` 200
-                    void (closeScribes logEnv)
-                logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
-                logged `shouldSatisfy` T.isInfixOf "cross-upstream integrity divergence"
-                logged `shouldSatisfy` T.isInfixOf (T.drop 7 (sha512Integrity "leftpad artifact bytes (privately tampered)"))
-                logged `shouldSatisfy` T.isInfixOf (T.drop 7 (sha512Integrity artifactBytes))
-                divergences >>= (`shouldBe` 1)
 
     it "records an unavailability and renders 503 when no upstream resolves" $ do
         (metricsPort, decisions) <- recordingMetricsPort
@@ -253,6 +240,127 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             (statusCode . responseStatus <$> held) `shouldBe` Just 200
 
+divergenceEvidenceSpec :: Spec
+divergenceEvidenceSpec = describe "validated divergence evidence across public rules" $ do
+    it "keeps the warning and counter after a named public denial with both digests fixed" $
+        withConflictOrigins (conflictPublicApp id) divergentPrivateApp $ \rt base divergences publicHits -> do
+            denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
+            for_ [(base, ["1.0.0", "2.0.0"], 1), (base{pdRules = denied}, ["1.0.0"], 2)] $ \(deps, keys, count) -> do
+                logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
+                    resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
+                    assertPrivatePackument keys resp
+                assertConflictLog True logged
+                divergences `shouldReturn` count
+            readIORef publicHits `shouldReturn` 1
+
+    it "retains denied conflict evidence beside another admitted public version" $
+        withConflictOrigins (conflictPublicApp (\v -> v{vsHasInstallScript = vsVersion v == "1.0.0"})) divergentPrivateApp $ \rt base divergences _ -> do
+            denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
+            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
+                resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpad defaultRequest)
+                assertPrivatePackument ["1.0.0", "2.0.0"] resp
+            assertConflictLog True logged
+            divergences `shouldReturn` 1
+
+    for_
+        [ ("a malformed digest", \v -> v{vsIntegrity = Just "sha512-invalid"})
+        , ("a missing digest", \v -> v{vsIntegrity = Nothing})
+        , ("an unsupported digest", \v -> v{vsIntegrity = Just "sha999-AAAA"})
+        , ("a below-floor digest", \v -> v{vsIntegrity = Nothing, vsShasum = Just (hexSha1Of artifactBytes)})
+        , ("a refused artifact authority", \v -> v{vsTarballUrl = "https://unrelated.invalid/leftpad-1.0.0.tgz"})
+        , ("malformed version metadata", \v -> v{vsExtraPairs = ["dist" .= ("invalid" :: Text)]})
+        , ("an unshared algorithm", \v -> v{vsIntegrity = Just (sriSha256Of artifactBytes)})
+        ]
+        $ \(label, change) ->
+            it ("does not alarm for " <> label <> " on a denied public copy") $
+                withConflictOrigins (conflictPublicApp change) divergentPrivateApp $ \rt base divergences _ -> do
+                    denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
+                    logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
+                        resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpad defaultRequest)
+                        assertPrivatePackument ["1.0.0"] resp
+                    assertConflictLog False logged
+                    divergences `shouldReturn` 0
+
+    it "excludes a denied SHA-256 copy when the public floor requires SHA-512" $
+        withConflictOrigins (conflictPublicApp (\v -> v{vsIntegrity = Just (sriSha256Of artifactBytes)})) (privateAppWithIntegrity (sriSha256Of "private bytes")) $ \rt base divergences _ -> do
+            floorSpec <- either (fail . toString) pure (mkMinIntegrity SHA512)
+            denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
+            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
+                resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied, pdMinIntegrity = floorSpec}) (servePackument npmPackumentReplies leftpad defaultRequest)
+                assertTrustedPackument (sriSha256Of "private bytes") ["1.0.0"] resp
+            assertConflictLog False logged
+            divergences `shouldReturn` 0
+
+    it "does not fetch public conflict evidence for a first-party name" $
+        withConflictOrigins (conflictPublicApp id) divergentPrivateApp $ \rt base divergences publicHits -> do
+            resp <- captureServe npmPackumentContract rt (mountWith base{pdFirstParty = (== leftpad)}) (servePackument npmPackumentReplies leftpad defaultRequest)
+            assertPrivatePackument ["1.0.0"] resp
+            divergences `shouldReturn` 0
+            readIORef publicHits `shouldReturn` 0
+
+    for_ [status401, status403] $ \refusal ->
+        it ("keeps private HTTP " <> show (statusCode refusal) <> " authoritative without another public fetch") $
+            withConflictOrigins (conflictPublicApp id) (\_ respond -> respond (responseLBS refusal [] "refused")) $ \rt deps divergences publicHits -> do
+                resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
+                statusCode (responseStatus resp) `shouldBe` 403
+                divergences `shouldReturn` 0
+                readIORef publicHits `shouldReturn` 1
+
+withConflictOrigins :: Application -> Application -> (ServeRuntime -> PackumentDeps -> IO Int -> IORef Int -> IO ()) -> IO ()
+withConflictOrigins public private action = do
+    publicHits <- newIORef 0
+    testWithApplication (pure (countingUpstream publicHits public)) $ \publicPort ->
+        testWithApplication (pure private) $ \privatePort -> do
+            (metrics, divergences) <- recordingDivergenceMetricsPort
+            rt <- mkRuntime metrics
+            base <- depsFor publicPort
+            action rt (withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base) divergences publicHits
+
+assertConflictLog :: Bool -> Text -> Expectation
+assertConflictLog expected logged = do
+    entries <- traverse (either fail pure . eitherDecodeStrict . encodeUtf8) (T.lines logged)
+    let conflicts = filter (T.isInfixOf "cross-upstream integrity divergence" . decodeUtf8 . LBS.toStrict . encode) (entries :: [Value])
+    length conflicts `shouldBe` if expected then 1 else 0
+    for_ conflicts $ \entry -> case entry of
+        Object fields -> do
+            KeyMap.lookup "sev" fields `shouldBe` Just (String "Warning")
+            let encoded = decodeUtf8 (LBS.toStrict (encode entry))
+            encoded `shouldSatisfy` T.isInfixOf (T.drop 7 (sha512Integrity "leftpad artifact bytes (privately tampered)"))
+            encoded `shouldSatisfy` T.isInfixOf (T.drop 7 (sha512Integrity artifactBytes))
+            encoded `shouldSatisfy` T.isInfixOf "\"package\":\"leftpad\""
+            encoded `shouldSatisfy` T.isInfixOf "\"versions\":\"1.0.0\""
+        _ -> expectationFailure "a structured log entry must be an object"
+
+assertPrivatePackument :: [Text] -> Response -> Expectation
+assertPrivatePackument = assertTrustedPackument (sha512Integrity "leftpad artifact bytes (privately tampered)")
+
+assertTrustedPackument :: Text -> [Text] -> Response -> Expectation
+assertTrustedPackument integrity keys resp = do
+    statusCode (responseStatus resp) `shouldBe` 200
+    value <- case resp of
+        ResponseBuilder _ _ builder -> either fail pure (eitherDecode (toLazyByteString builder))
+        _ -> fail "expected a packument response builder"
+    case value of
+        Object fields -> do
+            KeyMap.lookup "dist-tags" fields `shouldBe` Just (object ["latest" .= ("1.0.0" :: Text)])
+            case KeyMap.lookup "versions" fields of
+                Just (Object versions) -> do
+                    sort (map Key.toText (KeyMap.keys versions)) `shouldBe` keys
+                    KeyMap.lookup "1.0.0" versions
+                        `shouldBe` Just (versionValue ((versionSpec "leftpad" "1.0.0" "http://proxy.test/leftpad/-/leftpad-1.0.0.tgz"){vsIntegrity = Just integrity, vsExtraPairs = ["_retained" .= ("private field" :: Text)]}))
+                _ -> expectationFailure "expected served version objects"
+        _ -> expectationFailure "expected a packument object"
+
+conflictPublicApp :: (VersionSpec -> VersionSpec) -> Application
+conflictPublicApp change req respond =
+    respond (responseLBS status200 [(hContentType, "application/json")] (encode document))
+  where
+    host = maybe "localhost" snd (find ((== hHost) . fst) (requestHeaders req))
+    versions = ["1.0.0", "2.0.0"]
+    entry ver = versionValue (change ((versionSpec "leftpad" ver ("http://" <> decodeUtf8 host <> "/leftpad/-/leftpad-" <> ver <> ".tgz")){vsIntegrity = Just (sha512Integrity artifactBytes), vsHasInstallScript = True}))
+    document = packumentValue "leftpad" "2.0.0" [(ver, entry ver) | ver <- versions] ["1.0.0" .= old, "2.0.0" .= old] []
+    old = "2019-01-01T00:00:00.000Z" :: Text
+
 admissionLifetimeSpec :: Spec
 admissionLifetimeSpec = describe "admission lifetime after removing an allow" $
     for_ [SweepCandidates, SweepEverything] $ \shape -> describe (show shape) $ do
@@ -372,7 +480,6 @@ storedUpstream store req respond = do
         then upstreamApp req respond
         else respond (responseLBS status404 [] "")
 
--- | Run a serve handler over a request runtime and mount, capturing the 'Response' it hands its continuation.
 captureServe :: ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
 captureServe contract rt binding mkHandler = do
     logEnv <- newTestLogEnv
@@ -391,7 +498,6 @@ data MissingFixtureResponse = MissingFixtureResponse
 
 instance Exception MissingFixtureResponse
 
--- | A request runtime over the recording metrics port, sharing one no-TLS manager across both legs.
 mkRuntime :: MetricsPort -> IO ServeRuntime
 mkRuntime metricsPort = do
     -- Capacity high enough that this handle never gates. The admission cases wrap
@@ -409,11 +515,9 @@ mkRuntimeWith admission metricsPort = do
 leftpad :: PackageName
 leftpad = mkPackageName Npm Nothing "leftpad"
 
--- | An npm mount over the given serve dependencies (or 'Nothing' for the unwired stub).
 mountWith :: PackumentDeps -> MountBinding
 mountWith = mountUnder npmCredential
 
--- | An npm mount carrying the given credential presentation.
 mountUnder :: CredentialMapping -> PackumentDeps -> MountBinding
 mountUnder mapping deps =
     MountBinding
@@ -424,27 +528,23 @@ mountUnder mapping deps =
         , bindingPublishDeps = Nothing
         }
 
--- | A presentation that carries a raw token on @X-Api-Key@, a form npm does not present.
 apiKeyCredential :: CredentialMapping
 apiKeyCredential = credentialMapping recoverApiKey "X-Api-Key" (encodeUtf8 . unSecret . credSecret)
   where
     recoverApiKey headers = bareCredential . mkSecret . decodeUtf8 <$> lookup "X-Api-Key" headers
 
--- | The token a gated mount requires at its edge, in the form a client presents it.
 edgeToken :: (IsString s) => s
 edgeToken = "edge-token"
 
--- | Require the edge token but leave both upstreams unreachable, distinguishing edge refusal from fetch failure.
+-- Closed upstream ports distinguish an edge refusal from a fetch failure.
 gatedDeps :: IO PackumentDeps
 gatedDeps = do
     base <- depsFor 1
     pure base{pdInboundToken = Just (mkSecret edgeToken)}
 
--- | A request presenting the given headers, otherwise the WAI default.
 requestWith :: RequestHeaders -> Request
 requestWith headers = defaultRequest{requestHeaders = headers}
 
--- | Serve dependencies pointing the public origin at the in-process upstream on @publicPort@ and the private origin at a closed port.
 depsFor :: Int -> IO PackumentDeps
 depsFor publicPort = do
     prepared <- prepare inertRuleDeps allowPolicy
@@ -460,15 +560,12 @@ depsFor publicPort = do
             , pdEgressUrl = Right . loopbackRegistryUrl
             }
 
--- | A pure rule policy that admits the fixture version.
 allowPolicy :: [PrecededRule]
 allowPolicy = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 
--- | A fixed wall clock against which the fixture version reads as well-aged.
 fixedNow :: UTCTime
 fixedNow = UTCTime (fromGregorian 2020 1 1) 0
 
--- | A minimal npm upstream serving @leftpad@ and its self-hosted tarball.
 upstreamApp :: Application
 upstreamApp req respond =
     case rawPathInfo req of
@@ -480,15 +577,12 @@ upstreamApp req respond =
   where
     host = maybe "localhost" snd (find ((== hHost) . fst) (requestHeaders req))
 
--- | An upstream that counts every request before delegating.
 countingUpstream :: IORef Int -> Application -> Application
 countingUpstream hits app req respond = modifyIORef' hits (+ 1) >> app req respond
 
--- | The artifact bytes the upstream serves and the packument's @integrity@ commits to.
 artifactBytes :: ByteString
 artifactBytes = "leftpad artifact bytes"
 
--- | Keep artifact location and metadata fixed while varying the asserted integrity.
 packumentWithIntegrity :: ByteString -> Text -> Value
 packumentWithIntegrity host integrity =
     packumentValue
@@ -499,6 +593,7 @@ packumentWithIntegrity host integrity =
             , versionValue
                 ( (versionSpec "leftpad" "1.0.0" ("http://" <> decodeUtf8 host <> "/leftpad/-/leftpad-1.0.0.tgz"))
                     { vsIntegrity = Just integrity
+                    , vsExtraPairs = ["_retained" .= ("private field" :: Text)]
                     }
                 )
             )
@@ -506,24 +601,20 @@ packumentWithIntegrity host integrity =
         ["1.0.0" .= ("2019-01-01T00:00:00.000Z" :: Text)]
         []
 
--- | The public copy's packument: its integrity is a real SHA-512 over the served bytes.
 packumentFor :: ByteString -> Value
 packumentFor host = packumentWithIntegrity host (sha512Integrity artifactBytes)
 
--- | The Subresource-Integrity @sha512-<base64>@ string over the given bytes.
 sha512Integrity :: ByteString -> Text
 sha512Integrity = sriSha512Of
 
--- | A private (trusted) upstream whose @leftpad@ 1.0.0 integrity contradicts the public copy on the shared SHA-512 algorithm.
 divergentPrivateApp :: Application
-divergentPrivateApp req respond =
+divergentPrivateApp = privateAppWithIntegrity (sha512Integrity "leftpad artifact bytes (privately tampered)")
+
+privateAppWithIntegrity :: Text -> Application
+privateAppWithIntegrity integrity req respond =
     case rawPathInfo req of
         "/leftpad" ->
-            respond (responseLBS status200 [(hContentType, "application/json")] (encode (packumentForDivergent host)))
+            respond (responseLBS status200 [(hContentType, "application/json")] (encode (packumentWithIntegrity host integrity)))
         _ -> respond (responseLBS status404 [] "")
   where
     host = maybe "localhost" snd (find ((== hHost) . fst) (requestHeaders req))
-
--- | Use a different SHA-512 digest that still meets the integrity floor.
-packumentForDivergent :: ByteString -> Value
-packumentForDivergent host = packumentWithIntegrity host (sha512Integrity "leftpad artifact bytes (privately tampered)")

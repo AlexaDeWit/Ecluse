@@ -34,9 +34,7 @@ contribute provenance = Merge.contribute provenance . syntheticSnapshot
 name :: PackageName
 name = thingName
 
-{- | One tarball artifact carrying the given integrity digests. Every fixture version shares
-the one file name, because the merge keys digests by artifact file.
--}
+-- Every version shares a filename because comparison keys include the artifact file.
 artifactWith :: [Hash] -> Artifact
 artifactWith hs =
     (Package.artifactWith hs)
@@ -44,9 +42,6 @@ artifactWith hs =
         , artUrl = "https://example.test/thing.tgz"
         }
 
-{- | A per-version snapshot carrying the given integrity digests. The merge reads only
-the version key, the parsed version (for @latest@), and artifact integrity.
--}
 detailsWith :: Text -> [Hash] -> PackageDetails
 detailsWith rawVer hs =
     (Package.sampleDetails name (mkVersion Npm rawVer))
@@ -55,9 +50,6 @@ detailsWith rawVer hs =
         , pkgLicenses = ["MIT"]
         }
 
-{- | The fixed publish instant every 'detailsWith' version carries. 'withPublishedAt'
-overrides it where a test needs distinct cross-source instants.
--}
 t0 :: UTCTime
 t0 = UTCTime (fromGregorian 2026 1 1) 0
 
@@ -73,16 +65,10 @@ packumentWith vs =
         , infoInvalidEntries = []
         }
 
-{- | Override the publish instant every version of a packument carries, for tests
-pinning cross-source instants.
--}
 withPublishedAt :: UTCTime -> PackageInfo -> PackageInfo
 withPublishedAt t info =
     info{infoVersions = Map.map (\d -> d{pkgPublishedAt = Just t}) (infoVersions info)}
 
-{- | Build a packument whose every version carries a single SRI digest, the uniform
-algorithm set the collision and reconciliation tests need.
--}
 packument :: [(Text, Text)] -> PackageInfo
 packument vs = packumentWith [(v, [unsafeHash SRI d]) | (v, d) <- vs]
 
@@ -191,6 +177,24 @@ genMerge = foldMap (uncurry contribute) <$> Gen.list (Range.linear 0 3) genSourc
 
 spec :: Spec
 spec = do
+    describe "integrityDivergences" $ do
+        it "compares only overlapping versions and preserves the trusted fingerprint" $ do
+            let trusted = packument [("1.0.0", sriPriv), ("3.0.0", sriSame)]
+                public = packument [("1.0.0", sriPub), ("2.0.0", sriPublic)]
+                conflicts = integrityDivergences (infoVersions trusted) (infoVersions public)
+            Just conflicts `shouldBe` (mpDivergences <$> mergePackuments [(TrustedSource, trusted), (GatedSource, public)])
+            map divVersion (Set.toList conflicts) `shouldBe` ["1.0.0"]
+            map (integrityHashes . divWinning) (Set.toList conflicts) `shouldBe` [[sriPair sriPriv]]
+
+        it "ignores absent algorithms and matching digests but retains unequal digest sets" $ do
+            let versions hashes = Map.singleton "1.0.0" (detailsWith "1.0.0" hashes)
+                trusted = versions [unsafeHash SRI sriPriv]
+            integrityDivergences trusted Map.empty `shouldBe` Set.empty
+            integrityDivergences Map.empty trusted `shouldBe` Set.empty
+            integrityDivergences trusted (versions [unsafeHash SRI (validSha256SriOf "public")]) `shouldBe` Set.empty
+            integrityDivergences trusted (versions [unsafeHash SRI sriPriv, unsafeHash SHA1 sha1Abc]) `shouldBe` Set.empty
+            Set.size (integrityDivergences trusted (versions [unsafeHash SRI sriPriv, unsafeHash SRI sriPub])) `shouldBe` 1
+
     describe "mergePackuments" $ do
         it "returns Nothing on an empty input (nothing to serve)" $
             mergePackuments [] `shouldBe` Nothing
