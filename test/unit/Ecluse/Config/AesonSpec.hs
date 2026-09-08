@@ -18,7 +18,6 @@ import Ecluse.Config (
     ConfigError,
     EgressSettings (..),
     FirstParty (FirstPartyPyPI),
-    IntegritySettings (..),
     LimitsSettings (..),
     MountConfig (mntFirstParty),
     ObservabilitySettings (..),

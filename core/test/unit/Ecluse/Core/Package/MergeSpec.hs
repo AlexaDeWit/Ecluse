@@ -647,14 +647,14 @@ spec = do
         it "has mempty as a left identity: mempty <> a === a" $
             hedgehog $ do
                 a <- forAll genMerge
-                let identity = mempty
-                identity <> a === a
+                let emptyMerge = mempty
+                emptyMerge <> a === a
 
         it "has mempty as a right identity: a <> mempty === a" $
             hedgehog $ do
                 a <- forAll genMerge
-                let identity = mempty
-                a <> identity === a
+                let emptyMerge = mempty
+                a <> emptyMerge === a
 
         it "is intentionally NOT commutative (SourceId labels are positional)" $ do
             -- 'SourceId' must name the input's position so the serve layer can index back to a
