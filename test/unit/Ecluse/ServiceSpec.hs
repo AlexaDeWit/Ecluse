@@ -2,12 +2,22 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Mirror-pipeline role composition, worker liveness, and ecosystem mount bindings.
 module Ecluse.ServiceSpec (spec) where
 
+import Data.Map.Strict qualified as Map
 import Data.Time (addUTCTime, getCurrentTime)
 import Test.Hspec
 
+import Ecluse.Boot (BootEnv (BootEnv))
+import Ecluse.Composition.Credential (noCredentialProviders)
+import Ecluse.Composition.Executable (ExecutablePlan (epRoleWiring), MirrorWiring (mwCveSync), RoleWiring (MirrorPipelineWiring), planExecutable)
+import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, staticEnvVars)
+import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
+import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Queue (noMirrorQueue)
+import Ecluse.Core.Telemetry.Metrics (Label (LEcosystem), metricAttributes)
 import Ecluse.Core.Worker (
     Liveness (liveHealthy, liveLastPoll),
     WorkerHeartbeat,
@@ -17,7 +27,9 @@ import Ecluse.Core.Worker (
  )
 import Ecluse.Core.Worker.Liveness (newWorkerHeartbeatWithClock)
 import Ecluse.Runtime.Server (MountBinding (bindingPrefix))
-import Ecluse.Service (mountBindingFor, workerLiveness)
+import Ecluse.Service (mountBindingFor, withServiceRuntime, workerLiveness)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Support (newTestClock)
 
@@ -30,6 +42,7 @@ stalledHeartbeat = do
 
 spec :: Spec
 spec = do
+    advisoryAgeSpec
     describe "workerLiveness -- what /livez answers once the spawn decision is derived" $ do
         it "reports a stalled consume loop as not live where the process runs one" $ do
             liveness <- stalledHeartbeat >>= workerLiveness True
@@ -74,3 +87,29 @@ spec = do
 
         it "has no binding for an ecosystem with no adapter wired (loud Nothing, not a stub)" $
             (bindingPrefix <$> mountBindingFor RubyGems inertPackumentDeps Nothing) `shouldBe` Nothing
+
+advisoryAgeSpec :: Spec
+advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
+    for_ [ServeAndMirror, ServeOnly, MirrorOnly] $ \role ->
+        it ("emits configured ecosystem ages for " <> show role) $
+            withRoleTelemetry $ \logEnv telemetry meterEnv -> do
+                config <- expectConfig staticEnvVars Nothing
+                bootPlan <- expectPlanFor (BootMirrorPipeline role) staticEnvVars Nothing config noCeiling
+                planned <-
+                    planExecutable
+                        logEnv
+                        passthroughTracingPort
+                        mountBindingFor
+                        (\_ _ _ -> pure noMirrorQueue)
+                        (\_ _ -> pure (Right noCredentialProviders))
+                        (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
+                        bootPlan
+                case planned of
+                    Right plan | MirrorPipelineWiring mirror <- epRoleWiring plan -> do
+                        handles <- newAdvisoryHandles [Npm, PyPI]
+                        let boot = BootEnv config logEnv telemetry bootPlan
+                        withServiceRuntime boot plan mirror{mwCveSync = Map.fromList handles} $ \_ -> do
+                            points <- advisoryAgePoints meterEnv
+                            map fst points `shouldMatchList` map (metricAttributes . pure . LEcosystem) [Npm, PyPI]
+                            map snd points `shouldSatisfy` all (>= 0)
+                    _ -> expectationFailure "expected a mirror-pipeline role plan"

@@ -22,7 +22,6 @@ module Ecluse.Service (
     mountBindingFor,
 ) where
 
-import Data.Map.Strict qualified as Map
 import GHC.Conc (setNumCapabilities)
 import Katip (LogEnv, SimpleLogPayload, katipAddNamespace, runKatipContextT)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -50,7 +49,6 @@ import Ecluse.Composition.Validate (ValidatedPlan (vpSettings))
 import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (AppConfig)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
-import Ecluse.Core.Cve.Slot (generationInstalledAt)
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
 import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
 import Ecluse.Core.Registry.Adapter (
@@ -71,12 +69,10 @@ import Ecluse.Core.Supervision (
     transientPolicy,
  )
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
-import Ecluse.Cve.Sync (CveSyncHandle (csEnv), backgroundLoopBackoff, cveSyncReady, cveSyncScheduleFor, cveSyncTasks)
-import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
+import Ecluse.Cve.Sync (backgroundLoopBackoff, cveSyncReady, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..))
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
-import Ecluse.Runtime.Telemetry.Instruments (registerAdvisoryDatabaseAge)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
     deferredMirrorEnqueueFailure,
@@ -151,7 +147,7 @@ withServiceRuntime bootEnv plan mirror action = do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.
         installMetrics deferredMetrics (envMetrics builtEnv)
-        registerAdvisoryAges builtEnv cveSyncPlan
+        registerAdvisoryAges (envMetrics builtEnv) cveSyncPlan
         -- 'MirrorWith' always carries the artifact tenant.
         let workerArtifactMaxBytes = maybe mirrorArtifactBytesCap matMaxBytes (mpMirrorArtifactTenant memoryPlan)
         action
@@ -217,13 +213,6 @@ bufferedMirrorHandOff warn countEnqueueFailure =
 the log line is rate-limited, and the metric alongside counts every event. -}
 enqueueReportWorthy :: Int -> Bool
 enqueueReportWorthy n = reportWorthy n Composition.mirrorEnqueueReportInterval
-
-{- Attach each ecosystem's advisory-database age to the observable gauge, once at boot. The
-callback reads the slot, which outlives the sync tasks, so the age survives a task restart. -}
-registerAdvisoryAges :: Env -> Map.Map Ecosystem CveSyncHandle -> IO ()
-registerAdvisoryAges builtEnv plan =
-    for_ (Map.toList plan) $ \(eco, handle) ->
-        registerAdvisoryDatabaseAge (envMetrics builtEnv) eco (generationInstalledAt (syncSlot (csEnv handle)))
 
 {- The enqueue-buffer drain under the shared supervision combinator. Pacing lives in the
 buffer's own loop, so this wrapper only stops residue ending mirror-job delivery. -}

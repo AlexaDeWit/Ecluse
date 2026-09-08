@@ -77,7 +77,8 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
   ecosystem gates against an ageing advisory database or none at all. Its rules then deny by
   default. Check the bucket, the object key, and the IAM the sync task reads under. The artifact's
   own identifiers stay on the sync log line, never a label.
-- `ecluse.advisory.database.age.seconds` (a gauge) carries (ecosystem). It reads the seconds since
+- `ecluse.advisory.database.age.seconds` (a gauge) carries (ecosystem). The proxy, mirror worker,
+  and Dredger each observe their own slots. The gauge reads the seconds since
   that ecosystem's serving advisory database was installed. Écluse measures it at each collection,
   from the slot that holds the database, so it climbs on its own whether or not a sync task is
   alive. One threshold therefore alarms on a stale database, on a sync that stopped swapping, and
