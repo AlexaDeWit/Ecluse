@@ -15,6 +15,7 @@ module Ecluse.Core.Package.Merge (
     Divergence (..),
     IntegrityFingerprint,
     integrityHashes,
+    integrityDivergences,
     mergePackuments,
 
     -- * The merge accumulator
@@ -113,23 +114,15 @@ audit trail.
 integrityHashes :: IntegrityFingerprint -> [(Text, Maybe HashAlg, Text)]
 integrityHashes (IntegrityFingerprint hs) = hs
 
-{- | The resolution order for a contribution: 'TrustedSource' first, then the lower 'SourceId'. A
-'SourceId' is unique per input, so the order is strict and total and the minimum is the winner.
--}
 rank :: Provenance -> SourceId -> (Provenance, SourceId)
 rank prov sid = (prov, sid)
 
-{- | One source's contribution to a single version key: the input that offered it, its integrity
-fingerprint, and the typed details it carried. See 'candKey' for what identifies one.
--}
 data Candidate = Candidate
     { candProvenance :: Provenance
     , candSourceId :: SourceId
     , candFingerprint :: ~IntegrityFingerprint
-    {- ^ Deliberately lazy: the @~@ opts out of StrictData. Candidate ordering compares rank first,
-    and ranks are unique, so only a genuinely colliding version key forces a fingerprint.
-    -}
-    , candDetails :: PackageDetails
+    , -- Fingerprints are forced only for colliding versions because ranks are unique.
+      candDetails :: PackageDetails
     , candSnapshot :: ContentDigest
     }
     deriving stock (Show)
@@ -145,9 +138,7 @@ instance Eq Candidate where
 instance Ord Candidate where
     compare a b = compare (candKey a) (candKey b)
 
-{- | A value paired with the rank of the source that offered it. 'Ord' compares the rank alone, so
-the minimum is the precedence winner and a collision resolves by provenance, not input position.
--}
+-- Ordering ignores the value so precedence resolves collisions before content.
 data Ranked a = Ranked
     { rankedRank :: (Provenance, SourceId)
     , rankedValue :: a
@@ -312,12 +303,23 @@ planFrom acc = do
     chosenLatest :: Maybe Version
     chosenLatest = rankedValue <$> Map.lookup "latest" (mergeDistTags acc)
 
-    -- Each surviving version's publish instant comes from the /same/ winning candidate whose
-    -- manifest is served, so no timestamp comes from another source. A winner with no known
-    -- publish time drops out, so this map covers only a subset of the survivors.
+    -- Publish times retain the same source authority as the served manifest.
     reconciledTimes :: Map Text UTCTime
     reconciledTimes =
         Map.mapMaybe (pkgPublishedAt . candDetails . winnerOf) (mergeVersions acc)
+
+{- | Compare integrity-admitted versions independently of rule eligibility, with the trusted map winning.
+Inputs must share a validated package identity. Only shared version keys are compared.
+-}
+integrityDivergences :: Map Text PackageDetails -> Map Text PackageDetails -> Set Divergence
+integrityDivergences trusted public =
+    Set.fromList
+        [ Divergence key win lose
+        | (key, (privateDetails, publicDetails)) <- Map.toList (Map.intersectionWith (,) trusted public)
+        , let win = fingerprint privateDetails
+        , let lose = fingerprint publicDetails
+        , contradicts win lose
+        ]
 
 -- Sorted triples make the comparison order-independent across artifacts and hashes. Keying by
 -- 'assertedAlg', not the raw wrapper tag, compares what each digest claims about each file.

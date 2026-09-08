@@ -225,6 +225,9 @@ track which input a survivor came from, so the serve layer can index back to the
   wins. The public copy may contradict it on a shared artifact's shared integrity algorithm: same
   file, same algorithm, disagreeing digests. The merge logs a WARNING with both digests
   and increments the bounded-cardinality `ecluse.registry.merge.divergence` counter.
+  Validated public entries remain evidence for this comparison even when a public rule denies
+  their version. Evidence must pass the origin's identity, artifact-location, and integrity checks.
+  Denied entries contribute no served versions, files, or tags.
   The private version and its tags remain available. Artifact GET, HEAD, and conditional
   requests keep private preference. A disagreement proves neither copy correct, so a damaged
   private copy can still reach clients. The private repository holds previously admitted or

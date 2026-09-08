@@ -29,6 +29,7 @@ import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (
+    PackageDetails,
     PackageInfo (infoVersions),
     PackageName,
     renderPackageName,
@@ -38,9 +39,10 @@ import Ecluse.Core.Package.Integrity (
     MinTrustedIntegrity,
  )
 import Ecluse.Core.Package.Merge (
-    MergePlan (mpSurvivors),
+    MergePlan (mpDivergences, mpSurvivors),
     Provenance (GatedSource, TrustedSource),
     SourceId,
+    integrityDivergences,
     mergePackuments,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
@@ -136,8 +138,6 @@ data PackumentServe
       -- @Content-Length@ and the own @ETag@) with no body.
       PackumentHead
 
--- Dispatch shared by 'servePackument' and 'headPackument': read the mount's
--- dependencies and serve in the given mode.
 packumentWith ::
     PackumentServe ->
     PackumentReplies response ->
@@ -192,14 +192,15 @@ serveAdmittedPackument mode replies deps clientToken name request respond rt = d
             liftIO (mpServeDecision metrics Metric.Deny)
             liftIO (respond (packumentForbidden replies [] (privateAuthorisationRefusal (pdHelp deps))))
         _ -> do
-            (public, publicExclusions, publicVerdicts) <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx (originManifest pubResult))
             let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
-                sources = catMaybes [private, public]
+                trustedVersions = maybe Map.empty (infoVersions . srcInfo) private
+            public <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx trustedVersions (originManifest pubResult))
+            let sources = catMaybes [private, paContribution public]
                 noServeableVersions = do
-                    let decisions = collectDecisions privResult pubResult (privateExclusions <> publicExclusions)
+                    let decisions = collectDecisions privResult pubResult (privateExclusions <> paExclusions public)
                     liftIO (mpServeDecision metrics (packumentServeDecision decisions))
                     liftIO (recordDenials metrics decisions)
-                    logDenials name (ctxAdvisoryEtag evalCtx) publicVerdicts
+                    logDenials name (ctxAdvisoryEtag evalCtx) (paVerdicts public)
                     liftIO (respond (noSurvivors replies deps decisions))
                 serveResolved served = do
                     liftIO (mpServeDecision metrics Metric.Admit)
@@ -208,7 +209,7 @@ serveAdmittedPackument mode replies deps clientToken name request respond rt = d
                 then do
                     liftIO (mpServeDecision metrics Metric.Deny)
                     liftIO (respond (firstPartyAbsent replies deps name))
-                else case packumentPlan sources of
+                else case packumentPlan sources (paDeniedEvidence public) of
                     Nothing -> noServeableVersions
                     Just plan -> do
                         warnDivergences metrics name plan
@@ -272,25 +273,35 @@ admitTrusted minTrusted = \case
                 then (Nothing, integrityRefusals)
                 else (Just (Contribution TrustedSource admissible (manifestRaw manifest) (manifestDigest manifest)), integrityRefusals)
 
-gatePublic :: TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Maybe Manifest -> IO (Maybe Contribution, [ServeDecision], [VersionVerdict])
-gatePublic tracing metrics deps name ctx = \case
-    Nothing -> pure (Nothing, [], [])
+data PublicAdmission = PublicAdmission
+    { paContribution :: Maybe Contribution
+    , paExclusions :: [ServeDecision]
+    , paVerdicts :: [VersionVerdict]
+    , paDeniedEvidence :: Map Text PackageDetails
+    -- Integrity-admitted but rule-denied versions contribute alarms, never served entries.
+    }
+
+gatePublic :: TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Map Text PackageDetails -> Maybe Manifest -> IO PublicAdmission
+gatePublic tracing metrics deps name ctx trustedVersions = \case
+    Nothing -> pure (PublicAdmission Nothing [] [] Map.empty)
     Just manifest -> spanPackumentGate tracing name $ do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing (manifestInfo manifest)
         (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
         mpRuleEvalDuration metrics (evalTier (pdRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
         let plan = filterPlanFromDecisions decisions admissible
+            deniedEvidence = Map.withoutKeys (Map.intersection (infoVersions admissible) trustedVersions) (fpSurvivors plan)
         pure $
             if Set.null (fpSurvivors plan)
                 then
                     let verdicts = projectDecisions admissible (fpDecisions plan)
-                     in (Nothing, map vvDecision verdicts <> integrityRefusals, verdicts)
+                     in PublicAdmission Nothing (map vvDecision verdicts <> integrityRefusals) verdicts deniedEvidence
                 else
-                    ( Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest))
-                    , integrityRefusals
-                    , []
-                    )
+                    PublicAdmission
+                        (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest)))
+                        integrityRefusals
+                        []
+                        deniedEvidence
 
 decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
 decideVersions deps ctx info =
@@ -302,15 +313,14 @@ projectDecisions info =
   where
     versionVerdict (ver, details) d = VersionVerdict ver (serveDecisionOf details d)
 
--- The fully-assembled served body: the served document ('CachedDoc') to serialise and
--- answer against the conditional request.
 newtype ServedBody = ServedBody {servedDoc :: CachedDoc}
 
-packumentPlan :: [Contribution] -> Maybe MergePlan
-packumentPlan sources = do
+packumentPlan :: [Contribution] -> Map Text PackageDetails -> Maybe MergePlan
+packumentPlan sources deniedEvidence = do
     plan <- mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources]
     guard (not (Map.null (mpSurvivors plan)))
-    pure plan
+    let trustedVersions = maybe Map.empty (infoVersions . srcInfo) (find ((== TrustedSource) . srcProvenance) sources)
+    pure plan{mpDivergences = mpDivergences plan <> integrityDivergences trustedVersions deniedEvidence}
 
 -- | A validator derived from framed inputs so unchanged requests skip assembly. Bump the salt when assembly behaviour changes.
 packumentETag :: Text -> PackageName -> [(Provenance, ContentDigest, [Text])] -> ETag
