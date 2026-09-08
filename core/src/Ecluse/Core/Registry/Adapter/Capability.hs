@@ -2,13 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The ecosystem capability slices a consuming pipeline's dependency record __embeds__: the
-metadata read and assembly, the artifact request formation, the publish path, and the store
-maintenance verbs. Nothing here holds a URL, a credential, a limit, or a policy.
-
-They sit below the serve surface because the deps records carry them as fields, while
-'Ecluse.Core.Registry.Adapter.Types.AdapterServe' names the routing knot defined over those
-same records. The split is what makes both directions typeable.
+{- | Registry capabilities used by the ecosystem-neutral pipeline.
+Adapters own wire formats and share exact source-entry selection for served metadata.
 -}
 module Ecluse.Core.Registry.Adapter.Capability (
     -- * Metadata
@@ -48,6 +43,7 @@ import Ecluse.Core.Registry.Metadata (Manifest, MetadataClient, MetadataError)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
+import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -75,11 +71,8 @@ data AdapterMetadata = AdapterMetadata
     {- ^ Build a per-request metadata client for one origin. The adapter closes over the
     ecosystem's raw fetch primitives, and the caller names the origin and the observers.
     -}
-    , metadataAssemble :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
-    {- ^ Assemble the served document from a merge plan, the raw source documents, and the
-    precedence-winning base document ('Nothing' when there is none), rewriting each surviving
-    version's artifact URL under the given mount base.
-    -}
+    , metadataAssemble :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
+    -- ^ Select exact admitted entries from the supplied snapshots before rendering their wire shape.
     , metadataSerialise :: CachedDoc -> LByteString
     -- ^ Encode an assembled served document ('CachedDoc') to its wire bytes.
     , metadataFetchManifest :: ManifestFetch

@@ -36,9 +36,10 @@ import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime)
 
 import Ecluse.Core.Package (
-    PackageDetails,
-    PackageInfo,
+    PackageDetails (pkgArtifacts),
+    PackageInfo (infoVersions),
     PackageName,
+    artEntryKey,
     pkgCanonical,
     pkgEcosystem,
     pkgNamespace,
@@ -54,7 +55,7 @@ import Ecluse.Core.Server.Cache.Store (
     newSingleFlight,
     resolveSingleFlight,
  )
-import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
+import Ecluse.Core.Server.Cache.VersionWeight (weighEntryKey, weighVersion)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Telemetry.Record (
     MetricsPort,
@@ -101,9 +102,12 @@ data CacheEntry = CacheEntry
     }
     deriving stock (Eq, Show)
 
--- | Estimate retained bytes using the shared expansion model over the encoded raw document.
+-- | Charge the shared wire expansion plus artifact coordinates retained by the typed view.
 weighCacheEntry :: CacheEntry -> Int
-weighCacheEntry e = weighEncodedBytes (weighCachedDoc (entryRaw e))
+weighCacheEntry e =
+    fromInteger (min (toInteger (maxBound :: Int)) (toInteger (weighEncodedBytes (weighCachedDoc (entryRaw e))) + keysWeight))
+  where
+    keysWeight = sum [weighEntryKey (artEntryKey artifact) | details <- toList (infoVersions (entryInfo e)), artifact <- toList (pkgArtifacts details)]
 
 -- Scale through the one shared wire-to-resident model ("Ecluse.Core.Server.MemoryModel"), so this
 -- weigher and the composition root's memory plan never drift on the expansion factor.

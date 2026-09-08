@@ -2,14 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Test helpers and fixtures for "Ecluse.Core.Package".
-
-The module name follows this support library's @Ecluse.X → Ecluse.Test.X@ convention.
-The @unsafe@ formers lift a known-good fixture string into a domain value and error on a
-typo, so a bad fixture fails loudly. Each canonical digest is the empty-input digest of its
-algorithm, immaterial beyond being well-formed. The renderers compute npm's hexadecimal
-shasums and Subresource-Integrity text apart from the production integrity machinery, so
-tests keep a separate oracle.
+{- | Package fixtures and digest encoders shared across test suites.
+Invalid fixture inputs raise a typed exception.
 -}
 module Ecluse.Test.Package (
     -- * Constructing hashes from fixtures
@@ -56,6 +50,7 @@ module Ecluse.Test.Package (
     sampleManifest,
 ) where
 
+import Control.Exception (throw)
 import Crypto.Hash (Blake2b_512, Digest, SHA1, SHA256, SHA384, SHA512, hash, hashlazy)
 import Data.Aeson (Value (Object))
 import Data.ByteArray (ByteArrayAccess)
@@ -79,6 +74,7 @@ import Ecluse.Core.Package (
     mkPackageName,
     mkSriHashes,
  )
+import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Package.Integrity (
     MinIntegrity,
     MinTrustedIntegrity,
@@ -91,53 +87,45 @@ import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
-{- HLINT ignore unsafeHash "Avoid restricted function" -}
-
 {- | Build a 'Hash' from a known-valid digest, for fixtures. A malformed digest errors,
 so a fixture typo fails loudly instead of silently yielding nothing.
 -}
 unsafeHash :: HashAlg -> Text -> Hash
-unsafeHash alg = either error id . mkHash alg
-
-{- HLINT ignore unsafeSriHashes "Avoid restricted function" -}
+unsafeHash alg = fixtureValue . mkHash alg
 
 {- | Split a known-valid Subresource-Integrity wire string into its per-component
 hashes, for fixtures. A malformed component errors, so a fixture typo fails loudly.
 -}
 unsafeSriHashes :: Text -> NonEmpty Hash
-unsafeSriHashes = either error id . mkSriHashes
-
-{- HLINT ignore unsafeRegistryUrl "Avoid restricted function" -}
+unsafeSriHashes = fixtureValue . mkSriHashes
 
 {- | Build the https egress witness from a known-https fixture URL. A non-https value
 errors, so a typo fails loudly.
 -}
 unsafeRegistryUrl :: Text -> RegistryUrl
-unsafeRegistryUrl = either error id . mkRegistryUrl
-
-{- HLINT ignore unsafeFilename "Avoid restricted function" -}
+unsafeRegistryUrl = fixtureValue . mkRegistryUrl
 
 {- | Refine a known-safe fixture string into an artifact 'Filename'. An unsafe path component
 errors, so a fixture typo fails loudly.
 -}
 unsafeFilename :: Text -> Filename
-unsafeFilename raw = fromMaybe (error ("unsafe fixture filename: " <> raw)) (mkFilename raw)
+unsafeFilename raw = fixtureValue (maybeToRight ("unsafe fixture filename: " <> raw) (mkFilename raw))
 
-{- HLINT ignore defaultMinIntegrity "Avoid restricted function" -}
-
-{- | The SHA-256 public-integrity floor fixture: the hard minimum 'mkMinIntegrity' enforces, so
-the construction cannot fail. Use it wherever the floor is not the axis under test.
--}
+-- | The default SHA-256 public-integrity floor for fixtures.
 defaultMinIntegrity :: MinIntegrity
-defaultMinIntegrity = either error id (mkMinIntegrity SHA256)
+defaultMinIntegrity = fixtureValue (mkMinIntegrity SHA256)
 
-{- HLINT ignore defaultMinTrustedIntegrity "Avoid restricted function" -}
-
-{- | The SHA-256 trusted-integrity floor fixture, the same secure posture as 'defaultMinIntegrity'.
-SHA-256 names a concrete algorithm, so 'mkMinTrustedIntegrity' cannot fail here.
--}
+-- | The default SHA-256 trusted-integrity floor for fixtures.
 defaultMinTrustedIntegrity :: MinTrustedIntegrity
-defaultMinTrustedIntegrity = either error id (mkMinTrustedIntegrity SHA256)
+defaultMinTrustedIntegrity = fixtureValue (mkMinTrustedIntegrity SHA256)
+
+newtype InvalidPackageFixture = InvalidPackageFixture Text
+    deriving stock (Show)
+
+instance Exception InvalidPackageFixture
+
+fixtureValue :: Either Text a -> a
+fixtureValue = either (throw . InvalidPackageFixture) id
 
 -- | Lower-case hexadecimal digests for fixture bytes, named by algorithm.
 hexSha1Of, hexSha256Of, hexSha384Of, hexSha512Of, hexBlake2bOf :: ByteString -> Text
@@ -196,7 +184,8 @@ v1_0_0 = mkVersion Npm "1.0.0"
 sampleArtifact :: Artifact
 sampleArtifact =
     Artifact
-        { artFilename = "thing-1.0.0.tgz"
+        { artEntryKey = SingletonEntry
+        , artFilename = "thing-1.0.0.tgz"
         , artUrl = "https://example.test/thing-1.0.0.tgz"
         , artKind = Tarball
         , artHashes = []

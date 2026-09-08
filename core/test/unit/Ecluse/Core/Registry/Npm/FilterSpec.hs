@@ -23,8 +23,9 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo, PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Package.Entry (AdmittedEntry (admittedKey), EntryKey (..))
 import Ecluse.Core.Package.Filter (fpDecisions, fpSurvivors, restrictToSurvivors)
-import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
+import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.Npm.Filter (
     assembleMergedPackument,
     npmDocumentName,
@@ -40,22 +41,40 @@ import Ecluse.Core.Rules.Types (
     Rule (AllowIfOlderThan),
  )
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
 import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isApproved)
-import Ecluse.Test.Support (decodeJsonOrFail)
+import Ecluse.Test.Snapshot (jsonSnapshot, projectJsonSnapshot)
+import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
 spec :: Spec
 spec = do
     nameGateSpec
     rewriteSpec
     filterSpec
+    entryIdentitySpec
     coherenceSpec
     propertiesSpec
 
-{- | The gate on the upstream-controlled @name@ the rewrite interpolates. It is the shared npm
-name grammar read as a predicate, so it agrees with the route and the projection by construction.
--}
+entryIdentitySpec :: Spec
+entryIdentitySpec = describe "npm artifact-entry admission" $ do
+    it "requires the admitted object key and exact upstream snapshot" $ do
+        let version = NpmFixture.versionValue (NpmFixture.versionSpec "thing" "1.0.0" "https://upstream.test/thing-1.0.0.tgz")
+            raw = NpmFixture.packumentValue "thing" "1.0.0" [("1.0.0", version)] [] []
+        source <- projectJsonSnapshot (projectNpmManifest defaultLimits (mkPackageName Npm Nothing "thing")) raw
+        plan <- expectRight (maybeToRight ("expected merge plan" :: Text) (mergePackuments [(GatedSource, fst <$> source)]))
+        let rawSource = snd <$> source
+            assemble bySource selection = objKeys "versions" (asObject (assembleMergedPackument base bySource selection raw))
+            sources = Map.singleton 0 rawSource
+            wrongKey entry = entry{admittedKey = ArrayEntry 0}
+        Map.keys (assemble sources plan) `shouldBe` ["1.0.0"]
+        assemble sources plan{mpArtifacts = mempty} `shouldBe` mempty
+        assemble sources plan{mpArtifacts = fmap (fmap wrongKey) (mpArtifacts plan)} `shouldBe` mempty
+        assemble (Map.singleton 1 rawSource) plan `shouldBe` mempty
+        assemble (Map.singleton 0 rawSource{snapshotDigest = digestOf "different upstream bytes"}) plan `shouldBe` mempty
+
+-- The rewrite uses the same npm name grammar as projection and routing.
 nameGateSpec :: Spec
 nameGateSpec = describe "npmDocumentName -- the one npm name grammar" $
     for_ NpmFixture.npmNameVerdicts $ \(raw, valid) ->
@@ -447,10 +466,6 @@ twoVersionsWithTimeBookkeeping =
         , ("modified", publishedDaysAgo 0)
         ]
 
-{- | A surviving version whose key is not parseable semver, which npm accepts. Ranking @latest@
-therefore goes through the @compareVersions@-returns-Nothing path. @banana@ is old enough to
-survive the quarantine.
--}
 unparseableSurvivorPackument :: ByteString
 unparseableSurvivorPackument =
     encodePackument
@@ -701,10 +716,10 @@ applyToAt mountBase c rules info value = do
     pure $
         if Set.null (fpSurvivors plan)
             then NoSurvivors (fpDecisions plan)
-            else case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info)] of
+            else case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info <$ jsonSnapshot value)] of
                 Just merged
                     | not (Map.null (mpSurvivors merged)) ->
-                        Assembled (assembleMergedPackument mountBase (Map.singleton 0 value) merged value)
+                        Assembled (assembleMergedPackument mountBase (Map.singleton 0 (jsonSnapshot value)) merged value)
                 _ -> NoSurvivors (fpDecisions plan)
 
 -- | 'applyToAt' under the canonical fixture mount base.

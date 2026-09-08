@@ -2,15 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | A __selective__ decode of a PEP 691 Simple index: pull out one release's files without
-materialising the files of every other release.
-
-A project ships hundreds of files across its history and the artifact gate consults one
-release, so on the cold path a whole-index decode dominates the cost. This walk drives the
-bounded token engine in "Ecluse.Core.Json.Selective", probing each item for its @filename@
-alone (an index carries no per-release grouping) and building a 'Value' only for a match. It is
-not a shortcut past validation: the entire token stream is consumed, so malformed JSON or a
-value nested past the budget anywhere refuses exactly what a whole-document decode refuses.
+{- | Select one PyPI release without materialising unrelated files.
+The bounded token walk retains original array positions and checks the entire JSON stream.
 -}
 module Ecluse.Core.Registry.PyPI.SelectiveDecode (
     SelectedFiles (..),
@@ -27,7 +20,7 @@ import Ecluse.Core.Json.Selective (
     SelectiveError (..),
     findInRecord,
     materialiseWithinBudget,
-    selectFromArray,
+    selectIndexedFromArray,
     skipValue,
     trailingWhitespace,
     withArray,
@@ -40,7 +33,7 @@ its key is absent, so the caller reproduces the whole-document outcome.
 data SelectedFiles = SelectedFiles
     { sfName :: Maybe Value
     -- ^ The top-level @name@ value, if the key was present (else 'Nothing').
-    , sfFiles :: [Value]
+    , sfFiles :: [(Int, Value)]
     -- ^ The requested release's file entries, in index order.
     , sfFileCount :: Int
     -- ^ The number of entries in the @files@ array (@0@ when @files@ is absent).
@@ -101,7 +94,7 @@ walkTop childBudget belongsTo = fmap wsSelection . go initialWalk
     -- then mark @files@ seen.
     captureFiles st valueToks =
         withArray childBudget valueToks $ \files -> do
-            (picked, count, cont) <- selectFromArray (childBudget - 1) (const (belongsToRelease (childBudget - 1))) files
+            (picked, count, cont) <- selectIndexedFromArray (childBudget - 1) (const (belongsToRelease (childBudget - 1))) files
             pure (st{wsSelection = (wsSelection st){sfFiles = picked, sfFileCount = count}, wsSeenFiles = True}, cont)
 
     -- Capture the first top-level @name@ value, then mark @name@ seen.
@@ -111,10 +104,11 @@ walkTop childBudget belongsTo = fmap wsSelection . go initialWalk
 
     -- Read from the entry's own @filename@ alone, so a file of another release costs one
     -- materialised string. An entry declaring no readable name belongs to no release.
-    belongsToRelease budget entryToks =
+    belongsToRelease budget entryToks@TkRecordOpen{} =
         case withRecord budget entryToks (findInRecord (budget - 1) "filename") of
             Left err -> Left err
             Right (found, _count, _cont) -> Right (maybe False (belongsTo . renderName) found)
+    belongsToRelease _ _ = Right False
 
 -- A @filename@ value as text, or the empty name for a value that is not a string.
 renderName :: Value -> Text

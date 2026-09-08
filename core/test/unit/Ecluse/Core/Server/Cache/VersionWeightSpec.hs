@@ -14,6 +14,7 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package
+import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Version (mkVersion, versionKey)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName, unsafeHash, v1_0_0, validSha256)
@@ -40,6 +41,12 @@ spec = describe "selected-release accounting" $ do
         let withUrl url = baseline{pkgArtifacts = oneArtifact{artUrl = url} :| []}
         weight (withUrl (T.replicate 1024 "\x1f600"))
             `shouldSatisfy` (>= weight (withUrl (T.replicate 1024 "a")) + 3072)
+
+    it "charges a keyed identity for its complete retained backing allocation" $ do
+        let backing = T.replicate 65536 "x"
+            sliced = T.take 1 backing
+            withKey key = baseline{pkgArtifacts = oneArtifact{artEntryKey = ObjectEntry key} :| []}
+        weight (withKey sliced) `shouldSatisfy` (>= weight (withKey (T.copy sliced)) + 65535)
 
     for_ retainedFields $ \(label, change) ->
         it ("charges retained " <> label) $
@@ -82,6 +89,7 @@ retainedFields =
     , ("publisher name", \p -> p{pkgPublisher = Just (Person longText Nothing Nothing)})
     , ("publisher email", \p -> p{pkgPublisher = Just (Person "a" (Just longText) Nothing)})
     , ("publisher URL", \p -> p{pkgPublisher = Just (Person "a" Nothing (Just longText))})
+    , ("entry coordinates", changeArtifact (\a -> a{artEntryKey = ObjectEntry longText}))
     , ("filenames", changeArtifact (\a -> a{artFilename = longText}))
     , ("artifact URLs", changeArtifact (\a -> a{artUrl = longText}))
     , ("wheel tags", changeArtifact (\a -> a{artKind = Wheel longText}))

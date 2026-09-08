@@ -2,9 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Merge trusted private versions with the already-gated public set.
-The private copy wins collisions. Conflicting digests remain in the plan for alarms.
-Adapters replay the plan onto raw documents so unmodelled fields survive.
+{- | Merge admitted source snapshots with trusted-source precedence.
+The plan carries exact artifact coordinates for raw assembly and reports integrity divergence.
 -}
 module Ecluse.Core.Package.Merge (
     -- * Provenance
@@ -40,7 +39,9 @@ import Ecluse.Core.Package (
     hashValue,
     sriBody,
  )
+import Ecluse.Core.Package.Entry (AdmittedEntry (..))
 import Ecluse.Core.Package.Integrity (assertedAlg)
+import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
 import Ecluse.Core.Version (Version, renderVersion, selectLatest)
 
 {- | Which upstream a document came from. The caller decides this and applies it before merging.
@@ -91,8 +92,8 @@ data MergePlan = MergePlan
     {- ^ @dist-tags@ reconciled over the survivors. 'selectLatest' resolves @latest@, the plan keeps
     every other surviving-target tag, and it drops an absent-target tag.
     -}
-    , mpArtifacts :: Map Text (NonEmpty Text)
-    -- ^ File names from the winning version. Adapters serve exactly these artifacts.
+    , mpArtifacts :: Map Text (NonEmpty AdmittedEntry)
+    -- ^ Exact admitted entries from each version's winning source snapshot.
     , mpTime :: Map Text UTCTime
     -- ^ Publish times from winning candidates. A winner with no known time contributes no entry.
     , mpDivergences :: Set Divergence
@@ -129,6 +130,7 @@ data Candidate = Candidate
     and ranks are unique, so only a genuinely colliding version key forces a fingerprint.
     -}
     , candDetails :: PackageDetails
+    , candSnapshot :: ContentDigest
     }
     deriving stock (Show)
 
@@ -216,8 +218,8 @@ instance Monoid Merge where
 {- | One input's contribution to the accumulator, at local 'SourceId' @0@. The 'Semigroup' offset
 re-indexes it to the input's position when 'mergePackuments' folds over the inputs.
 -}
-contribute :: Provenance -> PackageInfo -> Merge
-contribute prov info =
+contribute :: Provenance -> Snapshot PackageInfo -> Merge
+contribute prov (Snapshot digest info) =
     Merge
         { mergeCount = 1
         , mergeVersions = Map.map candidateFor (infoVersions info)
@@ -234,10 +236,13 @@ contribute prov info =
                 , candSourceId = 0
                 , candFingerprint = fingerprint details
                 , candDetails = details
+                , candSnapshot = digest
                 }
 
--- | Merge with private preference and conflict alarms. An empty input list yields 'Nothing'.
-mergePackuments :: [(Provenance, PackageInfo)] -> Maybe MergePlan
+{- | Merge admitted snapshots with trusted-source precedence and divergence reporting.
+Empty input yields 'Nothing'.
+-}
+mergePackuments :: [(Provenance, Snapshot PackageInfo)] -> Maybe MergePlan
 mergePackuments [] = Nothing
 mergePackuments inputs = planFrom (foldMap (uncurry contribute) inputs)
 
@@ -251,7 +256,7 @@ planFrom acc = do
         MergePlan
             { mpName = name
             , mpSurvivors = Map.map (candSourceId . winnerOf) (mergeVersions acc)
-            , mpArtifacts = Map.map (fmap artFilename . pkgArtifacts . candDetails . winnerOf) (mergeVersions acc)
+            , mpArtifacts = Map.map (admittedEntries . winnerOf) (mergeVersions acc)
             , mpDistTags = reconciledTags
             , mpTime = reconciledTimes
             , mpDivergences = divergences
@@ -261,6 +266,11 @@ planFrom acc = do
     -- least one candidate, so 'Set.findMin' is total here.
     winnerOf :: Set Candidate -> Candidate
     winnerOf = Set.findMin
+
+    admittedEntries candidate =
+        fmap
+            (\artifact -> AdmittedEntry (candSnapshot candidate) (artEntryKey artifact) (artFilename artifact))
+            (pkgArtifacts (candDetails candidate))
 
     survives :: Text -> Bool
     survives key = Map.member key (mergeVersions acc)

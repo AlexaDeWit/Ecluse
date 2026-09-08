@@ -2,15 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The PEP 691 JSON Simple index as it arrives on the wire, and its lenient decoder.
-
-PyPI is a file index rather than a document store, so the shape modelled here is a flat @files@
-array, with the release a file belongs to spelled in its name.
-"Ecluse.Core.Registry.PyPI.Project" turns that into the agnostic domain model. @meta@ and the
-PEP 700 @versions@ array are walked but never carried, because the served body is rebuilt from
-the raw document. A malformed entry in either drops as an 'InvalidEntry', so one bad file
-cannot hide a project. @meta.api-version@ is the one field that refuses the whole document, as
-PEP 691 requires of a client that does not speak the major version.
+{- | Decode PEP 691 metadata with per-entry drops.
+Raw array positions survive malformed entries so admission and assembly identify the same files.
 -}
 module Ecluse.Core.Registry.PyPI.Wire (
     -- * The media type this shape travels under
@@ -22,6 +15,7 @@ module Ecluse.Core.Registry.PyPI.Wire (
     -- * One distribution file
     IndexFile (..),
     YankState (..),
+    decodeIndexFiles,
 ) where
 
 import Data.Aeson (
@@ -43,6 +37,7 @@ import Ecluse.Core.Package (
     InvalidEntry,
     InvalidEntryKind (InvalidIndexFile, InvalidVersionListing),
  )
+import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry.WireSupport (partitionLenientList)
 
 {- | The media type the PEP 691 JSON form travels under, in both directions: the index read asks for
@@ -83,7 +78,8 @@ instance FromJSON SimpleIndex where
 'ifFilename' rather than carried beside it.
 -}
 data IndexFile = IndexFile
-    { ifFilename :: Text
+    { ifEntryKey :: EntryKey
+    , ifFilename :: Text
     -- ^ The distribution file name, which encodes the project, the release, and a wheel's tags.
     , ifUrl :: Text
     -- ^ The file's absolute upstream location, on the ecosystem's files host or the index's own.
@@ -108,7 +104,7 @@ data IndexFile = IndexFile
 
 instance FromJSON IndexFile where
     parseJSON = withObject "PyPI index file" $ \o ->
-        IndexFile
+        IndexFile SingletonEntry
             <$> o .: "filename"
             <*> o .: "url"
             <*> o .:? "hashes" .!= mempty
@@ -155,9 +151,18 @@ supportedApiMajor = "1"
 lenientFiles :: Object -> Parser ([IndexFile], [InvalidEntry])
 lenientFiles o = do
     raw <- o .:? "files" .!= []
-    pure (first (map snd) (partitionLenientList InvalidIndexFile (parseEither parseJSON) (zipWith keyed [0 :: Int ..] raw)))
+    pure (decodeIndexFiles (zip [0 ..] raw))
+
+-- | Decode indexed files without renumbering entries that survive lenient parsing.
+decodeIndexFiles :: [(Int, Value)] -> ([IndexFile], [InvalidEntry])
+decodeIndexFiles = foldMap decode
   where
-    keyed position value = (fileKey position value, value)
+    decode (position, value) =
+        first (map snd) $
+            partitionLenientList
+                InvalidIndexFile
+                (fmap (\file -> file{ifEntryKey = ArrayEntry position}) . parseEither parseJSON)
+                [(fileKey position value, value)]
 
 {- Decode the PEP 700 @versions@ array element-wise for its drops alone. The files decide which
 releases are served, so a listing entry that is not a version string loses only its own record. -}

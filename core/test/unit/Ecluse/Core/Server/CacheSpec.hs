@@ -19,7 +19,8 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (..), PackageName, mkPackageName)
+import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (..), PackageName, mkPackageName)
+import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), digestOf)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIVersion)
@@ -38,7 +39,7 @@ import Ecluse.Core.Server.Cache qualified as Cache
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName, unscopedNpm, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 
@@ -142,6 +143,16 @@ selectedRelease count padding =
 
 spec :: Spec
 spec = do
+    describe "full-document entry-coordinate accounting" $
+        it "charges retained key backing allocations in the typed view" $ do
+            let backing = T.replicate 65536 "x"
+                sliced = T.take 1 backing
+                withKey key =
+                    (entry thingName "raw")
+                        { entryInfo = (info thingName){infoVersions = Map.singleton "1.0.0" ((sampleDetails thingName v1_0_0){pkgArtifacts = sampleArtifact{artEntryKey = ObjectEntry key} :| []})}
+                        }
+            weighCacheEntry (withKey sliced) `shouldSatisfy` (>= weighCacheEntry (withKey (T.copy sliced)) + 65535)
+
     describe "selected PyPI release accounting" $ do
         for_ [(1, 16), (100, 16), (100, 2048), (1000, 16)] $ \(files, urlLength) ->
             it ("reports retained bytes for " <> show files <> " files with URL padding " <> show urlLength) $ do

@@ -2,37 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | A memory-bounded __selective decode__ over a JSON document's token stream. This is the
-reusable engine. It materialises only the values a caller picks out, skips every other value's
-tokens unallocated, and depth-bounds every value it walks.
-
-A whole-document decode (@aeson@'s @eitherDecodeStrict@) builds a 'Value' for /every/ member of a
-large object. When a caller needs only a few members out of a multi-megabyte document, that decode
-dominates the cost. This engine walks a document's JSON token stream: @aeson@'s
-@Data.Aeson.Decoding@, no new dependency. It materialises a 'Value' only for the picked members
-and skips the rest without allocating them. The win is on the /parse/, not the fetch. The engine
-still reads the full bytes, but it parses them selectively, for @O(picked)@ work and residency
-rather than @O(N)@.
-
-== Faithful to the whole-document decode
-
-Bounded selective decode is a memory-bounding defence on a size-unbounded, attacker-influenced
-document. The walk is therefore faithful to the whole-document decode rather than a shortcut past
-it.
-
-  * It consumes the __entire__ token stream, so malformed JSON __anywhere__ surfaces as
-    'SelectiveUndecodable', matching @eitherDecodeStrict@ failing the whole body.
-  * It depth-bounds every value at the caller's budget, so a value nested past it __anywhere__ is
-    a 'SelectiveTooDeeplyNested' breach. 'Ecluse.Core.Security.withinNestingBudget' is the same
-    bound applied to a built 'Value'.
-  * Within one object a key's __first__ occurrence wins. It walks a later duplicate for the
-    malformed and over-deep checks but never re-materialises it, matching @aeson@'s duplicate-key
-    resolution.
-
-The engine names @aeson@'s token types and a depth budget only, with no registry or package
-concept. Each JSON ecosystem layers its own selection walk on top: 'findInRecord' for a keyed
-document, 'collectFromArray' for a file-list one. The npm packument selector is
-"Ecluse.Core.Registry.Npm.SelectiveDecode".
+{- | Bounded JSON token selection shared by registry decoders.
+Unselected values remain unmaterialised, while the walk validates their syntax and nesting.
 -}
 module Ecluse.Core.Json.Selective (
     -- * Refusal vocabulary
@@ -42,6 +13,7 @@ module Ecluse.Core.Json.Selective (
     findInRecord,
     collectFromArray,
     selectFromArray,
+    selectIndexedFromArray,
     materialiseWithinBudget,
 
     -- * Container guards
@@ -77,11 +49,7 @@ data SelectiveError
       SelectiveTooDeeplyNested
     deriving stock (Eq, Show)
 
-{- | Find one key in a record. The first occurrence wins, matching @aeson@'s own object
-decode, and only that value is materialised. Returns it, the raw count of entries scanned,
-and the record's continuation. @childBudget@ is the depth budget the record's values sit at.
-The scan runs to the record's end, so a malformed or over-deep sibling still refuses the decode.
--}
+-- | Find the first occurrence of a record key, returning its value, the raw entry count, and continuation.
 findInRecord :: Int -> Text -> TkRecord k String -> Either SelectiveError (Maybe Value, Int, k)
 findInRecord childBudget target = go Nothing 0
   where
@@ -110,7 +78,15 @@ selectFromArray ::
     (Int -> Tokens (TkArray k String) String -> Either SelectiveError Bool) ->
     TkArray k String ->
     Either SelectiveError ([Value], Int, k)
-selectFromArray budget probe = go [] 0
+selectFromArray budget probe = fmap (\(entries, count, cont) -> (map snd entries, count, cont)) . selectIndexedFromArray budget probe
+
+-- | Select array entries while retaining their positions, including gaps left by skipped entries.
+selectIndexedFromArray ::
+    Int ->
+    (Int -> Tokens (TkArray k String) String -> Either SelectiveError Bool) ->
+    TkArray k String ->
+    Either SelectiveError ([(Int, Value)], Int, k)
+selectIndexedFromArray budget probe = go [] 0
   where
     go picked !count = \case
         TkArrayEnd cont -> Right (reverse picked, count, cont)
@@ -120,13 +96,10 @@ selectFromArray budget probe = go [] 0
             if wanted
                 then do
                     (value, cont) <- materialiseWithinBudget budget valueToks
-                    go (value : picked) (count + 1) cont
+                    go ((count, value) : picked) (count + 1) cont
                 else skipValue budget valueToks >>= go picked (count + 1)
 
-{- | Materialise one value from its tokens, bounded at @budget@. It is the same 'Value'
-decode a whole-document path uses. Route every 'Value' a selective walk builds through
-here, so each passes the same depth gate.
--}
+-- | Decode one value within the shared nesting budget, returning its token continuation.
 materialiseWithinBudget :: Int -> Tokens k String -> Either SelectiveError (Value, k)
 materialiseWithinBudget budget toks = case toEitherValue toks of
     Left _ -> Left SelectiveUndecodable
@@ -154,10 +127,7 @@ withArray budget toks k
         TkArrayOpen arr -> k arr
         _ -> Left SelectiveUndecodable
 
-{- | Consume one value's tokens without allocating a 'Value', returning the continuation.
-It bounds nesting exactly as 'Ecluse.Core.Security.withinNestingBudget' does over a built
-'Value': a value occupies one level, and a container's children sit one level deeper.
--}
+-- | Consume a value without materialising it, applying the shared nesting budget.
 skipValue :: Int -> Tokens k String -> Either SelectiveError k
 skipValue budget toks
     | budget < 1 = Left SelectiveTooDeeplyNested

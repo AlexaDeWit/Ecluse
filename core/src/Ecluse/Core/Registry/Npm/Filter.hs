@@ -2,14 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The two pure transforms an npm packument needs before Écluse serves it: the artifact-URL
-rewrite, and the assembly of the served document from a 'MergePlan' and the raw sources.
-
-Both work structurally over the raw @aeson@ 'Value'. The served packument is an open document,
-so a field Écluse does not model relays unchanged, which rebuilding from
-"Ecluse.Core.Package" would silently drop. The plan owns which versions survive, which source
-won each, where @dist-tags.latest@ resolves, and each publish instant. This module owns the npm
-wire shape, replaying all of that onto the base document in one pass over the hot serve path.
+{- | Assemble admitted npm versions from their source snapshots and rebase artifact URLs.
+Unknown wire fields remain on the exact selected entries.
 -}
 module Ecluse.Core.Registry.Npm.Filter (
     -- * URL rewriting
@@ -31,11 +25,13 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpTime), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
 import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl, safeDocumentName, stringField)
+import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Text (joinUrlPath, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
@@ -63,7 +59,7 @@ rewriteDist servedUrl = \case
 {- | Assemble the served packument for @mountBase@. The plan owns @versions@, @dist-tags@, and
 @time@, every other top-level key comes from the base document, and the result is an object.
 -}
-assembleMergedPackument :: Text -> Map SourceId Value -> MergePlan -> Value -> Value
+assembleMergedPackument :: Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value
 assembleMergedPackument mountBase bySource plan base =
     Object rebuilt
   where
@@ -90,7 +86,7 @@ assembleMergedPackument mountBase bySource plan base =
     survivingVersions =
         KeyMap.fromList
             [ (Key.fromText version, rewriteSurvivor object)
-            | (version, object) <- overlaySurvivors versionObjectIn bySource plan
+            | (version, object) <- overlaySurvivors versionEntries bySource plan
             ]
 
     -- The plan has already resolved @latest@ and dropped absent-target tags over the union.
@@ -127,9 +123,9 @@ assembleMergedPackument mountBase bySource plan base =
 {- | npm's served-document __assemble__ capability
 ('Ecluse.Core.Registry.Adapter.Types.metadataAssemble'), across npm's own 'CachedDoc' boundary.
 -}
-assembleMergedDocument :: Text -> Map SourceId CachedDoc -> MergePlan -> Maybe CachedDoc -> CachedDoc
+assembleMergedDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
 assembleMergedDocument mountBase bySource plan base =
-    fst npmCached (assembleMergedPackument mountBase (Map.mapMaybe npmValue bySource) plan (fromMaybe (Object mempty) (npmValue =<< base)))
+    fst npmCached (assembleMergedPackument mountBase (Map.mapMaybe (traverse npmValue) bySource) plan (fromMaybe (Object mempty) (npmValue =<< base)))
 
 {- | npm's served-document __serialise__ capability
 ('Ecluse.Core.Registry.Adapter.Types.metadataSerialise'), to the compact wire bytes.
@@ -142,15 +138,12 @@ serialiseMergedDocument = encode . fromMaybe (Object mempty) . npmValue
 npmValue :: CachedDoc -> Maybe Value
 npmValue = snd npmCached
 
-{- One source document's version lookup: its raw @versions@ object, resolved once per source
-by 'overlaySurvivors' and then read per survivor. -}
-versionObjectIn :: Value -> Text -> Maybe Value
-versionObjectIn source =
-    \version -> versions >>= KeyMap.lookup (Key.fromText version)
-  where
-    versions = case source of
-        Object o | Just (Object vs) <- KeyMap.lookup "versions" o -> Just vs
-        _ -> Nothing
+versionEntries :: Value -> [(EntryKey, Value)]
+versionEntries = \case
+    Object o
+        | Just (Object versions) <- KeyMap.lookup "versions" o ->
+            [(ObjectEntry (Key.toText key), entry) | (key, entry) <- KeyMap.toList versions]
+    _ -> []
 
 -- The non-version keys an npm @time@ object carries, which the assembly relays
 -- unchanged.

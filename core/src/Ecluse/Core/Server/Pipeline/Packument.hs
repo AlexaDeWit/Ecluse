@@ -94,6 +94,7 @@ import Ecluse.Core.Server.Response (
     packumentStatus,
     serveDecisionOf,
  )
+import Ecluse.Core.Snapshot (Snapshot (..))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (TracingPort, spanPackumentGate)
@@ -307,7 +308,7 @@ newtype ServedBody = ServedBody {servedDoc :: CachedDoc}
 
 packumentPlan :: [Contribution] -> Maybe MergePlan
 packumentPlan sources = do
-    plan <- mergePackuments [(srcProvenance s, srcInfo s) | s <- sources]
+    plan <- mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources]
     guard (not (Map.null (mpSurvivors plan)))
     pure plan
 
@@ -352,8 +353,8 @@ renderServedBody :: PackumentDeps -> [Contribution] -> MergePlan -> ServedBody
 renderServedBody deps sources plan =
     ServedBody (metadataAssemble (pdMetadata deps) (pdMountBaseUrl deps) bySource plan (baseDocument sources))
   where
-    bySource :: Map SourceId CachedDoc
-    bySource = Map.fromList (zip [0 ..] (map srcValue sources))
+    bySource :: Map SourceId (Snapshot CachedDoc)
+    bySource = Map.fromList (zip [0 ..] [Snapshot (srcDigest source) (srcValue source) | source <- sources])
 
 baseDocument :: [Contribution] -> Maybe CachedDoc
 baseDocument sources =

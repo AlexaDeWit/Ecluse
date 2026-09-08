@@ -40,7 +40,7 @@ selectionSpec = describe "selectFilesFromIndex" $ do
 
     it "keeps a selected entry whole, unmodelled keys and all" $ do
         selected <- shouldSelect (belongsTo "2.34.2") (indexOf ["requests-2.34.2.tar.gz"])
-        (entryKey "provenance" =<< listToMaybe (sfFiles selected)) `shouldBe` Just (String "https://pypi.org/integrity/x/provenance")
+        (entryKey "provenance" . snd =<< listToMaybe (sfFiles selected)) `shouldBe` Just (String "https://pypi.org/integrity/x/provenance")
 
     it "selects nothing for a release the index does not carry" $ do
         selected <- shouldSelect (belongsTo "9.9.9") (indexOf ["requests-2.34.2.tar.gz"])
@@ -129,7 +129,7 @@ manyFileIndex = indexOf (["requests-1.0.0.tar.gz", "requests-1.0.0-py3-none-any.
 
 -- | The names of the selected entries, in index order.
 selectedNames :: SelectedFiles -> [Text]
-selectedNames selected = mapMaybe stringOf (mapMaybe (entryKey "filename") (sfFiles selected))
+selectedNames selected = mapMaybe stringOf (mapMaybe (entryKey "filename" . snd) (sfFiles selected))
   where
     stringOf = \case
         String s -> Just s

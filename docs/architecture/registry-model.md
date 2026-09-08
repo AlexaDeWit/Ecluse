@@ -315,6 +315,28 @@ carries `latest` from the plan, and relays every unmodeled key unchanged. The pr
 re-serialises the body from the lossy typed model, which is why the API surface
 [owns that schema](web-layer.md#the-synthesised-packument-schema--the-trust-boundary).
 
+Artifact admission identifies a raw entry by its source position, upstream-byte digest, and
+adapter-assigned entry key. A filename alone cannot distinguish admitted and refused siblings.
+The merge carries compact admitted-entry records, without retaining full artifact metadata.
+The shared selector rejects missing keys, ambiguous keys, and mismatched source snapshots.
+It preserves each source's entry order and leaves unknown fields on the selected raw entries.
+
+Adapters must establish these contracts before their metadata reaches assembly:
+
+- Assign each artifact an explicit key before lenient parsing drops any entry. PyPI uses raw array positions, including malformed gaps.
+- Use an equivalent key for other shapes. npm uses its version-map key. A singleton key is valid only for a source with one artifact entry.
+- Carry the same fetch digest with the typed and raw views. The digest covers exact upstream bytes, with one pass at fetch and none at serve.
+- Preserve keys through admission and use the shared selector before rendering. Selective reads must retain the full decoder's entry keys.
+
+Snapshot scope is transient and content-addressed. It changes no stored schema or epoch.
+Source positions distinguish identical content from different upstream contributions.
+`PackageInfo` equality remains independent of snapshot scope. npm and PyPI implement this contract.
+Future adapters must supply equivalent keys and contract tests before activation.
+
+The metadata cache charges new entry keys, including text backing allocations. The merge plan
+reuses the fetch digest and retains only each admitted key and filename. Array and object-key
+allocation checks run in CI alongside the adapter regressions.
+
 ### Graceful degradation: per-version, not per-package
 
 Decoding into the decision surface is lenient at version granularity, with a fail-closed boundary.

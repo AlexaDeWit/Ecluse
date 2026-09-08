@@ -122,6 +122,7 @@ library ecluse-core
     Ecluse.Core.Osv.Types
     Ecluse.Core.Package
     Ecluse.Core.Package.Admission
+    Ecluse.Core.Package.Entry
     Ecluse.Core.Package.Filter
     Ecluse.Core.Package.Hash
     Ecluse.Core.Package.Integrity
@@ -129,6 +130,7 @@ library ecluse-core
     Ecluse.Core.Package.Merge
     Ecluse.Core.Package.Pep503
     Ecluse.Core.Queue
+    Ecluse.Core.Snapshot
     Ecluse.Core.Queue.Memory
     Ecluse.Core.Registry
     Ecluse.Core.Registry.Adapter
@@ -619,6 +621,7 @@ library ecluse-test-support
     Ecluse.Test.Server.Transform
     Ecluse.Test.Stub
     Ecluse.Test.Support
+    Ecluse.Test.Snapshot
     Ecluse.Test.Version
     Ecluse.Test.Wai
     Ecluse.Test.WireVocab
@@ -720,6 +723,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.PackageSpec
     Ecluse.Core.Queue.MemorySpec
     Ecluse.Core.QueueSpec
+    Ecluse.Core.SnapshotSpec
     Ecluse.Core.Registry.AdapterSpec
     Ecluse.Core.Registry.CachedDocumentSpec
     Ecluse.Core.Registry.Maintenance.ProtocolSpec
