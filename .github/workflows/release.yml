@@ -1,13 +1,6 @@
 name: Release
 
-# Publishing is a separate lifecycle from the PR `gate` in ci.yml. It runs only on a
-# pushed version tag, or on a manual dispatch. A per-arch matrix builds the image
-# NATIVELY (amd64 and arm64), so there is no fragile GHC cross-compilation. One
-# privileged job then assembles the two builds into a SINGLE multi-arch manifest list
-# and pushes it under an immutable `X.Y.Z` tag. It attaches keyless provenance and
-# SBOM attestations: one per platform, plus provenance on the index. On a real tag it
-# also publishes a GitHub Release pinning the digest. It is never a gate dependency.
-# See docs/architecture/release-supply-chain.md.
+# Release protection and artifact retention: docs/architecture/release-supply-chain.md.
 on:
   push:
     tags:
@@ -115,7 +108,7 @@ jobs:
         with:
           name: image-${{ matrix.platform.arch }}
           path: image-${{ matrix.platform.arch }}.tar
-          retention-days: 1
+          retention-days: 7
           if-no-files-found: error
 
       - name: Upload SBOM
@@ -123,7 +116,7 @@ jobs:
         with:
           name: sbom-${{ matrix.platform.arch }}
           path: sbom/ecluse.spdx.json
-          retention-days: 1
+          retention-days: 7
           if-no-files-found: error
 
   publish:
