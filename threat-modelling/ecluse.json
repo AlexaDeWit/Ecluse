@@ -656,6 +656,17 @@
                   "mitigation": "Pilot canonicalises supported ecosystem package names before storing advisory segments. Denial and remediation consumers query the PackageName canonical key. PyPI uses PEP 503, while npm and RubyGems preserve their spelling. Dredger's candidate selection and shared rules therefore use the same identity. The OSV schema requires normalised PyPI names, but configured exports still receive local canonicalisation rather than assumed conformance. Epoch 4 identifies the new stored meaning and refuses epoch 3 artifacts despite their matching columns. Operators must publish rebuilt epoch 4 artifacts before switching consumers, retain old objects for old consumers during rollout, and update exact-key IAM policies. There is no automatic migration or compatibility fallback. Display spelling and raw fix-version matching remain unchanged.",
                   "modelType": "STRIDE",
                   "id": "36f3684d-f2b4-4cd4-a017-6b390bc77a46"
+                },
+                {
+                  "number": 116,
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "title": "Rejected artifact entries return through filename-based assembly",
+                  "type": "Tampering",
+                  "description": "An upstream PyPI index can declare the same filename on admitted and refused entries. Filename-only assembly restored siblings that location or integrity admission removed. CI reproduced nine refused-sibling failures, including both orders, foreign authority, missing or SHA-1-only digests, the default trusted floor, and a malformed preceding entry. Refused digest fields returned in the listing. The foreign URL rebased to the local artifact route. This establishes a listing-admission mismatch, not direct foreign-host egress, downloaded malicious bytes, or a demonstrated package-manager verification bypass.",
+                  "mitigation": "Artifact projection assigns explicit source-local entry keys before lenient drops. PyPI retains raw array positions, including selective reads, and npm uses raw version-map keys. The shared merge and assembly contract matches the winning source, the digest of its exact upstream bytes, and the admitted key. Missing, ambiguous, or mismatched identities contribute no entry. Valid duplicate entries retain their order and unknown fields. Public and trusted integrity floors, location checks, and first-party policy remain unchanged. The existing fetch digest scopes snapshots without a new serve-time hash, persistent identity, or schema epoch. Cache accounting charges variable entry keys, and CI checks allocation growth for array and object-key fan-out. The implemented adapters are npm and PyPI. A future adapter must establish equivalent key and snapshot contracts before activation. See https://github.com/AlexaDeWit/Ecluse/issues/1267 .",
+                  "modelType": "STRIDE",
+                  "id": "72ad19e6-3fbf-44c6-a190-8cb074f89ea0"
                 }
               ]
             }
@@ -3527,6 +3538,6 @@
     ],
     "diagramTop": 1,
     "reviewer": "",
-    "threatTop": 115
+    "threatTop": 116
   }
 }

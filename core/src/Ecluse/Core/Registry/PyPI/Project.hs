@@ -8,6 +8,7 @@ The same filename parser supplies coordinates for upstream projection and inboun
 module Ecluse.Core.Registry.PyPI.Project (
     -- * Projection
     projectSimpleIndexFromValue,
+    projectSimpleFiles,
 
     -- * File coordinates
     FileCoordinate (..),
@@ -53,6 +54,7 @@ import Ecluse.Core.Registry.PyPI.Wire (
     IndexFile (..),
     SimpleIndex (..),
     YankState (FileOffered, FileWithdrawn),
+    decodeIndexFiles,
  )
 import Ecluse.Core.Registry.WireSupport (
     NameRefusal (NameEmpty, NameNotAscii, NameUnsafeComponent),
@@ -68,6 +70,13 @@ projectSimpleIndexFromValue requestedName value = do
     index <- first (ParseError . toText) (parseEither parseJSON value)
     reportedName <- projectName (siName index)
     pure (checkNameAgreement requestedName reportedName (projectIndex reportedName index))
+
+-- | Project selected files under a validated project name, retaining their original array positions.
+projectSimpleFiles :: PackageName -> [(Int, Value)] -> PackageInfo
+projectSimpleFiles name entries =
+    projectIndex name SimpleIndex{siName = renderPackageName name, siFiles = files, siInvalidEntries = drops}
+  where
+    (files, drops) = decodeIndexFiles entries
 
 projectIndex :: PackageName -> SimpleIndex -> PackageInfo
 projectIndex name index =
@@ -146,7 +155,8 @@ projectDetails name entries =
 projectArtifact :: IndexFile -> FileCoordinate -> Artifact
 projectArtifact file coordinate =
     Artifact
-        { artFilename = ifFilename file
+        { artEntryKey = ifEntryKey file
+        , artFilename = ifFilename file
         , artUrl = ifUrl file
         , artKind = fcKind coordinate
         , artHashes = mapMaybe indexHash (Map.toAscList (ifHashes file))

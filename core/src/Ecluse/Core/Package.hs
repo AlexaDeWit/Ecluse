@@ -2,23 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The package domain model: the ecosystem-agnostic vocabulary the rules engine reasons
-over. A registry adapter (npm, PyPI, RubyGems) projects its wire responses into these types,
-so nothing above the registry layer sees a registry-specific structure. Five pieces live in
-sibling modules and are only named here: 'Ecosystem' in "Ecluse.Core.Ecosystem", 'Version' in
-"Ecluse.Core.Version", the PEP 503 grammar in "Ecluse.Core.Package.Pep503", and the
-integrity-digest and drop-tracking vocabularies in "Ecluse.Core.Package.Hash" and
-"Ecluse.Core.Package.InvalidEntry", both re-exported in full.
-
-== Design principles
-
-The protocol research (@docs\/research\/synthesis.md@) settled two. Rules consume normalised
-signals, not raw fields: npm install scripts, PyPI sdist builds, and RubyGems native
-extensions differ on the wire and collapse to one 'CodeExecSignal', so a rule never learns
-which ecosystem it is looking at. Signal availability is explicit: what an adapter has not
-determined, or cannot determine cheaply, is 'CodeExecUnknown', 'TrustUnknown', or 'Nothing',
-so a pure rule abstains rather than guessing and the effectful tier resolves it later
-(the "Rules Engine" section of @docs\/architecture.md@).
+{- | The ecosystem-neutral package model used by admission and rules.
+Artifact entry keys retain source coordinates while adapters keep ownership of wire formats.
 -}
 module Ecluse.Core.Package (
     -- * Scopes
@@ -96,6 +81,7 @@ import Data.Text.Short qualified as TS
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Package.Hash (
     Hash,
     HashAlg (..),
@@ -287,7 +273,9 @@ these: npm has exactly one, PyPI has an sdist plus many wheels, RubyGems has one
 per platform.
 -}
 data Artifact = Artifact
-    { artFilename :: Text
+    { artEntryKey :: EntryKey
+    -- ^ The coordinate in its source snapshot. Admission preserves it unchanged.
+    , artFilename :: Text
     , artUrl :: Text
     , artKind :: ArtifactKind
     , artHashes :: [Hash]

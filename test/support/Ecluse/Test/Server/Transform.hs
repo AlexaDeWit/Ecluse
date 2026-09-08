@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The npm serve-path transforms the performance harnesses time.
-
-'serveTransformSize' is the full-packument work a metadata read pays: the rule sweep, the
-merge, the served-document assembly with the fused tarball rewrite, and the re-serialise.
-'selectiveDepth' is the single-version read the cold tarball gate makes. Each result is
-forced when it is built, so a caller times the real work rather than a thunk.
+{- | Production serve transforms for performance harnesses.
+The caller supplies the fetch snapshot so measurements do not rehash whole documents.
 -}
 module Ecluse.Test.Server.Transform (
     serveTransformSize,
@@ -28,6 +24,7 @@ import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmVersion)
 import Ecluse.Core.Rules.Types (EvalContext)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Snapshot (Snapshot (snapshotValue))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (permissiveAgeRules, syntheticProxyBase)
 import Ecluse.Test.Rules (filterPlan, inertRuleDeps)
@@ -35,13 +32,13 @@ import Ecluse.Test.Rules (filterPlan, inertRuleDeps)
 {- | The full serve transform over a decoded packument and its projection. The returned
 served-body size forces the transform, and the paired argument suits @whnfAppIO@.
 -}
-serveTransformSize :: EvalContext -> (Value, PackageInfo) -> IO Int
-serveTransformSize ctx (value, info) = do
+serveTransformSize :: EvalContext -> (Snapshot Value, PackageInfo) -> IO Int
+serveTransformSize ctx (source, info) = do
     plan <- filterPlan inertRuleDeps ctx permissiveAgeRules info
-    pure $ case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info)] of
+    pure $ case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info <$ source)] of
         Just merged
             | not (Map.null (mpSurvivors merged)) ->
-                let body = encode (assembleMergedPackument syntheticProxyBase (Map.singleton 0 value) merged value)
+                let body = encode (assembleMergedPackument syntheticProxyBase (Map.singleton 0 source) merged (snapshotValue source))
                  in fromIntegral (BSL.length body)
         _ -> 0
 

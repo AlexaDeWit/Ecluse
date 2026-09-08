@@ -23,6 +23,7 @@ import Ecluse.Core.Package (
     PackageName,
     Trust (TrustUnknown),
  )
+import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
@@ -278,7 +279,8 @@ details who rawVer =
   where
     artifact =
         Artifact
-            { artFilename = "pkg-" <> rawVer <> ".tgz"
+            { artEntryKey = ObjectEntry rawVer
+            , artFilename = "pkg-" <> rawVer <> ".tgz"
             , artUrl = "https://example.test/pkg-" <> rawVer <> ".tgz"
             , artKind = Tarball
             , artHashes = []

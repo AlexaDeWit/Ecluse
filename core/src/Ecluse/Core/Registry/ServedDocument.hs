@@ -26,22 +26,43 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
-import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), SourceId)
+import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
+import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), SourceId)
+import Ecluse.Core.Snapshot (Snapshot (..))
 import Ecluse.Core.Text (urlFilename)
 
-{- | Resolve each surviving version to the entry its winning source holds, in key order. A
-survivor whose source holds no entry drops out, and each source's lookup is built once.
+{- | Select exact admitted entries from the winning source snapshot, preserving each source's order.
+Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.
 -}
-overlaySurvivors :: (src -> Text -> Maybe entry) -> Map SourceId src -> MergePlan -> [(Text, entry)]
-overlaySurvivors lookupIn bySource plan =
+overlaySurvivors :: (src -> [(EntryKey, entry)]) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, entry)]
+overlaySurvivors entriesOf bySource plan =
     [ (version, entry)
-    | (version, sid) <- Map.toList (mpSurvivors plan)
-    , Just lookupVersion <- [Map.lookup sid indexed]
-    , Just entry <- [lookupVersion version]
+    | (sid, source) <- Map.toAscList bySource
+    , let entries = entriesOf (snapshotValue source)
+    , let unambiguous = uniqueEntries entries
+    , (key, entry) <- entries
+    , validKey key
+    , Map.member key unambiguous
+    , Just (version, kept) <- [Map.lookup (sid, snapshotDigest source, key) admitted]
+    , not (T.null (admittedFilename kept))
     ]
   where
-    -- One partially applied lookup per source, so the index each closes over is built once.
-    indexed = Map.map lookupIn bySource
+    admitted =
+        uniqueEntries
+            [ ((sid, admittedSnapshot entry, admittedKey entry), (version, entry))
+            | (version, entries) <- Map.toList (mpArtifacts plan)
+            , Just sid <- [Map.lookup version (mpSurvivors plan)]
+            , entry <- toList entries
+            ]
+
+uniqueEntries :: (Ord key) => [(key, value)] -> Map key value
+uniqueEntries = Map.mapMaybe id . Map.fromListWith (\_ _ -> Nothing) . map (second Just)
+
+validKey :: EntryKey -> Bool
+validKey = \case
+    ArrayEntry position -> position >= 0
+    ObjectEntry _ -> True
+    SingletonEntry -> True
 
 {- | What the ecosystem's own name parser makes of the name a document claims for itself. The
 projection already refuses such a name, so this is defence in depth on the interpolated URL.

@@ -2,15 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The PyPI realisation of the serve-path read operations, every failure a typed
-'MetadataError' value.
-
-One endpoint answers both needs: the Simple index carries each file's own @upload-time@, so the
-age signal needs no second document and the pypi.org JSON API is not fetched at all.
-'projectPyPIIndex' backs the full manifest, and 'projectPyPIVersion' backs the single-version
-read over the same bytes selectively, so a cold artifact gate pays no whole-index decode to
-consult one release. The cached document carries the file-to-version index computed once here
-at fetch, so the served assembly re-parses no distribution file name.
+{- | Read full PyPI indexes or selected releases through one file projection.
+The fetch digest scopes full-document assembly, while selective reads retain original entry positions.
 -}
 module Ecluse.Core.Registry.PyPI.Metadata (
     -- * Per-request read handle
@@ -24,7 +17,7 @@ module Ecluse.Core.Registry.PyPI.Metadata (
     projectPyPIVersion,
 ) where
 
-import Data.Aeson (Value (Array, String), eitherDecodeStrict, object, parseJSON)
+import Data.Aeson (Value, eitherDecodeStrict, parseJSON)
 import Data.Aeson.Types (parseMaybe)
 import Data.Map.Strict qualified as Map
 
@@ -33,13 +26,10 @@ import Ecluse.Core.Package (
     PackageDetails,
     PackageInfo (infoVersions),
     PackageName,
-    artFilename,
-    pkgArtifacts,
-    renderPackageName,
  )
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
 import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse)
-import Ecluse.Core.Registry.CachedDocument (FileVersionIndex, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
@@ -52,6 +42,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager
 import Ecluse.Core.Registry.PyPI.Project (
     fileVersionKey,
     projectName,
+    projectSimpleFiles,
     projectSimpleIndexFromValue,
  )
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
@@ -114,12 +105,10 @@ fetchPyPIManifest tracing origin name =
         manifestOf (digestOf body) . first (enforceArtifactLocations pypiArtifactAuthorities (originBaseUrl origin))
             <$> projectPyPIIndex (ocLimits origin) name body
   where
-    -- The file-to-version index is computed here, at the fetch, so no served request re-parses
-    -- a distribution file name.
     manifestOf digest (info, raw) =
         Manifest
             { manifestInfo = info
-            , manifestRaw = fst pypiSimpleCached (raw, fileVersions info)
+            , manifestRaw = fst pypiSimpleCached raw
             , manifestDigest = digest
             }
 
@@ -157,23 +146,10 @@ projectPyPIVersion limits name version body = do
         NameMismatch other -> Left (MetadataNameMismatch other)
         Projected agreed -> Right agreed
     first MetadataBoundExceeded (checkVersionCountOf limits (sfFileCount selected))
-    -- The selected files are projected through the same code the whole-index path runs, over an
-    -- index carrying those files alone, so the release resolves identically either way.
-    pure (releaseOf (projectSelected reported (sfFiles selected)))
+    pure (Map.lookup wanted (infoVersions (projectSimpleFiles reported (sfFiles selected))))
   where
     belongsToRelease filename = fileVersionKey name filename == Just wanted
     wanted = renderVersion version
-
-    projectSelected reported files =
-        case projectSimpleIndexFromValue name (indexOf reported files) of
-            Right (Projected info) -> Just info
-            _ -> Nothing
-
-    releaseOf info = Map.lookup wanted . infoVersions =<< info
-
--- Rebuild the smallest index that carries the selected files, for the shared projection to read.
-indexOf :: PackageName -> [Value] -> Value
-indexOf reported files = object [("name", String (renderPackageName reported)), ("files", Array (fromList files))]
 
 -- The document's self-reported name, folded to the same 'MetadataUndecodable' the whole-document
 -- decode reaches for an absent, non-string, or malformed name.
@@ -183,16 +159,6 @@ validateReportedName = \case
     Just nameValue -> case parseMaybe parseJSON nameValue of
         Nothing -> Left MetadataUndecodable
         Just raw -> first (const MetadataUndecodable) (projectName raw)
-
-{- Which release each of a projected index's files belongs to, keyed by file name. The
-projection has already read every coordinate, so this reads its result rather than the names. -}
-fileVersions :: PackageInfo -> FileVersionIndex
-fileVersions info =
-    Map.fromList
-        [ (artFilename artifact, version)
-        | (version, details) <- Map.toList (infoVersions info)
-        , artifact <- toList (pkgArtifacts details)
-        ]
 
 {- PyPI's declared artifact authorities, derived once from the same list the adapter hands the
 tarball-host gate, so the projection and the download gate read one set. -}

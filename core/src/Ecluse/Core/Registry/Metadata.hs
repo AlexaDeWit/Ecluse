@@ -27,28 +27,14 @@ module Ecluse.Core.Registry.Metadata (
     versionTransience,
 ) where
 
-import Crypto.Hash (Digest, SHA256, hash)
-import Data.ByteArray qualified as BA
-
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, responseStatusCode), isAuthorisationFailure)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError)
+import Ecluse.Core.Snapshot (ContentDigest, digestBytes, digestOf)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version)
-
--- | Fingerprint the exact upstream bytes used to build a manifest.
-newtype ContentDigest = ContentDigest ByteString
-    deriving stock (Eq, Show)
-
--- | Digest a strict body: one @O(body)@ pass, paid at fetch time, never per serve.
-digestOf :: ByteString -> ContentDigest
-digestOf body = ContentDigest (BA.convert (hash body :: Digest SHA256))
-
--- | The digest's raw 32 bytes, for feeding into a wider fingerprint.
-digestBytes :: ContentDigest -> ByteString
-digestBytes (ContentDigest bytes) = bytes
 
 -- | A package snapshot with source bytes for assembly and a digest for validators.
 data Manifest = Manifest

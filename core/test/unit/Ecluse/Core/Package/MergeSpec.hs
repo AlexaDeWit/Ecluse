@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Merge precedence, divergence signals, and accumulator laws.
 module Ecluse.Core.Package.MergeSpec (spec) where
 
 import Data.List (nub)
@@ -17,10 +18,18 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
-import Ecluse.Core.Package.Merge
+import Ecluse.Core.Package.Merge hiding (contribute, mergePackuments)
+import Ecluse.Core.Package.Merge qualified as Merge
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash)
 import Ecluse.Test.Package qualified as Package
+import Ecluse.Test.Snapshot (syntheticSnapshot)
+
+mergePackuments :: [(Provenance, PackageInfo)] -> Maybe MergePlan
+mergePackuments = Merge.mergePackuments . map (second syntheticSnapshot)
+
+contribute :: Provenance -> PackageInfo -> Merge
+contribute provenance = Merge.contribute provenance . syntheticSnapshot
 
 name :: PackageName
 name = thingName
@@ -142,10 +151,6 @@ winnerOf key = Map.lookup key . mpSurvivors
 latestKey :: MergePlan -> Maybe Text
 latestKey p = renderVersion <$> Map.lookup "latest" (mpDistTags p)
 
-{- | The winning provenance per surviving version key, the order-independent decision
-beneath the order-dependent 'SourceId'. A 'SourceId' is a list index, so this maps each
-winning index to the 'Provenance' of the input at that position.
--}
 winnerProvenances :: [(Provenance, PackageInfo)] -> MergePlan -> Map Text Provenance
 winnerProvenances inputs plan =
     -- Index the inputs by 'SourceId' (their list position) up front, so the lookup

@@ -2,54 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Projection of npm wire JSON into the ecosystem-agnostic domain model, the second half of
-the npm protocol boundary. "Ecluse.Core.Registry.Npm.Wire" captures what the registry said;
-this module turns that into 'PackageInfo' and 'PackageDetails' and so realises the @parse*@
-fields of the "Ecluse.Core.Registry" handle, and nothing above the adapter ever sees npm wire
-data. The projection is pure and total: it returns 'Either' 'ParseError' and never throws.
-
-== Per-version graceful degradation
-
-The @versions@, @dist-tags@, and @time@ maps decode element-wise. A version whose manifest
-lacks a required or security-decisive field is dropped rather than failing the packument, and
-a dropped version is never served, so the degradation stays fail-closed for that one version
-while every healthy version still resolves. A document is denied wholesale only when its
-top-level structure is unusable: a @versions@ that is not an object, or an absent or empty
-@name@. Every drop is recorded as an 'Ecluse.Core.Package.InvalidEntry' in
-'Ecluse.Core.Package.infoInvalidEntries', so the serve path can log what arrived malformed.
-
-== Signal mapping
-
-Install-script presence maps to 'CodeExecSignal' __fail-closed__ across two independent wire
-signals: the @scripts@ map is consulted even when @hasInstallScript@ is present and @false@,
-so a hostile upstream cannot mask a declared hook behind the sibling flag. The @deprecated@
-notice maps to 'Availability', and @dist@ to one 'Artifact' carrying both digests. Both
-survive because a cross-upstream merge compares the same version's integrity across
-registries to spot a divergence, and each is built through the validating 'mkHash', so a
-malformed digest is absent rather than degenerate. Trust stays 'TrustUnknown', because
-establishing it needs a signature fetch this pure projection does not perform.
-
-== Name as a validation input
-
-The requested 'PackageName' is the validation authority for the served packument's name,
-never a rewrite of it. A document that self-reports a different name projects into the shared
-'Ecluse.Core.Registry.WireSupport.Projection' mismatch and carries no packument, so
-the caller can treat that origin as untrusted for this request, and an absent name is a
-'ParseError' instead. 'projectName' is also the one splitter for npm identifiers: the route,
-the URL rewrite, the publish guard, and the queue decode all read a name through it, so one
-spelling has one verdict everywhere. @\@@ and @\/@ are scope structure, so a bare @\@foo@ is a
-malformed scoped name rather than an unscoped one.
-
-== The name grammar
-
-Each part of a name parses against npm's own __error tier__, the rules invalid for every
-package, legacy included: the allowlist that survives @encodeURIComponent@ unchanged (letters,
-digits, and @-_.!~*'()@), no leading period, hyphen, or underscore, and neither reserved name
-(@node_modules@, @favicon.ico@). It sits on
-'Ecluse.Core.Registry.WireSupport.parseNameComponent', the non-empty, ASCII, path-safe floor
-Écluse holds ecosystem-wide, so nothing invisible or path-unsafe enters by construction. npm's __warning
-tier__ still parses, because real legacy names use it: capitals (@JSONStream@) and @~'!()*@. A
-name over 214 characters never parses, counted whole including any scope prefix, as npm counts it.
+{- | Project npm metadata into the shared package model.
+Version-map keys identify artifacts independently of their filenames.
 -}
 module Ecluse.Core.Registry.Npm.Project (
     -- * Projection
@@ -92,6 +46,7 @@ import Ecluse.Core.Package (
     mkScope,
     mkSriHashes,
  )
+import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry (ParseError (..), RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Npm.Wire (
     Dist (..),
@@ -278,7 +233,8 @@ availability vm = maybe Available Deprecated (vmDeprecated vm)
 projectArtifact :: Version -> Dist -> Artifact
 projectArtifact version dist =
     Artifact
-        { artFilename = tarballFilename (distTarball dist) version
+        { artEntryKey = ObjectEntry (renderVersion version)
+        , artFilename = tarballFilename (distTarball dist) version
         , artUrl = distTarball dist
         , artKind = Tarball
         , artHashes = sriHashes <> maybeToList sha1Hash
@@ -354,9 +310,6 @@ refusalText component = \case
     NameNotAscii -> ParseError ("non-ASCII npm name component: " <> show component)
     NameUnsafeComponent -> ParseError ("unusable npm name component: " <> show component)
 
-{- npm's error tier for one name part on top of the floor, the rules invalid for every package,
-legacy included: the allowlist @encodeURIComponent@ leaves unchanged, no leading @.@\/@-@\/@_@,
-neither reserved name. -}
 usableComponent :: Text -> Bool
 usableComponent component =
     T.all npmNameChar component

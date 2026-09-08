@@ -26,15 +26,18 @@ import Ecluse.Bench.Corpus (
  )
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
 import Ecluse.Core.Package (PackageInfo)
+import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
 import Ecluse.Test.Server.Transform (serveTransformSize)
+import Ecluse.Test.Snapshot (jsonSnapshot)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 
 -- | The serve-transform benches: realistic over the corpus, scaled over synthetic versions.
 benchmarks :: [LoadedEntry] -> Benchmark
 benchmarks loaded =
     bgroup "serve (filter + merge-assemble)" $
-        [ bench (entryName le) (whnfAppIO serveDepth (value, entryInfo le))
-        | le@(_, _, value) <- loaded
+        [ bench (entryName le) (whnfAppIO serveDepth (source, entryInfo le))
+        | le@(_, bytes, value) <- loaded
+        , let source = Snapshot (digestOf bytes) value
         ]
             <> [ -- A smaller upper bound than the other scaled benches: the serve op is the
                  -- heaviest of the scaled ops, so each measured size costs more. The 128x range
@@ -46,11 +49,11 @@ benchmarks loaded =
                     serveDepth
                ]
 
-serveDepth :: (Value, PackageInfo) -> IO Int
+serveDepth :: (Snapshot Value, PackageInfo) -> IO Int
 serveDepth = serveTransformSize benchEvalContext
 
 -- | A synthetic packument of the given version count, paired with its projection.
-syntheticServeInput :: Word -> (Value, PackageInfo)
+syntheticServeInput :: Word -> (Snapshot Value, PackageInfo)
 syntheticServeInput n =
     let value = syntheticPackumentValue (fromIntegral n)
-     in (value, projectInfo benchPackageName value)
+     in (jsonSnapshot value, projectInfo benchPackageName value)

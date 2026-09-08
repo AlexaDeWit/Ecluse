@@ -8,20 +8,21 @@ enforced over the HTTP body by the fetch, so the data-plane tests cover that ins
 -}
 module Ecluse.Core.Registry.PyPI.MetadataSpec (spec) where
 
-import Data.Aeson (Value (Object), encode, object, (.=))
+import Data.Aeson (Value (Number, Object), encode, object, (.=))
 import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (
-    Artifact (artFilename),
+    Artifact (artEntryKey, artFilename),
     PackageDetails (pkgArtifacts),
     PackageInfo (infoName, infoVersions),
     PackageName,
     mkPackageName,
     renderPackageName,
  )
+import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
  )
@@ -33,6 +34,7 @@ import Ecluse.Core.Security (
  )
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Registry.PyPI (simpleFile)
+import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
 spec = do
@@ -90,7 +92,15 @@ versionSpec = describe "projectPyPIVersion" $ do
             `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
 
 paritySpec :: Spec
-paritySpec = describe "the two decode paths agree on what they serve" $
+paritySpec = describe "the two decode paths agree on what they serve" $ do
+    it "retains original entry positions across skipped releases and malformed entries" $ do
+        let filename = "requests-1.0.0.tar.gz"
+            body = bytes (object ["name" .= ("requests" :: Text), "files" .= [simpleFile "requests-2.0.0.tar.gz", Number 1, object ["filename" .= filename], simpleFile filename, simpleFile filename]])
+        (info, _) <- expectRight (projectPyPIIndex defaultLimits requests body)
+        selected <- expectRight (projectPyPIVersion defaultLimits requests (release "1") body)
+        selected `shouldBe` Map.lookup "1" (infoVersions info)
+        (map artEntryKey . toList . pkgArtifacts <$> selected) `shouldBe` Just [ArrayEntry 3, ArrayEntry 4]
+
     for_ ["2.34.2", "2.34", "1.0.post1"] $ \version ->
         it ("resolves " <> toString version <> " to the same files as the whole-index path") $ do
             -- The selective walk is a memory bound, not a shortcut past the projection: the

@@ -2,28 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The live performance-acceptance harness (Context B).
-
-For each package in the shared curated catalogue it fetches the __live__ packument
-from the registry and times that fetch (the upstream leg). It then times two slices
-of Écluse's work-per-request over it:
-
-  * The __full-packument__ transform (decode, project, rule sweep, merge, served-body
-    assembly with the fused URL rewrite, re-serialise) that a metadata read of every
-    version pays.
-  * The __single-version__ selective decode the cold tarball gate consults to serve
-    one package version (its latest). This is the per-package overhead a
-    whole-document decode dominates on the heavy packuments and a selective decode
-    does not.
-
-The harness checks each measurement against the version-controlled acceptance budget
-("Ecluse.Acceptance"). The run prints a summary, mirrors it to the GitHub step
-summary when present, and exits non-zero __only__ on a real budget breach.
-
-Live and non-deterministic by design: the harness reports a fetch or decode failure
-as unavailable, never a breach. Registry flakiness does not red the run, only an
-over-budget measurement. The acceptance decision itself is pure and unit-tested
-in "Ecluse.Acceptance". This module is the live measurement shell.
+{- | Live performance acceptance over the curated package catalogue.
+The harness compares upstream latency with full and selective metadata processing costs.
 -}
 module Main (main) where
 
@@ -45,6 +25,7 @@ import Ecluse.Core.Registry (parseErrorMessage)
 import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue, projectName)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext))
+import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue, parseRegistryVersions)
 import Ecluse.Test.Server.Transform (SelectedDepth (Depth), selectiveDepth, serveTransformSize)
@@ -111,12 +92,6 @@ measureFull now pkg body = do
     t1 <- getMonotonicTime
     pure (if done then Just (t1 - t0) else Nothing)
 
-{- | Time the single-version selective decode, the median of a few passes. 'Nothing' when
-the version is absent or the body does not decode.
-
-Each pass runs over a distinct 'BS.copy' made outside the timed region. Otherwise GHC shares
-one evaluation of this pure projection across every pass and times nothing on the rest.
--}
 measureSingleVersion :: PackageName -> Version -> ByteString -> IO (Maybe Double)
 measureSingleVersion pkg version raw = do
     copies <- replicateM sampleCount (Exception.evaluate (BS.copy raw))
@@ -142,7 +117,7 @@ runTransform now pkg body =
         Left _ -> pure False
         Right value -> case parsePackageInfoFromValue pkg value of
             Right (Projected info) -> do
-                size <- serveTransformSize (EvalContext now Nothing) (value, info)
+                size <- serveTransformSize (EvalContext now Nothing) (Snapshot (digestOf (toStrict body)) value, info)
                 size `seq` pure True
             Right (NameMismatch _) -> pure False
             Left _ -> pure False

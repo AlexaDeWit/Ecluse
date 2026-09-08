@@ -7,17 +7,21 @@ module Ecluse.Core.Registry.ServedDocumentSpec (spec) where
 
 import Data.Aeson (Value (Array, Number, Object, String), object, (.=))
 import Data.Aeson.Key (Key)
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import GHC.Conc (getAllocationCounter)
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
+import UnliftIO (evaluate)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (InvalidEntry (invalidKey, invalidKind), InvalidEntryKind (InvalidIndexFile, InvalidVersionManifest), PackageInfo (infoInvalidEntries), mkPackageName)
+import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
 import Ecluse.Core.Package.Filter (enforceArtifactLocations)
 import Ecluse.Core.Package.Merge (MergePlan (..), Provenance (GatedSource), SourceId, mergePackuments)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
@@ -27,14 +31,18 @@ import Ecluse.Core.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl, safeDocumentName)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (ecosystemArtifactAuthorities)
+import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
 import Ecluse.Test.Registry.Npm qualified as Npm
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
+import Ecluse.Test.Snapshot (jsonSnapshot, syntheticSnapshot)
 import Ecluse.Test.Support (expectRight)
 
 -- | Pin source selection, name gates, and artifact rebasing after location admission.
 spec :: Spec
 spec = do
     overlaySpec
+    entryContractSpec
+    allocationSpec
     nameGateSpec
     rebaseSpec
     droppedArtifactSpec
@@ -49,10 +57,10 @@ droppedArtifactSpec = describe "served artifact filename refusals" $
             let kept = enforceArtifactLocations (ecosystemArtifactAuthorities []) "https://registry.npmjs.org" info
             map invalidKind (infoInvalidEntries kept) `shouldBe` [InvalidVersionManifest]
             map invalidKey (infoInvalidEntries kept) `shouldBe` ["1.0.0"]
-            case mergePackuments [(GatedSource, kept)] of
+            case mergePackuments [(GatedSource, kept <$ jsonSnapshot source)] of
                 Nothing -> expectationFailure "expected a merge plan for the empty listing"
                 Just plan ->
-                    field "versions" (assembleMergedPackument "https://ecluse.test/npm" (Map.singleton 0 source) plan source)
+                    field "versions" (assembleMergedPackument "https://ecluse.test/npm" (Map.singleton 0 (jsonSnapshot source)) plan source)
                         `shouldBe` Just (Object mempty)
 
         for_ ["absent", "distinct", "duplicate" :: Text] $ \siblingKind ->
@@ -63,15 +71,14 @@ droppedArtifactSpec = describe "served artifact filename refusals" $
                     refused = withFileKeys [("url", String ("https://files.pythonhosted.org/" <> filename))] (simpleFile refusedName)
                     files = refused : [simpleFile siblingName | keepSibling]
                     source = object ["name" .= ("requests" :: Text), "meta" .= object ["api-version" .= ("1.0" :: Text)], "files" .= files]
-                    index = Map.fromList [(refusedName, "1"), (siblingName, "1")]
                 info <- projectedInfo =<< expectRight (projectSimpleIndexFromValue (mkPackageName PyPI Nothing "requests") source)
                 let kept = enforceArtifactLocations (ecosystemArtifactAuthorities ["https://files.pythonhosted.org"]) "https://pypi.org" info
                 map invalidKind (infoInvalidEntries kept) `shouldBe` [if keepSibling then InvalidIndexFile else InvalidVersionManifest]
                 map invalidKey (infoInvalidEntries kept) `shouldBe` [if keepSibling then refusedName else "1"]
-                case mergePackuments [(GatedSource, kept)] of
+                case mergePackuments [(GatedSource, kept <$ jsonSnapshot source)] of
                     Nothing -> expectationFailure "expected a merge plan for the listing"
                     Just plan -> do
-                        let served = assembleSimpleIndex "https://ecluse.test/pypi" (Map.singleton 0 (source, index)) plan source
+                        let served = assembleSimpleIndex "https://ecluse.test/pypi" (Map.singleton 0 (jsonSnapshot source)) plan source
                             sibling = withFileKeys [("url", String ("https://ecluse.test/pypi/simple/requests/" <> siblingName))] (simpleFile siblingName)
                         field "files" served `shouldBe` Just (Array (fromList [sibling | keepSibling]))
                         field "versions" served `shouldBe` Just (Array (fromList [String "1" | keepSibling]))
@@ -113,6 +120,76 @@ overlaySpec = describe "overlaySurvivors" $ do
             let versions = [show n | n <- [1 .. count :: Int]]
                 survivors = [(v, 0 :: SourceId) | v <- versions]
             length (overlay [(0, sourceOf [(v, v) | v <- versions])] survivors) === count
+
+entryContractSpec :: Spec
+entryContractSpec = describe "source-scoped admitted-entry contracts" $ do
+    for_ [ArrayEntry 2, ObjectEntry "release", SingletonEntry] $ \key ->
+        describe (show key) $ do
+            let source = syntheticSnapshot [(key, "kept" :: Text)]
+                sources = Map.singleton 0 source
+                plan = entryPlan source key
+                serve = overlaySurvivors id
+            it "serves the exact admitted entry" $
+                serve sources plan `shouldBe` [("1", "kept")]
+            it "refuses a missing admitted identity" $
+                serve sources plan{mpArtifacts = mempty} `shouldBe` []
+            it "refuses an entry whose version lost admission" $
+                serve sources plan{mpSurvivors = mempty} `shouldBe` []
+            it "refuses an unnamed admitted entry" $
+                serve sources plan{mpArtifacts = fmap (fmap (\entry -> entry{admittedFilename = ""})) (mpArtifacts plan)} `shouldBe` []
+            it "refuses a missing raw identity" $
+                serve (Map.singleton 0 ([] <$ source)) plan `shouldBe` []
+            it "refuses a different raw key" $
+                serve (Map.singleton 0 ([(ObjectEntry "different", "other")] <$ source)) plan `shouldBe` []
+            it "refuses duplicate raw keys without selecting either occurrence" $
+                serve (Map.singleton 0 ([(key, "kept"), (key, "refused")] <$ source)) plan `shouldBe` []
+            it "refuses duplicate admitted keys" $
+                serve sources plan{mpArtifacts = fmap (\entries -> entries <> entries) (mpArtifacts plan)} `shouldBe` []
+            it "refuses a different snapshot under the same source position" $
+                serve (Map.singleton 0 source{snapshotDigest = digestOf "different upstream bytes"}) plan `shouldBe` []
+            it "refuses a matching snapshot from a losing source" $
+                serve (Map.singleton 1 source) plan `shouldBe` []
+            it "does not confuse identical content from two source positions" $
+                serve (Map.insert 1 ([(key, "losing")] <$ source) sources) plan `shouldBe` [("1", "kept")]
+
+    it "refuses negative array positions" $ do
+        let key = ArrayEntry (-1)
+            source = syntheticSnapshot [(key, "invalid" :: Text)]
+        overlaySurvivors id (Map.singleton 0 source) (entryPlan source key) `shouldBe` []
+
+allocationSpec :: Spec
+allocationSpec = describe "entry selection allocation growth" $
+    for_ [("array", ArrayEntry), ("object", ObjectEntry . show)] $ \(label, keyAt) ->
+        it ("bounds allocation growth for " <> label <> " coordinates") $ do
+            allocations <- forM [128, 256, 512, 1024] $ \count -> do
+                let entries = [(keyAt position, "raw entry" :: Text) | position <- [0 .. count - 1]]
+                    source = syntheticSnapshot entries
+                    basePlan = entryPlan source SingletonEntry
+                    admitted = [AdmittedEntry (snapshotDigest source) key "same-filename" | (key, _) <- entries]
+                kept <- expectRight (maybeToRight ("empty allocation fixture" :: Text) (nonEmpty admitted))
+                let plan = basePlan{mpArtifacts = Map.singleton "1" kept}
+                _ <- evaluate (T.length (show (source, plan)))
+                before <- getAllocationCounter
+                served <- evaluate (sum [T.length version + T.length value | (version, value) <- overlaySurvivors id (Map.singleton 0 source) plan])
+                after <- getAllocationCounter
+                served `shouldBe` count * 10
+                let allocated = before - after
+                putTextLn ("entry selection " <> toText label <> ": entries=" <> show count <> ", allocated_bytes=" <> show allocated)
+                allocated `shouldSatisfy` (> 0)
+                pure allocated
+            for_ (zip allocations (drop 1 allocations)) $ \(smaller, larger) ->
+                larger `shouldSatisfy` (< 3 * smaller + 65536)
+
+entryPlan :: Snapshot a -> EntryKey -> MergePlan
+entryPlan source key =
+    MergePlan
+        { mpName = mkPackageName Npm Nothing "fixture"
+        , mpSurvivors = Map.singleton "1" 0
+        , mpArtifacts = Map.singleton "1" (AdmittedEntry (snapshotDigest source) key "same-filename" :| [])
+        , mpDistTags = mempty
+        , mpTime = mempty
+        , mpDivergences = mempty
+        }
 
 nameGateSpec :: Spec
 nameGateSpec = describe "safeDocumentName" $ do
@@ -166,21 +243,27 @@ rebaseSpec = describe "rebaseArtifactUrl" $ do
 
 overlay :: [(SourceId, Value)] -> [(Text, SourceId)] -> [(Text, Value)]
 overlay sources survivors =
-    overlaySurvivors versionIn (Map.fromList sources) (planOver (Map.fromList survivors))
+    overlaySurvivors versionEntries scoped (planOver scoped (Map.fromList survivors))
   where
-    versionIn source version = case source of
-        Object o | Just (Object vs) <- KeyMap.lookup "versions" o -> KeyMap.lookup (fromString (toString version)) vs
-        _ -> Nothing
+    scoped = Map.fromList (map (second jsonSnapshot) sources)
+    versionEntries = \case
+        Object o
+            | Just (Object vs) <- KeyMap.lookup "versions" o ->
+                [(ObjectEntry (Key.toText key), value) | (key, value) <- KeyMap.toAscList vs]
+        _ -> []
 
 sourceOf :: [(Text, Text)] -> Value
 sourceOf entries = object ["versions" .= object [(fromString (toString version), String marker) | (version, marker) <- entries]]
 
-planOver :: Map Text SourceId -> MergePlan
-planOver survivors =
+planOver :: Map SourceId (Snapshot Value) -> Map Text SourceId -> MergePlan
+planOver sources survivors =
     MergePlan
         { mpName = mkPackageName Npm Nothing "lodash"
         , mpSurvivors = survivors
-        , mpArtifacts = Map.map (const ("x.tgz" :| [])) survivors
+        , mpArtifacts =
+            Map.mapMaybeWithKey
+                (\version sid -> (\source -> AdmittedEntry (snapshotDigest source) (ObjectEntry version) "x.tgz" :| []) <$> Map.lookup sid sources)
+                survivors
         , mpDistTags = Map.empty
         , mpTime = Map.empty
         , mpDivergences = mempty

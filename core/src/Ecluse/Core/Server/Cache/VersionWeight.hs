@@ -6,7 +6,7 @@
 {- | Conservative accounting for selectively decoded releases.
 The cache charges backing allocations and repeated structures without deduplicating sharing.
 -}
-module Ecluse.Core.Server.Cache.VersionWeight (weighVersion) where
+module Ecluse.Core.Server.Cache.VersionWeight (weighVersion, weighEntryKey) where
 
 import Data.Array.Byte (ByteArray (..))
 import Data.Text.Internal qualified as Text
@@ -15,6 +15,7 @@ import Data.Time (UTCTime (..), diffTimeToPicoseconds, toModifiedJulianDay)
 import GHC.Exts (Int (I#), sizeofByteArray#)
 
 import Ecluse.Core.Package
+import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Version (renderVersion)
 
 -- | Estimate retained release bytes. 'maxBound' marks an uncacheable saturated estimate.
@@ -88,12 +89,20 @@ availabilityWeight = \case
 
 artifactWeight :: Artifact -> Integer
 artifactWeight artifact =
-    textWeight (artFilename artifact)
+    weighEntryKey (artEntryKey artifact)
+        + textWeight (artFilename artifact)
         + textWeight (artUrl artifact)
         + kindWeight (artKind artifact)
         + itemsWeight (textWeight . hashValue) (artHashes artifact)
         + maybe 0 textWeight (artInterpreter artifact)
         + maybe 0 textWeight (artProvenance artifact)
+
+-- | Charge an entry coordinate, including any retained text backing allocation.
+weighEntryKey :: EntryKey -> Integer
+weighEntryKey = \case
+    ArrayEntry _ -> 64
+    ObjectEntry key -> 64 + textWeight key
+    SingletonEntry -> 16
 
 kindWeight :: ArtifactKind -> Integer
 kindWeight = \case
