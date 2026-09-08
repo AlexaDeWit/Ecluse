@@ -373,6 +373,7 @@ tasks:
     cmds:
       - bash scripts/ci-gate-verdict.test.sh
       - bash scripts/coverage-tix.test.sh
+      - bash scripts/docs-open.test.sh
       - bash scripts/release-assets.test.sh
       - bash scripts/release-version.test.sh
   analysis-build:
@@ -476,10 +477,7 @@ tasks:
     desc: Build hyperlinked, searchable Haddock HTML
     cmds:
       - cabal haddock lib:ecluse lib:ecluse-core lib:ecluse-runtime {{.HADDOCK_FLAGS}}
-      - |
-        html=$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | head -n1); \
-        echo "Haddock: $html"; \
-        command -v xdg-open >/dev/null 2>&1 && xdg-open "$html" >/dev/null 2>&1 &
+      - bash scripts/docs-open.sh
   docs-check:
     desc: Build Haddock for the CI gate
     cmds:
