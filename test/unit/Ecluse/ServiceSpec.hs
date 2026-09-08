@@ -15,13 +15,12 @@ import Ecluse.Core.Worker (
     recordPoll,
     workerHeartbeatStaleAfter,
  )
+import Ecluse.Core.Worker.Liveness (newWorkerHeartbeatWithClock)
 import Ecluse.Runtime.Server (MountBinding (bindingPrefix))
 import Ecluse.Service (mountBindingFor, workerLiveness)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
+import Ecluse.Test.Support (newTestClock)
 
-{- | A heartbeat whose last poll is older than 'workerHeartbeatStaleAfter': a consume loop
-that stopped advancing, which is what the worker arm of @\/livez@ exists to catch.
--}
 stalledHeartbeat :: IO WorkerHeartbeat
 stalledHeartbeat = do
     heartbeat <- newWorkerHeartbeat
@@ -53,6 +52,18 @@ spec = do
             liveness <- newWorkerHeartbeat >>= workerLiveness True
             liveHealthy liveness `shouldBe` True
             liveLastPoll liveness `shouldBe` Nothing
+
+        it "fails expired startup only when the process runs a worker" $ do
+            now <- getCurrentTime
+            (clock, setClock) <- newTestClock now
+            heartbeat <- newWorkerHeartbeatWithClock clock
+            setClock (addUTCTime (workerHeartbeatStaleAfter + 1) now)
+            running <- workerLiveness True heartbeat
+            liveHealthy running `shouldBe` False
+            liveLastPoll running `shouldBe` Nothing
+            absent <- workerLiveness False heartbeat
+            liveHealthy absent `shouldBe` True
+            liveLastPoll absent `shouldBe` Nothing
 
     describe "mountBindingFor -- ecosystem drives the binding" $ do
         it "resolves npm to a binding whose prefix is derived from the ecosystem (/npm)" $

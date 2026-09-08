@@ -2,17 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The liveness vocabulary behind @\/livez@: the mirror worker's consume-loop heartbeat, the
-staleness rule read against it, and the 'Liveness' verdict a probe renders.
-
-A process runs the worker or it does not ("Ecluse.Composition.MirrorRole" decides), so the
-verdict has two sources: 'heartbeatLivenessNow' where a loop runs, 'alwaysLive' where none
-does. Both carry the last recorded progress, so a probe can report staleness as well as
-pass or fail.
+{- | The mirror worker heartbeat behind @\/livez@, shared by embedded and dedicated workers.
+Startup and later stalls use the same allowance. Roles without a worker use 'alwaysLive'.
 -}
 module Ecluse.Core.Worker.Liveness (
     WorkerHeartbeat,
     newWorkerHeartbeat,
+    newWorkerHeartbeatWithClock,
     recordPoll,
     lastPoll,
     workerHeartbeatStaleAfter,
@@ -24,60 +20,48 @@ module Ecluse.Core.Worker.Liveness (
 
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 
-{- | The mirror worker's consume-loop heartbeat: the wall-clock instant of its last
-recorded progress, a successful poll or a completed job. It is the worker's own liveness
-signal, kept apart from the server's HTTP readiness.
--}
-newtype WorkerHeartbeat = WorkerHeartbeat (TVar (Maybe UTCTime))
+-- | Worker progress and its startup allowance, separate from HTTP readiness.
+data WorkerHeartbeat = WorkerHeartbeat
+    { whStartedAt :: UTCTime
+    , whNow :: IO UTCTime
+    , whLastPoll :: TVar (Maybe UTCTime)
+    }
 
 {- | Build a fresh 'WorkerHeartbeat' with no poll yet recorded ('lastPoll' is
 'Nothing' until the worker's first successful @receive@).
 -}
 newWorkerHeartbeat :: IO WorkerHeartbeat
-newWorkerHeartbeat = WorkerHeartbeat <$> newTVarIO Nothing
+newWorkerHeartbeat = newWorkerHeartbeatWithClock getCurrentTime
+
+-- | Start the allowance at the supplied clock, which also drives liveness probes.
+newWorkerHeartbeatWithClock :: IO UTCTime -> IO WorkerHeartbeat
+newWorkerHeartbeatWithClock clock = do
+    startedAt <- clock
+    var <- newTVarIO Nothing
+    pure WorkerHeartbeat{whStartedAt = startedAt, whNow = clock, whLastPoll = var}
 
 {- | Stamp the heartbeat with the given instant, recording a unit of worker progress.
 The worker calls it through 'Ecluse.Core.Worker.Types.recordWorkerProgress'.
 -}
 recordPoll :: WorkerHeartbeat -> UTCTime -> IO ()
-recordPoll (WorkerHeartbeat var) now = atomically (writeTVar var (Just now))
+recordPoll heartbeat now = atomically (writeTVar (whLastPoll heartbeat) (Just now))
 
 {- | The instant of the worker's last recorded progress, a successful poll or a completed
 job, or 'Nothing' before its first.
 -}
 lastPoll :: WorkerHeartbeat -> IO (Maybe UTCTime)
-lastPoll (WorkerHeartbeat var) = readTVarIO var
+lastPoll = readTVarIO . whLastPoll
 
-{- | How long the worker's last recorded progress may be stale before the liveness probe counts
-the loop as stalled. It clears two 'Ecluse.Core.Worker.Job.workerPublishVisibilityBudget'
-spans with headroom, because a tighter bound would kill a healthy pod mid-publish and the
-redelivered jobs would stall the same way.
+{- | Startup and progress allowance, exceeding two 'Ecluse.Core.Worker.Job.workerPublishVisibilityBudget'
+spans so a fetch followed by a publish does not trigger a restart.
 -}
 workerHeartbeatStaleAfter :: NominalDiffTime
 workerHeartbeatStaleAfter = 660
 
-{- | Whether the worker's consume loop is healthy as of @now@, given its last recorded
-progress. The @\/livez@ probe of a role that runs the worker folds this in (see
-"Ecluse.Runtime.Server"), apart from HTTP readiness.
-
-'Nothing' (no poll yet) is __healthy__: the worker is still starting, not stalled.
-
->>> import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
->>> let t0 = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
->>> heartbeatHealthy t0 Nothing
-True
-
->>> let now = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 10)
->>> heartbeatHealthy now (Just t0)
-True
-
->>> let later = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 700)
->>> heartbeatHealthy later (Just t0)
-False
--}
-heartbeatHealthy :: UTCTime -> Maybe UTCTime -> Bool
-heartbeatHealthy _ Nothing = True
-heartbeatHealthy now (Just polledAt) = diffUTCTime now polledAt <= workerHeartbeatStaleAfter
+-- | Judge progress at @now@, using startup time only until the first successful progress.
+heartbeatHealthy :: UTCTime -> UTCTime -> Maybe UTCTime -> Bool
+heartbeatHealthy now startedAt polledAt =
+    diffUTCTime now (fromMaybe startedAt polledAt) <= workerHeartbeatStaleAfter
 
 {- | What @\/livez@ answers from: the health verdict, plus the instant the checked loop last
 recorded progress so an orchestrator can judge staleness rather than only pass or fail.
@@ -98,6 +82,6 @@ instant judged. Both the embedded and the dedicated worker answer @\/livez@ thro
 -}
 heartbeatLivenessNow :: WorkerHeartbeat -> IO Liveness
 heartbeatLivenessNow heartbeat = do
-    now <- getCurrentTime
+    now <- whNow heartbeat
     polledAt <- lastPoll heartbeat
-    pure Liveness{liveHealthy = heartbeatHealthy now polledAt, liveLastPoll = polledAt}
+    pure Liveness{liveHealthy = heartbeatHealthy now (whStartedAt heartbeat) polledAt, liveLastPoll = polledAt}
