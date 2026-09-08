@@ -28,6 +28,44 @@ spec :: Spec
 spec = do
     tarballSpec
     privateAuthorisationSpec
+    divergentPrivateSpec
+
+divergentPrivateSpec :: Spec
+divergentPrivateSpec = describe "divergent private version" $
+    it "retains metadata and artifact access before and after detecting the conflict" $ do
+        privateUp <- conditionalArtifactUpstream "1.0.0" privateTarballBytes
+        publicUp <-
+            servingUpstream $
+                encodePackument $
+                    packument
+                        [("1.0.0", versionObject "1.0.0" (sriFor "public-conflict") False)]
+                        "1.0.0"
+                        [("1.0.0", publishedDaysAgo 30)]
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            for_ [False, True] $ \readMetadata -> do
+                when readMetadata $ do
+                    metadata <- getThing Nothing app
+                    status metadata `shouldBe` 200
+                    servedVersions metadata `shouldBe` ["1.0.0"]
+                    servedLatest metadata `shouldBe` Just "1.0.0"
+                    servedIntegrity "1.0.0" metadata `shouldBe` Just (sriFor "1.0.0")
+                    headResponse <- headThing Nothing app
+                    status headResponse `shouldBe` 200
+                    simpleBody headResponse `shouldBe` ""
+                    validator <- maybe (fail "missing metadata ETag") pure (header "ETag" metadata)
+                    for_ [methodGet, methodHead] $ \method -> do
+                        unchanged <- requestAt method "/npm/thing" defaultRequest{requestHeaders = [(hIfNoneMatch, validator)]} app
+                        status unchanged `shouldBe` 304
+                        simpleBody unchanged `shouldBe` ""
+                publicReads <- seenAuth publicUp
+                for_ [methodGet, methodHead] $ \method ->
+                    for_ [[], [(hIfNoneMatch, "\"v1\"")]] $ \validators -> do
+                        response <- requestAt method "/npm/thing/-/thing-1.0.0.tgz" defaultRequest{requestHeaders = validators} app
+                        status response `shouldBe` if null validators then 200 else 304
+                        simpleBody response
+                            `shouldBe` if method == methodGet && null validators then privateTarballBytes else ""
+                seenAuth publicUp `shouldReturn` publicReads
+            drainJobs env `shouldReturn` []
 
 privateAuthorisationSpec :: Spec
 privateAuthorisationSpec = describe "private artifact authorisation" $ do

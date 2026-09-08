@@ -9,6 +9,18 @@ every default, so you write down only what you change: a wider quarantine, a mir
 policy of your own. Start with where a setting lives, because there are two places and one always
 wins.
 
+## Migrating the removed divergence refusal
+
+The former `integrity.divergencePolicy: fail-closed` setting now refuses startup.
+Remove it only after accepting private preference and divergence alarms.
+This also applies to `mounts.<ecosystem>.integrity.divergencePolicy` and their environment variables.
+The old `fail_closed` and `failclosed` spellings also refuse startup.
+
+The deprecated `warn` value still loads, including surrounding whitespace and case variants.
+An absent or null key uses the same behaviour. Remove these unused compatibility keys.
+Digest disagreement alone never removes a private version or its tags, blocks a private artifact
+request, or authorises deletion. Independent integrity checks still apply.
+
 ## Two layers, one spelling rule
 
 Configuration has two layers. **Environment variables** carry process and secret values. An

@@ -2,13 +2,6 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- This spec deliberately writes out the Monoid identity laws (@mempty <> a@ and
--- @a <> mempty@) to /assert/ them. hlint would otherwise "simplify" the exact
--- expressions under test. The silence is file-wide because proving the laws is the
--- file's purpose, not an oversight.
-{- HLINT ignore "Monoid law, left identity" -}
-{- HLINT ignore "Monoid law, right identity" -}
-
 module Ecluse.Core.Package.MergeSpec (spec) where
 
 import Data.List (nub)
@@ -28,7 +21,6 @@ import Ecluse.Core.Package.Merge
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash)
 import Ecluse.Test.Package qualified as Package
-import Ecluse.Test.WireVocab (wireRoundTrips)
 
 name :: PackageName
 name = thingName
@@ -304,49 +296,21 @@ spec = do
                     integrityHashes (divLosing d) `shouldBe` [sriPair sriPublic]
                 other -> expectationFailure ("expected exactly one divergence, got " <> show other)
 
-    describe "applyDivergencePolicy (the caller's fail-closed projection)" $ do
-        -- 2.0.0 (the @latest@) diverges across sources and 1.0.0 agrees. The serve
-        -- layer runs the projection AFTER logging and metering the divergence, so a
-        -- fail-closed operator withholds only the contested version, coherently.
-        let trusted = packument [("1.0.0", sriSame), ("2.0.0", sriPrivate)]
+    describe "divergent private versions retain their listing entries" $ do
+        let trusted =
+                (packument [("1.0.0", sriSame), ("2.0.0", sriPrivate)])
+                    { infoDistTags = Map.fromList [("latest", mkVersion Npm "2.0.0"), ("private-tag", mkVersion Npm "2.0.0")]
+                    }
             gated = packument [("1.0.0", sriSame), ("2.0.0", sriPublic)]
             plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
 
-        it "warn is the identity: every version and its dist-tag survive" $ do
-            (survivorKeys . applyDivergencePolicy Warn <$> plan) `shouldBe` Just ["1.0.0", "2.0.0"]
-            (Map.lookup "latest" . mpDistTags . applyDivergencePolicy Warn <$> plan)
+        it "keeps the private version and latest tag alongside the alarm" $ do
+            (survivorKeys <$> plan) `shouldBe` Just ["1.0.0", "2.0.0"]
+            (Map.lookup "latest" . mpDistTags <$> plan)
                 `shouldBe` Just (Just (mkVersion Npm "2.0.0"))
-
-        it "fail-closed withholds the contested version, keeps the agreeing one" $
-            (survivorKeys . applyDivergencePolicy FailClosed <$> plan) `shouldBe` Just ["1.0.0"]
-
-        it "fail-closed drops the dist-tag and time entry that pointed at the contested version" $ do
-            let served = applyDivergencePolicy FailClosed <$> plan
-            (Map.lookup "latest" . mpDistTags <$> served) `shouldBe` Just Nothing
-            (Map.member "2.0.0" . mpTime <$> served) `shouldBe` Just False
-
-        it "fail-closed leaves the audit record (mpDivergences) intact" $
-            (Set.null . mpDivergences . applyDivergencePolicy FailClosed <$> plan) `shouldBe` Just False
-
-        it "fail-closed empties the listing when every surviving version is contested" $ do
-            let onlyDivergent =
-                    mergePackuments
-                        [ (TrustedSource, packument [("1.0.0", sriPrivate)])
-                        , (GatedSource, packument [("1.0.0", sriPublic)])
-                        ]
-            (Map.null . mpSurvivors . applyDivergencePolicy FailClosed <$> onlyDivergent) `shouldBe` Just True
-
-    wireRoundTrips @DivergencePolicy
-
-    describe "parseDivergencePolicy (the ECLUSE_INTEGRITY__DIVERGENCE_POLICY value)" $ do
-        it "parses warn and fail-closed, case- and spelling-tolerant" $ do
-            parseDivergencePolicy "warn" `shouldBe` Right Warn
-            parseDivergencePolicy "fail-closed" `shouldBe` Right FailClosed
-            parseDivergencePolicy "FAIL_CLOSED" `shouldBe` Right FailClosed
-            parseDivergencePolicy "  FailClosed  " `shouldBe` Right FailClosed
-
-        it "rejects an unknown policy" $
-            parseDivergencePolicy "drop" `shouldSatisfy` isLeft
+            (Set.null . mpDivergences <$> plan) `shouldBe` Just False
+            (Map.lookup "private-tag" . mpDistTags <$> plan) `shouldBe` Just (Just (mkVersion Npm "2.0.0"))
+            (Map.lookup "2.0.0" . mpTime <$> plan) `shouldBe` Just (Just t0)
 
     describe "divergence compares on shared algorithms, not the whole digest set" $ do
         -- A divergence needs two copies to contradict on an algorithm they both carry. An
@@ -683,12 +647,14 @@ spec = do
         it "has mempty as a left identity: mempty <> a === a" $
             hedgehog $ do
                 a <- forAll genMerge
-                mempty <> a === a
+                let identity = mempty
+                identity <> a === a
 
         it "has mempty as a right identity: a <> mempty === a" $
             hedgehog $ do
                 a <- forAll genMerge
-                a <> mempty === a
+                let identity = mempty
+                a <> identity === a
 
         it "is intentionally NOT commutative (SourceId labels are positional)" $ do
             -- 'SourceId' must name the input's position so the serve layer can index back to a

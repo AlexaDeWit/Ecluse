@@ -223,12 +223,15 @@ track which input a survivor came from, so the serve layer can index back to the
   result is `trusted(private) ∪ filtered(public)`.
 - **Collision: private wins, divergence is a signal.** On a shared version key the private copy
   wins. The public copy may contradict it on a shared artifact's shared integrity algorithm: same
-  file, same algorithm, disagreeing digests. That is the supply-chain tampering Écluse exists to
-  catch. The merge detects it, logs it (a `WARNING` naming the package, the versions, and the
-  digests), meters it (`ecluse.registry.merge.divergence`), and never reconciles it silently.
-  `ECLUSE_INTEGRITY__DIVERGENCE_POLICY` decides the rest. `warn` (the default) serves the trusted
-  copy and relies on the alarm. `fail-closed` drops the contested version and any `dist-tag`
-  pointing at it. One upstream carrying a digest the other omits is not a divergence.
+  file, same algorithm, disagreeing digests. The merge logs a WARNING with both digests
+  and increments the bounded-cardinality `ecluse.registry.merge.divergence` counter.
+  The private version and its tags remain available. Artifact GET, HEAD, and conditional
+  requests keep private preference. A disagreement proves neither copy correct, so a damaged
+  private copy can still reach clients. The private repository holds previously admitted or
+  first-party content. Current public metadata cannot revoke that trust.
+  Detection adds no persistent conflict state, per-read public revalidation, or deletion authority.
+  Dredger still requires a named denial and its existing deletion guards.
+  One upstream carrying a digest the other omits is not a divergence.
 - **Below-floor versions are inadmissible.** A version whose strongest digest is too weak or absent
   is a divergence blind spot, refused before the merge. The listing drops it, and the public
   artifact path `403`s it as `MissingIntegrity` or `BelowIntegrityFloor`. The private tarball leg

@@ -2,59 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Merging several upstream packuments into the one document Écluse serves.
-
-A packument is the /set of available versions/ of a package, and that set is spread
-across upstreams. A trusted private upstream holds the vetted set, while a gated public
-upstream holds the full history, including versions not yet mirrored.
-Serving only the private document would hide those, so Écluse serves their __union__
-rather than short-circuiting on a private hit. This module is the pure,
-ecosystem-agnostic fold that reasons over that union on the
-'Ecluse.Core.Package.PackageInfo' domain model. It lives above the registry handle,
-written once and reused by every ecosystem, and it never imports a registry adapter.
-
-__Decision surface, not served surface.__ This module reasons over the /typed/
-'PackageInfo' but does __not__ emit a finished, re-serialisable 'PackageInfo'. The
-document Écluse serves is the raw upstream document, rebuilt from the winning sources
-so that every unmodeled wire key survives. The typed model is lossy, so re-encoding it
-would drop those keys. The serve layer holds that raw document opaquely (as a
-'Ecluse.Core.Registry.CachedDocument.CachedDoc') and never reads it, because the
-rebuild runs through an injected adapter capability. This module therefore emits a
-'MergePlan': exactly which versions survive, which input each survivor came from, the
-reconciled @dist-tags@\/@time@, and the detected divergences. The serve layer
-__replays that plan onto the raw documents__ through the same capability. See
-@docs\/architecture\/registry-model.md@ → "Decision surface vs served surface".
-
-The trust split is the __caller's__. It rides on each input as a 'Provenance' tag and
-applies /before/ the merge. 'TrustedSource' (private) versions enter as-is.
-'GatedSource' (public) versions are the already-rule-filtered set. This module does not
-run rules: it reasons over exactly what it is handed (see
-@docs\/architecture\/rules-engine.md@ → "Applying verdicts to a packument").
-
-Two things make the merge more than a map union, and both are
-__supply-chain signals, not silent reconciliations__:
-
-* __Collision__. When the same version key comes from both a 'TrustedSource' and
-  a 'GatedSource', the trusted copy wins, because it is the authority. The plan
-  records it as the survivor's winning 'SourceId'.
-* __Divergence__. The colliding copies __contradict on a shared integrity algorithm__
-  when an algorithm both expose carries /disagreeing/ digests. That is exactly the
-  tampering Écluse exists to catch. Copies may expose /different/ algorithm sets without
-  contradicting on a shared one, as when one mirror also carries a legacy digest the
-  other omits. Those copies describe the same bytes and are __not__ a divergence.
-  The trusted copy still wins the merge, and the 'MergePlan' __reports__ a real
-  contradiction. Whether to drop the version as well (fail-closed) is a policy decision
-  left to the caller, so this module stays pure.
-
-__The merge is a lawful 'Monoid'.__ The fold runs over a 'Merge' accumulator with a
-lawful 'Semigroup' \/ 'Monoid'. 'mempty' is the empty merge, the degenerate identity at
-zero inputs, and @(<>)@ is the trusted-wins union with order-independent divergence
-detection. 'mergePackuments' assigns each input a 'SourceId' by list position,
-@foldMap@s the contributions into the accumulator, and projects to a 'MergePlan'. See
-the 'Semigroup' instance for the exact law domain (associative and identity,
-intentionally __not__ commutative).
-
-See @docs\/architecture\/registry-model.md@ → "Packument merge across upstreams".
+{- | Merge trusted private versions with the already-gated public set.
+The private copy wins collisions. Conflicting digests remain in the plan for alarms.
+Adapters replay the plan onto raw documents so unmodelled fields survive.
 -}
 module Ecluse.Core.Package.Merge (
     -- * Provenance
@@ -68,11 +18,6 @@ module Ecluse.Core.Package.Merge (
     integrityHashes,
     mergePackuments,
 
-    -- * Divergence policy (a post-plan projection)
-    DivergencePolicy (..),
-    parseDivergencePolicy,
-    applyDivergencePolicy,
-
     -- * The merge accumulator
     -- $accumulator
     Merge,
@@ -82,10 +27,7 @@ module Ecluse.Core.Package.Merge (
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Data.Universe.Class (Universe (..))
-import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.Core.Package (
     Artifact (..),
@@ -100,7 +42,6 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Integrity (assertedAlg)
 import Ecluse.Core.Version (Version, renderVersion, selectLatest)
-import Ecluse.Core.Wire (WireVocab (..), parseWire)
 
 {- | Which upstream a document came from. The caller decides this and applies it before merging.
 'Ord' is the trust order: 'TrustedSource' sorts before 'GatedSource', so the smallest wins.
@@ -121,10 +62,7 @@ back to the raw @Value@ it passed at that position, which 'Provenance' alone can
 -}
 type SourceId = Int
 
-{- | A version key present in more than one source whose copies disagree on a shared algorithm's
-digest. The trusted copy wins, and both fingerprints stay so the caller can log, meter, and apply
-a 'DivergencePolicy'. The merge surfaces the conflict, never reconciles it silently.
--}
+-- | Conflicting digests for one version. The private copy wins and both fingerprints remain for alarms.
 data Divergence = Divergence
     { divVersion :: Text
     {- ^ The raw version-string key the conflict was found at (the
@@ -154,16 +92,9 @@ data MergePlan = MergePlan
     every other surviving-target tag, and it drops an absent-target tag.
     -}
     , mpArtifacts :: Map Text (NonEmpty Text)
-    {- ^ The file names of each surviving version's artifacts, taken from the candidate that won
-    it. An assembly that replays this plan serves exactly these files, so the served listing and
-    the download gate agree file by file. A version whose artifact set is a singleton, npm's,
-    carries one name.
-    -}
+    -- ^ File names from the winning version. Adapters serve exactly these artifacts.
     , mpTime :: Map Text UTCTime
-    {- ^ The served @time@ map, rebuilt from the survivors. Each version's publish instant comes
-    from the same candidate that won its manifest. A winner with no known time contributes no
-    entry.
-    -}
+    -- ^ Publish times from winning candidates. A winner with no known time contributes no entry.
     , mpDivergences :: Set Divergence
     {- ^ Every distinct same-version integrity conflict: the winner's fingerprint against each
     fingerprint that contradicts it on a shared algorithm. Differing algorithm sets do not count.
@@ -171,57 +102,7 @@ data MergePlan = MergePlan
     }
     deriving stock (Eq, Show)
 
-{- | The operator's policy for a version an integrity 'Divergence' was found on
-(@ECLUSE_INTEGRITY__DIVERGENCE_POLICY@). Both policies still emit the @WARNING@ log line and the
-@ecluse.registry.merge.divergence@ counter. The policy decides only whether the version is withheld.
--}
-data DivergencePolicy
-    = {- | Serve the trusted (winning) copy and rely on the divergence signal alone (the
-      default). The contested version stays in the listing.
-      -}
-      Warn
-    | {- | Withhold every version a divergence was detected on from the served listing: it
-      is dropped from the survivors, its @time@ entry removed, and any @dist-tag@
-      (including @latest@) that pointed at it dropped. A resolver pinned to that exact
-      version then fails to resolve it rather than receive a contested copy.
-      -}
-      FailClosed
-    deriving stock (Eq, Generic, Ord, Show)
-
-instance Universe DivergencePolicy where universe = universeGeneric
-
-instance WireVocab DivergencePolicy where
-    wireKind = "divergence policy"
-    wireTable =
-        (Warn, "warn")
-            :| [(FailClosed, "fail-closed")]
-    wireAliases = [(FailClosed, "fail_closed"), (FailClosed, "failclosed")]
-
-{- | Parse the @ECLUSE_INTEGRITY__DIVERGENCE_POLICY@ value, tolerating surrounding
-whitespace, case, and the underscored and run-together spellings of @fail-closed@.
--}
-parseDivergencePolicy :: Text -> Either Text DivergencePolicy
-parseDivergencePolicy = parseWire . T.toLower . T.strip
-
-{- | Apply a 'DivergencePolicy' to a finished plan, after the serve layer has logged and metered
-its divergences. 'FailClosed' can empty 'mpSurvivors', which the caller treats as no survivors.
--}
-applyDivergencePolicy :: DivergencePolicy -> MergePlan -> MergePlan
-applyDivergencePolicy Warn plan = plan
-applyDivergencePolicy FailClosed plan =
-    plan
-        { mpSurvivors = Map.withoutKeys (mpSurvivors plan) dropped
-        , mpArtifacts = Map.withoutKeys (mpArtifacts plan) dropped
-        , mpTime = Map.withoutKeys (mpTime plan) dropped
-        , mpDistTags = Map.filter (\target -> not (renderVersion target `Set.member` dropped)) (mpDistTags plan)
-        }
-  where
-    dropped = Set.map divVersion (mpDivergences plan)
-
-{- | An order-independent fingerprint of a version's artifacts: the sorted @(artifact filename,
-asserted algorithm, comparable digest body)@ triples. A digest asserting no algorithm keys under
-'Nothing', its own bucket. Only a shared file's shared algorithm disagreeing is a divergence.
--}
+-- | Sorted file, asserted algorithm, and digest triples. Only shared file/algorithm keys can contradict.
 newtype IntegrityFingerprint = IntegrityFingerprint [(Text, Maybe HashAlg, Text)]
     deriving stock (Eq, Ord, Show)
 
@@ -355,10 +236,7 @@ contribute prov info =
                 , candDetails = details
                 }
 
-{- | Reason over several upstream packuments, by 'Provenance', and emit the 'MergePlan' the serve
-layer replays onto the raw @Value@s. Pure and total. 'TrustedSource' wins a version collision, and
-a contradicting copy is recorded as a 'Divergence'. An empty input list yields 'Nothing'.
--}
+-- | Merge with private preference and conflict alarms. An empty input list yields 'Nothing'.
 mergePackuments :: [(Provenance, PackageInfo)] -> Maybe MergePlan
 mergePackuments [] = Nothing
 mergePackuments inputs = planFrom (foldMap (uncurry contribute) inputs)
@@ -399,10 +277,7 @@ planFrom acc = do
         Set.fromList
             [ Divergence{divVersion = key, divWinning = win, divLosing = lose}
             | (key, cs) <- Map.toList (mergeVersions acc)
-            , -- A key offered by one source alone cannot diverge, because the winner
-            -- never contradicts itself. The guard also keeps the lazy 'candFingerprint'
-            -- unforced on the common collision-free merge.
-            Set.size cs > 1
+            , Set.size cs > 1
             , let win = candFingerprint (winnerOf cs)
             , let distinct = Set.fromList [candFingerprint c | c <- Set.toList cs]
             , lose <- Set.toList distinct
@@ -453,9 +328,7 @@ comparableBody h = case hashAlg h of
     SRI -> sriBody (hashValue h)
     _ -> hashValue h
 
--- A key present on one side alone never contradicts, because a mirror may add, omit, or
--- recompute a digest or carry a different file set without any byte being substituted. A
--- digest asserting no algorithm ('Nothing') keys apart, so it never compares against a real one.
+-- An omitted file or algorithm makes no conflicting claim.
 contradicts :: IntegrityFingerprint -> IntegrityFingerprint -> Bool
 contradicts a b =
     or (Map.intersectionWith (/=) (digestsByKey a) (digestsByKey b))

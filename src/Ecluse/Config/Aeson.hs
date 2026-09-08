@@ -25,7 +25,6 @@ import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName, parseEcosystem)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
-import Ecluse.Core.Package.Merge (parseDivergencePolicy)
 import Ecluse.Core.Registry.Npm.Project (projectScope)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty, projectFirstPartyEntry)
 import Ecluse.Core.Security (parseBlockedRange)
@@ -88,12 +87,12 @@ deletionConsent = optionalKeyOr "permitDeletion" False (const (pure . consentOf)
 tagKey :: StoreTag -> Key.Key
 tagKey = Key.fromText . storeTagName
 
--- Both keys are optional, so a mount that writes no @integrity@ object decodes the empty one.
+-- An absent mount integrity object inherits the global trusted floor.
 mountIntegrityDecoder :: GroupDecoder MountIntegrity
 mountIntegrityDecoder =
     MountIntegrity
         <$> optionalKey "minTrusted" (parseEnum parseMinTrustedIntegrity)
-        <*> optionalKey "divergencePolicy" (parseEnum parseDivergencePolicy)
+        <* optionalKey "divergencePolicy" parseLegacyDivergencePolicy
 
 instance FromJSON AppConfig where
     parseJSON = withObject "AppConfig" (decodeGroup "document" documentDecoder)
@@ -155,7 +154,17 @@ integrityDecoder =
     IntegritySettings
         <$> requiredKey "minPublic" (parseEnum parseMinIntegrity)
         <*> requiredKey "minTrusted" (parseEnum parseMinTrustedIntegrity)
-        <*> requiredKey "divergencePolicy" (parseEnum parseDivergencePolicy)
+        <* optionalKey "divergencePolicy" parseLegacyDivergencePolicy
+
+-- A removed refusal must fail at boot instead of silently becoming private preference.
+parseLegacyDivergencePolicy :: String -> Value -> Parser ()
+parseLegacyDivergencePolicy field = expectString field $ \value ->
+    case T.toLower (T.strip value) of
+        "warn" -> pure ()
+        removed
+            | removed `elem` ["fail-closed", "fail_closed", "failclosed"] ->
+                fail (field <> ": fail-closed was removed. Remove this setting after accepting private preference and divergence alarms.")
+        _ -> fail (field <> ": expected deprecated warn, or remove this setting")
 
 egressDecoder :: GroupDecoder EgressSettings
 egressDecoder =

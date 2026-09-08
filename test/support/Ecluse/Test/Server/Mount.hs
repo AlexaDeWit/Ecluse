@@ -39,7 +39,6 @@ module Ecluse.Test.Server.Mount (
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
-import Ecluse.Core.Package.Merge (DivergencePolicy (Warn))
 import Ecluse.Core.Registry.Adapter.Types (AdapterArtifact (artifactHosts), RegistryAdapter (adapterArtifact, adapterMetadata))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
@@ -73,7 +72,6 @@ serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
         , pdHelp = Nothing
         , pdMinIntegrity = defaultMinIntegrity
         , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
-        , pdDivergencePolicy = Warn
         , pdMetadata = adapterMetadata adapter
         , pdArtifact = adapterArtifact adapter
         , pdEgressUrl = mkRegistryUrl

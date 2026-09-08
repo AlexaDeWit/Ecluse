@@ -10,7 +10,9 @@ module Ecluse.Core.Server.PipelineSpec (spec) where
 import Data.Aeson (Value, encode, (.=))
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
+import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
+import Katip (LogEnv, closeScribes)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (hContentType, status200, status304, status401, status403, status404, statusCode)
 
@@ -47,7 +49,7 @@ import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Log (newTestLogEnv)
+import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
 import Ecluse.Test.Package (sriSha512Of, unsafeFilename)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -85,15 +87,22 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
-    it "logs and meters a cross-upstream integrity divergence, still serving the trusted copy (warn)" $
+    it "logs and meters a cross-upstream integrity divergence, still serving the trusted copy" $
         testWithApplication (pure upstreamApp) $ \publicPort ->
             testWithApplication (pure divergentPrivateApp) $ \privatePort -> do
                 (metricsPort, divergences) <- recordingDivergenceMetricsPort
                 rt <- mkRuntime metricsPort
                 baseDeps <- depsFor publicPort
                 let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) baseDeps
-                resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
-                statusCode (responseStatus resp) `shouldBe` 200
+                logged <- captureStdout $ do
+                    logEnv <- jsonLogEnv
+                    resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
+                    statusCode (responseStatus resp) `shouldBe` 200
+                    void (closeScribes logEnv)
+                logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+                logged `shouldSatisfy` T.isInfixOf "cross-upstream integrity divergence"
+                logged `shouldSatisfy` T.isInfixOf (T.drop 7 (sha512Integrity "leftpad artifact bytes (privately tampered)"))
+                logged `shouldSatisfy` T.isInfixOf (T.drop 7 (sha512Integrity artifactBytes))
                 divergences >>= (`shouldBe` 1)
 
     it "records an unavailability and renders 503 when no upstream resolves" $ do
@@ -243,6 +252,10 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 captureServe :: ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
 captureServe contract rt binding mkHandler = do
     logEnv <- newTestLogEnv
+    captureServeWithLog logEnv contract rt binding mkHandler
+
+captureServeWithLog :: LogEnv -> ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
+captureServeWithLog logEnv contract rt binding mkHandler = do
     captured <- newIORef Nothing
     let respond value = writeIORef captured (Just (responseToWai contract value)) >> pure ResponseReceived
     _ <- runHandler logEnv mempty (RequestCtx rt binding) (mkHandler respond)
