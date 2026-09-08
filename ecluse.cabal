@@ -888,6 +888,7 @@ test-suite ecluse-unit
     Ecluse.Composition.PlanSpec
     Ecluse.Composition.SizingSpec
     Ecluse.Composition.Support
+    Ecluse.Composition.TelemetrySupport
     Ecluse.Composition.TypesSpec
     Ecluse.Composition.ValidateSpec
     Ecluse.Composition.VetSpec

@@ -8,31 +8,20 @@ module Ecluse.DredgerSpec (spec) where
 import Control.Exception qualified as Exception
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Katip (closeScribes)
-import OpenTelemetry.Attributes (Attributes)
-import OpenTelemetry.Exporter.Metric (
-    GaugeDataPoint (gaugeDataPointAttributes, gaugeDataPointValue),
-    MetricExport (MetricExportGauge, megGaugePoints, megName),
-    NumberValue (IntNumber),
-    ResourceMetricsExport (resourceMetricsScopes),
-    ScopeMetricsExport (scopeMetricsExports),
- )
-import OpenTelemetry.MeterProvider (SdkMeterEnv, collectResourceMetrics)
-import OpenTelemetry.Metric (createMeterProvider, defaultSdkMeterProviderOptions, shutdownMeterProvider)
-import OpenTelemetry.Resource (emptyMaterializedResources)
-import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, shutdownTracerProvider)
+import OpenTelemetry.MeterProvider (SdkMeterEnv)
 import Test.Hspec
-import UnliftIO (bracket, throwIO)
+import UnliftIO (throwIO)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Boot (BootEnv (..))
 import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Executable (ExecutablePlan (epRoleWiring), PrunerWiring (pwCveSync), RoleWiring (StorePrunerWiring), planExecutable)
 import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling)
+import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootStorePruner))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvPort))
 import Ecluse.Core.Cve (CveDb (..), DbEtag (DbEtag))
-import Ecluse.Core.Cve.Slot (newCveSlot, swapIn)
+import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName, renderPackageName)
 import Ecluse.Core.Queue (noMirrorQueue)
@@ -53,11 +42,8 @@ import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Cve.Sync (CveSyncHandle (..))
 import Ecluse.Dredger (dredgerReady, latchedStep, runDredger, withSyncTasks)
 import Ecluse.Dredger.Plan (DredgerOptions (DredgerOptions), SweepMode (SweepRehearses), SweepRepetition (SweepOnce), rehearsedStore, sweepReportFor)
-import Ecluse.Runtime.Cve.Sync (SyncEnv (..))
-import Ecluse.Runtime.Telemetry (Telemetry (TelemetryEnabled), TelemetryProviders (TelemetryProviders))
-import Ecluse.Runtime.Test.Cve (headOnlyFetch)
+import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (
     FakeStore (fakeMaintenance, readFakeContents, readFakeCursor),
     FakeStoreConfig (..),
@@ -186,50 +172,29 @@ advisoryAgeSpec = describe "runDredger advisory database ages" $
                 _ -> expectationFailure "expected one age per configured ecosystem"
 
 withDredgerAges :: (SdkMeterEnv -> [(Ecosystem, CveSyncHandle)] -> IO ()) -> IO ()
-withDredgerAges use =
-    bracket (createMeterProvider emptyMaterializedResources defaultSdkMeterProviderOptions) (\(meter, _) -> void (shutdownMeterProvider meter Nothing)) $ \(meter, meterEnv) ->
-        bracket (createTracerProvider [] emptyTracerProviderOptions) (\tracer -> void (shutdownTracerProvider tracer Nothing)) $ \tracer ->
-            bracket newTestLogEnv (void . closeScribes) $ \logEnv -> do
-                config <- expectConfig codeArtifactEnvVars Nothing
-                bootPlan <- expectPlanFor BootStorePruner codeArtifactEnvVars Nothing config noCeiling
-                store <- newFakeStore defaultFakeStoreConfig
-                planned <-
-                    planExecutable
-                        logEnv
-                        passthroughTracingPort
-                        (\_ _ _ -> Nothing)
-                        (\_ _ _ -> pure noMirrorQueue)
-                        (\_ _ -> pure (Right noCredentialProviders))
-                        (\_ _ _ -> pure (fakeMaintenance store))
-                        bootPlan
-                case epRoleWiring <$> planned of
-                    Right (StorePrunerWiring pruner) -> do
-                        handles <- forM [Npm, PyPI] $ \eco -> do
-                            slot <- newCveSlot
-                            ready <- newTVarIO True
-                            let env = SyncEnv (headOnlyFetch (Right Nothing)) eco "unused.db" slot
-                            pure (eco, CveSyncHandle ready env)
-                        let telemetry = TelemetryEnabled (TelemetryProviders tracer meter)
-                            app = configApp config
-                            ephemeral = config{configApp = app{cfgServer = (cfgServer app){srvPort = 0}}}
-                            boot = BootEnv ephemeral logEnv telemetry bootPlan
-                        runDredger boot (DredgerOptions SweepRehearses SweepOnce) pruner{pwCveSync = Map.fromList handles}
-                            `shouldReturn` Nothing
-                        use meterEnv handles
-                    _ -> expectationFailure "expected the Dredger role plan"
-
-advisoryAgePoints :: SdkMeterEnv -> IO [(Attributes, Int64)]
-advisoryAgePoints meterEnv = do
-    batches <- collectResourceMetrics meterEnv
-    pure
-        [ (gaugeDataPointAttributes point, age)
-        | batch <- batches
-        , scope <- toList (resourceMetricsScopes batch)
-        , MetricExportGauge{megName = name, megGaugePoints = points} <- toList (scopeMetricsExports scope)
-        , name == "ecluse.advisory.database.age.seconds"
-        , point <- toList points
-        , IntNumber age <- [gaugeDataPointValue point]
-        ]
+withDredgerAges use = withRoleTelemetry $ \logEnv telemetry meterEnv -> do
+    config <- expectConfig codeArtifactEnvVars Nothing
+    bootPlan <- expectPlanFor BootStorePruner codeArtifactEnvVars Nothing config noCeiling
+    store <- newFakeStore defaultFakeStoreConfig
+    planned <-
+        planExecutable
+            logEnv
+            passthroughTracingPort
+            (\_ _ _ -> Nothing)
+            (\_ _ _ -> pure noMirrorQueue)
+            (\_ _ -> pure (Right noCredentialProviders))
+            (\_ _ _ -> pure (fakeMaintenance store))
+            bootPlan
+    case epRoleWiring <$> planned of
+        Right (StorePrunerWiring pruner) -> do
+            handles <- newAdvisoryHandles [Npm, PyPI]
+            let app = configApp config
+                ephemeral = config{configApp = app{cfgServer = (cfgServer app){srvPort = 0}}}
+                boot = BootEnv ephemeral logEnv telemetry bootPlan
+            runDredger boot (DredgerOptions SweepRehearses SweepOnce) pruner{pwCveSync = Map.fromList handles}
+                `shouldReturn` Nothing
+            use meterEnv handles
+        _ -> expectationFailure "expected the Dredger role plan"
 
 stepped :: Int -> IO (FakeStore, RecordedSweep, IORef (Maybe CycleHalt))
 stepped steps = do
