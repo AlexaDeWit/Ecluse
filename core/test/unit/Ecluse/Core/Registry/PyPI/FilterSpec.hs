@@ -5,23 +5,42 @@
 -- | PyPI assembly preserves admitted entries and refuses locations it cannot rebase.
 module Ecluse.Core.Registry.PyPI.FilterSpec (spec) where
 
-import Data.Aeson (Value (Array, Number, Object, String), object, toJSON, (.=))
+import Data.Aeson (Value (Array, Number, Object, String), encode, object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Package.Merge (MergePlan (..), SourceId)
+import Ecluse.Core.Package (
+    HashAlg (SHA1),
+    InvalidEntry (invalidKey, invalidKind),
+    InvalidEntryKind (InvalidIndexFile),
+    PackageInfo (infoInvalidEntries),
+    PackageName,
+    mkPackageName,
+ )
+import Ecluse.Core.Package.Filter (enforceArtifactLocations)
+import Ecluse.Core.Package.Integrity (IntegrityFloor, mkMinTrustedIntegrity)
+import Ecluse.Core.Package.Merge (MergePlan (..), Provenance (GatedSource, TrustedSource), SourceId, mergePackuments)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleIndex)
-import Ecluse.Test.Package (validSha256)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Core.Security (defaultLimits, ecosystemArtifactAuthorities)
+import Ecluse.Core.Server.Pipeline.Internal (admitByIntegrity)
+import Ecluse.Core.Server.Response (
+    RejectReason (BelowIntegrityFloor, MissingIntegrity),
+    Rejection (Rejection),
+    ServeDecision (Reject),
+ )
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, validSha1, validSha256)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
+import Ecluse.Test.Support (expectRight)
 
 -- | Pin PyPI source selection, artifact rebasing, and sidecar removal.
 spec :: Spec
 spec = do
     relaySpec
     survivorSpec
+    admissionSpec
     rebaseSpec
     sidecarSpec
 
@@ -80,6 +99,109 @@ survivorSpec = describe "which releases and files the assembly serves" $ do
         let served = assemble [] []
         field "versions" served `shouldBe` Just (Array mempty)
         servedNames served `shouldBe` []
+
+admissionSpec :: Spec
+admissionSpec = describe "replaying per-entry admission for duplicate filenames" $ do
+    for_ [("refused first", id), ("refused last", reverse)] $ \(order, arrange) ->
+        describe order $ do
+            it "omits an authority-refused sibling after projection, admission, and merge" $ do
+                source@(info, _) <- projectAdmitted defaultMinIntegrity (arrange [foreignDuplicate, admittedDuplicate])
+                map (\entry -> (invalidKind entry, invalidKey entry)) (infoInvalidEntries info)
+                    `shouldBe` [(InvalidIndexFile, duplicateFilename)]
+                (plan, served) <- assembleDuplicates [(GatedSource, source)]
+                mpArtifacts plan `shouldBe` Map.singleton "1" (duplicateFilename :| [])
+                servedFiles served `shouldBe` [rebasedDuplicate admittedDuplicate]
+
+            for_ [("no digest", Object mempty), ("SHA-1 only", object ["sha1" .= validSha1])] $ \(label, hashes) ->
+                it ("omits a public sibling admitted by location but refused for " <> label) $ do
+                    let refused = withFileKeys [("hashes", hashes)] otherDuplicate
+                    source@(info, _) <- projectAdmitted defaultMinIntegrity (arrange [refused, admittedDuplicate])
+                    infoInvalidEntries info `shouldBe` []
+                    (plan, served) <- assembleDuplicates [(GatedSource, source)]
+                    mpArtifacts plan `shouldBe` Map.singleton "1" (duplicateFilename :| [])
+                    servedFiles served `shouldBe` [rebasedDuplicate admittedDuplicate]
+
+            it "applies the default trusted floor to each same-name sibling" $ do
+                source <- projectAdmitted defaultMinTrustedIntegrity (arrange [weakDuplicate, admittedDuplicate])
+                (plan, served) <- assembleDuplicates [(TrustedSource, source)]
+                mpArtifacts plan `shouldBe` Map.singleton "1" (duplicateFilename :| [])
+                servedFiles served `shouldBe` [rebasedDuplicate admittedDuplicate]
+
+            it "keeps both valid siblings with their own unknown fields and their original order" $ do
+                let files = arrange [otherDuplicate, admittedDuplicate]
+                source <- projectAdmitted defaultMinIntegrity files
+                (plan, served) <- assembleDuplicates [(GatedSource, source)]
+                mpArtifacts plan `shouldBe` Map.singleton "1" (duplicateFilename :| [duplicateFilename])
+                servedFiles served `shouldBe` map rebasedDuplicate files
+
+            it "keeps a weak sibling when the trusted floor permits its digest" $ do
+                floorSpec <- expectRight (mkMinTrustedIntegrity SHA1)
+                let files = arrange [weakDuplicate, admittedDuplicate]
+                source <- projectAdmitted floorSpec files
+                (_, served) <- assembleDuplicates [(TrustedSource, source)]
+                servedFiles served `shouldBe` map rebasedDuplicate files
+
+    it "preserves repeated identical valid entries" $ do
+        source <- projectAdmitted defaultMinIntegrity [admittedDuplicate, admittedDuplicate]
+        (_, served) <- assembleDuplicates [(GatedSource, source)]
+        servedFiles served `shouldBe` replicate 2 (rebasedDuplicate admittedDuplicate)
+
+    it "does not confuse raw entry positions after a malformed file" $ do
+        source@(info, _) <- projectAdmitted defaultMinIntegrity [Number 1, foreignDuplicate, admittedDuplicate]
+        length (infoInvalidEntries info) `shouldBe` 2
+        (_, served) <- assembleDuplicates [(GatedSource, source)]
+        servedFiles served `shouldBe` [rebasedDuplicate admittedDuplicate]
+
+    for_ [("trusted first", id), ("trusted last", reverse)] $ \(order, arrange) ->
+        it ("takes duplicate entries only from the winning source: " <> order) $ do
+            private <- projectAdmitted defaultMinTrustedIntegrity [admittedDuplicate, otherDuplicate]
+            public <- projectAdmitted defaultMinIntegrity [withFileKeys [("source-marker", String "public")] admittedDuplicate]
+            let contributions = arrange [(TrustedSource, private), (GatedSource, public)]
+                expectedSource = fst <$> find ((== TrustedSource) . fst . snd) (zip [0 ..] contributions)
+            (plan, served) <- assembleDuplicates contributions
+            Map.lookup "1" (mpSurvivors plan) `shouldBe` expectedSource
+            servedFiles served `shouldBe` map rebasedDuplicate [admittedDuplicate, otherDuplicate]
+
+projectAdmitted :: (IntegrityFloor floor) => floor -> [Value] -> IO (PackageInfo, Value)
+projectAdmitted floorSpec files = do
+    (info, raw) <- expectRight (projectPyPIIndex defaultLimits (mkPackageName PyPI Nothing "requests") (toStrict (encode (indexOf files))))
+    let located = enforceArtifactLocations (ecosystemArtifactAuthorities ["https://files.pythonhosted.org"]) "https://pypi.org" info
+        (admitted, _) =
+            admitByIntegrity
+                floorSpec
+                (Reject (Rejection BelowIntegrityFloor "below floor"))
+                (Reject (Rejection MissingIntegrity "missing digest"))
+                located
+    pure (admitted, raw)
+
+assembleDuplicates :: [(Provenance, (PackageInfo, Value))] -> IO (MergePlan, Value)
+assembleDuplicates contributions = do
+    plan <- expectRight (maybeToRight ("expected a merge plan" :: Text) (mergePackuments (map (second fst) contributions)))
+    let sources = Map.fromList [(sid, (raw, Map.singleton duplicateFilename "1")) | (sid, (_, (_, raw))) <- zip [0 ..] contributions]
+    pure (plan, assembleSimpleIndex mountBase sources plan (indexOf []))
+
+duplicateFilename :: Text
+duplicateFilename = "requests-1.0.0.tar.gz"
+
+admittedDuplicate :: Value
+admittedDuplicate = withFileKeys [("source-marker", String "admitted")] (simpleFile duplicateFilename)
+
+otherDuplicate :: Value
+otherDuplicate =
+    withFileKeys
+        [ ("url", String ("https://files.pythonhosted.org/packages/b1/" <> duplicateFilename))
+        , ("source-marker", String "other")
+        ]
+        admittedDuplicate
+
+foreignDuplicate :: Value
+foreignDuplicate = withFileKeys [("url", String ("https://evil.test/" <> duplicateFilename))] otherDuplicate
+
+weakDuplicate :: Value
+weakDuplicate = withFileKeys [("hashes", object ["sha1" .= validSha1])] otherDuplicate
+
+rebasedDuplicate :: Value -> Value
+rebasedDuplicate = withFileKeys [("url", String (mountBase <> "/simple/requests/" <> duplicateFilename))]
 
 rebaseSpec :: Spec
 rebaseSpec = describe "where a served file points" $ do
