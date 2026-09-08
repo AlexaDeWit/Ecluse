@@ -2,29 +2,52 @@
 --
 -- SPDX-License-Identifier: MIT
 
+{- | Origin authority and namespace transitions through HTTP.
+Private responses read the same store the Dredger uses.
+-}
 module Ecluse.Core.Server.Pipeline.OriginIntegrationSpec (spec) where
 
 import Data.Aeson (Value (String))
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Ecluse.Composition (firstPartyName)
+import Ecluse.Config.Types (FirstParty (FirstPartyNpmScopes))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion, storedVersion), VersionPresence (VersionServed))
+import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
+import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty), newSweepState)
+import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (Rule (DenyByIdentity), mkEvalContext)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Pipeline.Origin (OriginResult (OriginAbsent, OriginAuthorisationFailure, OriginNameMismatch, OriginUnresolved), originMissed)
+import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepGuardSkipped))
+import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
 import Ecluse.Server.Pipeline.TestSupport
 import Ecluse.Test.Log (captureStdout, lineMessage)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents), FakeStoreConfig (fakeContents, fakeManifests), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Package (sampleManifest)
 import Ecluse.Test.Queue (newTestMemoryQueue)
+import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), versionSpec, versionValue)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Sweep (RecordedSweep (recPorts, recResults), recordingPorts, testMount, testPacing)
 import Ecluse.Test.Wai
 import Katip (Environment (Environment), closeScribes)
 import Network.HTTP.Types (status401, status403, status404, status503, statusCode)
-import Network.Wai (requestHeaders, responseLBS)
+import Network.Wai (Request (pathInfo, requestHeaders), responseLBS)
 import Network.Wai.Test (simpleBody)
 import Test.Hspec
 import UnliftIO (bracket)
 
+-- | Verify private authority, public fallback, and retained copies after a namespace declaration.
 spec :: Spec
 spec = do
     credentialSpec
     privateAuthoritySpec
     privateAuthorisationSpec
+    namespaceTransitionSpec
     partialAvailabilitySpec
 
 privateAuthorisationSpec :: Spec
@@ -165,6 +188,91 @@ privateAuthoritySpec = describe "private origin is the per-client authority (not
             servedVersions respB `shouldBe` ["2.0.0", "9.0.1"]
             servedVersions respA2 `shouldBe` ["2.0.0", "9.0.0"]
             simpleBody respA2 `shouldBe` simpleBody respA
+
+namespaceTransitionSpec :: Spec
+namespaceTransitionSpec = describe "declaring a namespace after public ingestion" $
+    it "keeps the public copy and genuine private release served and protected under an identity deny" $ do
+        let retained = [StoredVersion (mkVersion Npm v) VersionServed | v <- ["1.0.0", "9.0.0"]]
+            inventory = Map.singleton transitionName retained
+        store <-
+            newFakeStore
+                defaultFakeStoreConfig
+                    { fakeContents = inventory
+                    , fakeManifests = Map.singleton transitionName (sampleManifest transitionName (map storedVersion retained))
+                    }
+        privateUp <- servingUpstreamIO (storedTransitionBody store)
+        publicUp <- servingUpstreamIO (pure . transitionBody ["1.0.0", "2.0.0"])
+        absentPrivate <- failingUpstream
+        withProxy absentPrivate publicUp Nothing $ \app -> do
+            original <- getPath (transitionArtifactPath "1.0.0") app
+            status original `shouldBe` 200
+            simpleBody original `shouldBe` publicTarballBytes
+        queue <- newTestMemoryQueue
+        withProxyEnvQueue queue privateUp publicUp Nothing $ \app _env _port -> do
+            beforeResponse <- getPath "/npm/@acme/thing" app
+            status beforeResponse `shouldBe` 200
+            servedVersions beforeResponse `shouldBe` ["1.0.0", "2.0.0", "9.0.0"]
+        publicRequests <- seenAuth publicUp
+        publicRequests `shouldSatisfy` (not . null)
+        rules <- prepare inertRuleDeps [atDefaultPrecedence (DenyByIdentity "@acme/thing")]
+        let declared = firstPartyName (FirstPartyNpmScopes (mkScope "acme" :| []))
+            afterDeclaration deps = deps{pdFirstParty = declared, pdRules = rules}
+            maintenance = fakeMaintenance store
+            protectedMount = (testMount maintenance rules [DenyByIdentity "@acme/thing"]){smFirstParty = declared}
+        recorded <- recordingPorts Nothing
+        counters <- newSweepState
+        ctx <- mkEvalContext (pure (UTCTime (fromGregorian 2026 1 1) 0)) (pure Nothing)
+        sweepPackage testPacing (recPorts recorded) counters protectedMount maintenance ctx Nothing transitionName retained `shouldReturn` Nothing
+        recResults recorded `shouldReturn` [SweepGuardSkipped, SweepGuardSkipped]
+        readFakeContents store `shouldReturn` inventory
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing afterDeclaration $ \app env _port -> do
+            afterResponse <- getPath "/npm/@acme/thing" app
+            status afterResponse `shouldBe` 200
+            servedVersions afterResponse `shouldBe` ["1.0.0", "9.0.0"]
+            for_ ["1.0.0", "9.0.0"] $ \version -> do
+                artifact <- getPath (transitionArtifactPath version) app
+                status artifact `shouldBe` 200
+                simpleBody artifact `shouldBe` transitionBytes version
+            drainJobs env `shouldReturn` []
+        seenAuth publicUp `shouldReturn` publicRequests
+        readFakeContents store `shouldReturn` inventory
+
+transitionName :: PackageName
+transitionName = mkPackageName Npm (Just (mkScope "acme")) "thing"
+
+-- The mirrored public version and the genuine private release carry different bytes.
+transitionBytes :: Text -> LByteString
+transitionBytes "9.0.0" = privateTarballBytes
+transitionBytes _ = publicTarballBytes
+
+transitionArtifactPath :: Text -> ByteString
+transitionArtifactPath version = "/npm/@acme/thing/-/thing-" <> encodeUtf8 version <> ".tgz"
+
+transitionDocument :: [Text] -> LByteString
+transitionDocument versions = encodePackument (packumentNamed "@acme/thing" objects "1.0.0" [(v, publishedDaysAgo 30) | v <- versions])
+  where
+    objects =
+        [ ( v
+          , versionValue
+                ( (versionSpec "@acme/thing" v ("https://upstream.example/@acme/thing/-/thing-" <> v <> ".tgz"))
+                    { vsIntegrity = Just (sriFor (decodeUtf8 (toStrict (transitionBytes v))))
+                    }
+                )
+          )
+        | v <- versions
+        ]
+
+transitionBody :: [Text] -> Request -> LByteString
+transitionBody versions req =
+    case find (\v -> T.intercalate "/" (pathInfo req) == "@acme/thing/-/thing-" <> v <> ".tgz") versions of
+        Just version -> transitionBytes version
+        Nothing -> transitionDocument versions
+
+storedTransitionBody :: FakeStore -> Request -> IO LByteString
+storedTransitionBody store req = do
+    inventory <- readFakeContents store
+    let versions = map (renderVersion . storedVersion) (Map.findWithDefault [] transitionName inventory)
+    pure (transitionBody versions req)
 
 partialAvailabilitySpec :: Spec
 partialAvailabilitySpec = describe "partial-upstream availability" $ do

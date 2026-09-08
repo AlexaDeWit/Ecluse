@@ -2,6 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
+{- | Unit checks for package sweep verdicts and deletion limits.
+A mutable store exposes removals and first-party protection.
+-}
 module Ecluse.Core.Registry.Sweep.PackageSpec (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -13,7 +16,7 @@ import Ecluse.Core.Cve (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
-    StoreMaintenance (deleteVersions, rehearseDelete),
+    StoreMaintenance (deleteVersions, readStoreManifest, rehearseDelete),
     StoredVersion (StoredVersion, storedVersion),
     VersionOutcome (VersionRefused, VersionUnreached),
     VersionPresence (VersionServed, VersionWithdrawn),
@@ -28,18 +31,19 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepPacing (swpDeletionCap),
     newSweepState,
  )
-import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Rules.Types (EvalContext, mkEvalContext)
+import Ecluse.Core.Rules (PreparedRule, prepare)
+import Ecluse.Core.Rules.Types (EvalContext, Rule (DenyByIdentity), mkEvalContext)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Package (sampleManifest)
-import Ecluse.Test.Rules (admitRule, cannotVetRule, denyRule)
+import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, inertRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (..), recordingPorts, recordingPortsUnder, rehearsingReport, testMount, testPacing)
 
 epoch :: UTCTime
 epoch = UTCTime (fromGregorian 2026 1 1) 0
 
+-- | Verify each sweep outcome against the store's remaining versions.
 spec :: Spec
 spec = do
     verdictSpec
@@ -109,16 +113,29 @@ unvettableSpec = describe "a manifest the store did not serve" $ do
         errors `shouldSatisfy` any (T.isInfixOf "cannot be vetted and are kept")
 
 beltSpec :: Spec
-beltSpec = describe "the first-party belt" $ do
-    it "skips a name the deployment owns without reading its metadata at all" $ do
-        -- The belt shields the whole name, so the store is never even asked about it.
+beltSpec = describe "the first-party belt" $
+    it "skips identity-denied metadata until the first-party guard is removed" $ do
         store <- storeWith [version "1.0.0"] (Just (sampleManifest packageName [version "1.0.0"]))
+        manifestReads <- newIORef (0 :: Int)
+        rules <- prepare inertRuleDeps [atDefaultPrecedence (DenyByIdentity "left-pad@1.0.0")]
         rec' <- recordingPorts generation
-        let shielded = (mount store [denyRule]){smFirstParty = const True}
+        let handle = fakeMaintenance store
+            tracked =
+                store
+                    { fakeMaintenance =
+                        handle{readStoreManifest = \name -> modifyIORef' manifestReads (+ 1) >> readStoreManifest handle name}
+                    }
+            shielded = (mount tracked rules){smFirstParty = (== packageName)}
         halt <- runStep rec' testPacing shielded (served ["1.0.0"])
         halt `shouldBe` Nothing
         recResults rec' `shouldReturn` [SweepGuardSkipped]
+        readIORef manifestReads `shouldReturn` 0
         held store `shouldReturn` [version "1.0.0"]
+        unshielded <- recordingPorts generation
+        runStep unshielded testPacing (mount tracked rules) (served ["1.0.0"]) `shouldReturn` Nothing
+        recResults unshielded `shouldReturn` [SweepExamined, SweepDeleted]
+        readIORef manifestReads `shouldReturn` 1
+        held store `shouldReturn` []
 
 {- A refused or unreached delete leaves the version in the store, so it counts as kept and reports
 the backend's own code for an operator to follow up. -}
