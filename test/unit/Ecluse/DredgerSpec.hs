@@ -2,18 +2,40 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Dredger role composition, companion tasks, halt latching, and rehearsal behaviour.
 module Ecluse.DredgerSpec (spec) where
 
 import Control.Exception qualified as Exception
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Katip (closeScribes)
+import OpenTelemetry.Attributes (Attributes)
+import OpenTelemetry.Exporter.Metric (
+    GaugeDataPoint (gaugeDataPointAttributes, gaugeDataPointValue),
+    MetricExport (MetricExportGauge, megGaugePoints, megName),
+    NumberValue (IntNumber),
+    ResourceMetricsExport (resourceMetricsScopes),
+    ScopeMetricsExport (scopeMetricsExports),
+ )
+import OpenTelemetry.MeterProvider (SdkMeterEnv, collectResourceMetrics)
+import OpenTelemetry.Metric (createMeterProvider, defaultSdkMeterProviderOptions, shutdownMeterProvider)
+import OpenTelemetry.Resource (emptyMaterializedResources)
+import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, shutdownTracerProvider)
 import Test.Hspec
-import UnliftIO (throwIO)
+import UnliftIO (bracket, throwIO)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.Core.Cve (DbEtag (DbEtag))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Boot (BootEnv (..))
+import Ecluse.Composition.Credential (noCredentialProviders)
+import Ecluse.Composition.Executable (ExecutablePlan (epRoleWiring), PrunerWiring (pwCveSync), RoleWiring (StorePrunerWiring), planExecutable)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling)
+import Ecluse.Composition.Types (BootRole (BootStorePruner))
+import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvPort))
+import Ecluse.Core.Cve (CveDb (..), DbEtag (DbEtag))
+import Ecluse.Core.Cve.Slot (newCveSlot, swapIn)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName, renderPackageName)
+import Ecluse.Core.Queue (noMirrorQueue)
 import Ecluse.Core.Registry.Maintenance (
     StoreCursor (writeCursor),
     StoreMaintenance (deleteVersions, storeCursor),
@@ -26,10 +48,16 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepReport (reportCapHalts, reportRemoval),
  )
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity))
-import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepExamined, SweepWouldDelete))
+import Ecluse.Core.Telemetry.Metrics (Label (LEcosystem), SweepResult (SweepDeleted, SweepExamined, SweepWouldDelete), metricAttributes)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Dredger (dredgerReady, latchedStep, withSyncTasks)
-import Ecluse.Dredger.Plan (SweepMode (SweepRehearses), rehearsedStore, sweepReportFor)
+import Ecluse.Cve.Sync (CveSyncHandle (..))
+import Ecluse.Dredger (dredgerReady, latchedStep, runDredger, withSyncTasks)
+import Ecluse.Dredger.Plan (DredgerOptions (DredgerOptions), SweepMode (SweepRehearses), SweepRepetition (SweepOnce), rehearsedStore, sweepReportFor)
+import Ecluse.Runtime.Cve.Sync (SyncEnv (..))
+import Ecluse.Runtime.Telemetry (Telemetry (TelemetryEnabled), TelemetryProviders (TelemetryProviders))
+import Ecluse.Runtime.Test.Cve (headOnlyFetch)
+import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (
     FakeStore (fakeMaintenance, readFakeContents, readFakeCursor),
     FakeStoreConfig (..),
@@ -38,6 +66,7 @@ import Ecluse.Test.Maintenance (
     withBucket,
  )
 import Ecluse.Test.Package (sampleManifest)
+import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Rules (denyRule)
 import Ecluse.Test.Sweep (RecordedSweep (..), recordingPorts, testMount, testPacing)
 
@@ -47,10 +76,9 @@ spec = do
     latchSpec
     probeSpec
     rehearsalSpec
+    advisoryAgeSpec
 
-{- The advisory sync runs beside the sweep, never in a race with it: a deployment with no advisory
-store configured has no sync task at all, and a companion that could end the run would cancel the
-sweep before it swept anything. -}
+-- An empty sync plan must not cancel the sweep before it does any work.
 companionSpec :: Spec
 companionSpec = describe "withSyncTasks" $ do
     it "lets the sweep finish when there is no sync task to run at all" $ do
@@ -132,8 +160,77 @@ rehearsalSpec = describe "rehearsedStore" $ do
         reportRemoval report `shouldBe` SweepWouldDelete
         reportCapHalts report `shouldBe` False
 
-{- Drive the cycling Dredger's own step the given number of times over a seeded store whose cap is
-one, and hand back what the store holds, what was reported, and what latched. -}
+advisoryAgeSpec :: Spec
+advisoryAgeSpec = describe "runDredger advisory database ages" $
+    it "emits each configured ecosystem and observes generation swaps through its registered callbacks" $
+        withDredgerAges $ \meterEnv handles -> do
+            let install handle etag =
+                    swapIn
+                        (syncSlot (csEnv handle))
+                        (DbEtag etag)
+                        CveDb{cveDbLookup = fakeCveLookup [], cveDbClose = pass, cveDbMeta = []}
+            for_ handles $ \(_, handle) -> install handle "first-generation"
+            threadDelay 1_100_000
+            before <- advisoryAgePoints meterEnv
+            map fst before `shouldMatchList` map (metricAttributes . pure . LEcosystem) [Npm, PyPI]
+            map snd before `shouldSatisfy` all (>= 1)
+            for_ handles $ \(eco, handle) ->
+                when (eco == Npm) (install handle "next-generation")
+            after <- advisoryAgePoints meterEnv
+            map fst after `shouldMatchList` map fst before
+            let ages eco points = [age | (attrs, age) <- points, attrs == metricAttributes [LEcosystem eco]]
+            case (ages Npm after, ages PyPI after, ages PyPI before) of
+                ([npmAge], [pypiAge], [oldPypiAge]) -> do
+                    npmAge `shouldSatisfy` (< pypiAge)
+                    pypiAge `shouldSatisfy` (>= oldPypiAge)
+                _ -> expectationFailure "expected one age per configured ecosystem"
+
+withDredgerAges :: (SdkMeterEnv -> [(Ecosystem, CveSyncHandle)] -> IO ()) -> IO ()
+withDredgerAges use =
+    bracket (createMeterProvider emptyMaterializedResources defaultSdkMeterProviderOptions) (\(meter, _) -> void (shutdownMeterProvider meter Nothing)) $ \(meter, meterEnv) ->
+        bracket (createTracerProvider [] emptyTracerProviderOptions) (\tracer -> void (shutdownTracerProvider tracer Nothing)) $ \tracer ->
+            bracket newTestLogEnv (void . closeScribes) $ \logEnv -> do
+                config <- expectConfig codeArtifactEnvVars Nothing
+                bootPlan <- expectPlanFor BootStorePruner codeArtifactEnvVars Nothing config noCeiling
+                store <- newFakeStore defaultFakeStoreConfig
+                planned <-
+                    planExecutable
+                        logEnv
+                        passthroughTracingPort
+                        (\_ _ _ -> Nothing)
+                        (\_ _ _ -> pure noMirrorQueue)
+                        (\_ _ -> pure (Right noCredentialProviders))
+                        (\_ _ _ -> pure (fakeMaintenance store))
+                        bootPlan
+                case epRoleWiring <$> planned of
+                    Right (StorePrunerWiring pruner) -> do
+                        handles <- forM [Npm, PyPI] $ \eco -> do
+                            slot <- newCveSlot
+                            ready <- newTVarIO True
+                            let env = SyncEnv (headOnlyFetch (Right Nothing)) eco "unused.db" slot
+                            pure (eco, CveSyncHandle ready env)
+                        let telemetry = TelemetryEnabled (TelemetryProviders tracer meter)
+                            app = configApp config
+                            ephemeral = config{configApp = app{cfgServer = (cfgServer app){srvPort = 0}}}
+                            boot = BootEnv ephemeral logEnv telemetry bootPlan
+                        runDredger boot (DredgerOptions SweepRehearses SweepOnce) pruner{pwCveSync = Map.fromList handles}
+                            `shouldReturn` Nothing
+                        use meterEnv handles
+                    _ -> expectationFailure "expected the Dredger role plan"
+
+advisoryAgePoints :: SdkMeterEnv -> IO [(Attributes, Int64)]
+advisoryAgePoints meterEnv = do
+    batches <- collectResourceMetrics meterEnv
+    pure
+        [ (gaugeDataPointAttributes point, age)
+        | batch <- batches
+        , scope <- toList (resourceMetricsScopes batch)
+        , MetricExportGauge{megName = name, megGaugePoints = points} <- toList (scopeMetricsExports scope)
+        , name == "ecluse.advisory.database.age.seconds"
+        , point <- toList points
+        , IntNumber age <- [gaugeDataPointValue point]
+        ]
+
 stepped :: Int -> IO (FakeStore, RecordedSweep, IORef (Maybe CycleHalt))
 stepped steps = do
     store <- newFakeStore seededConfig
@@ -173,9 +270,7 @@ packageName = mkPackageName Npm Nothing
 version :: Text -> Version
 version = mkVersion Npm
 
-{- | Whether the run ended on a fault. The linked companion rethrows asynchronously, so the assertion
-reads through the base perimeter rather than the one that rethrows an async exception.
--}
+-- The linked companion rethrows asynchronously, so the assertion uses the base exception perimeter.
 faulted :: Either SomeException () -> Bool
 faulted = isLeft
 

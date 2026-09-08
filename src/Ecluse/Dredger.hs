@@ -52,6 +52,7 @@ import Ecluse.Cve.Sync (
     cveSyncReady,
     cveSyncScheduleFor,
     cveSyncTasks,
+    registerAdvisoryAges,
  )
 import Ecluse.Dredger.Plan (
     DredgerOptions (doMode, doRepetition),
@@ -76,9 +77,6 @@ import Ecluse.Runtime.Server (
 import Ecluse.Runtime.Telemetry.Instruments (Metrics, dredgerMetricsPortOf, newMetrics)
 import Ecluse.Runtime.Telemetry.Reporters (installMetrics)
 
-{- | What a running Dredger keeps between cycles: the halt that latched it, which only the cap
-sets, and the halt a one-shot run ended on, which becomes that invocation's exit status.
--}
 data SweepStatus = SweepStatus
     { stLatched :: IORef (Maybe CycleHalt)
     , stFinal :: IORef (Maybe CycleHalt)
@@ -96,6 +94,7 @@ runDredger bootEnv opts pruner = do
     -- The instruments exist now, so installing them makes the credential providers' and the
     -- effectful rules' deferred reporters live for the rest of the run.
     installMetrics (pwDeferredMetrics pruner) metrics
+    registerAdvisoryAges metrics (pwCveSync pruner)
     status <- newSweepStatus
     moduleLog logEnv dredgerModule InfoS capLine
     traverse_ (logBlastRadius logEnv opts pacing) mounts
@@ -179,8 +178,6 @@ reportLatched :: SweepPorts -> CycleHalt -> IO ()
 reportLatched ports halt =
     auditError (sweepAudit ports) ("the mirror sweep is halted and runs no cycle: " <> renderCycleHalt halt)
 
-{- The effects behind the sweep's ports: the process clock, the advisory slots the sync tasks
-fill, the delay, the instruments, and the process log stream. -}
 sweepPortsFor :: LogEnv -> Metrics -> SweepReport -> Map Ecosystem CveSyncHandle -> SweepPorts
 sweepPortsFor logEnv metrics report cveSync =
     SweepPorts

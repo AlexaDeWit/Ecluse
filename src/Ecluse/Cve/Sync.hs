@@ -5,8 +5,8 @@
 {- | The advisory-sync plan: one ecosystem's sync wiring ('CveSyncHandle') and the
 config-driven plan that builds it ('planCveSync'). It also holds the projections the
 composition root reads off that plan: the per-ecosystem rule capabilities, the
-first-sync readiness gate, and the sync schedule. "Ecluse.Service" builds the plan at boot
-and hands every role one supervised sync task per handle.
+first-sync readiness gate, the sync schedule, and database-age observations. Every consuming
+role registers the observations once and runs one supervised sync task per handle.
 -}
 module Ecluse.Cve.Sync (
     CveSyncHandle (..),
@@ -18,6 +18,7 @@ module Ecluse.Cve.Sync (
     cveSyncReady,
     cveSyncScheduleFor,
     cveSyncTasks,
+    registerAdvisoryAges,
     backgroundLoopBackoff,
 ) where
 
@@ -36,7 +37,7 @@ import Ecluse.Config (
     advisoryStoreBucket,
  )
 import Ecluse.Core.Breaker (BreakerReporter)
-import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
+import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, generationInstalledAt, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
@@ -50,7 +51,7 @@ import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Cve.Sync (S3CveSource, SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, newS3CveSource, runCveSync, s3CveFetchFor)
 import Ecluse.Runtime.Log (logLine, moduleField)
 import Ecluse.Runtime.Telemetry (Telemetry)
-import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisorySyncMetricsPortOf)
+import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisorySyncMetricsPortOf, registerAdvisoryDatabaseAge)
 import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf)
 
 {- | The rules' boot-bound capabilities for one mount ecosystem. A mount's rules read only their own
@@ -107,6 +108,12 @@ cveSyncTasks logEnv metrics telemetry schedule plan =
   where
     syncMetrics = advisorySyncMetricsPortOf metrics
     syncTracing = advisorySyncTracingPortOf telemetry
+
+-- | Register once per role. Callbacks read the slots, so observations survive sync-task restarts.
+registerAdvisoryAges :: Metrics -> Map.Map Ecosystem CveSyncHandle -> IO ()
+registerAdvisoryAges metrics plan =
+    for_ (Map.toList plan) $ \(eco, handle) ->
+        registerAdvisoryDatabaseAge metrics eco (generationInstalledAt (syncSlot (csEnv handle)))
 
 {- | The pace every shell background loop retries a transient fault at: one second after the
 first failure, doubling to a thirty-second ceiling.
