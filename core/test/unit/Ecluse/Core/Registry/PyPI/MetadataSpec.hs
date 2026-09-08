@@ -75,6 +75,7 @@ protocolSpec = describe "protocol envelope parity" $ do
     for_ [("{\"api-version\":\"1.0\",\"api-version\":\"2.0\"}", True), ("{\"api-version\":\"2.0\",\"api-version\":\"1.0\"}", False), ("null,\"meta\":{\"api-version\":\"2.0\"}", True), ("{\"api-version\":\"2.0\"},\"meta\":null", False)] $ \(meta, accepted) ->
         it ("keeps the first protocol keys in " <> show meta) $ do
             let body = "{\"name\":\"requests\",\"meta\":" <> meta <> "}"
+                expected :: Either MetadataError (Maybe PackageDetails)
                 expected = if accepted then Right Nothing else Left MetadataUndecodable
             (Nothing <$ projectPyPIIndex defaultLimits requests body) `shouldBe` expected
             projectPyPIVersion defaultLimits requests (release "2.34.2") body `shouldBe` expected
