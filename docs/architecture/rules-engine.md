@@ -196,14 +196,16 @@ is exploited in the wild within the next 30 days, and a moderate CVE under activ
 worse risk to a build than a critical one nobody has weaponised. `DenyIfEpss` denies version
 *V* of *P* when an advisory affects *V* and its EPSS score is at or above the configured `minEpss`.
 
-It is the twin of `DenyIfCve`: the same lookup, the same verdict vocabulary, the same failure
-alignment, and the same precedence rung. Only the score it compares differs. An advisory the
-artifact carries no EPSS score for counts as **above every threshold**, the same fail-closed
-direction as an unscored CVSS advisory. That is not a rare case on the npm feed. EPSS keys on CVE
-ids, the artifact's rows key on the advisory id, and the join runs through the advisory's `aliases`
-array, so an advisory with no CVE alias, which includes the whole `MAL-*` malware feed, arrives
-unscored. An operator should read the rule as "deny on exploitability, and on anything whose
-exploitability cannot be established", and enable it alongside `DenyIfCve` rather than instead of it.
+It shares `DenyIfCve`'s lookup, failure alignment, and precedence. An individual missing
+EPSS score makes the rule abstain for that advisory. EPSS joins through CVE aliases, so malware
+without a CVE alias receives no EPSS denial. `DenyIfCve` retains its independent malware and
+severity behaviour, including denial on missing CVSS scores.
+
+Other affecting advisories with known scores and other rules still apply. If all rules abstain,
+deny-by-default refuses admission but does not authorise Dredger deletion. A different decisive
+deny can authorise deletion under the existing guards. A valid feed that loses a score, including
+a malformed row the parser skips, can remove an EPSS denial and let another allow admit the version.
+That consequence does not establish that the version is harmless.
 
 Pilot supplies the score. It fetches the EPSS daily feed each compile pass, joins it onto the
 advisories through their aliases, and writes the result to the artifact's `epss_score` column
@@ -211,8 +213,9 @@ advisories through their aliases, and writes the result to the artifact's `epss_
 the served stream and again on its gzip expansion, so neither an endless stream nor a compression
 bomb can hang or exhaust the pass. A feed past either bound is refused whole rather than truncated,
 because a short table is indistinguishable from a complete one downstream. A pass that cannot fetch
-the feed, or that decodes no scores from it at all, fails rather than publishing an artifact whose
-scores all read as absent, which every EPSS rule would then read as a deny.
+the feed, or that decodes no scores from it at all, fails without publication.
+Configuration-dependent optional failure and consumer qualification remain separate work in
+[#1224](https://github.com/AlexaDeWit/Ecluse/issues/1224).
 
 ### Local polling, decoupled ingestion
 

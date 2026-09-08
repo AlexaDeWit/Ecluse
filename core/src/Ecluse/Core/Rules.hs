@@ -40,7 +40,7 @@ import UnliftIO.Async (Async, async, cancel, uninterruptibleCancel, wait)
 import UnliftIO.Exception (bracket)
 
 import Ecluse.Core.Breaker (BreakerReporter (..))
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, insideAffectedRange, scoreAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, MissingScorePolicy (..), insideAffectedRange, scoreAtLeast)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package
@@ -123,28 +123,26 @@ evalRule deps _ AllowIfRemediatesCve pd =
 evalRule deps _ (DenyIfCve params) pd =
     rdWithCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfCve" (dicOnUnavailable params))
-        Just cve -> advisoryDenyVerdict "CVSS" (dicMinCvss params) arSeverity cve pd
+        Just cve -> advisoryDenyVerdict DenyMissingScore "CVSS" (dicMinCvss params) arSeverity cve pd
 evalRule deps _ (DenyIfEpss params) pd =
     rdWithCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))
-        Just cve -> advisoryDenyVerdict "EPSS" (dieMinEpss params) arEpss cve pd
+        Just cve -> advisoryDenyVerdict AbstainMissingScore "EPSS" (dieMinEpss params) arEpss cve pd
 
 {- The verdict when no advisory database is loaded. It is a 'CannotVet' verdict and not a
 fault, because no in-process retry could load one, so the harness never retries it. -}
 noAdvisoryDbVerdict :: Text -> FailureAlignment -> RuleVerdict
 noAdvisoryDbVerdict rule alignment = CannotVet alignment (rule <> ": no advisory database loaded")
 
-{- The shape both scored deny rules share: deny when an affecting advisory's score reaches the
-threshold, naming the deciders. An unscored advisory clears every threshold ('scoreAtLeast'). -}
-advisoryDenyVerdict :: Text -> Double -> (AdvisoryRange -> Maybe Double) -> CveLookup -> PackageDetails -> IO RuleVerdict
-advisoryDenyVerdict metric threshold scoreOf cve pd = do
+advisoryDenyVerdict :: MissingScorePolicy -> Text -> Double -> (AdvisoryRange -> Maybe Double) -> CveLookup -> PackageDetails -> IO RuleVerdict
+advisoryDenyVerdict missing metric threshold scoreOf cve pd = do
     ranges <- cveAdvisoriesFor cve name
     let blocking =
             ordNub
                 [ arCveId ar
                 | ar <- ranges
                 , insideAffectedRange eco version ar
-                , scoreAtLeast threshold (scoreOf ar)
+                , scoreAtLeast missing threshold (scoreOf ar)
                 ]
     pure $ case blocking of
         [] -> NoDecision ("no advisory at or above the " <> metric <> " threshold affects this version")

@@ -350,14 +350,13 @@ rules:
   # Opt-in exploitability deny gate, also absent from this shipped policy. It denies a
   # version a synced advisory records as affected when that advisory's EPSS score (the
   # probability of exploitation in the wild within 30 days, 0-1) is at or above `minEpss`.
-  # An advisory the artifact carries no EPSS score for counts as above every threshold,
-  # and on the npm feed that is most of them: EPSS keys on CVE ids, and the malware
-  # advisories carry no CVE alias. Enable it as a companion to `deny-known-cves`, not as a
-  # cheaper substitute, and warm the mirror first as for that rule. It shares
-  # `DenyIfCve`'s precedence, so an identity pin overrides it too.
+  # An individual missing score makes this rule abstain for that advisory. This includes
+  # malware without a CVE alias. DenyIfCve retains its independent severity/malware role.
+  # Other advisories and rules still apply, including deny-by-default. Missing EPSS alone
+  # cannot authorise Dredger deletion. This rule shares DenyIfCve's precedence.
   # deny-exploitable-cves:
   #   type: DenyIfEpss
-  #   minEpss: 0.5            # EPSS >= 0.5. Unscored advisories always block
+  #   minEpss: 0.5            # EPSS >= 0.5. Individual unscored advisories abstain
   #   onUnavailable: deny     # as for DenyIfCve: "skip" fails open instead
   # Opt-in identity pin, absent from this shipped policy. It admits one package, or one
   # package@version, past the quarantine. `identity` matches the rendered package name

@@ -6,7 +6,7 @@ module Ecluse.Core.CveSpec (spec) where
 
 import Test.Hspec (Spec, describe, it, shouldBe)
 
-import Ecluse.Core.Cve (AdvisoryRange (..), insideAffectedRange, scoreAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), MissingScorePolicy (..), insideAffectedRange, scoreAtLeast)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (..))
 
@@ -36,14 +36,22 @@ spec :: Spec
 spec = do
     describe "scoreAtLeast" $ do
         it "clears the threshold at or above it, and not below" $ do
-            scoreAtLeast 8.0 (Just 9.8) `shouldBe` True
-            scoreAtLeast 8.0 (Just 8.0) `shouldBe` True
-            scoreAtLeast 8.0 (Just 7.9) `shouldBe` False
+            scoreAtLeast DenyMissingScore 8.0 (Just 9.8) `shouldBe` True
+            scoreAtLeast DenyMissingScore 8.0 (Just 8.0) `shouldBe` True
+            scoreAtLeast DenyMissingScore 8.0 (Just 7.9) `shouldBe` False
 
         it "counts an absent score as clearing every threshold, the fail-closed direction" $ do
-            -- Both deny rules read this: an unscored advisory must not slip a deny gate.
-            scoreAtLeast 10.0 Nothing `shouldBe` True
-            scoreAtLeast 0.0 Nothing `shouldBe` True
+            scoreAtLeast DenyMissingScore 10.0 Nothing `shouldBe` True
+            scoreAtLeast DenyMissingScore 0.0 Nothing `shouldBe` True
+
+        it "abstains on an absent EPSS score even at zero threshold" $ do
+            scoreAtLeast AbstainMissingScore 0.0 Nothing `shouldBe` False
+            scoreAtLeast AbstainMissingScore 1.0 Nothing `shouldBe` False
+
+        it "compares known EPSS scores at the threshold" $ do
+            scoreAtLeast AbstainMissingScore 0.5 (Just 0.49) `shouldBe` False
+            scoreAtLeast AbstainMissingScore 0.5 (Just 0.5) `shouldBe` True
+            scoreAtLeast AbstainMissingScore 0.5 (Just 0.75) `shouldBe` True
 
     describe "insideAffectedRange" $ do
         describe "the half-open interval [introduced, fixed)" $ do

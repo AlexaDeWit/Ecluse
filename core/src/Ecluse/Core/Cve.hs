@@ -27,6 +27,7 @@ module Ecluse.Core.Cve (
 
     -- * Pure range matching
     insideAffectedRange,
+    MissingScorePolicy (..),
     scoreAtLeast,
 ) where
 
@@ -163,6 +164,17 @@ unorderablePoint eco ar = case (arIntroduced ar, arUpperBound ar) of
             Just introduced
     _ -> Nothing
 
--- | Missing scores satisfy every deny threshold, so absent evidence cannot open the gate.
-scoreAtLeast :: Double -> Maybe Double -> Bool
-scoreAtLeast threshold = maybe True (>= threshold)
+-- | Whether an individual absent score supplies threshold evidence.
+data MissingScorePolicy
+    = -- | CVSS keeps its denial for unscored advisories, including malware.
+      DenyMissingScore
+    | -- | EPSS requires a known score to supply a denial.
+      AbstainMissingScore
+
+-- | Compare a score with the deny threshold using the metric's missing-score policy.
+scoreAtLeast :: MissingScorePolicy -> Double -> Maybe Double -> Bool
+scoreAtLeast missing threshold = maybe absent (>= threshold)
+  where
+    absent = case missing of
+        DenyMissingScore -> True
+        AbstainMissingScore -> False

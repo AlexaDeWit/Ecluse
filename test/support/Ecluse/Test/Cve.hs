@@ -10,9 +10,11 @@ and the real handle, so the two cannot drift apart.
 -}
 module Ecluse.Test.Cve (
     fakeCveLookup,
+    unscoredEpssCases,
 ) where
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..))
+import Ecluse.Core.Osv.Epss (epssForIds, mkEpssScores, parseEpssLine)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 
 {- | Build the fake from (package name, range) rows. The remediation probe is exact string equality
@@ -26,3 +28,16 @@ fakeCveLookup rows =
         , cveAdvisoriesFor = \name -> pure [ar | (n, ar) <- rows, n == name]
         , cveCoveredNames = pure (ordNub (map fst rows))
         }
+
+-- | Individual gaps in a nonempty feed, joined through the production score parser.
+unscoredEpssCases :: [(String, Maybe Double)]
+unscoredEpssCases =
+    [ ("malware without a CVE alias", score ["MAL-2026-1"] [])
+    , ("a CVE absent from a valid feed", score ["CVE-2026-10001"] [])
+    , ("a malformed score row in an accepted feed", score ["CVE-2026-10001"] ["CVE-2026-10001,not-a-number,0.5"])
+    ]
+  where
+    score ids rows =
+        epssForIds
+            (mkEpssScores (mapMaybe parseEpssLine ("CVE-2026-10002,0.75,0.9" : rows)))
+            ids

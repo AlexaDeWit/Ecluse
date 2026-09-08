@@ -284,7 +284,7 @@ type's knobs, and a knob written under a type that does not read it fails the lo
 | yours to add | `DenyByIdentity` | No | Hard-denies a specific package or `package@version` (the `revoke` shape). | `identity` |
 | yours to add | `DenyInstallTimeExecution` | No, because many legitimate packages ship install scripts | Denies install-time code execution. | (none) |
 | yours to add | `DenyIfCve` | No | Blocks a version a synced advisory records as affected at or above the CVSS threshold. The npm malware feed carries no score and counts as above every threshold, so enabling it also blocks known-malicious packages. Sits just below `AllowByIdentity`, so an identity pin overrides it. | `minCvss` (0-10). `onUnavailable` (`deny` by default, or `skip`) decides what happens when the advisory database cannot answer. |
-| yours to add | `DenyIfEpss` | No | Blocks a version a synced advisory records as affected when that advisory's EPSS score is at or above the threshold. EPSS is FIRST.org's estimate of the probability a vulnerability is exploited in the wild within 30 days, so this gates on likelihood where `DenyIfCve` gates on severity. An advisory with no EPSS score counts as above every threshold. Shares `DenyIfCve`'s precedence. | `minEpss` (0-1). `onUnavailable` as for `DenyIfCve`. |
+| yours to add | `DenyIfEpss` | No | Blocks a version a synced advisory records as affected when that advisory's EPSS score is at or above the threshold. EPSS is FIRST.org's estimate of the probability a vulnerability is exploited in the wild within 30 days, so this gates on likelihood where `DenyIfCve` gates on severity. An individual missing EPSS score makes this rule abstain for that advisory. Shares `DenyIfCve`'s precedence. | `minEpss` (0-1). `onUnavailable` as for `DenyIfCve`. |
 
 Before you enable `DenyIfCve` or `DenyIfEpss`, read
 [Onboarding the advisory denies](@/docs/configuration.md#onboarding-the-advisory-denies).
@@ -337,8 +337,14 @@ covered them. Enable them *after* you warm your private mirror:
    which outranks both. That covers a false positive or a risk you accept.
 
 Add `DenyIfEpss` alongside `DenyIfCve`, not instead of it. EPSS estimates exploitation probability,
-not severity or proof of exploitation. Missing scores currently count as above every threshold,
-so sparse EPSS coverage can make this rule restrictive even when known scores are low.
+not severity or proof of exploitation. An individual missing score makes EPSS abstain, including
+malware without a CVE alias. `DenyIfCve` still denies on missing CVSS scores. Other affecting scored
+advisories and other rules still apply. If all rules abstain, deny-by-default refuses admission.
+
+A valid feed can lose a score or contain a malformed row the parser skips. The EPSS rule then stops
+denying that advisory, and another allow can admit the version to public clients and the mirror.
+This does not establish that the version is harmless. Missing EPSS alone cannot authorise Dredger
+deletion. A different decisive deny can still authorise deletion under the existing guards.
 
 Set `onUnavailable: skip` to let another allow decide when an advisory lookup is unavailable.
 The default `deny` refuses instead. This also applies to mirror admission: a skipped check can
@@ -353,5 +359,6 @@ tracked in [#1230](https://github.com/AlexaDeWit/Ecluse/issues/1230).
 
 Maximum source-age enforcement is not implemented. The agreed change in
 [#1221](https://github.com/AlexaDeWit/Ecluse/issues/1221) will refuse stale OSV evidence even with
-`onUnavailable: skip`. Individual missing EPSS scores currently deny, as the table states.
-[#1225](https://github.com/AlexaDeWit/Ecluse/issues/1225) will change those cases to abstention.
+`onUnavailable: skip`. Individual missing scores differ from whole-feed failure.
+Pilot still requires a successful EPSS feed. Optional enrichment failure and consumer qualification
+remain planned in [#1224](https://github.com/AlexaDeWit/Ecluse/issues/1224).

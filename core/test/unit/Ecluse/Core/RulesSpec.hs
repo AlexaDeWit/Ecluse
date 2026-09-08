@@ -23,7 +23,7 @@ import Ecluse.Core.Cve (AdvisoryRange (..))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
 import Ecluse.Core.Package
-import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
 import Ecluse.Test.Rules (
     admittedBy,
@@ -277,11 +277,17 @@ spec = do
         it "abstains when the affecting advisory scores below the threshold" $
             evalRule (depsWith (affecting Nothing (Just 0.1))) ctx (denyEpssAt 0.5) (pkg Nothing 0)
                 >>= (`shouldSatisfy` isNoDecision)
-        it "denies an advisory with no EPSS score (fail-closed: the comparison is unprovable)" $
-            -- The npm malware feed carries no CVE alias for the feed to key on, so its
-            -- advisories reach the rule unscored and must not slip the gate.
-            evalRule (depsWith (affecting (Just 9.8) Nothing)) ctx (denyEpssAt 0.5) (pkg Nothing 0)
-                >>= (`shouldSatisfy` isDeny)
+        forM_ unscoredEpssCases $ \(label, score) ->
+            it ("abstains for " <> label) $ do
+                score `shouldBe` Nothing
+                evalRule (depsWith (affecting (Just 9.8) score)) ctx (denyEpssAt 0.5) (pkg Nothing 0)
+                    >>= (`shouldSatisfy` isNoDecision)
+        it "denies another affecting advisory whose EPSS score meets the threshold" $ do
+            let rows =
+                    affecting Nothing Nothing
+                        <> [("thing", AdvisoryRange "CVE-2026-10002" Nothing (Just "0") Unbounded (Just 0.75))]
+            evalRule (depsWith rows) ctx (denyEpssAt 0.5) (pkg Nothing 0)
+                >>= (`shouldBe` Deny "affected by CVE-2026-10002 (EPSS >= 0.5)")
         it "abstains when the version sits outside the affected range" $ do
             let rows = [("thing", AdvisoryRange "GHSA-affect-0002" Nothing (Just "0") (FixedBefore "1.0.0") (Just 0.99))]
             evalRule (depsWith rows) ctx (denyEpssAt 0.5) (pkg Nothing 0)
@@ -292,6 +298,37 @@ spec = do
         it "fails open (skips) when configured onUnavailable=skip and no database is loaded" $
             decideWith inertRuleDeps [atDefaultPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision))] (pkg Nothing 0)
                 >>= (`shouldSatisfy` isBlockedByDefault)
+
+    describe "individual EPSS gaps in public and mirror admission's shared evaluator" $ do
+        forM_ unscoredEpssCases $ \(label, score) -> do
+            it ("keeps deny-by-default for " <> label) $
+                decideWith (depsWith (affecting Nothing score)) [atDefaultPrecedence (denyEpssAt 0.5)] (pkg Nothing 99)
+                    >>= (`shouldSatisfy` isBlockedByDefault)
+            it ("allows through another rule for " <> label) $
+                decideWith
+                    (depsWith (affecting Nothing score))
+                    (map atDefaultPrecedence [denyEpssAt 0.5, AllowIfOlderThan (7 * nominalDay)])
+                    (pkg Nothing 99)
+                    >>= \d -> admittedBy d `shouldBe` Just "AllowIfOlderThan"
+        it "restores an EPSS denial when a known high score returns" $ do
+            let policy = map atDefaultPrecedence [denyEpssAt 0.5, AllowIfOlderThan (7 * nominalDay)]
+            forM_ [Just 0.75, Nothing, Just 0.75] $ \score -> do
+                decision <- decideWith (depsWith (affecting Nothing score)) policy (pkg Nothing 99)
+                case score of
+                    Nothing -> admittedBy decision `shouldBe` Just "AllowIfOlderThan"
+                    Just _ -> blockedBy decision `shouldBe` Just "DenyIfEpss"
+        it "retains DenyIfCve's unscored malware denial when EPSS abstains" $
+            decideWith
+                (depsWith (affecting Nothing Nothing))
+                (map atDefaultPrecedence [denyEpssAt 0.5, denyCveAt 8.0])
+                (pkg Nothing 99)
+                >>= \d -> blockedBy d `shouldBe` Just "DenyIfCve"
+        it "retains another decisive denial when EPSS abstains" $
+            decideWith
+                (depsWith (affecting Nothing Nothing))
+                (map atDefaultPrecedence [denyEpssAt 0.5, DenyByIdentity "thing"])
+                (pkg Nothing 99)
+                >>= \d -> blockedBy d `shouldBe` Just "DenyByIdentity"
 
     describe "deny precedence (DenyIfEpss)" $ do
         it "overrides the quarantine allow at default precedences, whatever the order" $ do

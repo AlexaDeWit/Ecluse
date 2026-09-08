@@ -2,16 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Data types for the policy rules engine.
-
-The evaluation model lives in "Ecluse.Core.Rules". This module holds only the
-dependency-light types it operates on. Those are the closed built-in rule vocabulary
-config selects from, a rule's per-version result, and the overall decision.
-
-A 'Rule' is __evaluation-agnostic data__. It says /what/ a rule is, never /how/ it is
-evaluated. How a rule decides is a separate concern that lives in "Ecluse.Core.Rules".
-'Ecluse.Core.Rules.evalRule' dispatches over this data, and the engine wraps it in a
-'Ecluse.Core.Rules.PreparedRule' to run it.
+{- | The closed rule vocabulary, rule verdicts, and policy decisions.
+"Ecluse.Core.Rules" binds these values to capabilities and evaluates them.
+Configuration selects built-in rules and cannot supply evaluation closures.
 -}
 module Ecluse.Core.Rules.Types (
     -- * The built-in rule vocabulary
@@ -102,11 +95,8 @@ data Rule
       existing build already depends on.
       -}
       DenyIfCve DenyIfCveParams
-    | {- | Deny a version a synced advisory records as __affected__ when that advisory's EPSS
-      score reaches the configured threshold. The 'DenyIfCve' twin over the same database and
-      failure model, gating on the probability of exploitation rather than on the damage. An
-      advisory with no EPSS score counts as above every threshold, which on the npm feed is
-      most of them: malware advisories carry no CVE alias for the feed to key on. Opt-in.
+    | {- | Deny on a known EPSS score at or above the threshold. Individual missing scores
+      abstain, including malware without CVE aliases. 'DenyIfCve' governs severity independently.
       -}
       DenyIfEpss DenyIfEpssParams
     deriving stock (Eq, Show)
@@ -132,9 +122,8 @@ data DenyIfCveParams = DenyIfCveParams
 -- | 'DenyIfEpss''s configured behaviour, the EPSS twin of 'DenyIfCveParams'.
 data DenyIfEpssParams = DenyIfEpssParams
     { dieMinEpss :: Double
-    {- ^ The EPSS probability (0 to 1) at or above which an affecting advisory denies. An
-    unscored advisory counts as above every threshold ('Ecluse.Core.Cve.scoreAtLeast'):
-    exploitability that cannot be proven low must not slip a deny gate.
+    {- ^ The EPSS probability (0 to 1) at or above which an affecting advisory denies.
+    An individual missing score supplies no denial.
     -}
     , dieOnUnavailable :: FailureAlignment
     -- ^ How the rule resolves when the advisory database cannot answer, as 'dicOnUnavailable'.

@@ -6,7 +6,7 @@
 {- | The FIRST.org EPSS feed, the exploitability score Pilot joins onto each advisory.
 
 Pilot joins the scores through advisory aliases ("Ecluse.Core.Osv.Advisory").
-Oversized and scoreless feeds fail the pass: missing scores deny downstream.
+Oversized and scoreless feeds fail the pass. Individual missing scores remain absent.
 -}
 module Ecluse.Core.Osv.Epss (
     -- * The feed
@@ -55,7 +55,7 @@ data EpssFeedTooLarge
 instance Exception EpssFeedTooLarge
 
 {- | The feed decoded to no scores at all: an error page served as 200, or a column order the row
-decode no longer reads. An all-unscored artifact denies every affected version, so the pass fails.
+decode no longer reads. Whole-feed failure remains distinct from an individual missing score.
 -}
 data EpssFeedEmpty = EpssFeedEmpty
     deriving stock (Eq, Show)
