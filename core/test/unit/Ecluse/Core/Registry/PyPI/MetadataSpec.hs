@@ -86,8 +86,8 @@ protocolSpec = describe "protocol envelope parity" $ do
 
     it "blocks cold artifact admission for bytes declaring an unsupported protocol" $ do
         rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
-        let context = EvalContext (UTCTime (fromGregorian 2026 9 7) 0) Nothing
-            admit body = traverse (traverse (admitArtifact context rules defaultMinIntegrity (unsafeFilename "requests-2.34.2.tar.gz"))) (projectPyPIVersion defaultLimits requests (release "2.34.2") body)
+        let evalContext = EvalContext (UTCTime (fromGregorian 2026 9 7) 0) Nothing
+            admit body = traverse (traverse (admitArtifact evalContext rules defaultMinIntegrity (unsafeFilename "requests-2.34.2.tar.gz"))) (projectPyPIVersion defaultLimits requests (release "2.34.2") body)
         admitted <- admit (protocolIndex (Just (object ["api-version" .= ("1.0" :: Text)])))
         case admitted of
             Right (Just AdmissionAdmit{}) -> pass
