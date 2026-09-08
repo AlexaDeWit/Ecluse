@@ -132,10 +132,9 @@ projectDetails name entries =
   where
     files = fmap fst entries
 
-    -- A later wheel restarts quarantine for the whole release.
-    newestUpload = case mapMaybe ifUploadTime (toList files) of
-        [] -> Nothing
-        earliest : rest -> Just (foldl' max earliest rest)
+    -- An unknown-age file cannot borrow a sibling's expired quarantine.
+    -- A later wheel restarts quarantine when every timestamp is known.
+    newestUpload = (\(instant :| rest) -> foldl' max instant rest) <$> traverse ifUploadTime files
 
     installCode
         | any ((== Sdist) . fcKind . snd) entries =

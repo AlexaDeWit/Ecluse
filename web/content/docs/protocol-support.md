@@ -23,6 +23,11 @@ A `pypi` mount serves reads and nothing else. It writes nothing, so a `publicati
 `mirrorTarget` on it refuses the boot naming the ecosystem and the key, and its upload endpoint
 answers `405`. Mirroring and first-party publishing for PyPI land in later releases.
 
+The age rule measures a PyPI release from its newest file upload. Every offered file must
+have a usable upload timestamp. If any timestamp is absent or malformed, the release age
+stays unknown and the age rule cannot admit it. An explicit policy exception can still admit
+the release, subject to the other rules and integrity floors.
+
 A **planned** registry is already a valid `mounts` key, but no adapter answers its routes yet,
 so activating one refuses the boot.
 
