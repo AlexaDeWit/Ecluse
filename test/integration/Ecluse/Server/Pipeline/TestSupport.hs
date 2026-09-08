@@ -17,6 +17,7 @@ module Ecluse.Server.Pipeline.TestSupport (
     truncatedResponse,
     servingUpstream,
     servingUpstreamPer,
+    servingUpstreamIO,
     failingUpstream,
     mutatingUpstream,
     twoServingUpstreams,
@@ -174,11 +175,9 @@ data Upstream = Upstream
     , upSeenArtifactValidators :: IORef [Maybe ByteString]
     }
 
--- | An upstream double answering each request with the given response.
 recordingUpstream :: (Request -> Response) -> IO Upstream
 recordingUpstream respondTo = recordingUpstreamIO (pure . respondTo)
 
--- | 'recordingUpstream' over an effectful responder, for a double whose answer depends on what it already served.
 recordingUpstreamIO :: (Request -> IO Response) -> IO Upstream
 recordingUpstreamIO respondTo = do
     seen <- newIORef []
@@ -196,8 +195,13 @@ servingUpstream = servingUpstreamPer . const
 
 -- | 'servingUpstream' over a body that depends on the request, for a double whose answer turns on what the client sent.
 servingUpstreamPer :: (Request -> LByteString) -> IO Upstream
-servingUpstreamPer bodyFor =
-    recordingUpstream (\req -> bodyAt (\base -> rebaseAuthority fixtureAuthority base (bodyFor req)) req)
+servingUpstreamPer bodyFor = servingUpstreamIO (pure . bodyFor)
+
+-- | Read each response body from live state and rebase its artifact locations to this upstream.
+servingUpstreamIO :: (Request -> IO LByteString) -> IO Upstream
+servingUpstreamIO bodyFor = recordingUpstreamIO $ \req -> do
+    body <- bodyFor req
+    pure (bodyAt (\base -> rebaseAuthority fixtureAuthority base body) req)
 
 -- | An upstream double that always answers @500@: a failed or unavailable upstream, for the partial-upstream-availability and no-survivors paths.
 failingUpstream :: IO Upstream
@@ -207,9 +211,7 @@ failingUpstream = upstreamRespondingWith (responseLBS status500 [] "upstream err
 mutatingUpstream :: NonEmpty LByteString -> IO Upstream
 mutatingUpstream bodies = do
     remaining <- newIORef (toList bodies)
-    recordingUpstreamIO $ \req -> do
-        body <- atomicModifyIORef' remaining serveNext
-        pure (bodyAt (\base -> rebaseAuthority fixtureAuthority base body) req)
+    servingUpstreamIO (const (atomicModifyIORef' remaining serveNext))
   where
     -- Serve the head and advance, but hold on the last body once exhausted.
     serveNext :: [LByteString] -> ([LByteString], LByteString)
