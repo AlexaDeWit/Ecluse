@@ -7,9 +7,10 @@ Weights exercise admission without allocating the reported byte counts.
 -}
 module Ecluse.Core.Server.Cache.StoreSpec (spec) where
 
+import Control.Exception (throw)
 import Data.Time (NominalDiffTime)
 import Test.Hspec
-import UnliftIO (async, cancel, concurrently, mapConcurrently, timeout, wait, withAsync)
+import UnliftIO (async, cancel, concurrently, concurrently_, mapConcurrently, timeout, wait, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, try)
 
@@ -219,12 +220,12 @@ spec = do
                 release <- newEmptyMVar
                 let blockingFetch = do
                         atomicModifyIORef' calls (\n -> (n + 1, ()))
-                        putMVar started () -- in the fetch (slot claimed)
-                        () <- takeMVar release -- block so the leader can be cancelled here
+                        putMVar started ()
+                        () <- takeMVar release
                         pure "unreached"
                 leader <- async (resolveOk sf "midflight" blockingFetch)
-                takeMVar started -- the leader holds the slot and is inside the fetch
-                cancel leader -- async-cancel mid-fetch: the slot must still free
+                takeMVar started
+                cancel leader
                 recovered <- resolveOk sf "midflight" (countingFetch calls "raw")
                 n <- readIORef calls
                 pure (recovered, n)
@@ -275,6 +276,92 @@ spec = do
             for_ [1 .. 10 :: Int] $ \i ->
                 resolveOk sf (show i) (pure "raw")
             resolveOk sf "final" (pure "raw") `shouldReturn` "raw"
+
+    describe "incremental occupancy" $ do
+        it "matches retained values through varied-weight eviction and repeated keys" $ do
+            seen <- newIORef Nothing
+            let weigh value = if value == "large" then 170 else 30
+                keys = map show [1 .. 7 :: Int]
+            sf <- newSingleFlight 60 4 230 weigh :: IO (SingleFlight StoreFault Text Text)
+            for_ (zip (concat (replicate 6 keys)) [1 .. 40 :: Int]) $ \(key, turn) -> do
+                let value = if even turn then "large" else "small"
+                _ <- resolveOkRecording seen sf key (pure value)
+                held <- catMaybes <$> traverse (lookupStore sf) keys
+                recordedOccupancy seen `shouldReturn` Just (length held, sum (map weigh held))
+
+        it "purges expired entries before inserting and reuses their full budget" $ do
+            seen <- newIORef Nothing
+            sf <- newStore 0.01 2 (2 * flatWeight)
+            _ <- resolveOk sf "old-a" (pure "raw")
+            _ <- resolveOk sf "old-b" (pure "raw")
+            threadDelay 30000
+            _ <- resolveOkRecording seen sf "new" (pure "raw")
+            recordedOccupancy seen `shouldReturn` Just (1, flatWeight)
+            lookupStore sf "old-a" `shouldReturn` Nothing
+            lookupStore sf "old-b" `shouldReturn` Nothing
+
+        for_ [("read-only", lookupStore), ("touching", lookupStoreTouching)] $ \(viewName, readEntry) ->
+            it ("accounts once for expiry through the " <> viewName <> " view") $ do
+                seen <- newIORef Nothing
+                sf <- newStore 0.01 2 (2 * flatWeight)
+                _ <- resolveOk sf "expired" (pure "raw")
+                threadDelay 30000
+                readEntry sf "expired" `shouldReturn` Nothing
+                readEntry sf "expired" `shouldReturn` Nothing
+                _ <- resolveOkRecording seen sf "fresh" (pure "raw")
+                recordedOccupancy seen `shouldReturn` Just (1, flatWeight)
+
+        it "replaces an expired key with its new weight without retaining the old charge" $ do
+            seen <- newIORef Nothing
+            let weigh value = if value == "old" then 170 else 30
+            sf <- newSingleFlight 0.01 2 230 weigh :: IO (SingleFlight StoreFault Text Text)
+            _ <- resolveOk sf "same" (pure "old")
+            threadDelay 30000
+            _ <- resolveOkRecording seen sf "same" (pure "new")
+            recordedOccupancy seen `shouldReturn` Just (1, 30)
+            _ <- resolveOkRecording seen sf "other" (pure "new")
+            recordedOccupancy seen `shouldReturn` Just (2, 60)
+
+        it "keeps accounting after the occupancy callback throws" $ do
+            seen <- newIORef Nothing
+            sf <- roomyStore
+            outcome <- try (resolveSingleFlight (pure ()) (const pass) (const (throwIO LeaderEscaped)) sf "first" (pure (Right "raw")))
+            outcome `shouldBe` Left LeaderEscaped
+            lookupStore sf "first" `shouldReturn` Just "raw"
+            _ <- resolveOkRecording seen sf "second" (pure "raw")
+            recordedOccupancy seen `shouldReturn` Just (2, 2 * flatWeight)
+
+        it "does not change occupancy when the weigher throws" $ do
+            seen <- newIORef Nothing
+            let weigh value = if value == "fault" then throw LeaderEscaped else flatWeight
+            sf <- newSingleFlight 60 2 (2 * flatWeight) weigh :: IO (SingleFlight StoreFault Text Text)
+            _ <- resolveOk sf "first" (pure "raw")
+            outcome <- try (resolveOk sf "failed" (pure "fault"))
+            outcome `shouldBe` Left LeaderEscaped
+            lookupStore sf "first" `shouldReturn` Just "raw"
+            lookupStore sf "failed" `shouldReturn` Nothing
+            _ <- resolveOkRecording seen sf "second" (pure "raw")
+            recordedOccupancy seen `shouldReturn` Just (2, 2 * flatWeight)
+
+        it "counts concurrent expiry reads and retaining inserts once" $ do
+            seen <- newIORef []
+            sf <- newStore 0 3 (3 * flatWeight)
+            _ <- resolveOk sf "expired" (pure "raw")
+            threadDelay 1000
+            concurrently_
+                (replicateM_ 20 (lookupStoreTouching sf "expired"))
+                (mapConcurrently (\(key :: Int) -> resolveOkAccumulating seen sf (show key) (pure "raw")) [1 .. 8])
+            readings <- readIORef seen
+            length readings `shouldBe` 8
+            map (\occ -> (occEntries occ, occBytes occ)) readings
+                `shouldBe` replicate 8 (1, flatWeight)
+
+        it "counts zero-weight entries against the entry limit" $ do
+            seen <- newIORef Nothing
+            sf <- newSingleFlight 60 2 1 (const 0) :: IO (SingleFlight StoreFault Text Text)
+            for_ [1 .. 6 :: Int] $ \key ->
+                resolveOkRecording seen sf (show key) (pure "raw")
+            recordedOccupancy seen `shouldReturn` Just (2, 0)
 
     describe "the resident-byte budget" $ do
         it "evicts to keep the resident estimate under the byte budget" $ do
@@ -370,3 +457,10 @@ spec = do
             byteReadings <- map occBytes <$> readIORef seen
             byteReadings `shouldSatisfy` (not . null)
             byteReadings `shouldSatisfy` all (<= budget)
+            held <- catMaybes <$> traverse (lookupStore sf . show) [1 .. 8 :: Int]
+            length held `shouldBe` 3
+            readings <- readIORef seen
+            readings `shouldSatisfy` all (\occ -> occBytes occ == occEntries occ * flatWeight)
+
+recordedOccupancy :: IORef (Maybe CacheOccupancy) -> IO (Maybe (Int, Int))
+recordedOccupancy seen = fmap (\occ -> (occEntries occ, occBytes occ)) <$> readIORef seen

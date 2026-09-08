@@ -23,6 +23,7 @@ module Ecluse.Core.Server.Cache.Store (
 
 import Data.Cache (Cache)
 import Data.Cache qualified as Cache
+import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Time (NominalDiffTime)
 import System.Clock (Clock (Monotonic), TimeSpec, fromNanoSecs, getTime)
@@ -34,17 +35,17 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
 data Weighted v = Weighted
     { wValue :: v
-    -- ^ The cached value.
     , wWeight :: Int
     -- ^ The value's estimated resident footprint in bytes, fixed at insert.
     , wStamp :: IORef Word64
     -- ^ The value's last-access stamp, bumped on every hit and read by eviction.
+    , wExpires :: TimeSpec
     }
 
 -- | A bounded store whose concurrent misses share one fetch per key.
 data SingleFlight e k v = SingleFlight
     { sfStore :: Cache k (Weighted v)
-    -- ^ The TTL- and STM-backed store (the @cache@ library), holding weighted values.
+    -- ^ This wrapper owns expiry so removals also update occupancy.
     , sfMaxEntries :: Int
     -- ^ The entry-count bound enforced on insert.
     , sfMaxBytes :: Int
@@ -52,6 +53,10 @@ data SingleFlight e k v = SingleFlight
     , sfWeigh :: v -> Int
     -- ^ Estimate a value's resident footprint in bytes, fixed into its 'Weighted' at insert.
     , sfClock :: IORef Word64
+    , sfTTL :: TimeSpec
+    , sfOccupancy :: TVar CacheOccupancy
+    , sfExpiry :: TVar (Map TimeSpec (HashMap k Int))
+    -- ^ Exactly one indexed weight per retained key. Empty deadline buckets are removed.
     , sfInsertLock :: MVar ()
     , sfInFlight :: TVar (Map k (TMVar (FlightOutcome e v)))
     }
@@ -64,8 +69,11 @@ data FlightOutcome e v
 -- | Build a store with positive bounds. A weight of 'maxBound' means uncacheable.
 newSingleFlight :: NominalDiffTime -> Int -> Int -> (v -> Int) -> IO (SingleFlight e k v)
 newSingleFlight ttl maxEntries maxBytes weigh = do
-    store <- Cache.newCache (Just (toTimeSpec ttl))
+    -- Expiry belongs to this wrapper so deletion and accounting share one transaction.
+    store <- Cache.newCache Nothing
     clock <- newIORef 0
+    occupancy <- newTVarIO (CacheOccupancy 0 0)
+    expiry <- newTVarIO Map.empty
     inFlight <- newTVarIO Map.empty
     insertLock <- newMVar ()
     pure
@@ -75,6 +83,9 @@ newSingleFlight ttl maxEntries maxBytes weigh = do
             , sfMaxBytes = max 1 maxBytes
             , sfWeigh = weigh
             , sfClock = clock
+            , sfTTL = toTimeSpec ttl
+            , sfOccupancy = occupancy
+            , sfExpiry = expiry
             , sfInsertLock = insertLock
             , sfInFlight = inFlight
             }
@@ -97,19 +108,13 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
     case decision of
         Hit weighted -> do
             recordRequest Metric.Hit
-            -- Bump recency outside the STM transaction: a hit updates the per-entry stamp
-            -- without writing the shared store, and the eviction still sees it.
             touch sf weighted
             pure (Right (wValue weighted))
         Follow marker -> do
-            -- A follower coalesced onto an in-flight fetch is a miss for this caller
-            -- (no fresh entry was present), exactly as the leader's miss is.
             recordRequest Metric.Miss
             outcome <- restore (atomically (readTMVar marker))
             case outcome of
                 FlightValue fetched -> pure (Right fetched)
-                -- The typed hand-off: the leader's fetch reported a failure value, so
-                -- every waiter receives the same 'Left', and nothing was cached.
                 FlightFault fault -> pure (Left fault)
                 FlightOrphaned err -> case fromException err of
                     Just (_ :: SomeAsyncException) ->
@@ -127,7 +132,6 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
                 -- served uncached" into one no-insert outcome for the telemetry.
                 inserted <- join <$> traverse (insertBounded sf key) (rightToMaybe fetched)
                 pure (fetched, inserted)
-            -- The leader inserted, so refresh the occupancy gauges (a follower never does).
             traverse_ recordInsert occupancy
             pure outcome
   where
@@ -140,62 +144,104 @@ insertBounded :: (Hashable k) => SingleFlight e k v -> k -> v -> IO (Maybe Cache
 insertBounded sf key value
     | weight == maxBound || weight > sfMaxBytes sf = pure Nothing
     | otherwise = withMVar (sfInsertLock sf) $ \() -> do
-        Cache.purgeExpired (sfStore sf)
+        nowT <- getTime Monotonic
+        atomically $ do
+            purgeExpired sf nowT
+            deleteStored sf key
         evictToBudget sf weight
         stamp <- nextStamp sf
         stampRef <- newIORef stamp
-        Cache.insert (sfStore sf) key (Weighted{wValue = value, wWeight = weight, wStamp = stampRef})
-        Just <$> occupancyOf sf
+        insertedAt <- getTime Monotonic
+        let expires = insertedAt + sfTTL sf
+            weighted = Weighted{wValue = value, wWeight = weight, wStamp = stampRef, wExpires = expires}
+        atomically $ do
+            Cache.insertSTM key weighted (sfStore sf) Nothing
+            modifyTVar' (sfExpiry sf) (Map.insertWith HashMap.union expires (HashMap.singleton key weight))
+            modifyTVar' (sfOccupancy sf) $ \occ ->
+                CacheOccupancy (occEntries occ + 1) (occBytes occ + weight)
+            Just <$> readTVar (sfOccupancy sf)
   where
     weight = sfWeigh sf value
 
 evictToBudget :: (Hashable k) => SingleFlight e k v -> Int -> IO ()
 evictToBudget sf incoming = do
-    held <- Cache.toList (sfStore sf)
-    stamped <- traverse stampOf held
-    let resident = sum [wWeight w | (_, w, _) <- held]
-        oldestFirst = sortOn (\(stamp, _, _) -> stamp) stamped
-    go oldestFirst resident (length held)
+    occupancy <- readTVarIO (sfOccupancy sf)
+    unless (fits occupancy) $ do
+        held <- Cache.toList (sfStore sf)
+        stamped <- traverse stampOf held
+        go (sortOn fst stamped)
   where
     stampOf (k, w, _) = do
         s <- readIORef (wStamp w)
-        pure (s, k, wWeight w)
+        pure (s, k)
 
-    fits resident count = resident <= sfMaxBytes sf - incoming && count < sfMaxEntries sf
+    fits occ = occBytes occ <= sfMaxBytes sf - incoming && occEntries occ < sfMaxEntries sf
 
-    go victims resident count
-        | fits resident count = pass
-        | otherwise = case victims of
-            [] -> pass
-            ((_, k, weight) : rest) -> do
-                Cache.delete (sfStore sf) k
-                go rest (resident - weight) (count - 1)
+    go [] = pass
+    go ((_, k) : rest) = do
+        removed <- atomically $ do
+            occ <- readTVar (sfOccupancy sf)
+            if fits occ
+                then pure False
+                else deleteStored sf k $> True
+        when removed (go rest)
 
--- The store's occupancy after an insert: the entry count and the summed resident weight
--- of the held entries, the values the residency telemetry reports.
-occupancyOf :: SingleFlight e k v -> IO CacheOccupancy
-occupancyOf sf = do
-    held <- Cache.toList (sfStore sf)
-    pure CacheOccupancy{occEntries = length held, occBytes = sum [wWeight w | (_, w, _) <- held]}
+deleteStored :: (Hashable k) => SingleFlight e k v -> k -> STM ()
+deleteStored sf key = do
+    held <- Cache.lookupSTM False key (sfStore sf) (fromNanoSecs 0)
+    for_ held $ \weighted -> do
+        Cache.deleteSTM key (sfStore sf)
+        modifyTVar' (sfExpiry sf) (Map.update dropKey (wExpires weighted))
+        subtractOccupancy sf 1 (wWeight weighted)
+  where
+    dropKey bucket =
+        let remaining = HashMap.delete key bucket
+         in if HashMap.null remaining then Nothing else Just remaining
 
--- Issue the next logical access stamp from the store's clock: a strictly increasing
--- 'Word64', so a larger stamp is more recent.
+subtractOccupancy :: SingleFlight e k v -> Int -> Int -> STM ()
+subtractOccupancy sf entries bytes =
+    modifyTVar' (sfOccupancy sf) $ \occ ->
+        CacheOccupancy (occEntries occ - entries) (occBytes occ - bytes)
+
+purgeExpired :: (Hashable k) => SingleFlight e k v -> TimeSpec -> STM ()
+purgeExpired sf nowT = do
+    expiry <- readTVar (sfExpiry sf)
+    case Map.minViewWithKey expiry of
+        Just ((deadline, bucket), rest) | deadline < nowT -> do
+            traverse_ (\key -> Cache.deleteSTM key (sfStore sf)) (HashMap.keys bucket)
+            subtractOccupancy sf (HashMap.size bucket) (sum bucket)
+            writeTVar (sfExpiry sf) rest
+            purgeExpired sf nowT
+        _ -> pass
+
 nextStamp :: SingleFlight e k v -> IO Word64
 nextStamp sf = atomicModifyIORef' (sfClock sf) (\n -> let n' = n + 1 in (n', n'))
 
--- Bump a held entry's recency to the current logical time, marking it most-recently-used.
--- Runs in plain 'IO' (never STM), so a hit refreshes recency without writing the store.
 touch :: SingleFlight e k v -> Weighted v -> IO ()
 touch sf weighted = nextStamp sf >>= writeIORef (wStamp weighted)
 
 -- | Read without fetching or refreshing recency.
 lookupStore :: (Hashable k) => SingleFlight e k v -> k -> IO (Maybe v)
-lookupStore sf key = fmap wValue <$> Cache.lookup (sfStore sf) key
+lookupStore sf key = fmap wValue <$> lookupWeighted sf key
 
 -- | Read without fetching and refresh recency on a hit.
 lookupStoreTouching :: (Hashable k) => SingleFlight e k v -> k -> IO (Maybe v)
 lookupStoreTouching sf key =
-    Cache.lookup (sfStore sf) key >>= traverse (\weighted -> wValue weighted <$ touch sf weighted)
+    lookupWeighted sf key >>= traverse (\weighted -> wValue weighted <$ touch sf weighted)
+
+lookupWeighted :: (Hashable k) => SingleFlight e k v -> k -> IO (Maybe (Weighted v))
+lookupWeighted sf key = do
+    nowT <- getTime Monotonic
+    atomically (lookupWeightedSTM True sf key nowT)
+
+lookupWeightedSTM :: (Hashable k) => Bool -> SingleFlight e k v -> k -> TimeSpec -> STM (Maybe (Weighted v))
+lookupWeightedSTM eager sf key nowT = do
+    held <- Cache.lookupSTM False key (sfStore sf) nowT
+    case held of
+        Just weighted | wExpires weighted < nowT -> do
+            when eager (deleteStored sf key)
+            pure Nothing
+        _ -> pure held
 
 -- The one atomic resolve decision: a fresh hit, follow an in-flight fetch, or lead a new
 -- one. A hit carries the weighted entry so the caller can bump its recency.
@@ -208,7 +254,7 @@ data Decision e v
 -- in-flight fetch, else install a marker and lead. Runs inside 'resolveSingleFlight''s mask.
 decideSingleFlight :: (Hashable k, Ord k) => SingleFlight e k v -> k -> TimeSpec -> STM (Decision e v)
 decideSingleFlight sf key nowT = do
-    hit <- Cache.lookupSTM False key (sfStore sf) nowT
+    hit <- lookupWeightedSTM False sf key nowT
     case hit of
         Just weighted -> pure (Hit weighted)
         Nothing -> do

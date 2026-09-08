@@ -1269,6 +1269,7 @@ benchmark ecluse-bench
   other-modules:
     Ecluse.Bench.Corpus
     Ecluse.Bench.Fit
+    Ecluse.Core.CacheBench
     Ecluse.Core.MergeBench
     Ecluse.Core.RouteBench
     Ecluse.Core.RulesBench

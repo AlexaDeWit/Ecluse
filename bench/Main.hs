@@ -21,6 +21,7 @@ import Ecluse.Bench.Corpus (
     versionKeysOf,
     withLoaded,
  )
+import Ecluse.Core.CacheBench qualified as CacheBench
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.MergeBench qualified as MergeBench
 import Ecluse.Core.Package (infoVersions, mkPackageName)
@@ -46,6 +47,7 @@ main = do
     -- Decode the curated corpus once, before the measured window, so no bench times it.
     -- Eager, not a tasty 'env' resource, which the bench reporters mishandle mixed with HUnit.
     corpusEntries <- withLoaded <$> loadCorpus
+    cacheBenchmarks <- CacheBench.benchmarks
     defaultMain
         [ bgroup
             "ecluse-core (work-per-request)"
@@ -58,11 +60,11 @@ main = do
             , ServeBench.benchmarks corpusEntries
             , StreamBench.benchmarks
             , SecurityBench.benchmarks corpusEntries
+            , cacheBenchmarks
             ]
         , generatorTests
         ]
 
--- | Correctness tests for the synthetic packument generator.
 generatorTests :: TestTree
 generatorTests =
     testGroup
@@ -87,8 +89,6 @@ generatorTests =
     sampleCount :: Int
     sampleCount = 500
 
-    -- Apply the serve assembly's per-version rewrite to every version of the
-    -- synthetic packument, as the fused assembly pass does per survivor.
     rewriteAllVersions :: Value -> Value
     rewriteAllVersions = \case
         Object top
@@ -96,14 +96,12 @@ generatorTests =
                 Object (KeyMap.insert "versions" (Object (fmap (rewriteVersion versionPrefix) versions)) top)
         other -> other
 
-    -- The served-URL renderer the assembly hands the rewrite, rendered from the artifact route.
     versionPrefix :: Text -> Maybe Text
     versionPrefix file = (\path -> syntheticProxyBase <> "/" <> path) <$> tarballPath (mkPackageName Npm Nothing benchPackageText) file
 
     rewrittenPrefix :: Text
     rewrittenPrefix = syntheticProxyBase <> "/" <> benchPackageText <> "/-/"
 
--- | Every @dist.tarball@ URL in a packument value, in @versions@-object order.
 tarballUrlsOf :: Value -> [Text]
 tarballUrlsOf value =
     [ url
