@@ -175,6 +175,7 @@ data Upstream = Upstream
     , upSeenArtifactValidators :: IORef [Maybe ByteString]
     }
 
+-- | Record upstream requests and answer each with the supplied response function.
 recordingUpstream :: (Request -> Response) -> IO Upstream
 recordingUpstream respondTo = recordingUpstreamIO (pure . respondTo)
 
