@@ -2,8 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Cycle permissions, retries, traversal, and pacing through recorded store effects.
 module Ecluse.Core.Registry.SweepSpec (spec) where
 
+import Data.Conduit (yield)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
@@ -20,19 +22,21 @@ import Ecluse.Core.Registry.Maintenance (
     StoreCursor (writeCursor),
     StoreFacts (factNameAlphabet),
     StoreFault (StoreFault, faultRetry, faultTransport),
-    StoreMaintenance (classifyStore, storeCursor, verifyConsent),
+    StoreMaintenance (classifyStore, enumerateVersions, listPackagesIn, storeCursor, verifyConsent),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
+    inBucket,
     mkNameAlphabet,
     protocolFault,
     renderNamePrefix,
  )
 import Ecluse.Core.Registry.Sweep (sweepCycle, withStoreRetry)
 import Ecluse.Core.Registry.Sweep.Types (
-    CycleHalt (HaltConsentWithheld, HaltStoreFault, HaltStorePreserved),
+    CycleHalt (HaltConsentWithheld, HaltDeletionCap, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (outcomeHalt, outcomeTally),
-    SweepPacing (swpShape),
-    SweepShape (SweepEverything),
+    SweepPacing (swpChunkPause, swpChunkSize, swpDeletionCap, swpShape),
+    SweepPorts (sweepDelay),
+    SweepShape (SweepCandidates, SweepEverything),
     SweepTally (tallyDeleted, tallyExamined, tallyKept),
  )
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity))
@@ -53,9 +57,8 @@ spec = do
     retrySpec
     candidateCycleSpec
     fullWalkSpec
+    pacingSpec
 
-{- The two standing permissions a delete needs, read at every cycle start, because an operator
-revokes either while the sweep runs. Both halts name the backend that raised them. -}
 permissionSpec :: Spec
 permissionSpec = describe "consent and classification" $ do
     it "halts the cycle when the store carries no consent marker, naming the backend" $ do
@@ -146,7 +149,6 @@ candidateCycleSpec = describe "the candidate cycle" $ do
     it "decides only the names the candidate set carries" $ do
         store <- seededStore
         (_, outcome) <- runCycleWith store [DenyByIdentity "left-pad"]
-        -- Two packages are in the store and one is a candidate, so only that one is examined.
         tallyExamined (outcomeTally outcome) `shouldBe` 1
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
 
@@ -231,6 +233,136 @@ recordingCursor handle = do
             cursor{writeCursor = \prefix -> modifyIORef' written (prefix :) >> writeCursor cursor prefix}
     pure (reverse <$> readIORef written, handle{storeCursor = recorded <$> storeCursor handle})
 
+pacingSpec :: Spec
+pacingSpec = describe "cycle chunk pacing" $ do
+    it "pauses before the second one-name page" $
+        assertPacing SweepCandidates 1 "" [["a"], ["b"]] ["a", "b"] [("a", 0), ("b", 1)]
+
+    it "carries a partial chunk across short pages without a trailing pause" $
+        assertPacing
+            SweepCandidates
+            2
+            ""
+            [["a"], ["b"], ["c", "d"]]
+            ["a", "b", "c", "d"]
+            [("a", 0), ("b", 0), ("c", 1), ("d", 1)]
+
+    it "keeps progress across empty pages and filters before counting" $
+        assertPacing
+            SweepCandidates
+            2
+            ""
+            [[], ["a", "x"], [], ["y"], ["b"], [], ["c"], []]
+            ["a", "b", "c"]
+            [("a", 0), ("b", 0), ("c", 1)]
+
+    it "does not pause for an empty listing" $
+        assertPacing SweepCandidates 1 "" [[], []] [] []
+
+    it "does not pause for pages containing no candidates" $
+        assertPacing SweepCandidates 1 "" [["x"], [], ["y"]] [] []
+
+    it "carries a completed chunk across empty candidate buckets" $
+        assertPacing SweepCandidates 1 "abc" [["a"], ["c"]] ["a", "c"] [("a", 0), ("c", 1)]
+
+    it "carries a partial chunk across full-walk buckets" $
+        assertPacing
+            SweepEverything
+            2
+            "abcd"
+            [["a"], [], ["b"], ["d"]]
+            []
+            [("a", 0), ("b", 0), ("d", 1)]
+
+    it "paces a full walk within a bucket" $
+        assertPacing
+            SweepEverything
+            1
+            ""
+            [["a", "b"], [], ["c"]]
+            []
+            [("a", 0), ("b", 1), ("c", 2)]
+
+    it "retains the single-name fallback for a non-positive chunk size" $
+        assertPacing SweepCandidates 0 "" [["a", "b"]] ["a", "b"] [("a", 0), ("b", 1)]
+
+    it "halts at the cap without pausing or requesting another page" $ do
+        store <- seededStore
+        rec' <- recordingPorts generation
+        let handle =
+                (fakeMaintenance store)
+                    { listPackagesIn = \_ -> do
+                        yield [packageName "left-pad"]
+                        lift (expectationFailure "the cap must abandon the listing before its next page")
+                        pure Nothing
+                    }
+            pacing = testPacing{swpChunkSize = 1, swpDeletionCap = 1}
+        outcome <- sweepCycle pacing (recPorts rec') [testMount handle [denyRule] [DenyByIdentity "left-pad"]]
+        outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 generation)
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+        recDelays rec' `shouldReturn` 0
+
+    it "shares progress across mounts and resets it for a new cycle" $ do
+        stores <- replicateM 2 seededStore
+        rec' <- recordingPorts generation
+        observed <- newIORef []
+        let observe store =
+                let handle = fakeMaintenance store
+                 in handle
+                        { enumerateVersions = \name -> do
+                            pauses <- recDelays rec'
+                            modifyIORef' observed (pauses :)
+                            enumerateVersions handle name
+                        }
+            mounts = [testMount (observe store) [] [] | store <- stores]
+            pacing = testPacing{swpShape = SweepEverything, swpChunkSize = 3}
+        replicateM_ 2 $ do
+            outcome <- sweepCycle pacing (recPorts rec') mounts
+            outcomeHalt outcome `shouldBe` Nothing
+            tallyKept (outcomeTally outcome) `shouldBe` 4
+        reverse <$> readIORef observed `shouldReturn` [0, 0, 0, 1, 1, 1, 1, 2]
+        recDelays rec' `shouldReturn` 2
+
+assertPacing :: SweepShape -> Int -> String -> [[Text]] -> [Text] -> [(Text, Int)] -> Expectation
+assertPacing shape chunkSize alphabet pages candidates expected = do
+    let names = map packageName (concat pages)
+        config =
+            (storeConfigFor names)
+                { fakeFacts = (fakeFacts seededConfig){factNameAlphabet = mkNameAlphabet alphabet}
+                }
+    store <- newFakeStore config
+    rec' <- recordingPorts generation
+    observed <- newIORef []
+    let base = fakeMaintenance store
+        selected name = shape == SweepEverything || name `elem` map packageName candidates
+        handle =
+            base
+                { listPackagesIn = \prefix -> do
+                    forM_ pages $ \page -> do
+                        let namesInPage = filter (inBucket prefix) (map packageName page)
+                        priorCount <- lift (length <$> readIORef observed)
+                        yield namesInPage
+                        when (shape == SweepCandidates) $
+                            lift ((length <$> readIORef observed) `shouldReturn` (priorCount + length (filter selected namesInPage)))
+                    pure Nothing
+                , enumerateVersions = \name -> do
+                    pauses <- recDelays rec'
+                    modifyIORef' observed ((name, pauses) :)
+                    enumerateVersions base name
+                }
+        ports =
+            (recPorts rec')
+                { sweepDelay = \duration -> do
+                    duration `shouldBe` 2
+                    sweepDelay (recPorts rec') duration
+                }
+        pacing = testPacing{swpShape = shape, swpChunkSize = chunkSize, swpChunkPause = 2}
+    outcome <- sweepCycle pacing ports [testMount handle [denyRule] (map DenyByIdentity candidates)]
+    outcomeHalt outcome `shouldBe` Nothing
+    tallyDeleted (outcomeTally outcome) `shouldBe` length expected
+    reverse <$> readIORef observed `shouldReturn` map (first packageName) expected
+    recDelays rec' `shouldReturn` foldl' max 0 (map snd expected)
+
 runCycle :: SweepPacing -> StoreMaintenance -> IO (RecordedSweep, CycleOutcome)
 runCycle pacing handle = do
     rec' <- recordingPorts generation
@@ -249,16 +381,15 @@ withStore store f = f (fakeMaintenance store)
 seededStore :: IO FakeStore
 seededStore = newFakeStore seededConfig
 
-{- Two packages, each with one served version and a manifest that carries it, so a case chooses
-which of them the candidate set names. -}
 seededConfig :: FakeStoreConfig
-seededConfig =
+seededConfig = storeConfigFor [packageName "left-pad", packageName "lodash"]
+
+storeConfigFor :: [PackageName] -> FakeStoreConfig
+storeConfigFor names =
     defaultFakeStoreConfig
         { fakeContents = Map.fromList [(name, [StoredVersion (version "1.0.0") VersionServed]) | name <- names]
         , fakeManifests = Map.fromList [(name, sampleManifest name [version "1.0.0"]) | name <- names]
         }
-  where
-    names = [packageName "left-pad", packageName "lodash"]
 
 generation :: Maybe DbEtag
 generation = Just (DbEtag "etag-1")

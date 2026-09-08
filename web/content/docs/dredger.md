@@ -47,6 +47,9 @@ Set the pace with the `dredger` group in your configuration. `chunkSize` and `ch
 many packages one chunk examines and how long it waits between chunks. `cyclePause` sets the wait
 between cycles.
 
+Chunk progress carries across listing pages, prefix buckets, and mounts within a cycle.
+The pause comes before examining the next package after a completed chunk, never after the last package.
+
 `chunkPause` has a floor of two seconds, and the Dredger refuses to boot beneath it, naming the key,
 your value, and the floor. The pause is what leaves you time to stop a mistaken sweep, so you may
 raise it and never lower it.

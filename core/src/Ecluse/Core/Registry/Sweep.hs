@@ -2,14 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror sweep: the Dredger's cycle over every mount's mirror store.
-
-A cycle reads each store's consent and classification, then carries names to the rules one package
-at a time. The default shape carries only the candidates a new advisory or an operator identity
-deny can have changed. The opt-in full walk carries every name instead, which is what covers a
-rule-configuration change, and it resumes from the store's own cursor.
-
-Deletion is permanent, so the belt, the per-cycle cap, and those two reads bound one cycle.
+{- | The Dredger's cycle over every mount's mirror store.
+Candidate listing streams pages. Full walks resume from stored bucket cursors through
+"Ecluse.Core.Registry.Sweep.Walk". Both share cycle pacing and deletion limits.
 -}
 module Ecluse.Core.Registry.Sweep (
     sweepCycle,
@@ -24,7 +19,6 @@ import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
-    DeleteCeiling (AtMost),
     NameAlphabet,
     NamePrefix,
     RetryAdvice (RetryDelayed, RetryFutile, RetryWorthwhile),
@@ -33,7 +27,6 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factBackend, factNameAlphabet),
     StoreFault (faultRetry),
     StoreMaintenance (classifyStore, enumerateVersions, listPackagesIn, storeCursor, storeFacts, verifyConsent),
-    chunksOfCeiling,
     renderNamePrefix,
  )
 import Ecluse.Core.Registry.Sweep.Candidates (CandidateSet, candidateSet, inCandidates)
@@ -52,6 +45,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     renderCycleHalt,
     renderStoreFault,
     renderTally,
+    stChunkProgress,
     stTally,
  )
 import Ecluse.Core.Registry.Sweep.Walk (
@@ -74,7 +68,6 @@ sweepCycle pacing ports mounts = do
     reportCycle ports halt tally
     pure CycleOutcome{outcomeHalt = halt, outcomeTally = tally}
 
--- The closing line of one cycle. A halt is the operator's to act on, a completion is not.
 reportCycle :: SweepPorts -> Maybe CycleHalt -> SweepTally -> IO ()
 reportCycle ports halt tally = case halt of
     Nothing -> auditInfo (sweepAudit ports) ("mirror sweep cycle complete: " <> renderTally tally)
@@ -91,7 +84,6 @@ stepUntilHalt step = go
     go [] = pure Nothing
     go (x : xs) = step x >>= maybe (go xs) (pure . Just)
 
--- Run the checks in order and stop at the first halt one raises.
 firstHalt :: [IO (Maybe CycleHalt)] -> IO (Maybe CycleHalt)
 firstHalt = stepUntilHalt id
 
@@ -222,8 +214,7 @@ streamCandidates pacing ports counters mount ctx etag keep prefix =
                 lift (sweepChunks pacing ports counters mount ctx etag (filter keep page))
                     >>= maybe foldPages (pure . Just)
 
-{- A run of names in chunks, with the pause ahead of every chunk but the first, so the pause falls
-between chunks and never after the last one. -}
+-- Pause only when another name needs examination, including after a page or bucket ends.
 sweepChunks ::
     SweepPacing ->
     SweepPorts ->
@@ -233,12 +224,15 @@ sweepChunks ::
     Maybe DbEtag ->
     [PackageName] ->
     IO (Maybe CycleHalt)
-sweepChunks pacing ports counters mount ctx etag names =
-    stepUntilHalt paced (zip [0 :: Int ..] (chunksOfCeiling (AtMost (swpChunkSize pacing)) names))
+sweepChunks pacing ports counters mount ctx etag = stepUntilHalt paced
   where
-    paced (index, chunk) = do
-        when (index > 0) (sweepDelay ports (swpChunkPause pacing))
-        stepUntilHalt (sweepOne pacing ports counters mount ctx etag) chunk
+    paced name = do
+        progress <- readIORef (stChunkProgress counters)
+        when (progress >= max 1 (swpChunkSize pacing)) $ do
+            sweepDelay ports (swpChunkPause pacing)
+            writeIORef (stChunkProgress counters) 0
+        modifyIORef' (stChunkProgress counters) (+ 1)
+        sweepOne pacing ports counters mount ctx etag name
 
 -- One package: what the store serves for it, then the shared decision step over those versions.
 sweepOne ::
