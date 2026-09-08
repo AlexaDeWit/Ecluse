@@ -340,10 +340,10 @@ assertPacing shape chunkSize alphabet pages candidates expected = do
                 { listPackagesIn = \prefix -> do
                     forM_ pages $ \page -> do
                         let namesInPage = filter (inBucket prefix) (map packageName page)
-                        before <- lift (length <$> readIORef observed)
+                        priorCount <- lift (length <$> readIORef observed)
                         yield namesInPage
                         when (shape == SweepCandidates) $
-                            lift ((length <$> readIORef observed) `shouldReturn` (before + length (filter selected namesInPage)))
+                            lift ((length <$> readIORef observed) `shouldReturn` (priorCount + length (filter selected namesInPage)))
                     pure Nothing
                 , enumerateVersions = \name -> do
                     pauses <- recDelays rec'
