@@ -47,7 +47,6 @@ import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
  )
-import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed))
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -284,20 +283,15 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
                 pdMinTrustedIntegrity deps `shouldBe` sha1Floor
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
-    it "refines the trusted floor and divergence policy per mount over the global defaults" $ do
-        -- The two knobs describe trust in a particular registry, so a legacy mount's
-        -- loosening must not leak onto other mounts. The mount key overrides, and the
-        -- global default stands elsewhere.
+    it "refines the trusted floor per mount over the global default" $ do
         sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
         let env =
                 ("ECLUSE_MOUNTS__NPM__INTEGRITY__MIN_TRUSTED", "sha1")
-                    : ("ECLUSE_MOUNTS__NPM__INTEGRITY__DIVERGENCE_POLICY", "fail-closed")
                     : staticEnvVars
         planFrom env Nothing >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 pdMinTrustedIntegrity deps `shouldBe` sha1Floor
-                pdDivergencePolicy deps `shouldBe` FailClosed
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
 bootErrorSpec :: Spec

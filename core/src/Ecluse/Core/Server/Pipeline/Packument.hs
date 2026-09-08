@@ -38,11 +38,9 @@ import Ecluse.Core.Package.Integrity (
     MinTrustedIntegrity,
  )
 import Ecluse.Core.Package.Merge (
-    DivergencePolicy,
     MergePlan (mpSurvivors),
     Provenance (GatedSource, TrustedSource),
     SourceId,
-    applyDivergencePolicy,
     mergePackuments,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
@@ -196,16 +194,12 @@ serveAdmittedPackument mode replies deps clientToken name request respond rt = d
             (public, publicExclusions, publicVerdicts) <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx (originManifest pubResult))
             let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
                 sources = catMaybes [private, public]
-                -- The terminal for a request that leaves nothing serveable: the merge found no
-                -- survivors, or the divergence policy withheld the last of them (fail-closed).
                 noServeableVersions = do
                     let decisions = collectDecisions privResult pubResult (privateExclusions <> publicExclusions)
                     liftIO (mpServeDecision metrics (packumentServeDecision decisions))
                     liftIO (recordDenials metrics decisions)
                     logDenials name (ctxAdvisoryEtag evalCtx) publicVerdicts
                     liftIO (respond (noSurvivors replies deps decisions))
-                -- Serve a plan that survived the divergence policy: record the admit, then answer
-                -- the conditional request.
                 serveResolved served = do
                     liftIO (mpServeDecision metrics Metric.Admit)
                     answerPackumentConditional mode replies deps name request respond rt sources served
@@ -216,10 +210,8 @@ serveAdmittedPackument mode replies deps clientToken name request respond rt = d
                 else case packumentPlan sources of
                     Nothing -> noServeableVersions
                     Just plan -> do
-                        -- Every policy logs and meters a cross-upstream integrity divergence (threat #11). Only
-                        -- 'FailClosed' then withholds the contested versions.
                         warnDivergences metrics name plan
-                        maybe noServeableVersions serveResolved (survivingPlan (pdDivergencePolicy deps) plan)
+                        serveResolved plan
 
 {- Resolve the origins this request may read: a first-party name reads the private origin alone
 and never the public leg. Every other name reads both concurrently. -}
@@ -318,13 +310,6 @@ packumentPlan sources = do
     plan <- mergePackuments [(srcProvenance s, srcInfo s) | s <- sources]
     guard (not (Map.null (mpSurvivors plan)))
     pure plan
-
-{- The plan to serve under the operator's divergence policy. 'Nothing' when the policy
-withheld the last surviving version, which takes the no-survivors terminal. -}
-survivingPlan :: DivergencePolicy -> MergePlan -> Maybe MergePlan
-survivingPlan policy plan =
-    let served = applyDivergencePolicy policy plan
-     in if Map.null (mpSurvivors served) then Nothing else Just served
 
 -- | A validator derived from framed inputs so unchanged requests skip assembly. Bump the salt when assembly behaviour changes.
 packumentETag :: Text -> PackageName -> [(Provenance, ContentDigest, [Text])] -> ETag

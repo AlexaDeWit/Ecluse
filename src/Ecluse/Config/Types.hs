@@ -83,7 +83,6 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
-import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
@@ -270,13 +269,11 @@ data FirstParty
 {- | A mount's refinements of the global @integrity@ group, under its own @integrity@ key so the
 mount groups them exactly as the top level does. Each is 'Nothing' at the global setting.
 -}
-data MountIntegrity = MountIntegrity
+newtype MountIntegrity = MountIntegrity
     { miMinTrusted :: Maybe MinTrustedIntegrity
     {- ^ A per-mount refinement of the global trusted-integrity floor, for the one
     legacy private registry whose loosening must not leak onto other mounts.
     -}
-    , miDivergencePolicy :: Maybe DivergencePolicy
-    -- ^ A per-mount refinement of the global cross-upstream divergence policy.
     }
     deriving stock (Eq, Show)
 
@@ -374,13 +371,10 @@ data CacheSettings = CacheSettings
     }
     deriving stock (Eq, Show)
 
-{- | The @integrity@ group: the global integrity floors and divergence policy. A mount refines
-@minTrusted@ and @divergencePolicy@ under its own @integrity@ key ('MountIntegrity').
--}
+-- | Global integrity floors. A mount can refine the trusted floor through 'MountIntegrity'.
 data IntegritySettings = IntegritySettings
     { intMinPublic :: MinIntegrity
     , intMinTrusted :: MinTrustedIntegrity
-    , intDivergencePolicy :: DivergencePolicy
     }
     deriving stock (Eq, Show)
 

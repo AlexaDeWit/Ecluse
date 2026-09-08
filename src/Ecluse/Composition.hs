@@ -230,9 +230,6 @@ planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget plan 
                   -- (SHA-256, loosenable below it), refined per mount so a legacy
                   -- registry's loosening never leaks onto a neighbouring mount.
                   pdMinTrustedIntegrity = fromMaybe (intMinTrusted (cfgIntegrity app)) (miMinTrusted (mntIntegrity mcfg))
-                , -- The cross-upstream divergence policy: the global default
-                  -- (warn), refined per mount for the same reason.
-                  pdDivergencePolicy = fromMaybe (intDivergencePolicy (cfgIntegrity app)) (miDivergencePolicy (mntIntegrity mcfg))
                 , pdMetadata = adapterMetadata adapter
                 , pdArtifact = adapterArtifact adapter
                 , pdEgressUrl = mkRegistryUrl

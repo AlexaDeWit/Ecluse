@@ -100,12 +100,13 @@ cache:
 integrity:
   minPublic: sha256
   minTrusted: sha256 # refinable per mount: mounts.<ecosystem>.integrity.minTrusted
-  # What to do when the public and private copies of a version contradict on a shared
-  # integrity algorithm (threat #11). Both policies log a WARNING and increment the
-  # ecluse.registry.merge.divergence counter. The trusted copy always wins the bytes.
-  #   warn        - serve the trusted copy and rely on the alarm (default)
-  #   fail-closed - additionally withhold the contested version from the served listing
-  divergencePolicy: warn # refinable per mount: mounts.<ecosystem>.integrity.divergencePolicy
+  # Digest conflicts keep the private version and tags, log WARNING with both digests,
+  # and increment ecluse.registry.merge.divergence. They never block private artifacts.
+  # Deprecated compatibility key:
+  # divergencePolicy: warn
+  # Remove the key. Missing/null or warn keeps alarms and private preference.
+  # fail-closed and its old aliases refuse startup. Remove that setting only after
+  # accepting private preference: divergence alone can leave a damaged private copy served.
 
 # Extra CIDR ranges denied registry egress, on top of the built-in internal-range
 # blocklist (comma-separated). Extends the block only. A malformed entry fails closed
@@ -296,7 +297,7 @@ mounts:
     # Per-mount refinements of the integrity group above, under the same key names.
     # integrity:
     #   minTrusted: sha256
-    #   divergencePolicy: warn
+    #   divergencePolicy: warn # deprecated compatibility only, remove this key
     # Per-mount rule refinement, merged over the shared policy with the same schema
     # as the top-level rules.
     # rules: {}

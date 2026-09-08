@@ -18,7 +18,6 @@ import Ecluse.Config (
     ConfigError,
     EgressSettings (..),
     FirstParty (FirstPartyPyPI),
-    IntegritySettings (..),
     LimitsSettings (..),
     MountConfig (mntFirstParty),
     ObservabilitySettings (..),
@@ -35,7 +34,6 @@ import Ecluse.Config (
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Package.Merge (DivergencePolicy (FailClosed, Warn))
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix)
 import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
 
@@ -326,19 +324,30 @@ spec = describe "decodeDocument" $ do
                 advDataDir (cfgAdvisories (configApp doc)) `shouldBe` "/var/lib/ecluse/advisories"
                 advUrl (cfgAdvisories (configApp doc)) `shouldBe` Nothing
 
-    it "defaults the divergence policy to warn" $
-        case loadConfig [] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> intDivergencePolicy (cfgIntegrity (configApp doc)) `shouldBe` Warn
-
-    it "parses ECLUSE_INTEGRITY__DIVERGENCE_POLICY=fail-closed from the environment" $
-        case loadConfig [("ECLUSE_INTEGRITY__DIVERGENCE_POLICY", "fail-closed")] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> intDivergencePolicy (cfgIntegrity (configApp doc)) `shouldBe` FailClosed
-
-    it "rejects an unknown ECLUSE_INTEGRITY__DIVERGENCE_POLICY value, naming the field" $
-        loadConfig [("ECLUSE_INTEGRITY__DIVERGENCE_POLICY", "drop")] Nothing
-            `shouldSatisfy` decodeErrorMentions "divergencePolicy"
+    describe "deprecated divergence configuration" $ do
+        for_ ["ECLUSE_INTEGRITY__DIVERGENCE_POLICY", "ECLUSE_MOUNTS__NPM__INTEGRITY__DIVERGENCE_POLICY"] $ \key -> do
+            for_ ["warn", " WARN "] $ \value ->
+                it ("accepts the old alarm-only value at " <> key <> ": " <> value) $
+                    loadConfig (pubUrlEnv <> [(key, value)]) Nothing `shouldSatisfy` isRight
+            for_ ["fail-closed", "FAIL_CLOSED", "  FailClosed  "] $ \value ->
+                it ("refuses the removed value at " <> key <> ": " <> value) $
+                    loadConfig (pubUrlEnv <> [(key, value)]) Nothing
+                        `shouldSatisfy` decodeErrorMentions "Remove this setting after accepting private preference"
+            it ("rejects an unknown value at " <> key) $
+                loadConfig (pubUrlEnv <> [(key, "drop")]) Nothing
+                    `shouldSatisfy` decodeErrorMentions "divergencePolicy"
+        for_ ["{\"integrity\":{\"divergencePolicy\":\"fail-closed\"}}", "{\"mounts\":{\"npm\":{\"integrity\":{\"divergencePolicy\":\"fail-closed\"}}}}"] $ \document ->
+            it ("refuses a removed value in a document: " <> show document) $
+                loadConfig pubUrlEnv (Just document)
+                    `shouldSatisfy` decodeErrorMentions "Remove this setting after accepting private preference"
+        for_ ["{\"integrity\":{\"divergencePolicy\":true}}", "{\"mounts\":{\"npm\":{\"integrity\":{\"divergencePolicy\":5}}}}"] $ \document ->
+            it ("rejects a non-string legacy value: " <> show document) $
+                loadConfig pubUrlEnv (Just document) `shouldSatisfy` decodeErrorMentions "expected a string"
+        it "accepts absent legacy keys" $
+            loadConfig [] Nothing `shouldSatisfy` isRight
+        for_ ["{\"integrity\":{\"divergencePolicy\":null}}", "{\"mounts\":{\"npm\":{\"integrity\":{\"divergencePolicy\":null}}}}"] $ \document ->
+            it ("treats a null legacy key as absent: " <> show document) $
+                loadConfig pubUrlEnv (Just document) `shouldSatisfy` isRight
 
     it "leaves the runtime posture unset when the shipped defaults are all that apply" $ do
         -- Every runtime key unset: the boot resolves cores down its ladder, and the ladder's

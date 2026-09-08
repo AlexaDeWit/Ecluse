@@ -6,7 +6,7 @@
 {-# LANGUAGE TypeApplications #-}
 
 {- | A table-driven codec for the small named-enum vocabularies the system speaks: the
-ecosystem key, the log format and level, the telemetry switch, the divergence policy.
+ecosystem key, the log format and level, and the telemetry switch.
 A 'WireVocab' instance carries one @(value, name)@ table plus the human noun for the
 set. 'lookupWire', 'parseWire' and 'renderWire' all read that table, so a parse, a
 render, and the accepted-set message cannot drift apart.

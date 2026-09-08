@@ -53,7 +53,6 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
-import Ecluse.Core.Package.Merge (DivergencePolicy)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact, AdapterMetadata, AdapterPublish, ProjectName)
 import Ecluse.Core.Registry.Request (CredentialMapping)
@@ -136,8 +135,6 @@ data PackumentDeps = PackumentDeps
     -- ^ Public integrity floor, at least SHA-256. Private reads use 'pdMinTrustedIntegrity'.
     , pdMinTrustedIntegrity :: MinTrustedIntegrity
     -- ^ The minimum integrity hash required for a trusted upstream dependency.
-    , pdDivergencePolicy :: DivergencePolicy
-    -- ^ Whether divergence also withholds a version from listings. Warning and metric always fire.
     , pdMetadata :: AdapterMetadata
     {- ^ The mount ecosystem's metadata capability, carried whole
     ('Ecluse.Core.Registry.Adapter.Capability.AdapterMetadata'), never copied field by field.
