@@ -9,8 +9,10 @@ module Ecluse.Test.OsvDb (
     epssFixtureFile,
     withFixtureOsvDb,
     withOsvZipDb,
+    compileOsvZipDbTo,
 ) where
 
+import Control.Monad ((>=>))
 import Network.HTTP.Types.Status (status200)
 import System.IO.Temp (withSystemTempDirectory)
 
@@ -21,9 +23,7 @@ import Ecluse.Test.Osv (CorpusVersion, osvCorpusZip, runOsvTestM)
 import Ecluse.Test.Port (noopAdvisoryCompileMetricsPort)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
-{- | The gzipped EPSS feed slice the fixture artifacts join against. It scores the CVE
-aliases the corpus advisories carry, and deliberately omits some of them.
--}
+-- | The shared EPSS feed slice omits some corpus aliases to cover missing scores.
 epssFixtureFile :: FilePath
 epssFixtureFile = "test/unit/fixtures/epss/sample-epss.csv.gz"
 
@@ -35,21 +35,23 @@ withFixtureOsvDb v use = do
 
 -- | Compile an archive and the shared EPSS slice into a temporary ecosystem artifact over local HTTP.
 withOsvZipDb :: Ecosystem -> LByteString -> (FilePath -> IO a) -> IO a
-withOsvZipDb eco zipBytes use = do
+withOsvZipDb eco zipBytes use =
+    withSystemTempDirectory "ecluse-osv-fixture" (compileOsvZipDbTo eco zipBytes >=> use)
+
+-- | Compile into the supplied directory so tests can exercise artifact replacement.
+compileOsvZipDbTo :: Ecosystem -> LByteString -> FilePath -> IO FilePath
+compileOsvZipDbTo eco zipBytes dir = do
     epssBytes <- readFileLBS epssFixtureFile
-    withSystemTempDirectory "ecluse-osv-fixture" $ \dir ->
-        withStub status200 zipBytes $ \osvStub ->
-            withStub status200 epssBytes $ \epssStub -> do
-                dbFile <-
-                    runOsvTestM
-                        ( compileOsvToSqlite
-                            noopAdvisoryCompileMetricsPort
-                            Nothing
-                            dir
-                            (osvEcosystemFor eco)
-                            CompileSources
-                                { csOsvExportUrl = toString (stubBaseUrl osvStub) <> "/all.zip"
-                                , csEpssFeedUrl = toString (stubBaseUrl epssStub) <> "/epss_scores-current.csv.gz"
-                                }
-                        )
-                use dbFile
+    withStub status200 zipBytes $ \osvStub ->
+        withStub status200 epssBytes $ \epssStub ->
+            runOsvTestM
+                ( compileOsvToSqlite
+                    noopAdvisoryCompileMetricsPort
+                    Nothing
+                    dir
+                    (osvEcosystemFor eco)
+                    CompileSources
+                        { csOsvExportUrl = toString (stubBaseUrl osvStub) <> "/all.zip"
+                        , csEpssFeedUrl = toString (stubBaseUrl epssStub) <> "/epss_scores-current.csv.gz"
+                        }
+                )
