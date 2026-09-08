@@ -7,7 +7,7 @@ and runtime downloads can share the traversal without sharing error types.
 -}
 module Ecluse.Core.Stream (boundBytes) where
 
-import Conduit (ConduitT, await, lift, yield)
+import Conduit (ConduitT, await, yield)
 import Data.ByteString qualified as BS
 
 {- | Preserve chunks up to the byte cap. On breach, pass the observed byte count
