@@ -174,7 +174,7 @@ can bypass public admission without a warning.
 |---|---|---|
 | One store for two roles | Provenance separation and per-store governance can be lost | Depending on the pair, startup warns or refuses. Use the [collision table](@/docs/configuration.md#endpoint-collisions) rather than assuming every collapse is allowed |
 | A private upstream that itself draws directly from public | Public rules, quarantine, and the public-admission integrity floor are bypassed. The trusted listing floor still applies, but conventional private npm artifact hits bypass metadata admission | **No. Écluse cannot detect this wiring.** |
-| An open edge: `ECLUSE_SERVER__AUTH_TOKEN` unset | Écluse's own authentication layer. Access control leans entirely on your network boundary | Nothing fires, but the posture is your own explicit setting |
+| A closed edge: `ECLUSE_SERVER__AUTH_TOKEN` set | Per-caller passthrough: every caller presents the one edge token and reaches the private upstream as one identity. With a static publish token configured, publication granularity: any edge-token holder can publish anything that token permits within the configured first-party scopes | Nothing fires. The posture is your own explicit setting |
 | A static publish credential without an edge token | Nothing at runtime, because it never boots | Yes. The boot fails closed |
 | A static mirror-write secret | The short-lived token minted from the container role | Nothing fires. The secret is visible in the configuration you wrote |
 
@@ -187,8 +187,12 @@ Edge authentication to the proxy ships in two modes:
 
 1. **Open**: `ECLUSE_SERVER__AUTH_TOKEN` unset. The network layer (VPC, service mesh) owns access
    control, so this is appropriate only on a closed network.
-2. **Static token**: `ECLUSE_SERVER__AUTH_TOKEN` set. Clients send it in whichever form their
-   own ecosystem speaks, and Écluse compares the secret half. An npm-protocol client sends
+2. **Static token**: `ECLUSE_SERVER__AUTH_TOKEN` set. Every caller presents the same edge token,
+   so private reads lose per-caller passthrough. With a static publish token configured, any
+   edge-token holder can publish anything it permits within the configured first-party scopes.
+   This reduces publication granularity. No warning fires for this deliberate setting.
+   Clients send the edge token in whichever form their own ecosystem speaks, and Écluse
+   compares the secret half. An npm-protocol client sends
    `Authorization: Bearer <token>`, which is the `_authToken` line keyed by the mount's host and
    path:
 
@@ -232,8 +236,8 @@ name under one of them may be published (see
 
 ### What a client configures
 
-Écluse serves one endpoint per mount, and installs and publishes both go to it. The client's whole
-obligation is to supply a credential the private registry accepts, keyed to the proxy's URL in
+Écluse serves one endpoint per mount, and installs and publishes both go to it. With the recommended
+open edge, the client supplies a credential the private registry accepts, keyed to the proxy's URL in
 whatever per-registry auth configuration that client keeps. Écluse forwards it to the private
 upstream, which authorises the caller, so what someone reaches through the proxy is what your
 registry already grants them. Public installs without credentials remain possible when no private
@@ -293,9 +297,9 @@ Either one routes traffic around the proxy, which is what the two rules above ex
 
 ### Keeping publishes on the proxy
 
-Écluse accepts a publish on the same mount endpoint it serves installs from and relays it to the
-publication target under the publisher's own credential. Two failures can take a publish off that
-path, and they are not alike.
+Écluse accepts a publish on the same mount endpoint it serves installs from.
+With the recommended open edge, it relays the publish to the publication target under the
+publisher's own credential. Two failures can take a publish off that path, and they are not alike.
 
 A publish that reaches Écluse when the mount declares no publication target is refused with
 `405 Method Not Allowed`. The failure is loud and immediate. Écluse relays a publish only to a
