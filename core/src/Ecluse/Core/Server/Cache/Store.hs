@@ -208,11 +208,15 @@ purgeExpired sf nowT = do
     expiry <- readTVar (sfExpiry sf)
     case Map.minViewWithKey expiry of
         Just ((deadline, bucket), rest) | deadline < nowT -> do
-            traverse_ (\key -> Cache.deleteSTM key (sfStore sf)) (HashMap.keys bucket)
-            subtractOccupancy sf (HashMap.size bucket) (sum bucket)
+            HashMap.foldrWithKey deleteExpired pass bucket
             writeTVar (sfExpiry sf) rest
             purgeExpired sf nowT
         _ -> pass
+  where
+    deleteExpired key weight remaining = do
+        Cache.deleteSTM key (sfStore sf)
+        subtractOccupancy sf 1 weight
+        remaining
 
 nextStamp :: SingleFlight e k v -> IO Word64
 nextStamp sf = atomicModifyIORef' (sfClock sf) (\n -> let n' = n + 1 in (n', n'))

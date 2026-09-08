@@ -353,7 +353,7 @@ spec = do
                 (mapConcurrently (\(key :: Int) -> resolveOkAccumulating seen sf (show key) (pure "raw")) [1 .. 8])
             readings <- readIORef seen
             length readings `shouldBe` 8
-            map (\occ -> (occEntries occ, occBytes occ)) readings
+            map occupancyPair readings
                 `shouldBe` replicate 8 (1, flatWeight)
 
         it "counts zero-weight entries against the entry limit" $ do
@@ -418,7 +418,7 @@ spec = do
             _ <- resolveOkRecording seen sf "second" (pure "b")
             lookupStore sf "first" `shouldReturn` Nothing
             lookupStore sf "second" `shouldReturn` Just "b"
-            (fmap (\occ -> (occEntries occ, occBytes occ)) <$> readIORef seen) `shouldReturn` Just (1, maxBound - 1)
+            recordedOccupancy seen `shouldReturn` Just (1, maxBound - 1)
 
         it "serves a value larger than the whole byte budget without retaining it" $ do
             sf <- newStore 60 100 (flatWeight - 1)
@@ -460,7 +460,10 @@ spec = do
             held <- catMaybes <$> traverse (lookupStore sf . show) [1 .. 8 :: Int]
             length held `shouldBe` 3
             readings <- readIORef seen
-            readings `shouldSatisfy` all (\occ -> occBytes occ == occEntries occ * flatWeight)
+            map occupancyPair readings `shouldSatisfy` all (\(entries, bytes) -> bytes == entries * flatWeight)
 
 recordedOccupancy :: IORef (Maybe CacheOccupancy) -> IO (Maybe (Int, Int))
-recordedOccupancy seen = fmap (\occ -> (occEntries occ, occBytes occ)) <$> readIORef seen
+recordedOccupancy seen = fmap occupancyPair <$> readIORef seen
+
+occupancyPair :: CacheOccupancy -> (Int, Int)
+occupancyPair occ = (occEntries occ, occBytes occ)
