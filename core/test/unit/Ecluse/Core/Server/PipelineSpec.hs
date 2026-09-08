@@ -4,12 +4,14 @@
 
 {- | Exercise core serve handlers through their runtime ports.
 Responses and emitted metrics remain observable independently of application wiring.
+Admission lifetime cases connect sweep deletions to the next private request.
 -}
 module Ecluse.Core.Server.PipelineSpec (spec) where
 
 import Data.Aeson (Value, encode, (.=))
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (LogEnv, closeScribes)
@@ -19,6 +21,7 @@ import Network.HTTP.Types (hContentType, status200, status304, status401, status
 import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mkSecret, unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Registry.Maintenance (ConsentVerdict (ConsentWithheld), StoreClass (StorePreserved), StoredVersion (StoredVersion), VersionPresence (VersionServed))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (
     npmPackumentContract,
@@ -28,8 +31,11 @@ import Ecluse.Core.Registry.Npm.Route (
     npmTarballReplies,
  )
 import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
-import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Registry.Sweep (sweepCycle)
+import Ecluse.Core.Registry.Sweep.Types (CycleOutcome (outcomeTally), SweepMount (smFirstParty), SweepPacing (swpShape), SweepShape (SweepCandidates, SweepEverything), SweepTally (tallyDeleted, tallyExamined))
+import Ecluse.Core.Rules (PreparedRule, evalRules, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
+import Ecluse.Core.Rules.Types qualified as Rules
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, withServeAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
@@ -50,13 +56,15 @@ import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
-import Ecluse.Test.Package (sriSha512Of, unsafeFilename)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents), FakeStoreConfig (fakeClass, fakeConsent, fakeContents, fakeManifests), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Package (sampleDetails, sampleManifest, sriSha512Of, unsafeFilename)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, versionSpec, versionValue)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, inertRuleDeps, isUndecidable)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (npmServeDeps, withPrivateBaseUrl)
+import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, testPacing)
 import Network.HTTP.Types.Header (RequestHeaders, hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -64,8 +72,11 @@ import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
+-- | Pin client responses and metrics, including trusted reads after a policy change.
 spec :: Spec
 spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)" $ do
+    admissionLifetimeSpec
+
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
         it ("records private artifact HTTP " <> show (statusCode upstreamStatus) <> " as " <> show expected <> " for GET and HEAD") $
             testWithApplication (pure (\_ respond -> respond (responseLBS upstreamStatus [] "private response"))) $ \port -> do
@@ -117,8 +128,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     it "admits exactly the credential presentation the mount's ecosystem declares" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
         rt <- mkRuntime metricsPort
-        -- Both origins point at a closed port, so a 503 means the edge admitted the request and a
-        -- 401 is the gate's own refusal. The mounts differ only in credential presentation.
+        -- Closed upstream ports distinguish edge refusal from an admitted request's fetch failure.
         gated <- gatedDeps
         let serveUnder mapping headers =
                 statusCode . responseStatus
@@ -152,21 +162,17 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         hits <- newIORef (0 :: Int)
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
             base <- depsFor port
-            -- Each predicate reads the requested name, as the one the composition root derives
-            -- does, rather than answering a constant whatever it is asked.
             let serveUnder firstParty =
                     captureServe
                         npmPackumentContract
                         rt
                         (mountWith base{pdFirstParty = firstParty})
                         (servePackument npmPackumentReplies leftpad defaultRequest)
-            -- The first-party serve runs first, against a cold metadata cache, so a zero count
-            -- means the public leg was never entered rather than answered from a cache entry.
+            -- A cold cache makes a zero count prove that the public leg never ran.
             firstParty <- serveUnder (== leftpad)
             statusCode (responseStatus firstParty) `shouldBe` 404
             readIORef hits >>= (`shouldBe` 0)
             decisions >>= (`shouldBe` [Deny])
-            -- The control: the same live upstream serves the same name once it is not first-party.
             thirdParty <- serveUnder (/= leftpad)
             statusCode (responseStatus thirdParty) `shouldBe` 200
             readIORef hits >>= (`shouldSatisfy` (> 0))
@@ -195,8 +201,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "sheds packument work when metadata admission refuses" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
-        -- No waiting room, so admission refuses the saturated attempt outright. These cases own the
-        -- refusal rendering (503 plus Retry-After), and AdmissionSpec owns the wait semantics.
+        -- No waiting room makes saturation refuse immediately.
         admission <- newServeAdmissionTuned 1 0 0
         rt <- mkRuntimeWith admission metricsPort
         deps <- depsFor 1
@@ -247,6 +252,125 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         (mountWith privateDeps)
                         (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             (statusCode . responseStatus <$> held) `shouldBe` Just 200
+
+admissionLifetimeSpec :: Spec
+admissionLifetimeSpec = describe "admission lifetime after removing an allow" $
+    for_ [SweepCandidates, SweepEverything] $ \shape -> describe (show shape) $ do
+        it "retains the copy and serves the next private GET when the only allow disappears" $
+            checkLifetime shape (LifetimePolicy [] (== Rules.BlockedByDefault []) Retained) Eligible
+        it "removes the copy and denies the next GET when an existing identity deny becomes decisive" $
+            checkLifetime shape winningDeny Eligible
+        it "keeps trusting the copy when an unchanged higher-priority allow still beats the deny" $
+            checkLifetime
+                shape
+                (LifetimePolicy [Rules.PrecededRule 600 (Rules.AllowByIdentity "leftpad"), identityDeny] ((== Just "AllowByIdentity") . admittedBy) Retained)
+                Eligible
+        it "retains the copy when unavailable advisory evidence wins ahead of the existing deny" $
+            checkLifetime
+                shape
+                (LifetimePolicy [unavailableCveDeny, identityDeny] isUndecidable Retained)
+                Eligible
+        it "retains the copy when unavailable advisory evidence is the only remaining rule" $
+            checkLifetime
+                shape
+                (LifetimePolicy [unavailableCveDeny] isUndecidable Retained)
+                Eligible
+        for_ [FirstParty, ConsentMissing, TargetPreserved, ManifestMissing] $ \protection ->
+            it ("retains the denied copy and serves the next private GET under " <> show protection) $
+                checkLifetime shape winningDeny protection
+
+data CopyDisposition = Retained | Removed
+    deriving stock (Eq)
+
+data LifetimeProtection = Eligible | FirstParty | ConsentMissing | TargetPreserved | ManifestMissing
+    deriving stock (Eq, Show)
+
+data LifetimePolicy = LifetimePolicy
+    { lpRules :: [PrecededRule]
+    , lpDecision :: Rules.Decision -> Bool
+    , lpDisposition :: CopyDisposition
+    }
+
+identityDeny :: PrecededRule
+identityDeny = atDefaultPrecedence (Rules.DenyByIdentity "leftpad@1.0.0")
+
+unavailableCveDeny :: PrecededRule
+unavailableCveDeny = Rules.PrecededRule 600 (Rules.DenyIfCve (Rules.DenyIfCveParams 0 Rules.FailDeny))
+
+winningDeny :: LifetimePolicy
+winningDeny = LifetimePolicy [identityDeny] ((== Just "DenyByIdentity") . blockedBy) Removed
+
+checkLifetime :: SweepShape -> LifetimePolicy -> LifetimeProtection -> Expectation
+checkLifetime shape policy protection = do
+    ctx <- Rules.mkEvalContext (pure fixedNow) (pure Nothing)
+    let version = mkVersion Npm "1.0.0"
+        details = sampleDetails leftpad version
+        initialPolicy = Rules.PrecededRule 700 (Rules.AllowByIdentity "leftpad@1.0.0") : lpRules policy
+    initial <- prepare inertRuleDeps initialPolicy
+    admittedBy <$> evalRules ctx initial details `shouldReturn` Just "AllowByIdentity"
+    store <- newFakeStore (lifetimeStore protection)
+    preparedAfter <- prepare inertRuleDeps (lpRules policy)
+    evalRules ctx preparedAfter details >>= (`shouldSatisfy` lpDecision policy)
+    recorded <- recordingPorts Nothing
+    let mount =
+            (testMount (fakeMaintenance store) preparedAfter (map Rules.prRule (lpRules policy)))
+                { smFirstParty = \name -> protection == FirstParty && name == leftpad
+                }
+    outcome <- sweepCycle testPacing{swpShape = shape} (recPorts recorded) [mount]
+    let retained = protection /= Eligible || lpDisposition policy == Retained
+        expectedVersions = [StoredVersion version VersionServed | retained]
+        examined = case protection of
+            FirstParty -> 0
+            ConsentMissing -> 0
+            TargetPreserved -> 0
+            _ -> if shape == SweepCandidates && identityDeny `notElem` lpRules policy then 0 else 1
+    tallyExamined (outcomeTally outcome) `shouldBe` examined
+    tallyDeleted (outcomeTally outcome) `shouldBe` if retained then 0 else 1
+    Map.lookup leftpad <$> readFakeContents store `shouldReturn` Just expectedVersions
+    nextPrivateGet store preparedAfter retained
+
+lifetimeStore :: LifetimeProtection -> FakeStoreConfig
+lifetimeStore protection = case protection of
+    ConsentMissing -> seeded{fakeConsent = ConsentWithheld "operator withdrew consent"}
+    TargetPreserved -> seeded{fakeClass = StorePreserved "the store has an upstream"}
+    ManifestMissing -> seeded{fakeManifests = Map.empty}
+    _ -> seeded
+  where
+    version = mkVersion Npm "1.0.0"
+    seeded =
+        defaultFakeStoreConfig
+            { fakeContents = Map.singleton leftpad [StoredVersion version VersionServed]
+            , fakeManifests = Map.singleton leftpad (sampleManifest leftpad [version])
+            }
+
+nextPrivateGet :: FakeStore -> [PreparedRule] -> Bool -> Expectation
+nextPrivateGet store rules retained = do
+    publicHits <- newIORef (0 :: Int)
+    privateHits <- newIORef (0 :: Int)
+    testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort ->
+        testWithApplication (pure (countingUpstream privateHits (storedUpstream store))) $ \privatePort -> do
+            (metricsPort, decisions) <- recordingMetricsPort
+            rt <- mkRuntime metricsPort
+            base <- depsFor publicPort
+            let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show privatePort))) base{pdRules = rules}
+            response <-
+                captureServe
+                    npmTarballContract
+                    rt
+                    (mountWith deps)
+                    (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+            statusCode (responseStatus response) `shouldBe` if retained then 200 else 403
+            decisions `shouldReturn` [if retained then Admit else Deny]
+            readIORef privateHits `shouldReturn` 1
+            readIORef publicHits `shouldReturn` if retained then 0 else 1
+
+-- The private registry reads the same inventory that the sweep's delete capability mutates.
+storedUpstream :: FakeStore -> Application
+storedUpstream store req respond = do
+    contents <- readFakeContents store
+    if StoredVersion (mkVersion Npm "1.0.0") VersionServed `elem` Map.findWithDefault [] leftpad contents
+        then upstreamApp req respond
+        else respond (responseLBS status404 [] "")
 
 -- | Run a serve handler over a request runtime and mount, capturing the 'Response' it hands its continuation.
 captureServe :: ResponseContract response -> ServeRuntime -> MountBinding -> ((response -> IO ResponseReceived) -> Handler ResponseReceived) -> IO Response
