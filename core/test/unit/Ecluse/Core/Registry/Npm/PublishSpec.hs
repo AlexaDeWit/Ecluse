@@ -2,17 +2,26 @@
 --
 -- SPDX-License-Identifier: MIT
 
+{- | Exercise npm mirror publication through a recording transport stub.
+Integrity cases connect worker verification to the published document and attachment.
+-}
 module Ecluse.Core.Registry.Npm.PublishSpec (spec) where
 
+import Data.Aeson (Value)
+import Data.ByteArray.Encoding (Base (Base64), convertFromBase)
+import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Lens.Micro (Traversal', (^?))
+import Lens.Micro.Aeson (key, _Integer, _String)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200, status404, status409, status500)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Expectation, Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
 import Ecluse.Core.Fault (TransportFault (tfDetail))
+import Ecluse.Core.Package (HashAlg (SHA1, SRI), mkHash, mkSriHashes)
 import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
-    MirrorArtifact (maSize),
+    MirrorArtifact (maHashes, maSize),
     PublishError (publishErrorMessage),
     PublishFault (PublishFetch, PublishRejected),
  )
@@ -24,8 +33,10 @@ import Ecluse.Core.Registry.Publish (
  )
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Test.Package (v1_0_0, validSha1)
+import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
+import Ecluse.Test.Package (hexSha1Of, sriSha256Of, sriSha512Of, unsafeHash, v1_0_0, validSha1)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd)
+import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
 import Ecluse.Test.Stub (
     Stub,
@@ -38,12 +49,12 @@ import Ecluse.Test.Stub (
     withStub,
  )
 
+-- | npm publication outcomes and the integrity carried with attached bytes.
 spec :: Spec
-spec = publishSpec
+spec = do
+    publishSpec
+    integritySpec
 
-{- | The npm mirror write, driven exactly as production runs it: 'npmPublishCodec'
-married to the shared transport ('newMirrorPublish') against a recording stub.
--}
 publishSpec :: Spec
 publishSpec = describe "the npm mirror write (codec over the shared transport)" $ do
     it "PUTs the publish document to the package path" $
@@ -54,8 +65,6 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
             capMethod cap `shouldBe` "PUT"
             capPath cap `shouldBe` "/is-odd"
             capBody cap `shouldBe` publishDoc
-            -- The publish must declare a content type of application/json: a
-            -- spec-compliant registry (e.g. Verdaccio) 415s a publish that omits it.
             headerValue "content-type" cap `shouldBe` Just "application/json"
 
     it "treats a 2xx as success" $
@@ -72,7 +81,6 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
         withStub status404 "{\"error\":\"Not found\"}" $ \stub -> do
             publish <- stubPublish stub
             outcome <- mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes
-            -- Force the error message so the failure carries the status it saw.
             leftMessage outcome `shouldSatisfy` maybe False (T.isInfixOf "404")
 
     it "reports a 500 as a publish error" $
@@ -82,14 +90,62 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
             outcome `shouldSatisfy` isLeft
 
     it "reports a transport failure as a PublishFetch value, never thrown" $ do
-        -- No server listens on this port, so the write throws a connection failure. The transport
-        -- must fold it into a retryable PublishFetch value, never throw.
         publish <- publishAt "http://127.0.0.1:1"
         outcome <- mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes
         outcome `shouldSatisfy` isTransport
 
--- The production marriage against a stub's endpoint: anonymous mint, a no-TLS
--- manager, and the secure-default response bounds.
+integritySpec :: Spec
+integritySpec = describe "verified integrity in the published document" $ do
+    let matching = sriSha512Of dummyTarballBytes
+        nonmatching = sriSha512Of "other tarball bytes"
+        weaker = sriSha256Of dummyTarballBytes
+    for_
+        [ ("keeps a nonmatching alternative before a matching alternative", [nonmatching, matching], Just (nonmatching <> " " <> matching))
+        , ("keeps a matching alternative before a nonmatching alternative", [matching, nonmatching], Just (matching <> " " <> nonmatching))
+        , ("drops a weaker first token and keeps every strongest alternative", [weaker, nonmatching, matching], Just (nonmatching <> " " <> matching))
+        , ("preserves a single SRI token", [matching], Just matching)
+        , ("preserves a SHA1-only artifact without adding SRI", [], Nothing)
+        ]
+        $ \(label, tokens, expectedIntegrity) ->
+            it label (assertPublishedIntegrity tokens expectedIntegrity)
+
+assertPublishedIntegrity :: [Text] -> Maybe Text -> Expectation
+assertPublishedIntegrity tokens expectedIntegrity =
+    withStub status200 "{}" $ \stub -> do
+        let shasum = T.toUpper (hexSha1Of dummyTarballBytes)
+            hashes = unsafeHash SHA1 shasum :| map (unsafeHash SRI) tokens
+            artifact = sizedArtifact{maHashes = hashes}
+        verifyIntegrity hashes dummyTarballBytes `shouldBe` IntegrityVerified
+        publish <- stubPublish stub
+        mpPublishArtifact publish isOdd v1_0_0 artifact dummyTarballBytes `shouldReturn` Right ()
+        cap <- lastCaptured stub
+        document <- decodeJsonOrFail (capBody cap) :: IO Value
+        let manifest, dist, attachment :: Traversal' Value Value
+            manifest = key "versions" . key "1.0.0"
+            dist = manifest . key "dist"
+            attachment = key "_attachments" . key "is-odd-1.0.0.tgz"
+        document ^? key "_id" . _String `shouldBe` Just "is-odd"
+        document ^? key "name" . _String `shouldBe` Just "is-odd"
+        document ^? key "dist-tags" . key "latest" . _String `shouldBe` Just "1.0.0"
+        document ^? manifest . key "name" . _String `shouldBe` Just "is-odd"
+        document ^? manifest . key "version" . _String `shouldBe` Just "1.0.0"
+        document ^? dist . key "tarball" . _String `shouldBe` Just "is-odd-1.0.0.tgz"
+        document ^? dist . key "integrity" . _String `shouldBe` expectedIntegrity
+        document ^? dist . key "shasum" . _String `shouldBe` Just shasum
+        document ^? attachment . key "content_type" . _String `shouldBe` Just "application/octet-stream"
+        document ^? attachment . key "length" . _Integer `shouldBe` Just (fromIntegral (BS.length dummyTarballBytes))
+        encoded <- maybe (fail "missing attachment data") pure (document ^? attachment . key "data" . _String)
+        bytes <- expectRight (convertFromBase Base64 (encodeUtf8 encoded :: ByteString))
+        bytes `shouldBe` dummyTarballBytes
+        case document ^? dist . key "integrity" . _String of
+            Just carrier -> do
+                publishedHashes <- expectRight (mkSriHashes carrier)
+                verifyIntegrity publishedHashes bytes `shouldBe` IntegrityVerified
+            Nothing -> do
+                raw <- maybe (fail "missing shasum") pure (document ^? dist . key "shasum" . _String)
+                publishedHash <- expectRight (mkHash SHA1 raw)
+                verifyIntegrity (publishedHash :| []) bytes `shouldBe` IntegrityVerified
+
 stubPublish :: Stub -> IO MirrorPublish
 stubPublish stub = publishAt (stubBaseUrl stub)
 
@@ -99,20 +155,15 @@ publishAt targetUrl = do
     let transport = MirrorTransport{ptManager = manager, ptMintToken = pure Nothing, ptLimits = defaultLimits}
     pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) npmPublishCodec)
 
--- | The shared descriptor, sized: the npm codec reports the attachment length it declares.
 sizedArtifact :: MirrorArtifact
 sizedArtifact = dummyArtifact{maSize = Just 1234}
 
 dummyTarballBytes :: ByteString
 dummyTarballBytes = "tarball-bytes"
 
--- | The expected publish document assembled by the codec.
 publishDoc :: ByteString
 publishDoc = npmPublishDocument isOdd v1_0_0 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes
 
-{- | The (forced) error message of a publish 'Left', or 'Nothing' on a 'Right'.
-Forcing the message exercises the error-construction path.
--}
 leftMessage :: Either PublishFault a -> Maybe Text
 leftMessage outcome = case outcome of
     Left (PublishRejected err) -> Just (publishErrorMessage err)
@@ -120,7 +171,6 @@ leftMessage outcome = case outcome of
     Left (PublishFetch _) -> Nothing
     Right _ -> Nothing
 
--- | Whether a publish outcome is the retryable transport fault (a value, not a throw).
 isTransport :: Either PublishFault a -> Bool
 isTransport = \case
     Left (PublishFetch (FetchTransport _)) -> True
