@@ -291,6 +291,7 @@ library ecluse-core
     , time                  ^>=1.12
     , tls >=2.1 && <2.5
     , universe-base         ^>=1.1
+    , unordered-containers  ^>=0.2
     , unliftio              ^>=0.2.25
     , vector                ^>=0.13
     , versions              ^>=6.0
@@ -1269,6 +1270,7 @@ benchmark ecluse-bench
   other-modules:
     Ecluse.Bench.Corpus
     Ecluse.Bench.Fit
+    Ecluse.Core.CacheBench
     Ecluse.Core.MergeBench
     Ecluse.Core.RouteBench
     Ecluse.Core.RulesBench
