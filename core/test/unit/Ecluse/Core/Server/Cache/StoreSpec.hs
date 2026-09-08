@@ -9,7 +9,7 @@ module Ecluse.Core.Server.Cache.StoreSpec (spec) where
 
 import Data.Time (NominalDiffTime)
 import Test.Hspec
-import UnliftIO (async, cancel, concurrently, mapConcurrently, timeout, wait)
+import UnliftIO (async, cancel, concurrently, mapConcurrently, timeout, wait, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, try)
 
@@ -151,6 +151,39 @@ spec = do
                 Just (leaderOutcome, followerOutcome) -> do
                     leaderOutcome `shouldBe` Left LeaderEscaped
                     followerOutcome `shouldBe` Left LeaderEscaped
+
+        it "releases the claim when leader request telemetry throws" $ do
+            result <- timeout 5_000_000 $ do
+                sf <- roomyStore
+                calls <- newIORef (0 :: Int)
+                seen <- newIORef []
+                leaderReported <- newEmptyMVar
+                followerReported <- newEmptyMVar
+                let fetch = Right <$> countingFetch calls "raw"
+                    reportRequest observed request = do
+                        atomicModifyIORef' seen (\requests -> (request : requests, ()))
+                        putMVar observed ()
+                    leaderRequest request = do
+                        reportRequest leaderReported request
+                        readMVar followerReported
+                        -- A callback fault must propagate through the exception channel.
+                        throwIO LeaderEscaped
+                    resolveReporting callback =
+                        resolveSingleFlight (pure ()) callback (const pass) sf "reporter" fetch
+                withAsync (try (resolveReporting leaderRequest)) $ \leader -> do
+                    takeMVar leaderReported
+                    withAsync (try (resolveReporting (reportRequest followerReported))) $ \follower -> do
+                        wait leader `shouldReturn` Left LeaderEscaped
+                        wait follower `shouldReturn` Left LeaderEscaped
+                lookupStore sf "reporter" `shouldReturn` Nothing
+                readIORef calls `shouldReturn` 0
+                readIORef seen `shouldReturn` [Metric.Miss, Metric.Miss]
+                resolveWithRequests seen (pure ()) sf "reporter" fetch `shouldReturn` Right "raw"
+                resolveWithRequests seen (pure ()) sf "reporter" fetch `shouldReturn` Right "raw"
+                lookupStore sf "reporter" `shouldReturn` Just "raw"
+                readIORef calls `shouldReturn` 1
+                readIORef seen `shouldReturn` [Metric.Hit, Metric.Miss, Metric.Miss, Metric.Miss]
+            result `shouldBe` Just ()
 
     describe "resolveSingleFlight -- single-flight orphan window" $ do
         it "unblocks a waiting follower and lets a later caller re-lead when the leader is cancelled at the claim handoff" $ do

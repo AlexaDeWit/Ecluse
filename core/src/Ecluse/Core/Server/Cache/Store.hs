@@ -115,13 +115,12 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
                     Just (_ :: SomeAsyncException) ->
                         -- Restore cancellation during retries. Keep the original miss count.
                         restore (resolveSingleFlight afterClaim (const pass) recordInsert sf key fetch)
-                    -- A synchronous escape broke the fetch's total contract. Re-raise it
-                    -- as an invariant break, never laundered into the typed channel.
+                    -- Preserve synchronous leader faults outside the typed fetch channel.
                     Nothing -> throwIO err
         Lead marker -> do
-            recordRequest Metric.Miss
             -- Mask publication and insertion so cancellation cannot strand followers.
             (outcome, occupancy) <- guardInFlight id (orphan marker) (atomically deregister) $ do
+                recordRequest Metric.Miss
                 fetched <- restore (afterClaim >> fetch)
                 atomically (putTMVar marker (either FlightFault FlightValue fetched))
                 -- The join collapses "nothing fetched" and "fetched but oversized,
