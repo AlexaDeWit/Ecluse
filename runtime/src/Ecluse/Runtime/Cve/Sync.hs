@@ -27,9 +27,8 @@ module Ecluse.Runtime.Cve.Sync (
     bootBackoffDelays,
 ) where
 
-import Conduit (ConduitT, await, runResourceT, yield, (.|))
+import Conduit (ConduitT, runResourceT, (.|))
 import Control.Retry (retrying)
-import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as C
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -52,6 +51,7 @@ import Ecluse.Core.Cve.Slot (CveSlot, swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Osv.Schema (MetaKey (MetaBuiltAt, MetaRowCount), renderMetaKey)
+import Ecluse.Core.Stream (boundBytes)
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
@@ -63,9 +63,7 @@ import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 
-{- | The sync transport, as data: the remote artifact's current version and its bytes. Injected so
-'syncStep' runs without a network. The composition root draws one from 'newS3CveSource'.
--}
+-- | The advisory transport supplied to 'syncStep' by 'newS3CveSource'.
 data CveFetch = CveFetch
     { fetchHeadEtag :: IO (Either OsvDbFetchFault (Maybe DbEtag))
     {- ^ The remote artifact's current ETag. @Right Nothing@ when the object does not exist (not yet
@@ -353,17 +351,8 @@ isNotFound = \case
     AWS.ServiceError se -> statusCode (se ^. AWS.serviceError_status) == 404
     _ -> False
 
-{- | A pass-through conduit that refuses to stream past the byte cap. A breach throws the confined
-'OsvDbCapExceeded', which the adapter boundary folds into 'OsvDbTooLarge'.
+{- | A breach throws 'OsvDbCapExceeded' before yielding the excess chunk.
+The S3 adapter folds it into 'OsvDbTooLarge'.
 -}
 cappedAt :: (MonadIO m) => Int -> ConduitT ByteString ByteString m ()
-cappedAt maxBytes = go 0
-  where
-    go seen =
-        await >>= \case
-            Nothing -> pass
-            Just chunk -> do
-                let seen' = seen + BS.length chunk
-                when (seen' > maxBytes) (throwIO (OsvDbCapExceeded maxBytes))
-                yield chunk
-                go seen'
+cappedAt maxBytes = boundBytes maxBytes (const (throwIO (OsvDbCapExceeded maxBytes)))

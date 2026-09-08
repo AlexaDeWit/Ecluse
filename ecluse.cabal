@@ -208,6 +208,7 @@ library ecluse-core
     Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.Stream
     Ecluse.Core.Server.Upstream
+    Ecluse.Core.Stream
     Ecluse.Core.Supervision
     Ecluse.Core.Telemetry.Metrics
     Ecluse.Core.Telemetry.Record
@@ -783,6 +784,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.RouteEngineSpec
     Ecluse.Core.Server.StreamSpec
     Ecluse.Core.Server.UpstreamSpec
+    Ecluse.Core.StreamSpec
     Ecluse.Core.SupervisionSpec
     Ecluse.Core.Telemetry.MetricsSpec
     Ecluse.Core.TextSpec

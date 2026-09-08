@@ -1,17 +1,12 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {- | The FIRST.org EPSS feed, the exploitability score Pilot joins onto each advisory.
 
-EPSS is the probability that a vulnerability is exploited in the wild within 30 days, keyed
-by CVE id. The OSV payload carries no such score, so Pilot fetches the daily feed itself and
-joins it through an advisory's aliases ("Ecluse.Core.Osv.Advisory"). The feed is a gzipped
-CSV, bounded on both sides of decompression and refused whole rather than truncated, and a
-feed that yields no scores at all is refused too. A partial or empty table reads downstream
-as unscored, which a deny-on-EPSS rule counts as exceeding every threshold.
+Pilot joins the scores through advisory aliases ("Ecluse.Core.Osv.Advisory").
+Oversized and scoreless feeds fail the pass: missing scores deny downstream.
 -}
 module Ecluse.Core.Osv.Epss (
     -- * The feed
@@ -31,7 +26,6 @@ module Ecluse.Core.Osv.Epss (
 ) where
 
 import Conduit
-import Data.ByteString qualified as BS
 import Data.Conduit.Combinators qualified as C
 import Data.Conduit.Zlib (ungzip)
 import Data.Map.Strict qualified as Map
@@ -40,6 +34,7 @@ import Katip (KatipContext, Severity (InfoS), logFM, ls)
 import Network.HTTP.Simple (getResponseBody, httpSource, parseRequest, setRequestCheckStatus)
 
 import Ecluse.Core.Security.Authority (authorityLabel)
+import Ecluse.Core.Stream (boundBytes)
 
 {- | The byte ceiling Pilot fetches under, 64 MiB, applied to the served stream and again to its
 expansion. The feed is one short row per scored CVE, so the headroom is several times over.
@@ -127,24 +122,10 @@ fetchEpssScores cap urlStr = do
 -- from hanging the pass, and bounding its expansion keeps a bomb from exhausting the heap.
 decodeEpssFeed :: (MonadIO m, MonadThrow m) => Int -> ConduitT ByteString o m EpssScores
 decodeEpssFeed cap =
-    boundBytes CompressedTooLarge cap
+    boundBytes cap (throwM . CompressedTooLarge cap)
         .| transPipe liftIO ungzip
-        .| boundBytes DecompressedTooLarge cap
+        .| boundBytes cap (throwM . DecompressedTooLarge cap)
         .| C.linesUnboundedAscii
         .| C.foldl addRow (mkEpssScores [])
   where
     addRow acc line = maybe acc (`addScore` acc) (parseEpssLine line)
-
--- Pass the stream through until it breaches the ceiling, then refuse the feed whole. It never
--- truncates, because a short table is indistinguishable downstream from a complete one.
-boundBytes :: (MonadThrow m) => (Int -> Int -> EpssFeedTooLarge) -> Int -> ConduitT ByteString ByteString m ()
-boundBytes refuse cap = go 0
-  where
-    go !seen =
-        await >>= \case
-            Nothing -> pass
-            Just chunk ->
-                let seen' = seen + BS.length chunk
-                 in if seen' > cap
-                        then throwM (refuse cap seen')
-                        else yield chunk >> go seen'
