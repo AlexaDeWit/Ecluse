@@ -52,11 +52,13 @@ divergentPrivateSpec = describe "divergent private version" $
                     headResponse <- headThing Nothing app
                     status headResponse `shouldBe` 200
                     simpleBody headResponse `shouldBe` ""
-                    validator <- maybe (fail "missing metadata ETag") pure (header "ETag" metadata)
-                    for_ [methodGet, methodHead] $ \method -> do
-                        unchanged <- requestAt method "/npm/thing" defaultRequest{requestHeaders = [(hIfNoneMatch, validator)]} app
-                        status unchanged `shouldBe` 304
-                        simpleBody unchanged `shouldBe` ""
+                    case header "ETag" metadata of
+                        Nothing -> expectationFailure "missing metadata ETag"
+                        Just validator ->
+                            for_ [methodGet, methodHead] $ \method -> do
+                                unchanged <- requestAt method "/npm/thing" defaultRequest{requestHeaders = [(hIfNoneMatch, validator)]} app
+                                status unchanged `shouldBe` 304
+                                simpleBody unchanged `shouldBe` ""
                 publicReads <- seenAuth publicUp
                 for_ [methodGet, methodHead] $ \method ->
                     for_ [[], [(hIfNoneMatch, "\"v1\"")]] $ \validators -> do
