@@ -7,12 +7,12 @@ Integrity cases connect worker verification to the published document and attach
 -}
 module Ecluse.Core.Registry.Npm.PublishSpec (spec) where
 
-import Data.Aeson (Value)
+import Data.Aeson (Object, Value (String), toJSON, (.:), (.:?))
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (parseEither)
 import Data.ByteArray.Encoding (Base (Base64), convertFromBase)
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
-import Lens.Micro (Traversal', (^?))
-import Lens.Micro.Aeson (key, _Integer, _String)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200, status404, status409, status500)
 import Test.Hspec (Expectation, Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
@@ -119,30 +119,31 @@ assertPublishedIntegrity tokens expectedIntegrity =
         publish <- stubPublish stub
         mpPublishArtifact publish isOdd v1_0_0 artifact dummyTarballBytes `shouldReturn` Right ()
         cap <- lastCaptured stub
-        document <- decodeJsonOrFail (capBody cap) :: IO Value
-        let manifest, dist, attachment :: Traversal' Value Value
-            manifest = key "versions" . key "1.0.0"
-            dist = manifest . key "dist"
-            attachment = key "_attachments" . key "is-odd-1.0.0.tgz"
-        document ^? key "_id" . _String `shouldBe` Just "is-odd"
-        document ^? key "name" . _String `shouldBe` Just "is-odd"
-        document ^? key "dist-tags" . key "latest" . _String `shouldBe` Just "1.0.0"
-        document ^? manifest . key "name" . _String `shouldBe` Just "is-odd"
-        document ^? manifest . key "version" . _String `shouldBe` Just "1.0.0"
-        document ^? dist . key "tarball" . _String `shouldBe` Just "is-odd-1.0.0.tgz"
-        document ^? dist . key "integrity" . _String `shouldBe` expectedIntegrity
-        document ^? dist . key "shasum" . _String `shouldBe` Just shasum
-        document ^? attachment . key "content_type" . _String `shouldBe` Just "application/octet-stream"
-        document ^? attachment . key "length" . _Integer `shouldBe` Just (fromIntegral (BS.length dummyTarballBytes))
-        encoded <- maybe (fail "missing attachment data") pure (document ^? attachment . key "data" . _String)
+        document <- decodeJsonOrFail (capBody cap) :: IO Object
+        manifest <- expectRight (parseEither (\o -> o .: "versions" >>= (.: "1.0.0")) document)
+        dist <- expectRight (parseEither (.: "dist") manifest)
+        attachment <- expectRight (parseEither (\o -> o .: "_attachments" >>= (.: "is-odd-1.0.0.tgz")) document)
+        tags <- expectRight (parseEither (.: "dist-tags") document)
+        KeyMap.lookup "_id" document `shouldBe` Just (String "is-odd")
+        KeyMap.lookup "name" document `shouldBe` Just (String "is-odd")
+        KeyMap.lookup "latest" tags `shouldBe` Just (String "1.0.0")
+        KeyMap.lookup "name" manifest `shouldBe` Just (String "is-odd")
+        KeyMap.lookup "version" manifest `shouldBe` Just (String "1.0.0")
+        KeyMap.lookup "tarball" dist `shouldBe` Just (String "is-odd-1.0.0.tgz")
+        KeyMap.lookup "integrity" dist `shouldBe` (String <$> expectedIntegrity)
+        KeyMap.lookup "shasum" dist `shouldBe` Just (String shasum)
+        KeyMap.lookup "content_type" attachment `shouldBe` Just (String "application/octet-stream")
+        KeyMap.lookup "length" attachment `shouldBe` Just (toJSON (BS.length dummyTarballBytes))
+        encoded <- expectRight (parseEither (.: "data") attachment) :: IO Text
         bytes <- expectRight (convertFromBase Base64 (encodeUtf8 encoded :: ByteString))
         bytes `shouldBe` dummyTarballBytes
-        case document ^? dist . key "integrity" . _String of
+        integrity <- expectRight (parseEither (.:? "integrity") dist)
+        case integrity of
             Just carrier -> do
                 publishedHashes <- expectRight (mkSriHashes carrier)
                 verifyIntegrity publishedHashes bytes `shouldBe` IntegrityVerified
             Nothing -> do
-                raw <- maybe (fail "missing shasum") pure (document ^? dist . key "shasum" . _String)
+                raw <- expectRight (parseEither (.: "shasum") dist)
                 publishedHash <- expectRight (mkHash SHA1 raw)
                 verifyIntegrity (publishedHash :| []) bytes `shouldBe` IntegrityVerified
 
