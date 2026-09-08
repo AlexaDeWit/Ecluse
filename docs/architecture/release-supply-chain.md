@@ -54,6 +54,12 @@ The environment carries no secrets and no variables, and needs none. The only cr
 uses is the ephemeral `GITHUB_TOKEN` that GitHub issues to the job. There is no registry password to
 store and nothing to rotate.
 
+The workflow retains both image archives and both SBOMs for seven days from each upload.
+That covers the three-day wait and a nominal four-day approval margin.
+Uneven build completion, runner queues, and publish setup consume part of that margin.
+Before approval, check the run's artifact expiry times and leave enough time for `publish` to download all four inputs.
+Keep retention and the environment wait timer aligned if either changes.
+
 ## Multi-architecture image
 
 `ecluse:X.Y.Z` is an OCI index over a `linux/amd64` and a `linux/arm64` image, so a consumer pulls
