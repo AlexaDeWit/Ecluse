@@ -349,16 +349,30 @@ spec = do
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left (ExitFailure 2)
 
-        it "validates a CodeArtifact-shaped mirror target structurally and exits 0 (no mint, no cloud call)" $ do
-            -- The derived-credential expectation is structural on the loaded config.
-            -- check-config must never mint the token a boot would.
-            traverse_ (uncurry setEnv) (filter (not . isRegistryMirrorKey . fst) runEnv)
-            traverse_ unsetEnv (filter isRegistryMirrorKey (map fst runEnv))
-            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactRepository
-            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL"
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Left ExitSuccess
+        forM_
+            [ ("CodeArtifact", [("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactRepository)], True)
+            ,
+                ( "Verdaccio"
+                ,
+                    [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://mirror.example.test")
+                    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "write-token")
+                    ]
+                , True
+                )
+            , ("registry", filter (isRegistryMirrorKey . fst) runEnv, False)
+            , ("serve-only", [], False)
+            ]
+            $ \(label, mirrorEnv, hasControlPlane) ->
+                it ("prints maintenance client notices only for control planes (" <> label <> ")") $ do
+                    let envVars = mirrorEnv <> filter (not . isRegistryMirrorKey . fst) runEnv
+                        notice = "mount \"npm\": the store maintenance client is built at boot against the live environment. check-config does not attempt this build."
+                    bracket_ (traverse_ (uncurry setEnv) envVars) (traverse_ (unsetEnv . fst) envVars) $ do
+                        output <- captureStdout $ do
+                            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
+                            outcome `shouldBe` Left ExitSuccess
+                        let mountLines = filter (T.isPrefixOf "mount \"npm\":") (lines output)
+                        length mountLines `shouldBe` (if hasControlPlane then 2 else 1)
+                        drop 1 mountLines `shouldBe` [notice | hasControlPlane]
 
     describe "the ambient AWS_ENDPOINT_URL refusal (one verdict for both entry points)" $ do
         it "refuses one malformed override in the boot and in check-config alike" $ do

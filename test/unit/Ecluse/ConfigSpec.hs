@@ -9,7 +9,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Composition.Support (expectConfig)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig)
 import Ecluse.Config (
     AppConfig (cfgQueue),
     Config (configApp, configMounts),
@@ -40,9 +40,7 @@ spec = do
                     Map.keys rules `shouldMatchList` ["min-age", "remediation-fast-track"]
 
         it "pins the shipped redelivery budget to the one a directly-built backend holds" $
-            -- The operator-visible YAML and the fallback a config-free backend holds state the same
-            -- policy default. If they drift, a deployment and a test double retire poison messages
-            -- at different counts.
+            -- A drift changes when deployments and test doubles retire poison messages.
             case (loadConfig [] Nothing, defaultDeliveryBudget) of
                 (Right cfg, DeliveryBudget budget) ->
                     qsMaxReceiveCount (cfgQueue (configApp cfg)) `shouldBe` budget
@@ -88,6 +86,21 @@ spec = do
             mountPostureLines permitted `shouldSatisfy` any (T.isInfixOf "which permits deletion")
             withheld <- configFor (verdaccioMountDoc "")
             mountPostureLines withheld `shouldSatisfy` any (T.isInfixOf "which withholds deletion")
+
+    describe "maintenance client posture" $ do
+        it "appends a live-environment notice for CodeArtifact and Verdaccio" $ do
+            codeArtifact <- expectConfig codeArtifactEnvVars Nothing
+            verdaccio <- configFor (verdaccioMountDoc "")
+            forM_ [codeArtifact, verdaccio] $ \cfg ->
+                drop 1 (mountPostureLines cfg)
+                    `shouldBe` ["mount \"npm\": the store maintenance client is built at boot against the live environment. check-config does not attempt this build."]
+
+        it "adds no notice for registry targets or serve-only mounts" $ do
+            registry <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://mirror.example.test")])
+            private <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test")])
+            public <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
+            forM_ [registry, private, public] $ \cfg ->
+                length (mountPostureLines cfg) `shouldBe` 1
 
     describe "resolvedKeyProvenance" $ do
         it "labels each resolved key with the layer that supplied it" $ do
