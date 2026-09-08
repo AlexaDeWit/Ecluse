@@ -12,7 +12,6 @@ module Ecluse.Test.OsvDb (
     compileOsvZipDbTo,
 ) where
 
-import Control.Monad ((>=>))
 import Network.HTTP.Types.Status (status200)
 import System.IO.Temp (withSystemTempDirectory)
 
