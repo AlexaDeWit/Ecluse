@@ -9,11 +9,16 @@ module Ecluse.Runtime.Cve.SyncSpec (spec) where
 
 import Conduit (runConduit, yieldMany, (.|))
 import Control.Concurrent.STM (check)
+import Data.Aeson (Value (String))
+import Data.ByteString.Lazy qualified as LBS
 import Data.Conduit.Combinators qualified as C
+import Data.List (lookup)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Katip (KatipContextT, closeScribes, runKatipContextT)
-import System.Directory (doesFileExist)
-import System.FilePath ((</>))
+import System.Directory (copyFile, doesFileExist)
+import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Expectation, Spec, anyException, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (AsyncCancelled (AsyncCancelled), async, cancel, waitCatch, withAsync)
@@ -21,14 +26,21 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (mask_, throwIO)
 import UnliftIO.Timeout (timeout)
 
-import Ecluse.Core.Cve (CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (cveRemediationProbe))
-import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
+import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
+import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Osv.Schema (osvDbFileName, osvSchemaEpoch)
+import Ecluse.Core.Osv.Stream (IngestStats (IngestStats), PilotIngestAborted (PilotIngestAborted))
+import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
+import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
+import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty), newSweepState)
+import Ecluse.Core.Rules (RuleDeps (..), evalRule, prepare)
+import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), EvalContext, FailureAlignment (FailDeny), Rule (..), RuleVerdict (..), mkEvalContext)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
  )
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Runtime.Cve.Sync (
     CveFetch (..),
     DbEtag (..),
@@ -43,14 +55,20 @@ import Ecluse.Runtime.Cve.Sync (
  )
 import Ecluse.Runtime.Test.Cve (headOnlyFetch)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, runQuietKatip)
-import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta)
+import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta, osvZipOf)
+import Ecluse.Test.Osv.Withdrawal (withdrawalBytes, withdrawalZip)
+import Ecluse.Test.OsvDb (compileOsvZipDbTo, withOsvZipDb)
+import Ecluse.Test.Package (sampleDetails, sampleManifest, unscopedNpm)
 import Ecluse.Test.Port (
     noopAdvisorySyncMetricsPort,
     passthroughAdvisorySyncTracingPort,
     recordingAdvisorySyncMetricsPort,
     recordingAdvisorySyncTracingPort,
  )
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
+import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, testPacing)
 
 withSyncEnv :: (FilePath -> CveSlot -> (CveFetch -> SyncEnv) -> IO a) -> IO a
 withSyncEnv use =
@@ -139,8 +157,108 @@ truncateObserved :: Int -> Observed -> Observed
 truncateObserved n (Observed spans attempts durations) =
     Observed (take n spans) (take n attempts) (take n durations)
 
+withdrawalSpec :: Spec
+withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $ do
+    it "refuses a withdrawal-only replacement and keeps the last accepted evidence" $ do
+        active <- withdrawalBytes Nothing >>= \bytes -> osvZipOf [("active.json", LBS.fromStrict bytes)]
+        withdrawn <- withdrawalBytes (Just (String "2024-05-14T20:15:44Z")) >>= \bytes -> osvZipOf [("active.json", LBS.fromStrict bytes)]
+        withOsvZipDb Npm active $ \path ->
+            withSyncEnv $ \_ slot envWith -> do
+                let env = envWith (fetchServing (Just "active") (copyFile path))
+                syncStep env Nothing >>= \case
+                    SyncSwapped actual meta -> do
+                        actual `shouldBe` DbEtag "active"
+                        lookup "row_count" meta `shouldBe` Just "4"
+                    other -> expectationFailure ("expected active generation swap, got " <> show other)
+                accepted <- readFileBS path
+                compileOsvZipDbTo Npm withdrawn (takeDirectory path)
+                    `shouldThrow` (\(PilotIngestAborted stats) -> stats == IngestStats 1 0 0 0)
+                readFileBS path `shouldReturn` accepted
+                syncStep env (Just (DbEtag "active")) >>= \case
+                    SyncUnchanged -> pass
+                    other -> expectationFailure ("expected unchanged generation, got " <> show other)
+                withSlotLookup slot $ \case
+                    Nothing -> expectationFailure "withdrawal refusal lost the synced database"
+                    Just lookup' -> do
+                        cveRemediationProbe lookup' "withdrawal-only" "2.0.0" `shouldReturn` True
+                        rows <- cveAdvisoriesFor lookup' "withdrawal-only"
+                        map arCveId rows `shouldBe` replicate 2 "GHSA-withdrawal"
+
+    it "removes withdrawn evidence while retaining independent denies, fixes, and deletion guards" $
+        withSyncEnv $ \_ slot envWith -> do
+            let deps = inertRuleDeps{rdWithCveLookup = withSlotLookup slot, rdCurrentAdvisoryEtag = currentAdvisoryEtag slot}
+                cvss = DenyIfCve (DenyIfCveParams 5 FailDeny)
+                epss = DenyIfEpss (DenyIfEpssParams 0.25 FailDeny)
+            ctx <- mkEvalContext (pure (UTCTime (fromGregorian 2026 1 1) 0)) (currentAdvisoryEtag slot)
+            for_ [(Nothing, "active", Nothing, True), (Just (String "2024-05-14T20:15:44Z"), "withdrawn", Just (DbEtag "active"), False)] $ \(withdrawn, etag, previous, active) -> do
+                archive <- withdrawalZip withdrawn
+                withOsvZipDb Npm archive $ \path -> do
+                    let env = envWith (fetchServing (Just etag) (copyFile path))
+                    syncStep env previous >>= \case
+                        SyncSwapped actual meta -> do
+                            actual `shouldBe` DbEtag etag
+                            lookup "row_count" meta `shouldBe` Just (if active then "6" else "2")
+                        other -> expectationFailure ("expected withdrawal generation swap, got " <> show other)
+                withSlotLookup slot $ \case
+                    Nothing -> expectationFailure "withdrawal test has no synced database"
+                    Just lookup' -> do
+                        cveRemediationProbe lookup' "withdrawal-only" "2.0.0" `shouldReturn` active
+                        cveRemediationProbe lookup' "withdrawal-overlap" "2.0.0" `shouldReturn` active
+                        cveRemediationProbe lookup' "withdrawal-overlap" "3.0.0" `shouldReturn` True
+                        cveRemediationProbe lookup' "corpus-vuln" "1.2.0" `shouldReturn` True
+                        rows <- cveAdvisoriesFor lookup' "withdrawal-only"
+                        map arCveId rows `shouldBe` replicate (if active then 2 else 0) "GHSA-withdrawal"
+                        overlapping <- cveAdvisoriesFor lookup' "withdrawal-overlap"
+                        sort (ordNub (map arCveId overlapping))
+                            `shouldBe` if active then ["GHSA-independent", "GHSA-withdrawal"] else ["GHSA-independent"]
+                        names <- cveCoveredNames lookup'
+                        ("withdrawal-only" `elem` names) `shouldBe` active
+                for_ [cvss, epss] $ \rule -> do
+                    for_ ["1.0.0", "4.0.0"] $ \version -> do
+                        verdict <- evalRule deps ctx rule (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm version))
+                        case verdict of
+                            Deny _ -> active `shouldBe` True
+                            NoDecision _ -> active `shouldBe` False
+                            other -> expectationFailure ("unexpected withdrawal denial verdict: " <> show other)
+                    for_ ["withdrawal-overlap", "corpus-vuln"] $ \name -> do
+                        verdict <- evalRule deps ctx rule (sampleDetails (unscopedNpm name) (mkVersion Npm "1.0.0"))
+                        verdict `shouldSatisfy` \case
+                            Deny _ -> True
+                            _ -> False
+                    sweepWithdrawal deps ctx rule False "withdrawal-only" `shouldReturn` not active
+                    sweepWithdrawal deps ctx rule False "withdrawal-overlap" `shouldReturn` False
+                    sweepWithdrawal deps ctx rule True "withdrawal-overlap" `shouldReturn` True
+                fixVerdict <- evalRule deps ctx AllowIfRemediatesCve (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm "2.0.0"))
+                case fixVerdict of
+                    Allow _ -> active `shouldBe` True
+                    NoDecision _ -> active `shouldBe` False
+                    other -> expectationFailure ("unexpected withdrawal remediation verdict: " <> show other)
+            sweepWithdrawal deps ctx (DenyByIdentity "withdrawal-only") False "withdrawal-only" `shouldReturn` False
+
+sweepWithdrawal :: RuleDeps -> EvalContext -> Rule -> Bool -> Text -> IO Bool
+sweepWithdrawal deps ctx rule firstParty rawName = do
+    let name = unscopedNpm rawName
+        version = mkVersion Npm "1.0.0"
+        stored = [StoredVersion version VersionServed]
+    store <-
+        newFakeStore
+            defaultFakeStoreConfig
+                { fakeContents = Map.singleton name stored
+                , fakeManifests = Map.singleton name (sampleManifest name [version])
+                }
+    rules <- prepare deps [atDefaultPrecedence rule]
+    generation <- rdCurrentAdvisoryEtag deps
+    recorded <- recordingPorts generation
+    counters <- newSweepState
+    let handle = fakeMaintenance store
+        mount = (testMount handle rules [rule]){smFirstParty = const firstParty}
+    sweepPackage testPacing (recPorts recorded) counters mount handle ctx generation name stored `shouldReturn` Nothing
+    contents <- readFakeContents store
+    pure (maybe False (not . null) (Map.lookup name contents))
+
 spec :: Spec
 spec = do
+    withdrawalSpec
     describe "sync provenance logging" $ do
         for_ [("2026-09-08T12:34:56Z", "42", "(Just 2026-09-08 12:34:56 UTC,Just 42)"), ("SECRET-time", "SECRET-count", "(Nothing,Nothing)"), (T.replicate 65 "9", T.replicate 21 "9", "(Nothing,Nothing)"), ("invalid", "18446744073709551616", "(Nothing,Nothing)"), ("invalid", "-1", "(Nothing,Nothing)"), ("invalid", "", "(Nothing,Nothing)")] $ \(builtAt, rowCount, summary) ->
             it ("logs only parsed values for built_at=" <> toString builtAt <> " and row_count=" <> toString rowCount) $
@@ -337,10 +455,7 @@ spec = do
                                     True -> Right (Just (DbEtag "e1"))
                             , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (DbEtag "e1")
                             }
-                    -- A short burst that finds nothing published, then a fast poll
-                    -- that finds the artifact once it exists.
                     schedule = SyncSchedule{schedBootBackoff = [5_000, 5_000], schedPollDelay = 25_000}
-                    -- Mirrors the boot burst in Ecluse.Runtime.Cve.Sync: one attempt per delay, plus the first.
                     burstAttempts = length (schedBootBackoff schedule) + 1
                 withAsync (runQuietKatip (runUnobserved (envWith lateFetch) schedule onSwap)) $ \_ -> do
                     -- Each attempt reads the flag in one transaction with the counter, so
