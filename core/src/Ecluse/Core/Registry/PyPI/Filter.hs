@@ -30,8 +30,8 @@ import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl,
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Text (joinUrlPath)
 
-{- | Assemble the served Simple index for @mountBase@, rebasing every location under the plan's own
-project name so the index carries none this mount would not claim. Always an object.
+{- | Assemble an object whose artifact URLs use @mountBase@ and the plan's project name.
+Unrelated fields survive, but unsupported metadata companions are not advertised.
 -}
 assembleSimpleIndex :: Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value
 assembleSimpleIndex mountBase bySource plan base =
@@ -70,18 +70,16 @@ dropSidecarKeys = \case
     Object entry -> Object (foldr KeyMap.delete entry sidecarKeys)
     other -> other
 
--- The two spellings PEP 714 has an index emit for the same sidecar.
+-- The JSON aliases and the HTML attribute spelling.
 sidecarKeys :: [Key.Key]
-sidecarKeys = ["core-metadata", "data-dist-info-metadata"]
+sidecarKeys = ["core-metadata", "dist-info-metadata", "data-dist-info-metadata"]
 
 entriesOf :: Value -> [Value]
 entriesOf = \case
     Object o | Just (Array files) <- KeyMap.lookup "files" o -> toList files
     _ -> []
 
-{- | PyPI's served-document __assemble__ capability. A source another ecosystem injected projects as
-'Nothing' and contributes nothing.
--}
+-- | Assemble a PyPI document. Sources from another ecosystem contribute nothing.
 assembleSimpleDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
 assembleSimpleDocument mountBase bySource plan base =
     fst pypiSimpleCached (assembleSimpleIndex mountBase sources plan baseValue)
@@ -89,8 +87,6 @@ assembleSimpleDocument mountBase bySource plan base =
     sources = Map.mapMaybe (traverse (snd pypiSimpleCached)) bySource
     baseValue = fromMaybe (Object mempty) (snd pypiSimpleCached =<< base)
 
-{- | PyPI's served-document __serialise__ capability
-('Ecluse.Core.Registry.Adapter.Types.metadataSerialise'), to the compact wire bytes.
--}
+-- | Serialise a PyPI document to compact JSON, or an empty object for another ecosystem.
 serialiseSimpleDocument :: CachedDoc -> LByteString
 serialiseSimpleDocument = encode . fromMaybe (Object mempty) . snd pypiSimpleCached
