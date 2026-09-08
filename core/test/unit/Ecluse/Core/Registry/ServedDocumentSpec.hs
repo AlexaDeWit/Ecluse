@@ -128,6 +128,7 @@ entryContractSpec = describe "source-scoped admitted-entry contracts" $ do
             let source = syntheticSnapshot [(key, "kept" :: Text)]
                 sources = Map.singleton 0 source
                 plan = entryPlan source key
+                serve :: Map SourceId (Snapshot [(EntryKey, Text)]) -> MergePlan -> [(Text, Text)]
                 serve = overlaySurvivors id
             it "serves the exact admitted entry" $
                 serve sources plan `shouldBe` [("1", "kept")]

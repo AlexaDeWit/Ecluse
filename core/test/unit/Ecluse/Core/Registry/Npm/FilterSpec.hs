@@ -57,9 +57,6 @@ spec = do
     coherenceSpec
     propertiesSpec
 
-{- | The gate on the upstream-controlled @name@ the rewrite interpolates. It is the shared npm
-name grammar read as a predicate, so it agrees with the route and the projection by construction.
--}
 entryIdentitySpec :: Spec
 entryIdentitySpec = describe "npm artifact-entry admission" $ do
     it "requires the admitted object key and exact upstream snapshot" $ do
@@ -77,6 +74,7 @@ entryIdentitySpec = describe "npm artifact-entry admission" $ do
         assemble (Map.singleton 1 rawSource) plan `shouldBe` mempty
         assemble (Map.singleton 0 rawSource{snapshotDigest = digestOf "different upstream bytes"}) plan `shouldBe` mempty
 
+-- The rewrite uses the same npm name grammar as projection and routing.
 nameGateSpec :: Spec
 nameGateSpec = describe "npmDocumentName -- the one npm name grammar" $
     for_ NpmFixture.npmNameVerdicts $ \(raw, valid) ->

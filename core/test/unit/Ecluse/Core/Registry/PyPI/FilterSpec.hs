@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.PyPI.FilterSpec (spec) where
 
 import Data.Aeson (Value (Array, Number, Object, String), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
