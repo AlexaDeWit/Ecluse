@@ -5,6 +5,7 @@
 module Ecluse.Composition.BootErrorSpec (spec) where
 
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
@@ -24,6 +25,14 @@ spec :: Spec
 spec = do
     renderBootErrorSpec
     renderBootErrorsSpec
+    forM_ [(Npm, "NPM"), (PyPI, "PYPI")] $ \(eco, envName) ->
+        it ("names the first-party dependency and fix for " <> show eco) $
+            TE.encodeUtf8 (renderBootError (FirstPartyWithoutPrivateUpstream eco))
+                `shouldBe` "ECLUSE_MOUNTS__"
+                    <> envName
+                    <> "__FIRST_PARTY is set but ECLUSE_MOUNTS__"
+                    <> envName
+                    <> "__PRIVATE_UPSTREAM is not: first-party names resolve from the private upstream alone. Configure privateUpstream for these names, or remove firstParty."
     it "names both upstream keys and their repository in the private/public refusal" $
         renderBootError (PrivateUpstreamOnPublicUpstream Npm "https://registry.example.test/npm/public/")
             `shouldBe` "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM and ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM resolve to the same registry (https://registry.example.test/npm/public/): the private leg forwards caller credentials and admits versions without the public rules. Configure distinct repositories."
@@ -32,8 +41,6 @@ renderBootErrorsSpec :: Spec
 renderBootErrorsSpec =
     describe "renderBootErrors" $
         it "reports every aggregated refusal, one line each, in the order it received them" $
-            -- One failed launch shows every problem an operator must fix, so no refusal may be
-            -- dropped and none may be reordered ahead of another.
             renderBootErrors [MissingAdapter PyPI, MirrorRoleWithoutMirroring]
                 `shouldBe` renderBootError (MissingAdapter PyPI)
                     <> "\n"

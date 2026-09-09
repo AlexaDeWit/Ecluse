@@ -21,7 +21,7 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse (ProcessOutcome (..), exitCodeFor, run, superviseProcess)
 import Ecluse.Boot (BootAborted (..), BootEnv (beLogEnv), applySecretFileIndirection, logBootInfo, orExit, readConfigDocument, withBootEnv)
 import Ecluse.Composition.BootError (
-    BootError (AwsEndpointMalformed, MirrorTargetOnMountEndpoint, PrivateUpstreamOnPublicUpstream, SplitRoleNeedsDurableQueue),
+    BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, MirrorTargetOnMountEndpoint, PrivateUpstreamOnPublicUpstream, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
 import Ecluse.Composition.Support (malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, withoutQueueUrl)
@@ -80,8 +80,6 @@ spec = do
             outcome `shouldBe` Nothing
 
         it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $ do
-            -- ECLUSE_MOUNTS__NPM__ENABLED and ECLUSE_SERVER__PUBLIC_URL are the whole start for a
-            -- real install. No mount mirrors, so the shipped sqs default is never consulted.
             unsetEnv "AWS_REGION"
             unsetEnv "ECLUSE_QUEUE__URL"
             setEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true"
@@ -124,8 +122,7 @@ spec = do
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "aborts fast when ECLUSE_CONFIG points at an unreadable path (a typed refusal, not a raw exception)" $ do
-            -- A directory is the portable unreadable-path shape, with no chmod games. The read
-            -- failure must land on the same typed exit-2 path as every other config refusal.
+            -- A directory gives an unreadable file path without relying on permission bits.
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
                 traverse_ (uncurry setEnv) awsRunEnv
                 setEnv "ECLUSE_CONFIG" dir
@@ -144,13 +141,10 @@ spec = do
                         message `shouldSatisfy` T.isInfixOf "cannot be read"
 
         it "aborts fast at boot when the queue URL names the unbuilt pubsub backend" $ do
-            -- The topic-shaped URL names the GCP backend, which has no
-            -- implementation compiled in: a loud refusal, never a silent fallback.
             traverse_ (uncurry setEnv) runEnv
             setEnv "ECLUSE_QUEUE__URL" "projects/acme/topics/mirror"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
             traverse_ (unsetEnv . fst) runEnv
-            -- The typed process supervisor maps the boot abort to exit 2.
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "aborts fast at boot when the queue URL's shape names no backend" $ do
@@ -176,7 +170,6 @@ spec = do
             splitRoleRefusal ["proxy", "--no-worker"] `shouldReturn` refusalNaming "ecluse proxy --no-worker"
 
         it "refuses ecluse dredger where the mirror target is also the private upstream" $
-            -- Only the Dredger refuses this collapsed target and its missing maintenance backend.
             bootRefusal ["dredger"] collapsedMirrorEnv
                 `shouldReturn` (Left (ExitFailure 2), map renderBootError [collapsedMirrorRefusal, noMaintenanceBackend])
 
@@ -192,8 +185,6 @@ spec = do
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "aborts fast at boot when a mirror target declares its write token and no url" $ do
-            -- The write token lives under the target's own tag, so a token alone declares
-            -- the target and the absent url is refused, never silently ignored.
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL") . fst) awsRunEnv)
             unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
@@ -201,8 +192,6 @@ spec = do
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "aborts fast at boot when a registry mirror target has no write token" $ do
-            -- The registry tag mints nothing, so it requires the operator's static write
-            -- token and a target without one fails at boot.
             traverse_ (uncurry setEnv) awsRunEnv
             unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN"
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
@@ -210,8 +199,7 @@ spec = do
             outcome `shouldBe` Left (ExitFailure 2)
 
         it "aborts fast at boot when a second tag lands on the declared mirror target" $ do
-            -- A layer fills keys under a tag, it never switches one, so an endpoint left
-            -- carrying two tags is a loud refusal caught before any AWS call.
+            -- Overrides fill keys under a tag without removing another layer's tag.
             traverse_ (uncurry setEnv) awsRunEnv
             setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactRepository
             outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
@@ -257,7 +245,6 @@ spec = do
                     case resolved of
                         Left e -> expectationFailure (toString e)
                         Right env -> do
-                            -- The indirection resolves each *_FILE to its base variable...
                             map fst env
                                 `shouldMatchList` [ "ECLUSE_SERVER__AUTH_TOKEN"
                                                   , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN"
@@ -298,6 +285,29 @@ spec = do
                     _ -> [refusal]
             bootRefusal args env `shouldReturn` (Left (ExitFailure 2), expected)
 
+    describe "first-party names without a private authority"
+        $ forM_
+            [ ["proxy"]
+            , ["proxy", "--no-worker"]
+            , ["mirror"]
+            , ["dredger"]
+            , ["pilot"]
+            , ["pilot", "compile", "--out", "scratchpad/refused-compile"]
+            , ["check-config"]
+            ]
+        $ \args -> it ("refuses " <> toString (unwords (map toText args)) <> " before starting services") $ do
+            let envVars =
+                    [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
+                    , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
+                    , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")
+                    ]
+                refusal = renderBootError (FirstPartyWithoutPrivateUpstream Npm)
+                expected = case args of
+                    ["mirror"] -> [refusal, renderBootError MirrorRoleWithoutMirroring]
+                    ["check-config"] -> [refusal, "configuration: refused"]
+                    _ -> [refusal]
+            bootRefusal args envVars `shouldReturn` (Left (ExitFailure 2), expected)
+
     describe "check-config (validate and print, boot nothing)" $ do
         it "validates a bootable configuration and exits 0" $ do
             traverse_ (uncurry setEnv) runEnv
@@ -306,8 +316,6 @@ spec = do
             outcome `shouldBe` Left ExitSuccess
 
         it "refuses an invalid configuration with exit 2" $ do
-            -- An active mount with no server.publicUrl: the same refusal a boot
-            -- would print, from the same loadConfig.
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_SERVER__PUBLIC_URL") . fst) runEnv)
             unsetEnv "ECLUSE_SERVER__PUBLIC_URL"
             outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
@@ -376,7 +384,6 @@ spec = do
 
     describe "the ambient AWS_ENDPOINT_URL refusal (one verdict for both entry points)" $ do
         it "refuses one malformed override in the boot and in check-config alike" $ do
-            -- The pre-flight tool must never pass a value the real boot then refuses.
             traverse_ (uncurry setEnv) runEnv
             setEnv "AWS_ENDPOINT_URL" malformedAwsEndpoint
             -- Each outcome leaves its capture through a ref, so every assertion waits for
@@ -413,7 +420,6 @@ spec = do
                 other -> expectationFailure ("expected ServiceExited, got " <> show other)
 
         it "classifies a kill delivery (ThreadKilled) as RunCancelled" $
-            -- Deliver a real asynchronous exception to exercise the process perimeter's cancellation path.
             superviseProcess (Conc.myThreadId >>= \tid -> Conc.throwTo tid ThreadKilled >> pure ShutdownRequested)
                 `shouldReturn` RunCancelled
 
@@ -439,8 +445,6 @@ spec = do
             orExit (const "unused") (Right 7 :: Either () Int) `shouldReturn` 7
 
         it "reports the failure and aborts the boot on a Left" $ do
-            -- The abort carries the rendered failure, and 'run' is what puts it on stderr, so a
-            -- non-zero exit cannot leave without it.
             outcome <- try (orExit (const "boot rejected") (Left ()) :: IO ()) :: IO (Either BootAborted ())
             case outcome of
                 Left (BootAborted rendered) -> rendered `shouldBe` "boot rejected"
@@ -455,7 +459,7 @@ bootRefusal args envVars = do
     report <- captureStderr $ do
         result <- try (timeout 100000 (withArgs args run))
         writeIORef outcome (Just result)
-    traverse_ (unsetEnv . fst) runEnv
+    traverse_ (unsetEnv . fst) envVars
     readIORef outcome >>= \case
         Nothing -> fail "the boot left no outcome behind"
         Just result -> pure (result, reportLines report)
