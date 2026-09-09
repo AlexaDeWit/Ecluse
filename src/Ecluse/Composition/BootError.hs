@@ -34,17 +34,13 @@ single run reports every problem an operator must fix.
 data BootError
     = -- | A rule policy did not resolve (surfaced by 'Ecluse.Config.loadConfig').
       PolicyBootError PolicyError
-    | {- | A configured mount's ecosystem has no adapter wired, so Écluse cannot serve it.
-      A loud miss, never a silent drop.
-      -}
+    | -- | A configured mount's ecosystem has no adapter, so Écluse cannot serve it.
       MissingAdapter Ecosystem
     | {- | A mount has no initialised mirror-write provider. Every active mount derives its
       credential from its mirror target, so this is a safety net, not a reachable state.
       -}
       UnresolvedCredential Ecosystem
-    | {- | The queue URL's shape names a backend this binary compiled no implementation for.
-      An honest refusal, never a silent fall-through to a different backend.
-      -}
+    | -- | The queue URL names a backend this binary cannot run.
       QueueProviderUnavailable Text
     | {- | An SQS endpoint override (@AWS_ENDPOINT_URL_SQS@) is set but @AWS_REGION@ is not.
       An emulator or VPC endpoint carries no region in its host, so the ambient one must scope it.
@@ -76,6 +72,8 @@ data BootError
       anti-shadowing guard has nothing to enforce and any name could be shadowed.
       -}
       FirstPartyMissing Ecosystem
+    | -- | First-party names have no private authority, so every lookup would return 404.
+      FirstPartyWithoutPrivateUpstream Ecosystem
     | {- | A static publish credential is set without a verifiable inbound edge
       (@ECLUSE_SERVER__AUTH_TOKEN@). An unauthenticated request could otherwise publish as Écluse.
       -}
@@ -204,6 +202,11 @@ renderBootError = \case
             <> " protocol: a publish would have no adapter to relay through, so the mount is refused rather than served with a publish route that refuses every attempt."
     FirstPartyMissing eco ->
         mountKeyRef eco "publicationTarget" <> " is set but " <> mountKeyRef eco "firstParty" <> " is not: a publication target needs the namespaces this deployment owns, written in the ecosystem's own shape (npm scopes such as @acme, PyPI distribution names and acme-* prefixes), for the anti-shadowing guard."
+    FirstPartyWithoutPrivateUpstream eco ->
+        mountKeyRef eco "firstParty"
+            <> " is set but "
+            <> mountKeyRef eco "privateUpstream"
+            <> " is not: first-party names resolve from the private upstream alone. Configure privateUpstream for these names, or remove firstParty."
     PublishStaticCredentialNeedsEdge eco tag ->
         mountKeyRef eco ("publicationTarget." <> storeTagName tag <> ".token")
             <> " is set but ECLUSE_SERVER__AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."

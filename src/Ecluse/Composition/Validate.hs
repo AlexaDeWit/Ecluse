@@ -2,12 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The boot's validate phase: one pass over the loaded configuration that yields every pure
-refusal and every advisory a role earns, and the plan a cleared configuration reifies from.
-
-The composition root builds from 'ValidatedPlan' alone, so a mount binding, a publish relay, or a
-store sweep cannot be assembled out of a configuration this pass never cleared. What no rule
-decides stays on 'vpSettings', where reading it raw is honest rather than a hole.
+{- | The pure boot pass accumulates refusals and advisories for each role.
+The composition root builds only from 'ValidatedPlan'. Unvetted settings remain on 'vpSettings'.
 -}
 module Ecluse.Composition.Validate (
     -- * The validate phase
@@ -25,6 +21,7 @@ import Ecluse.Composition.BootError (
     BootError (
         DredgerChunkPauseBeneathFloor,
         FirstPartyMissing,
+        FirstPartyWithoutPrivateUpstream,
         MirrorTargetWithoutPublish,
         MissingAdapter,
         PublicationTargetWithoutPublish,
@@ -45,7 +42,7 @@ import Ecluse.Config (
     DredgerSettings (drgChunkPause),
     FirstParty,
     Mount,
-    MountConfig (mntFirstParty, mntPublicationTarget),
+    MountConfig (mntFirstParty, mntPrivateUpstream, mntPublicationTarget),
     PublicationEndpoint (peTarget, peToken),
     ServerSettings (srvAuthToken),
     StoreTag,
@@ -93,9 +90,7 @@ data VettedPublication = VettedPublication
     , vpubStaticToken :: Maybe Secret
     }
 
-{- | Vet the whole loaded configuration for one role. The groups compose with '<*>', so one run
-reports every refusal and every advisory rather than the first group's alone.
--}
+-- | Accumulate every pure refusal and advisory for one role before constructing its plan.
 vetBoot :: Config -> Vet ValidatedPlan
 vetBoot config =
     assemble
@@ -128,8 +123,6 @@ vetSweepPacing app = rule severity beneathFloor (drgChunkPause (cfgDredger app))
 
     beneathFloor configured = configured <$ guard (configured < minimumChunkPause)
 
-{- Every active mount, refusing the ecosystems this build ships no adapter for. Serving one would
-answer every route with a stub, which is a wiring fault rather than a posture an operator chose. -}
 vetMounts :: Config -> Vet [VettedMount]
 vetMounts config = catMaybes <$> traverse vetMount (activeMounts config)
 
@@ -146,6 +139,7 @@ vetMount (eco, (mount, mcfg)) =
         <$ rule (const (Refuse MissingAdapter)) unservedEcosystem eco
         <* rule (const (Refuse MirrorTargetWithoutPublish)) (declaredWithoutPublish mirrors) eco
         <* rule (const (Refuse PublicationTargetWithoutPublish)) (declaredWithoutPublish publishes) eco
+        <* rule (const (Refuse FirstPartyWithoutPrivateUpstream)) firstPartyWithoutPrivateUpstream (eco, mcfg)
   where
     vetted = adapterFor eco <&> \adapter -> VettedMount eco adapter mount mcfg
 
@@ -156,13 +150,15 @@ vetMount (eco, (mount, mcfg)) =
     mirrors = isJust (regMirrorTarget (mountRegistries mount))
     publishes = isJust (mntPublicationTarget mcfg)
 
-    -- A mirror would drain a queue it could never publish from, and a publish relay would have
-    -- no adapter to reach its target, so such a mount is refused rather than served half-wired.
     declaredWithoutPublish declared e = do
         guard declared
         adapter <- adapterFor e
         guard (isNothing (adapterPublish adapter))
         pure e
+
+firstPartyWithoutPrivateUpstream :: (Ecosystem, MountConfig) -> Maybe Ecosystem
+firstPartyWithoutPrivateUpstream (eco, mcfg) =
+    eco <$ guard (isJust (mntFirstParty mcfg) && isNothing (mntPrivateUpstream mcfg))
 
 {- The two couplings a declared publication target carries: the first-party namespaces the
 guard enforces, and the inbound edge a static publish credential needs. -}
@@ -184,7 +180,6 @@ vetPublication inboundToken subject@(eco, mcfg) =
   where
     cleared = mntFirstParty mcfg <&> \firstParty -> (eco, (firstParty, publicationToken mcfg))
 
--- The static fallback the relay forwards when the publishing client sends none.
 publicationToken :: MountConfig -> Maybe Secret
 publicationToken mcfg = peToken =<< mntPublicationTarget mcfg
 

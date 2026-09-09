@@ -11,6 +11,7 @@ import Ecluse.Composition.BootError (
     BootError (
         DredgerChunkPauseBeneathFloor,
         FirstPartyMissing,
+        FirstPartyWithoutPrivateUpstream,
         MirrorTargetOnMountEndpoint,
         MirrorTargetWithoutPublish,
         MissingAdapter,
@@ -51,20 +52,40 @@ import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
 import Ecluse.Core.Security.Egress (registryUrlText)
 
-{- | Tests the boot's validate phase: the groups a role's pass runs, and the plan a cleared
-configuration reifies from. They compose with '<*>', so one run reports all of them.
--}
+-- | Check accumulated refusals and the plans cleared for each registry role.
 spec :: Spec
 spec = do
     clearedSpec
     refusalSpec
+    firstPartyAuthoritySpec
+
+firstPartyAuthoritySpec :: Spec
+firstPartyAuthoritySpec = describe "first-party authority" $
+    forM_ [(Npm, "NPM", "@acme"), (PyPI, "PYPI", "acme-tools,acme-*")] $ \(eco, envName, namespaces) ->
+        forM_ [MirrorWriter, MirrorPruner] $ \role ->
+            describe (show eco <> " " <> show role) $ do
+                let key suffix = "ECLUSE_MOUNTS__" <> envName <> "__" <> suffix
+                    publicEnv =
+                        [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
+                        , (key "ENABLED", "true")
+                        ]
+                    ownedEnv = overrideEnv (key "FIRST_PARTY") namespaces publicEnv
+                it "refuses first-party names without a private upstream" $
+                    refusalsFor role ownedEnv `shouldReturn` [FirstPartyWithoutPrivateUpstream eco]
+                it "clears first-party names with a private upstream" $
+                    refusalsFor role (overrideEnv (key "PRIVATE_UPSTREAM__REGISTRY__URL") "https://private.example.test" ownedEnv)
+                        `shouldReturn` []
+                it "clears a public-only mount without first-party names" $
+                    refusalsFor role publicEnv `shouldReturn` []
+                it "ignores a disabled mount's first-party declaration" $ do
+                    plan <- expectVetted role (overrideEnv (key "ENABLED") "false" ownedEnv)
+                    map vmEcosystem (vpMounts plan) `shouldBe` []
 
 clearedSpec :: Spec
 clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
     it "clears the active mounts and leaves the raw settings on the plan beside them" $ do
         plan <- expectVetted MirrorWriter staticEnvVars
         map vmEcosystem (vpMounts plan) `shouldBe` [Npm]
-        -- Nothing vets the settings, so the plan carries them as loaded rather than dropping them.
         Map.keys (cfgMounts (vpSettings plan)) `shouldBe` [Npm]
 
     it "clears a declared publication target with its namespaces and its static credential" $ do
@@ -86,20 +107,14 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
         fmap repositoryOf (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just "mirror"
 
     it "clears a backend for every mount that declares a mirror target" $ do
-        -- The plan's one store witness. A collapse the endpoint rules refuse yields no plan at
-        -- all, so a backend the plan carries is one no other declared endpoint holds.
         plan <- expectVetted MirrorPruner codeArtifactEnvVars
         Map.keys (vpMirrorStores plan) `shouldBe` mirroringMounts (vpSettings plan)
 
     it "clears a writing role no store at all, because no writing role sweeps one" $ do
-        -- The same configuration the deleting role gets a store from. A writing role holds a
-        -- witness for a delete it may not perform, so its pass issues none.
         plan <- expectVetted MirrorWriter codeArtifactEnvVars
         Map.keys (vpMirrorStores plan) `shouldBe` []
 
     it "clears a writing role a mirror target this build cannot sweep, and says nothing of it" $ do
-        -- Only the Dredger deletes, so only its pass reads the maintenance rule. The checker
-        -- names the Dredger's refusal for this configuration, so an operator still learns of it.
         config <- expectConfig staticEnvVars Nothing
         let (advisories, outcome) = runVet MirrorWriter (vetBoot config)
         advisories `shouldBe` []
@@ -114,8 +129,6 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
             `shouldReturn` [MissingAdapter RubyGems]
 
     it "refuses a mirror target on a mount whose ecosystem this build writes nothing for" $
-        -- The mirror would drain a queue it could never publish from, so the boot stops rather
-        -- than serving with a mirror that fails every job.
         refusalsFor
             MirrorWriter
             ( overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
@@ -126,13 +139,12 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
             `shouldReturn` [MirrorTargetWithoutPublish PyPI]
 
     it "refuses a publication target on a mount whose ecosystem this build writes nothing for" $
-        -- The relay would have no adapter to reach the target with, so the boot stops rather
-        -- than serving a publish route that refuses every attempt an operator configured for.
         refusalsFor
             MirrorWriter
             ( overrideEnv "ECLUSE_MOUNTS__PYPI__ENABLED" "true" $
                 overrideEnv "ECLUSE_MOUNTS__PYPI__FIRST_PARTY" "acme-*" $
-                    overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test/pypi/" staticEnvVars
+                    overrideEnv "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL" "https://private.example.test/pypi/" $
+                        overrideEnv "ECLUSE_MOUNTS__PYPI__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test/pypi/" staticEnvVars
             )
             `shouldReturn` [PublicationTargetWithoutPublish PyPI]
 
@@ -148,20 +160,14 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
         refusalsFor MirrorPruner staticEnvVars `shouldReturn` [noMaintenanceBackend]
 
     it "refuses the deleting role a collision on a target it has a backend for" $
-        -- The plan carries the cleared backend alone, so a collision has to stop the boot
-        -- through the endpoint rule. A backend the pass would clear yields no plan either way.
         refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL" codeArtifactMirrorUrl (withoutPrivateUpstreamUrl codeArtifactEnvVars))
             `shouldReturn` [MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" codeArtifactMirrorUrl]
 
     it "refuses the deleting role a chunk pause beneath the sweep's floor" $
-        -- The pause is what leaves an operator time to stop a mistaken sweep, and deletion is
-        -- permanent, so a value beneath the floor stops the boot rather than sweeping faster.
         refusalsFor MirrorPruner (beneathThePauseFloor codeArtifactEnvVars)
             `shouldReturn` [DredgerChunkPauseBeneathFloor 1 minimumChunkPause]
 
     it "clears a writing role that same pause, because no writing role sweeps" $
-        -- The dredger group is the deleting role's alone. The checker still names the refusal
-        -- for this configuration, so an operator learns of it from either side.
         refusalsFor MirrorWriter (beneathThePauseFloor codeArtifactEnvVars) `shouldReturn` []
 
     it "reports the mount refusal beside the maintenance refusal from one deleting-role run" $
@@ -169,8 +175,6 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
             `shouldReturn` [MissingAdapter RubyGems, noMaintenanceBackend]
 
     it "reports a refusal from each of the writing groups in one run" $ do
-        -- The point of the applicative: the mount group refusing does not hide what the publish
-        -- policy and the endpoint rules would have said about the same configuration.
         let envVars =
                 overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" $
                     withoutFirstParty (overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" "https://public.example.test/npm/" staticEnvVars)
@@ -180,36 +184,29 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
                            , PublicationTargetOnPublicUpstream Npm Npm "https://public.example.test/npm/"
                            ]
 
--- | The npm mount publishing to a registry of its own, under the namespaces the guard enforces.
 publishingEnv :: [(String, String)]
 publishingEnv =
     overrideEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme" $
         overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test" staticEnvVars
 
--- | 'publishingEnv' publishing under a static credential, which needs an inbound edge beside it.
 staticPublishEnv :: [(String, String)]
 staticPublishEnv = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN" "publish-write-token" publishingEnv
 
--- | A sweep paced faster than the floor the deleting role refuses beneath.
 beneathThePauseFloor :: [(String, String)] -> [(String, String)]
 beneathThePauseFloor = overrideEnv "ECLUSE_DREDGER__CHUNK_PAUSE" "1"
 
--- | Drop the first-party declaration, leaving the target the guard has nothing to check against.
 withoutFirstParty :: [(String, String)] -> [(String, String)]
 withoutFirstParty = filter ((/= "ECLUSE_MOUNTS__NPM__FIRST_PARTY") . fst)
 
--- | Every mount that declares a mirror target, which is what both store groups enumerate.
 mirroringMounts :: AppConfig -> [Ecosystem]
 mirroringMounts app =
     [eco | (eco, mcfg) <- Map.toAscList (cfgMounts app), isJust (mntMirrorTarget mcfg)]
 
--- | Vet an environment layer for one role, failing the test on a refusal.
 expectVetted :: RegistryRole -> [(String, String)] -> IO ValidatedPlan
 expectVetted role envVars = do
     config <- expectConfig envVars Nothing
     either (\errs -> fail ("boot vetting refused: " <> show errs)) pure (vetted role config)
 
--- | Every refusal one role's pass earns from an environment layer.
 refusalsFor :: RegistryRole -> [(String, String)] -> IO [BootError]
 refusalsFor role envVars = fromLeft [] . vetted role <$> expectConfig envVars Nothing
 

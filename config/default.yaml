@@ -285,7 +285,8 @@ mounts:
     #     url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
     #     token:
     # The namespaces this deployment owns, comma separated. Required with a publication
-    # target. Only a first-party name may be published here, and a first-party name
+    # target. Declaring firstParty requires privateUpstream on this mount.
+    # Only a first-party name may be published here, and a first-party name
     # resolves from privateUpstream alone: it is never fetched from publicUpstream,
     # never merged with a public document, never mirrored, and a private miss is a 404.
     # The shape is per-ecosystem. npm reads scopes. PyPI reads PEP 503 canonical
