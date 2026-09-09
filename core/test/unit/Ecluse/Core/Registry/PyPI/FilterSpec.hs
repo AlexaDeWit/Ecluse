@@ -5,7 +5,7 @@
 -- | PyPI assembly preserves admitted entries and refuses locations it cannot rebase.
 module Ecluse.Core.Registry.PyPI.FilterSpec (spec) where
 
-import Data.Aeson (Value (Array, Number, Object, String), object, toJSON, (.=))
+import Data.Aeson (Value (Array, Bool, Number, Object, String), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -248,10 +248,20 @@ rebaseSpec = describe "where a served file points" $ do
             `shouldBe` Just (String ("https://ecluse.test/pypi/simple/zope-interface/" <> zopeFile))
 
 sidecarSpec :: Spec
-sidecarSpec = describe "the PEP 658 sidecar keys" $
-    it "drops both spellings, because Écluse serves no .metadata companion" $ do
+sidecarSpec = describe "the PEP 658 sidecar keys" $ do
+    for_ ["core-metadata", "dist-info-metadata", "data-dist-info-metadata"] $ \key ->
+        for_ [Bool True, Bool False, object ["sha256" .= validSha256]] $ \metadata ->
+            it ("drops " <> show key <> " with value " <> show metadata <> " and preserves unrelated fields") $ do
+                let filename = "requests-2.34.2-py3-none-any.whl"
+                    original = withFileKeys [("custom-metadata", object ["retained" .= True])] (simpleFile filename)
+                    advertised = withFileKeys [(key, metadata)] original
+                    expected = withFileKeys [("url", String (mountBase <> "/simple/requests/" <> filename))] original
+                servedFiles (assembleOne [advertised]) `shouldBe` [expected]
+
+    it "drops all sidecar spellings when advertised together" $ do
         let entry = servedEntry (assembleOne allFiles) "requests-2.34.2-py3-none-any.whl"
         (entry >>= KeyMap.lookup "core-metadata") `shouldBe` Nothing
+        (entry >>= KeyMap.lookup "dist-info-metadata") `shouldBe` Nothing
         (entry >>= KeyMap.lookup "data-dist-info-metadata") `shouldBe` Nothing
 
 mountBase :: Text
@@ -338,6 +348,7 @@ fileNamed filename =
         [ ("size", toJSON (73075 :: Int))
         , ("yanked", toJSON ("withdrawn" :: Text))
         , ("core-metadata", object ["sha256" .= sidecarDigest])
+        , ("dist-info-metadata", object ["sha256" .= sidecarDigest])
         , ("data-dist-info-metadata", object ["sha256" .= sidecarDigest])
         ]
         (simpleFile filename)
