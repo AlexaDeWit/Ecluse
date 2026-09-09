@@ -2,6 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
+{- | Metadata caching and failure observations across full and selective reads.
+Failures remain uncached and retain their typed cause.
+-}
 module Ecluse.Core.Server.MetadataSpec (spec) where
 
 import Data.Aeson (Value (String))
@@ -29,7 +32,7 @@ import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
-    MetadataError (MetadataAuthorisationFailure, MetadataFetch, MetadataUndecodable),
+    MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataUndecodable),
     digestOf,
  )
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache)
@@ -50,11 +53,8 @@ spec = do
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0", "2.0.0"]
                 client = publicClient cache (countingFull calls info) (countingVersion calls info)
-            -- Populate the full cache (one upstream call) ...
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 1
-            -- ... then the single-version op selects from that warm entry: no second call,
-            -- and no selective version fetch.
             found <- fetchVersionMetadata client name (ver "1.0.0")
             fmap (fmap pkgVersion) found `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 1
@@ -64,11 +64,9 @@ spec = do
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
                 client = publicClient cache (countingFull calls info) (countingVersion calls info)
-            -- No preceding GET: the version op leads its own selective fetch (one call) ...
             cold <- fetchVersionMetadata client name (ver "1.0.0")
             fmap (fmap pkgVersion) cold `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 1
-            -- ... and the version cache serves a repeat, no second call.
             warmHit <- fetchVersionMetadata client name (ver "1.0.0")
             fmap (fmap pkgVersion) warmHit `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 1
@@ -81,12 +79,9 @@ spec = do
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
                 client = publicClient cache (countingFull calls info) (countingVersion calls info)
-            -- A version the metadata does not carry is a forwarded miss (a 404), and the
-            -- cache holds it as a determined absence ...
             absent <- fetchVersionMetadata client name (ver "2.0.0")
             fmap (fmap pkgVersion) absent `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
-            -- ... so the negative cache entry serves a repeat, no second call.
             absentHit <- fetchVersionMetadata client name (ver "2.0.0")
             fmap (fmap pkgVersion) absentHit `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
@@ -102,12 +97,11 @@ spec = do
             readIORef calls `shouldReturn` 2
 
     describe "newMetadataClient -- failure propagation" $ do
-        for_ [401, 403] $ \code ->
-            it ("records and preserves private access refusal " <> show code <> " on every read") $ do
+        for_ httpFailures $ \(refusal, expectedCause) ->
+            it ("records and preserves " <> show refusal <> " on every read") $ do
                 causes <- newIORef []
                 failures <- newIORef []
-                let refusal = MetadataAuthorisationFailure code
-                    port = noopMetricsPort{mpUpstreamFetchError = \upstream cause -> modifyIORef' causes ((upstream, cause) :)}
+                let port = noopMetricsPort{mpUpstreamFetchError = \upstream cause -> modifyIORef' causes ((upstream, cause) :)}
                     recordFailure who err = modifyIORef' failures ((who, err) :)
                     client = newMetadataClient port Metric.Private Uncached recordFailure noInvalidLog noFetchLog (const (pure (Left refusal))) (\_ _ -> pure (Left refusal))
                 replicateM_ 2 $ do
@@ -115,28 +109,23 @@ spec = do
                     void full `shouldBe` Left refusal
                     single <- fetchVersionMetadata client name (ver "1.0.0")
                     void single `shouldBe` Left refusal
-                readIORef causes `shouldReturn` replicate 4 (Metric.Private, Metric.OtherCause)
+                readIORef causes `shouldReturn` replicate 4 (Metric.Private, expectedCause)
                 readIORef failures `shouldReturn` replicate 4 (name, refusal)
 
-        it "propagates a MetadataError from both operations and caches nothing on failure" $ do
-            calls <- newIORef (0 :: Int)
-            cache <- newMetadataCache defaultCacheConfig
-            let client = publicClient cache (failingFull calls) (failingVersion calls)
-            full <- fetchFullManifest client name
-            case full of
-                Left err -> err `shouldBe` MetadataUndecodable
-                Right _ -> expectationFailure "expected the failure to propagate"
-            single <- fetchVersionMetadata client name (ver "1.0.0")
-            case single of
-                Left err -> err `shouldBe` MetadataUndecodable
-                Right _ -> expectationFailure "expected the failure to propagate"
-            -- A failed fetch caches nothing, so each op (the full leg, then the cold
-            -- single-version leg) re-ran its fetch.
-            readIORef calls `shouldReturn` 2
+        for_ httpFailures $ \(failure, _) ->
+            it ("caches neither full nor selective " <> show failure <> " responses") $ do
+                calls <- newIORef (0 :: Int)
+                cache <- newMetadataCache defaultCacheConfig
+                let failRead _ = modifyIORef' calls (+ 1) $> Left failure
+                    client = publicClient cache failRead (\_ _ -> failRead ())
+                replicateM_ 2 $ do
+                    full <- fetchFullManifest client name
+                    void full `shouldBe` Left failure
+                    single <- fetchVersionMetadata client name (ver "1.0.0")
+                    void single `shouldBe` Left failure
+                readIORef calls `shouldReturn` 4
 
         it "an unreachable upstream is not cached: the next resolve fetches afresh" $ do
-            -- The transport fault rides the same typed channel: the first resolve
-            -- reports it, nothing is cached, and a recovered upstream serves the next.
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
@@ -150,8 +139,6 @@ spec = do
             readIORef calls `shouldReturn` 2
 
         it "records the Connection error cause for an unreachable upstream" $ do
-            -- The upstream-fetch error metric keeps its bounded cause: the transport
-            -- arm classifies as Connection.
             calls <- newIORef (0 :: Int)
             causes <- newIORef ([] :: [Metric.Cause])
             cache <- newMetadataCache defaultCacheConfig
@@ -189,6 +176,13 @@ spec = do
             readIORef fetches `shouldReturn` 1
             readIORef failureLogs `shouldReturn` 1
 
+httpFailures :: [(MetadataError, Metric.Cause)]
+httpFailures =
+    [(MetadataAuthorisationFailure code, Metric.OtherCause) | code <- [401, 403]]
+        <> [(MetadataAbsent, Metric.UpstreamStatus)]
+        <> [(MetadataHttpFailure code, Metric.UpstreamStatus) | code <- [301, 400, 408, 429, 500, 503]]
+        <> [(MetadataUndecodable, Metric.Decode)]
+
 name :: PackageName
 name = unscopedNpm "is-odd"
 
@@ -207,7 +201,6 @@ noInvalidLog _ _ = pure ()
 noFetchLog :: PackageName -> IO ()
 noFetchLog _ = pure ()
 
--- | A public (cached, anonymous) read handle over an injected full and single-version fetch.
 publicClient ::
     MetadataCache ->
     (PackageName -> IO (Either MetadataError Manifest)) ->
@@ -216,43 +209,31 @@ publicClient ::
 publicClient cache =
     newMetadataClient noopMetricsPort Metric.Public (Cached cache source) noLog noInvalidLog noFetchLog
 
--- | A counting full-manifest fetch: bumps the call counter, then yields the given manifest paired with a marker raw 'Value'.
 countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError Manifest)
 countingFull calls info _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
     pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached (String "raw"), manifestDigest = digestOf "raw-bytes"})
 
--- | Count each selective fetch and resolve its version from the supplied snapshot.
 countingVersion :: IORef Int -> PackageInfo -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
 countingVersion calls info _name version = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
     pure (Right (Map.lookup (renderVersion version) (infoVersions info)))
 
--- | A counting full-manifest fetch that always fails, so a test can assert nothing is cached.
-failingFull :: IORef Int -> PackageName -> IO (Either MetadataError Manifest)
-failingFull calls _name = do
-    atomicModifyIORef' calls (\n -> (n + 1, ()))
-    pure (Left MetadataUndecodable)
-
--- | A counting full-manifest fetch reporting an unreachable upstream (the transport arm).
 unreachableFull :: IORef Int -> PackageName -> IO (Either MetadataError Manifest)
 unreachableFull calls _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
     pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))
 
--- | Whether a full-manifest outcome is the unreachable-upstream fault.
 isUnreachable :: Either MetadataError Manifest -> Bool
 isUnreachable = \case
     Left (MetadataFetch (FetchTransport _)) -> True
     _ -> False
 
--- | A counting single-version fetch that always fails.
 failingVersion :: IORef Int -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
 failingVersion calls _name _version = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
     pure (Left MetadataUndecodable)
 
--- | A manifest self-reporting @name@ with the given versions, each an inert snapshot.
 manifest :: PackageName -> [Text] -> PackageInfo
 manifest who versions =
     PackageInfo
@@ -262,7 +243,6 @@ manifest who versions =
         , infoInvalidEntries = []
         }
 
--- | A minimal per-version snapshot, identifiable by its parsed version.
 details :: PackageName -> Text -> PackageDetails
 details who rawVer =
     PackageDetails

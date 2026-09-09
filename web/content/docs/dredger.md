@@ -249,10 +249,11 @@ unwanted versions you identify. Apply the declaration to every role, then verify
 after older writes settle. Dredger cannot remove shielded leftovers for you, even under an identity
 deny. Do not delete the whole namespace merely because it now has first-party status.
 
-**A store that answers a metadata read with an error keeps the package for that cycle.** The read
-does not distinguish a package the store no longer holds from a server-side failure, and both keep
-every version of that package. A transient failure is re-read on the next cycle rather than retried
-within the same one.
+**A store that answers a metadata read with an error keeps the package for that cycle.**
+The read distinguishes an absent document (`404`) from other HTTP failures and decode failures.
+An absent document carries no retry advice. `408`, `429`, and server errors carry retry advice.
+The current manifest consumer does not use that advice. It keeps every version of the package
+and reads the manifest again on the next cycle, without a retry within the current cycle.
 
 **An advisory swap does not give the whole bucket one immutable rule snapshot.** Candidate names
 come from the bucket's acquired database, while each version's rule evaluation can see a newer
