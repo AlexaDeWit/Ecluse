@@ -180,7 +180,6 @@ vetPublication inboundToken subject@(eco, mcfg) =
   where
     cleared = mntFirstParty mcfg <&> \firstParty -> (eco, (firstParty, publicationToken mcfg))
 
--- The relay uses this credential when the publishing client sends none.
 publicationToken :: MountConfig -> Maybe Secret
 publicationToken mcfg = peToken =<< mntPublicationTarget mcfg
 

@@ -457,7 +457,8 @@ bootRefusal args envVars = do
     traverse_ (uncurry setEnv) envVars
     outcome <- newIORef (Nothing :: Maybe (Either ExitCode (Maybe ())))
     report <- captureStderr $ do
-        result <- try (timeout 100000 (withArgs args run))
+        -- Guard against a hung boot, without requiring refusal within a boot-speed deadline.
+        result <- try (timeout 5_000_000 (withArgs args run))
         writeIORef outcome (Just result)
     traverse_ (unsetEnv . fst) envVars
     readIORef outcome >>= \case
