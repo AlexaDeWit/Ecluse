@@ -76,7 +76,7 @@ flags:
 # instruments its Ecluse.Test.* modules. Codecov must never attribute it as software
 # under test. The core/test/unit/** glob covers the ecluse-core-unit spec files
 # (under test, not under test). The generation side enforces this too.
-# `scripts/coverage.sh` and `scripts/coverage-combined.sh` exclude every
+# `scripts/coverage.sh` excludes every
 # Ecluse.Test.* module from the HPC report, so the support library never reaches
 # Codecov in the first place. The `src/` and `core/src/` paths in `flags.*.paths`
 # above are the matching positive constraint.
