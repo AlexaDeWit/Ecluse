@@ -2,17 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The npm publish-document schema, in two halves. The mirror-write side is
-document assembly, request shaping, and the codec that carries them into the shared
-publish transport. The read side is 'declaredNames': the identity names the
-ecosystem-neutral publish pipeline's anti-shadowing guard reads from a first-party
-publish body.
-
-Everything here is pure. 'npmPublishCodec' is npm's
-'Ecluse.Core.Registry.Publish.PublishCodec'. The composition root marries it to the
-shared transport ('Ecluse.Core.Registry.Publish.newMirrorPublish'), which executes
-what this module forms. The first-party publish relay (a different concern: a
-client's own document forwarded verbatim) lives in "Ecluse.Core.Registry.Npm".
+{- | npm mirror publication through "Ecluse.Core.Registry.Publish", plus identity
+extraction for the first-party publish guard. Published SRI retains all alternatives
+at its strongest algorithm, matching the worker's verification contract.
 -}
 module Ecluse.Core.Registry.Npm.Publish (
     npmPublishCodec,
@@ -28,6 +20,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
+import Data.Text qualified as T
 
 import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
@@ -35,9 +28,10 @@ import Network.HTTP.Client (Request (method, requestBody, requestHeaders), Reque
 import Network.HTTP.Types.Header (hAccept, hContentType)
 
 import Ecluse.Core.Credential (ClientCredential, bareCredential)
-import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, Scope, pkgNamespace, renderPackageName)
+import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, Scope, hashAlg, hashValue, pkgNamespace, renderPackageName)
+import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (
-    MirrorArtifact (maFilename),
+    MirrorArtifact (maFilename, maHashes),
     PublishError (PublishError),
     PublishFault (PublishRejected),
     UrlFormationError,
@@ -50,9 +44,7 @@ import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (Version, renderVersion)
 
-{- | npm's mirror-write protocol codec. The probe reads the abbreviated packument, and the
-publish @PUT@s a single-version packument fragment carrying the artifact's verified digests.
--}
+-- | Probe an abbreviated packument and publish verified bytes with their strongest SRI alternatives.
 npmPublishCodec :: PublishCodec
 npmPublishCodec =
     PublishCodec
@@ -63,9 +55,15 @@ npmPublishCodec =
                 targetUrl
                 (bareCredential <$> token)
                 name
-                (npmPublishDocument name version (unFilename (maFilename artifact)) (firstHashValue SRI artifact) (firstHashValue SHA1 artifact) bytes)
+                (npmPublishDocument name version (unFilename (maFilename artifact)) (strongestSriValue artifact) (firstHashValue SHA1 artifact) bytes)
         , pcPublishOutcome = classifyPublish
         }
+
+strongestSriValue :: MirrorArtifact -> Maybe Text
+strongestSriValue artifact = do
+    hashes <- nonEmpty (filter ((== SRI) . hashAlg) (toList (maHashes artifact)))
+    let strongestAlg = assertedAlg (authoritativeDigest hashes)
+    pure (T.unwords [hashValue h | h <- toList hashes, assertedAlg h == strongestAlg])
 
 classifyPublish :: Int -> Either PublishFault ()
 classifyPublish code
@@ -74,10 +72,7 @@ classifyPublish code
     | otherwise =
         Left (PublishRejected (PublishError ("publish failed with HTTP status " <> show code)))
 
-{- | Build the publish @PUT /{pkg}@ request from the already-serialised npm publish document,
-carrying the bearer token. Fails with a 'UrlFormationError' only when the URL cannot be formed,
-never for a write fault, which 'Ecluse.Core.Registry.publishArtifact' reports.
--}
+-- | Build the publish request with its credential, failing when the URL cannot be formed.
 publishRequest ::
     Text ->
     Maybe ClientCredential ->
@@ -92,23 +87,16 @@ publishRequest baseUrl credential name document = do
         $ base
             { method = "PUT"
             , requestBody = RequestBodyBS document
-            , -- A spec-compliant registry (e.g. Verdaccio) answers @415@ to a publish
-              -- whose body is not declared @application/json@, and the npm publish
-              -- protocol requires it. Accept is set too, for the registry's response.
+            , -- npm registries reject a publish without the JSON content type with HTTP 415.
               requestHeaders =
                 (hContentType, "application/json")
                     : (hAccept, "application/json")
                     : requestHeaders base
             }
 
-{- | Assemble the npm publish document for one version from its verified tarball bytes.
-The @dist@ digests are the caller's verified ones, so the manifest matches the attached bytes.
-A managed registry recomputes the served @dist.tarball@, so @dist@ carries only the filename.
--}
+-- | Assemble one version with caller-verified digests and bytes. The registry expands the tarball filename into its served URL.
 npmPublishDocument ::
-    -- | The package being published.
     PackageName ->
-    -- | The version being published.
     Version ->
     -- | The tarball's filename: the @_attachments@ key and tarball file segment.
     Text ->
@@ -133,8 +121,6 @@ npmPublishDocument name version filename integrity shasum tarball =
     rendered = renderPackageName name
     manifest = versionManifestObject rendered versionText (distObject filename integrity shasum)
 
--- The one-version manifest under @versions.{version}@: the package name, the
--- version, and its @dist@ descriptor.
 versionManifestObject :: Text -> Text -> Aeson.Value -> Aeson.Value
 versionManifestObject rendered versionText dist =
     object
@@ -143,8 +129,6 @@ versionManifestObject rendered versionText dist =
         , "dist" .= dist
         ]
 
--- The manifest's @dist@ descriptor: the tarball filename plus whichever of the caller's
--- verified digests are known, never a fabricated one.
 distObject :: Text -> Maybe Text -> Maybe Text -> Aeson.Value
 distObject filename integrity shasum =
     object
@@ -153,8 +137,6 @@ distObject filename integrity shasum =
             <> maybe [] (\s -> ["shasum" .= s]) shasum
         )
 
--- The @_attachments@ entry for the tarball, with the @length@ taken from the
--- actual byte count.
 attachmentObject :: ByteString -> Aeson.Value
 attachmentObject tarball =
     object
@@ -163,16 +145,10 @@ attachmentObject tarball =
         , "length" .= BS.length tarball
         ]
   where
-    -- The npm attachment carries the raw tarball bytes, standard-base64-encoded.
     encodedTarball :: Text
     encodedTarball = decodeUtf8 (convertToBase Base64 tarball :: ByteString)
 
-{- | Every package name a first-party npm publish body declares as its own identity: @_id@,
-@name@, and each @versions.\<v\>.name@. A body that does not decode declares nothing.
-
-The publish pipeline's anti-shadowing guard checks these names, so a crafted body cannot claim
-a package the scope guard never authorised.
--}
+-- | Read @_id@, @name@ and each version's name for the anti-shadowing guard. An undecodable body declares nothing.
 declaredNames :: LByteString -> [Text]
 declaredNames body =
     [ declared
@@ -186,9 +162,7 @@ declaredNames body =
     , Just (String declared) <- [slot]
     ]
 
-{- | Whether npm's first-party namespaces cover a name: its scope must equal a configured entry
-exactly, so an unscoped name and @\@acme-evil@ against an @\@acme@ entry are both refused.
--}
+-- | Require an exact configured scope, refusing unscoped names and scope prefixes.
 npmPublishAllowed :: [Scope] -> PackageName -> Bool
 npmPublishAllowed scopes name = case pkgNamespace name of
     Just scope -> scope `elem` scopes
