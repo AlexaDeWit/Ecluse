@@ -2,14 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | PyPI projection parity and the release metadata used by artifact admission.
+-- | PyPI protocol, artifact identity and release-age projection parity.
 module Ecluse.Core.Registry.PyPI.MetadataSpec (spec) where
 
-import Data.Aeson (Value (Number, Object, String), encode, object, (.=))
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
-import Data.Time (UTCTime (..), fromGregorian, nominalDay)
+import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
@@ -46,6 +46,71 @@ spec = do
     versionSpec
     paritySpec
     releaseAgeSpec
+    protocolSpec
+
+protocolSpec :: Spec
+protocolSpec = describe "protocol envelope parity" $ do
+    for_ [String "2.0", String "0.9", String "broken", String "", Number 1, Bool True, Array mempty, object []] $ \declared ->
+        it ("refuses the API declaration " <> show declared) $
+            assertProtocolRefusal (protocolIndex (Just (object ["api-version" .= declared])))
+
+    for_ [String "1.0", String "1.4", String "1", Null] $ \declared ->
+        it ("accepts the API declaration " <> show declared) $
+            assertProtocolAcceptance (protocolIndex (Just (object ["api-version" .= declared])))
+
+    for_ [Nothing, Just Null, Just (object [])] $ \meta ->
+        it ("accepts an absent declaration in " <> show meta) $
+            assertProtocolAcceptance (protocolIndex meta)
+
+    for_ [String "1.0", Number 1, Bool True, Array mempty] $ \meta ->
+        it ("refuses a non-object meta value " <> show meta) $
+            assertProtocolRefusal (protocolIndex (Just meta))
+
+    it "checks the protocol before the name mismatch and file count" $ do
+        let body = bytes (object ["name" .= ("urllib3" :: Text), "meta" .= object ["api-version" .= ("2.0" :: Text)], "files" .= [simpleFile "urllib3-2.34.2.tar.gz"]])
+            limits = defaultLimits{maxVersionCount = 0}
+        projectPyPIIndex limits requests body `shouldBe` Left MetadataUndecodable
+        projectPyPIVersion limits requests (release "2.34.2") body `shouldBe` Left MetadataUndecodable
+
+    for_ [("{\"api-version\":\"1.0\",\"api-version\":\"2.0\"}", True), ("{\"api-version\":\"2.0\",\"api-version\":\"1.0\"}", False), ("null,\"meta\":{\"api-version\":\"2.0\"}", True), ("{\"api-version\":\"2.0\"},\"meta\":null", False)] $ \(meta, accepted) ->
+        it ("keeps the first protocol keys in " <> show meta) $ do
+            let body = "{\"name\":\"requests\",\"meta\":" <> meta <> "}"
+                expected :: Either MetadataError (Maybe PackageDetails)
+                expected = if accepted then Right Nothing else Left MetadataUndecodable
+            (Nothing <$ projectPyPIIndex defaultLimits requests body) `shouldBe` expected
+            projectPyPIVersion defaultLimits requests (release "2.34.2") body `shouldBe` expected
+
+    it "refuses an unsupported protocol even when the requested release is absent" $
+        projectPyPIVersion defaultLimits requests (release "9.9.9") (protocolIndex (Just (object ["api-version" .= ("2.0" :: Text)])))
+            `shouldBe` Left MetadataUndecodable
+
+    it "blocks cold artifact admission for bytes declaring an unsupported protocol" $ do
+        rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
+        let evalContext = EvalContext (UTCTime (fromGregorian 2026 9 7) 0) Nothing
+            admit body = traverse (traverse (admitArtifact evalContext rules defaultMinIntegrity (unsafeFilename "requests-2.34.2.tar.gz"))) (projectPyPIVersion defaultLimits requests (release "2.34.2") body)
+        admitted <- admit (protocolIndex (Just (object ["api-version" .= ("1.0" :: Text)])))
+        case admitted of
+            Right (Just AdmissionAdmit{}) -> pass
+            other -> expectationFailure ("expected supported protocol admission, got: " <> show other)
+        refused <- admit (protocolIndex (Just (object ["api-version" .= ("2.0" :: Text)])))
+        case refused of
+            Left MetadataUndecodable -> pass
+            other -> expectationFailure ("expected protocol refusal before admission, got: " <> show other)
+
+assertProtocolRefusal :: ByteString -> Expectation
+assertProtocolRefusal body = do
+    projectPyPIIndex defaultLimits requests body `shouldBe` Left MetadataUndecodable
+    projectPyPIVersion defaultLimits requests (release "2.34.2") body `shouldBe` Left MetadataUndecodable
+
+assertProtocolAcceptance :: ByteString -> Expectation
+assertProtocolAcceptance body = do
+    (info, _) <- expectRight (projectPyPIIndex defaultLimits requests body)
+    let selected = Map.lookup "2.34.2" (infoVersions info)
+    selected `shouldSatisfy` isJust
+    projectPyPIVersion defaultLimits requests (release "2.34.2") body `shouldBe` Right selected
+
+protocolIndex :: Maybe Value -> ByteString
+protocolIndex meta = bytes (object (["name" .= ("requests" :: Text), "files" .= [simpleFile "requests-2.34.2.tar.gz"]] <> maybe [] (\value -> ["meta" .= value]) meta))
 
 indexSpec :: Spec
 indexSpec = describe "projectPyPIIndex" $ do
@@ -65,8 +130,6 @@ indexSpec = describe "projectPyPIIndex" $ do
             `shouldBe` Left MetadataUndecodable
 
     it "reports an index self-reporting another project as a name mismatch, not a decode failure" $
-        -- The anti-shadowing distinction: a responding upstream serving the wrong project is a
-        -- `502`, never a `404` that would read as the project not existing.
         projectPyPIIndex defaultLimits requests (indexNamed "urllib3" [])
             `shouldBe` Left (MetadataNameMismatch "urllib3")
 

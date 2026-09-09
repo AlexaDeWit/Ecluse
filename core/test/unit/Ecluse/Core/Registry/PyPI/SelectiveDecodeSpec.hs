@@ -2,9 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
+{- | Selective PyPI decoding preserves protocol fields and file positions.
+Skipped values still obey JSON syntax and depth limits.
+-}
 module Ecluse.Core.Registry.PyPI.SelectiveDecodeSpec (spec) where
 
-import Data.Aeson (Value (Object, String), encode, object, (.=))
+import Data.Aeson (Value (Array, Object, String), encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as BL
 import Data.Text qualified as T
@@ -13,7 +16,7 @@ import Test.Hspec
 import Ecluse.Test.Registry.PyPI (simpleFile)
 
 import Ecluse.Core.Registry.PyPI.SelectiveDecode (
-    SelectedFiles (sfFileCount, sfFiles, sfName),
+    SelectedFiles (sfFileCount, sfFiles, sfMeta, sfName),
     SelectiveError (SelectiveTooDeeplyNested, SelectiveUndecodable),
     selectFilesFromIndex,
  )
@@ -26,6 +29,14 @@ spec = do
 
 selectionSpec :: Spec
 selectionSpec = describe "selectFilesFromIndex" $ do
+    it "retains only the API declaration from a large metadata object" $ do
+        selected <- shouldSelect (const True) (BL.toStrict (encode (object ["meta" .= object ["api-version" .= ("1.4" :: Text), "unrelated" .= replicate 400 (rawIndexValue [])]])))
+        sfMeta selected `shouldBe` Just (object ["api-version" .= ("1.4" :: Text)])
+
+    it "skips the contents of a malformed metadata array" $ do
+        selected <- shouldSelect (const True) "{\"meta\":[{\"ignored\":1}]}"
+        sfMeta selected `shouldBe` Just (Array mempty)
+
     it "materialises the files of the requested release and no others" $ do
         selected <- shouldSelect (belongsTo "2.34.2") (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl", "requests-2.34.1.tar.gz"])
         selectedNames selected `shouldBe` ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl"]
@@ -57,25 +68,27 @@ selectionSpec = describe "selectFilesFromIndex" $ do
         sfFileCount selected `shouldBe` 0
 
     it "keeps the first files array when a hostile document repeats the key" $ do
-        -- aeson resolves a duplicate key first-occurrence-wins, so the selective walk must too,
-        -- or the two decode paths would disagree about what the upstream said.
         selected <- shouldSelect (const True) duplicateFilesIndex
         selectedNames selected `shouldBe` ["first.tar.gz"]
 
 volumeSpec :: Spec
 volumeSpec = describe "decode volume" $
     it "materialises one entry per matching file, whatever the size of the array" $ do
-        -- A public project carries hundreds of files across its history. The gate consults one
-        -- release, so what it materialises must scale with that release, not with the project.
         selected <- shouldSelect (belongsTo "1.0.0") manyFileIndex
         length (sfFiles selected) `shouldBe` 2
         sfFileCount selected `shouldBe` 400
 
 faithfulnessSpec :: Spec
 faithfulnessSpec = describe "faithful to a whole-document decode" $ do
+    for_ ["{\"meta\":{\"unrelated\":[1,]}}", "{\"meta\":[1,]}", "{\"meta\":null,\"meta\":{\"ignored\":[1,]}}"] $ \body ->
+        it ("checks syntax in skipped metadata " <> show body) $
+            selectFilesFromIndex 64 (const True) body `shouldBe` Left SelectiveUndecodable
+
+    for_ ["{\"meta\":{\"unrelated\":[1]}}", "{\"meta\":[[1]]}", "{\"meta\":null,\"meta\":{\"ignored\":[1]}}", "{\"meta\":{\"api-version\":null,\"api-version\":[1]}}"] $ \body ->
+        it ("checks depth in skipped metadata " <> show body) $
+            selectFilesFromIndex 3 (const True) body `shouldBe` Left SelectiveTooDeeplyNested
+
     it "refuses malformed JSON inside an entry it would have skipped" $
-        -- The lexer reaches the offending bytes whether or not they sit in the requested
-        -- release, so the walk refuses exactly what a whole-document decode refuses.
         selectFilesFromIndex 64 (belongsTo "2.34.2") "{\"name\":\"requests\",\"files\":[{\"filename\":\"other-1.0.tar.gz\",}]}"
             `shouldBe` Left SelectiveUndecodable
 
@@ -94,28 +107,21 @@ faithfulnessSpec = describe "faithful to a whole-document decode" $ do
         selectFilesFromIndex 0 (const True) (indexOf ["requests-2.34.2.tar.gz"])
             `shouldBe` Left SelectiveTooDeeplyNested
 
--- | Run the walk at the default depth budget, failing the example on a refusal.
 shouldSelect :: (Text -> Bool) -> ByteString -> IO SelectedFiles
 shouldSelect belongs = either (fail . show) pure . selectFilesFromIndex 64 belongs
 
-{- | Whether a distribution file name names the given release, standing in for the PyPI
-coordinate reader the production caller supplies.
--}
 belongsTo :: Text -> Text -> Bool
 belongsTo version filename = T.isInfixOf ("-" <> version <> ".") filename || T.isInfixOf ("-" <> version <> "-") filename
 
--- | An index for @requests@ offering one complete entry per file name.
 indexOf :: [Text] -> ByteString
 indexOf = rawIndex . map simpleFile
 
--- | An index offering the given raw entries.
 rawIndex :: [Value] -> ByteString
 rawIndex = BL.toStrict . encode . rawIndexValue
 
 rawIndexValue :: [Value] -> Value
 rawIndexValue files = object ["name" .= ("requests" :: Text), "meta" .= object ["api-version" .= ("1.4" :: Text)], "files" .= files]
 
--- | An index whose @files@ key appears twice, the second carrying a different entry.
 duplicateFilesIndex :: ByteString
 duplicateFilesIndex =
     "{\"name\":\"requests\",\"files\":[" <> entry "first.tar.gz" <> "],\"files\":[" <> entry "second.tar.gz" <> "]}"
@@ -123,11 +129,9 @@ duplicateFilesIndex =
     entry :: Text -> ByteString
     entry name = "{\"filename\":\"" <> encodeUtf8 name <> "\",\"url\":\"https://files.test/" <> encodeUtf8 name <> "\"}"
 
--- | An index of 400 entries, two of which belong to the release under test.
 manyFileIndex :: ByteString
 manyFileIndex = indexOf (["requests-1.0.0.tar.gz", "requests-1.0.0-py3-none-any.whl"] <> [T.pack ("requests-2." <> show n <> ".0.tar.gz") | n <- [1 .. 398 :: Int]])
 
--- | The names of the selected entries, in index order.
 selectedNames :: SelectedFiles -> [Text]
 selectedNames selected = mapMaybe stringOf (mapMaybe (entryKey "filename" . snd) (sfFiles selected))
   where
@@ -135,7 +139,6 @@ selectedNames selected = mapMaybe stringOf (mapMaybe (entryKey "filename" . snd)
         String s -> Just s
         _ -> Nothing
 
--- | One key of a selected file entry.
 entryKey :: Text -> Value -> Maybe Value
 entryKey key = \case
     Object entry -> KeyMap.lookup (fromString (toString key)) entry

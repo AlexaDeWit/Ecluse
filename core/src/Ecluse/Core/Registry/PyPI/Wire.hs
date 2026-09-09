@@ -11,6 +11,7 @@ module Ecluse.Core.Registry.PyPI.Wire (
 
     -- * The Simple index
     SimpleIndex (..),
+    checkApiVersion,
 
     -- * One distribution file
     IndexFile (..),
@@ -40,15 +41,11 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry.WireSupport (partitionLenientList)
 
-{- | The media type the PEP 691 JSON form travels under, in both directions: the index read asks for
-it and the served index is written under it. No HTML form is requested, parsed, or served.
--}
+-- | The PEP 691 media type used for index requests and responses.
 simpleIndexMediaType :: ByteString
 simpleIndexMediaType = "application/vnd.pypi.simple.v1+json"
 
-{- | One project's PEP 691 Simple index: the name it reports for itself and the distribution files
-it offers. A dropped @files@ or @versions@ entry is recorded rather than served.
--}
+-- | A project's index records malformed file and version entries as drops.
 data SimpleIndex = SimpleIndex
     { siName :: Text
     -- ^ The project name the index reports, verbatim. Empty when the key is absent.
@@ -69,14 +66,10 @@ instance FromJSON SimpleIndex where
             SimpleIndex
                 { siName = name
                 , siFiles = files
-                , -- Deterministic order (files, then the versions listing), each already in
-                  -- input order, so the dropped-entry list is stable.
-                  siInvalidEntries = fileDrops <> versionDrops
+                , siInvalidEntries = fileDrops <> versionDrops
                 }
 
-{- | One distribution file: an sdist or a wheel, with the release it belongs to spelled in
-'ifFilename' rather than carried beside it.
--}
+-- | A distribution file encodes its release in 'ifFilename'.
 data IndexFile = IndexFile
     { ifEntryKey :: EntryKey
     , ifFilename :: Text
@@ -84,17 +77,13 @@ data IndexFile = IndexFile
     , ifUrl :: Text
     -- ^ The file's absolute upstream location, on the ecosystem's files host or the index's own.
     , ifHashes :: Map Text Text
-    {- ^ Integrity digests keyed by algorithm name. @sha256@ is always present on public PyPI, and
-    an algorithm this build does not know is dropped at projection.
-    -}
+    -- ^ Unknown digest algorithms drop during projection.
     , ifRequiresPython :: Maybe Text
     -- ^ The PEP 440 interpreter specifier a client filters on, if the file declares one.
     , ifSize :: Maybe Int
     -- ^ The file's byte count, if reported. Advisory, so a hostile value reads as absent.
     , ifUploadTime :: Maybe UTCTime
-    {- ^ When this file was published. It is per file, not per release, so a version's age signal is
-    a fold over its files.
-    -}
+    -- ^ The per-file publication instant used to compute release age.
     , ifYanked :: YankState
     -- ^ Whether PEP 592 withdraws this file from resolution, and why.
     , ifProvenance :: Maybe Text
@@ -114,9 +103,7 @@ instance FromJSON IndexFile where
             <*> (yankState <$> o .:? "yanked")
             <*> o .:? "provenance"
 
-{- | PEP 592's per-file yank marker. A yanked file stays installable by an exact pin and drops out
-of every range, so it is withdrawn from resolution rather than deleted.
--}
+-- | A PEP 592 yank withdraws a file from ranges while allowing exact pins.
 data YankState
     = -- | The file resolves normally.
       FileOffered
@@ -124,16 +111,13 @@ data YankState
       FileWithdrawn (Maybe Text)
     deriving stock (Eq, Show)
 
-{- Read PEP 592's @yanked@ key, which is a boolean or the reason string. @false@, @null@,
-absence, or any other shape reads as offered. -}
 yankState :: Maybe Value -> YankState
 yankState = \case
     Just (Bool True) -> FileWithdrawn Nothing
     Just (String reason) -> FileWithdrawn (Just reason)
     _ -> FileOffered
 
-{- Refuse an index whose declared PEP 691 major API version this decoder does not speak, as
-PEP 691 requires of a client. An index that declares none is read as this one. -}
+-- | Refuse malformed or unsupported API declarations. An absent declaration uses the supported API.
 checkApiVersion :: Object -> Parser ()
 checkApiVersion o = do
     meta <- o .:? "meta" .!= mempty
@@ -142,12 +126,9 @@ checkApiVersion o = do
         Just (major, _) | major /= supportedApiMajor -> fail ("unsupported PEP 691 api-version: " <> toString major)
         _ -> pure ()
 
--- The PEP 691 major API version this decoder speaks.
 supportedApiMajor :: Text
 supportedApiMajor = "1"
 
--- An entry with no name, no location, or an undecodable required field cannot be gated, so it
--- is recorded rather than served.
 lenientFiles :: Object -> Parser ([IndexFile], [InvalidEntry])
 lenientFiles o = do
     raw <- o .:? "files" .!= []
@@ -164,8 +145,6 @@ decodeIndexFiles = foldMap decode
                 (fmap (\file -> file{ifEntryKey = ArrayEntry position}) . parseEither parseJSON)
                 [(fileKey position value, value)]
 
-{- Decode the PEP 700 @versions@ array element-wise for its drops alone. The files decide which
-releases are served, so a listing entry that is not a version string loses only its own record. -}
 lenientVersionListing :: Object -> Parser [InvalidEntry]
 lenientVersionListing o = do
     raw <- o .:? "versions" .!= []
@@ -174,7 +153,6 @@ lenientVersionListing o = do
     decodeVersion :: Value -> Either String Text
     decodeVersion = parseEither parseJSON
 
--- The key a dropped file entry is recorded under: the name it declared, else its position.
 fileKey :: Int -> Value -> Text
 fileKey position = \case
     Object file | Just (String name) <- KeyMap.lookup "filename" file -> name
