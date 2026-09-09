@@ -295,11 +295,24 @@ renderLeafValue path v
         String t -> t
         other -> decodeUtf8 (LBS.toStrict (encode other))
 
-{- | Boot-time posture: one line per served mount naming its derived mode and its consequence, so
-an unintentionally dropped @mirrorTarget@ shows up as "serve-only" rather than silently un-mirroring.
--}
+-- | Mount modes followed by the live-environment limits of @check-config@, shared with boot.
 mountPostureLines :: Config -> [Text]
-mountPostureLines config = map postureLine (Map.toAscList (configMounts config))
+mountPostureLines config = map postureLine mounts <> mapMaybe maintenanceClientLine mounts
+  where
+    mounts = Map.toAscList (configMounts config)
+
+maintenanceClientLine :: (Ecosystem, Mount) -> Maybe Text
+maintenanceClientLine (eco, mount) = do
+    target <- regMirrorTarget (mountRegistries mount)
+    case sbControl (mtBackend target) of
+        ControlNone -> Nothing
+        ControlCodeArtifact{} -> Just notice
+        ControlProtocol{} -> Just notice
+  where
+    notice =
+        "mount \""
+            <> ecosystemName eco
+            <> "\": the store maintenance client is built at boot against the live environment. check-config does not attempt this build."
 
 postureLine :: (Ecosystem, Mount) -> Text
 postureLine (eco, mount) = case regMode (mountRegistries mount) of

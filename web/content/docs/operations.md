@@ -8,6 +8,10 @@ Deployment ends with a running instance, and this page is about living with one.
 you wire probes into an orchestrator, point a collector at the logs, size a pod, or have to pull
 a bad version back out of the mirror.
 
+`ecluse check-config` validates the configuration without starting a role.
+For mirror stores with a control plane, it reports that boot builds the maintenance client
+against the live environment without attempting that build itself.
+
 ## Health probes
 
 An orchestrator watches two endpoints on the proxy, and they answer for different things, so wire
