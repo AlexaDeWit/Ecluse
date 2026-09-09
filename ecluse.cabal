@@ -15,23 +15,8 @@ maintainer:    https://github.com/AlexaDeWit
 category:      Network, Security
 build-type:    Simple
 
--- Test fixtures the pure unit suite reads at run time. The version-ordering file is
--- reference-oracle output. Regenerate it with `task gen-version-fixtures`. The
--- `npm/*.json` bodies are live captures of registry.npmjs.org, and
--- Ecluse.Registry.Npm.Wire decodes them.
--- `express.full.json` is a real, untrimmed capture of a large trusted package's full
--- packument (registry.npmjs.org/express). A test can then prove that the
--- response-bound defaults do not false-positive on a legitimate large package.
---
--- `bench/corpus/npm/*.json` is the curated real-world packument corpus the benchmarks
--- read at run time. The corpus stays frozen, pinned by `bench/corpus/pins.json` and
--- re-captured deliberately with `task gen-bench-corpus`. `bench/corpus/pins.json` is
--- the shared registry catalogue, holding the capture pins and the smoke curated names,
--- read by the Node capture script and Ecluse.Test.RegistryCapture.
--- `acceptance/criteria.json` is the version-controlled acceptance budget for the live
--- performance-acceptance harness (Ecluse.Acceptance and the perf-acceptance executable).
--- `test/unit/fixtures/epss/*.gz` is a gzipped slice of the EPSS feed, keyed to the CVE
--- aliases the OSV corpus carries, so the compile-time join has a deterministic input.
+-- Include runtime fixtures in source distributions. Regenerate version-ordering
+-- fixtures with `task gen-version-fixtures` and pinned captures with `task gen-bench-corpus`.
 extra-source-files:
   acceptance/criteria.json
   bench/corpus/npm/*.json
@@ -496,19 +481,8 @@ library ecluse-runtime
 
 executable ecluse
   import:         shared
-  -- This executable needs the threaded runtime. With telemetry enabled, the
-  -- OpenTelemetry SDK runs a batch span processor on a background thread, which aborts
-  -- under the non-threaded RTS. The -N flag lets the server and worker use every core.
-  --
-  -- The -A64m -n4m pair tunes the GC for the serve path's allocation profile.
-  -- Assembling and re-serialising a many-version packument allocates tens of MB per
-  -- request. The default 4 MB allocation area then makes the process collect hundreds
-  -- of times a second under load. GC took about half the wall time in the load
-  -- benchmarks. A 64 MB per-capability allocation area, divided into 4 MB chunks, cuts
-  -- the collection count by an order of magnitude. The chunks let capabilities share
-  -- the area instead of stranding idle nurseries. An operator can override it at run
-  -- time, `ecluse +RTS -A16m -RTS` for example, because -rtsopts is set. See
-  -- https://ecluse-proxy.com/docs/operations/.
+  -- The OpenTelemetry batch processor requires the threaded RTS.
+  -- Runtime tuning and overrides: https://ecluse-proxy.com/docs/operations/.
   ghc-options:    -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m"
   main-is:        Main.hs
   hs-source-dirs: app
@@ -1297,15 +1271,8 @@ benchmark ecluse-bench
     , text             ^>=2.1
     , time             ^>=1.12
 
--- Load benchmarks harness: throughput and latency under concurrent load against the
--- real composed proxy. A separate EXECUTABLE rather than a tasty-bench component. It
--- boots Ecluse.Server.application on warp over in-process stub upstreams and the
--- in-memory queue and credential doubles. It drives the HTTP scenarios with `oha`, a
--- subprocess run through typed-process, and the worker scenario in-process. It captures
--- RTS stats (peak residency, GC pauses, allocations per request). So it needs the
--- threaded RTS (-threaded, for real warp and concurrency), -N for every core, and -T
--- baked in (GHC.Stats). It links the `ecluse` app library for the composed Application,
--- and stays out of the library closure. INFORM-ONLY and not part of the gate.
+-- The load tool links the composed application without entering the shipped library closure.
+-- Its concurrent scenarios require the threaded RTS and expose RTS statistics through -T.
 executable bench-load
   import:          shared
   main-is:         Main.hs
