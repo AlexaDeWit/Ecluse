@@ -23,7 +23,7 @@ import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, Fet
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (..),
-    MetadataError (MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
+    MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
  )
 
 import Ecluse.Core.Server.Cache (
@@ -85,8 +85,6 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
     resolveVersionHybrid name version = case caching of
         Uncached -> versionLeader name version
         Cached cache source -> do
-            -- (1) The single-version cache: a positive snapshot or a cached determined
-            -- absence both short-circuit.
             cached <- cachedVersion cache source name version
             case cached of
                 Just details -> pure (Right details)
@@ -94,10 +92,8 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
                     warm <- cachedMetadata cache source name
                     case warm of
                         Just entry -> pure (Right (selectVersion version (entryInfo entry)))
-                        -- (3) Cold: lead the selective fetch through the version cache.
                         Nothing -> resolveVersion metrics cache source name version (versionLeader name version)
 
-    -- The single-version single-flight leader: run only on a cold miss, logging a failure once.
     versionLeader :: PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
     versionLeader name version = do
         logFetch name
@@ -110,8 +106,6 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
 selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
 selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
 
--- Widen a cached entry back to the read handle's 'Manifest'. The same three fields,
--- named for the boundary each type serves: the cache stores, the handle answers.
 entryToManifest :: CacheEntry -> Manifest
 entryToManifest entry =
     Manifest
@@ -134,6 +128,8 @@ recordedFetch metrics upstream action = do
 the typed 'MetadataError', never error text, so the label set stays bounded by construction. -}
 metadataErrorCause :: MetadataError -> Metric.Cause
 metadataErrorCause = \case
+    MetadataAbsent -> Metric.UpstreamStatus
+    MetadataHttpFailure _ -> Metric.UpstreamStatus
     MetadataAuthorisationFailure _ -> Metric.OtherCause
     MetadataUndecodable -> Metric.Decode
     MetadataNameMismatch _ -> Metric.Decode

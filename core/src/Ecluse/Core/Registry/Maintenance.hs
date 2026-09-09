@@ -80,6 +80,7 @@ import Ecluse.Core.Fault (
     transportFault,
     transportRetryable,
  )
+import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Package (PackageName, unscopedName)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
@@ -88,7 +89,7 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.Metadata (
     Manifest,
-    MetadataError (MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
+    MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
  )
 import Ecluse.Core.Version (Version)
 
@@ -338,9 +339,15 @@ storeFaultOfFetch = \case
     FetchBoundExceeded _ -> protocolFault "the store's answer crossed the response-size bound"
     FetchUrlUnformable err -> unformableFault err
 
--- | Treat metadata refusals as terminal within the cycle, except for retryable transport faults.
+-- | Preserve HTTP and transport retry advice. Absence and other terminal refusals advise no retry.
 storeFaultOfMetadata :: MetadataError -> StoreFault
 storeFaultOfMetadata = \case
+    MetadataAbsent -> protocolFault "the store has no metadata for the requested package (HTTP 404)"
+    MetadataHttpFailure code ->
+        StoreFault
+            { faultTransport = transportFault TransportProtocol ("the store refused the metadata read with HTTP " <> show code)
+            , faultRetry = if isRetryableStatusCode code then RetryWorthwhile else RetryFutile
+            }
     MetadataAuthorisationFailure _ -> protocolFault "the store refused metadata access"
     MetadataFetch fault -> storeFaultOfFetch fault
     MetadataBoundExceeded _ -> protocolFault "the store's metadata crossed a structural bound"

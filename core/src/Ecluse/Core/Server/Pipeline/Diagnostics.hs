@@ -15,7 +15,9 @@ import Data.Aeson (Value)
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
-import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
+import Katip (KatipContext, Severity (ErrorS, WarningS), katipAddContext, logFM, ls, sl)
+
+import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 
 import Ecluse.Core.Package (
     HashAlg,
@@ -34,13 +36,12 @@ import Ecluse.Core.Package.Merge (
  )
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable))
 import Ecluse.Core.Registry.Metadata (
-    MetadataError (MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
+    MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
  )
 import Ecluse.Core.Security (
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions),
     authorityLabel,
  )
-import Ecluse.Core.Server.Context (Handler)
 import Ecluse.Core.Server.Pipeline.Internal (
     logDecodeFailure,
     logNameMismatch,
@@ -50,8 +51,10 @@ import Ecluse.Core.Server.Pipeline.Internal (
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
 -- | Log once per real fetch, inside the single-flight leader's request context.
-logMetadataFailure :: PackageName -> Text -> MetadataError -> Handler ()
+logMetadataFailure :: (KatipContext m) => PackageName -> Text -> MetadataError -> m ()
 logMetadataFailure name baseUrl = \case
+    MetadataAbsent -> logHttpFailure name baseUrl 404 "the upstream has no metadata for the requested package"
+    MetadataHttpFailure code -> logHttpFailure name baseUrl code "the upstream refused the metadata read"
     MetadataAuthorisationFailure _ -> logFM WarningS "the upstream refused metadata access"
     MetadataBoundExceeded err -> logBreach name err
     MetadataUndecodable -> logDecodeFailure name
@@ -59,6 +62,17 @@ logMetadataFailure name baseUrl = \case
     MetadataFetch (FetchBoundExceeded err) -> logBreach name err
     MetadataFetch (FetchUrlUnformable urlErr) -> logUpstreamUnformable name baseUrl urlErr
     MetadataFetch (FetchTransport fault) -> logUpstreamUnreachable name baseUrl fault
+
+logHttpFailure :: (KatipContext m) => PackageName -> Text -> Int -> Text -> m ()
+logHttpFailure name baseUrl code message =
+    katipAddContext payload (logFM severity (ls message))
+  where
+    severity = if isRetryableStatusCode code then ErrorS else WarningS
+    payload =
+        sl "module" pipelineModule
+            <> sl "package" (renderPackageName name)
+            <> sl "upstream" (authorityLabel baseUrl)
+            <> sl "status" code
 
 logBreach :: (KatipContext m) => PackageName -> LimitError -> m ()
 logBreach name err =
@@ -75,8 +89,6 @@ logBreach name err =
     message :: Text
     message = "refused an upstream metadata document: it exceeded the " <> boundName <> " response bound (observed " <> observed <> ", cap " <> cap <> ")"
 
-    -- Pulled from the typed error, so the ceiling, the observed value, and the cap
-    -- always agree with what was enforced.
     boundName :: Text
     observed :: Text
     cap :: Text
@@ -143,8 +155,6 @@ logInvalidEntries name baseUrl entries =
         "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream packument (the rest is served)"
     plural = if entriesLen == 1 then "y" else "ies"
 
--- One dropped entry for the operator, carrying the raw value the upstream sent
--- (truncated) so the offending bytes stay visible.
 renderDroppedEntry :: InvalidEntry -> Text
 renderDroppedEntry e =
     renderInvalidEntryKind (invalidKind e)

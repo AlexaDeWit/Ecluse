@@ -148,6 +148,13 @@ a look.
 
 ## Telemetry (opt-in)
 
+Metadata reads record HTTP refusals on `ecluse.upstream.fetch.errors` with cause
+`upstream_status`, including `404`. A malformed successful response records `decode` instead.
+Explicit `401` and `403` refusals retain `other` and their existing warning log.
+Metadata `408`, `429`, and server errors log at `ERROR`. A genuine `404` absence and other
+non-success statuses log at `WARN`. These logs carry the status and upstream authority,
+without the upstream body, credentials, or URL query.
+
 Telemetry stays off until you ask for it. Set `ECLUSE_OBSERVABILITY__TELEMETRY=on`, then give the
 instance its identity: `DD_*` (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_AGENT_HOST`) for
 Datadog, or the standard `OTEL_*` variables for any other backend. `DD_*` wins where both are

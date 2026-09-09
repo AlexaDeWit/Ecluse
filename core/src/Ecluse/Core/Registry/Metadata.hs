@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The per-request metadata handle and typed outcomes shared by registry adapters.
-Access refusals retain their upstream status before projection. The serve pipeline owns fallback policy.
+HTTP refusals retain their cause before projection. The serve pipeline owns fallback policy.
 -}
 module Ecluse.Core.Registry.Metadata (
     -- * The read handle
@@ -54,7 +54,7 @@ data MetadataClient = MetadataClient
     -- ^ 'Nothing' means the package resolved without this version. Errors retain the upstream failure.
     }
 
--- | Preserve access refusals before projection, with separate fetch and decode spans.
+-- | Project successful responses only, preserving HTTP refusals before decoding.
 fetchThenProject ::
     TracingPort ->
     (PackageName -> IO (Either FetchFault RegistryResponse)) ->
@@ -64,14 +64,21 @@ fetchThenProject ::
 fetchThenProject tracing fetch name project =
     spanMetadataFetch tracing name (fetch name) >>= \case
         Left fault -> pure (Left (MetadataFetch fault))
-        Right response
-            | isAuthorisationFailure (responseStatusCode response) -> pure (Left (MetadataAuthorisationFailure (responseStatusCode response)))
-            | otherwise -> spanMetadataDecode tracing name (pure (project (responseBody response)))
+        Right response -> case responseStatusCode response of
+            404 -> pure (Left MetadataAbsent)
+            code
+                | isAuthorisationFailure code -> pure (Left (MetadataAuthorisationFailure code))
+                | code >= 200 && code < 300 -> spanMetadataDecode tracing name (pure (project (responseBody response)))
+                | otherwise -> pure (Left (MetadataHttpFailure code))
 
 -- | Why a metadata fetch could not yield a usable result.
 data MetadataError
     = -- | The upstream explicitly refused access. Carries the original 401 or 403.
       MetadataAuthorisationFailure Int
+    | -- | The upstream answered 404. Its body cannot establish a package's identity.
+      MetadataAbsent
+    | -- | Another non-success HTTP status, retained for the consumer's retry policy.
+      MetadataHttpFailure Int
     | -- | A failed exchange, with request-formation, bound, and transport causes kept distinct.
       MetadataFetch FetchFault
     | -- | The decoded structure crossed a limit, distinct from an exchange body-size failure.

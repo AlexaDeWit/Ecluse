@@ -39,7 +39,7 @@ import Ecluse.Core.Registry.Maintenance (
     wholeNameSpace,
  )
 import Ecluse.Core.Registry.Metadata (
-    MetadataError (MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataNameMismatch, MetadataUndecodable),
+    MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
  )
 import Ecluse.Core.Security (LimitError (TooManyVersions))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
@@ -134,6 +134,17 @@ readFaultSpec = do
                 `shouldBe` RetryFutile
 
     describe "storeFaultOfMetadata" $ do
+        it "keeps an absent document without retrying" $ do
+            let fault = storeFaultOfMetadata MetadataAbsent
+            faultRetry fault `shouldBe` RetryFutile
+            tfDetail (faultTransport fault) `shouldBe` "the store has no metadata for the requested package (HTTP 404)"
+
+        for_ [(301, RetryFutile), (400, RetryFutile), (410, RetryFutile), (408, RetryWorthwhile), (429, RetryWorthwhile), (500, RetryWorthwhile), (503, RetryWorthwhile), (599, RetryWorthwhile)] $ \(code, advice) ->
+            it ("retains HTTP " <> show code <> " with " <> show advice) $ do
+                let fault = storeFaultOfMetadata (MetadataHttpFailure code)
+                faultRetry fault `shouldBe` advice
+                tfDetail (faultTransport fault) `shouldBe` "the store refused the metadata read with HTTP " <> show code
+
         for_ [401, 403] $ \code ->
             it ("does not retry explicit metadata access refusal " <> show code) $ do
                 let fault = storeFaultOfMetadata (MetadataAuthorisationFailure code)
@@ -308,12 +319,9 @@ recordingSender sent faultOn batch = do
             then Left aFault
             else Right [(v, VersionRemoved) | v <- batch]
 
--- A fetch that answers from a fixed page sequence, so a listing walk is drivable in IO.
--- Every page a source handed out, discarding the fault the stream ended with.
 pagesOf :: (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text]))) -> IO [[Text]]
 pagesOf fetch = runConduit (void (pageSource fetch) .| CL.consume)
 
--- | 'collectPages' over a page source, which is what 'pageAll' folds a paged fetch through.
 collectedPages :: (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text]))) -> IO (Either StoreFault [Text])
 collectedPages = collectPages . pageSource
 

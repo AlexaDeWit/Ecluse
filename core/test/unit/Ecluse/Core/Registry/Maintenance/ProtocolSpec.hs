@@ -147,15 +147,30 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
             sent <- allCaptured stub
             map (headerValue "Authorization") sent `shouldBe` [Just "Bearer write-token"]
 
-    it "reads every answer it cannot project as one fault, because the read keeps no status" $ do
-        -- The shared metadata read drops the status, so an absent package and a server-side
-        -- failure both arrive as a document that did not project. Either way the version keeps.
-        withStore True answerNothing $ \handle _ ->
-            (fmap faultRetry . leftToMaybe <$> readStoreManifest handle leftpad)
-                `shouldReturn` Just RetryFutile
-        withStore True (answerAll status503 "{}") $ \handle _ ->
-            (fmap faultRetry . leftToMaybe <$> readStoreManifest handle leftpad)
-                `shouldReturn` Just RetryFutile
+    it "retains an absent manifest as HTTP 404 without retry advice" $
+        withStore True answerNothing $ \handle stub -> do
+            outcome <- readStoreManifest handle leftpad
+            fmap faultRetry (leftToMaybe outcome) `shouldBe` Just RetryFutile
+            fmap (tfDetail . faultTransport) (leftToMaybe outcome)
+                `shouldBe` Just "the store has no metadata for the requested package (HTTP 404)"
+            calls stub `shouldReturn` [("GET", "/leftpad")]
+
+    for_ [status408, status429, status500, status503] $ \manifestStatus ->
+        it ("retains manifest HTTP " <> show (statusCode manifestStatus) <> " with retry advice") $
+            withStore True (answerAll manifestStatus "{}") $ \handle stub -> do
+                outcome <- readStoreManifest handle leftpad
+                fmap faultRetry (leftToMaybe outcome) `shouldBe` Just RetryWorthwhile
+                fmap (tfDetail . faultTransport) (leftToMaybe outcome)
+                    `shouldBe` Just ("the store refused the metadata read with HTTP " <> show (statusCode manifestStatus))
+                calls stub `shouldReturn` [("GET", "/leftpad")]
+
+    it "retains a malformed successful manifest as a decode failure without retry advice" $
+        withStore True (answerAll status200 "{}") $ \handle stub -> do
+            outcome <- readStoreManifest handle leftpad
+            fmap faultRetry (leftToMaybe outcome) `shouldBe` Just RetryFutile
+            fmap (tfDetail . faultTransport) (leftToMaybe outcome)
+                `shouldBe` Just "the store's metadata did not decode into a manifest"
+            calls stub `shouldReturn` [("GET", "/leftpad")]
 
     it "advises another attempt when the store never answered the manifest read at all" $ do
         handle <- unreachableStore
@@ -345,7 +360,6 @@ consentKey = "set mounts.npm.mirrorTarget.verdaccio.permitDeletion to true"
 leftpad :: PackageName
 leftpad = unscopedNpm "leftpad"
 
--- The one bucket a leaf with no alphabet offers, which covers everything the store holds.
 listWholeStore :: StoreMaintenance -> IO (Either StoreFault [PackageName])
 listWholeStore handle = listBucketOf handle ""
 
@@ -355,7 +369,6 @@ listBucketOf handle raw = withBucket raw (collectPages . listPackagesIn handle)
 version :: Text -> Version
 version = mkVersion Npm
 
--- A store answering the listing, the packument, and both writes of the delete sequence.
 answerStore :: Captured -> (Status, LBS.ByteString)
 answerStore captured = case (capMethod captured, capPath captured) of
     ("GET", "/-/all") -> (status200, encode listingDocument)
@@ -381,7 +394,6 @@ answerRefusingEdit captured = case capMethod captured of
     "GET" -> (status200, encode (packumentDocumentOn (capAuthority captured)))
     _ -> (status500, "{\"error\":\"refused\"}")
 
--- A store holding nothing: the listing, the packument, and every read answer 404.
 answerNothing :: Captured -> (Status, LBS.ByteString)
 answerNothing = answerAll status404 "{}"
 

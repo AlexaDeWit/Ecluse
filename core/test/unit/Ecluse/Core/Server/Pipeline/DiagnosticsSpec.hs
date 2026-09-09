@@ -2,6 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
+{- | Metadata diagnostics preserve bounded status fields and redact upstream credentials.
+Dropped-entry diagnostics retain their existing detail limits.
+-}
 module Ecluse.Core.Server.Pipeline.DiagnosticsSpec (spec) where
 
 import Data.Aeson (Value (Number), object, (.=))
@@ -15,15 +18,38 @@ import Ecluse.Core.Package (
     InvalidEntryKind (InvalidDistTag, InvalidIndexFile, InvalidVersionManifest),
     mkInvalidEntry,
  )
-import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataHttpFailure))
+import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv)
 import Ecluse.Test.Package (unscopedNpm)
 
-{- | The operator-facing dropped-entry line. It renders a value an upstream supplied, so it is
-the last place a credential could surface.
--}
+-- | Pin log severity, status fields, and credential redaction.
 spec :: Spec
-spec = invalidEntriesSpec
+spec = do
+    metadataFailureSpec
+    invalidEntriesSpec
+
+metadataFailureSpec :: Spec
+metadataFailureSpec = describe "logMetadataFailure" $ do
+    for_ [(MetadataAbsent, 404, "Warning"), (MetadataHttpFailure 301, 301, "Warning"), (MetadataHttpFailure 400, 400, "Warning"), (MetadataHttpFailure 408, 408, "Error"), (MetadataHttpFailure 429, 429, "Error"), (MetadataHttpFailure 500, 500, "Error"), (MetadataHttpFailure 503, 503, "Error")] $ \(failure, code, severity) ->
+        it ("logs " <> show failure <> " as " <> toString severity <> " without credentials") $ do
+            logged <- runLog (logMetadataFailure (unscopedNpm "mix") "https://deploy:hunter2@registry.npmjs.org/path?sig=abc" failure)
+            logged `shouldSatisfy` T.isInfixOf ("\"sev\":\"" <> severity <> "\"")
+            logged `shouldSatisfy` T.isInfixOf ("\"status\":" <> show (code :: Int))
+            logged `shouldSatisfy` T.isInfixOf "\"package\":\"mix\""
+            logged `shouldSatisfy` T.isInfixOf "\"upstream\":\"registry.npmjs.org:443\""
+            let message = case failure of
+                    MetadataAbsent -> "the upstream has no metadata for the requested package"
+                    _ -> "the upstream refused the metadata read"
+            logged `shouldSatisfy` T.isInfixOf message
+            for_ ["hunter2", "deploy", "sig=abc", "/path"] $ \secret ->
+                logged `shouldSatisfy` (not . T.isInfixOf secret)
+
+    for_ [401, 403] $ \code ->
+        it ("keeps access refusal HTTP " <> show code <> " at Warning") $ do
+            logged <- runLog (logMetadataFailure (unscopedNpm "mix") upstream (MetadataAuthorisationFailure code))
+            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+            logged `shouldSatisfy` T.isInfixOf "the upstream refused metadata access"
 
 invalidEntriesSpec :: Spec
 invalidEntriesSpec = describe "logInvalidEntries" $ do
@@ -60,7 +86,6 @@ invalidEntriesSpec = describe "logInvalidEntries" $ do
         logged `shouldSatisfy` (not . T.isInfixOf "hunter2")
         logged `shouldSatisfy` (not . T.isInfixOf "sig=abc")
 
--- | Run one log action through a JSON scribe and hand back what it wrote.
 runLog :: KatipContextT IO () -> IO Text
 runLog action =
     captureStdout $ do
@@ -71,7 +96,6 @@ runLog action =
 upstream :: Text
 upstream = "https://registry.npmjs.org"
 
--- | Three drops across two kinds, so the bucketing has something to distinguish.
 mixedDrops :: [InvalidEntry]
 mixedDrops =
     [ dropOf InvalidVersionManifest (Number 1)
@@ -79,11 +103,9 @@ mixedDrops =
     , dropOf InvalidDistTag (Number 5)
     ]
 
--- | Record a drop of the given kind and value, holding the key and reason fixed.
 dropOf :: InvalidEntryKind -> Value -> InvalidEntry
 dropOf kind value = mkInvalidEntry kind "2.0.0" value "expected an object"
 
--- | A dropped version object whose @dist.tarball@ carries a credential and a signature.
 credentialedManifest :: Value
 credentialedManifest =
     object ["dist" .= object ["tarball" .= ("https://deploy:hunter2@registry.npmjs.org/x.tgz?sig=abc" :: Text)]]
