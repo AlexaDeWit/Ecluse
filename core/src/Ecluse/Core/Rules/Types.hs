@@ -2,16 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Data types for the policy rules engine.
-
-The evaluation model lives in "Ecluse.Core.Rules". This module holds only the
-dependency-light types it operates on. Those are the closed built-in rule vocabulary
-config selects from, a rule's per-version result, and the overall decision.
-
-A 'Rule' is __evaluation-agnostic data__. It says /what/ a rule is, never /how/ it is
-evaluated. How a rule decides is a separate concern that lives in "Ecluse.Core.Rules".
-'Ecluse.Core.Rules.evalRule' dispatches over this data, and the engine wraps it in a
-'Ecluse.Core.Rules.PreparedRule' to run it.
+{- | The closed rule vocabulary, rule verdicts, and policy decisions.
+"Ecluse.Core.Rules" binds these values to capabilities and evaluates them.
+Configuration selects built-in rules and cannot supply evaluation closures.
 -}
 module Ecluse.Core.Rules.Types (
     -- * The built-in rule vocabulary
@@ -51,62 +44,38 @@ import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Fault (RetryAfter (..))
 import Ecluse.Core.Package (Scope)
 
-{- | The closed, evaluation-agnostic vocabulary of __built-in__ rules an operator selects
-and refines in config. "Ecluse.Core.Rules" prepares each one into the engine's runtime
-'Ecluse.Core.Rules.PreparedRule', binding /how/ it is evaluated.
-
-Security boundary: untrusted config only ever yields closed 'Rule' data, never an
-arbitrary evaluation closure. A rule whose evaluation performs IO is a plain constructor
-here that 'Ecluse.Core.Rules.evalRule' dispatches on.
+{- | The closed built-in rule vocabulary accepted from configuration.
+'Ecluse.Core.Rules.prepare' binds capabilities without accepting arbitrary evaluation closures.
 -}
 data Rule
     = -- | Unconditionally allow every package under the given scope.
       AllowScope Scope
-    | {- | Allow a version only if it was published at least this long ago.
-      Guards against race-to-publish supply-chain attacks where an attacker
-      publishes a malicious version and hopes it is consumed before takedown.
+    | {- | Delay new versions to give malicious publishes time to be detected and removed.
+      Allow only after the configured publish age.
       -}
       AllowIfOlderThan NominalDiffTime
-    | {- | Deny any package version that runs code at install time: npm install
-      scripts, a RubyGems native-extension build, or a PyPI sdist build backend. That
-      is a common arbitrary-code-execution vector. Yields no decision otherwise.
+    | {- | Deny install-time code execution through npm scripts, RubyGems native builds, or PyPI sdist build backends.
+      Abstain when the package carries no install-time execution signal.
       -}
       DenyInstallTimeExecution
     | {- | A hard deny for a specific package or package@version. Evaluated at top
       precedence (above AllowScope) as a post-mirror revocation mechanism.
       -}
       DenyByIdentity Text
-    | {- | Allow a specific package or package\@version by exact identity: the allow
-      twin of 'DenyByIdentity', and the operator's explicit escape hatch. One use is a
-      security fix published under a version string the remediation fast lane's
-      exact-match probe cannot see. Top of the allow band, still under every deny
-      default.
+    | {- | Allow an exact package identity, optionally with a version, including fixes the remediation probe cannot match.
+      Default precedence overrides advisory denies but yields to install-code and identity denies.
       -}
       AllowByIdentity Text
-    | {- | Fast-track a version a synced advisory names as its __exact fix__, so a
-      security patch is admitted immediately rather than waiting out the
-      publish-age quarantine. Effectful: it consults the local advisory database
-      ('Ecluse.Core.Cve.CveLookup') through the boot-bound
-      'Ecluse.Core.Rules.RuleDeps', and abstains when no database is loaded, when
-      the version is not an exact fixed bound, or when the version still sits
-      inside another advisory's affected range.
+    | {- | Admit an exact advisory fix without quarantine when no advisory still affects the version.
+      Consult the local database and abstain when it is absent or either condition fails.
       -}
       AllowIfRemediatesCve
-    | {- | Deny a version a synced advisory records as __affected__, at or above the
-      configured severity threshold. This is the deny direction over the same advisory
-      database as 'AllowIfRemediatesCve', with the deliberately __opposite failure
-      mode__. Where an unconfirmable remediation merely falls back to the quarantine,
-      an unanswerable deny check refuses the version, unless the operator configured it
-      fail-open (see 'DenyIfCveParams'). It ships opt-in, not in the default policy:
-      enabled before the mirror is warmed, it would deny the historical versions an
-      existing build already depends on.
+    | {- | Opt-in denial for affected versions meeting the severity threshold, including historical mirror dependencies.
+      'DenyIfCveParams' governs missing scores and unavailable lookups.
       -}
       DenyIfCve DenyIfCveParams
-    | {- | Deny a version a synced advisory records as __affected__ when that advisory's EPSS
-      score reaches the configured threshold. The 'DenyIfCve' twin over the same database and
-      failure model, gating on the probability of exploitation rather than on the damage. An
-      advisory with no EPSS score counts as above every threshold, which on the npm feed is
-      most of them: malware advisories carry no CVE alias for the feed to key on. Opt-in.
+    | {- | Deny on a known EPSS score at or above the threshold. Individual missing scores
+      abstain, including malware without CVE aliases. 'DenyIfCve' governs severity independently.
       -}
       DenyIfEpss DenyIfEpssParams
     deriving stock (Eq, Show)
@@ -116,15 +85,12 @@ the constructor, so its selectors stay total under the sum (@-Wpartial-fields@).
 -}
 data DenyIfCveParams = DenyIfCveParams
     { dicMinCvss :: Double
-    {- ^ The CVSS base score (0 to 10) at or above which an affecting advisory denies. A
-    qualitative label counts as its band's ceiling, and an unscored advisory counts as
-    above every threshold ('Ecluse.Core.Cve.scoreAtLeast'). Severity that cannot be
-    proven low must not slip a deny gate.
+    {- ^ CVSS threshold (0 to 10). Qualitative labels use their band's ceiling.
+    Missing scores satisfy every threshold, so unscored malware remains denied.
     -}
     , dicOnUnavailable :: FailureAlignment
-    {- ^ How the rule resolves when the advisory database cannot answer. 'FailDeny' refuses
-    the version and is the shipped default. 'FailNoDecision' skips the rule, and the
-    decision's audit reasons record the skip.
+    {- ^ Resolve an unavailable advisory lookup: 'FailDeny' refuses by default.
+    'FailNoDecision' skips the rule and records the reason in the decision's audit trail.
     -}
     }
     deriving stock (Eq, Show)
@@ -132,9 +98,8 @@ data DenyIfCveParams = DenyIfCveParams
 -- | 'DenyIfEpss''s configured behaviour, the EPSS twin of 'DenyIfCveParams'.
 data DenyIfEpssParams = DenyIfEpssParams
     { dieMinEpss :: Double
-    {- ^ The EPSS probability (0 to 1) at or above which an affecting advisory denies. An
-    unscored advisory counts as above every threshold ('Ecluse.Core.Cve.scoreAtLeast'):
-    exploitability that cannot be proven low must not slip a deny gate.
+    {- ^ The EPSS probability (0 to 1) at or above which an affecting advisory denies.
+    An individual missing score supplies no denial.
     -}
     , dieOnUnavailable :: FailureAlignment
     -- ^ How the rule resolves when the advisory database cannot answer, as 'dicOnUnavailable'.
@@ -169,12 +134,8 @@ readsAdvisories = \case
     DenyByIdentity{} -> False
     AllowByIdentity{} -> False
 
-{- | A 'Rule' paired with the integer precedence at which it competes, higher first.
-'Ecluse.Core.Rules.bootOrder' turns precedence, and at equal precedence the rule name,
-into the single total order the engine walks.
-
-Precedence is a field, not an @Ord@ instance: equal precedence is legal, so a derived
-'Ord' would be non-antisymmetric.
+{- | A rule with explicit precedence, ordered highest first and then by name through 'Ecluse.Core.Rules.bootOrder'.
+No derived 'Ord' defines policy order.
 -}
 data PrecededRule = PrecededRule
     { rulePrecedence :: Int
@@ -184,17 +145,8 @@ data PrecededRule = PrecededRule
     }
     deriving stock (Eq, Show)
 
-{- | The default precedence for a rule /type/, used when a policy omits an explicit
-precedence.
-
-The ladder climbs most-passive to most-decisive:
-
-@AllowIfOlderThan@ (100) < @AllowIfRemediatesCve@ (150) < @AllowScope@ (200) <
-@DenyIfCve@ = @DenyIfEpss@ (225) < @AllowByIdentity@ (250) <
-@DenyInstallTimeExecution@ (300) < @DenyByIdentity@ (400)
-
-The two advisory denies are the only ones below an allow, so an operator's exact-identity
-pin overrides either. They share a rung, and the boot order breaks that tie by name.
+{- | Use the rule type's default when configuration omits precedence. See 'Ecluse.Core.Rules.bootOrder' for tie-breaking.
+Identity allows override both advisory denies, while install-code and identity denies outrank every allow.
 -}
 defaultPrecedence :: Rule -> Int
 defaultPrecedence = \case
@@ -213,9 +165,8 @@ quarantine that yields to an explicit allow-list and to every deny.
 defaultAllowIfOlderThanPrecedence :: Int
 defaultAllowIfOlderThanPrecedence = 100
 
-{- | Default precedence of 'AllowIfRemediatesCve': above the passive age quarantine, so a
-security fix is admitted immediately instead of waiting out @min-age@. Below
-'AllowScope', so a scoped package an operator already trusts never pays the advisory probe.
+{- | Admit security fixes ahead of quarantine.
+Yield to 'AllowScope', whose trusted packages need no advisory probe.
 -}
 defaultAllowIfRemediatesCvePrecedence :: Int
 defaultAllowIfRemediatesCvePrecedence = 150
@@ -226,9 +177,8 @@ explicit allow-list is a stronger statement than the time gate. Still below ever
 defaultAllowScopePrecedence :: Int
 defaultAllowScopePrecedence = 200
 
-{- | Default precedence of 'DenyIfCve': above the age gate, the remediation lane, and a
-scope allow-list, but deliberately below 'AllowByIdentity', so an operator's identity pin
-can override an advisory deny. It is the one deny type not strictly above every allow.
+{- | Outrank quarantine, remediation, and scope allows.
+Yield to 'AllowByIdentity' so an operator can override an advisory denial.
 -}
 defaultDenyIfCvePrecedence :: Int
 defaultDenyIfCvePrecedence = 225
@@ -239,9 +189,8 @@ same database and answers to the same identity-pin override. A tie resolves by n
 defaultDenyIfEpssPrecedence :: Int
 defaultDenyIfEpssPrecedence = defaultDenyIfCvePrecedence
 
-{- | Default precedence of 'AllowByIdentity': the top of the allow band, above both advisory
-denies so an identity pin overrides them, and below 'DenyInstallTimeExecution' and
-'DenyByIdentity' so those two keep the last word.
+{- | An identity pin overrides both advisory denies.
+'DenyInstallTimeExecution' and 'DenyByIdentity' retain higher default precedence.
 -}
 defaultAllowByIdentityPrecedence :: Int
 defaultAllowByIdentityPrecedence = 250
@@ -263,18 +212,14 @@ data EvalContext = EvalContext
     { ctxNow :: UTCTime
     -- ^ The wall-clock "now" for age-based rules.
     , ctxAdvisoryEtag :: Maybe DbEtag
-    {- ^ The advisory database 'DbEtag' a denial's audit line names as active at emit, or
-    'Nothing' when none is loaded. It is deliberately __not__ the database the decision was
-    evaluated against, because a shadow swap may land mid-request.
+    {- ^ The advisory generation active when the audit line emits, or 'Nothing' when none is loaded.
+    A shadow swap means this need not identify the generation used for evaluation.
     -}
     }
     deriving stock (Eq, Show)
 
-{- | Assemble the ambient evaluation context, the one assembly point every consumer shares.
-
-'ctxNow' must come from the mount's injected clock ('Ecluse.Core.Server.Context.pdNow'),
-never an ad-hoc 'Data.Time.getCurrentTime', so the age gate cannot drift between
-consumers. 'ctxAdvisoryEtag' is audit-only and never enters a rule's decision.
+{- | Build the shared context from the mount's injected clock, never an ad-hoc wall clock.
+The advisory ETag is audit-only and cannot affect the decision.
 -}
 mkEvalContext :: IO UTCTime -> IO (Maybe DbEtag) -> IO EvalContext
 mkEvalContext now advisoryEtag = EvalContext <$> now <*> advisoryEtag
@@ -282,12 +227,8 @@ mkEvalContext now advisoryEtag = EvalContext <$> now <*> advisoryEtag
 -- | A human-facing reason a rule attaches to its result, kept for the audit trail.
 type Reason = Text
 
-{- | What a single rule returns for a single package version: a __deterministic__ verdict.
-A rule cannot manufacture an 'Unavailable', so the harness takes every verdict at face
-value and never retries one.
-
-A verdict is __decisive__ iff it is 'Allow', 'Deny', or @'CannotVet' 'FailDeny' _@. The
-engine collects every other reason, in boot order, for the deny-by-default audit trail.
+{- | A deterministic verdict that the harness never retries. 'Allow', 'Deny', and fail-closed 'CannotVet' are decisive.
+Other verdict reasons enter the deny-by-default audit trail in boot order.
 -}
 data RuleVerdict
     = -- | This rule admits the package (with a human reason). Decisive.
@@ -296,42 +237,26 @@ data RuleVerdict
       Deny Reason
     | -- | This rule has no opinion. The reason stays for the audit trail. A no-op.
       NoDecision Reason
-    | {- | The rule reached the package but cannot vet it: a __deterministic,
-      in-process absence__, not a fault. Today that means no advisory database is
-      loaded. It carries its own __failure alignment__. A 'FailDeny' rule is decisive
-      (fail-closed, → 'Undecidable'), and a 'FailNoDecision' rule is a no-op
-      (fail-open). It carries __no__ 'Transience' on purpose: the absence is
-      deterministic, so no in-process retry can change it, which is exactly why the
-      harness must not route it through the retry\/breaker path.
+    | {- | Deterministic inability to vet, such as an absent database. Never enters retry or breaker handling.
+      'FailDeny' yields 'Undecidable'. 'FailNoDecision' abstains.
       -}
       CannotVet FailureAlignment Reason
     deriving stock (Eq, Show)
 
-{- | The outcome the resilience harness produces for one rule. Only the harness constructs
-'Unavailable', so the retry and breaker machinery reacts only to a fault the harness itself
-observed, never to a verdict a rule returned.
-
-An evaluation is decisive iff it credits a 'Decision': a decisive 'RuleVerdict', or an
-@'Unavailable' _ 'FailDeny' _@. The engine gathers every other reason for the audit trail.
+{- | The harness alone creates 'Unavailable' from faults. Decisive verdicts and fail-closed faults determine the decision.
+Other outcomes contribute their reasons to the audit trail.
 -}
 data RuleEvaluation
     = -- | The rule returned a verdict, and the harness takes it at face value.
       Decided RuleVerdict
-    | {- | The harness could not obtain a verdict: the rule's IO failed, timed out, or
-      its source circuit breaker is open. It carries the rule's __failure alignment__
-      (a 'FailDeny' evaluation is decisive → 'Undecidable', a 'FailNoDecision' one is a
-      no-op) and a 'Transience' recording whether a retry can help. Only the harness
-      builds this.
+    | {- | A harness-observed IO fault, timeout, or open breaker, with retry advice in 'Transience'.
+      'FailDeny' yields 'Undecidable'. 'FailNoDecision' abstains.
       -}
       Unavailable Transience FailureAlignment Reason
     deriving stock (Eq, Show)
 
-{- | How a rule aligns when it cannot vet a version, or its evaluation faults.
-
-There is deliberately __no @FailAllow@__: a failed or uncomputable check must never
-/admit/ unvetted bytes. A rule whose verdict is load-bearing for safety fails closed
-('FailDeny'). A remediation or allow-direction rule whose missing signal should not block
-availability fails open ('FailNoDecision').
+{- | Choose refusal or abstention when a rule cannot vet or its evaluation faults.
+There is no failure alignment that admits unvetted bytes.
 -}
 data FailureAlignment
     = -- | __Fail closed.__ An uncomputable result is decisive: the version is not admitted.
@@ -352,25 +277,18 @@ data Decision
       in boot order, so the denial response can explain what was considered.
       -}
       BlockedByDefault [Reason]
-    | {- | Undecidable: a 'FailDeny' rule that could not be computed __won__, so the
-      version could not be vetted. Fail-closed, so it is not admitted. A packument
-      filters it out like a denial, and a concrete artifact surfaces a @503@\/@500@ by
-      the serve error model. The 'Transience' carries whether a retry can help, and the
-      'Reason' is the audit reason.
+    | {- | A fail-closed rule won without vetting the version. Packuments omit it, and artifact requests return an error.
+      'Transience' selects the error status and retry advice. The reason remains available for audit.
       -}
       Undecidable Transience Reason
     deriving stock (Eq, Show)
 
-{- | Whether an unavailability is expected to resolve on its own. The serve status mapping
-turns on this distinction alone: 'WillResolve' is a @503@, 'WontResolve' a @500@.
-
-The resilience harness treats an upstream outage, rate limit, timeout, or open breaker as
-transient, and an internal or parse fault as not.
+{- | Serve transient outages, rate limits, timeouts, and open breakers as @503@.
+Serve internal or parse faults as @500@. 'WillResolve' and 'WontResolve' encode that distinction.
 -}
 data Transience
-    = {- | Transient: a retry may succeed (an advisory source briefly down, a
-      timeout, an open circuit breaker). The optional 'RetryAfter' is the delay to
-      suggest to the client.
+    = {- | A retry may succeed after an outage, timeout, or open breaker.
+      The optional 'RetryAfter' suggests a client delay.
       -}
       WillResolve (Maybe RetryAfter)
     | {- | Not expected to self-heal (an internal or parse error). Retrying cannot

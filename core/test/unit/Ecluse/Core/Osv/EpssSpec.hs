@@ -84,8 +84,6 @@ spec = do
                 `shouldReturn` 1
 
         it "refuses a feed that decompresses past the cap, rather than truncating it" $
-            -- A compression bomb: a truncated table would read downstream as unscored, which
-            -- denies every affected version under an EPSS rule.
             fetchServed 4096 (toLazy (BS.replicate 65536 0x78))
                 `shouldThrow` (\case DecompressedTooLarge cap seen -> cap == 4096 && seen > 4096; _ -> False)
 
@@ -97,7 +95,6 @@ spec = do
 
         it "refuses a feed that decodes to no scores at all" $ do
             -- A 200 carrying an error page, and a feed whose rows the decode no longer reads.
-            -- Either would publish an all-unscored artifact, which denies every affected version.
             fetchServed maxEpssFeedBytes "<html><body>service unavailable</body></html>"
                 `shouldThrow` (== EpssFeedEmpty)
             fetchServed maxEpssFeedBytes feedPreamble `shouldThrow` (== EpssFeedEmpty)

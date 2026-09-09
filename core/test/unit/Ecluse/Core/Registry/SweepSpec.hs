@@ -10,9 +10,10 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Core.Cve (DbEtag (DbEtag))
+import Ecluse.Core.Cve (AdvisoryRange (..), DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
+import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
@@ -34,21 +35,24 @@ import Ecluse.Core.Registry.Sweep (sweepCycle, withStoreRetry)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltConsentWithheld, HaltDeletionCap, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (outcomeHalt, outcomeTally),
+    SweepMount (smRuleDeps),
     SweepPacing (swpChunkPause, swpChunkSize, swpDeletionCap, swpShape),
     SweepPorts (sweepDelay),
     SweepShape (SweepCandidates, SweepEverything),
     SweepTally (tallyDeleted, tallyExamined, tallyKept),
  )
-import Ecluse.Core.Rules.Types (Rule (DenyByIdentity))
+import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup), prepare)
+import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny), Rule (DenyByIdentity, DenyIfCve, DenyIfEpss))
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
 import Ecluse.Test.Maintenance (
-    FakeStore (fakeMaintenance, readFakeCursor),
+    FakeStore (fakeMaintenance, readFakeContents, readFakeCursor),
     FakeStoreConfig (..),
     defaultFakeStoreConfig,
     newFakeStore,
  )
 import Ecluse.Test.Package (sampleManifest)
-import Ecluse.Test.Rules (denyRule)
+import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (..), recordingPorts, testMount, testPacing)
 
 spec :: Spec
@@ -57,6 +61,7 @@ spec = do
     retrySpec
     candidateCycleSpec
     fullWalkSpec
+    epssSpec
     pacingSpec
 
 permissionSpec :: Spec
@@ -362,6 +367,58 @@ assertPacing shape chunkSize alphabet pages candidates expected = do
     tallyDeleted (outcomeTally outcome) `shouldBe` length expected
     reverse <$> readIORef observed `shouldReturn` map (first packageName) expected
     recDelays rec' `shouldReturn` foldl' max 0 (map snd expected)
+
+epssSpec :: Spec
+epssSpec = describe "individual missing EPSS scores under the production evaluator" $ do
+    forM_ unscoredEpssCases $ \(label, score) ->
+        it ("keeps the stored version for " <> label) $ do
+            score `shouldBe` Nothing
+            (outcome, contents) <- sweepAdvisories [advisory "MAL-2026-1" score] [epssRule]
+            tallyExamined (outcomeTally outcome) `shouldBe` 1
+            tallyKept (outcomeTally outcome) `shouldBe` 1
+            tallyDeleted (outcomeTally outcome) `shouldBe` 0
+            Map.lookup (packageName "left-pad") contents `shouldBe` Map.lookup (packageName "left-pad") (fakeContents seededConfig)
+
+    it "keeps below-threshold scores and deletes when a known high score returns" $
+        forM_ [(Just 0.01, 0), (Nothing, 0), (Just 0.75, 1)] $ \(score, deleted) -> do
+            (outcome, _) <- sweepAdvisories [advisory "CVE-2026-10001" score] [epssRule]
+            tallyDeleted (outcomeTally outcome) `shouldBe` deleted
+
+    it "deletes on another affecting advisory above the EPSS threshold" $ do
+        (outcome, contents) <-
+            sweepAdvisories
+                [advisory "MAL-2026-1" Nothing, advisory "CVE-2026-10002" (Just 0.75)]
+                [epssRule]
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+        Map.findWithDefault [] (packageName "left-pad") contents `shouldBe` []
+
+    it "preserves CVSS denial of an unscored malware advisory" $ do
+        (outcome, _) <-
+            sweepAdvisories
+                [advisory "MAL-2026-1" Nothing]
+                [epssRule, DenyIfCve (DenyIfCveParams 8.0 FailDeny)]
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+
+    it "deletes on another decisive rule when EPSS abstains" $ do
+        (outcome, _) <-
+            sweepAdvisories
+                [advisory "MAL-2026-1" Nothing]
+                [epssRule, DenyByIdentity "left-pad"]
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+  where
+    epssRule = DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)
+    advisory identifier = AdvisoryRange identifier Nothing (Just "0") Unbounded
+
+sweepAdvisories :: [AdvisoryRange] -> [Rule] -> IO (CycleOutcome, Map PackageName [StoredVersion])
+sweepAdvisories ranges configured = do
+    store <- seededStore
+    rec' <- recordingPorts generation
+    let deps = inertRuleDeps{rdWithCveLookup = \use -> use (Just (fakeCveLookup [("left-pad", ar) | ar <- ranges]))}
+    prepared <- prepare deps (map atDefaultPrecedence configured)
+    let mount = (testMount (fakeMaintenance store) prepared configured){smRuleDeps = deps}
+    outcome <- sweepCycle testPacing (recPorts rec') [mount]
+    contents <- readFakeContents store
+    pure (outcome, contents)
 
 runCycle :: SweepPacing -> StoreMaintenance -> IO (RecordedSweep, CycleOutcome)
 runCycle pacing handle = do
