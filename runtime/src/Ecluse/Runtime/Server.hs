@@ -144,8 +144,8 @@ import Ecluse.Runtime.Server.Middleware (
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Tracing (telemetryWaiMiddleware)
 
-{- | The settings the web layer needs to serve that the composition-root 'Env' does not carry. Not
-the request-body cap: the publish route bounds its own against 'Ecluse.Core.Server.Context.pubMaxRequestBytes'.
+{- | The settings the web layer needs to serve that the composition-root 'Env' does not carry.
+Not the request-body cap: the publish route bounds its own body as a value.
 -}
 data ServerConfig = ServerConfig
     { scPort :: Int
@@ -176,7 +176,7 @@ data ServerConfig = ServerConfig
     -}
     }
 
-{- | Build a 'ServerConfig' over the given mount bindings on 'defaultPort'. There is no built-in
+{- | Build a 'ServerConfig' over the mount bindings on 'defaultPort'. There is no built-in
 mount: the web layer serves only the ecosystems the composition root binds here.
 -}
 mkServerConfig :: [MountBinding] -> ServerConfig
@@ -264,8 +264,8 @@ serve env binding (RouteAction contract action) request respond =
     ctx :: RequestCtx
     ctx = RequestCtx runtime binding
 
-{- | Run one route's handler behind a commit-tracking respond, catching __synchronous__ escapes only, so cancellation still tears the request down.
-Pre-commit an escape is classified, observed, and answered with the neutral fallback, carrying no detail to the client. Post-commit it rethrows.
+{- | Run one route's handler behind a commit-tracking respond, catching __synchronous__ escapes
+only. Pre-commit one answers the neutral fallback with no detail, post-commit it rethrows.
 -}
 perimeterGuard ::
     -- | Observe a classified pre-commit fault (the metric and the audit line).
@@ -290,14 +290,14 @@ perimeterGuard observeFault respond fallback handlerOn = do
                 observeFault (classifyEscape escape)
                 respond fallback
 
-{- Match a request path to a mount: the first binding whose prefix the path begins with, paired with the action its
-router names for the remainder. A prefix matches with or without a trailing slash, so a bare @\/npm@ hits the mount too.
+{- Match a request path to a mount: the first binding whose prefix the path begins with, paired
+with the action its router names. A prefix matches with or without a trailing slash.
 -}
 matchMount :: Method -> RequestHeaders -> [MountBinding] -> [Text] -> Maybe (MountBinding, RouteAction)
 matchMount method headers mounts segments = asum (map match mounts)
   where
-    {- The method and the headers are part of the mapping: the npm router tells a @PUT@ publish from a @GET@ read over
-    one path and a @HEAD@ from the @GET@ it varies, and a route serving one media type refuses a client that admits none. -}
+    {- The method and the headers are part of the mapping: the npm router tells a @PUT@ publish
+    from a @GET@ over one path, and a media-typed route refuses a client that admits none. -}
     match :: MountBinding -> Maybe (MountBinding, RouteAction)
     match binding =
         (binding,) . bindingRouter binding method headers
@@ -317,8 +317,8 @@ stripPrefixSegments _ _ = Nothing
 dropTrailingSlashes :: [Text] -> [Text]
 dropTrailingSlashes = dropWhileEnd (== "")
 
-{- | The cross-cutting stack around the proxy 'Application'. The request-body cap is __not__ here: a middleware would throw across the request perimeter.
-@Autohead@ and @Gzip@ stay out too, because one answers a @HEAD@ by streaming a whole tarball to nowhere and the other fights streaming backpressure.
+{- | The cross-cutting stack around the proxy 'Application'. The body cap is not a middleware:
+it would throw across the request perimeter, and @Autohead@ and @Gzip@ fight streaming.
 -}
 serverMiddleware :: ServerConfig -> Middleware
 serverMiddleware cfg =
@@ -326,8 +326,8 @@ serverMiddleware cfg =
         . timeout timeoutSeconds
         . goingAwayMiddleware (scDrain cfg)
 
-{- | Serve the front door over the launch's one live 'DrainSignal', which the readiness probe, the going-away middleware, and the shutdown handler share.
-@warp@ waits for in-flight requests and artifact streams under 'scDrainTimeout', and on a TTY Ctrl-D forces an immediate halt that bypasses the drain.
+{- | Serve the front door over one live 'DrainSignal', which the probe, the going-away header,
+and the shutdown handler share. @warp@ drains under 'scDrainTimeout', and a TTY adds Ctrl-D.
 -}
 runWarp :: ServerConfig -> (ServerConfig -> IO Application) -> IO ()
 runWarp cfg0 getApp = do
@@ -339,8 +339,8 @@ runWarp cfg0 getApp = do
                 . Warp.setInstallShutdownHandler (installShutdownHandler drain)
                 . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
                 . Warp.setOnException (scOnException cfg)
-                -- Defence in depth for a fault with no mount context, from a middleware or warp itself: a neutral JSON
-                -- 500 carrying no exception detail. A handler escape answers through the request perimeter and never reaches here.
+                -- Defence in depth for a fault with no mount context, from a middleware or
+                -- warp itself: a neutral 500 with no detail. A handler escape never gets here.
                 . Warp.setOnExceptionResponse (const onExceptionResponse)
                 $ Warp.defaultSettings
     app <- getApp cfg
@@ -351,8 +351,8 @@ runWarp cfg0 getApp = do
 onExceptionResponse :: Response
 onExceptionResponse = jsonResponse status500 "{\"error\":\"internal server error\"}"
 
-{- On @SIGTERM@ or @SIGINT@, raise the drain before closing the listen socket, so readiness fails and responses carry
-@Connection: close@ before @warp@ stops accepting. 'CatchOnce' leaves a second signal to the runtime default, which hard-stops a slow drain.
+{- On @SIGTERM@ or @SIGINT@, raise the drain before closing the socket, so readiness fails and
+responses carry @Connection: close@ first. 'CatchOnce' leaves the second to the runtime.
 -}
 installShutdownHandler :: DrainSignal -> IO () -> IO ()
 installShutdownHandler drain closeSocket =
@@ -360,8 +360,8 @@ installShutdownHandler drain closeSocket =
   where
     install sig = installHandler sig (CatchOnce (beginDrain drain >> closeSocket)) Nothing
 
-{- | Race a server arm against a never-returning background loop, the shutdown shape the single-process composition roots share.
-'race_' is the invariant: 'concurrently_' would keep waiting after the server drained and leave telemetry and resource brackets un-unwound, with no flush.
+{- | Race a server arm against a never-returning background loop, the single-process shutdown
+shape. 'race_' is the invariant: 'concurrently_' would wait forever, brackets un-unwound.
 -}
 raceServerAgainstLoop :: (MonadUnliftIO m) => m () -> m () -> m ()
 raceServerAgainstLoop = race_

@@ -97,15 +97,15 @@ spec = do
                 bodyOf ready `shouldSatisfy` BS.isInfixOf "\"pypi\":\"ready\""
 
         it "admits the PyPI read on an identity override while that slot is still empty" $
-            -- An intentional allow outranks the advisory deny, so it keeps admitting through the
-            -- outage the mount beside it is still waiting out.
+            -- An intentional allow outranks the advisory deny, so it keeps admitting through
+            -- the outage the mount beside it is still waiting out.
             withRoutedStub upstreamReply $ \stub -> do
                 (app, _) <- partialAdvisoryApp (stubLocalhostUrl stub) overridePolicy
                 overridden <- requestPath app "/pypi/simple/leftpad/"
                 status overridden `shouldBe` 200
 
 {- | Both mounts as the composition root resolves them, over one upstream, with npm's advisory
-database installed and PyPI's slot still empty. The handles come back so a test can land PyPI's.
+database installed and PyPI's slot empty. The handles come back so a test can land PyPI's.
 -}
 partialAdvisoryApp :: Text -> [PrecededRule] -> IO (Application, Map.Map Ecosystem CveSyncHandle)
 partialAdvisoryApp upstreamBase policy = do
@@ -142,11 +142,11 @@ advisoryPolicy =
     , atDefaultPrecedence (AllowIfOlderThan 0)
     ]
 
-{- | 'advisoryPolicy' under an operator's identity allow, whose default precedence outranks the
-advisory deny, so it decides before the rule that has no database to read.
+{- | 'advisoryPolicy' under an operator's identity allow, which outranks the advisory deny by
+default precedence. PyPI keys a release by its canonical PEP 440 spelling, so @1.0.0@ is @1@.
 -}
 overridePolicy :: [PrecededRule]
-overridePolicy = atDefaultPrecedence (AllowByIdentity "leftpad@1.0.0") : advisoryPolicy
+overridePolicy = atDefaultPrecedence (AllowByIdentity "leftpad@1") : advisoryPolicy
 
 -- One upstream for both ecosystems. Each document names the authority that served it, which is
 -- the authority a projection accepts artifact locations on.

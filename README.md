@@ -56,6 +56,8 @@ The [operator manual](https://ecluse-proxy.com/docs/) covers running Écluse.
 `Ecluse.Core.Package.Entry` defines artifact coordinates, and `Registry.ServedDocument` selects only
 the exact entries that admission kept. The npm and PyPI adapters own their wire parsing and rendering.
 `Ecluse.Core.Registry.Metadata.Projection` shares full-document validation and metadata error mapping across adapters.
+`Ecluse.Core.Server.Readiness` decides the `/readyz` verdict from each mount's advisory state, so one
+ecosystem awaiting its database leaves the healthy mounts routable.
 
 [`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules
 engine, and the mirror queue. The threat model (OWASP Threat Dragon, STRIDE) lives in

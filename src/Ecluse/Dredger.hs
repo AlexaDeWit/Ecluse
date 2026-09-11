@@ -149,8 +149,8 @@ sweepTask logEnv opts pacing ports checkReady status mounts = case doRepetition 
 
     step = latchedStep pacing ports mounts (stLatched status)
 
-    {- Give every mount's first advisory sync a bounded chance to land before the first cycle decides anything, because a sweep
-    reads each mount's own database and partial readiness is not enough here. Past the bound the cycle runs regardless. -}
+    {- Give every mount's first sync a bounded chance to land, because a sweep reads each
+    mount's own database and partial readiness is not enough. Past the bound the cycle runs. -}
     awaitAdvisories = when (waitsForAdvisories mounts) (poll (advisoryWaitAttempts pacing))
 
     poll remaining
