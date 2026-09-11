@@ -2,15 +2,17 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Aggregated startup refusals and their
+{- | Aggregated startup refusals, the advisories a boot logs beside them, and their
 operator-facing rendering.
 -}
 module Ecluse.Composition.BootError (
     BootError (..),
     StoreMaintenanceReason (..),
+    Advisory (..),
     refuseOnThrow,
     renderBootError,
     renderBootErrors,
+    renderAdvisory,
 ) where
 
 import Data.Text qualified as T
@@ -26,6 +28,7 @@ import Ecluse.Config (
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (displayExceptionT)
 
 {- | A reason the composition root refuses to start. The root aggregates them, so a
@@ -146,6 +149,18 @@ data StoreMaintenanceReason
       NoProtocolMaintenance
     | -- | Building the cleared backend's client against the live environment threw.
       ClientBuildFailed Text
+    deriving stock (Eq, Show)
+
+{- | A collapsed configuration a writing role boots on and warns about. The deleting role
+refuses the same collapses, so no advisory here reaches it.
+-}
+data Advisory
+    = {- | A mount's mirror target is also the named mount's private upstream, at the carried
+      registry. Both mounts are carried, because the two can differ.
+      -}
+      MirrorTargetOnPrivateUpstream Ecosystem Ecosystem RegistryUrl
+    | -- | A mount's mirror target is also its own publication target, at the carried registry.
+      MirrorTargetOnOwnPublicationTarget Ecosystem RegistryUrl
     deriving stock (Eq, Show)
 
 {- | Fold a thrown fault into the boot error the caller names, so a phase that dials a live
@@ -296,3 +311,31 @@ renderStoreMaintenanceReason eco = \case
             <> ecosystemName eco
             <> " protocol carries no package listing or version delete for one"
     ClientBuildFailed detail -> "building its client failed: " <> detail
+
+{- | Render an advisory as the warning line a boot logs and @ecluse check-config@ prints. Both
+entry points render here, so neither can word a warning its own way.
+-}
+renderAdvisory :: Advisory -> Text
+renderAdvisory = \case
+    MirrorTargetOnPrivateUpstream eco other url ->
+        mirrorCollapseLine eco (endpointRef eco other "privateUpstream") url
+    MirrorTargetOnOwnPublicationTarget eco url ->
+        mirrorCollapseLine eco "publicationTarget" url
+
+-- The line both mirror collapses take: the collapsed pair, the registry they share, and the
+-- consequence of keeping the configuration.
+mirrorCollapseLine :: Ecosystem -> Text -> RegistryUrl -> Text
+mirrorCollapseLine eco otherRef url =
+    "mount \""
+        <> ecosystemName eco
+        <> "\": mirrorTarget and "
+        <> otherRef
+        <> " resolve to the same registry ("
+        <> registryUrlText url
+        <> "); the Dredger refuses this configuration, so pruning this mirror stays manual"
+
+-- A neighbouring mount's endpoint is named by its mount. The subject's own is not.
+endpointRef :: Ecosystem -> Ecosystem -> Text -> Text
+endpointRef eco other key
+    | eco == other = key
+    | otherwise = "mount \"" <> ecosystemName other <> "\" " <> key

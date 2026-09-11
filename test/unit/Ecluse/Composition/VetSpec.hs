@@ -4,13 +4,17 @@
 
 module Ecluse.Composition.VetSpec (spec) where
 
+import Data.Text qualified as T
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Composition.BootError (BootError (QueueUrlUnrecognised))
+import Ecluse.Composition.BootError (
+    Advisory (MirrorTargetOnOwnPublicationTarget),
+    BootError (QueueUrlUnrecognised),
+ )
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (
     Severity (Advise, Ignore, Refuse),
@@ -20,6 +24,8 @@ import Ecluse.Composition.Vet (
     runVet,
     vetRole,
  )
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Test.Package (unsafeRegistryUrl)
 
 spec :: Spec
 spec = do
@@ -27,35 +33,38 @@ spec = do
     accumulationSpec
     inputSpec
 
-{- The four applicative laws. A hand-rolled instance can break any of them, and the accumulation
-every boot report depends on is only total while they hold. Each is written out in full, because
-hlint would otherwise "simplify" the exact expression under test. -}
-{- HLINT ignore lawSpec "Use <$>" -}
+{- The four applicative laws, which the accumulation every boot report depends on rests on. Each
+is written out in full, through 'pureVet', so the expression under test is the law itself. -}
 lawSpec :: Spec
 lawSpec = describe "the applicative laws" $ do
     it "identity: pure id <*> v is v" $
         hedgehog $ do
             v <- forAll genProbe
-            observe (pure id <*> probeVet v) === observe (probeVet v)
+            observe (pureVet id <*> probeVet v) === observe (probeVet v)
 
     it "composition: pure (.) <*> u <*> v <*> w is u <*> (v <*> w)" $
         hedgehog $ do
             u <- forAll genProbe
             v <- forAll genProbe
             w <- forAll genProbe
-            observe (pure (.) <*> probeVetFn u <*> probeVetFn v <*> probeVet w)
+            observe (pureVet (.) <*> probeVetFn u <*> probeVetFn v <*> probeVet w)
                 === observe (probeVetFn u <*> (probeVetFn v <*> probeVet w))
 
     it "homomorphism: pure f <*> pure x is pure (f x)" $
         hedgehog $ do
             x <- forAll genValue
-            observe (pure (+ 1) <*> pure x) === observe (pure (x + 1))
+            observe (pureVet (+ 1) <*> pureVet x) === observe (pureVet (x + 1))
 
     it "interchange: u <*> pure y is pure ($ y) <*> u" $
         hedgehog $ do
             u <- forAll genProbe
             y <- forAll genValue
-            observe (probeVetFn u <*> pure y) === observe (pure ($ y) <*> probeVetFn u)
+            observe (probeVetFn u <*> pureVet y) === observe (pureVet ($ y) <*> probeVetFn u)
+
+-- 'pure' pinned to 'Vet'. A law spelled with 'pure' itself is what a lint rule rewrites into
+-- the point-free form, which is not the expression these tests must run.
+pureVet :: a -> Vet a
+pureVet = pure
 
 accumulationSpec :: Spec
 accumulationSpec = describe "accumulation" $ do
@@ -68,20 +77,20 @@ accumulationSpec = describe "accumulation" $ do
     it "logs the advisories of both sides of an application, in order" $
         -- Both sides advise, so reversing the mappend that joins them fails here.
         observe (probeVetFn (Probe Advised 1) <*> probeVet (Probe Advised 2))
-            `shouldBe` [ (["Advised 1", "Advised 2"], Right 3)
-                       , (["Advised 1", "Advised 2"], Right 3)
+            `shouldBe` [ ([probeAdvisory "Advised 1", probeAdvisory "Advised 2"], Right 3)
+                       , ([probeAdvisory "Advised 1", probeAdvisory "Advised 2"], Right 3)
                        ]
 
     it "keeps the advisories of a refused pass, so a refusal never hides an advisory" $
         observe (probeVetFn (Probe Advised 1) <*> probeVet (Probe Refused 2))
-            `shouldBe` [ (["Advised 1"], Left [QueueUrlUnrecognised "Refused 2"])
-                       , (["Advised 1"], Left [QueueUrlUnrecognised "Refused 2"])
+            `shouldBe` [ ([probeAdvisory "Advised 1"], Left [QueueUrlUnrecognised "Refused 2"])
+                       , ([probeAdvisory "Advised 1"], Left [QueueUrlUnrecognised "Refused 2"])
                        ]
 
     it "neither refuses nor advises on a finding the role ignores, and still yields the value" $
         observe (probeVetFn (Probe Advised 1) <*> probeVet (Probe Ignored 2))
-            `shouldBe` [ (["Advised 1"], Right 3)
-                       , (["Advised 1"], Right 3)
+            `shouldBe` [ ([probeAdvisory "Advised 1"], Right 3)
+                       , ([probeAdvisory "Advised 1"], Right 3)
                        ]
 
     it "lets one rule ignore a finding under one role and refuse it under the other" $
@@ -103,7 +112,7 @@ inputSpec = describe "the pass's own inputs" $ do
                        ]
 
 -- A vet is a function of its role, so the laws compare what it yields under every role.
-observe :: Vet a -> [([Text], Either [BootError] a)]
+observe :: Vet a -> [([Advisory], Either [BootError] a)]
 observe v = [runVet role v | role <- [MirrorWriter, MirrorPruner]]
 
 -- The finding a probe carries. 'RoleSplit' is what exercises the role reader.
@@ -133,7 +142,7 @@ findingVet :: Probe -> Vet ()
 findingVet (Probe finding n) = case finding of
     Undetected -> rule (const (Refuse QueueUrlUnrecognised)) (const Nothing) label
     Refused -> rule (const (Refuse QueueUrlUnrecognised)) Just label
-    Advised -> rule (const (Advise id)) Just label
+    Advised -> rule (const (Advise probeAdvisory)) Just label
     Ignored -> rule (const Ignore) Just label
     RoleSplit -> rule roleSplit Just label
   where
@@ -141,8 +150,16 @@ findingVet (Probe finding n) = case finding of
 
 roleSplit :: RegistryRole -> Severity Text
 roleSplit = \case
-    MirrorWriter -> Advise id
+    MirrorWriter -> Advise probeAdvisory
     MirrorPruner -> Refuse QueueUrlUnrecognised
+
+{- The probe's advisory, carrying its label in the URL, so two advisories are distinguishable
+and an assertion on the order they accumulate in fails when they are swapped. -}
+probeAdvisory :: Text -> Advisory
+probeAdvisory label =
+    MirrorTargetOnOwnPublicationTarget Npm (unsafeRegistryUrl ("https://" <> slug <> ".example.test"))
+  where
+    slug = T.toLower (T.replace " " "-" label)
 
 -- A finding only the deleting role acts on, the shape the store maintenance rule takes.
 ignoredByWriter :: RegistryRole -> Severity Text

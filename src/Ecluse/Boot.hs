@@ -28,7 +28,7 @@ import System.Environment (getEnvironment)
 import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
 import UnliftIO (bracket, throwIO, tryIO)
 
-import Ecluse.Composition.BootError (renderBootErrors)
+import Ecluse.Composition.BootError (renderAdvisory, renderBootErrors)
 import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     deadLetterTerminusWarning,
@@ -190,7 +190,7 @@ withBootEnv role action = do
             -- The provenance block logs ahead of every refusable phase, so a refusal that names a
             -- config key stays traceable to the layer that set it.
             traverse_ (logBootInfo logEnv) (brProvenance report)
-            let logAdvisories = traverse_ (logBootWarning logEnv) (brAdvisories report)
+            let logAdvisories = traverse_ (logBootWarning logEnv . renderAdvisory) (brAdvisories report)
             bootPlan <- case brOutcome report of
                 -- An advisory about a configuration that will not start is still one its operator
                 -- must act on, so a refusal reports beside it rather than instead of it.

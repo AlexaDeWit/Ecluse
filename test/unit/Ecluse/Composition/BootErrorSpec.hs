@@ -9,8 +9,10 @@ import Data.Text.Encoding qualified as TE
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
+    Advisory (MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream),
     BootError (..),
     StoreMaintenanceReason (ClientBuildFailed, NoControlPlane),
+    renderAdvisory,
     renderBootError,
     renderBootErrors,
  )
@@ -20,11 +22,13 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Test.Package (unsafeRegistryUrl)
 
 spec :: Spec
 spec = do
     renderBootErrorSpec
     renderBootErrorsSpec
+    renderAdvisorySpec
     forM_ [(Npm, "NPM"), (PyPI, "PYPI")] $ \(eco, envName) ->
         it ("names the first-party dependency and fix for " <> show eco) $
             TE.encodeUtf8 (renderBootError (FirstPartyWithoutPrivateUpstream eco))
@@ -132,3 +136,22 @@ renderBootErrorSpec = describe "renderBootError" $
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay
+
+{- | Every advisory constructor's rendered bytes. A writing role boots on these, so the line is
+all an operator gets, and rewording one is a change to the operator-facing contract.
+-}
+renderAdvisorySpec :: Spec
+renderAdvisorySpec = describe "renderAdvisory" $ do
+    it "names the pair and the registry a mount's own private upstream collapsed onto" $
+        advisoryBytes (MirrorTargetOnPrivateUpstream Npm Npm (unsafeRegistryUrl "https://store.example.test"))
+            `shouldBe` "mount \"npm\": mirrorTarget and privateUpstream resolve to the same registry (https://store.example.test); the Dredger refuses this configuration, so pruning this mirror stays manual"
+
+    it "names the neighbouring mount whose private upstream the mirror target collapsed onto" $
+        advisoryBytes (MirrorTargetOnPrivateUpstream Npm PyPI (unsafeRegistryUrl "https://store.example.test"))
+            `shouldBe` "mount \"npm\": mirrorTarget and mount \"pypi\" privateUpstream resolve to the same registry (https://store.example.test); the Dredger refuses this configuration, so pruning this mirror stays manual"
+
+    it "quotes the mirror target as configured, trailing slash included" $
+        advisoryBytes (MirrorTargetOnOwnPublicationTarget Npm (unsafeRegistryUrl "https://store.example.test/npm/mirror/"))
+            `shouldBe` "mount \"npm\": mirrorTarget and publicationTarget resolve to the same registry (https://store.example.test/npm/mirror/); the Dredger refuses this configuration, so pruning this mirror stays manual"
+  where
+    advisoryBytes = TE.encodeUtf8 . renderAdvisory

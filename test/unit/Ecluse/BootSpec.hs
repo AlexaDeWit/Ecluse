@@ -382,6 +382,15 @@ spec = do
                         length mountLines `shouldBe` (if hasControlPlane then 2 else 1)
                         drop 1 mountLines `shouldBe` [notice | hasControlPlane]
 
+        it "prints the mirror-collapse advisory a writing role boots on" $
+            -- The typed advisory reaches an operator as this line or as nothing at all, so this
+            -- is what pins the render to the print path rather than to the pass that logged it.
+            bracket_ (traverse_ (uncurry setEnv) collapsedMirrorEnv) (traverse_ (unsetEnv . fst) collapsedMirrorEnv) $ do
+                output <- captureStdout $ do
+                    outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
+                    outcome `shouldBe` Left ExitSuccess
+                lines output `shouldContain` [collapsedMirrorAdvisory]
+
     describe "the ambient AWS_ENDPOINT_URL refusal (one verdict for both entry points)" $ do
         it "refuses one malformed override in the boot and in check-config alike" $ do
             traverse_ (uncurry setEnv) runEnv
@@ -473,6 +482,11 @@ collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__U
 
 collapsedMirrorRefusal :: BootError
 collapsedMirrorRefusal = MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" "https://private.example.test"
+
+-- The advisory 'collapsedMirrorEnv' earns, as check-config prints it: its 'warn' prefix included.
+collapsedMirrorAdvisory :: Text
+collapsedMirrorAdvisory =
+    "warning: mount \"npm\": mirrorTarget and privateUpstream resolve to the same registry (https://private.example.test); the Dredger refuses this configuration, so pruning this mirror stays manual"
 
 refusalNaming :: Text -> (Either ExitCode (Maybe ()), [Text])
 refusalNaming invocation =

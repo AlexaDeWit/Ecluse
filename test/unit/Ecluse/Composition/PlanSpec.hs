@@ -8,6 +8,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
+    Advisory (MirrorTargetOnPrivateUpstream),
     BootError (
         AwsEndpointMalformed,
         MemoryPlanOverrideUnsafe,
@@ -64,6 +65,7 @@ import Ecluse.Rts (
     reconcileRuntimePlan,
     resolveRuntimePlan,
  )
+import Ecluse.Test.Package (unsafeRegistryUrl)
 
 spec :: Spec
 spec = describe "resolveBootPlan" $ do
@@ -102,8 +104,7 @@ spec = describe "resolveBootPlan" $ do
 
     it "carries the role it vetted under, so a boot starts the behaviour the plan names" $ do
         -- The boot reads the behaviour off this field, so a plan resolved for one role can no
-        -- longer start another's. The mirror target is one the deleting role can sweep, so
-        -- every role clears the configuration.
+        -- longer start another's. Every role clears this target, the deleting role included.
         config <- expectConfig codeArtifactEnvVars Nothing
         let roleOf role = fmap bpRole (brOutcome (resolveBootPlan role (bootInputsFor codeArtifactEnvVars Nothing config noCeiling)))
         roleOf (BootMirrorPipeline MirrorOnly) `shouldBe` Right (BootMirrorPipeline MirrorOnly)
@@ -239,9 +240,8 @@ spec = describe "resolveBootPlan" $ do
             brAdvisories report `shouldBe` [mirrorCollapseAdvisory]
 
         it "gives the deleting role the refusal alone, never the writing roles' advisory too" $ do
-            -- One rule turns the detected collapse into exactly one outcome per role, so the
-            -- Dredger reports what it refuses and not what another role would have tolerated.
-            -- The collapsed target is also one no backend here sweeps, and the pass reports both.
+            -- One rule turns the detected collapse into exactly one outcome per role, and the
+            -- collapsed target is also one no backend here sweeps, so the pass reports both.
             config <- expectConfig collapsedMirrorEnv Nothing
             let report = resolveBootPlan BootStorePruner (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
             refusalsOf report `shouldBe` Left [collapsedMirrorRefusal, noMaintenanceBackend]
@@ -249,10 +249,8 @@ spec = describe "resolveBootPlan" $ do
 
     describe "the runtime posture each entry point sizes against" $
         it "decides an override against the posture its own entry point resolved, so the two sides can differ" $ do
-            -- One set of process facts, resolved through the two functions the two entry points
-            -- call: 'reconcileRuntimePlan' for the boot, which measures the posture it reached,
-            -- and 'appliedRuntimePlan' for the checker, which predicts a full application. The
-            -- pass is the same function, so its verdict agrees only where those two values agree.
+            -- The boot measures the posture it reached ('reconcileRuntimePlan') and the checker
+            -- predicts one ('appliedRuntimePlan'), so one pass can reach two verdicts.
             let envVars = overrideEnv "ECLUSE_CACHE__MAX_BYTES" "1073741824" serveOnlyEnvVars
             config <- expectConfig envVars Nothing
             let plan = resolveRuntimePlan roomyHeapOverride noCgroup ghcrtsBoundPosture
@@ -313,9 +311,8 @@ collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__U
 collapsedMirrorRefusal :: BootError
 collapsedMirrorRefusal = MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" "https://private.example.test"
 
-mirrorCollapseAdvisory :: Text
-mirrorCollapseAdvisory =
-    "mount \"npm\": mirrorTarget and privateUpstream resolve to the same registry (https://private.example.test); the Dredger refuses this configuration, so pruning this mirror stays manual"
+mirrorCollapseAdvisory :: Advisory
+mirrorCollapseAdvisory = MirrorTargetOnPrivateUpstream Npm Npm (unsafeRegistryUrl "https://private.example.test")
 
 {- | A plan resolution reduced to its verdict. 'BootPlan' carries the cleared adapters, which are
 records of functions, so the refusal is what an assertion compares.

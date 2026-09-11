@@ -17,7 +17,7 @@ import Data.Text.IO qualified as TIO
 import System.Environment (getEnvironment)
 
 import Ecluse.Boot (applySecretFileIndirection, orExit, readConfigDocument, refuseBoot)
-import Ecluse.Composition.BootError (renderBootErrors)
+import Ecluse.Composition.BootError (renderAdvisory, renderBootErrors)
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
     BootPlan (bpLines, bpWarnings),
@@ -84,12 +84,12 @@ runCheckConfig = do
     traverse_ TIO.putStrLn (brProvenance report)
     bootPlan <- case brOutcome report of
         Left errs -> do
-            traverse_ warn (brAdvisories report)
+            traverse_ (warn . renderAdvisory) (brAdvisories report)
             refuseBoot (renderBootErrors errs <> "\nconfiguration: refused")
         Right plan -> pure plan
     traverse_ TIO.putStrLn (bpLines bootPlan)
     traverse_ warn (bpWarnings bootPlan)
-    traverse_ warn (brAdvisories report)
+    traverse_ (warn . renderAdvisory) (brAdvisories report)
     -- A configuration one role refuses and another boots is a normal deployment, so the other
     -- roles' refusals report as warnings rather than deciding the exit status.
     traverse_ warn (roleRefusalWarnings BootWithoutPipeline inputs)

@@ -10,6 +10,7 @@ import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition.BootError (
+    Advisory,
     BootError (StoreMaintenanceUnavailable),
     StoreMaintenanceReason (ClientBuildFailed, DeletionNotPermitted, NoProtocolMaintenance),
     renderBootError,
@@ -273,7 +274,7 @@ data NoStoreClient = NoStoreClient
 instance Exception NoStoreClient
 
 -- The pass as the boot runs it, over this build's own adapter registry.
-vetted :: RegistryRole -> MountMap -> ([Text], Either [BootError] (Map Ecosystem ClearedBackend))
+vetted :: RegistryRole -> MountMap -> ([Advisory], Either [BootError] (Map Ecosystem ClearedBackend))
 vetted role mounts = runVet role (vetStoreBackends adapterFor mounts)
 
 -- | An ecosystem this build ships no adapter for at all.
@@ -304,15 +305,15 @@ protocolArm cleared = case cbControl cleared of
     ClearedCodeArtifact{} -> False
 
 -- A pass that logged nothing and cleared no store: what every writing role's pass looks like.
-clearsNothing :: ([Text], Either [BootError] (Map Ecosystem ClearedBackend)) -> Bool
+clearsNothing :: ([Advisory], Either [BootError] (Map Ecosystem ClearedBackend)) -> Bool
 clearsNothing = \case
     ([], Right cleared) -> Map.null cleared
     _ -> False
 
-refusalsOf :: ([Text], Either [BootError] a) -> Maybe [BootError]
+refusalsOf :: ([Advisory], Either [BootError] a) -> Maybe [BootError]
 refusalsOf = leftToMaybe . snd
 
-renderedRefusals :: ([Text], Either [BootError] a) -> [Text]
+renderedRefusals :: ([Advisory], Either [BootError] a) -> [Text]
 renderedRefusals = maybe [] (map renderBootError) . refusalsOf
 
 -- The resolved mounts an environment layer loads to: the input the rule reads.

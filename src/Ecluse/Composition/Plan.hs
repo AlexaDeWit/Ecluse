@@ -41,6 +41,7 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition.BootError (
+    Advisory,
     BootError (AwsEndpointMalformed, MemoryPlanOverrideUnsafe),
     renderBootError,
  )
@@ -100,7 +101,7 @@ naming a config key stays traceable and an advisory beside it is not lost with t
 data BootReport = BootReport
     { brProvenance :: [Text]
     -- ^ The config-document line and the per-key provenance lines, reported ahead of any refusal.
-    , brAdvisories :: [Text]
+    , brAdvisories :: [Advisory]
     -- ^ The advisories the vetting pass logged, whatever it decided.
     , brOutcome :: Either [BootError] BootPlan
     -- ^ Every refusal the role earned, or the decisions it cleared.
@@ -165,7 +166,7 @@ roleRefusalWarnings own inputs =
     ]
 
 -- Every decision past the provenance block, joined by '<*>' so every group reports.
-planDecisions :: BootRole -> BootInputs -> ([Text], Either [BootError] BootPlan)
+planDecisions :: BootRole -> BootInputs -> ([Advisory], Either [BootError] BootPlan)
 planDecisions role inputs =
     second (fmap (bootPlanFrom role inputs)) . runVet (registryRoleOf role) $
         (,,)
