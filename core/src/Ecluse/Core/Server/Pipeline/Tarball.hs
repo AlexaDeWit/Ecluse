@@ -21,6 +21,9 @@ module Ecluse.Core.Server.Pipeline.Tarball (
 
     -- * The first-party private miss (exposed for direct testing)
     firstPartyMissRefusal,
+
+    -- * The private metadata read's outcome (exposed for direct testing)
+    privateMetadataMiss,
 ) where
 
 import Network.HTTP.Client qualified as HTTP
@@ -53,7 +56,15 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchVersionMetadata),
-    MetadataError (MetadataAbsent, MetadataAuthorisationFailure),
+    MetadataError (
+        MetadataAbsent,
+        MetadataAuthorisationFailure,
+        MetadataBoundExceeded,
+        MetadataFetch,
+        MetadataHttpFailure,
+        MetadataNameMismatch,
+        MetadataUndecodable
+    ),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     fetchVersionDetails,
     versionTransience,
@@ -290,9 +301,7 @@ privateArtifactRequest rt deps token name version file = case pdPrivateBaseUrl d
         resolved <- tryAny (withPrivateMetadataClient rt deps privateBase token (\client -> fetchVersionMetadata client name version))
         pure $ case resolved of
             Left _ -> PrivateMissing MissUnresolved
-            Right (Left MetadataAuthorisationFailure{}) -> PrivateRefused
-            Right (Left MetadataAbsent) -> PrivateMissing MissAbsent
-            Right (Left _) -> PrivateMissing MissUnresolved
+            Right (Left err) -> maybe PrivateRefused PrivateMissing (privateMetadataMiss err)
             Right (Right details) -> maybe (PrivateMissing MissAbsent) PrivateRequest (details >>= requestForDetails)
       where
         requestForDetails details = do
@@ -301,6 +310,19 @@ privateArtifactRequest rt deps token name version file = case pdPrivateBaseUrl d
             guard (artifactAuthorityHonoured (thgEcosystemHosts (pdTarballHostGate deps)) privateHostPort target)
             let carried = if target == privateHostPort then token else Nothing
             rightToMaybe (artifactByUrl (pdArtifact deps) carried (artUrl artifact))
+
+{- | The miss a private metadata failure leaves the artifact path, or 'Nothing' for an explicit
+access refusal. An identity fault settles the request, because this path renders no @502@ for one.
+-}
+privateMetadataMiss :: MetadataError -> Maybe OriginMiss
+privateMetadataMiss = \case
+    MetadataAuthorisationFailure{} -> Nothing
+    MetadataAbsent -> Just MissAbsent
+    MetadataNameMismatch{} -> Just MissAbsent
+    MetadataHttpFailure{} -> Just MissUnresolved
+    MetadataBoundExceeded{} -> Just MissUnresolved
+    MetadataFetch{} -> Just MissUnresolved
+    MetadataUndecodable -> Just MissUnresolved
 
 servePublicArtifact ::
     ArtifactServe ->

@@ -21,6 +21,7 @@ import Ecluse.Core.Package.Admission (
         AdmissionUndecidable
     ),
  )
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataNameMismatch, MetadataUndecodable))
 import Ecluse.Core.Rules.Types (
     Decision (Blocked, Undecidable),
     Transience (WillResolve, WontResolve),
@@ -31,28 +32,21 @@ import Ecluse.Core.Server.Pipeline.Tarball (
     PublicArtifactGate (Admitted, Refused),
     artifactOutcomeStatus,
     firstPartyMissRefusal,
+    privateMetadataMiss,
     publicArtifactGate,
  )
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, ServerError, Unavailable'),
-    RejectReason,
-    Rejection (rejectionReason),
-    ServeDecision (Admit, Reject),
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (sampleDetails)
+import Ecluse.Test.Server.Response (reasonOf)
 
 -- The version snapshot the gate reasons over. Each case supplies its own verdict, so only the
 -- snapshot's validity matters.
 details :: PackageDetails
 details = sampleDetails (mkPackageName Npm Nothing "thing") (mkVersion Npm "1.0.0")
-
--- The refusal reason a decision carries, or 'Nothing' where it admitted the request.
-reasonOf :: ServeDecision -> Maybe RejectReason
-reasonOf = \case
-    Admit -> Nothing
-    Reject rejection -> Just (rejectionReason rejection)
 
 -- The status a gated verdict renders, or 'Nothing' where the gate admitted it.
 statusOf :: ArtifactAdmission -> Maybe ArtifactStatus
@@ -91,7 +85,7 @@ publicArtifactGateSpec = describe "publicArtifactGate -- the shared admission ve
         statusOf AdmissionIntegrityMissing `shouldBe` Just Forbidden
 
 firstPartyMissSpec :: Spec
-firstPartyMissSpec = describe "firstPartyMissRefusal -- the private miss a first-party name answers" $ do
+firstPartyMissSpec = describe "the private miss a first-party name answers" $ do
     it "renders an origin that holds no such artifact as a 404 the first-party rule decided" $ do
         artifactOutcomeStatus (firstPartyMissRefusal MissAbsent) `shouldBe` NotFound
         serveDecisionClass (firstPartyMissRefusal MissAbsent) `shouldBe` Metric.Deny
@@ -105,3 +99,9 @@ firstPartyMissSpec = describe "firstPartyMissRefusal -- the private miss a first
             `shouldBe` Just (Just "first-party", Metric.ReasonPolicy)
         fmap denialLabels (reasonOf (firstPartyMissRefusal MissUnresolved))
             `shouldBe` Just (Nothing, Metric.ReasonUnavailable)
+
+    it "settles a private identity fault rather than inviting a retry" $ do
+        -- The packument pipeline renders this fault as a 502. This path has no such arm, so
+        -- the name keeps the answer an absence gets.
+        privateMetadataMiss (MetadataNameMismatch "other-package") `shouldBe` Just MissAbsent
+        privateMetadataMiss MetadataUndecodable `shouldBe` Just MissUnresolved

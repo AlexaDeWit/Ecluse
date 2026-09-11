@@ -593,6 +593,7 @@ library ecluse-test-support
     Ecluse.Test.Rules
     Ecluse.Test.Sweep
     Ecluse.Test.Server.Cache
+    Ecluse.Test.Server.Response
     Ecluse.Test.Server.Route
     Ecluse.Test.Server.Transform
     Ecluse.Test.Stub

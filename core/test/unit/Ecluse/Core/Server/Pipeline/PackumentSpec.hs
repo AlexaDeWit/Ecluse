@@ -29,11 +29,11 @@ import Ecluse.Core.Server.Pipeline.Packument (
  )
 import Ecluse.Core.Server.Response (
     RejectReason (Unavailable),
-    Rejection (rejectionReason),
-    ServeDecision (Admit, Reject),
+    ServeDecision,
     Transience (WillResolve),
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Test.Server.Response (reasonOf)
 
 spec :: Spec
 spec = do
@@ -122,11 +122,6 @@ replyFor = firstPartyMissReply namedReplies Nothing thing
 
 decisionFor :: OriginMiss -> ServeDecision
 decisionFor = firstPartyMissDecision thing
-
-reasonOf :: ServeDecision -> Maybe RejectReason
-reasonOf = \case
-    Admit -> Nothing
-    Reject rejection -> Just (rejectionReason rejection)
 
 -- The fixture: a private (trusted) and a public (gated) source with distinct
 -- bodies and survivor sets, varied one field at a time by each case.
