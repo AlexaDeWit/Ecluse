@@ -365,33 +365,51 @@ admissionLifetimeSpec :: Spec
 admissionLifetimeSpec = describe "admission lifetime after removing an allow" $
     for_ [SweepCandidates, SweepEverything] $ \shape -> describe (show shape) $ do
         it "retains the copy and serves the next private GET when the only allow disappears" $
-            checkLifetime shape (LifetimePolicy [] (== Rules.BlockedByDefault []) Retained) Eligible
+            checkLifetime shape (LifetimePolicy [] (== Rules.BlockedByDefault []) Retained) Sweepable
         it "removes the copy and denies the next GET when an existing identity deny becomes decisive" $
-            checkLifetime shape winningDeny Eligible
+            checkLifetime shape winningDeny Sweepable
         it "keeps trusting the copy when an unchanged higher-priority allow still beats the deny" $
             checkLifetime
                 shape
                 (LifetimePolicy [Rules.PrecededRule 600 (Rules.AllowByIdentity "leftpad"), identityDeny] ((== Just "AllowByIdentity") . admittedBy) Retained)
-                Eligible
+                Sweepable
         it "retains the copy when unavailable advisory evidence wins ahead of the existing deny" $
             checkLifetime
                 shape
                 (LifetimePolicy [unavailableCveDeny, identityDeny] isUndecidable Retained)
-                Eligible
+                Sweepable
         it "retains the copy when unavailable advisory evidence is the only remaining rule" $
             checkLifetime
                 shape
                 (LifetimePolicy [unavailableCveDeny] isUndecidable Retained)
-                Eligible
-        for_ [FirstParty, ConsentMissing, TargetPreserved, ManifestMissing] $ \protection ->
-            it ("retains the denied copy and serves the next private GET under " <> show protection) $
-                checkLifetime shape winningDeny protection
+                Sweepable
+        for_ [FirstParty, ConsentMissing, TargetPreserved] $ \guard' ->
+            it ("retains the denied copy and serves the next private GET under " <> show guard') $
+                checkLifetime shape winningDeny guard'
+        it "removes a version whose manifest the store no longer serves, so the next private GET is denied" $
+            checkLifetime shape winningDeny ManifestMissing
+        it "retains a version with no manifest when no exact deny wins, so the next private GET serves it" $
+            checkLifetime
+                shape
+                (LifetimePolicy [unavailableCveDeny] isUndecidable Retained)
+                ManifestMissing
 
 data CopyDisposition = Retained | Removed
     deriving stock (Eq)
 
-data LifetimeProtection = Eligible | FirstParty | ConsentMissing | TargetPreserved | ManifestMissing
+{- The store's shape for one cycle: what holds a delete back, and whether its metadata read answers.
+An unread manifest is evidence rather than a guard, so a rule reading only identity still decides. -}
+data LifetimeStore = Sweepable | FirstParty | ConsentMissing | TargetPreserved | ManifestMissing
     deriving stock (Eq, Show)
+
+-- The store states that stop a delete before any rule runs.
+guarded :: LifetimeStore -> Bool
+guarded = \case
+    FirstParty -> True
+    ConsentMissing -> True
+    TargetPreserved -> True
+    Sweepable -> False
+    ManifestMissing -> False
 
 data LifetimePolicy = LifetimePolicy
     { lpRules :: [PrecededRule]
@@ -408,37 +426,36 @@ unavailableCveDeny = Rules.PrecededRule 600 (Rules.DenyIfCve (Rules.DenyIfCvePar
 winningDeny :: LifetimePolicy
 winningDeny = LifetimePolicy [identityDeny] ((== Just "DenyByIdentity") . blockedBy) Removed
 
-checkLifetime :: SweepShape -> LifetimePolicy -> LifetimeProtection -> Expectation
-checkLifetime shape policy protection = do
+checkLifetime :: SweepShape -> LifetimePolicy -> LifetimeStore -> Expectation
+checkLifetime shape policy storeState = do
     ctx <- Rules.mkEvalContext (pure fixedNow) (pure Nothing)
     let version = mkVersion Npm "1.0.0"
         details = sampleDetails leftpad version
         initialPolicy = Rules.PrecededRule 700 (Rules.AllowByIdentity "leftpad@1.0.0") : lpRules policy
     initial <- prepare inertRuleDeps initialPolicy
     admittedBy <$> evalRules ctx initial (Rules.completeEvidence details) `shouldReturn` Just "AllowByIdentity"
-    store <- newFakeStore (lifetimeStore protection)
+    store <- newFakeStore (lifetimeStoreConfig storeState)
     preparedAfter <- prepare inertRuleDeps (lpRules policy)
     evalRules ctx preparedAfter (Rules.completeEvidence details) >>= (`shouldSatisfy` lpDecision policy)
     recorded <- recordingPorts Nothing
     let mount =
             (testMount (fakeMaintenance store) preparedAfter (map Rules.prRule (lpRules policy)))
-                { smFirstParty = \name -> protection == FirstParty && name == leftpad
+                { smFirstParty = \name -> storeState == FirstParty && name == leftpad
                 }
     outcome <- sweepCycle testPacing{swpShape = shape} (recPorts recorded) [mount]
-    let retained = protection /= Eligible || lpDisposition policy == Retained
+    let retained = guarded storeState || lpDisposition policy == Retained
         expectedVersions = [StoredVersion version VersionServed | retained]
-        examined = case protection of
-            FirstParty -> 0
-            ConsentMissing -> 0
-            TargetPreserved -> 0
-            _ -> if shape == SweepCandidates && identityDeny `notElem` lpRules policy then 0 else 1
+        examined
+            | guarded storeState = 0
+            | shape == SweepCandidates && identityDeny `notElem` lpRules policy = 0
+            | otherwise = 1
     tallyExamined (outcomeTally outcome) `shouldBe` examined
     tallyDeleted (outcomeTally outcome) `shouldBe` if retained then 0 else 1
     Map.lookup leftpad <$> readFakeContents store `shouldReturn` Just expectedVersions
     nextPrivateGet store preparedAfter retained
 
-lifetimeStore :: LifetimeProtection -> FakeStoreConfig
-lifetimeStore protection = case protection of
+lifetimeStoreConfig :: LifetimeStore -> FakeStoreConfig
+lifetimeStoreConfig storeState = case storeState of
     ConsentMissing -> seeded{fakeConsent = ConsentWithheld "operator withdrew consent"}
     TargetPreserved -> seeded{fakeClass = StorePreserved "the store has an upstream"}
     ManifestMissing -> seeded{fakeManifests = Map.empty}

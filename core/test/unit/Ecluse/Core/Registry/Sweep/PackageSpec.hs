@@ -58,7 +58,7 @@ spec = do
     capSpec
     dryRunSpec
 
-{- Only a named decisive deny deletes. Deny by default and an unvettable version both keep,
+{- Only a named decisive deny deletes. Deny by default and a rule that could not vet both keep,
 because the store may hold the only surviving copy. -}
 verdictSpec :: Spec
 verdictSpec = describe "the delete verdict" $ do
