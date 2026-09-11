@@ -272,6 +272,10 @@ assertFixInstallable :: E2E -> IO ()
 assertFixInstallable e2e = do
     void $ npmInstall e2e (revokedName <> "@" <> fixedVersion) >>= shouldSucceed
     verdaccioVersions e2e revokedName `shouldReturn` [fixedVersion]
+    -- The proxy falls back to the public leg for a name that is not first-party, so only a direct
+    -- store read tells a surviving artifact from that fallback.
+    stored <- verdaccioArtifact e2e revokedName fixedVersion
+    stored `shouldSatisfy` (\(code, size) -> code == 200 && size > 0)
     (status, body) <- proxyGet e2e (npmTarballPath revokedName fixedVersion)
     (status, LBS.length body) `shouldSatisfy` (\(code, size) -> code == 200 && size > 0)
 
