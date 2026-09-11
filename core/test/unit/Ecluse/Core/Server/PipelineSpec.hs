@@ -403,8 +403,8 @@ data LifetimeStore = Sweepable | FirstParty | ConsentMissing | TargetPreserved |
     deriving stock (Eq, Show)
 
 -- The store states that stop a delete before any rule runs.
-guarded :: LifetimeStore -> Bool
-guarded = \case
+stopsBeforeRules :: LifetimeStore -> Bool
+stopsBeforeRules = \case
     FirstParty -> True
     ConsentMissing -> True
     TargetPreserved -> True
@@ -443,10 +443,10 @@ checkLifetime shape policy storeState = do
                 { smFirstParty = \name -> storeState == FirstParty && name == leftpad
                 }
     outcome <- sweepCycle testPacing{swpShape = shape} (recPorts recorded) [mount]
-    let retained = guarded storeState || lpDisposition policy == Retained
+    let retained = stopsBeforeRules storeState || lpDisposition policy == Retained
         expectedVersions = [StoredVersion version VersionServed | retained]
         examined
-            | guarded storeState = 0
+            | stopsBeforeRules storeState = 0
             | shape == SweepCandidates && identityDeny `notElem` lpRules policy = 0
             | otherwise = 1
     tallyExamined (outcomeTally outcome) `shouldBe` examined
