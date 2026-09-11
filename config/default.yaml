@@ -288,7 +288,8 @@ mounts:
     # target. Declaring firstParty requires privateUpstream on this mount.
     # Only a first-party name may be published here, and a first-party name
     # resolves from privateUpstream alone: it is never fetched from publicUpstream,
-    # never merged with a public document, never mirrored, and a private miss is a 404.
+    # never merged with a public document, and never mirrored. A private 404 answers
+    # 404, and a private upstream that cannot be read answers 503.
     # The shape is per-ecosystem. npm reads scopes. PyPI reads PEP 503 canonical
     # distribution names, and an entry ending in a separator then * is a prefix, so
     # acme-* covers acme-tools and not acmeco. A star on no separator (acme*) is

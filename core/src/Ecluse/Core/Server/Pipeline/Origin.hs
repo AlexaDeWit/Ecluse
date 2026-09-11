@@ -4,7 +4,8 @@
 
 {- | Resolve metadata origins with their credential posture and typed outcomes.
 Private reads forward the caller's credential without caching. Public reads are anonymous.
-Explicit access refusals remain distinct for the packument pipeline.
+Explicit access refusals remain distinct for the packument pipeline, and an origin that
+answered 404 stays distinct from one that could not be read.
 -}
 module Ecluse.Core.Server.Pipeline.Origin (
     -- * A resolved contribution
@@ -13,8 +14,9 @@ module Ecluse.Core.Server.Pipeline.Origin (
 
     -- * The per-origin outcome
     OriginResult (..),
+    OriginMiss (..),
     originManifest,
-    originMissed,
+    originMiss,
 
     -- * Fetching the two origins
     fetchPrivateOrigin,
@@ -41,7 +43,7 @@ import Ecluse.Core.Registry.Metadata (
     ContentDigest,
     Manifest,
     MetadataClient (fetchFullManifest),
-    MetadataError (MetadataAuthorisationFailure, MetadataNameMismatch),
+    MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataNameMismatch),
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl), originClient)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
@@ -77,10 +79,22 @@ data OriginResult
       OriginAuthorisationFailure Int
     | -- | An invalid package identity, contributing a 502 when no valid origin remains.
       OriginNameMismatch
-    | -- | The origin did not yield a usable packument: unreachable, undecodable, or a genuine absence. It degrades to no contribution.
+    | -- | The origin answered 404, so it holds no such package. It degrades to no contribution.
+      OriginNotFound
+    | -- | The origin was not read: unreachable, faulting, or undecodable. It degrades to no contribution.
       OriginUnresolved
     | -- | An unconfigured origin contributes neither metadata nor an availability failure.
       OriginAbsent
+
+{- | Why an origin yielded no document. An origin that must answer alone reads this to tell a
+settled answer from one a retry may still change.
+-}
+data OriginMiss
+    = -- | The origin holds no such package, or the mount configures no such origin.
+      MissAbsent
+    | -- | The origin was not read, so nothing yet says whether it holds the package.
+      MissUnresolved
+    deriving stock (Eq, Show)
 
 -- | The resolved manifest an origin contributed, if any.
 originManifest :: OriginResult -> Maybe Manifest
@@ -88,23 +102,27 @@ originManifest = \case
     OriginAuthorisationFailure _ -> Nothing
     OriginResolved manifest -> Just manifest
     OriginNameMismatch -> Nothing
+    OriginNotFound -> Nothing
     OriginUnresolved -> Nothing
     OriginAbsent -> Nothing
 
--- | Whether an origin yielded neither a document nor an explicit access or identity refusal.
-originMissed :: OriginResult -> Bool
-originMissed = \case
-    OriginAuthorisationFailure _ -> False
-    OriginResolved{} -> False
-    OriginNameMismatch -> False
-    OriginUnresolved -> True
-    OriginAbsent -> True
+-- | The miss an origin yielded, or 'Nothing' when it contributed a document or an explicit refusal.
+originMiss :: OriginResult -> Maybe OriginMiss
+originMiss = \case
+    OriginAuthorisationFailure _ -> Nothing
+    OriginResolved{} -> Nothing
+    OriginNameMismatch -> Nothing
+    OriginNotFound -> Just MissAbsent
+    OriginUnresolved -> Just MissUnresolved
+    -- An unconfigured origin never answers, so it groups with an absence: a retry changes nothing.
+    OriginAbsent -> Just MissAbsent
 
 originResultOf :: Either SomeException (Either MetadataError Manifest) -> OriginResult
 originResultOf = \case
     Left _ -> OriginUnresolved
     Right (Left (MetadataAuthorisationFailure code)) -> OriginAuthorisationFailure code
     Right (Left (MetadataNameMismatch _)) -> OriginNameMismatch
+    Right (Left MetadataAbsent) -> OriginNotFound
     Right (Left _) -> OriginUnresolved
     Right (Right manifest) -> OriginResolved manifest
 

@@ -11,6 +11,10 @@ module Ecluse.Core.Server.Pipeline.Packument (
     servePackument,
     headPackument,
 
+    -- * The first-party private miss (exported for its unit spec)
+    firstPartyMissDecision,
+    firstPartyMissReply,
+
     -- * The derived validator (exported for its unit spec)
     packumentETag,
 ) where
@@ -77,18 +81,20 @@ import Ecluse.Core.Server.Pipeline.Internal (
  )
 import Ecluse.Core.Server.Pipeline.Origin (
     Contribution (..),
+    OriginMiss (MissAbsent, MissUnresolved),
     OriginResult (..),
     fetchPrivateOrigin,
     fetchPublicOrigin,
     fingerprintPiece,
     originManifest,
-    originMissed,
+    originMiss,
  )
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
+    HelpMessage,
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     Refusal,
-    RejectReason (Unavailable, UpstreamInvalid),
+    RejectReason (ByPolicy, Unavailable, UpstreamInvalid),
     Rejection (Rejection, rejectionMessage),
     ServeDecision (Admit, Reject),
     Transience (WillResolve),
@@ -205,11 +211,14 @@ serveAdmittedPackument mode replies deps clientToken name request respond rt = d
                 serveResolved served = do
                     liftIO (mpServeDecision metrics Metric.Admit)
                     answerPackumentConditional mode replies deps name request respond rt sources served
-            if pdFirstParty deps name && originMissed privResult
-                then do
-                    liftIO (mpServeDecision metrics Metric.Deny)
-                    liftIO (respond (firstPartyAbsent replies deps name))
-                else case packumentPlan sources (paDeniedEvidence public) of
+                firstPartyMissed miss = do
+                    let decision = firstPartyMissDecision name miss
+                    liftIO (mpServeDecision metrics (packumentServeDecision [decision]))
+                    liftIO (recordDenials metrics [decision])
+                    liftIO (respond (firstPartyMissReply replies (pdHelp deps) name miss))
+            case originMiss privResult of
+                Just miss | pdFirstParty deps name -> firstPartyMissed miss
+                _ -> case packumentPlan sources (paDeniedEvidence public) of
                     Nothing -> noServeableVersions
                     Just plan -> do
                         warnDivergences metrics name plan
@@ -227,17 +236,39 @@ resolveOrigins deps rt clientToken name
             (fetchPrivateOrigin deps rt clientToken name)
             (fetchPublicOrigin deps rt name)
 
-{- The @404@ for a first-party name the private upstream did not resolve. The namespace belongs to
-this deployment, so no public document may stand in for it. -}
-firstPartyAbsent :: PackumentReplies response -> PackumentDeps -> PackageName -> response
-firstPartyAbsent replies deps name =
-    packumentNotFound replies [] (mkRefusal (pdHelp deps) message)
-  where
-    message :: Text
-    message =
+-- Why a first-party name did not resolve, in the words the client reads.
+firstPartyMissMessage :: PackageName -> OriginMiss -> Text
+firstPartyMissMessage name = \case
+    MissAbsent ->
         "'"
-            <> renderPackageName name
+            <> rendered
             <> "' did not resolve from the private upstream, and its namespace is first-party to this deployment, so it is never fetched from the public registry"
+    MissUnresolved ->
+        "the private upstream did not answer for '"
+            <> rendered
+            <> "', and its namespace is first-party to this deployment, so no public document may stand in for it"
+  where
+    rendered = renderPackageName name
+
+{- | The verdict a first-party private miss records. An absence is the first-party rule refusing a
+public stand-in, and an origin that could not be read is an outage a retry may clear.
+-}
+firstPartyMissDecision :: PackageName -> OriginMiss -> ServeDecision
+firstPartyMissDecision name miss = Reject (Rejection reason (firstPartyMissMessage name miss))
+  where
+    reason = case miss of
+        MissAbsent -> ByPolicy firstPartyRule
+        MissUnresolved -> Unavailable (WillResolve Nothing)
+
+{- | The reply a first-party private miss renders: a @404@ for a settled absence, and the @503@ any
+needed upstream's outage gets. That outage suggests no delay, so it carries no @Retry-After@.
+-}
+firstPartyMissReply :: PackumentReplies response -> Maybe HelpMessage -> PackageName -> OriginMiss -> response
+firstPartyMissReply replies help name miss = case miss of
+    MissAbsent -> packumentNotFound replies [] body
+    MissUnresolved -> packumentUnavailable replies [] body
+  where
+    body = mkRefusal help (firstPartyMissMessage name miss)
 
 {- Answer the conditional packument request before any assembly. A 304 costs the fetches
 and the plan, never the document rebuild, the encode, or an output hash. -}
@@ -378,6 +409,9 @@ collectDecisions privResult pubResult publicExclusions =
     privateDecision = \case
         OriginAuthorisationFailure _ -> []
         OriginResolved _ -> []
+        -- A merged name keeps a private 404 and a private outage on one refusal, so a name
+        -- neither leg could serve still invites a retry.
+        OriginNotFound -> [neededUpstreamUnavailable]
         OriginUnresolved -> [neededUpstreamUnavailable]
         OriginNameMismatch -> [upstreamInvalidDecision]
         -- An unconfigured private leg (a serve-only pure gate) is not an outage:
@@ -389,6 +423,7 @@ collectDecisions privResult pubResult publicExclusions =
         OriginAuthorisationFailure _ -> []
         OriginNameMismatch -> [upstreamInvalidDecision]
         OriginResolved _ -> []
+        OriginNotFound -> []
         OriginUnresolved -> []
         OriginAbsent -> []
 

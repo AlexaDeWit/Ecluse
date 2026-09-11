@@ -189,7 +189,7 @@ names with a public one.
 | Path | What the privilege decides |
 | --- | --- |
 | Publish | Only a first-party name may be published through the relay. Every other name is a `403`. |
-| Serve | A first-party name resolves from `privateUpstream` alone. Écluse never fetches it from `publicUpstream` and never merges a public document into it. A private miss is a `404`. |
+| Serve | A first-party name resolves from `privateUpstream` alone. Écluse never fetches it from `publicUpstream` and never merges a public document into it. |
 | Mirror | Nothing first-party is mirrored, because nothing first-party is fetched from the public leg. The worker drops, and does not mirror, a job that was already on the queue when you declared the namespace. |
 
 The shape follows the ecosystem, and an empty or malformed list is refused at boot.
@@ -210,9 +210,11 @@ your scopes that the private upstream does not have answers `404`, and Écluse d
 the public registry for it. That refusal is the point: a public package published under a scope you
 own is a dependency-confusion attack.
 
-A private upstream that is unreachable answers `404` for a first-party name too, rather than the
-`503` a merged name gets. The private upstream is that name's one authority, so an origin Écluse
-cannot read leaves nothing that may answer for it.
+The private upstream is that name's one authority, so why it did not answer decides what your
+client sees. A `404` from it settles the question, and Écluse answers `404`. An upstream Écluse
+cannot reach, one that faults, and one whose body does not decode all leave the question open
+instead, so Écluse answers `503` and the client retries rather than treating the install as
+missing.
 
 This is a privilege over names, not authentication. It says which names are yours, never who may
 use them, so the private upstream stays the authority on every caller.
