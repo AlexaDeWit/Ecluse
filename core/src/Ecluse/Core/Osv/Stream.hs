@@ -11,7 +11,7 @@ header honest, and the bounds here are per entry: a drop is counted in 'IngestSt
 rest of the archive keeps flowing. 'ilMaxAdvisoryBytes' applies before the bytes are retained
 and before the JSON decodes, so an inflation bomb never reaches the decoder whole, and the
 offending entry drains to its boundary so the entries after it stay aligned. An advisory over
-'ilMaxAdvisoryFanOut' ranges is anomalous, logged, and kept. The aggregate verdict is the
+the feed's 'osvMaxAdvisoryFanOut' is anomalous, logged, and kept. The aggregate verdict is the
 separate pure decision 'systemicDrop', which the compiler reads once the stream completes.
 -}
 module Ecluse.Core.Osv.Stream (
@@ -41,30 +41,23 @@ import OpenTelemetry.Trace.Core (SpanKind (Internal), TracerProvider, addAttribu
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv, OsvAdvisory, extPackage, extractFromAdvisory, orderableBounds, osvId, unorderableBounds)
+import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvEcosystemTag, osvMaxAdvisoryFanOut))
 import Ecluse.Core.Osv.Epss (EpssScores)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Telemetry.Span (closeOptionalSpan, openOptionalSpan)
 
--- | Per-advisory byte limits and a log-only range fan-out threshold.
-data IngestLimits = IngestLimits
-    { ilMaxAdvisoryBytes :: !Int
+-- | The per-advisory byte bound one ingest pass holds every zip entry to.
+newtype IngestLimits = IngestLimits
+    { ilMaxAdvisoryBytes :: Int
     {- ^ Largest decompressed advisory JSON, in bytes, the ingest accepts from one
     zip entry. It drops a larger one. Bounds memory and, transitively, decode cost.
-    -}
-    , ilMaxAdvisoryFanOut :: !Int
-    {- ^ Number of extracted ranges one advisory may expand into before the ingest
-    flags it as anomalous. Log-only: the ingest still keeps the advisory.
     -}
     }
     deriving stock (Eq, Show)
 
--- | An 8 MiB per-advisory ceiling and a 256-range fan-out flag.
+-- | An 8 MiB per-advisory ceiling.
 defaultIngestLimits :: IngestLimits
-defaultIngestLimits =
-    IngestLimits
-        { ilMaxAdvisoryBytes = 8 * 1024 * 1024
-        , ilMaxAdvisoryFanOut = 256
-        }
+defaultIngestLimits = IngestLimits{ilMaxAdvisoryBytes = 8 * 1024 * 1024}
 
 {- | The running tally of one ingest pass. Pilot reads it once the stream completes to
 decide whether the artifact is trustworthy enough to publish ('systemicDrop').
@@ -93,16 +86,16 @@ newtype IngestCounter = IngestCounter {counterRef :: IORef IngestStats}
 data OsvIngest = OsvIngest
     { ingestLimits :: IngestLimits
     , ingestCounter :: IngestCounter
-    , ingestEcosystem :: Maybe Ecosystem
-    {- ^ The version grammar that orders this pass's bounds. 'Nothing' for a name this build
-    does not serve, and then nothing is tallied.
+    , ingestEcosystem :: OsvEcosystem
+    {- ^ The feed this pass compiles: it carries the grammar that orders the pass's bounds and
+    the fan-out an ordinary advisory of the feed stays under.
     -}
     , ingestEpss :: EpssScores
     -- ^ The pass's EPSS table, joined onto each advisory as it is extracted.
     }
 
--- | A fresh ingest context with the given bounds, grammar and EPSS table, and a zeroed tally.
-newOsvIngest :: (MonadIO m) => IngestLimits -> Maybe Ecosystem -> EpssScores -> m OsvIngest
+-- | A fresh ingest context with the given bounds, feed and EPSS table, and a zeroed tally.
+newOsvIngest :: (MonadIO m) => IngestLimits -> OsvEcosystem -> EpssScores -> m OsvIngest
 newOsvIngest limits eco scores = do
     counter <- IngestCounter <$> newIORef emptyIngestStats
     pure (OsvIngest limits counter eco scores)
@@ -203,7 +196,7 @@ admitAdvisory ingest adv = do
     extracted = extractFromAdvisory (ingestEpss ingest) adv
     -- A name this build does not serve has no grammar to judge its bounds by, so nothing
     -- about it is anomalous.
-    unorderable = maybe [] (\eco -> mapMaybe (unorderableExample eco) extracted) (ingestEcosystem ingest)
+    unorderable = maybe [] (\eco -> mapMaybe (unorderableExample eco) extracted) (osvEcosystemTag (ingestEcosystem ingest))
 
 -- The package and the first unorderable bound of one row, for the log line below.
 unorderableExample :: Ecosystem -> ExtractedOsv -> Maybe (Text, Text)
@@ -224,7 +217,7 @@ warnOnFanOut ingest adv extracted =
         logFM WarningS (ls ("OSV advisory " <> osvId adv <> " expanded into " <> show n <> " ranges, exceeding the sanity threshold of " <> show limit <> "; ingesting it regardless"))
   where
     n = length extracted
-    limit = ilMaxAdvisoryFanOut (ingestLimits ingest)
+    limit = osvMaxAdvisoryFanOut (ingestEcosystem ingest)
 
 bumpAccepted :: (MonadIO m) => IngestCounter -> m ()
 bumpAccepted (IngestCounter ref) = modifyIORef' ref (\s -> s{statAccepted = statAccepted s + 1})

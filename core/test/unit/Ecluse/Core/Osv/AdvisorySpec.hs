@@ -20,6 +20,11 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Advisory
+import Ecluse.Core.Osv.Ecosystem (
+    OsvEcosystem (osvExportDirectory, osvMaxAdvisoryFanOut, osvWireName),
+    osvEcosystemFor,
+    osvEcosystemNamed,
+ )
 import Ecluse.Core.Osv.Epss (EpssScores, mkEpssScores)
 import Ecluse.Core.Osv.Stream (
     IngestLimits (..),
@@ -51,6 +56,41 @@ advisory entries label =
 
 noScores :: EpssScores
 noScores = mkEpssScores []
+
+npmFeed :: OsvEcosystem
+npmFeed = osvEcosystemFor Npm
+
+fanOutFlag :: Text
+fanOutFlag = "exceeding the sanity threshold"
+
+-- One advisory of @feed@ naming @n@ exact versions, which the ingest expands into @n@ rows.
+fanOutAdvisory :: OsvEcosystem -> Int -> LByteString
+fanOutAdvisory feed n = encodeUtf8 (opening <> T.intercalate "," (map versionLiteral [1 .. n]) <> "]}]}")
+  where
+    opening =
+        "{\"id\":\"GHSA-fan\",\"affected\":[{\"package\":{\"name\":\"fan\",\"ecosystem\":\""
+            <> osvExportDirectory feed
+            <> "\"},\"versions\":["
+    versionLiteral i = "\"1.0." <> show i <> "\""
+
+fanOutRows :: OsvEcosystem -> Int -> IO ([ExtractedOsv], IngestStats)
+fanOutRows feed n = do
+    zipData <- osvZipOf [("fan.json", fanOutAdvisory feed n)]
+    runOsvTestM $ do
+        ingest <- newOsvIngest defaultIngestLimits feed noScores
+        rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
+        st <- readIngestStats ingest
+        pure (rs, st)
+
+fanOutLog :: OsvEcosystem -> Int -> IO Text
+fanOutLog feed n = do
+    zipData <- osvZipOf [("fan.json", fanOutAdvisory feed n)]
+    captureStdout $ do
+        logEnv <- jsonLogEnv
+        runOsvTestMWith logEnv $ do
+            ingest <- newOsvIngest defaultIngestLimits feed noScores
+            void . runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
+        void (closeScribes logEnv)
 
 decodeWithdrawal :: Maybe Value -> IO OsvAdvisory
 decodeWithdrawal withdrawn = withdrawalBytes withdrawn >>= either fail pure . eitherDecodeStrict
@@ -147,7 +187,7 @@ spec = describe "Osv parsing and streaming" $ do
             it ("preserves streaming drop accounting for withdrawal " <> show withdrawn) $ do
                 archive <- withdrawalZip (Just withdrawn)
                 (rows, stats) <- runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits (Just Npm) noScores
+                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
                     rows <- runConduit $ yieldMany (LBS.toChunks archive) .| parseOsvStream Nothing ingest .| sinkList
                     stats <- readIngestStats ingest
                     pure (rows, stats)
@@ -294,7 +334,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "streams an OSV zip archive and emits ExtractedOsv elements" $ do
         results <-
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits (Just Npm) noScores
+                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
                 runConduit $
                     sourceFile "test/unit/fixtures/osv/sample.zip"
                         .| parseOsvStream Nothing ingest
@@ -312,7 +352,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "handles an empty zip archive gracefully without emitting anything" $ do
         results <-
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits (Just Npm) noScores
+                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
                 runConduit $
                     sourceFile "test/unit/fixtures/osv/empty.zip"
                         .| parseOsvStream Nothing ingest
@@ -322,7 +362,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "skips malformed JSON files inside a zip archive and logs a warning" $ do
         results <-
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits (Just Npm) noScores
+                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
                 runConduit $
                     sourceFile "test/unit/fixtures/osv/malformed-json.zip"
                         .| parseOsvStream Nothing ingest
@@ -332,7 +372,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "throws an exception when streaming a non-zip file" $ do
         let action =
                 runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits (Just Npm) noScores
+                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
                     runConduit $
                         sourceFile "test/unit/fixtures/osv/not-a-zip.zip"
                             .| parseOsvStream Nothing ingest
@@ -343,7 +383,7 @@ spec = describe "Osv parsing and streaming" $ do
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
         results <- withStub status200 zipData $ \stub -> do
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits (Just Npm) noScores
+                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
                 runConduit $
                     streamOsvUrl Nothing ingest (unpack (stubBaseUrl stub) <> "/sample.zip")
                         .| sinkList
@@ -359,7 +399,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "throws an exception if the URL is invalid" $ do
         let action =
                 runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits (Just Npm) noScores
+                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
                     runConduit $
                         streamOsvUrl Nothing ingest "not-a-valid-url"
                             .| sinkList
@@ -376,7 +416,7 @@ spec = describe "Osv parsing and streaming" $ do
             let limits = defaultIngestLimits{ilMaxAdvisoryBytes = 2000}
             (results, stats) <-
                 runOsvTestM $ do
-                    ingest <- newOsvIngest limits (Just Npm) noScores
+                    ingest <- newOsvIngest limits npmFeed noScores
                     rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
                     st <- readIngestStats ingest
                     pure (rs, st)
@@ -385,38 +425,42 @@ spec = describe "Osv parsing and streaming" $ do
             statDroppedOversize stats `shouldBe` 1
             statDroppedMalformed stats `shouldBe` 0
 
-        it "flags an anomalous fan-out but still ingests every range of the advisory" $ do
-            zipData <-
-                osvZipOf
-                    [("fan.json", "{\"id\":\"GHSA-fan\",\"affected\":[{\"package\":{\"name\":\"fan\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\",\"1.1.0\",\"1.2.0\",\"1.3.0\",\"1.4.0\"]}]}")]
-            let limits = defaultIngestLimits{ilMaxAdvisoryFanOut = 3}
-            (results, stats) <-
-                runOsvTestM $ do
-                    ingest <- newOsvIngest limits (Just Npm) noScores
-                    rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
-                    st <- readIngestStats ingest
-                    pure (rs, st)
-            length results `shouldBe` 5
+        it "keeps every range of a flagged advisory, so the flag refuses nothing" $ do
+            let over = osvMaxAdvisoryFanOut npmFeed + 1
+            (results, stats) <- fanOutRows npmFeed over
+            length results `shouldBe` over
             statAccepted stats `shouldBe` 1
+
+        -- Each bound is measured against its own export, so a fan-out that is ordinary on
+        -- PyPI is still anomalous on npm.
+        forM_ [npmFeed, osvEcosystemFor PyPI] $ \feed ->
+            describe (toString (osvWireName feed)) $ do
+                it "flags an advisory one range past the ecosystem's threshold" $ do
+                    logged <- fanOutLog feed (osvMaxAdvisoryFanOut feed + 1)
+                    logged `shouldSatisfy` T.isInfixOf fanOutFlag
+
+                it "leaves an advisory at the ecosystem's threshold unflagged" $ do
+                    logged <- fanOutLog feed (osvMaxAdvisoryFanOut feed)
+                    logged `shouldSatisfy` (not . T.isInfixOf fanOutFlag)
 
         -- 'systemicDrop' is what escalates a feed whose drops stop being isolated.
         it "keeps every per-entry drop below the level an operator pages on" $ do
             zipData <-
                 osvZipOf
-                    [ ("big.json", LBS.replicate 3000 120)
+                    [ ("big.json", LBS.replicate 6000 120)
                     , ("bad.json", "not json at all")
-                    , ("fan.json", "{\"id\":\"GHSA-fan\",\"affected\":[{\"package\":{\"name\":\"fan\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\",\"1.1.0\",\"1.2.0\",\"1.3.0\",\"1.4.0\"]}]}")
+                    , ("fan.json", fanOutAdvisory npmFeed (osvMaxAdvisoryFanOut npmFeed + 1))
                     ]
-            let limits = defaultIngestLimits{ilMaxAdvisoryBytes = 2000, ilMaxAdvisoryFanOut = 3}
+            let limits = defaultIngestLimits{ilMaxAdvisoryBytes = 5000}
             logged <- captureStdout $ do
                 logEnv <- jsonLogEnv
                 runOsvTestMWith logEnv $ do
-                    ingest <- newOsvIngest limits (Just Npm) noScores
+                    ingest <- newOsvIngest limits npmFeed noScores
                     void . runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
                 void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "Dropping oversized OSV entry"
             logged `shouldSatisfy` T.isInfixOf "Failed to parse OSV advisory JSON"
-            logged `shouldSatisfy` T.isInfixOf "exceeding the sanity threshold"
+            logged `shouldSatisfy` T.isInfixOf fanOutFlag
             logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
 
         it "counts a row the grammar cannot order, and still emits every row" $ do
@@ -426,7 +470,7 @@ spec = describe "Osv parsing and streaming" $ do
                     [("mixed.json", "{\"id\":\"GHSA-mixed\",\"affected\":[{\"package\":{\"name\":\"mixed\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\",\"2026.05.1\"]}]}")]
             (results, stats) <-
                 runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits (Just Npm) noScores
+                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
                     rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
                     st <- readIngestStats ingest
                     pure (rs, st)
@@ -441,7 +485,7 @@ spec = describe "Osv parsing and streaming" $ do
                     [("other.json", "{\"id\":\"GHSA-other\",\"affected\":[{\"package\":{\"name\":\"other\",\"ecosystem\":\"npm\"},\"versions\":[\"v1.2\"]}]}")]
             (results, stats) <-
                 runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits Nothing noScores
+                    ingest <- newOsvIngest defaultIngestLimits (osvEcosystemNamed "Go") noScores
                     rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
                     st <- readIngestStats ingest
                     pure (rs, st)

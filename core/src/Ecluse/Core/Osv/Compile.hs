@@ -27,7 +27,7 @@ import UnliftIO.Exception (bracket, throwIO)
 
 import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
-import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvEcosystemTag, osvExportDirectory, osvWireName))
+import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory, osvWireName))
 import Ecluse.Core.Osv.Epss (fetchEpssScores, maxEpssFeedBytes)
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Core.Osv.Schema (MetaKey (..), metaTableDdl, osvDbFileName, osvSchemaEpoch, rangesTableDdl, renderMetaKey)
@@ -88,7 +88,7 @@ compileOsvToSqlite metrics mTracerProvider outDir eco sources = do
                 -- The join needs the whole score table before the first advisory row lands, and a
                 -- feed the retry budget cannot fetch fails the pass rather than shipping without.
                 epss <- withOsvRetry defaultOsvRetryPolicy (fetchEpssScores maxEpssFeedBytes (csEpssFeedUrl sources))
-                ingest <- newOsvIngest defaultIngestLimits (osvEcosystemTag eco) epss
+                ingest <- newOsvIngest defaultIngestLimits eco epss
 
                 bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
                     liftIO $ initSchema conn
