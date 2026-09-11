@@ -148,9 +148,8 @@ withGlobalDataPlane action = do
                             , drPorts = ["127.0.0.1:0:4873"]
                             , drMounts = [(workDir </> "verdaccio.yaml", "/verdaccio/conf/config.yaml:ro")]
                             }
-                    -- One nginx terminates TLS for every registry stub, so it answers to the
-                    -- four in-network aliases below. The raw docker CLI supports that
-                    -- multi-alias and testcontainers 0.5.3.0 does not.
+                    -- One nginx terminates TLS for every registry stub, so it answers to the four
+                    -- aliases below. The raw docker CLI takes that, testcontainers 0.5.3.0 does not.
                     stubRun =
                         (dockerRun stub net stubImage)
                             { drAliases = ["upstream", "mirror", "private-upstream", "pypi-upstream"]
@@ -166,9 +165,8 @@ withGlobalDataPlane action = do
                             { drAliases = ["ministack"]
                             , drPorts = ["127.0.0.1:0:4566"]
                             }
-                -- RFC 5737 TEST-NET-3: an external-looking range the egress guard never blocks (see
-                -- "Ecluse.Core.Security.Host"). The real image runs with no production escape
-                -- hatch.
+                -- RFC 5737 TEST-NET-3: an external-looking range the egress guard never blocks
+                -- (see "Ecluse.Core.Security.Host"), so the image needs no escape hatch.
                 withDockerNetwork labelArgs net ["--subnet", "203.0.113.0/24"] $ \_ ->
                     withDockerContainer labelArgs verdRun $ \_ ->
                         withDockerContainer labelArgs stubRun $ \_ ->
@@ -224,8 +222,6 @@ withE2EWith cfg action gdp = do
                 proxyPort <- freeHostPort
                 -- The product image is built by `task test-e2e` or the CI e2e job, never pulled, so
                 -- it is 'LocallyBuilt' and unpinned: the pin invariant covers only registry pulls.
-                -- The test CA bundle it trusts (SSL_CERT_FILE in 'proxyEnv') is bind-mounted from
-                -- the certs dir.
                 let proxRun =
                         (dockerRun prox net (LocallyBuilt (toText image)))
                             { drPorts = ["127.0.0.1:" <> show proxyPort <> ":4873"]
@@ -259,10 +255,8 @@ proxyEnv hostPort queueUrl =
     , -- ECLUSE_SERVER__PUBLIC_URL is the proxy's own client-facing URL (for dist.tarball
       -- rewriting), not a registry-egress target, so it stays http on host loopback.
       ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
-    , -- The registry endpoints are https-only by construction: an nginx terminator with
-      -- the test cert serves the upstream and mirror stubs over TLS. SSL_CERT_FILE below
-      -- extends the proxy image's trust store with the test CA, the documented internal-CA
-      -- operator workflow.
+    , -- The registry endpoints are https-only by construction, so an nginx terminator serves
+      -- every stub over TLS under the test CA that SSL_CERT_FILE below adds to the trust store.
       ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://mirror/")
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://mirror/")
@@ -279,9 +273,8 @@ proxyEnv hostPort queueUrl =
     , ("AWS_ACCESS_KEY_ID", "test")
     , ("AWS_SECRET_ACCESS_KEY", "test")
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
-    , -- Add DenyInstallTimeExecution so the deny scenario has a rule to fire. This policy
-      -- also disables 'min-age' from the opinionated default policy, which would otherwise
-      -- block the e2e test's freshly-created test packages.
+    , -- DenyInstallTimeExecution gives the deny scenario a rule to fire, and min-age drops to
+      -- zero because the shipped week would quarantine every freshly built fixture.
       ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0},\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}")
     ]
 
@@ -461,9 +454,8 @@ data DredgerRun = DredgerRun
     , dredgerOutput :: Text
     }
 
-{- | Run the product image as @ecluse dredger --once@ against the shared data plane, with the extra
-environment the case layers over the Dredger's own. It deletes from the same Verdaccio store the
-proxy mirrors into, so a case seeds through the proxy and asserts against the store.
+{- | Run the product image as @ecluse dredger --once@ against the shared data plane, layering
+@extraEnv@ over 'dredgerEnv'. It deletes from the store the proxy mirrors into.
 -}
 runDredgerOnce :: GlobalDataPlane -> [Text] -> [(Text, Text)] -> IO DredgerRun
 runDredgerOnce gdp flags extraEnv = do
@@ -479,9 +471,8 @@ runDredgerOnce gdp flags extraEnv = do
     (code, out, err) <- readProcess (proc "docker" (runArgs [] labelArgs run))
     pure DredgerRun{dredgerExit = code, dredgerOutput = decodeUtf8 (LBS.toStrict (out <> err))}
 
-{- | The Dredger's own environment. Its mirror target is the store the proxy mirrors into, and it
-carries the operator consent that store's tag admits. Its private upstream is a registry of its
-own, because the deleting role refuses a mirror target that is also any mount\'s private upstream.
+{- | The Dredger's own environment, carrying the operator consent its mirror target's tag admits.
+Its private upstream is a registry of its own: a deleting role refuses a shared one.
 -}
 dredgerEnv :: [(Text, Text)]
 dredgerEnv =
@@ -504,9 +495,8 @@ dockerOk args = do
     unless (code == ExitSuccess) $
         fail ("docker command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
 
-{- | Generate a test CA and a server certificate into @dir@ (SANs: @upstream@, @mirror@,
-@private-upstream@, @pypi-upstream@, @localhost@, @127.0.0.1@), plus a @bundle.pem@ of system
-and test CAs for @SSL_CERT_FILE@.
+{- | Generate a test CA and a server certificate into @dir@, carrying a SAN per stub alias plus
+@localhost@, and a @bundle.pem@ of system and test CAs for @SSL_CERT_FILE@.
 -}
 generateCerts :: FilePath -> IO ()
 generateCerts dir = do
@@ -552,8 +542,7 @@ publishedPort cname containerPort = do
         (readMaybe (toString portText))
 
 {- | Create the mirror queue in the ministack SQS emulator and return its queue URL.
-@CreateQueue@ is idempotent, so retrying while the emulator warms up is safe. The URL names the
-emulator's own host, which nothing dials because the proxy routes by @AWS_ENDPOINT_URL_SQS@.
+@CreateQueue@ is idempotent, so retrying while the emulator warms up is safe.
 -}
 createMinistackQueue :: Manager -> Int -> Text -> IO Text
 createMinistackQueue manager hostPort queueName =
@@ -599,9 +588,8 @@ waitFor manager url want = pollUntil 100 300000 id probe
 exitOk :: (ExitCode, a, b) -> Bool
 exitOk (code, _, _) = code == ExitSuccess
 
-{- | A free host loopback port: bind to @127.0.0.1:0@, read the port the OS assigned,
-release it. The brief window before docker rebinds it is a tolerable race for a
-loopback test. Picked up front so ECLUSE_SERVER__PUBLIC_URL can name it before boot.
+{- | A free host loopback port: bind to @127.0.0.1:0@, read the port the OS assigned, release it.
+The brief window before docker rebinds it is a tolerable race for a loopback test.
 -}
 freeHostPort :: IO Int
 freeHostPort =
@@ -618,9 +606,7 @@ uniqueSuffix = do
     pure (show (round (t * 1000) :: Integer))
 
 {- | The nginx stub config. One nginx terminates TLS for every registry stub by @server_name@, so
-the proxy dials https-only registry endpoints. Only the proxy validates the cert, so the harness's
-own probes stay plain HTTP. @client_max_body_size 0@ admits a published tarball, and
-@X-Forwarded-Proto https@ keeps Verdaccio generating https URLs.
+the proxy dials https-only endpoints while the harness's own probes stay plain HTTP.
 -}
 nginxStubConfig :: Text
 nginxStubConfig =
@@ -645,12 +631,17 @@ nginxStubConfig =
         , "    ssl_certificate /certs/server.crt;"
         , "    ssl_certificate_key /certs/server.key;"
         , "    root /usr/share/nginx/pypi;"
-        , "    location ~ ^/simple/(?<project>[^/]+)/$ {"
-        , "        default_type application/vnd.pypi.simple.v1+json;"
-        , "        alias /usr/share/nginx/pypi/simple/$project/index.json;"
+        , "    index index.json;"
+        , -- A `types` block replaces the inherited map rather than extending it, so the
+          -- index gets the PEP 691 media type and every other file needs the default below.
+          "    types {"
+        , "        application/vnd.pypi.simple.v1+json json;"
         , "    }"
+        , "    default_type application/octet-stream;"
         , "    location / {"
-        , "        try_files $uri =404;"
+        , -- An index request carries a trailing slash, so the file form is tried first: a
+          -- bare $uri matches the directory, which nginx answers 403 with no index file.
+          "        try_files $uri/index.json $uri =404;"
         , "    }"
         , "}"
         , "server {"
@@ -667,11 +658,11 @@ nginxStubConfig =
         , "    server_name mirror;"
         , "    ssl_certificate /certs/server.crt;"
         , "    ssl_certificate_key /certs/server.key;"
-        , "    client_max_body_size 0;"
+        , "    client_max_body_size 0;" -- admits a published tarball of any size
         , "    location / {"
         , "        proxy_pass http://verdaccio:4873;"
         , "        proxy_set_header Host $host;"
-        , "        proxy_set_header X-Forwarded-Proto https;"
+        , "        proxy_set_header X-Forwarded-Proto https;" -- keeps Verdaccio writing https URLs
         , "        proxy_set_header X-Forwarded-For $remote_addr;"
         , "    }"
         , "}"

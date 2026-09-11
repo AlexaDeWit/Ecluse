@@ -18,12 +18,13 @@ module Ecluse.E2E.Harness.Pip (
 import Data.Aeson (Value (Array, Object, String))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Text qualified as T
 import System.Directory (doesDirectoryExist)
 import System.FilePath ((</>))
 import UnliftIO.Environment (getEnvironment)
 
 import Ecluse.E2E.Harness.Client (runClient, withClientDir)
-import Ecluse.E2E.Harness.Proxy (proxyGet)
+import Ecluse.E2E.Harness.Proxy (proxyContainerLogs, proxyGet)
 import Ecluse.E2E.Harness.Types
 
 {- | Isolate a consumer's pip state, pinning @project==version@ to @digest@, and remove the
@@ -34,13 +35,15 @@ withPipProject e2e project version digest use =
     withClientDir "pip" $ \projectDir -> do
         writeFileText (projectDir </> requirementsFile) (requirement project version digest)
         baseEnv <- getEnvironment
-        -- pip's own --isolated drops PIP_* and the user config. HOME keeps whatever it
-        -- still writes inside the throwaway project.
-        let cleanEnv = filter ((/= "HOME") . fst) baseEnv <> [("HOME", projectDir)]
+        -- --isolated drops PIP_* and the user config but still reads the global and site
+        -- config files, which PIP_CONFIG_FILE is the only way to silence.
+        let cleanEnv =
+                filter ((`notElem` ["HOME", "PIP_CONFIG_FILE"]) . fst) baseEnv
+                    <> [("HOME", projectDir), ("PIP_CONFIG_FILE", "/dev/null")]
         use PipProject{ppDir = projectDir, ppEnv = cleanEnv, ppIndex = e2ePypiIndex e2e}
 
-{- | Install the pinned requirement through the proxy into the project's own target
-directory. @--require-hashes@ makes the advertised digest the download's acceptance test.
+{- | Install the pinned requirement through the proxy into the project's own target directory.
+@--require-hashes@ makes the advertised digest the download's acceptance test.
 -}
 pipInstallIn :: PipProject -> IO ClientResult
 pipInstallIn proj =
@@ -56,6 +59,9 @@ pipInstallIn proj =
         , "--disable-pip-version-check"
         , "--no-input"
         , "--require-hashes"
+        , -- An sdist runs its own build backend on install, so a wheel is the only
+          -- admissible form here, as npm_config_ignore_scripts is on the npm side.
+          "--only-binary=:all:"
         , "--index-url"
         , toString (ppIndex proj)
         , "--target"
@@ -74,9 +80,29 @@ the proxy exactly as a client reads them. A mount that does not answer fails the
 advertisedFiles :: E2E -> Text -> IO [(Text, Text)]
 advertisedFiles e2e project = do
     (status, body) <- proxyGet e2e ("/pypi/simple/" <> project)
-    unless (status == 200) $
-        fail ("the pypi mount answered " <> show status <> " for the " <> toString project <> " index")
+    unless (status == 200) $ do
+        logs <- proxyContainerLogs e2e
+        fail (toString (indexRefusal project status logs))
     pure (digestedFiles body)
+
+-- A refusal reaches the wire as a bare status, so its reason exists only in the proxy's own
+-- JSONL. "no versions are available" means the index never resolved; a rule name means a denial.
+indexRefusal :: Text -> Int -> Text -> Text
+indexRefusal project status logs =
+    "the pypi mount answered "
+        <> show status
+        <> " for the "
+        <> project
+        <> " index. Last "
+        <> show logTailLines
+        <> " proxy log lines:\n"
+        <> logTail logTailLines logs
+
+logTail :: Int -> Text -> Text
+logTail n = T.intercalate "\n" . reverse . take n . reverse . lines
+
+logTailLines :: Int
+logTailLines = 50
 
 -- The served PEP 691 document's file entries, keeping only those carrying a sha256.
 digestedFiles :: LByteString -> [(Text, Text)]

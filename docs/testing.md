@@ -139,6 +139,10 @@ probe whose `postinstall` would write a sentinel, and asserts the sentinel never
 guard cannot rot silently. `ignore-scripts` skips lifecycle scripts only, so it leaves the
 resilience scenarios alone.
 
+The pip case carries the same prohibition. A source distribution runs its own build backend on
+install, so the harness passes `--only-binary=:all:` and installs a wheel alone, and it points
+`PIP_CONFIG_FILE` at `/dev/null` because `--isolated` still reads the global and site config files.
+
 ## OSV advisory fixtures
 
 Advisory-shaped test data has one source of truth: the committed OSV JSON under `test/fixtures/osv/`
