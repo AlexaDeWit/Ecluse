@@ -44,6 +44,7 @@ spec = do
     describe "allMountsReady -- the Dredger's wait condition, not the routing verdict" $ do
         it "holds only once every configured mount has its advisory database" $ do
             allMountsReady (mountReadiness oneOfTwo) `shouldBe` False
+            allMountsReady (mountReadiness neitherOfTwo) `shouldBe` False
             allMountsReady (mountReadiness bothOfTwo) `shouldBe` True
 
         it "holds with no configured mount, so a plan without an advisory store never waits" $
