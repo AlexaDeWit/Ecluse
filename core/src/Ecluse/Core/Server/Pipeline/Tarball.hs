@@ -18,6 +18,9 @@ module Ecluse.Core.Server.Pipeline.Tarball (
     PublicArtifactGate (..),
     publicArtifactGate,
     artifactOutcomeStatus,
+
+    -- * The first-party private miss (exposed for direct testing)
+    firstPartyMissRefusal,
 ) where
 
 import Network.HTTP.Client qualified as HTTP
@@ -50,7 +53,7 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchVersionMetadata),
-    MetadataError (MetadataAuthorisationFailure),
+    MetadataError (MetadataAbsent, MetadataAuthorisationFailure),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     fetchVersionDetails,
     versionTransience,
@@ -91,7 +94,12 @@ import Ecluse.Core.Server.Pipeline.Internal (
     recordDenials,
     serveDecisionClass,
  )
-import Ecluse.Core.Server.Pipeline.Origin (mountOrigin, withPrivateMetadataClient, withPublicMetadataClient)
+import Ecluse.Core.Server.Pipeline.Origin (
+    OriginMiss (MissAbsent, MissUnresolved),
+    mountOrigin,
+    withPrivateMetadataClient,
+    withPublicMetadataClient,
+ )
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     ArtifactServe (ServeFull, ServeHead),
@@ -107,9 +115,10 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
 import Ecluse.Core.Server.Response (
     ArtifactStatus (NotFound, Unavailable'),
     Refusal,
-    Rejection (rejectionMessage),
+    RejectReason (ByPolicy),
+    Rejection (Rejection, rejectionMessage),
     ServeDecision (Admit, Reject),
-    Transience (WontResolve),
+    Transience (WillResolve, WontResolve),
     artifactHttpStatus,
     artifactStatus,
     mkRefusal,
@@ -193,16 +202,22 @@ serveTarballWithDeps mode replies deps clientToken name version file request res
         let validators = forwardValidators (requestHeaders request)
         privateHit <- streamPrivateArtifact mode replies rt deps clientToken validators name version file respond
         case privateHit of
-            Just (decision, received) -> do
+            PrivateAnswered decision received -> do
                 liftIO (mpServeDecision (srMetrics rt) decision)
                 pure received
             -- A first-party name has one authority, so a private miss ends here rather than
             -- falling through to the public leg.
-            Nothing
+            PrivateMissed miss
                 | pdFirstParty deps name -> do
-                    liftIO (mpServeDecision (srMetrics rt) Metric.Deny)
-                    liftIO (respond (artifactError replies deps firstPartyAbsent))
+                    let decision = firstPartyMissRefusal miss
+                    liftIO (mpServeDecision (srMetrics rt) (serveDecisionClass decision))
+                    liftIO (respond (artifactError replies deps decision))
                 | otherwise -> servePublicArtifact mode replies rt deps validators name version file respond
+
+-- The private leg's answer: the response it committed, or why it did not answer.
+data PrivateLeg received
+    = PrivateAnswered Metric.Decision received
+    | PrivateMissed OriginMiss
 
 -- An access refusal commits only the local error response, without reading upstream's body.
 streamPrivateArtifact ::
@@ -216,15 +231,17 @@ streamPrivateArtifact ::
     Version ->
     Filename ->
     (response -> IO ResponseReceived) ->
-    Handler (Maybe (Metric.Decision, ResponseReceived))
+    Handler (PrivateLeg ResponseReceived)
 streamPrivateArtifact mode replies rt deps token validators name version file respond =
     privateArtifactRequest rt deps token name version file >>= \case
-        Left _ -> Just . (Metric.Deny,) <$> liftIO refuse
-        Right (Just req) ->
+        PrivateRefused -> PrivateAnswered Metric.Deny <$> liftIO refuse
+        PrivateMissing miss -> pure (PrivateMissed miss)
+        -- The relay reports no cause of its own, so a rejected private status and an unreachable
+        -- private host are one miss, each keeping today's fall-through.
+        PrivateRequest req ->
             liftIO $
-                fmap snd
+                maybe (PrivateMissed MissAbsent) (uncurry PrivateAnswered . snd)
                     <$> relayUpstreamWhen mode (srPrivateManager rt) (withValidators validators (withMethod mode req)) acceptPrivate relayUnjudged privateResponder
-        Right Nothing -> pure Nothing
   where
     refuse = respond (tarballError replies status403 [] (privateAuthorisationRefusal (pdHelp deps)))
     acceptPrivate status = acceptArtifact status || isAuthorisationFailure (statusCode status)
@@ -236,6 +253,12 @@ streamPrivateArtifact mode replies rt deps token validators name version file re
         | isAuthorisationFailure (statusCode status) = (Metric.Deny,) <$> refuse
         | otherwise = (Metric.Admit,) <$> admitted
 
+-- The private leg's outcome before any relay: a request to make, an explicit refusal, or a miss.
+data PrivateArtifact
+    = PrivateRequest HTTP.Request
+    | PrivateRefused
+    | PrivateMissing OriginMiss
+
 privateArtifactRequest ::
     ServeRuntime ->
     PackumentDeps ->
@@ -243,12 +266,13 @@ privateArtifactRequest ::
     PackageName ->
     Version ->
     Filename ->
-    Handler (Either MetadataError (Maybe HTTP.Request))
+    Handler PrivateArtifact
 privateArtifactRequest rt deps token name version file = case pdPrivateBaseUrl deps of
-    Nothing -> pure (Right Nothing)
+    -- An unconfigured leg and a refused host settle the request here: neither changes on a retry.
+    Nothing -> pure (PrivateMissing MissAbsent)
     Just privateBase
-        | not (tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort) -> pure (Right Nothing)
-        | null (artifactHosts (pdArtifact deps)) -> pure (Right (byConventionalPath privateBase))
+        | not (tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort) -> pure (PrivateMissing MissAbsent)
+        | null (artifactHosts (pdArtifact deps)) -> pure (byConventionalPath privateBase)
         | otherwise -> byIndexedLocation privateBase
   where
     -- The precomputed private authority. A conventionally-built URL is on the private base, so
@@ -256,16 +280,19 @@ privateArtifactRequest rt deps token name version file = case pdPrivateBaseUrl d
     privateHostPort = thgPrivateHostPort (pdTarballHostGate deps)
 
     byConventionalPath privateBase =
-        rightToMaybe (artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateManager rt) privateBase token) name (unFilename file))
+        either (const (PrivateMissing MissAbsent)) PrivateRequest $
+            artifactByFile (pdArtifact deps) (mountOrigin deps (srPrivateManager rt) privateBase token) name (unFilename file)
 
     -- The location is gated from the same definition the download gate reads, and the credential
     -- rides only when it is the private upstream itself.
     byIndexedLocation privateBase = do
         resolved <- tryAny (withPrivateMetadataClient rt deps privateBase token (\client -> fetchVersionMetadata client name version))
         pure $ case resolved of
-            Right (Left refusal@MetadataAuthorisationFailure{}) -> Left refusal
-            Right (Right details) -> Right (details >>= requestForDetails)
-            _ -> Right Nothing
+            Left _ -> PrivateMissing MissUnresolved
+            Right (Left MetadataAuthorisationFailure{}) -> PrivateRefused
+            Right (Left MetadataAbsent) -> PrivateMissing MissAbsent
+            Right (Left _) -> PrivateMissing MissUnresolved
+            Right (Right details) -> maybe (PrivateMissing MissAbsent) PrivateRequest (details >>= requestForDetails)
       where
         requestForDetails details = do
             artifact <- find ((== unFilename file) . artFilename) (pkgArtifacts details)
@@ -370,13 +397,29 @@ versionAbsent :: ServeDecision
 versionAbsent =
     versionUnresolved VersionMissing "the requested version was not found upstream"
 
-{- A first-party artifact the private upstream did not serve. No public artifact may
-stand in for it, and 'artifactOutcomeStatus' renders it @404@. -}
+{- A first-party artifact the private upstream does not hold. No public artifact may stand in for
+it, and 'artifactOutcomeStatus' renders it @404@. -}
 firstPartyAbsent :: ServeDecision
 firstPartyAbsent =
-    versionUnresolved
-        VersionMissing
-        "the requested artifact is first-party to this deployment, so it is served from the private upstream only and is never fetched from the public registry"
+    Reject
+        ( Rejection
+            (ByPolicy firstPartyRule)
+            "the requested artifact is first-party to this deployment, so it is served from the private upstream only and is never fetched from the public registry"
+        )
+
+{- A first-party artifact whose private upstream could not be read. That upstream is the name's one
+authority, so a retry may still resolve it. -}
+firstPartyUnresolved :: ServeDecision
+firstPartyUnresolved =
+    rejectUnavailable
+        (WillResolve Nothing)
+        "the private upstream for this first-party artifact was unavailable"
+
+-- | The refusal a first-party private miss renders: a settled absence @404@, an outage @503@.
+firstPartyMissRefusal :: OriginMiss -> ServeDecision
+firstPartyMissRefusal = \case
+    MissAbsent -> firstPartyAbsent
+    MissUnresolved -> firstPartyUnresolved
 
 {- The refusal a version the single-version read could not resolve renders as. Its transience
 is the shared projection's, the one the worker's retry-versus-drop reads. -}
@@ -472,7 +515,7 @@ crossHostRefused :: TarballReplies response -> response
 crossHostRefused replies =
     tarballError replies status403 [] (mkRefusal Nothing "the upstream artifact host is not permitted by the tarball-host policy")
 
--- | Missing versions and first-party misses map to 404. Other outcomes use 'artifactStatus'.
+-- | Missing versions and a first-party absence map to 404. Other outcomes use 'artifactStatus'.
 artifactOutcomeStatus :: ServeDecision -> ArtifactStatus
 artifactOutcomeStatus decision
     | decision `elem` [versionAbsent, firstPartyAbsent] = NotFound

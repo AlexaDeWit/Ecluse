@@ -2,8 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The serve half of the shared admission projection. The gate turns one 'ArtifactAdmission'
-into a serve outcome, and these cases pin the status each outcome reaches the client as.
+{- | The serve half of the shared admission projection, and the answer a first-party name's
+private miss renders. Both turn one verdict into a serve outcome, and these cases pin the status
+each outcome reaches the client as.
 -}
 module Ecluse.Core.Server.Pipeline.TarballSpec (spec) where
 
@@ -24,14 +25,18 @@ import Ecluse.Core.Rules.Types (
     Decision (Blocked, Undecidable),
     Transience (WillResolve, WontResolve),
  )
+import Ecluse.Core.Server.Pipeline.Internal (serveDecisionClass)
+import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
 import Ecluse.Core.Server.Pipeline.Tarball (
     PublicArtifactGate (Admitted, Refused),
     artifactOutcomeStatus,
+    firstPartyMissRefusal,
     publicArtifactGate,
  )
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, ServerError, Unavailable'),
  )
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (sampleDetails)
 
@@ -47,7 +52,12 @@ statusOf admission = case publicArtifactGate details admission of
     Refused decision -> Just (artifactOutcomeStatus decision)
 
 spec :: Spec
-spec = describe "publicArtifactGate -- the shared admission verdict on the serve surface" $ do
+spec = do
+    publicArtifactGateSpec
+    firstPartyMissSpec
+
+publicArtifactGateSpec :: Spec
+publicArtifactGateSpec = describe "publicArtifactGate -- the shared admission verdict on the serve surface" $ do
     it "renders an inability the evaluator expects to clear as a 503" $
         -- The transience comes from the shared projection, the one the worker reads to
         -- redeliver the job.
@@ -70,3 +80,13 @@ spec = describe "publicArtifactGate -- the shared admission verdict on the serve
     it "renders an artifact the integrity floor refuses as a 403" $ do
         statusOf AdmissionBelowFloor `shouldBe` Just Forbidden
         statusOf AdmissionIntegrityMissing `shouldBe` Just Forbidden
+
+firstPartyMissSpec :: Spec
+firstPartyMissSpec = describe "firstPartyMissRefusal -- the private miss a first-party name answers" $ do
+    it "renders an origin that holds no such artifact as a 404 the first-party rule decided" $ do
+        artifactOutcomeStatus (firstPartyMissRefusal MissAbsent) `shouldBe` NotFound
+        serveDecisionClass (firstPartyMissRefusal MissAbsent) `shouldBe` Metric.Deny
+
+    it "renders an origin that was never read as a 503, suggesting no delay" $ do
+        artifactOutcomeStatus (firstPartyMissRefusal MissUnresolved) `shouldBe` Unavailable' Nothing
+        serveDecisionClass (firstPartyMissRefusal MissUnresolved) `shouldBe` Metric.Unavailable

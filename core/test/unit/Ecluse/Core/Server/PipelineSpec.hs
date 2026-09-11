@@ -143,10 +143,12 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
-    it "keeps a first-party packument off the public upstream, answering 404 on a private miss" $ do
+    it "keeps a first-party packument off the public upstream, answering 503 when the private origin cannot be read" $ do
         (metricsPort, decisions) <- recordingMetricsPort
         rt <- mkRuntime metricsPort
         hits <- newIORef (0 :: Int)
+        -- 'depsFor' points the private origin at a closed port, so this name's one authority
+        -- never answers and the client is told to retry rather than that the name is gone.
         testWithApplication (pure (countingUpstream hits upstreamApp)) $ \port -> do
             base <- depsFor port
             let serveUnder firstParty =
@@ -157,13 +159,13 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         (servePackument npmPackumentReplies leftpad defaultRequest)
             -- A cold cache makes a zero count prove that the public leg never ran.
             firstParty <- serveUnder (== leftpad)
-            statusCode (responseStatus firstParty) `shouldBe` 404
+            statusCode (responseStatus firstParty) `shouldBe` 503
             readIORef hits >>= (`shouldBe` 0)
-            decisions >>= (`shouldBe` [Deny])
+            decisions >>= (`shouldBe` [Unavailable])
             thirdParty <- serveUnder (/= leftpad)
             statusCode (responseStatus thirdParty) `shouldBe` 200
             readIORef hits >>= (`shouldSatisfy` (> 0))
-            decisions >>= (`shouldBe` [Deny, Admit])
+            decisions >>= (`shouldBe` [Unavailable, Admit])
 
     it "keeps a first-party artifact off the public upstream, answering 404 after a private miss" $ do
         (metricsPort, decisions) <- recordingMetricsPort

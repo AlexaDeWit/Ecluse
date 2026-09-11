@@ -2,16 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The derived packument validator ('packumentETag'): the input fingerprint that
-stands in for a hash of the served bytes.
+{- | The derived packument validator ('packumentETag') and the answer a first-party
+name's private miss renders.
 
-The correctness direction a validator must hold is __never call a changed document
-unchanged__. These cases pin that the tag moves whenever an input of the served
-document moves. The inputs are an origin body, a survivor set, the source's
-provenance, the source order, the mount base URL, and the package. They also pin that
-the tag is bit-stable when nothing moves. The tag may change spuriously. It may not
-stand still. Framing cases guard the hash-input encoding: adjacent variable-length
-fields must not collapse into a colliding split.
+A validator must never call a changed document unchanged, so these cases pin that the
+tag moves whenever an input of the served document moves, and that it is bit-stable
+when nothing moves. The framing cases guard the hash-input encoding: adjacent
+variable-length fields must not collapse into a colliding split.
 -}
 module Ecluse.Core.Server.Pipeline.PackumentSpec (spec) where
 
@@ -22,10 +19,29 @@ import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource))
 import Ecluse.Core.Registry.Metadata (ContentDigest, digestOf)
 import Ecluse.Core.Server.Conditional (ETag)
-import Ecluse.Core.Server.Pipeline.Packument (packumentETag)
+import Ecluse.Core.Server.Pipeline.Internal (denialLabels, packumentServeDecision)
+import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
+import Ecluse.Core.Server.Pipeline.Packument (
+    PackumentReplies (..),
+    firstPartyMissDecision,
+    firstPartyMissReply,
+    packumentETag,
+ )
+import Ecluse.Core.Server.Response (
+    RejectReason (Unavailable),
+    Rejection (rejectionReason),
+    ServeDecision (Admit, Reject),
+    Transience (WillResolve),
+ )
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
 spec :: Spec
-spec = describe "packumentETag -- the input-derived validator" $ do
+spec = do
+    packumentETagSpec
+    firstPartyMissSpec
+
+packumentETagSpec :: Spec
+packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
     it "is bit-stable across identical inputs" $
         tagWith base `shouldBe` tagWith base
 
@@ -69,6 +85,48 @@ spec = describe "packumentETag -- the input-derived validator" $ do
 
     it "changes when a whole source appears or disappears" $
         packumentETag mountBase thing [publicPiece base] `shouldNotBe` tagWith base
+
+firstPartyMissSpec :: Spec
+firstPartyMissSpec = describe "a first-party name whose private origin yielded nothing" $ do
+    it "renders an origin that answered 404 as a 404" $
+        replyFor MissAbsent `shouldBe` "not-found"
+
+    it "renders an origin that was never read as a 503" $
+        replyFor MissUnresolved `shouldBe` "unavailable"
+
+    it "counts an absence as a denial the first-party rule decided" $ do
+        packumentServeDecision [decisionFor MissAbsent] `shouldBe` Metric.Deny
+        fmap denialLabels (reasonOf (decisionFor MissAbsent))
+            `shouldBe` Just (Just "first-party", Metric.ReasonPolicy)
+
+    it "counts an unread origin as an outage, suggesting no delay" $ do
+        packumentServeDecision [decisionFor MissUnresolved] `shouldBe` Metric.Unavailable
+        reasonOf (decisionFor MissUnresolved) `shouldBe` Just (Unavailable (WillResolve Nothing))
+
+-- Each reply factory answers its own name, so a case reads back which one the pipeline chose.
+namedReplies :: PackumentReplies Text
+namedReplies =
+    PackumentReplies
+        { packumentOk = \_ _ -> "ok"
+        , packumentNotModified = const "not-modified"
+        , packumentUnauthorised = \_ _ -> "unauthorised"
+        , packumentForbidden = \_ _ -> "forbidden"
+        , packumentNotFound = \_ _ -> "not-found"
+        , packumentInternal = \_ _ -> "internal"
+        , packumentBadGateway = \_ _ -> "bad-gateway"
+        , packumentUnavailable = \_ _ -> "unavailable"
+        }
+
+replyFor :: OriginMiss -> Text
+replyFor = firstPartyMissReply namedReplies Nothing thing
+
+decisionFor :: OriginMiss -> ServeDecision
+decisionFor = firstPartyMissDecision thing
+
+reasonOf :: ServeDecision -> Maybe RejectReason
+reasonOf = \case
+    Admit -> Nothing
+    Reject rejection -> Just (rejectionReason rejection)
 
 -- The fixture: a private (trusted) and a public (gated) source with distinct
 -- bodies and survivor sets, varied one field at a time by each case.

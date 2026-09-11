@@ -21,7 +21,6 @@ import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty), newSweepStat
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity), mkEvalContext)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
-import Ecluse.Core.Server.Pipeline.Origin (OriginResult (OriginAbsent, OriginAuthorisationFailure, OriginNameMismatch, OriginUnresolved), originMissed)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepGuardSkipped))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
@@ -52,10 +51,6 @@ spec = do
 
 privateAuthorisationSpec :: Spec
 privateAuthorisationSpec = describe "private authorisation refusal" $ do
-    it "distinguishes explicit access and identity refusals from absent origins" $
-        map originMissed [OriginAuthorisationFailure 401, OriginAuthorisationFailure 403, OriginNameMismatch, OriginUnresolved, OriginAbsent]
-            `shouldBe` [False, False, False, True, True]
-
     for_ [status401, status403] $ \upstreamStatus -> do
         it ("logs a fixed warning without private details for HTTP " <> show (statusCode upstreamStatus)) $ do
             privateUp <- upstreamRespondingWith (responseLBS upstreamStatus [("WWW-Authenticate", "secret-realm")] "secret-upstream-body")
@@ -118,7 +113,9 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                 status response `shouldBe` 200
                 servedVersions response `shouldBe` ["1.0.0"]
 
-    for_ [status404, status503] $ \upstreamStatus ->
+    -- A first-party name reads its one authority, so the private status decides: an absence
+    -- refuses the request, and an outage invites a retry. A merged name is unaffected by either.
+    for_ [(status404, 404), (status503, 503)] $ \(upstreamStatus, firstPartyStatus) ->
         for_ [False, True] $ \firstParty ->
             it ("preserves metadata HTTP " <> show (statusCode upstreamStatus) <> " policy, firstParty=" <> show firstParty) $ do
                 privateUp <- upstreamRespondingWith (responseLBS upstreamStatus [] "not found")
@@ -126,7 +123,7 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                 queue <- newTestMemoryQueue
                 withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdFirstParty = const firstParty}) $ \app _ _ -> do
                     response <- getThing Nothing app
-                    status response `shouldBe` if firstParty then 404 else 200
+                    status response `shouldBe` if firstParty then firstPartyStatus else 200
                     servedVersions response `shouldBe` ["1.0.0" | not firstParty]
                     seenAuth publicUp `shouldReturn` [Nothing | not firstParty]
 

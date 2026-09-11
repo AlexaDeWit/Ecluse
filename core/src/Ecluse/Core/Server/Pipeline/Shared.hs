@@ -20,6 +20,9 @@ module Ecluse.Core.Server.Pipeline.Shared (
     shedRetryAfter,
     retryAfterHeaders,
 
+    -- * First-party refusals
+    firstPartyRule,
+
     -- * Integrity-floor rejections
     integrityMissing,
     integrityBelowFloor,
@@ -42,6 +45,7 @@ import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, MissingIntegrity),
     Rejection (Rejection),
     RetryAfter (RetryAfter),
+    RuleName (RuleName),
     ServeDecision (Reject),
     mkRefusal,
  )
@@ -102,6 +106,12 @@ unauthorisedMessage = "authentication required"
 
 forwardedCredential :: MountBinding -> Request -> Maybe ClientCredential
 forwardedCredential mount = credentialRecover (bindingCredential mount) . requestHeaders
+
+{- | The rule a first-party refusal names, so the read pipelines label one denial series rather
+than two spellings of the same refusal.
+-}
+firstPartyRule :: RuleName
+firstPartyRule = RuleName "first-party"
 
 integrityMissing :: ServeDecision
 integrityMissing =
