@@ -16,11 +16,10 @@ import Test.Hspec
 import UnliftIO.Exception (impureThrow, throwString)
 
 import Ecluse.Core.Breaker (noBreakerReporter)
-import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
 import Ecluse.Core.Rules (PreparedRule (..), Resilience (..))
 import Ecluse.Core.Rules.Effectful (EffectfulConfig (..), defaultEffectfulConfig, newBreaker)
-import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleVerdict (..))
+import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleEvidence, RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
@@ -36,7 +35,7 @@ spec = do
     boundsLogSpec
     perimeterSpec
 
-mkEffectful :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleVerdict) -> IO PreparedRule
+mkEffectful :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (RuleEvidence -> IO RuleVerdict) -> IO PreparedRule
 mkEffectful name prec cfg align eval = do
     breaker <- newBreaker
     pure
@@ -44,7 +43,7 @@ mkEffectful name prec cfg align eval = do
             { prepName = name
             , prepPrecedence = prec
             , prepResilience = Just (Resilience cfg align breaker noBreakerReporter getCurrentTime noFaultReporter)
-            , prepEval = \_ pd -> eval pd
+            , prepEval = \_ ev -> eval ev
             }
 
 downEffectfulRule :: IO PreparedRule

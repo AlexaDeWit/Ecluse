@@ -162,7 +162,7 @@ identityOnlySpec = describe "a manifest the store did not serve" $ do
         errors <- recErrors rec'
         errors `shouldSatisfy` any (T.isInfixOf "ACCESS_DENIED")
 
-    it "reaches the deletion cap from a read that produced no manifest" $ do
+    it "reaches the deletion cap from a read that produced no manifest, so the held-back version serves" $ do
         -- Identity alone can now condemn, so this branch counts against the cycle's cap like any
         -- other and latches the halt when it fills it.
         rules <- prepare inertRuleDeps (map atDefaultPrecedence [DenyByIdentity "left-pad@1.0.0", DenyByIdentity "left-pad@2.0.0"])
@@ -176,7 +176,7 @@ identityOnlySpec = describe "a manifest the store did not serve" $ do
 
 beltSpec :: Spec
 beltSpec = describe "the first-party belt" $
-    it "skips identity-denied metadata until the first-party guard is removed" $ do
+    it "serves an identity-denied first-party version until the guard is removed, then 404s" $ do
         store <- storeWith [version "1.0.0"] (Just (sampleManifest packageName [version "1.0.0"]))
         manifestReads <- newIORef (0 :: Int)
         rules <- identityDeny

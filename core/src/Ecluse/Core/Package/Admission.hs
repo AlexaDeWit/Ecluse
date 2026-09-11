@@ -32,39 +32,32 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Core.Server.Path (Filename, unFilename)
 
-{- | The admission verdict for one requested artifact, shared by serve and ingest. An inability to
-decide is not a refusal: it renders @503@\/@500@ and the worker redelivers ('admissionTransience').
+{- | The admission verdict for one requested artifact. An inability to decide is no refusal: serve
+renders @503@\/@500@, and the worker redelivers or drops per 'admissionTransience'.
 -}
 data ArtifactAdmission
-    = {- | The rules admitted the version and its digests clear the integrity floor. Carries the
-      'Filename' the gate matched against current metadata, and the floor-checked digest set.
+    = {- | Admitted, with digests clearing the integrity floor. Carries the 'Filename' the gate
+      matched against current metadata, and the floor-checked digest set.
       -}
       AdmissionAdmit Filename Artifact (NonEmpty Hash)
-    | {- | A rule (or deny-by-default) blocked the version. Carries the 'Blocked' \/
-      'BlockedByDefault' 'Decision' so each consumer renders the deciding rule and
-      reason on its own surface.
+    | {- | A rule, or deny-by-default, blocked the version. Carries the 'Decision' so each consumer
+      renders the deciding rule and reason on its own surface.
       -}
       AdmissionDenied Decision
-    | {- | The version could not be decided: a fail-closed rule whose evaluation was
-      unavailable. Carries the 'Undecidable' 'Decision' with its
-      'Ecluse.Core.Rules.Types.Transience', which 'admissionTransience' reads out for
-      both consumers.
+    | {- | A fail-closed rule could not vet the version. Carries the 'Undecidable' 'Decision', whose
+      transience 'admissionTransience' reads out for both consumers.
       -}
       AdmissionUndecidable Decision
-    | {- | The rules admitted the version but no artifact carries the requested
-      filename: a forwarded miss on the serve path, or a withdrawn-file drop at the
-      worker. Never a fabricated location.
+    | {- | Admitted, but no artifact carries the requested filename: a forwarded miss on serve, a
+      withdrawn-file drop at the worker, never a fabricated location.
       -}
       AdmissionFileAbsent
-    | {- | The selected artifact carries no integrity digest of any kind, so nothing
-      ties its bytes to a tamper-evident fingerprint. The admission policy refuses it
-      (deny-by-default), distinct from 'AdmissionBelowFloor' so the refusal can say
-      which.
+    | {- | The selected artifact carries no digest at all, so nothing ties its bytes to a
+      fingerprint. Kept apart from 'AdmissionBelowFloor' so the refusal can say which.
       -}
       AdmissionIntegrityMissing
-    | {- | The selected artifact carries digests, but none meets the configured
-      public-integrity floor (e.g. a legacy SHA-1 shasum only, under the SHA-256
-      floor). The admission policy refuses it.
+    | {- | The selected artifact carries digests, but none meets the configured public-integrity
+      floor (a legacy SHA-1 shasum only, under a SHA-256 floor).
       -}
       AdmissionBelowFloor
     deriving stock (Show)

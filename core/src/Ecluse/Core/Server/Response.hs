@@ -253,8 +253,8 @@ data PackumentStatus
       PackumentServerError
     deriving stock (Eq, Show)
 
-{- | Choose a packument's status from the per-version outcomes, a needed-but-unavailable upstream's
-'Reject' included. With no survivor the most recoverable cause wins, and an empty input is a @403@.
+{- | A packument's status from the per-version outcomes: with no survivor the most recoverable cause
+wins, @502@ under @503@ as a transient origin may yet answer, and an empty input is a @403@.
 -}
 packumentStatus :: [ServeDecision] -> PackumentStatus
 packumentStatus decisions
