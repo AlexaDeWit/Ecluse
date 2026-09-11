@@ -45,7 +45,7 @@ spec = do
             withUpstream $ \url -> do
                 heartbeat <- newWorkerHeartbeat
                 seen <- newIORef []
-                logRef <- newIORef (PublishLog [] [])
+                logRef <- newIORef emptyPublishLog
                 let base = recordingPublish logRef (Right ())
                     snapshotOnPublish =
                         base

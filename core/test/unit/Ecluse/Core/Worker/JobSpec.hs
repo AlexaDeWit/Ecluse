@@ -37,7 +37,7 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Registry.Publish (PublishPlan (PublishPlan, ppLatest, ppVersion))
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (BodyTooLarge))
-import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     WorkerPolicy (wpArtifact, wpPublish),
@@ -302,8 +302,8 @@ spec = do
             -- The decoy PyPI bundle carries its own recording publish capability. The npm job's
             -- probe and publish must both ride npm's, so the decoy records nothing.
             withUpstream $ \url -> do
-                npmLog <- newIORef (PublishLog [] [])
-                decoyLog <- newIORef (PublishLog [] [])
+                npmLog <- newIORef emptyPublishLog
+                decoyLog <- newIORef emptyPublishLog
                 let npmBundle = (npmPolicy presentResolver [admitRule]){wpPublish = recordingPublish npmLog (Right ())}
                     decoyBundle = (npmPolicy presentResolver [admitRule]){wpPublish = recordingPublish decoyLog (Right ())}
                     policies = Map.fromList [(Npm, npmBundle), (PyPI, decoyBundle)]
@@ -518,18 +518,16 @@ spec = do
                     $ \runtime queue logRef -> do
                         (receipt, job) <- enqueueAndReceive queue (jobWith url)
                         runWM runtime (processJob receipt job) `shouldReturn` Succeeded
-                        published <- plDocuments <$> readIORef logRef
-                        map (stringAt ["dist-tags", "latest"]) (decodedDocuments published)
-                            `shouldBe` [Just (renderVersion otherVer)]
+                        plans <- plPlans <$> readIORef logRef
+                        map ppLatest plans `shouldBe` [otherVer]
 
         it "declares its own version when the store holds nothing else" $
             withUpstream $ \url ->
                 withRuntime (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
                     runWM runtime (processJob receipt job) `shouldReturn` Succeeded
-                    published <- plDocuments <$> readIORef logRef
-                    map (stringAt ["dist-tags", "latest"]) (decodedDocuments published)
-                        `shouldBe` [Just (renderVersion ver)]
+                    plans <- plPlans <$> readIORef logRef
+                    map ppLatest plans `shouldBe` [ver]
 
     describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
         -- The serve-time tarball gate and the worker both resolve a version through this one
@@ -567,10 +565,6 @@ versionReadOf details upstreamLatest = VersionRead{vrDetails = details, vrUpstre
 
 npmVer :: Text -> Version
 npmVer = mkVersion Npm
-
--- Decode each captured publish document, failing the parse to 'Nothing' rather than throwing.
-decodedDocuments :: [ByteString] -> [Value]
-decodedDocuments documents = [value | document <- documents, Right value <- [eitherDecodeStrict' document]]
 
 -- An admission verdict no rule could decide, with the given transience.
 undecided :: Transience -> Text -> ArtifactAdmission

@@ -8,6 +8,7 @@ Queue receipts, publications, and typed failures expose the worker's decisions.
 module Ecluse.Worker.Support.Runtime (
     -- * A recording publish capability
     PublishLog (..),
+    emptyPublishLog,
     recordingPublish,
     mirrorListingPublish,
     probeUnreachablePublish,
@@ -67,7 +68,7 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError,
     VersionRead,
  )
-import Ecluse.Core.Registry.Publish (MirrorPublish (..))
+import Ecluse.Core.Registry.Publish (MirrorPublish (..), PublishPlan)
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker (
@@ -85,11 +86,18 @@ import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Worker.Support.Fixtures (admitPolicies, tarballBytes, withPublish)
 
--- | Capture verified bytes and the descriptor passed to publication.
+-- | Capture what publication was handed: the verified bytes, the descriptor, and the plan.
 data PublishLog = PublishLog
     { plDocuments :: [ByteString]
+    -- ^ The verified tarball bytes, not the assembled publish document the codec renders.
     , plArtifacts :: [MirrorArtifact]
+    , plPlans :: [PublishPlan]
+    -- ^ The version and release tag each write declared.
     }
+
+-- | A log that has recorded nothing, so a new field never has to be spelled at every call site.
+emptyPublishLog :: PublishLog
+emptyPublishLog = PublishLog{plDocuments = [], plArtifacts = [], plPlans = []}
 
 {- | Record publications with a fixed outcome. The inventory probe answers @404@, which the
 worker reads as a known-empty store without consulting the version list.
@@ -99,8 +107,8 @@ recordingPublish logRef outcome =
     MirrorPublish
         { mpProbeMetadata = const (pure (Right (RegistryResponse 404 "")))
         , mpParseVersionList = const (Left (ParseError "absent: nothing mirrored yet"))
-        , mpPublishArtifact = \_ _ artifact document -> do
-            atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l}, ()))
+        , mpPublishArtifact = \_ plan artifact document -> do
+            atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l, plPlans = plan : plPlans l}, ()))
             pure outcome
         }
 
@@ -135,7 +143,7 @@ withRuntimeRegistry mkPublish policies metricsPort body = do
 -- | Use a supplied queue to observe or perturb the worker's queue decisions.
 withRuntimeQueue :: MirrorQueue -> (IORef PublishLog -> MirrorPublish) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IORef PublishLog -> IO a) -> IO a
 withRuntimeQueue queue mkPublish policies metricsPort body = do
-    logRef <- newIORef (PublishLog [] [])
+    logRef <- newIORef emptyPublishLog
     withWiredRuntime queue (withPublish (mkPublish logRef) policies) metricsPort (`body` logRef)
 
 -- | Run the supplied worker policies without replacing their publish capabilities.

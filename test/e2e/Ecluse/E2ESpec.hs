@@ -108,21 +108,18 @@ scenarios = do
                     void $ withUpstreamPaused e2e (npmCiIn proj) >>= shouldSucceed -- (5) public down → from the mirror
             it "keeps the upstream latest on the mirror when an older version is mirrored after it" $ \e2e -> do
                 let name = psName latestPkg
-                -- The case before this one resumes the public stub without waiting for it to
-                -- answer again, so the merged listing is the readiness signal.
-                awaitPackument e2e name `shouldReturn` True
                 withNpmProject e2e $ \proj -> do
-                    void $ npmInstallIn proj (name <> "@2.0.0") >>= shouldSucceed
+                    void $ npmInstallIn proj (name <> "@2.0.0") >>= shouldSucceedThroughProxy e2e
                     verdaccioHasVersion e2e name "2.0.0" `shouldReturn` True
                     verdaccioLatest e2e name `shouldReturn` Just "2.0.0"
-                    void $ npmInstallIn proj (name <> "@1.0.0") >>= shouldSucceed
+                    void $ npmInstallIn proj (name <> "@1.0.0") >>= shouldSucceedThroughProxy e2e
                     verdaccioHasVersion e2e name "1.0.0" `shouldReturn` True
                     -- Completion order must not retag: 1.0.0 landing last stays behind 2.0.0.
                     verdaccioLatest e2e name `shouldReturn` Just "2.0.0"
                     verdaccioVersions e2e name `shouldReturn` ["1.0.0", "2.0.0"]
                 withNpmProject e2e $ \proj -> do
                     -- The next unqualified install resolves through the mirror's own tag.
-                    void $ withUpstreamPaused e2e (npmInstallIn proj name) >>= shouldSucceed
+                    void $ withUpstreamPaused e2e (npmInstallIn proj name) >>= shouldSucceedThroughProxy e2e
                     installedVersion proj name `shouldReturn` Just "2.0.0"
         describe "first-party publish -- opt-in posture" $
             it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
