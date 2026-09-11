@@ -415,10 +415,10 @@ checkLifetime shape policy protection = do
         details = sampleDetails leftpad version
         initialPolicy = Rules.PrecededRule 700 (Rules.AllowByIdentity "leftpad@1.0.0") : lpRules policy
     initial <- prepare inertRuleDeps initialPolicy
-    admittedBy <$> evalRules ctx initial details `shouldReturn` Just "AllowByIdentity"
+    admittedBy <$> evalRules ctx initial (Rules.completeEvidence details) `shouldReturn` Just "AllowByIdentity"
     store <- newFakeStore (lifetimeStore protection)
     preparedAfter <- prepare inertRuleDeps (lpRules policy)
-    evalRules ctx preparedAfter details >>= (`shouldSatisfy` lpDecision policy)
+    evalRules ctx preparedAfter (Rules.completeEvidence details) >>= (`shouldSatisfy` lpDecision policy)
     recorded <- recordingPorts Nothing
     let mount =
             (testMount (fakeMaintenance store) preparedAfter (map Rules.prRule (lpRules policy)))

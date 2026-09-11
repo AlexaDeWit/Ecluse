@@ -32,6 +32,7 @@ import Ecluse.Core.Package (PackageInfo, infoVersions)
 import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
+    completeEvidence,
  )
 import Ecluse.Test.Rules (inertRuleDeps)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
@@ -56,7 +57,7 @@ per-request work a packument response performs, since 'prepare' runs once at boo
 rulesDepth :: PackageInfo -> IO Int
 rulesDepth info = do
     prepared <- prepare inertRuleDeps benchRules
-    sum <$> traverse (fmap decisionCode . evalRules benchEvalContext prepared) (Map.elems (infoVersions info))
+    sum <$> traverse (fmap decisionCode . evalRules benchEvalContext prepared . completeEvidence) (Map.elems (infoVersions info))
 
 -- | A distinct code per decision arm, forcing the engine's verdict to a constructor.
 decisionCode :: Decision -> Int

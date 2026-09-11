@@ -28,6 +28,7 @@ import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext,
     Transience (WontResolve),
+    completeEvidence,
  )
 import Ecluse.Core.Server.Path (Filename, unFilename)
 
@@ -84,7 +85,7 @@ admitArtifact ::
     PackageDetails ->
     IO ArtifactAdmission
 admitArtifact ctx rules minIntegrity file details = do
-    decision <- evalRules ctx rules details
+    decision <- evalRules ctx rules (completeEvidence details)
     pure $ case decision of
         Admitted{} -> case artifactFor file details of
             Nothing -> AdmissionFileAbsent

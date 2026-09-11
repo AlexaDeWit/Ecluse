@@ -9,7 +9,7 @@ module Ecluse.Core.Registry.Sweep.PackageSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Test.Hspec
 
 import Ecluse.Core.Cve (DbEtag (DbEtag))
@@ -32,7 +32,12 @@ import Ecluse.Core.Registry.Sweep.Types (
     newSweepState,
  )
 import Ecluse.Core.Rules (PreparedRule, prepare)
-import Ecluse.Core.Rules.Types (EvalContext, Rule (DenyByIdentity), mkEvalContext)
+import Ecluse.Core.Rules.Types (
+    EvalContext,
+    PrecededRule (PrecededRule),
+    Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity),
+    mkEvalContext,
+ )
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
@@ -79,9 +84,17 @@ verdictSpec = describe "the delete verdict" $ do
         recResults rec' `shouldReturn` [SweepExamined, SweepKept]
         held store `shouldReturn` [version "1.0.0"]
 
-    it "keeps a version the listing names but the manifest no longer carries" $ do
-        -- The store lists it and its own metadata does not, so nothing about it can be decided.
-        (rec', store) <- sweepOne [denyRule] ["1.0.0"] []
+    it "deletes a version the manifest omits but a deny names by identity, so the next request 404s" $ do
+        -- The store lists it and its own metadata does not. The listing establishes identity anyway.
+        rules <- identityDeny
+        store <- storeWith [version "1.0.0"] (Just (sampleManifest packageName []))
+        rec' <- recordingPorts generation
+        void (runStep rec' testPacing (mount store rules) (served ["1.0.0"]))
+        recResults rec' `shouldReturn` [SweepExamined, SweepDeleted]
+        held store `shouldReturn` []
+
+    it "keeps a version the manifest omits when no rule is decisive, so the next request serves it" $ do
+        (rec', store) <- sweepOne [] ["1.0.0"] []
         recResults rec' `shouldReturn` [SweepExamined, SweepKept]
         held store `shouldReturn` [version "1.0.0"]
 
@@ -94,30 +107,70 @@ verdictSpec = describe "the delete verdict" $ do
         halt `shouldBe` Nothing
         recResults rec' `shouldReturn` []
 
-{- A read that produced no manifest keeps every version of the package for this cycle and says so.
-The shared bounded fetch discards the response status, so a 404 and a 5xx arrive here alike. -}
+{- A read that produced no manifest decides every version of the package on the identity the
+listing carries. The shared bounded fetch discards the response status, so a 404 and a 5xx arrive
+here alike. -}
 unvettableSpec :: Spec
 unvettableSpec = describe "a manifest the store did not serve" $ do
-    it "keeps every version of the package and reports it" $ do
-        store <- storeWith [] Nothing
+    it "deletes a version the operator revoked by identity, so the next request 404s" $ do
+        rules <- identityDeny
+        store <- storeWith [version "1.0.0"] Nothing
         rec' <- recordingPorts generation
-        halt <- runStep rec' testPacing (mount store [denyRule]) (served ["1.0.0", "2.0.0"])
+        halt <- runStep rec' testPacing (mount store rules) (served ["1.0.0"])
         halt `shouldBe` Nothing
+        recResults rec' `shouldReturn` [SweepExamined, SweepDeleted]
+        held store `shouldReturn` []
+
+    it "keeps a version a higher-precedence allow admits, so the next request still serves it" $ do
+        rules <-
+            prepare
+                inertRuleDeps
+                [PrecededRule 500 (AllowByIdentity "left-pad@1.0.0"), atDefaultPrecedence (DenyByIdentity "left-pad@1.0.0")]
+        (rec', store) <- unreadStep rules ["1.0.0"]
+        recResults rec' `shouldReturn` [SweepExamined, SweepKept]
+        held store `shouldReturn` [version "1.0.0"]
+
+    it "keeps a version an earlier rule could not decide, so the next request still serves it" $ do
+        -- The age rule reads a publish time no listing carries, so the fold stops above the deny
+        -- rather than letting it delete past an unresolved rule.
+        rules <-
+            prepare
+                inertRuleDeps
+                [ PrecededRule 500 (AllowIfOlderThan (7 * nominalDay))
+                , atDefaultPrecedence (DenyByIdentity "left-pad@1.0.0")
+                ]
+        (rec', store) <- unreadStep rules ["1.0.0"]
+        recResults rec' `shouldReturn` [SweepExamined, SweepKept]
+        held store `shouldReturn` [version "1.0.0"]
+
+    it "keeps every version when no rule is decisive, so the next request still serves them" $ do
+        (rec', store) <- unreadStep [] ["1.0.0", "2.0.0"]
         recResults rec' `shouldReturn` [SweepExamined, SweepKept, SweepExamined, SweepKept]
+        held store `shouldReturn` map version ["1.0.0", "2.0.0"]
 
     it "names the package and the fault on the line an operator acts on" $ do
-        store <- storeWith [] Nothing
-        rec' <- recordingPorts generation
-        void (runStep rec' testPacing (mount store [denyRule]) (served ["1.0.0"]))
+        (rec', _) <- unreadStep [] ["1.0.0"]
         errors <- recErrors rec'
-        errors `shouldSatisfy` any (T.isInfixOf "cannot be vetted and are kept")
+        errors `shouldSatisfy` any (T.isInfixOf "decided on identity alone")
+
+    it "reaches the deletion cap from a read that produced no manifest" $ do
+        -- Identity alone can now condemn, so this branch counts against the cycle's cap like any
+        -- other and latches the halt when it fills it.
+        rules <- prepare inertRuleDeps (map atDefaultPrecedence [DenyByIdentity "left-pad@1.0.0", DenyByIdentity "left-pad@2.0.0"])
+        store <- storeWith (map version ["1.0.0", "2.0.0"]) Nothing
+        rec' <- recordingPorts generation
+        halt <- runStep rec' testPacing{swpDeletionCap = 1} (mount store rules) (served ["1.0.0", "2.0.0"])
+        case halt of
+            Just (HaltDeletionCap cap issued _) -> (cap, issued) `shouldBe` (1, 1)
+            other -> expectationFailure ("expected the cap halt, got: " <> show other)
+        held store `shouldReturn` [version "2.0.0"]
 
 beltSpec :: Spec
 beltSpec = describe "the first-party belt" $
     it "skips identity-denied metadata until the first-party guard is removed" $ do
         store <- storeWith [version "1.0.0"] (Just (sampleManifest packageName [version "1.0.0"]))
         manifestReads <- newIORef (0 :: Int)
-        rules <- prepare inertRuleDeps [atDefaultPrecedence (DenyByIdentity "left-pad@1.0.0")]
+        rules <- identityDeny
         rec' <- recordingPorts generation
         let handle = fakeMaintenance store
             tracked =
@@ -233,6 +286,19 @@ rehearseOne pacing stored = do
         rehearsed = (mount store [denyRule]){smStore = handle{deleteVersions = fromMaybe (deleteVersions handle) (rehearseDelete handle)}}
     void (runStep rec' pacing rehearsed (served stored))
     pure (rec', store)
+
+-- One package's step over a store that serves no metadata at all for it.
+unreadStep :: [PreparedRule] -> [Text] -> IO (RecordedSweep, FakeStore)
+unreadStep rules stored = do
+    store <- storeWith (map version stored) Nothing
+    rec' <- recordingPorts generation
+    halt <- runStep rec' testPacing (mount store rules) (served stored)
+    halt `shouldBe` Nothing
+    pure (rec', store)
+
+-- The operator's own revocation of one exact version, which identity alone decides.
+identityDeny :: IO [PreparedRule]
+identityDeny = prepare inertRuleDeps [atDefaultPrecedence (DenyByIdentity "left-pad@1.0.0")]
 
 -- One package's step over a store seeded with those versions and a manifest carrying those.
 sweepOne :: [PreparedRule] -> [Text] -> [Text] -> IO (RecordedSweep, FakeStore)

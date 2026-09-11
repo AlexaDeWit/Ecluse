@@ -22,6 +22,7 @@ import Ecluse.Core.Rules.Types (
     EvalContext (EvalContext),
     PrecededRule,
     Rule (AllowScope, DenyInstallTimeExecution),
+    completeEvidence,
  )
 import Ecluse.Core.Server.Response (
     ArtifactStatus (..),
@@ -50,7 +51,7 @@ now = UTCTime (fromGregorian 2026 6 20) 0
 
 -- | Decide a built-in policy through the one engine ('prepare' then 'evalRules') at 'now'.
 decideAt :: [PrecededRule] -> PackageDetails -> IO Decision
-decideAt prs pd = prepare inertRuleDeps prs >>= \prepared -> evalRules (EvalContext now Nothing) prepared pd
+decideAt prs pd = prepare inertRuleDeps prs >>= \prepared -> evalRules (EvalContext now Nothing) prepared (completeEvidence pd)
 
 {- | A scoped package version published @ageDays@ before 'now'. The caller supplies the
 install-code signal, so a case can exercise a deny rule.

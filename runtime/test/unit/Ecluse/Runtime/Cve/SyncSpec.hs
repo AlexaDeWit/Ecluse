@@ -36,7 +36,7 @@ import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionP
 import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty), newSweepState)
 import Ecluse.Core.Rules (RuleDeps (..), evalRule, prepare)
-import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), EvalContext, FailureAlignment (FailDeny), Rule (..), RuleVerdict (..), mkEvalContext)
+import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), EvalContext, FailureAlignment (FailDeny), Rule (..), RuleVerdict (..), completeEvidence, mkEvalContext)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
  )
@@ -215,20 +215,20 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                         ("withdrawal-only" `elem` names) `shouldBe` active
                 for_ [cvss, epss] $ \rule -> do
                     for_ ["1.0.0", "4.0.0"] $ \version -> do
-                        verdict <- evalRule deps ctx rule (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm version))
+                        verdict <- evalRule deps ctx rule (completeEvidence (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm version)))
                         case verdict of
                             Deny _ -> active `shouldBe` True
                             NoDecision _ -> active `shouldBe` False
                             other -> expectationFailure ("unexpected withdrawal denial verdict: " <> show other)
                     for_ ["withdrawal-overlap", "corpus-vuln"] $ \name -> do
-                        verdict <- evalRule deps ctx rule (sampleDetails (unscopedNpm name) (mkVersion Npm "1.0.0"))
+                        verdict <- evalRule deps ctx rule (completeEvidence (sampleDetails (unscopedNpm name) (mkVersion Npm "1.0.0")))
                         verdict `shouldSatisfy` \case
                             Deny _ -> True
                             _ -> False
                     sweepWithdrawal deps ctx rule False "withdrawal-only" `shouldReturn` not active
                     sweepWithdrawal deps ctx rule False "withdrawal-overlap" `shouldReturn` False
                     sweepWithdrawal deps ctx rule True "withdrawal-overlap" `shouldReturn` True
-                fixVerdict <- evalRule deps ctx AllowIfRemediatesCve (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm "2.0.0"))
+                fixVerdict <- evalRule deps ctx AllowIfRemediatesCve (completeEvidence (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm "2.0.0")))
                 case fixVerdict of
                     Allow _ -> active `shouldBe` True
                     NoDecision _ -> active `shouldBe` False

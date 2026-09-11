@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The closed rule vocabulary, rule verdicts, and policy decisions.
+{- | The closed rule vocabulary, the evidence a rule reads, rule verdicts, and policy decisions.
 "Ecluse.Core.Rules" binds these values to capabilities and evaluates them.
 Configuration selects built-in rules and cannot supply evaluation closures.
 -}
@@ -25,6 +25,12 @@ module Ecluse.Core.Rules.Types (
     defaultAllowByIdentityPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
 
+    -- * What a rule reads about one version
+    Fact (..),
+    RuleEvidence (..),
+    completeEvidence,
+    identityEvidence,
+
     -- * Evaluation
     EvalContext (..),
     mkEvalContext,
@@ -42,7 +48,13 @@ module Ecluse.Core.Rules.Types (
 import Data.Time (NominalDiffTime, UTCTime)
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Fault (RetryAfter (..))
-import Ecluse.Core.Package (Scope)
+import Ecluse.Core.Package (
+    CodeExecSignal,
+    PackageDetails (pkgInstallCode, pkgName, pkgPublishedAt, pkgVersion),
+    PackageName,
+    Scope,
+ )
+import Ecluse.Core.Version (Version)
 
 {- | The closed built-in rule vocabulary accepted from configuration.
 'Ecluse.Core.Rules.prepare' binds capabilities without accepting arbitrary evaluation closures.
@@ -207,6 +219,53 @@ every other rule (including explicit allow-lists), to serve as a hard revocation
 defaultDenyByIdentityPrecedence :: Int
 defaultDenyByIdentityPrecedence = 400
 
+{- | Whether the evidence set carries one fact. 'Known' wraps the fact's own vocabulary, so a
+determined absence ('Known' 'Nothing') stays distinct from having no reading at all.
+-}
+data Fact a
+    = -- | The fact was read, and is whatever it says.
+      Known a
+    | -- | Nothing read this fact, so a rule that needs it cannot decide.
+      Unavailable
+    deriving stock (Eq, Show)
+
+{- | What the engine reads about one version, one entry per fact the rule vocabulary consults.
+Identity is unconditional, because a store listing establishes it without any metadata read.
+-}
+data RuleEvidence = RuleEvidence
+    { evName :: PackageName
+    -- ^ The package identity, which every rule reads.
+    , evVersion :: Version
+    -- ^ The version under evaluation.
+    , evPublishedAt :: Fact (Maybe UTCTime)
+    -- ^ The publish time, absent from some cheap metadata views even when the manifest was read.
+    , evInstallCode :: Fact CodeExecSignal
+    -- ^ Whether installing the version executes code.
+    }
+    deriving stock (Eq, Show)
+
+-- | Every fact present, the shape the serve, admission, and mirror paths always hold.
+completeEvidence :: PackageDetails -> RuleEvidence
+completeEvidence pd =
+    RuleEvidence
+        { evName = pkgName pd
+        , evVersion = pkgVersion pd
+        , evPublishedAt = Known (pkgPublishedAt pd)
+        , evInstallCode = Known (pkgInstallCode pd)
+        }
+
+{- | Identity alone, which an authenticated store listing establishes with no manifest. A rule
+reading any further fact cannot decide over it.
+-}
+identityEvidence :: PackageName -> Version -> RuleEvidence
+identityEvidence name version =
+    RuleEvidence
+        { evName = name
+        , evVersion = version
+        , evPublishedAt = Unavailable
+        , evInstallCode = Unavailable
+        }
+
 -- | Ambient information a rule may need that is not part of the package itself.
 data EvalContext = EvalContext
     { ctxNow :: UTCTime
@@ -237,8 +296,8 @@ data RuleVerdict
       Deny Reason
     | -- | This rule has no opinion. The reason stays for the audit trail. A no-op.
       NoDecision Reason
-    | {- | Deterministic inability to vet, such as an absent database. Never enters retry or breaker handling.
-      'FailDeny' yields 'Undecidable'. 'FailNoDecision' abstains.
+    | {- | Deterministic inability to vet: an absent database, or a fact nothing read. Never enters
+      retry or breaker handling. 'FailDeny' yields 'Undecidable'. 'FailNoDecision' abstains.
       -}
       CannotVet FailureAlignment Reason
     deriving stock (Eq, Show)

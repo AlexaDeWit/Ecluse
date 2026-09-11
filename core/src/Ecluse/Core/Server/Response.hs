@@ -85,6 +85,7 @@ import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     RetryAfter (..),
     Transience (..),
+    completeEvidence,
  )
 
 {- | The outcome of deciding a request: serve it, or refuse it with a reason. Every client-facing
@@ -169,10 +170,12 @@ serveDecisionOf pd decision = case decision of
     Admitted{} -> Admit
     Blocked name _ -> Reject (rejectAs (ByPolicy (RuleName name)))
     BlockedByDefault{} -> Reject (rejectAs (ByPolicy (RuleName "BlockedByDefault")))
-    Undecidable transience _ -> rejectUnavailable transience (renderDecision pd decision)
+    Undecidable transience _ -> rejectUnavailable transience rendered
   where
+    rendered = renderDecision (completeEvidence pd) decision
+
     rejectAs :: RejectReason -> Rejection
-    rejectAs reason = Rejection reason (renderDecision pd decision)
+    rejectAs reason = Rejection reason rendered
 
 {- | Refuse a request that could not be decided. The 'Transience' it carries is what
 'artifactStatus' renders as a @503@ or a @500@, so a caller states that rather than a status.

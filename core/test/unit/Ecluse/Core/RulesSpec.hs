@@ -49,12 +49,14 @@ ctx = EvalContext now Nothing
 {- | A package version under an optional npm scope, published @ageDays@ days before 'now'.
 The rules under test read only the scope, the publish age, and the install-code signal.
 -}
-pkg :: Maybe Text -> Integer -> PackageDetails
-pkg mScope ageDays =
-    (sampleDetails (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0)
-        { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
-        , pkgLicenses = ["MIT"]
-        }
+pkg :: Maybe Text -> Integer -> RuleEvidence
+pkg mScope ageDays = completeEvidence details
+  where
+    details =
+        (sampleDetails (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0)
+            { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
+            , pkgLicenses = ["MIT"]
+            }
 
 isAllow :: RuleVerdict -> Bool
 isAllow (Allow _) = True
@@ -68,6 +70,14 @@ isDeny :: RuleVerdict -> Bool
 isDeny (Deny _) = True
 isDeny _ = False
 
+isCannotVet :: RuleVerdict -> Bool
+isCannotVet (CannotVet _ _) = True
+isCannotVet _ = False
+
+-- | Identity alone for the fixture package, the evidence an authenticated store listing carries.
+listed :: Maybe Text -> RuleEvidence
+listed mScope = identityEvidence (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0
+
 isBlockedByDefault :: Decision -> Bool
 isBlockedByDefault (BlockedByDefault _) = True
 isBlockedByDefault _ = False
@@ -79,11 +89,11 @@ at = PrecededRule
 {- | Decide a policy through the one engine ('prepare' then 'evalRules') under the
 given capabilities.
 -}
-decideWith :: RuleDeps -> [PrecededRule] -> PackageDetails -> IO Decision
-decideWith deps prs pd = prepare deps prs >>= \prepared -> evalRules ctx prepared pd
+decideWith :: RuleDeps -> [PrecededRule] -> RuleEvidence -> IO Decision
+decideWith deps prs ev = prepare deps prs >>= \prepared -> evalRules ctx prepared ev
 
 -- | 'decideWith' for the pure built-ins, which consult no capability.
-decide :: [PrecededRule] -> PackageDetails -> IO Decision
+decide :: [PrecededRule] -> RuleEvidence -> IO Decision
 decide = decideWith inertRuleDeps
 
 -- | Rule capabilities whose advisory database is the given fake's rows.
@@ -144,25 +154,25 @@ spec = do
     describe "advisory package identity" $ do
         for_ [denyCveAt 0, denyEpssAt 0] $ \rule ->
             it (toString (ruleName rule <> " queries the canonical PyPI name")) $ do
-                let pd = (pkg Nothing 0){pkgName = mkPackageName PyPI Nothing "Flask_Thing"}
+                let pd = (pkg Nothing 0){evName = mkPackageName PyPI Nothing "Flask_Thing"}
                     rows = [("flask-thing", snd row) | row <- affecting (Just 9.8) (Just 0.9)]
                 evalRule (depsWith rows) ctx rule pd >>= (`shouldSatisfy` isDeny)
 
         it "matches a PyPI fix and keeps its display spelling in the decision message" $ do
-            let pd = (pkg Nothing 0){pkgName = mkPackageName PyPI Nothing "Flask_Thing"}
+            let pd = (pkg Nothing 0){evName = mkPackageName PyPI Nothing "Flask_Thing"}
                 rows = [("flask-thing", snd row) | row <- fixRows]
             decision <- decideWith (depsWith rows) [atDefaultPrecedence AllowIfRemediatesCve] pd
             admittedBy decision `shouldBe` Just "AllowIfRemediatesCve"
             renderDecision pd decision `shouldSatisfy` T.isInfixOf "Flask_Thing@1.0.0"
 
         it "does not fast-track a PyPI fix while a canonical-name advisory still affects it" $ do
-            let pd = (pkg Nothing 0){pkgName = mkPackageName PyPI Nothing "Flask_Thing"}
+            let pd = (pkg Nothing 0){evName = mkPackageName PyPI Nothing "Flask_Thing"}
                 rows = [("flask-thing", snd row) | row <- fixRows <> affecting Nothing Nothing]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve pd >>= (`shouldSatisfy` isNoDecision)
 
         for_ [mkPackageName Npm Nothing "Flask_Thing", mkPackageName Npm (Just (mkScope "Acme")) "Flask_Thing"] $ \name ->
             it (toString ("preserves npm identity " <> renderPackageName name)) $ do
-                let pd = (pkg Nothing 0){pkgName = name}
+                let pd = (pkg Nothing 0){evName = name}
                     exactRows = [(renderPackageName name, snd row) | row <- affecting Nothing Nothing]
                     otherRows = [("flask-thing", snd row) | row <- affecting Nothing Nothing]
                     exactFixes = [(renderPackageName name, snd row) | row <- fixRows]
@@ -645,6 +655,39 @@ spec = do
                     p = withInstallScripts (pkg (Just scopeTxt) ageDays)
                 d <- liftIO (decide rules p)
                 blockedBy d === Just "DenyInstallTimeExecution"
+
+    describe "identity-only evidence" $ do
+        it "AllowIfOlderThan cannot decide, because nothing read the publish time" $
+            evalRule inertRuleDeps ctx (AllowIfOlderThan (7 * nominalDay)) (listed Nothing)
+                >>= (`shouldSatisfy` isCannotVet)
+        it "DenyInstallTimeExecution cannot decide, because nothing read the install signal" $
+            evalRule inertRuleDeps ctx DenyInstallTimeExecution (listed Nothing)
+                >>= (`shouldSatisfy` isCannotVet)
+        it "a read publish time that is absent still abstains rather than refusing" $
+            evalRule inertRuleDeps ctx (AllowIfOlderThan (7 * nominalDay)) (completeEvidence (sampleDetails (mkPackageName Npm Nothing "thing") v1_0_0))
+                >>= (`shouldSatisfy` isNoDecision)
+        it "an identity deny decides, because identity is all it reads" $
+            decide [atDefaultPrecedence (DenyByIdentity "thing@1.0.0")] (listed Nothing)
+                >>= \d -> blockedBy d `shouldBe` Just "DenyByIdentity"
+        it "a higher-precedence allow whose own facts are present still wins" $
+            decide
+                [at 500 (AllowScope (mkScope "myorg")), atDefaultPrecedence (DenyByIdentity "@myorg/thing")]
+                (listed (Just "myorg"))
+                >>= \d -> admittedBy d `shouldBe` Just "AllowScope"
+        it "refuses rather than reaching a lower identity deny past an unresolved rule" $
+            decide
+                [at 500 (AllowIfOlderThan (7 * nominalDay)), atDefaultPrecedence (DenyByIdentity "thing@1.0.0")]
+                (listed Nothing)
+                >>= (`shouldSatisfy` isUndecidable)
+        it "denies by default when no rule is decisive" $
+            decide [atDefaultPrecedence (AllowScope (mkScope "myorg"))] (listed Nothing)
+                >>= (`shouldSatisfy` isBlockedByDefault)
+        it "an advisory deny decides, because identity and the database are all it reads" $
+            decideWith (depsWith (affecting (Just 9.8) Nothing)) [atDefaultPrecedence (denyCveAt 8.0)] (listed Nothing)
+                >>= \d -> blockedBy d `shouldBe` Just "DenyIfCve"
+        it "an affecting advisory with no EPSS score still abstains" $
+            decideWith (depsWith (affecting Nothing Nothing)) [atDefaultPrecedence (denyEpssAt 0.5)] (listed Nothing)
+                >>= (`shouldSatisfy` isBlockedByDefault)
 
     describe "renderDecision" $ do
         let pd = pkg (Just "myorg") 0

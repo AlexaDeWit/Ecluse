@@ -49,7 +49,6 @@ import Ecluse.Core.Breaker (
     recordSuccess,
     reportBreakerChange,
  )
-import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Text (displayExceptionT)
@@ -90,8 +89,8 @@ reportFault (FaultReporter report) = report
 {- | Run one effectful rule evaluation under its 'Resilience' policy. The evaluator is the
 rule's per-version IO with the evaluation context applied, and the name tags the audit reason.
 -}
-runResilient :: Resilience -> Text -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO RuleEvaluation
-runResilient res name evalAt pd = do
+runResilient :: Resilience -> Text -> (RuleEvidence -> IO RuleVerdict) -> RuleEvidence -> IO RuleEvaluation
+runResilient res name evalAt ev = do
     admitted <- admitProbe res =<< resClock res
     if not admitted
         then -- Breaker open and still cooling down: fast-fail without running the
@@ -99,7 +98,7 @@ runResilient res name evalAt pd = do
         -- infrastructural outage, so it is transient.
             pure (exhausted res name (transientCause (resConfig res)) "the rule source circuit breaker is open")
         else do
-            result <- attemptWithRetry res evalAt pd
+            result <- attemptWithRetry res evalAt ev
             -- Read the clock again after the retry run. An exhausted result then starts its
             -- cooldown at the failure commit, not at the start of the run.
             settledNow <- resClock res
@@ -121,17 +120,17 @@ settleOutcome res name now = \case
 
 {- Attempt the rule's IO under the per-attempt timeout until the retry budget is spent.
 Only a 'Left' fault retries, so a deterministic verdict never enters the retry loop. -}
-attemptWithRetry :: Resilience -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO (Either (Transience, Text) RuleVerdict)
-attemptWithRetry res evalAt pd =
-    retrying (delayListPolicy (ecBackoff (resConfig res))) shouldRetry (\_ -> attemptOnce res evalAt pd)
+attemptWithRetry :: Resilience -> (RuleEvidence -> IO RuleVerdict) -> RuleEvidence -> IO (Either (Transience, Text) RuleVerdict)
+attemptWithRetry res evalAt ev =
+    retrying (delayListPolicy (ecBackoff (resConfig res))) shouldRetry (\_ -> attemptOnce res evalAt ev)
   where
     shouldRetry _ = pure . isLeft
 
 {- One attempt under the timeout. A 'RuleVerdict', a deterministic 'CannotVet' included, is
 taken at face value, so only a throw or a timeout retries and feeds the breaker. -}
-attemptOnce :: Resilience -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO (Either (Transience, Text) RuleVerdict)
-attemptOnce res evalAt pd = do
-    result <- tryAny (timeout (ecTimeout (resConfig res)) (evalAt pd))
+attemptOnce :: Resilience -> (RuleEvidence -> IO RuleVerdict) -> RuleEvidence -> IO (Either (Transience, Text) RuleVerdict)
+attemptOnce res evalAt ev = do
+    result <- tryAny (timeout (ecTimeout (resConfig res)) (evalAt ev))
     pure $ case result of
         Left e -> Left (transient, "the rule threw: " <> displayExceptionT e) -- the rule's IO threw
         Right Nothing -> Left (transient, "the attempt timed out") -- the attempt timed out

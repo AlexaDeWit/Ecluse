@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIVersion)
 import Ecluse.Core.Rules (evalRules, prepare)
-import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan))
+import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
 import Ecluse.Core.Security (
     LimitError (TooManyVersions),
     Limits (maxVersionCount),
@@ -190,7 +190,7 @@ releaseAgeSpec = describe "release age and artifact admission" $
                         map artFilename (toList (pkgArtifacts details)) `shouldBe` names
                         pkgPublishedAt details `shouldBe` expectedTime
                         ageRules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
-                        decision <- evalRules ctx ageRules details
+                        decision <- evalRules ctx ageRules (completeEvidence details)
                         admittedBy decision `shouldBe` ("AllowIfOlderThan" <$ expectedTime)
                         exceptionRules <- prepare inertRuleDeps (map atDefaultPrecedence [AllowByIdentity "requests@2.34.2", AllowIfOlderThan (7 * nominalDay)])
                         for_ names $ \name -> do

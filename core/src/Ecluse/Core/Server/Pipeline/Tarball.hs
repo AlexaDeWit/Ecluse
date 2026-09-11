@@ -56,7 +56,7 @@ import Ecluse.Core.Registry.Metadata (
     versionTransience,
  )
 import Ecluse.Core.Rules (renderDecision)
-import Ecluse.Core.Rules.Types (EvalContext, mkEvalContext)
+import Ecluse.Core.Rules.Types (EvalContext, completeEvidence, mkEvalContext)
 import Ecluse.Core.Security (
     Origin (TrustedOrigin, UntrustedOrigin),
     artifactAuthorityHonoured,
@@ -350,7 +350,7 @@ publicArtifactGate details admission = case admission of
     -- streams without rehashing, so it has no consumer for the set.
     AdmissionAdmit _ artifact _ -> Admitted artifact
     AdmissionDenied decision -> Refused (serveDecisionOf details decision)
-    AdmissionUndecidable decision -> Refused (rejectUnavailable transience (renderDecision details decision))
+    AdmissionUndecidable decision -> Refused (rejectUnavailable transience (renderDecision (completeEvidence details) decision))
     AdmissionFileAbsent -> Refused versionAbsent
     AdmissionBelowFloor -> Refused integrityBelowFloor
     AdmissionIntegrityMissing -> Refused integrityMissing
