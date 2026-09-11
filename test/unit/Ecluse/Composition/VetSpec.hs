@@ -34,33 +34,37 @@ spec = do
     inputSpec
 
 {- The four applicative laws, which the accumulation every boot report depends on rests on. Each
-is written out in full, because hlint would otherwise "simplify" the expression under test. -}
-{- HLINT ignore lawSpec "Use <$>" -}
+is written out in full, through 'pureVet', so the expression under test is the law itself. -}
 lawSpec :: Spec
 lawSpec = describe "the applicative laws" $ do
     it "identity: pure id <*> v is v" $
         hedgehog $ do
             v <- forAll genProbe
-            observe (pure id <*> probeVet v) === observe (probeVet v)
+            observe (pureVet id <*> probeVet v) === observe (probeVet v)
 
     it "composition: pure (.) <*> u <*> v <*> w is u <*> (v <*> w)" $
         hedgehog $ do
             u <- forAll genProbe
             v <- forAll genProbe
             w <- forAll genProbe
-            observe (pure (.) <*> probeVetFn u <*> probeVetFn v <*> probeVet w)
+            observe (pureVet (.) <*> probeVetFn u <*> probeVetFn v <*> probeVet w)
                 === observe (probeVetFn u <*> (probeVetFn v <*> probeVet w))
 
     it "homomorphism: pure f <*> pure x is pure (f x)" $
         hedgehog $ do
             x <- forAll genValue
-            observe (pure (+ 1) <*> pure x) === observe (pure (x + 1))
+            observe (pureVet (+ 1) <*> pureVet x) === observe (pureVet (x + 1))
 
     it "interchange: u <*> pure y is pure ($ y) <*> u" $
         hedgehog $ do
             u <- forAll genProbe
             y <- forAll genValue
-            observe (probeVetFn u <*> pure y) === observe (pure ($ y) <*> probeVetFn u)
+            observe (probeVetFn u <*> pureVet y) === observe (pureVet ($ y) <*> probeVetFn u)
+
+-- 'pure' pinned to 'Vet'. A law spelled with 'pure' itself is what a lint rule rewrites into
+-- the point-free form, which is not the expression these tests must run.
+pureVet :: a -> Vet a
+pureVet = pure
 
 accumulationSpec :: Spec
 accumulationSpec = describe "accumulation" $ do
