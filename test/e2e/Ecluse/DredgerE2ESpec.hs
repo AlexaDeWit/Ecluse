@@ -205,20 +205,45 @@ second swap line is the cue that the sweep and the next install both decide unde
 loadSecondGeneration :: GlobalDataPlane -> E2E -> IO ()
 loadSecondGeneration plane e2e = do
     compileGeneration plane CorpusV2
-    swapped <- awaitProxyLog e2e ((> 1) . length . T.breakOnAll "advisory database swapped in") 240
-    swapped `shouldBe` True
+    swapped <- awaitProxyLog e2e ((> 1) . length . T.breakOnAll swapMessage) 240
+    unless swapped $ do
+        logs <- proxyContainerLogs e2e
+        expectationFailure (toString ("the proxy never swapped in the second generation. Its last lines:\n" <> T.takeEnd 4000 logs))
+
+-- The sync's own line for a generation taking effect, so a second one means G2 replaced G1.
+swapMessage :: Text
+swapMessage = "advisory database swapped in"
 
 {- The cycle condemns the affected version by name and leaves the fix and every version no advisory
-covers. The generation each line names is the Dredger's own report, so it stays unpinned here. -}
+covers. The whole message list is the subject, so a mismatch prints the generation each line named. -}
 assertRevoked :: E2E -> Map Text [Text] -> RoleRun -> Expectation
 assertRevoked e2e seeded run = do
     (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
     let messages = sweepMessages run
-    map (fst . T.breakOn "; advisory generation ") (filter (T.isPrefixOf "deleting ") messages)
-        `shouldBe` [revocationAuditLine]
-    filter (T.isPrefixOf "mirror sweep cycle ") messages
-        `shouldBe` ["mirror sweep cycle complete: examined 2, deleted 1, kept 1, guard-skipped 0"]
+    unless (reportsRevocation messages) (expectationFailure (toString (revocationReport messages run)))
     verdaccioSnapshot e2e `shouldReturn` Map.adjust (filter (/= vulnerableVersion)) revokedName seeded
+
+-- What the cycle reported, with the generation each line named, then the run's whole output.
+revocationReport :: [Text] -> RoleRun -> Text
+revocationReport messages run =
+    "the cycle reported these sweep lines:\n"
+        <> T.unlines messages
+        <> "\nexpected the deletion "
+        <> revocationAuditLine
+        <> "\nand the tally "
+        <> revocationTally
+        <> "\nwhole cycle output:\n"
+        <> roleOutput run
+
+{- One deletion for the affected version, and one closing tally. The generation a deletion names is
+the Dredger's own report: it prints on failure and is never pinned here. -}
+reportsRevocation :: [Text] -> Bool
+reportsRevocation messages =
+    map (fst . T.breakOn generationMarker) (filter (T.isPrefixOf "deleting ") messages) == [revocationAuditLine]
+        && filter (T.isPrefixOf "mirror sweep cycle ") messages == [revocationTally]
+
+generationMarker :: Text
+generationMarker = "; advisory generation "
 
 revocationAuditLine :: Text
 revocationAuditLine =
@@ -227,6 +252,9 @@ revocationAuditLine =
         <> "@"
         <> vulnerableVersion
         <> ": blocked by DenyIfCve (affected by GHSA-corpus-1002 (CVSS >= 7.0))"
+
+revocationTally :: Text
+revocationTally = "mirror sweep cycle complete: examined 2, deleted 1, kept 1, guard-skipped 0"
 
 {- The next request for the revoked version is refused by policy on the public leg, and a refusal
 enqueues no mirror, so the store entry stays gone. -}

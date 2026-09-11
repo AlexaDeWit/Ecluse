@@ -69,8 +69,8 @@ createAdvisoryBucket gdp = do
             -- 409 is BucketAlreadyOwnedByYou, which a retried create reports.
             pure (statusCode (responseStatus resp) `elem` [200, 409])
 
-{- The emulator routes a request to a service by the credential scope and verifies no signature,
-so this header decides that the path-addressed PUT reaches S3 rather than another service. -}
+{- This suite depends on neither amazonka nor ecluse-runtime, so the bucket is created by hand
+rather than through S3.CreateBucket. The emulator routes on the scope and verifies no signature. -}
 s3CredentialScope :: IO Text
 s3CredentialScope = do
     day <- formatTime defaultTimeLocale "%Y%m%d" <$> getCurrentTime
