@@ -7,7 +7,10 @@ module Ecluse.Composition.EndpointsSpec (spec) where
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
-import Ecluse.Composition.BootError (BootError (..))
+import Ecluse.Composition.BootError (
+    Advisory (MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream),
+    BootError (..),
+ )
 import Ecluse.Composition.Endpoints (
     PublicationTarget,
     VettedEndpoints (vePublicationTargets),
@@ -19,7 +22,8 @@ import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig (cfgMounts), Config (configApp), MountConfig)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Test.Package (unsafeRegistryUrl)
 
 spec :: Spec
 spec = do
@@ -209,19 +213,21 @@ advisorySpec = describe "the advisories a writing role logs" $ do
 
     it "warns on a mirror target equal to its own mount's private upstream" $
         advisoriesFor (mirroringTo "https://private.example.test" staticEnvVars)
-            `shouldReturn` ["mount \"npm\": mirrorTarget and privateUpstream resolve to the same registry (https://private.example.test); the Dredger refuses this configuration, so pruning this mirror stays manual"]
+            `shouldReturn` [MirrorTargetOnPrivateUpstream Npm Npm (unsafeRegistryUrl "https://private.example.test")]
 
     it "warns on a mirror target equal to its own mount's publication target" $
         advisoriesFor (publishingTo "https://mirror.example.test")
-            `shouldReturn` ["mount \"npm\": mirrorTarget and publicationTarget resolve to the same registry (https://mirror.example.test); the Dredger refuses this configuration, so pruning this mirror stays manual"]
+            `shouldReturn` [MirrorTargetOnOwnPublicationTarget Npm (unsafeRegistryUrl "https://mirror.example.test")]
 
     it "warns once on a mirror target equal to another mount's private upstream" $
         advisoriesFor (withPyPI (mirroringTo "https://pypi-private.example.test" staticEnvVars))
-            `shouldReturn` ["mount \"npm\": mirrorTarget and mount \"pypi\" privateUpstream resolve to the same registry (https://pypi-private.example.test); the Dredger refuses this configuration, so pruning this mirror stays manual"]
+            `shouldReturn` [MirrorTargetOnPrivateUpstream Npm PyPI (unsafeRegistryUrl "https://pypi-private.example.test")]
 
     it "ignores a trailing-slash difference when comparing endpoints" $
+        -- The comparison folds the slash away, and the advisory still carries the value as
+        -- configured, so an operator finds the key by search.
         advisoriesFor (mirroringTo "https://private.example.test/" staticEnvVars)
-            `shouldReturn` ["mount \"npm\": mirrorTarget and privateUpstream resolve to the same registry (https://private.example.test/); the Dredger refuses this configuration, so pruning this mirror stays manual"]
+            `shouldReturn` [MirrorTargetOnPrivateUpstream Npm Npm (unsafeRegistryUrl "https://private.example.test/")]
 
     it "logs no advisory for a collapse it refuses outright" $
         advisoriesFor (withPyPI (publishingTo "https://pypi-mirror.example.test")) `shouldReturn` []
@@ -243,8 +249,8 @@ aggregationSpec = describe "aggregation" $ do
     it "logs the advising rules of that same configuration in that same order" $
         -- The mirror collisions still advise a writing role when another rule refuses.
         advisoriesFor everyEndpointCollapseEnv
-            `shouldReturn` [ "mount \"npm\": mirrorTarget and mount \"pypi\" privateUpstream resolve to the same registry (" <> sharedRegistryText <> "); the Dredger refuses this configuration, so pruning this mirror stays manual"
-                           , "mount \"npm\": mirrorTarget and publicationTarget resolve to the same registry (" <> sharedRegistryText <> "); the Dredger refuses this configuration, so pruning this mirror stays manual"
+            `shouldReturn` [ MirrorTargetOnPrivateUpstream Npm PyPI sharedRegistryUrl
+                           , MirrorTargetOnOwnPublicationTarget Npm sharedRegistryUrl
                            ]
 
     it "reports every collision in one boot failure, in rule order" $ do
@@ -268,11 +274,11 @@ refusalsFor :: RegistryRole -> [(String, String)] -> IO [BootError]
 refusalsFor role env = fromLeft [] . snd . runVet role . vetEndpoints <$> mountsFor env
 
 -- Every advisory a writing role (@ecluse proxy@ and @ecluse mirror@ alike) logs.
-advisoriesFor :: [(String, String)] -> IO [Text]
+advisoriesFor :: [(String, String)] -> IO [Advisory]
 advisoriesFor = advisoriesForRole MirrorWriter
 
 -- Every advisory one role logs, whatever that role's pass decided.
-advisoriesForRole :: RegistryRole -> [(String, String)] -> IO [Text]
+advisoriesForRole :: RegistryRole -> [(String, String)] -> IO [Advisory]
 advisoriesForRole role env = fst . runVet role . vetEndpoints <$> mountsFor env
 
 -- The publish endpoints a writing role's pass clears, or every refusal at once.
@@ -327,6 +333,10 @@ sharedRegistry = "https://shared.example.test"
 
 sharedRegistryText :: Text
 sharedRegistryText = toText sharedRegistry
+
+-- | 'sharedRegistry' as the egress value an advisory carries.
+sharedRegistryUrl :: RegistryUrl
+sharedRegistryUrl = unsafeRegistryUrl sharedRegistryText
 
 -- The PyPI neighbour publishing to the given target. The endpoint rules read no namespaces.
 pypiPublishingTo :: String -> [(String, String)] -> [(String, String)]

@@ -18,6 +18,7 @@ module Ecluse.Composition.Endpoints (
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition.BootError (
+    Advisory (MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream),
     BootError (
         MirrorTargetOnMountEndpoint,
         MirrorTargetOnPublicUpstream,
@@ -42,7 +43,7 @@ import Ecluse.Config (
     sameRegistry,
     storeTagName,
  )
-import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Security (hostAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 
@@ -106,12 +107,12 @@ mirrorOffPublicUpstreams =
 
 mirrorOffPrivateUpstreams :: Map Ecosystem MountConfig -> Vet ()
 mirrorOffPrivateUpstreams =
-    vetCollisions mirrorCollapse $
+    vetCollisions (mirrorCollapse mirrorOnPrivateUpstream) $
         EndpointComparison KeyMirrorTarget [KeyPrivateUpstream] AnyMount ByRegistry
 
 mirrorOffOwnPublicationTarget :: Map Ecosystem MountConfig -> Vet ()
 mirrorOffOwnPublicationTarget =
-    vetCollisions mirrorCollapse $
+    vetCollisions (mirrorCollapse mirrorOnOwnPublicationTarget) $
         EndpointComparison KeyMirrorTarget [KeyPublicationTarget] SameMount ByRegistry
 
 privateOffPublicUpstream :: Map Ecosystem MountConfig -> Vet ()
@@ -142,18 +143,20 @@ storeTagConflict pair =
         (registryUrlText (tgtUrl (epTarget pair)))
 
 -- A mirror target on another declared endpoint: the deleting role refuses, the writing roles warn.
-mirrorCollapse :: RegistryRole -> Severity EndpointPair
-mirrorCollapse = \case
-    MirrorWriter -> advise pruningStaysManual
+mirrorCollapse :: (EndpointPair -> Advisory) -> RegistryRole -> Severity EndpointPair
+mirrorCollapse toAdvisory = \case
+    MirrorWriter -> Advise toAdvisory
     MirrorPruner -> Refuse mirrorOnMountEndpoint
-  where
-    pruningStaysManual =
-        "the Dredger refuses this configuration, so pruning this mirror stays manual"
 
-{- The advisory builder every rule here goes through, so each line carries the mount, the keys
-and the registry 'advisoryLine' names ahead of its consequence clause. -}
-advise :: Text -> Severity EndpointPair
-advise = Advise . advisoryLine
+{- Each advisory carries the mirror target's own URL, so the warning quotes the spelling the
+mount configured rather than the endpoint it collided with. -}
+mirrorOnPrivateUpstream :: EndpointPair -> Advisory
+mirrorOnPrivateUpstream pair =
+    MirrorTargetOnPrivateUpstream (epMount pair) (epOtherMount pair) (tgtUrl (epTarget pair))
+
+mirrorOnOwnPublicationTarget :: EndpointPair -> Advisory
+mirrorOnOwnPublicationTarget pair =
+    MirrorTargetOnOwnPublicationTarget (epMount pair) (tgtUrl (epTarget pair))
 
 publicationOnPublicUpstream :: EndpointPair -> BootError
 publicationOnPublicUpstream pair =
@@ -296,25 +299,3 @@ endpointKeyName = \case
 -- The key path down to the tag, the depth a tag refusal must name to be actionable.
 taggedKeyName :: EndpointKey -> Target -> Text
 taggedKeyName key target = endpointKeyName key <> "." <> storeTagName (tgtTag target)
-
--- One advisory line: the collapsed pair, the registry they share, and the consequence.
-advisoryLine :: Text -> EndpointPair -> Text
-advisoryLine advice pair =
-    "mount \""
-        <> ecosystemName (epMount pair)
-        <> "\": "
-        <> endpointKeyName (epKey pair)
-        <> " and "
-        <> otherRef
-        <> " resolve to the same registry ("
-        <> pairRegistry pair
-        <> "); "
-        <> advice
-  where
-    otherRef
-        | epOtherMount pair == epMount pair = endpointKeyName (epOtherKey pair)
-        | otherwise =
-            "mount \""
-                <> ecosystemName (epOtherMount pair)
-                <> "\" "
-                <> endpointKeyName (epOtherKey pair)

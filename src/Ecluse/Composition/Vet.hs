@@ -25,13 +25,13 @@ module Ecluse.Composition.Vet (
 
 import Validation (Validation (Failure, Success), validationToEither)
 
-import Ecluse.Composition.BootError (BootError)
+import Ecluse.Composition.BootError (Advisory, BootError)
 import Ecluse.Composition.Types (RegistryRole)
 
 {- | A boot check awaiting its role: the advisories it logs, beside either every refusal it earned
 or the value it vetted.
 -}
-newtype Vet a = Vet (RegistryRole -> ([Text], Validation [BootError] a))
+newtype Vet a = Vet (RegistryRole -> ([Advisory], Validation [BootError] a))
 
 instance Functor Vet where
     fmap f (Vet run) = Vet $ \role ->
@@ -48,7 +48,7 @@ instance Applicative Vet where
          in (fAdvisories <> aAdvisories, f <*> a)
 
 -- | Run a pass for one role: every advisory it logs, and either every refusal or the vetted value.
-runVet :: RegistryRole -> Vet a -> ([Text], Either [BootError] a)
+runVet :: RegistryRole -> Vet a -> ([Advisory], Either [BootError] a)
 runVet role (Vet run) = second validationToEither (run role)
 
 {- | The role the pass runs for. A witness one role alone may hold is built from this, so no other
@@ -69,8 +69,8 @@ decided outcome = Vet . const $ case outcome of
 data Severity finding
     = -- | Refuse to boot, reporting this refusal.
       Refuse (finding -> BootError)
-    | -- | Boot, and log this advisory line.
-      Advise (finding -> Text)
+    | -- | Boot, and log this advisory.
+      Advise (finding -> Advisory)
     | {- | Boot, and log nothing. A finding that changes this role's own behaviour advises, and
       one only another role acts on ignores, which @ecluse check-config@ names that role for.
       -}
