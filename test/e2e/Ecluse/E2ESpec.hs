@@ -118,8 +118,9 @@ scenarios = do
                     verdaccioLatest e2e name `shouldReturn` Just "2.0.0"
                     verdaccioVersions e2e name `shouldReturn` ["1.0.0", "2.0.0"]
                 withNpmProject e2e $ \proj -> do
-                    -- The next unqualified install resolves through the mirror's own tag.
-                    void $ withUpstreamPaused e2e (npmInstallIn proj name) >>= shouldSucceedThroughProxy e2e
+                    -- The mirror's own tag is asserted on the store above, because one stub fronts
+                    -- all three registry names and cannot be paused for the public leg alone.
+                    void $ npmInstallIn proj name >>= shouldSucceedThroughProxy e2e
                     installedVersion proj name `shouldReturn` Just "2.0.0"
         describe "first-party publish -- opt-in posture" $
             it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
