@@ -25,7 +25,6 @@ import Data.Time (UTCTime)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     InvalidEntry,
-    PackageDetails,
     PackageInfo,
     PackageName,
  )
