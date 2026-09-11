@@ -4,7 +4,8 @@
 {-# LANGUAGE UndecidableInstances #-}
 
 {- | Shared OSV fixtures derived from @test\/fixtures\/osv\/@ and hostile artifact builders.
-'CorpusV2' adds an advisory for a package absent from 'CorpusV1', making swaps observable.
+'CorpusV2' adds advisories for packages absent from 'CorpusV1', making swaps observable: one
+unbounded range, and one that names an exact fixed version.
 -}
 module Ecluse.Test.Osv (
     -- * The corpus
@@ -63,7 +64,7 @@ corpusV1Files =
     ]
 
 corpusV2ExtraFiles :: [FilePath]
-corpusV2ExtraFiles = ["v2/GHSA-corpus-1001.json"]
+corpusV2ExtraFiles = ["v2/GHSA-corpus-1001.json", "v2/GHSA-corpus-1002.json"]
 
 osvCorpusFiles :: CorpusVersion -> IO [(FilePath, LByteString)]
 osvCorpusFiles v = traverse readEntry (files v)
