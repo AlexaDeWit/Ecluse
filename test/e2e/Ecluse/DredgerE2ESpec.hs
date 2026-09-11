@@ -152,10 +152,10 @@ revocationScenario =
     describe "advisory compilation, mirror revocation, and the next install" $
         aroundAllWith withAdvisoryStore $
             it "revokes the version a new advisory generation condemns and keeps its fix installable" $ \(plane, e2e) -> do
-                before <- seedRevocationStore e2e
+                seeded <- seedRevocationStore e2e
                 loadSecondGeneration plane e2e
                 run <- runDredgerOnce plane ["--once"] (advisoryStoreEnv <> [("ECLUSE_RULES", advisoryRules)])
-                assertRevoked e2e before run
+                assertRevoked e2e seeded run
                 assertVulnerableRefused e2e
                 assertFixInstallable e2e
 
@@ -211,14 +211,14 @@ loadSecondGeneration plane e2e = do
 {- The cycle condemns the affected version by name and leaves the fix and every version no advisory
 covers. The generation each line names is the Dredger's own report, so it stays unpinned here. -}
 assertRevoked :: E2E -> Map Text [Text] -> RoleRun -> Expectation
-assertRevoked e2e before run = do
+assertRevoked e2e seeded run = do
     (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
     let messages = sweepMessages run
     map (fst . T.breakOn "; advisory generation ") (filter (T.isPrefixOf "deleting ") messages)
         `shouldBe` [revocationAuditLine]
     filter (T.isPrefixOf "mirror sweep cycle ") messages
         `shouldBe` ["mirror sweep cycle complete: examined 2, deleted 1, kept 1, guard-skipped 0"]
-    verdaccioSnapshot e2e `shouldReturn` Map.adjust (filter (/= vulnerableVersion)) revokedName before
+    verdaccioSnapshot e2e `shouldReturn` Map.adjust (filter (/= vulnerableVersion)) revokedName seeded
 
 revocationAuditLine :: Text
 revocationAuditLine =
