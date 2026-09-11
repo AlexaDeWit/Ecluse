@@ -392,7 +392,9 @@
           # oracleNodeModules and put on NODE_PATH above), Python packaging (PyPI),
           # and Ruby Gem::Version (built into ruby).
           pkgs.nodejs
-          (pkgs.python3.withPackages (ps: [ ps.packaging ]))
+          # pip rides along because the end-to-end tier drives it as a real client
+          # against a pypi mount, the way it drives npm against an npm mount.
+          (pkgs.python3.withPackages (ps: [ ps.packaging ps.pip ]))
           pkgs.ruby
           pkgs.go-task
         ];

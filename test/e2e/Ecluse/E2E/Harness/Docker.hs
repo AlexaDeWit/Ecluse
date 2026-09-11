@@ -63,7 +63,8 @@ import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess, readProcessStdout)
 import UnliftIO (bracket, bracket_, handleAny)
 
-import Ecluse.E2E.Fixtures (buildFixtures, fixturePackages)
+import Ecluse.E2E.Fixtures.Npm (buildFixtures, fixturePackages)
+import Ecluse.E2E.Fixtures.PyPI (buildPyPIFixtures, pypiUpstreamUrl)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Container.Image (
     ImageRef (LocallyBuilt, PinnedExternal),
@@ -113,6 +114,7 @@ withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
             htmlDir = workDir </> "html"
         createDirectoryIfMissing True htmlDir
         buildFixtures htmlDir fixturePackages
+        buildPyPIFixtures (workDir </> "pypi")
         writeFileText (workDir </> "verdaccio.yaml") verdaccioConfig
         writeFileText (workDir </> "nginx.conf") nginxStubConfig
         generateCerts (workDir </> "certs")
@@ -146,14 +148,15 @@ withGlobalDataPlane action = do
                             , drPorts = ["127.0.0.1:0:4873"]
                             , drMounts = [(workDir </> "verdaccio.yaml", "/verdaccio/conf/config.yaml:ro")]
                             }
-                    -- One nginx terminates TLS for every registry stub, so it answers to three
-                    -- in-network aliases (`upstream`, `mirror`, and `private-upstream`). The raw
-                    -- docker CLI supports that multi-alias and testcontainers 0.5.3.0 does not.
+                    -- One nginx terminates TLS for every registry stub, so it answers to the
+                    -- four in-network aliases below. The raw docker CLI supports that
+                    -- multi-alias and testcontainers 0.5.3.0 does not.
                     stubRun =
                         (dockerRun stub net stubImage)
-                            { drAliases = ["upstream", "mirror", "private-upstream"]
+                            { drAliases = ["upstream", "mirror", "private-upstream", "pypi-upstream"]
                             , drMounts =
                                 [ (workDir </> "html", "/usr/share/nginx/html:ro")
+                                , (workDir </> "pypi", "/usr/share/nginx/pypi:ro")
                                 , (workDir </> "nginx.conf", "/etc/nginx/conf.d/default.conf:ro")
                                 , (workDir </> "certs", "/certs:ro")
                                 ]
@@ -193,6 +196,7 @@ withE2EWith cfg action gdp = do
             action
                 E2E
                     { e2eRegistry = base <> "/npm/"
+                    , e2ePypiIndex = base <> "/pypi/simple/"
                     , e2eBaseUrl = base
                     , e2eVerdaccio = "http://127.0.0.1:4874" -- Assuming local verdaccio is on 4874 in local dev
                     , e2eStubContainer = gdpStub gdp
@@ -234,6 +238,7 @@ withE2EWith cfg action gdp = do
                         e2e =
                             E2E
                                 { e2eRegistry = base <> "/npm/"
+                                , e2ePypiIndex = base <> "/pypi/simple/"
                                 , e2eBaseUrl = base
                                 , e2eVerdaccio = "http://127.0.0.1:" <> show verdPort
                                 , e2eStubContainer = stub
@@ -262,6 +267,9 @@ proxyEnv hostPort queueUrl =
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://mirror/")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "e2e-publish-token")
+    , -- A serve-only pypi mount beside the npm one, so a real pip client reads the PEP 691
+      -- index and the distribution files under it through the same proxy.
+      ("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", pypiUpstreamUrl)
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
     , ("ECLUSE_QUEUE__URL", queueUrl)
     , -- The production endpoint override (AWS-SDK-standard), aimed at the ministack
@@ -497,8 +505,8 @@ dockerOk args = do
         fail ("docker command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
 
 {- | Generate a test CA and a server certificate into @dir@ (SANs: @upstream@, @mirror@,
-@private-upstream@, @localhost@, @127.0.0.1@), plus a @bundle.pem@ of system and test CAs for
-@SSL_CERT_FILE@.
+@private-upstream@, @pypi-upstream@, @localhost@, @127.0.0.1@), plus a @bundle.pem@ of system
+and test CAs for @SSL_CERT_FILE@.
 -}
 generateCerts :: FilePath -> IO ()
 generateCerts dir = do
@@ -509,7 +517,7 @@ generateCerts dir = do
         srvKey = dir </> "server.key"
         srvCsr = dir </> "server.csr"
         ext = dir </> "san.ext"
-    writeFileText ext "subjectAltName=DNS:upstream,DNS:mirror,DNS:private-upstream,DNS:localhost,IP:127.0.0.1\n"
+    writeFileText ext "subjectAltName=DNS:upstream,DNS:mirror,DNS:private-upstream,DNS:pypi-upstream,DNS:localhost,IP:127.0.0.1\n"
     opensslOk ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", caKey, "-out", caCrt, "-days", "2", "-subj", "/CN=Ecluse E2E Test CA"]
     opensslOk ["genrsa", "-out", srvKey, "2048"]
     opensslOk ["req", "-new", "-key", srvKey, "-out", srvCsr, "-subj", "/CN=ecluse-e2e"]
@@ -626,6 +634,20 @@ nginxStubConfig =
         , "    location ~ ^/(?<pkg>[^/]+)$ {"
         , "        default_type application/json;"
         , "        alias /usr/share/nginx/html/$pkg/packument.json;"
+        , "    }"
+        , "    location / {"
+        , "        try_files $uri =404;"
+        , "    }"
+        , "}"
+        , "server {"
+        , "    listen 443 ssl;"
+        , "    server_name pypi-upstream;"
+        , "    ssl_certificate /certs/server.crt;"
+        , "    ssl_certificate_key /certs/server.key;"
+        , "    root /usr/share/nginx/pypi;"
+        , "    location ~ ^/simple/(?<project>[^/]+)/$ {"
+        , "        default_type application/vnd.pypi.simple.v1+json;"
+        , "        alias /usr/share/nginx/pypi/simple/$project/index.json;"
         , "    }"
         , "    location / {"
         , "        try_files $uri =404;"

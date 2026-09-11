@@ -96,14 +96,16 @@ config parsing, the denial span-attribute mapping, the JSONL scribe, and the met
 ## End-to-end tests: `ecluse-e2e` (gating)
 
 The only tier that assembles the whole system through the real composition root and drives it with
-the real `npm` CLI. It runs the published OCI image (`nix build .#dockerImage`), an nginx
-public-upstream stub, and a Verdaccio private upstream and mirror target as containers on a Docker
-network. It then asserts client- and mirror-observable outcomes:
+the real `npm` and `pip` clients. It runs the published OCI image (`nix build .#dockerImage`), an
+nginx public-upstream stub, and a Verdaccio private upstream and mirror target as containers on a
+Docker network. It then asserts client- and mirror-observable outcomes:
 
 - an allow-listed package installs,
 - Écluse blocks a rules-denied package and never mirrors it,
 - an installed package round-trips server → worker to the private mirror,
-- a tampered artifact fails the integrity gate and never publishes.
+- a tampered artifact fails the integrity gate and never publishes,
+- `pip` installs a wheel from a `pypi` mount in hash-checking mode, pinned to the sha256 the
+  served Simple index advertised, so the installed bytes are the advertised ones.
 
 The Dredger cases seed Verdaccio through the proxy and mirror worker, then run the same
 image with an identity deny and no advisory database. They cover `--once`, `--dry-run`,
@@ -121,7 +123,8 @@ gate: an image build, multiple containers, and the npm CLI. But it is hermetic. 
 Verdaccio upstreams are local, so unlike smoke it has no external dependency to flake on, which
 makes gating safe. Its weight keeps it out of the local `task gate` and `task check`. Run
 `task test-e2e` on demand to build the image, load it, and run the suite. It needs a Docker daemon
-and the npm CLI, and skips every case as `pending` when `ECLTEST_E2E_IMAGE` is unset.
+and the `npm` and `pip` clients, both from the dev shell, and skips every case as `pending` when
+`ECLTEST_E2E_IMAGE` is unset.
 
 The egress guard refuses internal addresses on the public path. So the containers run on
 the RFC 5737 documentation subnet `203.0.113.0/24`, which the guard treats as external. The real

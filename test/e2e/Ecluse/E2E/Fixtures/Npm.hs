@@ -6,7 +6,7 @@
 Versions predate quarantine, and artifact integrity matches the served bytes
 except in the tampering fixture.
 -}
-module Ecluse.E2E.Fixtures (
+module Ecluse.E2E.Fixtures.Npm (
     PkgSpec (..),
     defaultPkgSpec,
     allowPkg,
