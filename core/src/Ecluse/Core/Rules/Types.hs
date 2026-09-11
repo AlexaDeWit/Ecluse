@@ -220,13 +220,13 @@ defaultDenyByIdentityPrecedence :: Int
 defaultDenyByIdentityPrecedence = 400
 
 {- | Whether the evidence set carries one fact. 'Known' wraps the fact's own vocabulary, so a
-determined absence ('Known' 'Nothing') stays distinct from having no reading at all.
+determined absence ('Known' 'Nothing') stays distinct from 'Unread', which is no reading at all.
 -}
 data Fact a
     = -- | The fact was read, and is whatever it says.
       Known a
     | -- | Nothing read this fact, so a rule that needs it cannot decide.
-      Unavailable
+      Unread
     deriving stock (Eq, Show)
 
 {- | What the engine reads about one version, one entry per fact the rule vocabulary consults.
@@ -262,8 +262,8 @@ identityEvidence name version =
     RuleEvidence
         { evName = name
         , evVersion = version
-        , evPublishedAt = Unavailable
-        , evInstallCode = Unavailable
+        , evPublishedAt = Unread
+        , evInstallCode = Unread
         }
 
 -- | Ambient information a rule may need that is not part of the package itself.

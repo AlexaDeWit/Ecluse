@@ -15,7 +15,7 @@ import Ecluse.Core.Package (
     PackageDetails (pkgInstallCode, pkgPublishedAt),
  )
 import Ecluse.Core.Rules.Types (
-    Fact (Known, Unavailable),
+    Fact (Known, Unread),
     RuleEvidence (evInstallCode, evName, evPublishedAt, evVersion),
     completeEvidence,
     identityEvidence,
@@ -58,8 +58,8 @@ identitySpec = describe "identityEvidence" $ do
 
     it "carries no reading of any fact a manifest would supply" $ do
         let evidence = identityEvidence (unscopedNpm "left-pad") v1_0_0
-        evPublishedAt evidence `shouldBe` Unavailable
-        evInstallCode evidence `shouldBe` Unavailable
+        evPublishedAt evidence `shouldBe` Unread
+        evInstallCode evidence `shouldBe` Unread
 
 {- A rule reads these two cases differently: it abstains on the first and refuses on the second,
 so nothing may collapse them. -}

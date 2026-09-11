@@ -32,12 +32,8 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Core.Server.Path (Filename, unFilename)
 
-{- | The admission verdict for one requested artifact of one public version, shared by the
-serve gate and the worker's ingest re-evaluation.
-
-A deliberate refusal and an inability to decide ('AdmissionUndecidable') stay separate:
-serve renders a denial @403@ and an inability @503@\/@500@, and the worker acks a denied job
-but leaves an inability a retry could clear to redeliver ('admissionTransience').
+{- | The admission verdict for one requested artifact, shared by serve and ingest. An inability to
+decide is not a refusal: it renders @503@\/@500@ and the worker redelivers ('admissionTransience').
 -}
 data ArtifactAdmission
     = {- | The rules admitted the version and its digests clear the integrity floor. Carries the
@@ -115,10 +111,8 @@ admissionTransience = \case
     AdmissionIntegrityMissing -> Nothing
     AdmissionBelowFloor -> Nothing
 
-{- Select the artifact a request's filename names from a version's distribution files.
-'Nothing' when no artifact carries that filename: a forwarded miss, never a fabricated
-location.
--}
+{- Select the artifact a request's filename names. 'Nothing' when none carries that filename:
+a forwarded miss, never a fabricated location. -}
 artifactFor :: Filename -> PackageDetails -> Maybe Artifact
 artifactFor file details =
     find ((== unFilename file) . artFilename) (pkgArtifacts details)

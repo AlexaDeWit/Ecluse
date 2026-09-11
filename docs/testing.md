@@ -272,7 +272,7 @@ Tests are documentation too, so keep them as readable as the code.
   ```
 
 - **Name fixtures and helpers, and give them signatures** (`now :: UTCTime`,
-  `pkg :: Maybe Text -> Integer -> PackageDetails`). A small builder that fills defaults and
+  `pkg :: Maybe Text -> Integer -> RuleEvidence`). A small builder that fills defaults and
   exposes only the axis under test keeps each case to one line.
 - **Add small predicate/extractor helpers** (`isAllow`, `approvedBy`) instead of inlining
   pattern matches in assertions.

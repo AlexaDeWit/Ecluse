@@ -71,8 +71,8 @@ data RuleDeps = RuleDeps
     -- ^ Reports exhausted faults to the operator log without exposing them to clients.
     }
 
-{- | Lookup faults escape to the resilience policy attached by 'prepare'. A rule reading a fact the
-evidence does not carry refuses rather than abstaining, through 'needsFact'.
+{- | Lookup faults escape to the resilience policy attached by 'prepare'. A rule that reads a fact
+nothing supplied refuses rather than abstaining, so the fold stops at it.
 -}
 evalRule :: RuleDeps -> EvalContext -> Rule -> RuleEvidence -> IO RuleVerdict
 evalRule _ _ (AllowScope scope) ev =
@@ -84,7 +84,7 @@ evalRule _ _ (AllowScope scope) ev =
             NoDecision ("scope is not the allow-listed " <> renderScope scope)
 evalRule _ ctx (AllowIfOlderThan minAge) ev =
     pure $ case evPublishedAt ev of
-        Unavailable -> needsFact "AllowIfOlderThan" "the publish time"
+        Unread -> needsFact "AllowIfOlderThan" "the publish time"
         Known Nothing -> NoDecision "publish time is unknown"
         Known (Just publishedAt) ->
             let age = diffUTCTime (ctxNow ctx) publishedAt
@@ -106,7 +106,7 @@ evalRule _ ctx (AllowIfOlderThan minAge) ev =
                             )
 evalRule _ _ DenyInstallTimeExecution ev =
     pure $ case evInstallCode ev of
-        Unavailable -> needsFact "DenyInstallTimeExecution" "the install-time execution signal"
+        Unread -> needsFact "DenyInstallTimeExecution" "the install-time execution signal"
         Known (RunsCodeOnInstall how) -> Deny ("runs code on install: " <> how)
         Known NoCodeOnInstall -> NoDecision "no install-time code execution"
         Known CodeExecUnknown -> NoDecision "install-time code execution not yet determined"

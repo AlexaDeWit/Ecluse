@@ -52,7 +52,7 @@ epoch = UTCTime (fromGregorian 2026 1 1) 0
 spec :: Spec
 spec = do
     verdictSpec
-    unvettableSpec
+    identityOnlySpec
     beltSpec
     outcomeSpec
     capSpec
@@ -107,11 +107,10 @@ verdictSpec = describe "the delete verdict" $ do
         halt `shouldBe` Nothing
         recResults rec' `shouldReturn` []
 
-{- A read that produced no manifest decides every version of the package on the identity the
-listing carries. The shared bounded fetch discards the response status, so a 404 and a 5xx arrive
-here alike. -}
-unvettableSpec :: Spec
-unvettableSpec = describe "a manifest the store did not serve" $ do
+{- A read that produced no manifest decides on the identity the listing carries. The shared bounded
+fetch discards the response status, so a 404 and a 5xx arrive here alike. -}
+identityOnlySpec :: Spec
+identityOnlySpec = describe "a manifest the store did not serve" $ do
     it "deletes a version the operator revoked by identity, so the next request 404s" $ do
         rules <- identityDeny
         store <- storeWith [version "1.0.0"] Nothing
@@ -148,10 +147,20 @@ unvettableSpec = describe "a manifest the store did not serve" $ do
         recResults rec' `shouldReturn` [SweepExamined, SweepKept, SweepExamined, SweepKept]
         held store `shouldReturn` map version ["1.0.0", "2.0.0"]
 
-    it "names the package and the fault on the line an operator acts on" $ do
+    it "names the package and the fault on the line an operator acts on, having kept the versions" $ do
         (rec', _) <- unreadStep [] ["1.0.0"]
         errors <- recErrors rec'
         errors `shouldSatisfy` any (T.isInfixOf "decided on identity alone")
+
+    it "keeps a version the backend refused to delete, so the next request still serves it" $ do
+        rules <- identityDeny
+        store <- refusingStore' Nothing (VersionRefused (storeRefusal "ACCESS_DENIED" "the identity may not delete"))
+        rec' <- recordingPorts generation
+        halt <- runStep rec' testPacing (mount store rules) (served ["1.0.0"])
+        halt `shouldBe` Nothing
+        recResults rec' `shouldReturn` [SweepExamined, SweepKept]
+        errors <- recErrors rec'
+        errors `shouldSatisfy` any (T.isInfixOf "ACCESS_DENIED")
 
     it "reaches the deletion cap from a read that produced no manifest" $ do
         -- Identity alone can now condemn, so this branch counts against the cycle's cap like any
@@ -326,8 +335,12 @@ storeWith stored manifest =
 {- A store whose delete reports the given outcome and changes nothing, so the refusal and the
 unreached arms are both drivable without a fault that would stop the whole cycle. -}
 refusingStore :: VersionOutcome -> IO FakeStore
-refusingStore outcome = do
-    store <- storeWith [version "1.0.0"] (Just (sampleManifest packageName [version "1.0.0"]))
+refusingStore = refusingStore' (Just (sampleManifest packageName [version "1.0.0"]))
+
+-- | As 'refusingStore', over the given manifest, so the identity-only path drives the same arms.
+refusingStore' :: Maybe Manifest -> VersionOutcome -> IO FakeStore
+refusingStore' manifest outcome = do
+    store <- storeWith [version "1.0.0"] manifest
     let handle = fakeMaintenance store
     pure store{fakeMaintenance = handle{deleteVersions = \_ versions -> pure [(v, outcome) | v <- versions]}}
 

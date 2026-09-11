@@ -107,9 +107,8 @@ data Rejection = Rejection
     }
     deriving stock (Eq, Show)
 
-{- | Why a request was refused. A policy refusal is a deliberate verdict and is final for this
-request. An unavailability is an /inability to decide/, and its 'Transience' separates a
-retryable @503@ from a terminal @500@.
+{- | Why a request was refused. A policy refusal is final for this request. An unavailability is
+an /inability to decide/, whose 'Transience' separates a retryable @503@ from a terminal @500@.
 -}
 data RejectReason
     = {- | A rule denied the version (including deny-by-default). The 'RuleName'
@@ -161,9 +160,8 @@ body.
 newtype RuleName = RuleName Text
     deriving stock (Eq, Ord, Show)
 
-{- | Project a rules 'Decision' (see "Ecluse.Core.Rules") into a serve outcome. Pure and total.
-An 'Undecidable' decision rejects as 'Unavailable', which is __fail-closed__: a version no rule
-could vet is never admitted.
+{- | Project a rules 'Decision' into a serve outcome. An 'Undecidable' decision rejects as
+'Unavailable', which is fail-closed: a version no rule could vet is never admitted.
 -}
 serveDecisionOf :: PackageDetails -> Decision -> ServeDecision
 serveDecisionOf pd decision = case decision of
@@ -183,9 +181,8 @@ serveDecisionOf pd decision = case decision of
 rejectUnavailable :: Transience -> Text -> ServeDecision
 rejectUnavailable transience message = Reject (Rejection (Unavailable transience) message)
 
-{- | The HTTP status a __concrete-artifact__ request renders to. A packument request has no
-single status, because the pipeline filters its versions and chooses one over the survivors, so
-'PackumentStatus' models that case.
+{- | The HTTP status a __concrete-artifact__ request renders to. A packument request has no single
+status, because the pipeline chooses one over the survivors: 'PackumentStatus' models that.
 -}
 data ArtifactStatus
     = -- | @200@: admitted, so the proxy streams the artifact.
@@ -202,9 +199,8 @@ data ArtifactStatus
       NotFound
     deriving stock (Eq, Show)
 
-{- | Map a serve outcome to its concrete-artifact status. Pure and total. The load-bearing rule
-is __@503@ only when we believe it will resolve__, so a 'WontResolve' unavailability is a @500@.
-A @404@ upstream miss is not a serve decision, so this function never produces one.
+{- | Map a serve outcome to its concrete-artifact status: @503@ only where it will resolve, so a
+'WontResolve' unavailability is a @500@. An upstream @404@ is no serve decision and never appears.
 -}
 artifactStatus :: ServeDecision -> ArtifactStatus
 artifactStatus = \case
@@ -228,9 +224,8 @@ artifactHttpStatus = \case
     ServerError -> status500
     NotFound -> status404
 
-{- | The HTTP status a __packument__ request renders to, chosen over the merged survivor set
-(see 'packumentStatus'). There is no @404@: a packument whose versions were all withheld is not
-a miss, because the package exists, and a genuine absence is decided before the merge.
+{- | The HTTP status a __packument__ request renders to, chosen over the merged survivor set. There
+is no @404@: the package exists, and a genuine absence is decided before the merge.
 -}
 data PackumentStatus
     = -- | @200@: at least one version survived, so the proxy serves the merged, filtered packument.
@@ -258,17 +253,8 @@ data PackumentStatus
       PackumentServerError
     deriving stock (Eq, Show)
 
-{- | Choose a packument's status from the per-version serve outcomes, including any 'Reject' a
-needed-but-unavailable upstream contributes. Pure and total. Any 'Admit' serves the document.
-With no survivor the status follows the __most recoverable cause__ among the exclusions, so it
-invites a retry exactly when a retry might yield survivors:
-
-* 'Unavailable' 'WillResolve' → @503@, suggesting the longest 'RetryAfter' asked for, so every
-transient cause has likely cleared by then.
-* Otherwise 'UpstreamInvalid' → @502@, a concrete gateway fault. It ranks below @503@, because a
-transient origin may yet return a valid document.
-* Otherwise 'Unavailable' 'WontResolve' → @500@, because a retry cannot help.
-* Otherwise every exclusion is deny-by-default, __the empty input included__ → @403@.
+{- | Choose a packument's status from the per-version outcomes, a needed-but-unavailable upstream's
+'Reject' included. With no survivor the most recoverable cause wins, and an empty input is a @403@.
 -}
 packumentStatus :: [ServeDecision] -> PackumentStatus
 packumentStatus decisions
@@ -300,9 +286,8 @@ packumentStatus decisions
             MissingIntegrity -> acc
             BelowIntegrityFloor -> acc
 
-{- | The signals 'packumentStatus' weighs over the per-version serve outcomes, accumulated in a
-single pass. The fields are strict ('StrictData'), so the tally does not thunk across a large
-survivor set.
+{- | The signals 'packumentStatus' weighs, accumulated in one pass. The fields are strict
+('StrictData'), so the tally does not thunk across a large survivor set.
 -}
 data PackumentTally = PackumentTally
     { tallyAdmit :: Bool
