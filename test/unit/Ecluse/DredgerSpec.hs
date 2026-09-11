@@ -37,6 +37,12 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepReport (reportCapHalts, reportRemoval),
  )
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity))
+import Ecluse.Core.Server.Readiness (
+    MountReadiness (MountAwaitingFirstSync, MountReady),
+    Readiness (Latched),
+    mountReadiness,
+    routable,
+ )
 import Ecluse.Core.Telemetry.Metrics (Label (LEcosystem), SweepResult (SweepDeleted, SweepExamined, SweepWouldDelete), metricAttributes)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Cve.Sync (CveSyncHandle (..))
@@ -112,16 +118,19 @@ pod would start sweeping the same generation that filled the cap. -}
 probeSpec :: Spec
 probeSpec = describe "the health surface under a latch" $ do
     it "answers ready while the advisory sync has landed and nothing has latched" $
-        dredgerReady (pure True) (pure Nothing) `shouldReturn` True
+        routable <$> dredgerReady (pure synced) (pure Nothing) `shouldReturn` True
 
-    it "stops answering ready once a halt latched" $ do
+    it "reports the latch itself once a halt latched, whatever the sync says" $ do
         (_, _, latched) <- stepped 1
         halt <- readIORef latched
         halt `shouldSatisfy` isJust
-        dredgerReady (pure True) (readIORef latched) `shouldReturn` False
+        dredgerReady (pure synced) (readIORef latched) `shouldReturn` Latched
 
     it "answers unready before the advisory sync has landed, latch or no latch" $
-        dredgerReady (pure False) (pure Nothing) `shouldReturn` False
+        routable <$> dredgerReady (pure awaiting) (pure Nothing) `shouldReturn` False
+  where
+    synced = mountReadiness (Map.singleton Npm MountReady)
+    awaiting = mountReadiness (Map.singleton Npm MountAwaitingFirstSync)
 
 {- The composition root hands the loop a store that cannot delete, so a dry run is not a branch
 the loop takes but a capability it was never given. -}

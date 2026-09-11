@@ -10,10 +10,11 @@ and the real handle, so the two cannot drift apart.
 -}
 module Ecluse.Test.Cve (
     fakeCveLookup,
+    fakeCveDb,
     unscoredEpssCases,
 ) where
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..))
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..))
 import Ecluse.Core.Osv.Epss (epssForIds, mkEpssScores, parseEpssLine)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 
@@ -28,6 +29,12 @@ fakeCveLookup rows =
         , cveAdvisoriesFor = \name -> pure [ar | (n, ar) <- rows, n == name]
         , cveCoveredNames = pure (ordNub (map fst rows))
         }
+
+{- | An owning handle over the fake lookup, closing to nothing. A spec that pins when the slot
+retires a displaced generation builds its own recording handle instead.
+-}
+fakeCveDb :: [(Text, AdvisoryRange)] -> CveDb
+fakeCveDb rows = CveDb{cveDbLookup = fakeCveLookup rows, cveDbClose = pass, cveDbMeta = []}
 
 -- | Individual gaps in a nonempty feed, joined through the production score parser.
 unscoredEpssCases :: [(String, Maybe Double)]

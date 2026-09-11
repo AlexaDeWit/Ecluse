@@ -117,6 +117,7 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Contract (responseToWai)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause, rqDetail), classifyEscape)
+import Ecluse.Core.Server.Readiness (Readiness, alwaysReady)
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpRequestPerimeterFault))
 import Ecluse.Core.Worker (Liveness, alwaysLive)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envTelemetry, serveRuntimeOf)
@@ -162,10 +163,9 @@ data ServerConfig = ServerConfig
     {- ^ How long the graceful drain waits for in-flight requests and in-progress
     artifact streams to finish before the process exits ('defaultShutdownDrainTimeout').
     -}
-    , scCheckReady :: IO Bool
-    {- ^ A second readiness gate the composition root installs, ANDed with the drain check by
-    @\/readyz@. It must be a one-way flip (today the advisory database's first sync), so readiness
-    never flaps a pod out of rotation. It gates routing, not whether the process answers.
+    , scCheckReady :: IO Readiness
+    {- ^ The readiness verdict the composition root installs, which @\/readyz@ renders and the
+    drain check overrides. Each mount's flip is one way, so readiness never flaps a pod out of rotation.
     -}
     , scCheckLive :: IO Liveness
     {- ^ The liveness check @\/livez@ answers from, beyond the listener itself. A worker
@@ -188,7 +188,7 @@ mkServerConfig mounts =
         , scMounts = mounts
         , scDrain = neverDraining
         , scDrainTimeout = defaultShutdownDrainTimeout
-        , scCheckReady = pure True
+        , scCheckReady = pure alwaysReady
         , scCheckLive = pure alwaysLive
         , scOnException = \_ _ -> pass
         }

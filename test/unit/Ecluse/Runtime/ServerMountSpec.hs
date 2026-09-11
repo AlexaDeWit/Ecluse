@@ -6,15 +6,43 @@ module Ecluse.Runtime.ServerMountSpec (spec) where
 
 import Prelude hiding (get)
 
+import Data.Aeson (Value, encode, object, (.=))
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
+import Data.Map.Strict qualified as Map
+import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Network.HTTP.Types (Header, Status, hContentType, status200, status404)
 import Network.Wai (Application)
+import Network.Wai.Test qualified as WaiTest
 import Test.Hspec
 import Test.Hspec.Wai
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Runtime.Server (application, mkServerConfig)
+import Ecluse.Composition.TelemetrySupport (newAdvisoryHandles)
+import Ecluse.Core.Breaker (noBreakerReporter)
+import Ecluse.Core.Cve (DbEtag (DbEtag))
+import Ecluse.Core.Cve.Slot (swapIn)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (
+    DenyIfCveParams (DenyIfCveParams),
+    FailureAlignment (FailDeny),
+    PrecededRule,
+    Rule (AllowIfOlderThan, DenyIfCve),
+ )
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
+import Ecluse.Cve.Sync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReadiness)
+import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
+import Ecluse.Runtime.Server (ServerConfig (scCheckReady), application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Service (mountBindingFor)
-import Ecluse.Test.Server.Mount (inertPackumentDeps)
+import Ecluse.Test.Cve (fakeCveDb)
+import Ecluse.Test.Package (validSha256, validSha256Sri)
+import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, publishedDaysAgo, versionSpec, versionValue)
+import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
+import Ecluse.Test.Server.Mount (inertPackumentDeps, npmServeDeps, pypiServeDeps)
+import Ecluse.Test.Stub (Captured (capHeaders, capPath), stubLocalhostUrl, withRoutedStub)
+import Ecluse.Test.Wai (selfBaseUrlOf, servedVersions, status)
 
 {- | A single npm mount with __inert__ packument-serve dependencies (every upstream a
 closed port) and no publish target, resolved as the composition root resolves it.
@@ -39,3 +67,102 @@ spec = do
 
             it "renders an unmounted prefix as a neutral text/plain 404" $
                 get "/pypi/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
+
+    describe "two mounts, one advisory database" $
+        it "serves npm, refuses the PyPI read, and stays routable" $
+            -- The owner's case: npm synced and the PyPI artifact never arrived. One upstream
+            -- serves both documents, so the advisory slot is the only difference between them.
+            withRoutedStub upstreamReply $ \stub -> do
+                app <- partialAdvisoryApp (stubLocalhostUrl stub)
+
+                npm <- requestPath app "/npm/leftpad"
+                status npm `shouldBe` 200
+                servedVersions npm `shouldBe` ["1.0.0"]
+
+                pypi <- requestPath app "/pypi/simple/leftpad/"
+                status pypi `shouldBe` 503
+                -- Named, so a refusal for want of the database cannot pass as an upstream failure.
+                LBS.toStrict (WaiTest.simpleBody pypi) `shouldSatisfy` BS.isInfixOf "no advisory database loaded"
+
+                readyz <- requestPath app "/readyz"
+                status readyz `shouldBe` 200
+                LBS.toStrict (WaiTest.simpleBody readyz) `shouldSatisfy` BS.isInfixOf "\"pypi\":\"awaiting startup readiness\""
+
+{- | Both mounts as the composition root resolves them, over one upstream, with npm's advisory
+database installed and PyPI's slot still empty.
+-}
+partialAdvisoryApp :: Text -> IO Application
+partialAdvisoryApp upstreamBase = do
+    handles <- Map.fromList <$> newAdvisoryHandles [Npm, PyPI]
+    for_ (Map.lookup Npm handles) $ \handle ->
+        swapIn (syncSlot (csEnv handle)) (DbEtag "npm-1") (fakeCveDb [])
+    for_ (Map.lookup PyPI handles) $ \handle ->
+        atomically (writeTVar (csReady handle) False)
+    let depsFor = cveRuleDepsFor handles noBreakerReporter noFaultReporter
+    npmRules <- prepare (depsFor Npm) advisoryPolicy
+    pypiRules <- prepare (depsFor PyPI) advisoryPolicy
+    env <- newTestEnv
+    let public = loopbackRegistryUrl upstreamBase
+        bindings =
+            catMaybes
+                [ mountBindingFor Npm (npmServeDeps Nothing public NoMirrorWrite npmRules (pure servedAt)) Nothing
+                , mountBindingFor PyPI (pypiServeDeps Nothing public NoMirrorWrite pypiRules (pure servedAt)) Nothing
+                ]
+        cfg = (mkServerConfig bindings){scCheckReady = cveSyncReadiness handles}
+    pure (application cfg env)
+
+{- | The policy both mounts run. The advisory deny outranks the age allow, so a mount whose slot
+is empty refuses what the rule cannot vet, and a mount with its database admits.
+-}
+advisoryPolicy :: [PrecededRule]
+advisoryPolicy =
+    [ atDefaultPrecedence (DenyIfCve (DenyIfCveParams 8.0 FailDeny))
+    , atDefaultPrecedence (AllowIfOlderThan 0)
+    ]
+
+-- One upstream for both ecosystems. Each document names the authority that served it, which is
+-- the authority a projection accepts artifact locations on.
+upstreamReply :: Captured -> (Status, [Header], LByteString)
+upstreamReply cap
+    | capPath cap == "/leftpad" = served "application/json" (npmPackument authority)
+    | "/simple/leftpad" `BS.isPrefixOf` capPath cap =
+        served "application/vnd.pypi.simple.v1+json" (pypiIndex authority)
+    | otherwise = (status404, [], "")
+  where
+    authority = selfBaseUrlOf (capHeaders cap)
+    served mediaType document = (status200, [(hContentType, mediaType)], encode document)
+
+-- | One admissible npm version, digested to the fixtures' SHA-256 floor.
+npmPackument :: Text -> Value
+npmPackument authority =
+    packumentValue
+        "leftpad"
+        "1.0.0"
+        [("1.0.0", versionValue (versionSpec "leftpad" "1.0.0" (authority <> "/leftpad/-/leftpad-1.0.0.tgz")){vsIntegrity = Just validSha256Sri})]
+        ["1.0.0" .= publishedDaysAgo servedAt 30]
+        []
+
+-- | One admissible PyPI release, on the index's own authority.
+pypiIndex :: Text -> Value
+pypiIndex authority =
+    object
+        [ "name" .= ("leftpad" :: Text)
+        , "meta" .= object ["api-version" .= ("1.1" :: Text)]
+        , "files"
+            .= [ object
+                    [ "filename" .= ("leftpad-1.0.0.tar.gz" :: Text)
+                    , "url" .= (authority <> "/simple/leftpad/leftpad-1.0.0.tar.gz")
+                    , "hashes" .= object ["sha256" .= validSha256]
+                    , "requires-python" .= (">=3.10" :: Text)
+                    , "upload-time" .= ("2026-01-01T00:00:00Z" :: Text)
+                    ]
+               ]
+        ]
+
+-- | A fixed "now", so the age rule is deterministic.
+servedAt :: UTCTime
+servedAt = UTCTime (fromGregorian 2026 6 20) 0
+
+-- | One GET against the composed application, as an orchestrator or a client would send it.
+requestPath :: Application -> ByteString -> IO WaiTest.SResponse
+requestPath app path = WaiTest.runSession (WaiTest.request (WaiTest.setPath WaiTest.defaultRequest path)) app

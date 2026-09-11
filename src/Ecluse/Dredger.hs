@@ -45,11 +45,12 @@ import Ecluse.Core.Registry.Sweep.Types (
     latches,
     renderCycleHalt,
  )
+import Ecluse.Core.Server.Readiness (Readiness (Latched), allMountsReady)
 import Ecluse.Core.Supervision (secondsToMicros, superviseLoop, transientPolicy)
 import Ecluse.Cve.Sync (
     CveSyncHandle (csEnv),
     backgroundLoopBackoff,
-    cveSyncReady,
+    cveSyncReadiness,
     cveSyncScheduleFor,
     cveSyncTasks,
     registerAdvisoryAges,
@@ -112,7 +113,7 @@ runDredger bootEnv opts pruner = do
     mounts = case doMode opts of
         SweepDeletes -> pwMounts pruner
         SweepRehearses -> [mount{smStore = rehearsedStore (smStore mount)} | mount <- pwMounts pruner]
-    syncReady = cveSyncReady (pwCveSync pruner)
+    syncReady = cveSyncReadiness (pwCveSync pruner)
     cfg status = dredgerServerConfig appConfig (dredgerReady syncReady (readIORef (stLatched status)))
     syncTasks metrics = cveSyncTasks logEnv metrics telemetry (cveSyncScheduleFor appConfig) (pwCveSync pruner)
     portsOver metrics = sweepPortsFor logEnv metrics (sweepReportFor (doMode opts)) (pwCveSync pruner)
@@ -120,18 +121,18 @@ runDredger bootEnv opts pruner = do
 {- | The Dredger's health surface: the shared @server.port@, and a readiness the advisory sync
 opens and a latched halt closes for good. A latch never fails liveness, so nothing restarts it.
 -}
-dredgerServerConfig :: AppConfig -> IO Bool -> ServerConfig
+dredgerServerConfig :: AppConfig -> IO Readiness -> ServerConfig
 dredgerServerConfig appConfig checkReady = (probeServerConfig appConfig){scCheckReady = checkReady}
 
-{- | Ready once the advisory sync has landed, and never again after a halt latched. Liveness stays
-untouched, because a restart would begin sweeping the generation that latched it.
+{- | The advisory sync's own verdict until a halt latches, and 'Latched' for good after one.
+Liveness stays untouched, because a restart would begin sweeping the generation that latched it.
 -}
-dredgerReady :: IO Bool -> IO (Maybe CycleHalt) -> IO Bool
-dredgerReady checkReady readLatched = (&&) <$> checkReady <*> (isNothing <$> readLatched)
+dredgerReady :: IO Readiness -> IO (Maybe CycleHalt) -> IO Readiness
+dredgerReady checkReady readLatched = readLatched >>= maybe checkReady (const (pure Latched))
 
 {- Run the sweep on the invocation's repetition. A cycle is one supervised step, so a fault that
 escapes a store handle's typed contract backs off and the next cycle runs. -}
-sweepTask :: LogEnv -> DredgerOptions -> SweepPacing -> SweepPorts -> IO Bool -> SweepStatus -> [SweepMount] -> IO ()
+sweepTask :: LogEnv -> DredgerOptions -> SweepPacing -> SweepPorts -> IO Readiness -> SweepStatus -> [SweepMount] -> IO ()
 sweepTask logEnv opts pacing ports checkReady status mounts = case doRepetition opts of
     SweepOnce -> awaitAdvisories >> onceCycle
     SweepContinuously ->
@@ -148,13 +149,14 @@ sweepTask logEnv opts pacing ports checkReady status mounts = case doRepetition 
 
     step = latchedStep pacing ports mounts (stLatched status)
 
-    {- Give the first advisory sync a bounded chance to land before the first cycle decides
-    anything, where a rule reads the database at all. Past the bound the cycle runs regardless. -}
+    {- Give every mount's first advisory sync a bounded chance to land before the first cycle
+    decides anything. A sweep reads each mount's own database, so partial readiness is not enough
+    here, and past the bound the cycle runs regardless. -}
     awaitAdvisories = when (waitsForAdvisories mounts) (poll (advisoryWaitAttempts pacing))
 
     poll remaining
         | remaining <= (0 :: Int) = pass
-        | otherwise = checkReady >>= bool (threadDelay advisoryPollMicros >> poll (remaining - 1)) pass
+        | otherwise = checkReady >>= bool (threadDelay advisoryPollMicros >> poll (remaining - 1)) pass . allMountsReady
 
 {- | Run the sweep with the advisory sync tasks beside it. The sweep alone decides when the run
 ends, and a task that faults still brings the run down with it.

@@ -5,7 +5,7 @@
 {- | The advisory-sync plan: one ecosystem's sync wiring ('CveSyncHandle') and the
 config-driven plan that builds it ('planCveSync'). It also holds the projections the
 composition root reads off that plan: the per-ecosystem rule capabilities, the
-first-sync readiness gate, the sync schedule, and database-age observations. Every consuming
+per-mount readiness verdict, the sync schedule, and database-age observations. Every consuming
 role registers the observations once and runs one supervised sync task per handle.
 -}
 module Ecluse.Cve.Sync (
@@ -15,7 +15,7 @@ module Ecluse.Cve.Sync (
     sweepStep,
     cveRuleDepsFor,
     katipFaultReporter,
-    cveSyncReady,
+    cveSyncReadiness,
     cveSyncScheduleFor,
     cveSyncTasks,
     registerAdvisoryAges,
@@ -41,6 +41,11 @@ import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, generationInstalledAt, newCveS
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
+import Ecluse.Core.Server.Readiness (
+    MountReadiness (MountAwaitingFirstSync, MountReady),
+    Readiness,
+    mountReadiness,
+ )
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
     secondsToMicros,
@@ -78,11 +83,15 @@ katipFaultReporter logEnv =
             WarningS
             "effectful rule evaluation faulted"
 
-{- | The readiness gate over the sync plan: ready once every ecosystem completes its first sync.
-Each flag flips one way, so readiness never flaps. An empty plan is vacuously ready.
+{- | The readiness verdict over the sync plan: routable once at least one configured ecosystem
+completes its first sync, so one ecosystem's missing artifact leaves the others routable.
 -}
-cveSyncReady :: Map.Map Ecosystem CveSyncHandle -> IO Bool
-cveSyncReady plan = allM (readTVarIO . csReady) (Map.elems plan)
+cveSyncReadiness :: Map.Map Ecosystem CveSyncHandle -> IO Readiness
+cveSyncReadiness plan = mountReadiness <$> traverse mountStateOf plan
+
+-- One mount's advisory state, read off the one-way flag its own sync task flips.
+mountStateOf :: CveSyncHandle -> IO MountReadiness
+mountStateOf = fmap (bool MountAwaitingFirstSync MountReady) . readTVarIO . csReady
 
 {- | The sync tasks' timing: the shipped boot burst over the configured poll interval. The microsecond
 conversion cannot wrap: the config decoder bounds the interval to @[1, maxBound div 1_000_000]@ seconds.

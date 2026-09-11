@@ -62,6 +62,7 @@ import Ecluse.Core.Registry.Adapter (
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
+import Ecluse.Core.Server.Readiness (Readiness)
 import Ecluse.Core.Supervision (
     FaultDisposition (Permanent, Transient),
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
@@ -69,7 +70,7 @@ import Ecluse.Core.Supervision (
     transientPolicy,
  )
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
-import Ecluse.Cve.Sync (backgroundLoopBackoff, cveSyncReady, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
+import Ecluse.Cve.Sync (backgroundLoopBackoff, cveSyncReadiness, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..))
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
@@ -103,7 +104,7 @@ data ServiceRuntime = ServiceRuntime
     -}
     , svcSyncTasks :: [IO ()]
     -- ^ One supervised advisory-sync task per configured ecosystem.
-    , svcCheckReady :: IO Bool
+    , svcCheckReady :: IO Readiness
     , svcCheckLive :: IO Liveness
     }
 
@@ -166,7 +167,7 @@ withServiceRuntime bootEnv plan mirror action = do
                         (envTelemetry builtEnv)
                         (cveSyncScheduleFor appConfig)
                         cveSyncPlan
-                , svcCheckReady = cveSyncReady cveSyncPlan
+                , svcCheckReady = cveSyncReadiness cveSyncPlan
                 , svcCheckLive = workerLiveness runsWorkerHere heartbeat
                 }
 

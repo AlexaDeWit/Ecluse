@@ -50,7 +50,8 @@ explicit configuration (`server.publicUrl` plus its derived prefix).
 ## Meta-routes: ping, health, and search
 
 `/livez` and `/readyz` stay distinct for orchestration. Liveness means the process responds.
-Readiness includes startup, draining, and each configured ecosystem's first advisory sync.
+Readiness includes startup, draining, and the first advisory sync of at least one configured
+ecosystem, with the state of every mount in the body.
 Public-upstream reachability is not a readiness requirement, because private hits can still serve
 during a public outage. The [operator probe contract](https://ecluse-proxy.com/docs/operations/#health-probes)
 also describes role-specific conditions. `/-/ping` answers locally, and
