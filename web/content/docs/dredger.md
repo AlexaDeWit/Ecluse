@@ -41,7 +41,8 @@ Each cycle:
 
 A cycle reads listings page by page and metadata for candidate names. A newly covered package can
 wait until the next cycle if its name was absent from the current candidate set. Store failures,
-consent, metadata failures, and the cap can delay or prevent deletion.
+consent, and the cap can delay or prevent deletion. A metadata failure narrows the facts a rule
+has to decide on rather than stopping the package.
 
 Set the pace with the `dredger` group in your configuration. `chunkSize` and `chunkPause` set how
 many packages one chunk examines and how long it waits between chunks. `cyclePause` sets the wait
@@ -63,21 +64,27 @@ A version is deleted **only** on a named decisive deny. Everything else keeps it
 | A named rule denies the version | Deleted |
 | No rule was decisive (deny by default) | Kept |
 | A rule could not be evaluated | Kept |
-| The store's own metadata no longer carries the version | Kept |
-| The store served no metadata for the package this cycle | Every version of that package is kept |
+| A higher-precedence rule reads a fact this cycle could not | Kept |
 
 Deny by default is how the serve path refuses an unknown version, and it is the right answer
 there. Here it keeps, because your mirror may hold the only surviving copy of a version the public
 registry has already removed.
+
+Each rule is evaluated against the facts the cycle holds. The store's listing establishes the
+package name and version on its own, so a rule that reads only identity decides even when the
+package metadata is unreadable or omits that version. That covers `DenyByIdentity` and
+`AllowByIdentity`, and the advisory denies as well, because identity and the advisory database are
+all they read. A rule that reads anything further, such as the publish age or the install-time
+execution signal, cannot decide without that metadata: the evaluation stops there and the version
+is kept. Precedence still governs, so an undecided rule above a deny keeps the version rather than
+letting the deny remove it. Missing metadata on its own never deletes anything.
 
 The first-party belt shields every version under a namespace your `firstParty` key names, and the
 Dredger never even reads their metadata.
 
 Removing an allow is not itself a deny. A version stays when no named rule condemns it, including
 during a full walk. If removing an override exposes an existing winning deny, normal pruning
-applies. Current manifest-read failures keep the version even for an exact identity denial.
-[#1232](https://github.com/AlexaDeWit/Ecluse/issues/1232) tracks using sufficient identity evidence
-without unrelated manifest fields.
+applies.
 
 ## Consent, and what the store is
 
@@ -249,11 +256,12 @@ unwanted versions you identify. Apply the declaration to every role, then verify
 after older writes settle. Dredger cannot remove shielded leftovers for you, even under an identity
 deny. Do not delete the whole namespace merely because it now has first-party status.
 
-**A store that answers a metadata read with an error keeps the package for that cycle.**
+**A store that answers a metadata read with an error decides its package on identity alone.**
 The read distinguishes an absent document (`404`) from other HTTP failures and decode failures.
 An absent document carries no retry advice. `408`, `429`, and server errors carry retry advice.
-The current manifest consumer does not use that advice. It keeps every version of the package
-and reads the manifest again on the next cycle, without a retry within the current cycle.
+The current manifest consumer does not use that advice. It reads the manifest again on the next
+cycle, without a retry within the current cycle, and until then every rule reading more than
+identity leaves the package's versions in place.
 
 **An advisory swap does not give the whole bucket one immutable rule snapshot.** Candidate names
 come from the bucket's acquired database, while each version's rule evaluation can see a newer

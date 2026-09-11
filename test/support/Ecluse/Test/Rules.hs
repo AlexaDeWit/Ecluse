@@ -41,7 +41,6 @@ module Ecluse.Test.Rules (
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Package (
     CodeExecSignal (RunsCodeOnInstall),
-    PackageDetails (pkgInstallCode),
     PackageInfo (infoVersions),
  )
 import Ecluse.Core.Package.Filter (FilterPlan, filterPlanFromDecisions)
@@ -55,10 +54,13 @@ import Ecluse.Core.Rules (
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, Undecidable),
     EvalContext,
+    Fact (Known),
     FailureAlignment (FailDeny),
     PrecededRule (PrecededRule),
     Rule,
+    RuleEvidence (evInstallCode),
     RuleVerdict (Allow, CannotVet, Deny),
+    completeEvidence,
     defaultPrecedence,
  )
 
@@ -124,8 +126,8 @@ isUndecidable = \case
     _ -> False
 
 -- | Mark the version as running code on install, so the install-script deny fires.
-withInstallScripts :: PackageDetails -> PackageDetails
-withInstallScripts pd = pd{pkgInstallCode = RunsCodeOnInstall "postinstall hook"}
+withInstallScripts :: RuleEvidence -> RuleEvidence
+withInstallScripts ev = ev{evInstallCode = Known (RunsCodeOnInstall "postinstall hook")}
 
 {- | Decide a single public packument against a rule set in one call. A spec or bench exercises the
 real engine and the real survivor resolution without wiring the staged serve path itself.
@@ -133,5 +135,5 @@ real engine and the real survivor resolution without wiring the staged serve pat
 filterPlan :: RuleDeps -> EvalContext -> [PrecededRule] -> PackageInfo -> IO FilterPlan
 filterPlan deps ctx rules info = do
     prepared <- prepare deps rules
-    decisions <- traverse (evalRules ctx prepared) (infoVersions info)
+    decisions <- traverse (evalRules ctx prepared . completeEvidence) (infoVersions info)
     pure (filterPlanFromDecisions decisions info)

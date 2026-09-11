@@ -741,6 +741,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.ServedDocumentSpec
     Ecluse.Core.Registry.WireSupportSpec
     Ecluse.Core.Rules.EffectfulSpec
+    Ecluse.Core.Rules.TypesSpec
     Ecluse.Core.RulesSpec
     Ecluse.Core.Security.AuthoritySpec
     Ecluse.Core.Security.EgressSpec

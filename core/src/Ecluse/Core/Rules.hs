@@ -71,19 +71,22 @@ data RuleDeps = RuleDeps
     -- ^ Reports exhausted faults to the operator log without exposing them to clients.
     }
 
--- | Lookup faults escape to the resilience policy attached by 'prepare'.
-evalRule :: RuleDeps -> EvalContext -> Rule -> PackageDetails -> IO RuleVerdict
-evalRule _ _ (AllowScope scope) pd =
-    pure $ case pkgNamespace (pkgName pd) of
+{- | Lookup faults escape to the resilience policy attached by 'prepare'. A rule that reads a fact
+nothing supplied refuses rather than abstaining, so the fold stops at it.
+-}
+evalRule :: RuleDeps -> EvalContext -> Rule -> RuleEvidence -> IO RuleVerdict
+evalRule _ _ (AllowScope scope) ev =
+    pure $ case pkgNamespace (evName ev) of
         Just s
             | s == scope ->
                 Allow ("scope " <> renderScope scope <> " is allow-listed")
         _ ->
             NoDecision ("scope is not the allow-listed " <> renderScope scope)
-evalRule _ ctx (AllowIfOlderThan minAge) pd =
-    pure $ case pkgPublishedAt pd of
-        Nothing -> NoDecision "publish time is unknown"
-        Just publishedAt ->
+evalRule _ ctx (AllowIfOlderThan minAge) ev =
+    pure $ case evPublishedAt ev of
+        Unread -> needsFact "AllowIfOlderThan" "the publish time"
+        Known Nothing -> NoDecision "publish time is unknown"
+        Known (Just publishedAt) ->
             let age = diffUTCTime (ctxNow ctx) publishedAt
              in if age >= minAge
                     then
@@ -101,41 +104,47 @@ evalRule _ ctx (AllowIfOlderThan minAge) pd =
                                 <> " ago, minimum age is "
                                 <> renderDuration minAge
                             )
-evalRule _ _ DenyInstallTimeExecution pd =
-    pure $ case pkgInstallCode pd of
-        RunsCodeOnInstall how -> Deny ("runs code on install: " <> how)
-        NoCodeOnInstall -> NoDecision "no install-time code execution"
-        CodeExecUnknown -> NoDecision "install-time code execution not yet determined"
-evalRule _ _ (DenyByIdentity ident) pd =
+evalRule _ _ DenyInstallTimeExecution ev =
+    pure $ case evInstallCode ev of
+        Unread -> needsFact "DenyInstallTimeExecution" "the install-time execution signal"
+        Known (RunsCodeOnInstall how) -> Deny ("runs code on install: " <> how)
+        Known NoCodeOnInstall -> NoDecision "no install-time code execution"
+        Known CodeExecUnknown -> NoDecision "install-time code execution not yet determined"
+evalRule _ _ (DenyByIdentity ident) ev =
     pure $
-        if matchesIdentity ident pd
+        if matchesIdentity ident ev
             then Deny ("identity " <> ident <> " is revoked by operator")
             else NoDecision ("identity is not the revoked " <> ident)
-evalRule _ _ (AllowByIdentity ident) pd =
+evalRule _ _ (AllowByIdentity ident) ev =
     pure $
-        if matchesIdentity ident pd
+        if matchesIdentity ident ev
             then Allow ("identity " <> ident <> " is allow-listed by operator")
             else NoDecision ("identity is not the allow-listed " <> ident)
-evalRule deps _ AllowIfRemediatesCve pd =
+evalRule deps _ AllowIfRemediatesCve ev =
     rdWithCveLookup deps $ \case
         Nothing -> pure (NoDecision "no advisory database is loaded")
-        Just cve -> remediationVerdict cve pd
-evalRule deps _ (DenyIfCve params) pd =
+        Just cve -> remediationVerdict cve ev
+evalRule deps _ (DenyIfCve params) ev =
     rdWithCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfCve" (dicOnUnavailable params))
-        Just cve -> advisoryDenyVerdict DenyMissingScore "CVSS" (dicMinCvss params) arSeverity cve pd
-evalRule deps _ (DenyIfEpss params) pd =
+        Just cve -> advisoryDenyVerdict DenyMissingScore "CVSS" (dicMinCvss params) arSeverity cve ev
+evalRule deps _ (DenyIfEpss params) ev =
     rdWithCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))
-        Just cve -> advisoryDenyVerdict AbstainMissingScore "EPSS" (dieMinEpss params) arEpss cve pd
+        Just cve -> advisoryDenyVerdict AbstainMissingScore "EPSS" (dieMinEpss params) arEpss cve ev
+
+{- The verdict when the evidence carries no reading of a fact the rule consults. It is fail-closed so
+the fold stops here, rather than letting a lower-precedence rule decide past an unresolved one. -}
+needsFact :: Text -> Text -> RuleVerdict
+needsFact rule fact = CannotVet FailDeny (rule <> ": " <> fact <> " is not available")
 
 {- The verdict when no advisory database is loaded. It is a 'CannotVet' verdict and not a
 fault, because no in-process retry could load one, so the harness never retries it. -}
 noAdvisoryDbVerdict :: Text -> FailureAlignment -> RuleVerdict
 noAdvisoryDbVerdict rule alignment = CannotVet alignment (rule <> ": no advisory database loaded")
 
-advisoryDenyVerdict :: MissingScorePolicy -> Text -> Double -> (AdvisoryRange -> Maybe Double) -> CveLookup -> PackageDetails -> IO RuleVerdict
-advisoryDenyVerdict missing metric threshold scoreOf cve pd = do
+advisoryDenyVerdict :: MissingScorePolicy -> Text -> Double -> (AdvisoryRange -> Maybe Double) -> CveLookup -> RuleEvidence -> IO RuleVerdict
+advisoryDenyVerdict missing metric threshold scoreOf cve ev = do
     ranges <- cveAdvisoriesFor cve name
     let blocking =
             ordNub
@@ -148,9 +157,9 @@ advisoryDenyVerdict missing metric threshold scoreOf cve pd = do
         [] -> NoDecision ("no advisory at or above the " <> metric <> " threshold affects this version")
         ids -> Deny ("affected by " <> T.intercalate ", " ids <> " (" <> metric <> " >= " <> show threshold <> ")")
   where
-    eco = pkgEcosystem (pkgName pd)
-    name = TS.toText (pkgCanonical (pkgName pd))
-    version = renderVersion (pkgVersion pd)
+    eco = pkgEcosystem (evName ev)
+    name = TS.toText (pkgCanonical (evName ev))
+    version = renderVersion (evVersion ev)
 
 -- | Read the advisory identifiers from a scored denial reason, or return none.
 cveIdsInReason :: Text -> [Text]
@@ -165,18 +174,18 @@ cveIdsInReason message
     (ids, afterThreshold) = T.breakOn " (" body
 
 -- The CVE rule's verdict against a loaded advisory database.
-remediationVerdict :: CveLookup -> PackageDetails -> IO RuleVerdict
-remediationVerdict cve pd = do
+remediationVerdict :: CveLookup -> RuleEvidence -> IO RuleVerdict
+remediationVerdict cve ev = do
     fixes <- cveRemediationProbe cve name version
     if not fixes
         then pure (NoDecision "no advisory names this version as its fix")
         else do
             -- The probe hit, so the version is some advisory's exact fixed bound.
             ranges <- cveAdvisoriesFor cve name
-            pure (classifyRanges (pkgEcosystem (pkgName pd)) version ranges)
+            pure (classifyRanges (pkgEcosystem (evName ev)) version ranges)
   where
-    name = TS.toText (pkgCanonical (pkgName pd))
-    version = renderVersion (pkgVersion pd)
+    name = TS.toText (pkgCanonical (evName ev))
+    version = renderVersion (evVersion ev)
 
 -- A version still inside any advisory's affected range, an unfixed one included, must not
 -- fast-track. Otherwise credit the advisories that name it as their exact fixed bound.
@@ -197,10 +206,10 @@ classifyRanges eco version ranges =
 
 -- The one identity test the by-identity twins share: the exact rendered package
 -- name, or the exact package@version.
-matchesIdentity :: Text -> PackageDetails -> Bool
-matchesIdentity ident pd =
-    let pkgStr = renderPackageName (pkgName pd)
-        pkgAtVer = pkgStr <> "@" <> renderVersion (pkgVersion pd)
+matchesIdentity :: Text -> RuleEvidence -> Bool
+matchesIdentity ident ev =
+    let pkgStr = renderPackageName (evName ev)
+        pkgAtVer = pkgStr <> "@" <> renderVersion (evVersion ev)
      in ident == pkgStr || ident == pkgAtVer
 
 -- | Config obtains evaluators only through 'prepare', never from arbitrary code.
@@ -213,7 +222,7 @@ data PreparedRule = PreparedRule
     -- ^ The precedence at which this rule competes. Higher wins in the boot order.
     , prepResilience :: Maybe Resilience
     -- ^ The resilience policy, or 'Nothing' for a rule run directly.
-    , prepEval :: EvalContext -> PackageDetails -> IO RuleVerdict
+    , prepEval :: EvalContext -> RuleEvidence -> IO RuleVerdict
     {- ^ The rule's raw verdict for one version. For a resilient rule it may do IO that
     fails or hangs, and 'runEffectfulRule' wraps it.
     -}
@@ -283,8 +292,8 @@ renderBootOrder rules = zipWith line [1 :: Int ..] (bootOrder rules)
             <> ")"
 
 -- | Decide in boot order despite concurrent lookups. Unexpected direct-rule faults refuse admission.
-evalRules :: EvalContext -> [PreparedRule] -> PackageDetails -> IO Decision
-evalRules ctx rules pd = step (bootOrder rules) []
+evalRules :: EvalContext -> [PreparedRule] -> RuleEvidence -> IO Decision
+evalRules ctx rules ev = step (bootOrder rules) []
   where
     -- 'reasons' accumulates non-decisive reasons in reverse boot order. The final
     -- deny-by-default list reverses them back into boot order.
@@ -294,7 +303,7 @@ evalRules ctx rules pd = step (bootOrder rules) []
         | isNothing (prepResilience r) = do
             -- A direct rule is zero-cost, so run it in place. Reaching it means every
             -- earlier rule was non-decisive, so it moots no speculated IO.
-            evaluated <- tryAny (prepEval r ctx pd)
+            evaluated <- tryAny (prepEval r ctx ev)
             case evaluated of
                 Left escape ->
                     -- A direct-rule exception breaks its contract and must refuse admission.
@@ -308,16 +317,16 @@ evalRules ctx rules pd = step (bootOrder rules) []
             -- Stopping the block at the next direct rule keeps the "no mooted IO" guarantee: that
             -- rule runs, and may decide, before the engine launches any resilient rule beyond it.
             let (block, rest) = span (isJust . prepResilience) (r : rs)
-             in evalBlock ctx pd block >>= \case
+             in evalBlock ctx ev block >>= \case
                     Left d -> pure d
                     Right blockReasons -> step rest (reverse blockReasons <> reasons)
 
 -- Launch a contiguous resilient block concurrently, then await in boot order. 'Left' is
 -- the earliest decisive winner, 'Right' the block's non-decisive reasons in boot order.
-evalBlock :: EvalContext -> PackageDetails -> [PreparedRule] -> IO (Either Decision [Reason])
-evalBlock ctx pd block =
+evalBlock :: EvalContext -> RuleEvidence -> [PreparedRule] -> IO (Either Decision [Reason])
+evalBlock ctx ev block =
     bracket
-        (traverse (\r -> async (runEffectfulRule ctx r pd)) block)
+        (traverse (\r -> async (runEffectfulRule ctx r ev)) block)
         (traverse_ uninterruptibleCancel)
         (\asyncs -> awaitInOrder (zip block asyncs) [])
 
@@ -354,17 +363,17 @@ reasonOf (Decided verdict) = case verdict of
     CannotVet _ reason -> reason
 
 -- | Apply resilience to effectful rules. Direct-rule exceptions remain the caller's responsibility.
-runEffectfulRule :: EvalContext -> PreparedRule -> PackageDetails -> IO RuleEvaluation
-runEffectfulRule ctx rule pd = case prepResilience rule of
-    Nothing -> Decided <$> prepEval rule ctx pd
-    Just res -> runResilient res (prepName rule) (prepEval rule ctx) pd
+runEffectfulRule :: EvalContext -> PreparedRule -> RuleEvidence -> IO RuleEvaluation
+runEffectfulRule ctx rule ev = case prepResilience rule of
+    Nothing -> Decided <$> prepEval rule ctx ev
+    Just res -> runResilient res (prepName rule) (prepEval rule ctx) ev
 
 {- | A human-readable summary of a decision, suitable for logs and the denial
 response body.
 -}
-renderDecision :: PackageDetails -> Decision -> Text
-renderDecision pd decision =
-    let subject = renderPackageName (pkgName pd) <> "@" <> renderVersion (pkgVersion pd)
+renderDecision :: RuleEvidence -> Decision -> Text
+renderDecision ev decision =
+    let subject = renderPackageName (evName ev) <> "@" <> renderVersion (evVersion ev)
      in case decision of
             Admitted name reason ->
                 subject <> " was approved by " <> name <> ": " <> reason

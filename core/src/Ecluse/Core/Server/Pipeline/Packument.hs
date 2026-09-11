@@ -57,7 +57,7 @@ import Ecluse.Core.Registry.Metadata (
     digestBytes,
  )
 import Ecluse.Core.Rules (evalRules)
-import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), mkEvalContext)
+import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
@@ -336,7 +336,7 @@ gatePublic tracing metrics deps name ctx trustedVersions = \case
 
 decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
 decideVersions deps ctx info =
-    traverse (evalRules ctx (pdRules deps)) (infoVersions info)
+    traverse (evalRules ctx (pdRules deps) . completeEvidence) (infoVersions info)
 
 projectDecisions :: PackageInfo -> [Decision] -> [VersionVerdict]
 projectDecisions info =

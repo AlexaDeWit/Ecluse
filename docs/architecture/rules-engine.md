@@ -16,12 +16,18 @@ decision. Built-in deny rules default above allow rules, so "any deny overrides 
 out of the box. An operator can still rank a specific allow above a specific deny, say to let a
 trusted internal scope through an install-script deny.
 
-A rule evaluates one `PackageDetails` snapshot, the ecosystem-agnostic per-version view an
-adapter produces (see [The internal domain model](registry-model.md#the-internal-domain-model)).
-A rule never sees a registry wire format. Rule names track the agnostic concept, not one
-ecosystem's mechanism: the install-time code-execution signal, not npm's `hasInstallScript`.
-Where the signal a rule reads is absent for an ecosystem, the rule yields no decision, the
-no-op under deny-by-default, never a configuration error.
+A rule evaluates one `RuleEvidence` value: the package identity, plus one entry per further fact
+the vocabulary reads, each of which is either a reading or nothing at all. The serve, admission,
+and mirror paths build it from a `PackageDetails` snapshot, the ecosystem-agnostic per-version
+view an adapter produces (see
+[The internal domain model](registry-model.md#the-internal-domain-model)), so every fact is a
+reading. The Dredger can build it from a store listing alone, which establishes identity with no
+metadata read. A rule never sees a registry wire format. Rule names track the agnostic concept,
+not one ecosystem's mechanism: the install-time code-execution signal, not npm's
+`hasInstallScript`. Where the signal a rule reads is absent for an ecosystem, the rule yields no
+decision, the no-op under deny-by-default, never a configuration error. Where nothing read that
+signal at all, the rule yields `CannotVet` instead, so evaluation stops rather than letting a
+lower-precedence rule decide past an unresolved one.
 
 A `Rule` is closed `Eq`/`Show` data with no evaluation. `evalRule` is the single dispatch over
 it ([`Ecluse.Core.Rules`](../../core/src/Ecluse/Core/Rules.hs)). Keeping `Rule` closed is a
@@ -33,15 +39,15 @@ inside the `.gem`.
 
 ### Evaluation model
 
-Each rule applied to a `PackageDetails` yields a `RuleVerdict`, a deterministic answer, never a
-fault:
+Each rule applied to a `RuleEvidence` value yields a `RuleVerdict`, a deterministic answer, never
+a fault:
 
 - **`Allow`** and **`Deny`**: admit the version, or block it. Decisive.
 - **`NoDecision`**: no opinion. A no-op, but the engine keeps the reason for the audit trail.
 - **`CannotVet alignment`**: the rule reached the version but cannot vet it deterministically
-  and in-process. Today that means no advisory database is loaded. It carries its own failure
-  alignment (below). There is deliberately no fail-allow: a check that cannot vet must never
-  admit unvetted bytes.
+  and in-process. That means no advisory database is loaded, or the evidence carries no reading
+  of a fact the rule needs. It carries its own failure alignment (below). There is deliberately
+  no fail-allow: a check that cannot vet must never admit unvetted bytes.
 
 Under its resilience harness a rule either returns a decided verdict, taken at face value, or
 the harness synthesises `Unavailable`. That means no verdict at all: the IO faulted, it timed

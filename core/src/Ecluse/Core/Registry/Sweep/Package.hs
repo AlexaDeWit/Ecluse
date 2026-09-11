@@ -5,10 +5,10 @@
 {- | One package, the sweep's work unit. Both cycle shapes decide a version the same way here.
 
 The metadata comes from the store being dredged, never the public upstream: one manifest read per
-package, with every stored version projected out of it. A version is deleted only on a named
-decisive deny, because deletion is permanent and the store may hold the only surviving copy.
-
-Nothing here knows whether the run deletes: a dry run holds a handle whose delete is a rehearsal.
+package. A version the manifest omits, or a package whose read faulted, is decided on the identity
+the listing establishes. A version is deleted only on a named decisive deny, because deletion is
+permanent and the store may hold the only surviving copy. Nothing here knows whether the run
+deletes: a dry run holds a handle whose delete is a rehearsal.
 -}
 module Ecluse.Core.Registry.Sweep.Package (
     sweepPackage,
@@ -42,13 +42,13 @@ import Ecluse.Core.Registry.Sweep.Types (
     renderStoreFault,
  )
 import Ecluse.Core.Rules (evalRules)
-import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason)
+import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvidence, completeEvidence, identityEvidence)
 import Ecluse.Core.Server.Metadata (selectVersion)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept))
 import Ecluse.Core.Version (Version, renderVersion)
 
 {- | Decide one package's stored versions and hand the condemned ones over, yielding the halt the
-deletion cap raised. A manifest read that faulted keeps the package rather than halting.
+deletion cap raised. A faulted read decides on identity alone, so it too can reach the cap.
 -}
 sweepPackage ::
     SweepPacing ->
@@ -65,26 +65,33 @@ sweepPackage pacing ports counters mount store ctx etag name stored
     | smFirstParty mount name = Nothing <$ traverse_ (const (record ports counters SweepGuardSkipped)) served
     | otherwise =
         readStoreManifest store name >>= \case
-            Left fault -> Nothing <$ keepUnvettable ports counters name served fault
-            Right manifest -> do
-                condemned <- catMaybes <$> traverse (decideVersion ports counters mount ctx manifest) served
-                disposeOf pacing ports counters store etag name condemned
+            Left fault -> announceUnread ports name served fault *> decideAll (identityEvidence name)
+            Right manifest -> decideAll (evidenceIn name manifest)
   where
     served = [storedVersion s | s <- stored, storedPresence s == VersionServed]
 
-{- Nothing about these versions is known, so every one stays. The shared fetch discards the response
-status, so a package the store no longer serves arrives here too. -}
-keepUnvettable :: SweepPorts -> SweepState -> PackageName -> [Version] -> StoreFault -> IO ()
-keepUnvettable ports counters name served fault = do
+    decideAll evidence = do
+        condemned <- catMaybes <$> traverse (decideVersion ports counters mount ctx evidence) served
+        disposeOf pacing ports counters store etag name condemned
+
+{- The store served no metadata, so each version is decided on the identity the listing carries. The
+shared fetch discards the response status, so a package the store no longer serves arrives here too. -}
+announceUnread :: SweepPorts -> PackageName -> [Version] -> StoreFault -> IO ()
+announceUnread ports name served fault =
     auditError
         (sweepAudit ports)
         ( renderPackageName name
             <> ": the store served no metadata this cycle, so its "
             <> show (length served)
-            <> " versions cannot be vetted and are kept: "
+            <> " versions are decided on identity alone: "
             <> renderStoreFault fault
         )
-    for_ served $ \_ -> record ports counters SweepExamined >> record ports counters SweepKept
+
+{- The manifest's own entry for a version, or identity alone where it projects none. A listing can
+name a version the manifest omits, and identity is established either way. -}
+evidenceIn :: PackageName -> Manifest -> Version -> RuleEvidence
+evidenceIn name manifest version =
+    maybe (identityEvidence name version) completeEvidence (selectVersion version (manifestInfo manifest))
 
 {- | One version a named decisive deny condemned, with the rule that named it. Its audit line
 and its deletion both read this, so neither can credit a rule the other did not.
@@ -95,26 +102,21 @@ data Condemned = Condemned
     , cdReason :: Reason
     }
 
-{- Decide one version out of the one manifest and count it. Only a named decisive deny condemns, so
-this runs 'evalRules' rather than the wrapper that folds it together with deny-by-default. -}
+{- Decide one version from whatever evidence it has and count it. Only a named decisive deny
+condemns, so this runs 'evalRules' rather than the wrapper that folds in deny-by-default. -}
 decideVersion ::
     SweepPorts ->
     SweepState ->
     SweepMount ->
     EvalContext ->
-    Manifest ->
+    (Version -> RuleEvidence) ->
     Version ->
     IO (Maybe Condemned)
-decideVersion ports counters mount ctx manifest version = do
+decideVersion ports counters mount ctx evidence version = do
     record ports counters SweepExamined
-    maybe keep condemnation (selectVersion version (manifestInfo manifest))
-  where
-    keep = record ports counters SweepKept $> Nothing
-
-    condemnation details =
-        evalRules ctx (smRules mount) details >>= \case
-            Blocked rule reason -> pure (Just Condemned{cdVersion = version, cdRule = rule, cdReason = reason})
-            _ -> keep
+    evalRules ctx (smRules mount) (evidence version) >>= \case
+        Blocked rule reason -> pure (Just Condemned{cdVersion = version, cdRule = rule, cdReason = reason})
+        _ -> record ports counters SweepKept $> Nothing
 
 {- Hand the condemned versions over, up to what the cycle's cap still allows. The cap counts
 what was handed over rather than what came back, because the cap bounds destructive calls. -}

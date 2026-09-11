@@ -30,6 +30,7 @@ import Ecluse.Core.Registry.Maintenance (
     mkNameAlphabet,
     protocolFault,
     renderNamePrefix,
+    storedVersion,
  )
 import Ecluse.Core.Registry.Sweep (sweepCycle, withStoreRetry)
 import Ecluse.Core.Registry.Sweep.Types (
@@ -79,6 +80,24 @@ permissionSpec = describe "consent and classification" $ do
         let preserved = withStore store (\h -> h{classifyStore = pure (Right (StorePreserved "it has an upstream"))})
         (_, outcome) <- runCycle testPacing preserved
         outcomeHalt outcome `shouldBe` Just (HaltStorePreserved Npm "fake" "it has an upstream")
+
+    it "deletes nothing without consent, so the next request still serves the revoked version" $ do
+        (outcome, held) <- unreadableCycle (\h -> h{verifyConsent = pure (Right (ConsentWithheld "attach it"))})
+        outcomeHalt outcome `shouldBe` Just (HaltConsentWithheld Npm "fake" "attach it")
+        tallyDeleted (outcomeTally outcome) `shouldBe` 0
+        held `shouldBe` [version "1.0.0"]
+
+    it "deletes nothing from a store that refills itself, so the next request still serves it" $ do
+        (outcome, held) <- unreadableCycle (\h -> h{classifyStore = pure (Right (StorePreserved "it has an upstream"))})
+        outcomeHalt outcome `shouldBe` Just (HaltStorePreserved Npm "fake" "it has an upstream")
+        tallyDeleted (outcomeTally outcome) `shouldBe` 0
+        held `shouldBe` [version "1.0.0"]
+
+    it "deletes on identity alone once both guards pass, so the next request 404s" $ do
+        (outcome, held) <- unreadableCycle id
+        outcomeHalt outcome `shouldBe` Nothing
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+        held `shouldBe` []
 
     it "reads both at every cycle start, so nothing stale decides a delete" $ do
         store <- seededStore
@@ -434,6 +453,19 @@ runCycleWith store configured = do
 
 withStore :: FakeStore -> (StoreMaintenance -> StoreMaintenance) -> StoreMaintenance
 withStore store f = f (fakeMaintenance store)
+
+{- A cycle over a store that serves no metadata, carrying the identity deny that identity alone
+condemns. The transform is where one guard is withdrawn, so each guard is read on its own. -}
+unreadableCycle :: (StoreMaintenance -> StoreMaintenance) -> IO (CycleOutcome, [Version])
+unreadableCycle f = do
+    store <- newFakeStore seededConfig{fakeManifests = Map.empty}
+    rec' <- recordingPorts generation
+    prepared <- prepare inertRuleDeps [atDefaultPrecedence revoked]
+    outcome <- sweepCycle testPacing (recPorts rec') [testMount (f (fakeMaintenance store)) prepared [revoked]]
+    contents <- readFakeContents store
+    pure (outcome, maybe [] (map storedVersion) (Map.lookup (packageName "left-pad") contents))
+  where
+    revoked = DenyByIdentity "left-pad@1.0.0"
 
 seededStore :: IO FakeStore
 seededStore = newFakeStore seededConfig

@@ -25,6 +25,7 @@ import Ecluse.Core.Rules.Types (
     FailureAlignment (FailDeny),
     Rule (AllowByIdentity, DenyByIdentity, DenyIfCve, DenyInstallTimeExecution),
     RuleVerdict (Deny),
+    completeEvidence,
  )
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
@@ -67,7 +68,7 @@ intersectionSpec = describe "candidateSet" $ do
             ctx = EvalContext (UTCTime (fromGregorian 2026 1 1) 0) Nothing
         candidates <- candidateSet (adapterProjectName pypiAdapter) [] (Just cve)
         inCandidates candidates name `shouldBe` True
-        evalRule deps ctx advisoryRule (sampleDetails name v1_0_0)
+        evalRule deps ctx advisoryRule (completeEvidence (sampleDetails name v1_0_0))
             `shouldReturn` Deny "affected by CVE-2026-0001 (CVSS >= 7.0)"
 
     it "carries every name the loaded generation covers" $ do

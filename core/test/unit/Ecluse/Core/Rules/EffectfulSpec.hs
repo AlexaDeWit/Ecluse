@@ -64,12 +64,14 @@ ctx = ctxAt now
 {- | A package version under an optional npm scope, published @ageDays@ days before 'now'.
 Everything outside the scope, age, and install-code signals is fixed.
 -}
-pkg :: Maybe Text -> Integer -> PackageDetails
-pkg mScope ageDays =
-    (sampleDetails (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0)
-        { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
-        , pkgLicenses = ["MIT"]
-        }
+pkg :: Maybe Text -> Integer -> RuleEvidence
+pkg mScope ageDays = completeEvidence details
+  where
+    details =
+        (sampleDetails (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0)
+            { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
+            , pkgLicenses = ["MIT"]
+            }
 
 -- | A config with no retries, so a test never waits on a backoff.
 fastConfig :: EffectfulConfig
@@ -84,14 +86,14 @@ fastConfig =
 evaluator ignores the evaluation context, because the rules under test read only the package.
 -}
 mkRuleR ::
-    BreakerReporter -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleVerdict) -> IO PreparedRule
+    BreakerReporter -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (RuleEvidence -> IO RuleVerdict) -> IO PreparedRule
 mkRuleR = mkRuleClocked (pure now)
 
 {- | As 'mkRuleR', but with an injected breaker clock, so a cooldown test drives the
 breaker's timing through 'newTestClock' rather than through the request context.
 -}
 mkRuleClocked ::
-    IO UTCTime -> BreakerReporter -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleVerdict) -> IO PreparedRule
+    IO UTCTime -> BreakerReporter -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (RuleEvidence -> IO RuleVerdict) -> IO PreparedRule
 mkRuleClocked clock reporter name prec cfg align eval = do
     breaker <- newBreaker
     pure
@@ -99,15 +101,15 @@ mkRuleClocked clock reporter name prec cfg align eval = do
             { prepName = name
             , prepPrecedence = prec
             , prepResilience = Just (Resilience cfg align breaker reporter clock noFaultReporter)
-            , prepEval = \_ pd -> eval pd
+            , prepEval = \_ ev -> eval ev
             }
 
 -- | As 'mkRule', but with an injected breaker clock (through the inert default reporter).
-mkRuleClock :: IO UTCTime -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleVerdict) -> IO PreparedRule
+mkRuleClock :: IO UTCTime -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (RuleEvidence -> IO RuleVerdict) -> IO PreparedRule
 mkRuleClock clock = mkRuleClocked clock noBreakerReporter
 
 -- | As 'mkRuleR', through the inert default reporter.
-mkRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleVerdict) -> IO PreparedRule
+mkRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (RuleEvidence -> IO RuleVerdict) -> IO PreparedRule
 mkRule = mkRuleR noBreakerReporter
 
 -- | An effectful rule that always returns the given verdict (no IO failure).

@@ -2,25 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The resilience harness for effectful rules: the per-attempt timeout, bounded
-retry with backoff, and per-source circuit breaker wrapped around a rule evaluation
-that does IO. "Ecluse.Core.Rules" attaches a 'Resilience' to each effectful rule at
-'Ecluse.Core.Rules.prepare' and runs it through 'runResilient'. The pure built-ins
-never enter this module.
+{- | The resilience harness around an effectful rule's IO: a per-attempt timeout, bounded retry
+with backoff, and a per-source circuit breaker. 'Ecluse.Core.Rules.prepare' attaches one to each
+effectful rule, and the pure built-ins never enter this module.
 
-A resilient evaluation runs under its breaker's admission gate, a per-attempt timeout,
-and bounded retry with backoff. Any 'RuleVerdict' the rule returns, a deterministic
-'CannotVet' included, resets the breaker and comes back 'Decided'. The harness takes
-that verdict at face value and never retries it. Only a __fault__ the harness observes
-advances the breaker: a timeout, an exception, or the breaker already open. Such a
-fault resolves to @'Unavailable' transience alignment reason@, with the alignment from
-the rule's 'Resilience', fail-closed 'FailDeny' or fail-open 'FailNoDecision'. Total:
-'runResilient' never throws, and a rule failure becomes a result.
-
-The breaker timing reads the injected resilience clock ('resClock') fresh at each
-breaker decision. That makes it deterministic under test and independent of the request
-snapshot the age rules hold constant. Reading it again after the retry run means a
-tripped breaker's cooldown starts when the failure commits, not when the run began.
+Any 'RuleVerdict' the rule returns, 'CannotVet' included, resets the breaker and comes back
+'Decided' unretried. Only a harness-observed fault advances it, resolving to 'Unavailable' under
+the rule's own alignment. 'runResilient' never throws. The breaker reads 'resClock' fresh at each
+decision, never the request snapshot, so its cooldown starts at the failure commit.
 -}
 module Ecluse.Core.Rules.Effectful (
     -- * The resilience policy
@@ -49,7 +38,6 @@ import Ecluse.Core.Breaker (
     recordSuccess,
     reportBreakerChange,
  )
-import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Text (displayExceptionT)
@@ -90,8 +78,8 @@ reportFault (FaultReporter report) = report
 {- | Run one effectful rule evaluation under its 'Resilience' policy. The evaluator is the
 rule's per-version IO with the evaluation context applied, and the name tags the audit reason.
 -}
-runResilient :: Resilience -> Text -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO RuleEvaluation
-runResilient res name evalAt pd = do
+runResilient :: Resilience -> Text -> (RuleEvidence -> IO RuleVerdict) -> RuleEvidence -> IO RuleEvaluation
+runResilient res name evalAt ev = do
     admitted <- admitProbe res =<< resClock res
     if not admitted
         then -- Breaker open and still cooling down: fast-fail without running the
@@ -99,7 +87,7 @@ runResilient res name evalAt pd = do
         -- infrastructural outage, so it is transient.
             pure (exhausted res name (transientCause (resConfig res)) "the rule source circuit breaker is open")
         else do
-            result <- attemptWithRetry res evalAt pd
+            result <- attemptWithRetry res evalAt ev
             -- Read the clock again after the retry run. An exhausted result then starts its
             -- cooldown at the failure commit, not at the start of the run.
             settledNow <- resClock res
@@ -121,17 +109,17 @@ settleOutcome res name now = \case
 
 {- Attempt the rule's IO under the per-attempt timeout until the retry budget is spent.
 Only a 'Left' fault retries, so a deterministic verdict never enters the retry loop. -}
-attemptWithRetry :: Resilience -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO (Either (Transience, Text) RuleVerdict)
-attemptWithRetry res evalAt pd =
-    retrying (delayListPolicy (ecBackoff (resConfig res))) shouldRetry (\_ -> attemptOnce res evalAt pd)
+attemptWithRetry :: Resilience -> (RuleEvidence -> IO RuleVerdict) -> RuleEvidence -> IO (Either (Transience, Text) RuleVerdict)
+attemptWithRetry res evalAt ev =
+    retrying (delayListPolicy (ecBackoff (resConfig res))) shouldRetry (\_ -> attemptOnce res evalAt ev)
   where
     shouldRetry _ = pure . isLeft
 
 {- One attempt under the timeout. A 'RuleVerdict', a deterministic 'CannotVet' included, is
 taken at face value, so only a throw or a timeout retries and feeds the breaker. -}
-attemptOnce :: Resilience -> (PackageDetails -> IO RuleVerdict) -> PackageDetails -> IO (Either (Transience, Text) RuleVerdict)
-attemptOnce res evalAt pd = do
-    result <- tryAny (timeout (ecTimeout (resConfig res)) (evalAt pd))
+attemptOnce :: Resilience -> (RuleEvidence -> IO RuleVerdict) -> RuleEvidence -> IO (Either (Transience, Text) RuleVerdict)
+attemptOnce res evalAt ev = do
+    result <- tryAny (timeout (ecTimeout (resConfig res)) (evalAt ev))
     pure $ case result of
         Left e -> Left (transient, "the rule threw: " <> displayExceptionT e) -- the rule's IO threw
         Right Nothing -> Left (transient, "the attempt timed out") -- the attempt timed out
@@ -176,9 +164,8 @@ and cooldown ('Ecluse.Core.Breaker.recordFailure'). -}
 tripOnFailure :: EffectfulConfig -> UTCTime -> Breaker -> Breaker
 tripOnFailure cfg = recordFailure (ecBreakerThreshold cfg) (ecBreakerCooldown cfg)
 
-{- | The resilience knobs around an effectful rule's IO: the per-attempt timeout, the retries
-and the backoff before each, and the breaker threshold and cooldown. The breaker's timing reads
-'resClock' fresh at failure commit, not the request snapshot 'ctxNow'.
+{- | The resilience knobs around an effectful rule's IO. The breaker's timing reads 'resClock'
+fresh at failure commit, not the request snapshot 'ctxNow'.
 -}
 data EffectfulConfig = EffectfulConfig
     { ecTimeout :: Int
@@ -201,9 +188,8 @@ data EffectfulConfig = EffectfulConfig
     -}
     }
 
-{- | The default resilience knobs are a 2-second per-attempt timeout and two retries, at
-100ms then 250ms. The breaker trips after 5 consecutive failures and cools for 30
-seconds. The caller supplies the rule's IO. The knobs are policy, with these defaults.
+{- | A 2-second per-attempt timeout and two retries, at 100ms then 250ms. The breaker trips after
+5 consecutive failures and cools for 30 seconds.
 -}
 defaultEffectfulConfig :: EffectfulConfig
 defaultEffectfulConfig =
