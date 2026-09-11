@@ -36,6 +36,7 @@ import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission)
 import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), ResponseAction (AnswerLocally), RouteAction (RouteAction))
 import Ecluse.Core.Server.Contract (ResponseContract, VariableResponse, variableOpaqueContract, variableResponse)
 import Ecluse.Core.Server.Fault (RequestFault (rqCause))
+import Ecluse.Core.Server.Readiness (Readiness (Latched))
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (UnclassifiedFault))
 import Ecluse.Core.Worker (Liveness (Liveness, liveHealthy, liveLastPoll), heartbeatLivenessNow, workerHeartbeatStaleAfter)
 import Ecluse.Runtime.Env (envWorkerHeartbeat, recordPoll)
@@ -177,6 +178,13 @@ raisedDrain = do
     beginDrain drain
     pure drain
 
+{- | An npm-mount 'application' whose readiness is the Dredger's halt latch, the one verdict
+no mount state explains, so @\/readyz@ renders it with no @mounts@ object.
+-}
+latchedApp :: IO Application
+latchedApp =
+    application (mkServerConfig [mountAt ("npm" :| []) npmRouter]){scCheckReady = pure Latched} <$> newTestEnv
+
 {- | An npm-mount 'application' whose worker heartbeat is older than
 'workerHeartbeatStaleAfter', driving the liveness probe to its @503@ "worker stalled" arm.
 -}
@@ -216,6 +224,11 @@ spec = do
 
             it "answers /readyz with 200" $
                 get "/readyz" `shouldRespondWith` 200
+
+    describe "readiness -- the latched arm" $
+        with latchedApp $
+            it "fails /readyz with 503 and the halted body a latched Dredger answers" $
+                get "/readyz" `shouldRespondWith` "{\"status\":\"halted\"}"{matchStatus = 503}
 
     describe "liveness -- worker-stall arm of /livez" $
         with stalledWorkerApp $ do

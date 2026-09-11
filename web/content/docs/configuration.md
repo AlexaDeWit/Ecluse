@@ -291,6 +291,9 @@ type's knobs, and a knob written under a type that does not read it fails the lo
 Before you enable `DenyIfCve` or `DenyIfEpss`, read
 [Onboarding the advisory denies](@/docs/configuration.md#onboarding-the-advisory-denies).
 
+A `package@version` identity matches the version as Écluse keys it. For PyPI that is the canonical
+PEP 440 spelling, which drops trailing zeros, so the release published as `1.0.0` is written `1`.
+
 Precedence defaults per type, and an integer `precedence` overrides it. The policy below patches
 `min-age`, suppresses the fast-track, and adds six more by name:
 

@@ -19,6 +19,7 @@ import UnliftIO.Async (mapConcurrently_)
 
 import Ecluse.Boot (probeServerConfig)
 import Ecluse.Config (AppConfig)
+import Ecluse.Core.Server.Readiness (Readiness)
 import Ecluse.Core.Worker (Liveness)
 import Ecluse.Runtime.Env (envLogEnv)
 import Ecluse.Runtime.Log (moduleLog)
@@ -45,6 +46,6 @@ runMirror runtime = do
 {- | The dedicated worker's health surface: no mount, the shared @server.port@, and the
 consume-loop heartbeat behind @\/livez@ so a stalled worker fails its own liveness check.
 -}
-mirrorServerConfig :: AppConfig -> IO Bool -> IO Liveness -> ServerConfig
+mirrorServerConfig :: AppConfig -> IO Readiness -> IO Liveness -> ServerConfig
 mirrorServerConfig appConfig checkReady checkLive =
     (probeServerConfig appConfig){scCheckReady = checkReady, scCheckLive = checkLive}

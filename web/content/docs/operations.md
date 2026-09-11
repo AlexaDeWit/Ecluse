@@ -20,7 +20,7 @@ both:
 | Endpoint | What it reports | When it answers `503` |
 |---|---|---|
 | `GET /livez` | Process liveness: `200` while the process is healthy. On a process that runs no mirror worker that is the listener alone. | When the process is not healthy. Where a mirror worker runs, a stalled consume loop fails it. |
-| `GET /readyz` | Whether the role can accept its work. | During startup or drain, before configured ecosystems complete their first advisory sync, and while Dredger's cap halt is latched. |
+| `GET /readyz` | Whether the role can accept its work. | During startup or drain, before any configured ecosystem completes its first advisory sync, and while Dredger's cap halt is latched. |
 
 The `/livez` body is a JSON object with two keys, in no guaranteed order: `status`, the same
 verdict the status code carries, and `lastPoll`, the mirror worker's last successful poll as an
@@ -34,15 +34,21 @@ the same allowance, so later stalls also fail liveness after 660 seconds without
 
 Readiness is deliberately lenient about public-upstream reachability, so a transient blip does not
 pull a healthy pod from rotation. The starting-up case is the one to plan for. With an advisory
-store configured, that startup gate also waits for each ecosystem's first advisory sync, a
-one-way flip that never flaps back. Give a cold pod room for that first database download: a
-Kubernetes `startupProbe`, or a readiness `failureThreshold` sized for it. Pilot publishes an
-artifact for every ecosystem the configuration mounts, and readiness waits for each one's first
-sync. If acquisition fails, the process stays alive and keeps polling. Readiness does not itself
-block direct requests. Partial readiness for healthy mounts is planned in
-[#1223](https://github.com/AlexaDeWit/Ecluse/issues/1223), not implemented. A successful first sync
-also does not prove the data is still fresh later: source-age refusal is tracked in
-[#1221](https://github.com/AlexaDeWit/Ecluse/issues/1221).
+store configured, that startup gate waits for the first advisory sync of at least one mounted
+ecosystem, a one-way flip that never flaps back. Give a cold pod room for that first database
+download: a Kubernetes `startupProbe`, or a readiness `failureThreshold` sized for it. Pilot
+publishes an artifact for every ecosystem the configuration mounts. If acquisition fails, the
+process stays alive and keeps polling.
+
+Readiness reports every mount separately, so one ecosystem's missing artifact does not take the
+others out of rotation. The `/readyz` body carries a `mounts` object keyed by ecosystem, and each
+value is `ready` or `awaiting startup readiness`. A missing PyPI database therefore leaves a healthy
+npm mount routable, and the body names PyPI as the mount still waiting. A latched Dredger reports
+`halted` instead, and a draining instance reports `draining`. Readiness does not itself block direct
+requests: a request that needs advisory data its mount does not have is refused by that mount's own
+`onUnavailable` policy, and a rule that admits without reading the database still admits. A
+successful first sync also does not prove the data is still fresh later: source-age refusal is
+tracked in [#1221](https://github.com/AlexaDeWit/Ecluse/issues/1221).
 
 The npm liveness probe `GET /npm/-/ping` answers locally with `200 {}`. `GET /npm/-/v1/search`
 returns `501` by design, because search is a discovery convenience, not an install path.

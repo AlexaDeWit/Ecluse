@@ -20,15 +20,19 @@ import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition.Support (expectAppConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
-import Ecluse.Core.Cve (CveDb (..), DbEtag (..))
+import Ecluse.Core.Cve (DbEtag (..))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup))
+import Ecluse.Core.Server.Readiness (
+    MountReadiness (MountAwaitingFirstSync, MountReady),
+    Readiness (AwaitingMounts, Routable),
+ )
 import Ecluse.Core.Supervision (delayListPolicy)
-import Ecluse.Cve.Sync (CveSyncHandle (..), cveRuleDepsFor, cveSyncReady, cveSyncScheduleFor, planCveSync, sweepStaleTemps, sweepStep)
+import Ecluse.Cve.Sync (CveSyncHandle (..), cveRuleDepsFor, cveSyncReadiness, cveSyncScheduleFor, planCveSync, sweepStaleTemps, sweepStep)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
 import Ecluse.Runtime.Test.Cve (refusingFetch)
-import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
 import Ecluse.Test.Rules (noFaultReporter)
 
@@ -100,29 +104,36 @@ spec = do
     describe "cveRuleDepsFor -- per-ecosystem capability dispatch" $ do
         it "borrows through the mount ecosystem's own slot" $ do
             handle <- stubSyncHandle
-            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") fakeDb
+            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") (fakeCveDb [])
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
             rdWithCveLookup (deps Npm) (pure . isJust) `shouldReturn` True
 
         it "abstains for an ecosystem the plan does not carry" $ do
             handle <- stubSyncHandle
-            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") fakeDb
+            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") (fakeCveDb [])
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
             rdWithCveLookup (deps PyPI) (pure . isJust) `shouldReturn` False
 
-    describe "cveSyncReady -- the first-sync readiness gate" $ do
-        it "is vacuously ready with no advisory store (an empty plan)" $
-            cveSyncReady Map.empty `shouldReturn` True
+    describe "cveSyncReadiness -- the per-mount first-sync verdict" $ do
+        it "is routable with no advisory store (an empty plan)" $
+            cveSyncReadiness Map.empty `shouldReturn` Routable Map.empty
 
-        it "waits for every configured ecosystem, then reports ready" $ do
-            npmHandle <- stubSyncHandle
-            pypiHandle <- stubSyncHandle
-            let plan = Map.fromList [(Npm, npmHandle), (PyPI, pypiHandle)]
-            cveSyncReady plan `shouldReturn` False
-            atomically (writeTVar (csReady npmHandle) True)
-            cveSyncReady plan `shouldReturn` False
-            atomically (writeTVar (csReady pypiHandle) True)
-            cveSyncReady plan `shouldReturn` True
+        it "awaits the mounts while neither artifact exists" $ do
+            (plan, _) <- twoMountPlan
+            cveSyncReadiness plan `shouldReturn` AwaitingMounts (bothAt MountAwaitingFirstSync)
+
+        it "keeps npm routable while the PyPI artifact is missing, then reports the recovery" $ do
+            (plan, (npmHandle, pypiHandle)) <- twoMountPlan
+            landed npmHandle
+            -- The isolation the owner ruled on: npm stays routable and PyPI is named as awaiting.
+            cveSyncReadiness plan `shouldReturn` Routable (Map.fromList [(Npm, MountReady), (PyPI, MountAwaitingFirstSync)])
+            landed pypiHandle
+            cveSyncReadiness plan `shouldReturn` Routable (bothAt MountReady)
+
+        it "keeps PyPI routable while the npm artifact is missing" $ do
+            (plan, (_, pypiHandle)) <- twoMountPlan
+            landed pypiHandle
+            cveSyncReadiness plan `shouldReturn` Routable (Map.fromList [(Npm, MountAwaitingFirstSync), (PyPI, MountReady)])
 
     describe "cveSyncScheduleFor" $
         it "converts the configured poll interval to microseconds over the shipped burst" $ do
@@ -137,6 +148,21 @@ spec = do
             -- schedule directly. The length of 'bootBackoffDelays' is the retry budget.
             delays <- simulatePolicy (length bootBackoffDelays) (delayListPolicy bootBackoffDelays)
             map snd delays `shouldBe` map Just bootBackoffDelays <> [Nothing]
+
+-- An npm and a PyPI mount, neither having synced yet, with their handles for flipping.
+twoMountPlan :: IO (Map.Map Ecosystem CveSyncHandle, (CveSyncHandle, CveSyncHandle))
+twoMountPlan = do
+    npmHandle <- stubSyncHandle
+    pypiHandle <- stubSyncHandle
+    pure (Map.fromList [(Npm, npmHandle), (PyPI, pypiHandle)], (npmHandle, pypiHandle))
+
+-- Both mounts in the same state, the expectation either artifact's absence is read against.
+bothAt :: MountReadiness -> Map.Map Ecosystem MountReadiness
+bothAt readiness = Map.fromList [(Npm, readiness), (PyPI, readiness)]
+
+-- One mount's first sync landing, which is the only way its flag flips.
+landed :: CveSyncHandle -> IO ()
+landed handle = atomically (writeTVar (csReady handle) True)
 
 -- A handle as 'planCveSync' would build it, minus the transport (the tests
 -- above never fetch): a fresh empty slot and a readiness flag at False.
@@ -155,10 +181,6 @@ stubSyncHandle = do
                     , syncSlot = slot
                     }
             }
-
--- An owning handle over an in-memory lookup. Closing is a no-op.
-fakeDb :: CveDb
-fakeDb = CveDb{cveDbLookup = fakeCveLookup [], cveDbClose = pass, cveDbMeta = []}
 
 -- The S3 env discovers credentials from the process environment. The plan only wires
 -- the transport and makes no request, so dummies satisfy it.

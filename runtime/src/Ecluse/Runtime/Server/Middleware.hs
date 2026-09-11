@@ -23,10 +23,18 @@ module Ecluse.Runtime.Server.Middleware (
     jsonResponse,
 ) where
 
-import Data.Aeson (encode, object, (.=))
+import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson.Key qualified as Key
+import Data.Map.Strict qualified as Map
 import Network.HTTP.Types (Status, hConnection, hContentType, status200, status404, status503)
 import Network.Wai (Application, Middleware, Response, mapResponseHeaders, modifyResponse, pathInfo, responseLBS)
 
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Server.Readiness (
+    MountReadiness (MountAwaitingFirstSync, MountReady),
+    Readiness (AwaitingMounts, Latched, Routable),
+    routable,
+ )
 import Ecluse.Core.Worker (Liveness (liveHealthy, liveLastPoll))
 import Ecluse.Runtime.Server.Drain (DrainSignal, isDraining)
 
@@ -54,7 +62,7 @@ timeoutSeconds = 60
 {- | The control-plane health probes, answered above any mount: @\/livez@ from the injected
 liveness check, @\/readyz@ from the drain signal and startup gate. Any other path is a @404@.
 -}
-probeApplication :: DrainSignal -> IO Bool -> IO Liveness -> Application
+probeApplication :: DrainSignal -> IO Readiness -> IO Liveness -> Application
 probeApplication drain checkReady checkLiveness request respond =
     case pathInfo request of
         ["livez"] -> checkLiveness >>= respond . livenessResponse
@@ -75,17 +83,43 @@ livenessResponse liveness
 {- Readiness stays lenient about public-upstream reachability, because the proxy still serves
 private-upstream hits when public is down. A blip must not flap a healthy pod out of rotation.
 -}
-readiness :: DrainSignal -> IO Bool -> IO Response
+readiness :: DrainSignal -> IO Readiness -> IO Response
 readiness drain checkReady =
     isDraining drain >>= \case
-        True -> pure (jsonResponse status503 "{\"status\":\"draining\"}")
-        False ->
-            checkReady <&> \case
-                False -> jsonResponse status503 "{\"status\":\"awaiting startup readiness\"}"
-                True -> jsonResponse status200 "{\"status\":\"ready\"}"
+        True -> pure (statusOnly status503 "draining")
+        False -> readinessResponse <$> checkReady
 
-{- This tier sits above the mounts, so no ecosystem shapes the body of an unmounted path.
--}
+{- The body names every configured mount beside the verdict, so an operator sees which ecosystem
+awaits its advisory database while the others keep serving. -}
+readinessResponse :: Readiness -> Response
+readinessResponse verdict = case verdict of
+    Routable mounts -> withMounts readyLabel mounts
+    AwaitingMounts mounts -> withMounts awaitingLabel mounts
+    Latched -> statusOnly status "halted"
+  where
+    -- 'routable' alone decides the status, and the match decides only what the body reports.
+    status = bool status503 status200 (routable verdict)
+    withMounts label mounts =
+        jsonResponse status (encode (object ["status" .= label, "mounts" .= mountsOf mounts]))
+
+-- A mount reports the two words the whole verdict reports, under its configured ecosystem key.
+mountsOf :: Map.Map Ecosystem MountReadiness -> Value
+mountsOf mounts =
+    object [Key.fromText (ecosystemName eco) .= mountLabel mount | (eco, mount) <- Map.toList mounts]
+  where
+    mountLabel = \case
+        MountReady -> readyLabel
+        MountAwaitingFirstSync -> awaitingLabel
+
+readyLabel, awaitingLabel :: Text
+readyLabel = "ready"
+awaitingLabel = "awaiting startup readiness"
+
+-- A probe body carrying the verdict alone, for a state no mount detail explains.
+statusOnly :: Status -> Text -> Response
+statusOnly status label = jsonResponse status (encode (object ["status" .= label]))
+
+-- This tier sits above the mounts, so no ecosystem shapes the body of an unmounted path.
 notFound :: Response
 notFound =
     responseLBS status404 [(hContentType, "text/plain; charset=utf-8")] "Not Found\n"
