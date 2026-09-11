@@ -203,6 +203,7 @@ withE2EWith cfg action gdp = do
                     , e2eVerdaccio = "http://127.0.0.1:4874" -- Assuming local verdaccio is on 4874 in local dev
                     , e2eStubContainer = gdpStub gdp
                     , e2eProxyContainer = "ecluse-proxy" -- Placeholder for local dev
+                    , e2eMirrorContainer = gdpVerd gdp
                     , e2eCollectorContainer = if ecCollector cfg then Just "otelcol" else Nothing
                     , e2eManager = manager
                     }
@@ -244,6 +245,7 @@ withE2EWith cfg action gdp = do
                                 , e2eVerdaccio = "http://127.0.0.1:" <> show verdPort
                                 , e2eStubContainer = stub
                                 , e2eProxyContainer = prox
+                                , e2eMirrorContainer = gdpVerd gdp
                                 , e2eCollectorContainer = collectorName
                                 , e2eManager = manager
                                 }

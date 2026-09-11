@@ -33,6 +33,10 @@ data E2E = E2E
     {- ^ The proxy container name, so a test can read the proxy's own JSONL log stream
     ('proxyContainerLogs'): what it wrote to stdout\/stderr.
     -}
+    , e2eMirrorContainer :: String
+    {- ^ The Verdaccio container name, so a failure can carry the mirror store's own reason
+    for a status the proxy could only report as an outage.
+    -}
     , e2eCollectorContainer :: Maybe String
     {- ^ The OTLP collector container name when the environment booted one ('ecCollector'), so
     a test can read the collector's debug-exporter output. 'Nothing' when no collector booted.
