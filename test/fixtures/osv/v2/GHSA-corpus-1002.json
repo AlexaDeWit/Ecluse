@@ -1,0 +1,17 @@
+{
+  "id": "GHSA-corpus-1002",
+  "aliases": ["CVE-2026-11002"],
+  "summary": "Fixture: a V2 delta with a published fix. corpus-revoked has no advisory in CorpusV1, so a V1-to-V2 swap condemns 1.0.0 and spares 1.2.0.",
+  "database_specific": { "severity": "HIGH" },
+  "affected": [
+    {
+      "package": { "name": "corpus-revoked", "ecosystem": "npm" },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [{ "introduced": "0" }, { "fixed": "1.2.0" }]
+        }
+      ]
+    }
+  ]
+}

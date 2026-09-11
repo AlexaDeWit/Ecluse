@@ -19,9 +19,11 @@ module Ecluse.E2E.Harness.Docker (
     -- * Observability
     withUpstreamPaused,
 
-    -- * The Dredger, run to completion
-    DredgerRun (..),
+    -- * The product image, run to completion
+    RoleRun (..),
+    runRoleOnce,
     runDredgerOnce,
+    advisoryDataDir,
 
     -- * Container logs
     awaitContainerLog,
@@ -63,6 +65,7 @@ import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess, readProcessStdout)
 import UnliftIO (bracket, bracket_, handleAny)
 
+import Ecluse.E2E.Fixtures.Advisories (buildAdvisoryFixtures)
 import Ecluse.E2E.Fixtures.Npm (buildFixtures, fixturePackages)
 import Ecluse.E2E.Fixtures.PyPI (buildPyPIFixtures, pypiUpstreamUrl)
 import Ecluse.E2E.Harness.Types
@@ -115,6 +118,7 @@ withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
         createDirectoryIfMissing True htmlDir
         buildFixtures htmlDir fixturePackages
         buildPyPIFixtures (workDir </> "pypi")
+        buildAdvisoryFixtures htmlDir
         writeFileText (workDir </> "verdaccio.yaml") verdaccioConfig
         writeFileText (workDir </> "nginx.conf") nginxStubConfig
         generateCerts (workDir </> "certs")
@@ -226,6 +230,7 @@ withE2EWith cfg action gdp = do
                         (dockerRun prox net (LocallyBuilt (toText image)))
                             { drPorts = ["127.0.0.1:" <> show proxyPort <> ":4873"]
                             , drMounts = [(certsDir, "/certs:ro")]
+                            , drTmpfs = [advisoryDataTmpfs]
                             , drEnv = proxyEnv proxyPort queueUrl <> ecExtraEnv cfg
                             }
                 withDockerContainer labelArgs proxRun $ \_ -> do
@@ -292,6 +297,8 @@ data DockerRun = DockerRun
     -- ^ @-p@ publish specs, e.g. @"127.0.0.1:0:4873"@.
     , drMounts :: [(FilePath, String)]
     -- ^ @-v@ bind mounts as @(hostPath, "containerPath[:ro]")@.
+    , drTmpfs :: [String]
+    -- ^ @--tmpfs@ specs, e.g. @"/var/lib/ecluse/advisories:mode=1777"@.
     , drEnv :: [(Text, Text)]
     -- ^ @-e@ environment.
     , drImage :: String
@@ -317,6 +324,7 @@ dockerRun name net image =
         , drAliases = []
         , drPorts = []
         , drMounts = []
+        , drTmpfs = []
         , drEnv = []
         , drImage = toString (renderImageRef image)
         , drCmd = []
@@ -339,6 +347,7 @@ runArgs extra labelArgs spec =
         <> concatMap (\a -> ["--network-alias", a]) (drAliases spec)
         <> concatMap (\p -> ["-p", p]) (drPorts spec)
         <> concatMap (\(h, c) -> ["-v", h <> ":" <> c]) (drMounts spec)
+        <> concatMap (\t -> ["--tmpfs", t]) (drTmpfs spec)
         <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (drEnv spec)
         <> labelArgs
         <> (drImage spec : drCmd spec)
@@ -446,30 +455,50 @@ collectorConfig =
         <> "traces: {receivers: [otlp], exporters: [debug]}, "
         <> "metrics: {receivers: [otlp], exporters: [debug]}}}}"
 
-{- | What one @ecluse dredger --once@ run reported: the status a scheduler reads, and the JSONL
-log lines it wrote. The run is not detached, so it ends when the cycle does.
+{- | What one product-image run reported: the status a scheduler reads, and the JSONL log lines it
+wrote. The run is not detached, so it ends when the role's own work does.
 -}
-data DredgerRun = DredgerRun
-    { dredgerExit :: ExitCode
-    , dredgerOutput :: Text
+data RoleRun = RoleRun
+    { roleExit :: ExitCode
+    , roleOutput :: Text
     }
+
+{- | The advisory data directory the shipped image defaults to. A role that syncs or compiles an
+artifact writes here, so every product-image container mounts it writable.
+-}
+advisoryDataDir :: FilePath
+advisoryDataDir = "/var/lib/ecluse/advisories"
+
+-- The image's own filesystem is read-only to its non-root user, so the directory arrives as a
+-- world-writable tmpfs rather than the volume a deployment mounts.
+advisoryDataTmpfs :: String
+advisoryDataTmpfs = advisoryDataDir <> ":mode=1777"
+
+{- | Run the product image to completion on the shared data plane, under the caller's environment
+and arguments. It joins the plane's network, so it addresses the same stores the proxy does.
+-}
+runRoleOnce :: GlobalDataPlane -> [(Text, Text)] -> [String] -> IO RoleRun
+runRoleOnce gdp env args = do
+    image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
+    sfx <- uniqueSuffix
+    labelArgs <- dockerLabelArgs "e2e"
+    let role = fromMaybe "role" (listToMaybe args)
+        run =
+            (dockerRun ("ecluse-e2e-" <> role <> "-" <> sfx) (gdpNet gdp) (LocallyBuilt (toText image)))
+                { drMounts = [(gdpWorkDir gdp </> "certs", "/certs:ro")]
+                , drTmpfs = [advisoryDataTmpfs]
+                , drEnv = env
+                , drCmd = args
+                }
+    (code, out, err) <- readProcess (proc "docker" (runArgs [] labelArgs run))
+    pure RoleRun{roleExit = code, roleOutput = decodeUtf8 (LBS.toStrict (out <> err))}
 
 {- | Run the product image as @ecluse dredger --once@ against the shared data plane, layering
 @extraEnv@ over 'dredgerEnv'. It deletes from the store the proxy mirrors into.
 -}
-runDredgerOnce :: GlobalDataPlane -> [Text] -> [(Text, Text)] -> IO DredgerRun
-runDredgerOnce gdp flags extraEnv = do
-    image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
-    sfx <- uniqueSuffix
-    labelArgs <- dockerLabelArgs "e2e"
-    let run =
-            (dockerRun ("ecluse-e2e-dredger-" <> sfx) (gdpNet gdp) (LocallyBuilt (toText image)))
-                { drMounts = [(gdpWorkDir gdp </> "certs", "/certs:ro")]
-                , drEnv = dredgerEnv <> extraEnv
-                , drCmd = "dredger" : map toString flags
-                }
-    (code, out, err) <- readProcess (proc "docker" (runArgs [] labelArgs run))
-    pure DredgerRun{dredgerExit = code, dredgerOutput = decodeUtf8 (LBS.toStrict (out <> err))}
+runDredgerOnce :: GlobalDataPlane -> [Text] -> [(Text, Text)] -> IO RoleRun
+runDredgerOnce gdp flags extraEnv =
+    runRoleOnce gdp (dredgerEnv <> extraEnv) ("dredger" : map toString flags)
 
 {- | The Dredger's own environment, carrying the operator consent its mirror target's tag admits.
 Its private upstream is a registry of its own: a deleting role refuses a shared one.

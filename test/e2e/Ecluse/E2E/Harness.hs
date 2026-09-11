@@ -4,6 +4,7 @@
 
 module Ecluse.E2E.Harness (
     module Ecluse.E2E.Harness.Types,
+    module Ecluse.E2E.Harness.Advisories,
     module Ecluse.E2E.Harness.Client,
     module Ecluse.E2E.Harness.Docker,
     module Ecluse.E2E.Harness.Npm,
@@ -12,6 +13,7 @@ module Ecluse.E2E.Harness (
     module Ecluse.E2E.Harness.Verdaccio,
 ) where
 
+import Ecluse.E2E.Harness.Advisories
 import Ecluse.E2E.Harness.Client
 import Ecluse.E2E.Harness.Docker
 import Ecluse.E2E.Harness.Npm

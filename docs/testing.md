@@ -97,8 +97,9 @@ config parsing, the denial span-attribute mapping, the JSONL scribe, and the met
 
 The only tier that assembles the whole system through the real composition root and drives it with
 the real `npm` and `pip` clients. It runs the published OCI image (`nix build .#dockerImage`), an
-nginx public-upstream stub, and a Verdaccio private upstream and mirror target as containers on a
-Docker network. It then asserts client- and mirror-observable outcomes:
+nginx public-upstream stub, a Verdaccio private upstream and mirror target, and a ministack emulator
+for the mirror queue and the advisory store, as containers on a Docker network. It then asserts
+client- and mirror-observable outcomes:
 
 - an allow-listed package installs,
 - Écluse blocks a rules-denied package and never mirrors it,
@@ -113,6 +114,14 @@ consent refusal, first-party protection, and listing preservation after the fina
 is deleted. `Ecluse.DredgerE2ESpec` also drives `listPackagesIn` against the store and compares
 complete package-version snapshots with the audit records and cycle counts. Its first-party
 fixture holds two versions. These cases do not verify behaviour against a real CodeArtifact repository.
+
+One further Dredger scenario connects advisory compilation to revocation. Pilot compiles the `v1`
+corpus through the product image and uploads it to the emulated advisory store. The proxy syncs it,
+and `npm` installs both versions of the corpus fixture the `v2` delta condemns, which the worker
+mirrors. Pilot then publishes the `v2` generation, the proxy swaps it in, and a candidate-mode
+Dredger cycle deletes the affected version under a named `DenyIfCve`. The scenario then confirms the
+next install of that version fails, its artifact request is refused with `403` and re-mirrors
+nothing, and the stated fix still installs from the store.
 
 It catches composition-root and cross-component regressions nothing else does. The mount rewrites a
 served `dist.tarball` to an absolute installable URL under `ECLUSE_SERVER__PUBLIC_URL`, because

@@ -10,6 +10,8 @@ module Ecluse.E2E.Harness.Verdaccio (
     verdaccioAwaitListed,
     verdaccioNamesUnder,
     verdaccioVersions,
+    verdaccioAwaitVersions,
+    verdaccioArtifact,
     verdaccioSnapshot,
 ) where
 
@@ -133,6 +135,22 @@ verdaccioVersions e2e name = do
         404 -> pure []
         200 -> sort . map Key.toText . KeyMap.keys <$> expectRight (first (\err -> name <> ": " <> toText err) versions)
         _ -> expectRight (Left (name <> ": packument returned HTTP " <> show status) :: Either Text [Text])
+
+{- | Poll until the store serves exactly the wanted versions, sorted as 'verdaccioVersions' returns
+them. It yields what it last read, so a failure names the versions the store actually held.
+-}
+verdaccioAwaitVersions :: E2E -> Text -> [Text] -> IO [Text]
+verdaccioAwaitVersions e2e name wanted =
+    pollUntil 40 500000 (== wanted) (handleAny (\_ -> pure []) (verdaccioVersions e2e name))
+
+{- | Read one version's artifact straight from the store, returning the status and the body size.
+It bypasses the proxy, so a case can tell a stored artifact from a public-leg fallback.
+-}
+verdaccioArtifact :: E2E -> Text -> Text -> IO (Int, Int64)
+verdaccioArtifact e2e name version = do
+    req <- parseRequest (toString (e2eVerdaccio e2e <> "/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz"))
+    resp <- httpLbs req (e2eManager e2e)
+    pure (statusCode (responseStatus resp), LBS.length (responseBody resp))
 
 -- | Snapshot every listed package and its versions, failing if a packument cannot be read.
 verdaccioSnapshot :: E2E -> IO (Map Text [Text])

@@ -13,7 +13,6 @@ import Test.Hspec
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.E2E.Fixtures.Npm (
-    PkgSpec,
     allowPkg,
     denyPkg,
     headPkg,
@@ -78,7 +77,7 @@ scenarios = do
             it "refuses to mirror an artifact whose bytes fail the integrity gate" $ \e2e -> do
                 -- A tarball request enqueues a mirror on demand. The worker's digest gate must
                 -- reject the tampered bytes, so the version never reaches the private mirror.
-                _ <- proxyGet e2e (tarballPath tamperPkg)
+                _ <- proxyGet e2e (npmTarballPath (psName tamperPkg) (psVersion tamperPkg))
                 threadDelay 1500000
                 mirrored <- verdaccioHasVersionNow e2e (psName tamperPkg) (psVersion tamperPkg)
                 mirrored `shouldBe` False
@@ -87,7 +86,7 @@ scenarios = do
             it "answers HEAD on a tarball with its size but no body, and enqueues no mirror" $ \e2e -> do
                 -- A HEAD relays the upstream headers with no body, so it declares a
                 -- Content-Length yet enqueues no mirror. Only this case touches headPkg.
-                (status, declared, bodyBytes) <- proxyHead e2e (tarballPath headPkg)
+                (status, declared, bodyBytes) <- proxyHead e2e (npmTarballPath (psName headPkg) (psVersion headPkg))
                 status `shouldBe` 200
                 bodyBytes `shouldBe` 0
                 declared `shouldSatisfy` maybe False (> 0)
@@ -252,6 +251,3 @@ pendingScenarios =
     describe "graceful shutdown" $
         it "drains in-flight work on SIGTERM" $ \_ ->
             pendingWith "activates with the #160 graceful-drain work"
-
-tarballPath :: PkgSpec -> Text
-tarballPath p = "/npm/" <> psName p <> "/-/" <> psName p <> "-" <> psVersion p <> ".tgz"
