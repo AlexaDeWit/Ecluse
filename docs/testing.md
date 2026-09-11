@@ -104,6 +104,7 @@ client- and mirror-observable outcomes:
 - an allow-listed package installs,
 - Écluse blocks a rules-denied package and never mirrors it,
 - an installed package round-trips server → worker to the private mirror,
+- mirroring an older version after a newer one leaves the mirror's `dist-tags.latest` alone,
 - a tampered artifact fails the integrity gate and never publishes,
 - `pip` installs a wheel from a `pypi` mount in hash-checking mode, pinned to the sha256 the
   served Simple index advertised, so the installed bytes are the advertised ones.

@@ -12,6 +12,9 @@ redirect. Both effectful operations report failure as a __value__, 'FetchFault' 
 'PublishFault' on the write, so the worker's decisions stay total at the call site.
 -}
 module Ecluse.Core.Registry.Publish (
+    -- * What one write declares
+    PublishPlan (..),
+
     -- * The adapter's protocol codec
     PublishCodec (..),
 
@@ -41,6 +44,20 @@ import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (Version)
 
+{- | What one mirror write declares: the version it adds, and the release tag the store must carry
+once it lands. The caller decides the tag over the inventory the write itself produces, so a codec
+never derives one from the version in hand.
+-}
+data PublishPlan = PublishPlan
+    { ppVersion :: Version
+    -- ^ The version these bytes publish.
+    , ppLatest :: Version
+    {- ^ The @latest@ target to declare. It is a version the store holds after this write, which
+    is the published version itself when nothing else is mirrored.
+    -}
+    }
+    deriving stock (Eq, Show)
+
 {- | One ecosystem's mirror-write protocol: the pure request formations and projections, nothing
 effectful. The endpoint and bearer arrive as arguments, so the codec holds no URL, credential, or
 connection state.
@@ -50,7 +67,7 @@ data PublishCodec = PublishCodec
     -- ^ Form the metadata read the presence probe makes against the mirror target.
     , pcParseVersionList :: RegistryResponse -> Either ParseError [Version]
     -- ^ Project a probed metadata response onto the versions the mirror holds.
-    , pcPublishRequest :: Text -> Maybe Secret -> PackageName -> Version -> MirrorArtifact -> ByteString -> Either UrlFormationError Request
+    , pcPublishRequest :: Text -> Maybe Secret -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> Either UrlFormationError Request
     -- ^ Form the complete publish request for one verified artifact, document assembly included.
     , pcPublishOutcome :: Int -> Either PublishFault ()
     {- ^ Classify the registry's status answer, counting an idempotent already-present as
@@ -82,7 +99,7 @@ data MirrorPublish = MirrorPublish
     -}
     , mpParseVersionList :: RegistryResponse -> Either ParseError [Version]
     -- ^ Project a probed response onto the versions the mirror holds.
-    , mpPublishArtifact :: PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
+    , mpPublishArtifact :: PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
     {- ^ Publish one verified artifact to the mirror target. Every failure is a
     'PublishFault' value, so the worker's retry-vs-drop decision is total at the
     call site.
@@ -114,13 +131,13 @@ probeMetadata transport targetUrl codec name = do
         (boundedFetch (ptManager transport) (ptLimits transport))
         (sealRequest <$> pcProbeRequest codec targetUrl token name)
 
-publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
-publishArtifact transport targetUrl codec name version artifact bytes = do
+publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
+publishArtifact transport targetUrl codec name plan artifact bytes = do
     token <- ptMintToken transport
     formThen
         (PublishFetch . FetchUrlUnformable)
         (writeArtifact transport codec)
-        (sealRequest <$> pcPublishRequest codec targetUrl token name version artifact bytes)
+        (sealRequest <$> pcPublishRequest codec targetUrl token name plan artifact bytes)
 
 -- Read the codec's verdict from the answered status. The 'const' projection drops the
 -- target's body, which the write has no use for, and the exchange bounds it either way.

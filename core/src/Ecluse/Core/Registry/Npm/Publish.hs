@@ -39,10 +39,10 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest, packageUrl, parseRequestEither, withToken)
-import Ecluse.Core.Registry.Publish (PublishCodec (..))
+import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest, ppVersion))
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Server.Path (unFilename)
-import Ecluse.Core.Version (Version, renderVersion)
+import Ecluse.Core.Version (renderVersion)
 
 -- | Probe an abbreviated packument and publish verified bytes with their strongest SRI alternatives.
 npmPublishCodec :: PublishCodec
@@ -50,12 +50,12 @@ npmPublishCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated noValidators
         , pcParseVersionList = Project.parseVersionList
-        , pcPublishRequest = \targetUrl token name version artifact bytes ->
+        , pcPublishRequest = \targetUrl token name plan artifact bytes ->
             publishRequest
                 targetUrl
                 (bareCredential <$> token)
                 name
-                (npmPublishDocument name version (unFilename (maFilename artifact)) (strongestSriValue artifact) (firstHashValue SHA1 artifact) bytes)
+                (npmPublishDocument name plan (unFilename (maFilename artifact)) (strongestSriValue artifact) (firstHashValue SHA1 artifact) bytes)
         , pcPublishOutcome = classifyPublish
         }
 
@@ -94,10 +94,13 @@ publishRequest baseUrl credential name document = do
                     : requestHeaders base
             }
 
--- | Assemble one version with caller-verified digests and bytes. The registry expands the tarball filename into its served URL.
+{- | Assemble one version with caller-verified digests and bytes. The registry expands the tarball
+filename into its served URL. The declared @latest@ is the plan's, never the published version by
+default, because a registry left to choose can otherwise retag on completion order.
+-}
 npmPublishDocument ::
     PackageName ->
-    Version ->
+    PublishPlan ->
     -- | The tarball's filename: the @_attachments@ key and tarball file segment.
     Text ->
     -- | The @dist.integrity@ SRI string, if known (e.g. @"sha512-…"@).
@@ -107,17 +110,17 @@ npmPublishDocument ::
     -- | The verified tarball bytes.
     ByteString ->
     ByteString
-npmPublishDocument name version filename integrity shasum tarball =
+npmPublishDocument name plan filename integrity shasum tarball =
     toStrict . Aeson.encode $
         object
             [ "_id" .= rendered
             , "name" .= rendered
-            , "dist-tags" .= object ["latest" .= versionText]
+            , "dist-tags" .= object ["latest" .= renderVersion (ppLatest plan)]
             , "versions" .= object [Key.fromText versionText .= manifest]
             , "_attachments" .= object [Key.fromText filename .= attachmentObject tarball]
             ]
   where
-    versionText = renderVersion version
+    versionText = renderVersion (ppVersion plan)
     rendered = renderPackageName name
     manifest = versionManifestObject rendered versionText (distObject filename integrity shasum)
 

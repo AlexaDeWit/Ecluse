@@ -22,7 +22,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (..), PackageName, mkPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), digestOf)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead (VersionRead, vrDetails, vrUpstreamLatest), digestOf)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIVersion)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (
@@ -49,6 +49,10 @@ resolveMetadata c source name fetch =
 
 unwrapResolved :: Either MetadataError a -> IO a
 unwrapResolved = either (throwIO . UnexpectedFault) pure
+
+-- A version read from an ecosystem that declares no release tag.
+untagged :: Maybe PackageDetails -> VersionRead
+untagged details = VersionRead{vrDetails = details, vrUpstreamLatest = Nothing}
 
 newtype UnexpectedFault = UnexpectedFault MetadataError
     deriving stock (Show)
@@ -128,9 +132,10 @@ pypiName = mkPackageName PyPI Nothing "auditdemo"
 pypiVersion :: Version
 pypiVersion = mkVersion PyPI "1"
 
-selectedRelease :: Int -> Int -> Either MetadataError (Maybe PackageDetails)
+selectedRelease :: Int -> Int -> Either MetadataError VersionRead
 selectedRelease count padding =
-    projectPyPIVersion defaultLimits pypiName pypiVersion
+    fmap untagged
+        . projectPyPIVersion defaultLimits pypiName pypiVersion
         . BL.toStrict
         . encode
         $ object ["name" .= ("auditdemo" :: Text), "files" .= map file [1 .. count]]
@@ -157,7 +162,7 @@ spec = do
         for_ [(1, 16), (100, 16), (100, 2048), (1000, 16)] $ \(files, urlLength) ->
             it ("reports retained bytes for " <> show files <> " files with URL padding " <> show urlLength) $ do
                 release <- unwrapResolved (selectedRelease files urlLength)
-                (length . pkgArtifacts <$> release) `shouldBe` Just files
+                (length . pkgArtifacts <$> vrDetails release) `shouldBe` Just files
                 let accounted = weighVersion release
                 accounted `shouldSatisfy` (> files * urlLength)
                 seen <- newIORef 0
@@ -175,10 +180,10 @@ spec = do
                 absentVersion = mkVersion PyPI "2"
                 fetch = modifyIORef' calls (+ 1) $> Right release
             c <- newMetadataCache (configBytes 60 100 16384)
-            _ <- Cache.resolveVersion port c publicSource pypiName absentVersion (pure (Right Nothing))
+            _ <- Cache.resolveVersion port c publicSource pypiName absentVersion (pure (Right (untagged Nothing)))
             replicateM_ 2 $ Cache.resolveVersion port c publicSource pypiName pypiVersion fetch `shouldReturn` Right release
             Cache.cachedVersion c publicSource pypiName pypiVersion `shouldReturn` Nothing
-            Cache.cachedVersion c publicSource pypiName absentVersion `shouldReturn` Just Nothing
+            Cache.cachedVersion c publicSource pypiName absentVersion `shouldReturn` Just (untagged Nothing)
             readIORef calls `shouldReturn` 2
             readIORef seen `shouldReturn` 1024
 
@@ -338,7 +343,7 @@ spec = do
             let name = unscopedNpm "hot-head"
             _ <- resolveMetadata c publicSource name (pure (entry name "raw"))
             for_ ([1 .. 5] :: [Int]) $ \i ->
-                Cache.resolveVersion noopMetricsPort c publicSource name (mkVersion Npm (show i <> ".0.0")) (pure (Right Nothing))
+                Cache.resolveVersion noopMetricsPort c publicSource name (mkVersion Npm (show i <> ".0.0")) (pure (Right (untagged Nothing)))
 
             Cache.cachedVersion c publicSource name (mkVersion Npm "1.0.0") `shouldReturn` Nothing
 
@@ -369,7 +374,7 @@ spec = do
             for_ ([1 .. 10] :: [Int]) $ \i -> do
                 let name = unscopedNpm ("filler-" <> show i)
                 _ <- Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
-                _ <- Cache.resolveVersion port c publicSource name (mkVersion Npm "1.0.0") (pure (Right Nothing))
+                _ <- Cache.resolveVersion port c publicSource name (mkVersion Npm "1.0.0") (pure (Right (untagged Nothing)))
                 _ <- Cache.resolveAssembled port c (show i) (pure (mkBytes 2048 'x'))
                 pass
             total <- sum <$> traverse readIORef [fullSeen, versionSeen, assembledSeen]
@@ -387,12 +392,12 @@ spec = do
                         }
             let name = unscopedNpm "recency"
                 v n = mkVersion Npm (show (n :: Int) <> ".0.0")
-            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 1) (pure (Right Nothing))
-            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 2) (pure (Right Nothing))
+            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 1) (pure (Right (untagged Nothing)))
+            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 2) (pure (Right (untagged Nothing)))
 
             _ <- Cache.cachedVersion c publicSource name (v 1)
 
-            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 3) (pure (Right Nothing))
+            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 3) (pure (Right (untagged Nothing)))
 
-            Cache.cachedVersion c publicSource name (v 1) `shouldReturn` Just Nothing
+            Cache.cachedVersion c publicSource name (v 1) `shouldReturn` Just (untagged Nothing)
             Cache.cachedVersion c publicSource name (v 2) `shouldReturn` Nothing

@@ -16,6 +16,7 @@ import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
     HashAlg (Blake2b, SHA1, SHA256, SRI),
+    PackageDetails,
  )
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionUndecidable))
 import Ecluse.Core.Registry (
@@ -29,17 +30,20 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataFetch, MetadataUndecodable),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
+    VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
     fetchVersionDetails,
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
+import Ecluse.Core.Registry.Publish (PublishPlan (PublishPlan, ppLatest, ppVersion))
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (BodyTooLarge))
+import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     WorkerPolicy (wpArtifact, wpPublish),
     processJob,
  )
-import Ecluse.Core.Worker.Job (outcomeOfAdmission, outcomeOfFetchFault)
+import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
 import Ecluse.Test.Package (unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -83,7 +87,7 @@ spec = do
     describe "npmPublishDocument" $ do
         it "assembles a PUT document with the version, dist integrity, and base64 attachment" $ do
             let document =
-                    npmPublishDocument pkg ver "thing-1.0.0.tgz" (Just trueSri) (Just trueSha1) tarballBytes
+                    npmPublishDocument pkg (PublishPlan{ppVersion = ver, ppLatest = ver}) "thing-1.0.0.tgz" (Just trueSri) (Just trueSha1) tarballBytes
                 decoded :: Either String Value
                 decoded = eitherDecodeStrict' document
             case decoded of
@@ -426,10 +430,9 @@ spec = do
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
 
-    describe "processJob: the mirror-presence dedup probe" $ do
-        -- The default 'recordingPublish' answers the probe with an unparseable body (the
-        -- absent posture), so every other test in this file already covers that
-        -- fall-through. These cover the confirmed-present skip and the cannot-tell arms.
+    describe "processJob: the mirror inventory probe" $ do
+        -- The default 'recordingPublish' answers 404, the known-empty store every other test
+        -- in this file rides. These cover the present skip and the unreadable arms.
         it "acks an already-mirrored version without fetching or publishing" $
             -- 'unreachableUrl' doubles as the no-fetch guard: were the probe's skip not
             -- taken, the artifact fetch would surface a Retried, not this Succeeded.
@@ -440,16 +443,25 @@ spec = do
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 
-        it "falls through to the full pipeline when the probe cannot reach the mirror" $
-            -- A mirror outage means the probe cannot tell, so the job must run the full gated
-            -- pipeline. It is never skipped or failed on the probe alone.
+        it "retries without publishing when the probe cannot reach the mirror" $
+            -- The release tag is chosen over the inventory, so an unreachable mirror is a
+            -- transient fault. Publishing anyway would declare a tag decided without it.
             withUpstream $ \url ->
                 withRuntimeRegistry (`probeUnreachablePublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url)
                     outcome <- runWM runtime (processJob receipt job)
-                    outcome `shouldBe` Succeeded
+                    outcome `shouldSatisfy` isRetried
                     published <- plDocuments <$> readIORef logRef
-                    length published `shouldBe` 1
+                    published `shouldBe` []
+
+        it "retries without publishing when the mirror's answer does not project" $
+            withUpstream $ \url ->
+                withRuntimeRegistry (`probeUnreadablePublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldSatisfy` isRetried
+                    published <- plDocuments <$> readIORef logRef
+                    published `shouldBe` []
 
         it "falls through when the mirror lists other versions but not this one" $
             -- The worker judges presence per version: a package already partially
@@ -462,15 +474,76 @@ spec = do
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
 
+    describe "mirrorLatest: the release tag one mirror write declares" $ do
+        -- The shared selector decides it, so these pin the mirror's own arguments: the
+        -- upstream tag as chosen, and the store's post-write inventory as survivors.
+        it "keeps a present upstream latest, whatever this job publishes" $
+            -- 2.0.0 mirrored first, then an older 1.0.0 job: completion order must not retag.
+            mirrorLatest (Just (npmVer "2.0.0")) [npmVer "2.0.0"] (npmVer "1.0.0")
+                `shouldBe` npmVer "2.0.0"
+
+        it "converges on the same tag when the two jobs complete in the reverse order" $ do
+            -- 1.0.0 lands first with its target absent, so it is the only version to name.
+            mirrorLatest (Just (npmVer "2.0.0")) [] (npmVer "1.0.0") `shouldBe` npmVer "1.0.0"
+            mirrorLatest (Just (npmVer "2.0.0")) [npmVer "1.0.0"] (npmVer "2.0.0") `shouldBe` npmVer "2.0.0"
+
+        it "falls back to the highest stable version when the upstream target is not mirrored" $
+            mirrorLatest (Just (npmVer "9.9.9")) [npmVer "2.0.0"] (npmVer "1.0.0")
+                `shouldBe` npmVer "2.0.0"
+
+        it "falls back the same way when no upstream latest is known" $
+            mirrorLatest Nothing [npmVer "2.0.0"] (npmVer "1.0.0") `shouldBe` npmVer "2.0.0"
+
+        it "prefers a stable version over a higher prerelease" $
+            mirrorLatest Nothing [npmVer "2.0.0"] (npmVer "3.0.0-beta.1") `shouldBe` npmVer "2.0.0"
+
+        it "names a prerelease only when no stable version is present" $
+            mirrorLatest Nothing [npmVer "3.0.0-beta.1"] (npmVer "3.0.0-beta.2")
+                `shouldBe` npmVer "3.0.0-beta.2"
+
+        it "keeps an explicit upstream prerelease latest that is present" $
+            mirrorLatest (Just (npmVer "3.0.0-beta.1")) [npmVer "2.0.0"] (npmVer "3.0.0-beta.1")
+                `shouldBe` npmVer "3.0.0-beta.1"
+
+        it "names the published version when the store held nothing" $
+            mirrorLatest Nothing [] (npmVer "1.0.0") `shouldBe` npmVer "1.0.0"
+
+    describe "processJob: the release tag the write declares" $ do
+        it "declares the upstream's latest, not the version this job publishes" $
+            withUpstream $ \url ->
+                withRuntimeRegistry
+                    (\logRef -> mirrorListingPublish logRef (Right ()) [otherVer])
+                    (npmPolicies (taggedResolver (Just otherVer)) [admitRule])
+                    noopWorkerMetricsPort
+                    $ \runtime queue logRef -> do
+                        (receipt, job) <- enqueueAndReceive queue (jobWith url)
+                        runWM runtime (processJob receipt job) `shouldReturn` Succeeded
+                        published <- plDocuments <$> readIORef logRef
+                        map (stringAt ["dist-tags", "latest"]) (decodedDocuments published)
+                            `shouldBe` [Just (renderVersion otherVer)]
+
+        it "declares its own version when the store holds nothing else" $
+            withUpstream $ \url ->
+                withRuntime (Right ()) $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
+                    runWM runtime (processJob receipt job) `shouldReturn` Succeeded
+                    published <- plDocuments <$> readIORef logRef
+                    map (stringAt ["dist-tags", "latest"]) (decodedDocuments published)
+                        `shouldBe` [Just (renderVersion ver)]
+
     describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
         -- The serve-time tarball gate and the worker both resolve a version through this one
         -- function, so these cases pin its classification directly.
         it "classifies a resolved version as present" $
-            fetchVersionDetails (versionClient (Right (Just (sampleDetails pkg ver)))) pkg ver
-                `shouldReturn` VersionPresent (sampleDetails pkg ver)
+            fetchVersionDetails (versionClient (Right (versionReadOf (Just (sampleDetails pkg ver)) (Just otherVer)))) pkg ver
+                `shouldReturn` VersionPresent (sampleDetails pkg ver) (Just otherVer)
+
+        it "carries the document's own latest onto the present verdict" $
+            fetchVersionDetails (versionClient (Right (versionReadOf (Just (sampleDetails pkg ver)) Nothing))) pkg ver
+                `shouldReturn` VersionPresent (sampleDetails pkg ver) Nothing
 
         it "classifies an absent version (resolved, but no such version) as missing" $
-            fetchVersionDetails (versionClient (Right Nothing)) pkg ver
+            fetchVersionDetails (versionClient (Right (versionReadOf Nothing Nothing))) pkg ver
                 `shouldReturn` VersionMissing
 
         it "classifies a metadata error as unavailable (the transient degrade)" $
@@ -487,6 +560,22 @@ spec = do
             -- transient degrade.
             outcome <- try (fetchVersionDetails throwingVersionClient pkg ver) :: IO (Either SomeException VersionEvaluation)
             outcome `shouldSatisfy` isLeft
+
+-- A version read carrying the given release and the document's own latest.
+versionReadOf :: Maybe PackageDetails -> Maybe Version -> VersionRead
+versionReadOf details upstreamLatest = VersionRead{vrDetails = details, vrUpstreamLatest = upstreamLatest}
+
+npmVer :: Text -> Version
+npmVer = mkVersion Npm
+
+isRetried :: JobOutcome -> Bool
+isRetried = \case
+    Retried _ -> True
+    _ -> False
+
+-- Decode each captured publish document, failing the parse to 'Nothing' rather than throwing.
+decodedDocuments :: [ByteString] -> [Value]
+decodedDocuments documents = [value | document <- documents, Right value <- [eitherDecodeStrict' document]]
 
 -- An admission verdict no rule could decide, with the given transience.
 undecided :: Transience -> Text -> ArtifactAdmission

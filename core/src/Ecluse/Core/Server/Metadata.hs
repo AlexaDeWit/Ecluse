@@ -14,16 +14,18 @@ module Ecluse.Core.Server.Metadata (
 
     -- * Projecting one version
     selectVersion,
+    readOfInfo,
 ) where
 
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoVersions), PackageName)
+import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoDistTags, infoInvalidEntries, infoVersions), PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable))
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (..),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
+    VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
  )
 
 import Ecluse.Core.Server.Cache (
@@ -55,7 +57,7 @@ newMetadataClient ::
     (PackageName -> [InvalidEntry] -> IO ()) ->
     (PackageName -> IO ()) ->
     (PackageName -> IO (Either MetadataError Manifest)) ->
-    (PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))) ->
+    (PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
     MetadataClient
 newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFetch rawFetchVersion =
     MetadataClient
@@ -81,20 +83,20 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
 
     -- The single-version hybrid: the small version cache, then the warm full cache
     -- read-only, then a cold selective fetch. Uncached, it is the raw selective fetch.
-    resolveVersionHybrid :: PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
+    resolveVersionHybrid :: PackageName -> Version -> IO (Either MetadataError VersionRead)
     resolveVersionHybrid name version = case caching of
         Uncached -> versionLeader name version
         Cached cache source -> do
             cached <- cachedVersion cache source name version
             case cached of
-                Just details -> pure (Right details)
+                Just versionRead -> pure (Right versionRead)
                 Nothing -> do
                     warm <- cachedMetadata cache source name
                     case warm of
-                        Just entry -> pure (Right (selectVersion version (entryInfo entry)))
+                        Just entry -> pure (Right (readOfInfo version (entryInfo entry)))
                         Nothing -> resolveVersion metrics cache source name version (versionLeader name version)
 
-    versionLeader :: PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
+    versionLeader :: PackageName -> Version -> IO (Either MetadataError VersionRead)
     versionLeader name version = do
         logFetch name
         recordedFetch metrics upstream $
@@ -105,6 +107,16 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
 -- | Find a version by its ecosystem-rendered key in a package snapshot.
 selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
 selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
+
+{- | Project a whole-document snapshot onto one version's read, so the warm full cache answers a
+version request with the same pair a selective read would have produced.
+-}
+readOfInfo :: Version -> PackageInfo -> VersionRead
+readOfInfo version info =
+    VersionRead
+        { vrDetails = selectVersion version info
+        , vrUpstreamLatest = Map.lookup "latest" (infoDistTags info)
+        }
 
 entryToManifest :: CacheEntry -> Manifest
 entryToManifest entry =

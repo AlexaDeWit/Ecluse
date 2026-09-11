@@ -18,7 +18,7 @@ module Ecluse.Core.Registry.Npm.Metadata (
     projectNpmVersion,
 ) where
 
-import Data.Aeson (Value, parseJSON)
+import Data.Aeson (Value (String), parseJSON)
 import Data.Aeson.Types (parseMaybe)
 import Data.Time (UTCTime)
 
@@ -36,6 +36,7 @@ import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient,
     MetadataError (MetadataBoundExceeded),
+    VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
     digestOf,
     fetchThenProject,
  )
@@ -48,7 +49,7 @@ import Ecluse.Core.Registry.Npm.Project (
  )
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), npmArtifactHosts)
 import Ecluse.Core.Registry.Npm.SelectiveDecode (
-    SelectedVersion (svName, svTime, svVersion, svVersionCount),
+    SelectedVersion (svDistTagLatest, svName, svTime, svVersion, svVersionCount),
     selectVersionFromPackument,
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits))
@@ -98,10 +99,13 @@ fetchNpmManifest tracing origin name =
 projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
 projectNpmManifest limits name = projectMetadata (parsePackageInfoFromValue name) limits
 
-fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
+fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchNpmVersion tracing origin name version =
     fetchThenProject tracing (fetchNpmPackument origin) name $
-        fmap (>>= enforceArtifactLocationsOf npmArtifactAuthorities (originBaseUrl origin)) . projectNpmVersion (ocLimits origin) name version
+        fmap locationChecked . projectNpmVersion (ocLimits origin) name version
+  where
+    locationChecked versionRead =
+        versionRead{vrDetails = vrDetails versionRead >>= enforceArtifactLocationsOf npmArtifactAuthorities (originBaseUrl origin)}
 
 -- npm artifacts must use the authority that served the packument.
 npmArtifactAuthorities :: AllowedHostPorts
@@ -111,15 +115,25 @@ originBaseUrl :: OriginClient -> Text
 originBaseUrl = registryUrlText . ocBaseUrl
 
 -- | Project one version without decoding its siblings. Absent or unprojectable versions yield 'Nothing'.
-projectNpmVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
+projectNpmVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError VersionRead
 projectNpmVersion limits name version body = do
     decoded <- first (selectiveError limits) (selectVersionFromPackument (maxNestingDepth limits) version body)
     reported <- validateReportedName projectName (svName decoded)
     selected <- projectionResult (checkNameAgreement name reported decoded)
     first MetadataBoundExceeded (checkVersionCountOf limits (svVersionCount selected))
     publishedAt <- parsePublishTime (svTime selected)
-    -- Use the same rendered version key as the full-document projection.
-    pure (svVersion selected >>= projectVersionEntry name (mkVersion Npm (renderVersion version)) publishedAt)
+    pure
+        VersionRead
+            { -- Use the same rendered version key as the full-document projection.
+              vrDetails = svVersion selected >>= projectVersionEntry name (mkVersion Npm (renderVersion version)) publishedAt
+            , vrUpstreamLatest = latestTarget (svDistTagLatest selected)
+            }
+
+-- A non-string @latest@ is no known tag, matching the whole-document projection's per-entry drop.
+latestTarget :: Maybe Value -> Maybe Version
+latestTarget = \case
+    Just (String raw) -> Just (mkVersion Npm raw)
+    _ -> Nothing
 
 -- An absent or undecodable stamp means no known publish time, never a document failure.
 -- The whole-document path drops a malformed @time@ entry the same way.

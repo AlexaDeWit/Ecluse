@@ -36,6 +36,7 @@ import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient,
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
+    VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
     digestOf,
     fetchThenProject,
  )
@@ -108,11 +109,18 @@ fetchPyPIManifest tracing origin name =
 projectPyPIIndex :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
 projectPyPIIndex limits name = projectMetadata (projectSimpleIndexFromValue name) limits
 
--- 'Nothing' is a release genuinely absent from a sound index, a forwarded miss.
-fetchPyPIVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
+{- A 'vrDetails' of 'Nothing' is a release genuinely absent from a sound index, a forwarded miss.
+A Simple index declares no release tag, so 'vrUpstreamLatest' is always 'Nothing' here. -}
+fetchPyPIVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchPyPIVersion tracing origin name version =
     fetchThenProject tracing (fetchSimpleIndex origin) name $
-        fmap (>>= enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin)) . projectPyPIVersion (ocLimits origin) name version
+        fmap untagged . projectPyPIVersion (ocLimits origin) name version
+  where
+    untagged details =
+        VersionRead
+            { vrDetails = details >>= enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin)
+            , vrUpstreamLatest = Nothing
+            }
 
 -- | Project one release after the full path's protocol check, retaining original file positions.
 projectPyPIVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)

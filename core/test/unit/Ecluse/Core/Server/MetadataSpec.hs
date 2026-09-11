@@ -33,13 +33,14 @@ import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataUndecodable),
+    VersionRead (vrDetails, vrUpstreamLatest),
     digestOf,
  )
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache)
-import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached), newMetadataClient)
+import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached), newMetadataClient, readOfInfo)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamFetchError))
-import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
@@ -56,7 +57,7 @@ spec = do
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 1
             found <- fetchVersionMetadata client name (ver "1.0.0")
-            fmap (fmap pkgVersion) found `shouldBe` Right (Just (ver "1.0.0"))
+            fmap (fmap pkgVersion . vrDetails) found `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 1
 
         it "cold: leads a selective single-version fetch, caches it, and a repeat hits the version cache" $ do
@@ -65,14 +66,25 @@ spec = do
             let info = manifest name ["1.0.0"]
                 client = publicClient cache (countingFull calls info) (countingVersion calls info)
             cold <- fetchVersionMetadata client name (ver "1.0.0")
-            fmap (fmap pkgVersion) cold `shouldBe` Right (Just (ver "1.0.0"))
+            fmap (fmap pkgVersion . vrDetails) cold `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 1
             warmHit <- fetchVersionMetadata client name (ver "1.0.0")
-            fmap (fmap pkgVersion) warmHit `shouldBe` Right (Just (ver "1.0.0"))
+            fmap (fmap pkgVersion . vrDetails) warmHit `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 1
             -- The cold single-version path stays isolated on writes: it never populated the
             -- shared full-packument cache (only the version cache).
             cachedMetadata cache source name `shouldReturn` Nothing
+
+        it "carries the document's own latest on both the cold read and the warm select" $ do
+            calls <- newIORef (0 :: Int)
+            cache <- newMetadataCache defaultCacheConfig
+            let info = tagged (manifest name ["1.0.0", "2.0.0"]) "2.0.0"
+                client = publicClient cache (countingFull calls info) (countingVersion calls info)
+            cold <- fetchVersionMetadata client name (ver "1.0.0")
+            fmap vrUpstreamLatest cold `shouldBe` Right (Just (ver "2.0.0"))
+            _ <- fetchFullManifest client name
+            warm <- fetchVersionMetadata client name (ver "2.0.0")
+            fmap vrUpstreamLatest warm `shouldBe` Right (Just (ver "2.0.0"))
 
         it "caches a determined absence: an absent version is a Nothing re-served without a re-fetch" $ do
             calls <- newIORef (0 :: Int)
@@ -80,10 +92,10 @@ spec = do
             let info = manifest name ["1.0.0"]
                 client = publicClient cache (countingFull calls info) (countingVersion calls info)
             absent <- fetchVersionMetadata client name (ver "2.0.0")
-            fmap (fmap pkgVersion) absent `shouldBe` Right Nothing
+            fmap (fmap pkgVersion . vrDetails) absent `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
             absentHit <- fetchVersionMetadata client name (ver "2.0.0")
-            fmap (fmap pkgVersion) absentHit `shouldBe` Right Nothing
+            fmap (fmap pkgVersion . vrDetails) absentHit `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
 
     describe "newMetadataClient -- caching policy" $
@@ -204,7 +216,7 @@ noFetchLog _ = pure ()
 publicClient ::
     MetadataCache ->
     (PackageName -> IO (Either MetadataError Manifest)) ->
-    (PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))) ->
+    (PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
     MetadataClient
 publicClient cache =
     newMetadataClient noopMetricsPort Metric.Public (Cached cache source) noLog noInvalidLog noFetchLog
@@ -214,10 +226,10 @@ countingFull calls info _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
     pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached (String "raw"), manifestDigest = digestOf "raw-bytes"})
 
-countingVersion :: IORef Int -> PackageInfo -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
+countingVersion :: IORef Int -> PackageInfo -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 countingVersion calls info _name version = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
-    pure (Right (Map.lookup (renderVersion version) (infoVersions info)))
+    pure (Right (readOfInfo version info))
 
 unreachableFull :: IORef Int -> PackageName -> IO (Either MetadataError Manifest)
 unreachableFull calls _name = do
@@ -229,7 +241,7 @@ isUnreachable = \case
     Left (MetadataFetch (FetchTransport _)) -> True
     _ -> False
 
-failingVersion :: IORef Int -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
+failingVersion :: IORef Int -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 failingVersion calls _name _version = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
     pure (Left MetadataUndecodable)
@@ -242,6 +254,10 @@ manifest who versions =
         , infoDistTags = Map.empty
         , infoInvalidEntries = []
         }
+
+-- The same snapshot with a declared release tag, for the tag-carrying cases.
+tagged :: PackageInfo -> Text -> PackageInfo
+tagged info raw = info{infoDistTags = Map.singleton "latest" (ver raw)}
 
 details :: PackageName -> Text -> PackageDetails
 details who rawVer =

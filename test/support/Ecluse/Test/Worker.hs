@@ -78,7 +78,7 @@ admitAllPoliciesCapped artifactMaxBytes publish currentDigests =
         Npm
         (npmPolicyWith getCurrentTime artifactMaxBytes publish resolve [allowAll])
   where
-    resolve name version = pure (VersionPresent (mirrorableDetails name version))
+    resolve name version = pure (VersionPresent (mirrorableDetails name version) Nothing)
 
     allowAll :: PreparedRule
     allowAll = constRule "test-allow-all" (Allow "admitted for test")

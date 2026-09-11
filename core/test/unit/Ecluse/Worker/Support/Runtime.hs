@@ -11,6 +11,7 @@ module Ecluse.Worker.Support.Runtime (
     recordingPublish,
     mirrorListingPublish,
     probeUnreachablePublish,
+    probeUnreadablePublish,
 
     -- * Building a worker runtime over doubles
     withRuntimeRegistry,
@@ -47,7 +48,6 @@ import Network.HTTP.Types (status200)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
-import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Queue (
     MirrorJob,
     MirrorQueue (ack, deadLetter, receive),
@@ -65,6 +65,7 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
     MetadataError,
+    VersionRead,
  )
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
@@ -90,29 +91,40 @@ data PublishLog = PublishLog
     , plArtifacts :: [MirrorArtifact]
     }
 
--- | Record publications with a fixed outcome, always reporting the mirror version absent.
+{- | Record publications with a fixed outcome. The inventory probe answers @404@: the mirror
+holds this package not at all, which the worker reads as a known-empty inventory without
+consulting the version list.
+-}
 recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 recordingPublish logRef outcome =
     MirrorPublish
-        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 "")))
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 404 "")))
         , mpParseVersionList = const (Left (ParseError "absent: nothing mirrored yet"))
         , mpPublishArtifact = \_ _ artifact document -> do
             atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l}, ()))
             pure outcome
         }
 
--- | 'recordingPublish' whose mirror-presence probe __confirms__ the given versions present at the mirror target, for the dedup short-circuit tests.
+-- | 'recordingPublish' whose inventory probe __reports__ the given versions present at the mirror target, for the dedup and release-tag cases.
 mirrorListingPublish :: IORef PublishLog -> Either PublishFault () -> [Version] -> MirrorPublish
 mirrorListingPublish logRef outcome versions =
     (recordingPublish logRef outcome)
-        { mpParseVersionList = const (Right versions)
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 "")))
+        , mpParseVersionList = const (Right versions)
         }
 
--- | 'recordingPublish' whose mirror-presence probe reports a mirror outage as the typed 'FetchTransport' value, for the probe-cannot-tell fall-through tests.
+-- | 'recordingPublish' whose inventory probe reports a mirror outage as the typed 'FetchTransport' value, for the unreadable-inventory cases.
 probeUnreachablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeUnreachablePublish logRef outcome =
     (recordingPublish logRef outcome)
         { mpProbeMetadata = const (pure (Left (FetchTransport (transportFault TransportUnreachable "simulated mirror outage"))))
+        }
+
+-- | 'recordingPublish' whose inventory probe answers a readable status with a body the version projection refuses.
+probeUnreadablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
+probeUnreadablePublish logRef outcome =
+    (recordingPublish logRef outcome)
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 "not a packument")))
         }
 
 -- | Expose the worker's queue and captured publications to the test callback.
@@ -175,7 +187,7 @@ runWMWith :: LogEnv -> WorkerRuntime -> WorkerM a -> IO a
 runWMWith logEnv = runWorkerM logEnv mempty
 
 -- | A 'MetadataClient' double whose single-version op returns a fixed result (the full-manifest op is unused here and refuses loudly).
-versionClient :: Either MetadataError (Maybe PackageDetails) -> MetadataClient
+versionClient :: Either MetadataError VersionRead -> MetadataClient
 versionClient result =
     MetadataClient
         { fetchFullManifest = const (throwIO (TestContractEscape "versionClient: fetchFullManifest is unused"))

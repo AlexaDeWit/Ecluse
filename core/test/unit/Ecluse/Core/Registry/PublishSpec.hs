@@ -24,6 +24,7 @@ import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeMetadata, mpPublishArtifact),
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
     PublishCodec (..),
+    PublishPlan (PublishPlan, ppLatest, ppVersion),
     newMirrorPublish,
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
@@ -59,7 +60,7 @@ spec = do
         it "mints the bearer per publish and attaches it to the wire" $
             withStub status200 "{}" $ \stub -> do
                 (publish, mints) <- mintCountingPublish stub
-                _ <- mpPublishArtifact publish isOdd v1_0_0 dummyArtifact "bytes"
+                _ <- mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes"
                 captured <- lastCaptured stub
                 headerValue "Authorization" captured `shouldBe` Just "Bearer minted-token"
                 minted <- readIORef mints
@@ -72,7 +73,7 @@ spec = do
 
         it "reports an unformable publish URL as a PublishFault value, never thrown" $ do
             publish <- publishAt ""
-            outcome <- mpPublishArtifact publish isOdd v1_0_0 dummyArtifact "bytes"
+            outcome <- mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes"
             outcome `shouldSatisfy` isUrlUnformablePublish
 
         it "reports a probe transport failure as a FetchTransport value, never thrown" $ do
@@ -107,7 +108,7 @@ spec = do
                             , ptLimits = defaultLimits{maxBodyBytes = 16}
                             }
                     publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
-                outcome <- mpPublishArtifact publish isOdd v1_0_0 dummyArtifact "bytes"
+                outcome <- mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes"
                 outcome `shouldSatisfy` isBoundExceededPublish
 
     describe "the codec's request formers (credential invariants per married client)" $ do
@@ -121,7 +122,7 @@ spec = do
                     lookup "Authorization" (Client.requestHeaders request) `shouldBe` Just "Bearer tok"
 
         it "the publish request attaches the bearer at the single attach point with redirects disabled" $
-            case pcPublishRequest npmPublishCodec "https://mirror.test" (Just (mkSecret "tok")) isOdd v1_0_0 dummyArtifact "bytes" of
+            case pcPublishRequest npmPublishCodec "https://mirror.test" (Just (mkSecret "tok")) isOdd planV1 dummyArtifact "bytes" of
                 Left err -> fail ("expected a formed publish request, got " <> show err)
                 Right request -> do
                     Client.redirectCount request `shouldBe` 0
@@ -139,7 +140,7 @@ spec = do
         it "refuses to chase a redirect on the write leg, where the bearer rides" $
             withRoutedStub (redirectFrom "/write") $ \stub -> do
                 publish <- unsealedPublishAt stub
-                _ <- mpPublishArtifact publish isOdd v1_0_0 dummyArtifact "bytes"
+                _ <- mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes"
                 servedPaths stub `shouldReturn` ["/write"]
 
         it "identifies the proxy on the wire, whatever headers the codec set" $
@@ -156,12 +157,16 @@ unsealedCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
         , pcParseVersionList = const (Right [])
-        , pcPublishRequest = \targetUrl _token _name _version _artifact _bytes ->
+        , pcPublishRequest = \targetUrl _token _name _plan _artifact _bytes ->
             unsealed (targetUrl <> "/write")
         , pcPublishOutcome = const (Right ())
         }
   where
     unsealed url = maybe (Left (UnparseableUrl url)) Right (Client.parseRequest (toString url))
+
+-- One write of @1.0.0@ declaring itself latest, the shape these transport cases do not vary.
+planV1 :: PublishPlan
+planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0}
 
 unsealedPublishAt :: Stub -> IO MirrorPublish
 unsealedPublishAt stub = publishWith unsealedCodec (stubBaseUrl stub)

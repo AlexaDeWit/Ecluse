@@ -23,7 +23,7 @@ module Ecluse.Integration.WorkerLoop (
 ) where
 
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (Status)
+import Network.HTTP.Types (Status, status404)
 import Network.Wai (Application, rawPathInfo, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import UnliftIO (race_, timeout)
@@ -70,8 +70,9 @@ loopHardTimeout = 45_000_000
 waitFor :: IO Bool -> IO ()
 waitFor done = void (pollUntil 200 200_000 id done)
 
-{- | A WAI mirror-target stub answering @replyStatus@ and recording each publish @PUT@'s path.
-Its @{}@ body never parses as a version list, so no job takes the dedup short-circuit.
+{- | A WAI mirror-target stub answering each publish @PUT@ with @replyStatus@ and recording its
+path. The inventory @GET@ answers @404@, a store holding this package not at all, so no job takes
+the presence short-circuit and each write chooses its tag over its own version alone.
 -}
 withMirrorTarget :: Status -> (Text -> IORef [ByteString] -> IO a) -> IO a
 withMirrorTarget replyStatus body = do
@@ -79,10 +80,11 @@ withMirrorTarget replyStatus body = do
     testWithApplication (pure (app logRef)) $ \port -> body (localhost port) logRef
   where
     app :: IORef [ByteString] -> Application
-    app logRef request respond = do
-        when (requestMethod request == "PUT") $
+    app logRef request respond
+        | requestMethod request == "PUT" = do
             atomicModifyIORef' logRef (\xs -> (rawPathInfo request : xs, ()))
-        respond (responseLBS replyStatus [] "{}")
+            respond (responseLBS replyStatus [] "{}")
+        | otherwise = respond (responseLBS status404 [] "{}")
 
 {- | Admit-everything policies publishing through the production marriage (npm's codec over
 the shared transport) at @mirrorUrl@. A 'Just' caps the fetch: an artifact past it is dropped.
