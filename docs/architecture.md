@@ -114,8 +114,7 @@ flowchart TD
   public metadata, and a denial follows the [error model](architecture/web-layer.md#error-model).
   Mirroring is demand-driven, so Écluse mirrors only the versions a client pulls.
 - **Packument**: the merge keeps not-yet-mirrored public versions visible, so demand-driven
-  mirroring can fire. A first-party name skips the public leg entirely and answers `404` on a
-  private miss. See
+  mirroring can fire. A first-party name skips the public leg entirely. See
   [Packument merge](architecture/registry-model.md#packument-merge-across-upstreams).
 - **Publish**: Écluse checks the name against the mount's first-party namespaces before any
   upstream write (anti-shadowing). The path is opt-in: a `PUT` is `405` when

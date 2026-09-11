@@ -113,12 +113,10 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                 status response `shouldBe` 200
                 servedVersions response `shouldBe` ["1.0.0"]
 
-    -- A first-party name reads its one authority, so the private status decides: an absence
-    -- refuses the request, and an outage invites a retry. A merged name is unaffected by either.
-    for_ [(status404, 404), (status503, 503)] $ \(upstreamStatus, firstPartyStatus) ->
+    for_ privateOutcomes $ \(label, makePrivateUpstream, firstPartyStatus) ->
         for_ [False, True] $ \firstParty ->
-            it ("preserves metadata HTTP " <> show (statusCode upstreamStatus) <> " policy, firstParty=" <> show firstParty) $ do
-                privateUp <- upstreamRespondingWith (responseLBS upstreamStatus [] "not found")
+            it ("preserves private " <> label <> " policy, firstParty=" <> show firstParty) $ do
+                privateUp <- makePrivateUpstream
                 publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
                 queue <- newTestMemoryQueue
                 withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdFirstParty = const firstParty}) $ \app _ _ -> do
@@ -126,6 +124,17 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                     status response `shouldBe` if firstParty then firstPartyStatus else 200
                     servedVersions response `shouldBe` ["1.0.0" | not firstParty]
                     seenAuth publicUp `shouldReturn` [Nothing | not firstParty]
+
+{- The private outcomes a first-party name must tell apart, with the status each renders for it.
+A merged name serves the public set whichever it is. -}
+privateOutcomes :: [(String, IO Upstream, Int)]
+privateOutcomes =
+    -- Only the origin's own 404 settles the question. A 5xx and an undecodable body leave it
+    -- open, so both invite a retry rather than report the name as gone.
+    [ ("HTTP 404", upstreamRespondingWith (responseLBS status404 [] "not found"), 404)
+    , ("HTTP 503", upstreamRespondingWith (responseLBS status503 [] "unavailable"), 503)
+    , ("an undecodable body", servingUpstream "this is not json at all", 503)
+    ]
 
 credentialSpec :: Spec
 credentialSpec = describe "credential authority (forward-to-private, strip-before-public)" $

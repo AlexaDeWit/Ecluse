@@ -211,6 +211,7 @@ serveTarballWithDeps mode replies deps clientToken name version file request res
                 | pdFirstParty deps name -> do
                     let decision = firstPartyMissRefusal miss
                     liftIO (mpServeDecision (srMetrics rt) (serveDecisionClass decision))
+                    liftIO (recordDenials (srMetrics rt) [decision])
                     liftIO (respond (artifactError replies deps decision))
                 | otherwise -> servePublicArtifact mode replies rt deps validators name version file respond
 

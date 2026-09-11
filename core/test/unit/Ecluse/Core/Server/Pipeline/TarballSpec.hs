@@ -25,7 +25,7 @@ import Ecluse.Core.Rules.Types (
     Decision (Blocked, Undecidable),
     Transience (WillResolve, WontResolve),
  )
-import Ecluse.Core.Server.Pipeline.Internal (serveDecisionClass)
+import Ecluse.Core.Server.Pipeline.Internal (denialLabels, serveDecisionClass)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
 import Ecluse.Core.Server.Pipeline.Tarball (
     PublicArtifactGate (Admitted, Refused),
@@ -35,6 +35,9 @@ import Ecluse.Core.Server.Pipeline.Tarball (
  )
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, ServerError, Unavailable'),
+    RejectReason,
+    Rejection (rejectionReason),
+    ServeDecision (Admit, Reject),
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (mkVersion)
@@ -44,6 +47,12 @@ import Ecluse.Test.Package (sampleDetails)
 -- snapshot's validity matters.
 details :: PackageDetails
 details = sampleDetails (mkPackageName Npm Nothing "thing") (mkVersion Npm "1.0.0")
+
+-- The refusal reason a decision carries, or 'Nothing' where it admitted the request.
+reasonOf :: ServeDecision -> Maybe RejectReason
+reasonOf = \case
+    Admit -> Nothing
+    Reject rejection -> Just (rejectionReason rejection)
 
 -- The status a gated verdict renders, or 'Nothing' where the gate admitted it.
 statusOf :: ArtifactAdmission -> Maybe ArtifactStatus
@@ -90,3 +99,9 @@ firstPartyMissSpec = describe "firstPartyMissRefusal -- the private miss a first
     it "renders an origin that was never read as a 503, suggesting no delay" $ do
         artifactOutcomeStatus (firstPartyMissRefusal MissUnresolved) `shouldBe` Unavailable' Nothing
         serveDecisionClass (firstPartyMissRefusal MissUnresolved) `shouldBe` Metric.Unavailable
+
+    it "carries the denial labels the artifact path records for each miss" $ do
+        fmap denialLabels (reasonOf (firstPartyMissRefusal MissAbsent))
+            `shouldBe` Just (Just "first-party", Metric.ReasonPolicy)
+        fmap denialLabels (reasonOf (firstPartyMissRefusal MissUnresolved))
+            `shouldBe` Just (Nothing, Metric.ReasonUnavailable)
