@@ -20,7 +20,7 @@ import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlan
 import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootStorePruner))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvPort))
-import Ecluse.Core.Cve (CveDb (..), DbEtag (DbEtag))
+import Ecluse.Core.Cve (DbEtag (DbEtag))
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName, renderPackageName)
@@ -49,7 +49,7 @@ import Ecluse.Cve.Sync (CveSyncHandle (..))
 import Ecluse.Dredger (dredgerReady, latchedStep, runDredger, withSyncTasks)
 import Ecluse.Dredger.Plan (DredgerOptions (DredgerOptions), SweepMode (SweepRehearses), SweepRepetition (SweepOnce), rehearsedStore, sweepReportFor)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
-import Ecluse.Test.Cve (fakeCveLookup)
+import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Maintenance (
     FakeStore (fakeMaintenance, readFakeContents, readFakeCursor),
     FakeStoreConfig (..),
@@ -159,11 +159,7 @@ advisoryAgeSpec :: Spec
 advisoryAgeSpec = describe "runDredger advisory database ages" $
     it "emits each configured ecosystem and observes generation swaps through its registered callbacks" $
         withDredgerAges $ \meterEnv handles -> do
-            let install handle etag =
-                    swapIn
-                        (syncSlot (csEnv handle))
-                        (DbEtag etag)
-                        CveDb{cveDbLookup = fakeCveLookup [], cveDbClose = pass, cveDbMeta = []}
+            let install handle etag = swapIn (syncSlot (csEnv handle)) (DbEtag etag) (fakeCveDb [])
             for_ handles $ \(_, handle) -> install handle "first-generation"
             threadDelay 1_100_000
             initialPoints <- advisoryAgePoints meterEnv

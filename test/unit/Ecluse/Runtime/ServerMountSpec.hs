@@ -27,7 +27,7 @@ import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
     FailureAlignment (FailDeny),
     PrecededRule,
-    Rule (AllowIfOlderThan, DenyIfCve),
+    Rule (AllowByIdentity, AllowIfOlderThan, DenyIfCve),
  )
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
@@ -68,12 +68,12 @@ spec = do
             it "renders an unmounted prefix as a neutral text/plain 404" $
                 get "/pypi/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
 
-    describe "two mounts, one advisory database" $
-        it "serves npm, refuses the PyPI read, and stays routable" $
+    describe "two mounts, one advisory database" $ do
+        it "serves npm, refuses the PyPI read, and serves it once the PyPI artifact lands" $
             -- The owner's case: npm synced and the PyPI artifact never arrived. One upstream
             -- serves both documents, so the advisory slot is the only difference between them.
             withRoutedStub upstreamReply $ \stub -> do
-                app <- partialAdvisoryApp (stubLocalhostUrl stub)
+                (app, handles) <- partialAdvisoryApp (stubLocalhostUrl stub) advisoryPolicy
 
                 npm <- requestPath app "/npm/leftpad"
                 status npm `shouldBe` 200
@@ -81,26 +81,41 @@ spec = do
 
                 pypi <- requestPath app "/pypi/simple/leftpad/"
                 status pypi `shouldBe` 503
-                -- Named, so a refusal for want of the database cannot pass as an upstream failure.
-                LBS.toStrict (WaiTest.simpleBody pypi) `shouldSatisfy` BS.isInfixOf "no advisory database loaded"
 
-                readyz <- requestPath app "/readyz"
-                status readyz `shouldBe` 200
-                LBS.toStrict (WaiTest.simpleBody readyz) `shouldSatisfy` BS.isInfixOf "\"pypi\":\"awaiting startup readiness\""
+                awaiting <- requestPath app "/readyz"
+                status awaiting `shouldBe` 200
+                bodyOf awaiting `shouldSatisfy` BS.isInfixOf "\"pypi\":\"awaiting startup readiness\""
+
+                -- The recovery is what pins that 503 on the empty slot, because an upstream
+                -- failure renders a bare 503 too and this upstream never changed.
+                advisoriesLanded handles PyPI
+                recovered <- requestPath app "/pypi/simple/leftpad/"
+                status recovered `shouldBe` 200
+
+                ready <- requestPath app "/readyz"
+                bodyOf ready `shouldSatisfy` BS.isInfixOf "\"npm\":\"ready\""
+                bodyOf ready `shouldSatisfy` BS.isInfixOf "\"pypi\":\"ready\""
+
+        it "admits the PyPI read on an identity override while that slot is still empty" $
+            -- An intentional allow outranks the advisory deny, so it keeps admitting through the
+            -- outage the mount beside it is still waiting out.
+            withRoutedStub upstreamReply $ \stub -> do
+                (app, _) <- partialAdvisoryApp (stubLocalhostUrl stub) overridePolicy
+                overridden <- requestPath app "/pypi/simple/leftpad/"
+                status overridden `shouldBe` 200
 
 {- | Both mounts as the composition root resolves them, over one upstream, with npm's advisory
-database installed and PyPI's slot still empty.
+database installed and PyPI's slot still empty. The handles come back so a test can land PyPI's.
 -}
-partialAdvisoryApp :: Text -> IO Application
-partialAdvisoryApp upstreamBase = do
+partialAdvisoryApp :: Text -> [PrecededRule] -> IO (Application, Map.Map Ecosystem CveSyncHandle)
+partialAdvisoryApp upstreamBase policy = do
     handles <- Map.fromList <$> newAdvisoryHandles [Npm, PyPI]
-    for_ (Map.lookup Npm handles) $ \handle ->
-        swapIn (syncSlot (csEnv handle)) (DbEtag "npm-1") (fakeCveDb [])
+    advisoriesLanded handles Npm
     for_ (Map.lookup PyPI handles) $ \handle ->
         atomically (writeTVar (csReady handle) False)
     let depsFor = cveRuleDepsFor handles noBreakerReporter noFaultReporter
-    npmRules <- prepare (depsFor Npm) advisoryPolicy
-    pypiRules <- prepare (depsFor PyPI) advisoryPolicy
+    npmRules <- prepare (depsFor Npm) policy
+    pypiRules <- prepare (depsFor PyPI) policy
     env <- newTestEnv
     let public = loopbackRegistryUrl upstreamBase
         bindings =
@@ -109,7 +124,14 @@ partialAdvisoryApp upstreamBase = do
                 , mountBindingFor PyPI (pypiServeDeps Nothing public NoMirrorWrite pypiRules (pure servedAt)) Nothing
                 ]
         cfg = (mkServerConfig bindings){scCheckReady = cveSyncReadiness handles}
-    pure (application cfg env)
+    pure (application cfg env, handles)
+
+-- | One mount's first sync landing: its slot fills, and its one-way readiness flag flips.
+advisoriesLanded :: Map.Map Ecosystem CveSyncHandle -> Ecosystem -> IO ()
+advisoriesLanded handles eco =
+    for_ (Map.lookup eco handles) $ \handle -> do
+        swapIn (syncSlot (csEnv handle)) (DbEtag "landed") (fakeCveDb [])
+        atomically (writeTVar (csReady handle) True)
 
 {- | The policy both mounts run. The advisory deny outranks the age allow, so a mount whose slot
 is empty refuses what the rule cannot vet, and a mount with its database admits.
@@ -119,6 +141,12 @@ advisoryPolicy =
     [ atDefaultPrecedence (DenyIfCve (DenyIfCveParams 8.0 FailDeny))
     , atDefaultPrecedence (AllowIfOlderThan 0)
     ]
+
+{- | 'advisoryPolicy' under an operator's identity allow, whose default precedence outranks the
+advisory deny, so it decides before the rule that has no database to read.
+-}
+overridePolicy :: [PrecededRule]
+overridePolicy = atDefaultPrecedence (AllowByIdentity "leftpad@1.0.0") : advisoryPolicy
 
 -- One upstream for both ecosystems. Each document names the authority that served it, which is
 -- the authority a projection accepts artifact locations on.
@@ -166,3 +194,7 @@ servedAt = UTCTime (fromGregorian 2026 6 20) 0
 -- | One GET against the composed application, as an orchestrator or a client would send it.
 requestPath :: Application -> ByteString -> IO WaiTest.SResponse
 requestPath app path = WaiTest.runSession (WaiTest.request (WaiTest.setPath WaiTest.defaultRequest path)) app
+
+-- | A response body as strict bytes, for a substring assertion over rendered JSON.
+bodyOf :: WaiTest.SResponse -> ByteString
+bodyOf = LBS.toStrict . WaiTest.simpleBody

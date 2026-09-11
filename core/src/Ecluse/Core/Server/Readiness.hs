@@ -4,10 +4,10 @@
 
 {- | The verdict behind @\/readyz@, and the per-mount advisory state it was decided from.
 One configured ecosystem awaiting its advisory database does not take the whole listener out
-of rotation, so a router keeps sending the healthy mounts their traffic. 'mountReadiness' is
-the only way to reach the two mount-derived verdicts, so a verdict cannot disagree with its
-own map. Readiness routes traffic. It gates no request: a mount with no advisory database
-refuses what needs one through its own rule policy.
+of rotation, so a router keeps sending the healthy mounts their traffic. The constructors are
+exported for matching and 'mountReadiness' is the sanctioned builder, so a verdict a producer
+makes agrees with its own map. Readiness routes traffic. It gates no request: a mount with no
+advisory database refuses what needs one through its own rule policy.
 -}
 module Ecluse.Core.Server.Readiness (
     MountReadiness (..),

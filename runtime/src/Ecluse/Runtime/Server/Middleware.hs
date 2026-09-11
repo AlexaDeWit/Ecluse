@@ -33,6 +33,7 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Server.Readiness (
     MountReadiness (MountAwaitingFirstSync, MountReady),
     Readiness (AwaitingMounts, Latched, Routable),
+    routable,
  )
 import Ecluse.Core.Worker (Liveness (liveHealthy, liveLastPoll))
 import Ecluse.Runtime.Server.Drain (DrainSignal, isDraining)
@@ -91,18 +92,20 @@ readiness drain checkReady =
 {- The body names every configured mount beside the verdict, so an operator sees which ecosystem
 awaits its advisory database while the others keep serving. -}
 readinessResponse :: Readiness -> Response
-readinessResponse = \case
-    Routable mounts -> withMounts status200 readyLabel mounts
-    AwaitingMounts mounts -> withMounts status503 awaitingLabel mounts
-    Latched -> statusOnly status503 "halted"
+readinessResponse verdict = case verdict of
+    Routable mounts -> withMounts readyLabel mounts
+    AwaitingMounts mounts -> withMounts awaitingLabel mounts
+    Latched -> statusOnly status "halted"
   where
-    withMounts status label mounts =
+    -- 'routable' alone decides the status, and the match decides only what the body reports.
+    status = bool status503 status200 (routable verdict)
+    withMounts label mounts =
         jsonResponse status (encode (object ["status" .= label, "mounts" .= mountsOf mounts]))
 
 -- A mount reports the two words the whole verdict reports, under its configured ecosystem key.
 mountsOf :: Map.Map Ecosystem MountReadiness -> Value
 mountsOf mounts =
-    object [Key.fromText (ecosystemName eco) .= mountLabel state | (eco, state) <- Map.toList mounts]
+    object [Key.fromText (ecosystemName eco) .= mountLabel mount | (eco, mount) <- Map.toList mounts]
   where
     mountLabel = \case
         MountReady -> readyLabel

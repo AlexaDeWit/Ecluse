@@ -158,7 +158,7 @@ twoMountPlan = do
 
 -- Both mounts in the same state, the expectation either artifact's absence is read against.
 bothAt :: MountReadiness -> Map.Map Ecosystem MountReadiness
-bothAt state = Map.fromList [(Npm, state), (PyPI, state)]
+bothAt readiness = Map.fromList [(Npm, readiness), (PyPI, readiness)]
 
 -- One mount's first sync landing, which is the only way its flag flips.
 landed :: CveSyncHandle -> IO ()

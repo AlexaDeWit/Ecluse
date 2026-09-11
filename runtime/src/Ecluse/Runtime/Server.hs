@@ -144,9 +144,8 @@ import Ecluse.Runtime.Server.Middleware (
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Tracing (telemetryWaiMiddleware)
 
-{- | The settings the web layer needs to serve that the composition-root 'Env' does not
-carry. The request-body cap is not here: the publish route bounds its own body against
-'Ecluse.Core.Server.Context.pubMaxRequestBytes'.
+{- | The settings the web layer needs to serve that the composition-root 'Env' does not carry. Not
+the request-body cap: the publish route bounds its own against 'Ecluse.Core.Server.Context.pubMaxRequestBytes'.
 -}
 data ServerConfig = ServerConfig
     { scPort :: Int
@@ -177,9 +176,8 @@ data ServerConfig = ServerConfig
     -}
     }
 
-{- | Build a 'ServerConfig' over the given mount bindings, taking the default listen port
-('defaultPort'). There is no built-in mount: the web layer serves only the ecosystems the
-composition root binds here.
+{- | Build a 'ServerConfig' over the given mount bindings on 'defaultPort'. There is no built-in
+mount: the web layer serves only the ecosystems the composition root binds here.
 -}
 mkServerConfig :: [MountBinding] -> ServerConfig
 mkServerConfig mounts =
@@ -266,13 +264,8 @@ serve env binding (RouteAction contract action) request respond =
     ctx :: RequestCtx
     ctx = RequestCtx runtime binding
 
-{- | Run one route's handler behind a commit-tracking respond, catching __synchronous__
-escapes only. Asynchronous cancellation tears the request down like any other thread.
-
-Pre-commit, the perimeter classifies the escape, hands it to the observation channel, and
-answers the route's neutral fallback, so no fault detail ever reaches the client.
-Post-commit there is no second response to give: the escape rethrows and 'scOnException'
-logs it.
+{- | Run one route's handler behind a commit-tracking respond, catching __synchronous__ escapes only, so cancellation still tears the request down.
+Pre-commit an escape is classified, observed, and answered with the neutral fallback, carrying no detail to the client. Post-commit it rethrows.
 -}
 perimeterGuard ::
     -- | Observe a classified pre-commit fault (the metric and the audit line).
@@ -297,16 +290,14 @@ perimeterGuard observeFault respond fallback handlerOn = do
                 observeFault (classifyEscape escape)
                 respond fallback
 
-{- Match a request path to a mount: the first binding whose prefix the path begins with,
-paired with the action its router names for the remainder. A prefix matches with or
-without a trailing slash, so @\/npm\/pkg@ and a bare @\/npm@ both hit the @\/npm@ mount.
+{- Match a request path to a mount: the first binding whose prefix the path begins with, paired with the action its
+router names for the remainder. A prefix matches with or without a trailing slash, so a bare @\/npm@ hits the mount too.
 -}
 matchMount :: Method -> RequestHeaders -> [MountBinding] -> [Text] -> Maybe (MountBinding, RouteAction)
 matchMount method headers mounts segments = asum (map match mounts)
   where
-    {- The method is part of the mapping: the npm router tells a @PUT@ publish from a @GET@
-    read over the same path, and a @HEAD@ from the @GET@ it varies. The headers are too: a
-    route serving one media type refuses a client that admits no such thing. -}
+    {- The method and the headers are part of the mapping: the npm router tells a @PUT@ publish from a @GET@ read over
+    one path and a @HEAD@ from the @GET@ it varies, and a route serving one media type refuses a client that admits none. -}
     match :: MountBinding -> Maybe (MountBinding, RouteAction)
     match binding =
         (binding,) . bindingRouter binding method headers
@@ -326,19 +317,8 @@ stripPrefixSegments _ _ = Nothing
 dropTrailingSlashes :: [Text] -> [Text]
 dropTrailingSlashes = dropWhileEnd (== "")
 
-{- | The cross-cutting middleware stack composed around the proxy 'Application': client-IP
-recovery behind a load balancer (@X-Forwarded-For@ \/ @X-Real-IP@), a per-request timeout,
-and the going-away header. While the drain is raised that header stamps @Connection:
-close@, so a keep-alive pool stops reusing a socket into an instance that is shutting down
-(@docs\/architecture\/web-layer.md@).
-
-The request-body cap is __not__ a middleware. A middleware would have to throw across the
-request perimeter, so the publish route bounds its own body as a value
-('Ecluse.Core.Server.Pipeline.Publish').
-
-@wai-extra@'s @Autohead@ and @Gzip@ stay out on purpose. @Autohead@ would answer a HEAD by
-running the GET handler, streaming a whole tarball to nowhere, and @Gzip@ would re-compress
-artifacts and fight the streaming backpressure the serve path relies on.
+{- | The cross-cutting stack around the proxy 'Application'. The request-body cap is __not__ here: a middleware would throw across the request perimeter.
+@Autohead@ and @Gzip@ stay out too, because one answers a @HEAD@ by streaming a whole tarball to nowhere and the other fights streaming backpressure.
 -}
 serverMiddleware :: ServerConfig -> Middleware
 serverMiddleware cfg =
@@ -346,15 +326,8 @@ serverMiddleware cfg =
         . timeout timeoutSeconds
         . goingAwayMiddleware (scDrain cfg)
 
-{- | Serve the proxy's HTTP front door. This allocates the launch's live 'DrainSignal' and
-hands the builder a 'ServerConfig' carrying it, so the readiness probe and the going-away
-middleware read the same drain the shutdown handler raises.
-
-@warp@ stops accepting on that signal and waits for in-flight requests and in-progress
-artifact streams, bounded by 'scDrainTimeout'.
-
-Attached to an interactive terminal, 'withInteractiveHalt' also makes Ctrl-D force an
-immediate halt, bypassing the drain. Outside a TTY it installs nothing.
+{- | Serve the front door over the launch's one live 'DrainSignal', which the readiness probe, the going-away middleware, and the shutdown handler share.
+@warp@ waits for in-flight requests and artifact streams under 'scDrainTimeout', and on a TTY Ctrl-D forces an immediate halt that bypasses the drain.
 -}
 runWarp :: ServerConfig -> (ServerConfig -> IO Application) -> IO ()
 runWarp cfg0 getApp = do
@@ -366,9 +339,8 @@ runWarp cfg0 getApp = do
                 . Warp.setInstallShutdownHandler (installShutdownHandler drain)
                 . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
                 . Warp.setOnException (scOnException cfg)
-                -- Defence in depth for a fault with no mount context, from a middleware or warp
-                -- itself: a neutral JSON 500 carrying no exception detail. A handler escape answers
-                -- through the request perimeter instead and never reaches here.
+                -- Defence in depth for a fault with no mount context, from a middleware or warp itself: a neutral JSON
+                -- 500 carrying no exception detail. A handler escape answers through the request perimeter and never reaches here.
                 . Warp.setOnExceptionResponse (const onExceptionResponse)
                 $ Warp.defaultSettings
     app <- getApp cfg
@@ -379,9 +351,8 @@ runWarp cfg0 getApp = do
 onExceptionResponse :: Response
 onExceptionResponse = jsonResponse status500 "{\"error\":\"internal server error\"}"
 
-{- On @SIGTERM@ or @SIGINT@, raise the drain before closing the listen socket, so
-readiness fails and responses carry @Connection: close@ before @warp@ stops accepting.
-'CatchOnce' leaves a second signal to the runtime default, which hard-stops a slow drain.
+{- On @SIGTERM@ or @SIGINT@, raise the drain before closing the listen socket, so readiness fails and responses carry
+@Connection: close@ before @warp@ stops accepting. 'CatchOnce' leaves a second signal to the runtime default, which hard-stops a slow drain.
 -}
 installShutdownHandler :: DrainSignal -> IO () -> IO ()
 installShutdownHandler drain closeSocket =
@@ -389,13 +360,8 @@ installShutdownHandler drain closeSocket =
   where
     install sig = installHandler sig (CatchOnce (beginDrain drain >> closeSocket)) Nothing
 
-{- | Race a server arm against a never-returning background loop, the shutdown shape the
-single-process composition roots share.
-
-'race_' rather than 'concurrently_' is the invariant: the loop never returns, so
-'concurrently_' would keep waiting after the server drained and leave the surrounding
-telemetry and resource brackets un-unwound, with no exporter flush. A fault from either arm
-still propagates.
+{- | Race a server arm against a never-returning background loop, the shutdown shape the single-process composition roots share.
+'race_' is the invariant: 'concurrently_' would keep waiting after the server drained and leave telemetry and resource brackets un-unwound, with no flush.
 -}
 raceServerAgainstLoop :: (MonadUnliftIO m) => m () -> m () -> m ()
 raceServerAgainstLoop = race_
