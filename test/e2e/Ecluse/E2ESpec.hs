@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Whole-system scenarios share local stores and run real npm clients against the product image.
-Each scenario group boots its own proxy. Missing prerequisites report pending cases.
+{- | Whole-system scenarios share local stores and run real npm and pip clients against the
+product image. Each scenario group boots its own proxy. Missing prerequisites report pending cases.
 -}
 module Ecluse.E2ESpec (spec) where
 
@@ -12,7 +12,7 @@ import Data.Text qualified as T
 import Test.Hspec
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.E2E.Fixtures (
+import Ecluse.E2E.Fixtures.Npm (
     PkgSpec,
     allowPkg,
     denyPkg,
@@ -24,9 +24,10 @@ import Ecluse.E2E.Fixtures (
     telemetryDdPkg,
     telemetryPkg,
  )
+import Ecluse.E2E.Fixtures.PyPI (pypiDistInfo, pypiProject, pypiVersion, pypiWheelFile)
 import Ecluse.E2E.Harness
 
--- | Drive the product image with real npm clients and local stores.
+-- | Drive the product image with real package-manager clients and local stores.
 spec :: Spec
 spec = do
     unavailable <- runIO e2eUnavailable
@@ -57,6 +58,21 @@ scenarios = do
                 (installed, scriptRan) <- installWithLifecycleProbe e2e
                 void $ shouldSucceed installed
                 scriptRan `shouldBe` False
+
+        describe "pypi surface -- a real pip install" $
+            it "installs a wheel whose bytes hash to the sha256 the served index advertised" $ \e2e -> do
+                advertised <- advertisedFiles e2e pypiProject
+                case advertised of
+                    [(filename, digest)] -> do
+                        filename `shouldBe` pypiWheelFile
+                        -- pip's hash-checking mode accepts the download only when it hashes
+                        -- to this digest, so a successful install is that equality.
+                        withPipProject e2e pypiProject pypiVersion digest $ \proj -> do
+                            void $ pipInstallIn proj >>= shouldSucceed
+                            installed <- pipInstalled proj pypiDistInfo
+                            installed `shouldBe` True
+                    other ->
+                        expectationFailure ("the served index advertised " <> show (map fst other) <> ", not one digested wheel")
 
         describe "server↔worker -- the integrity gate" $
             it "refuses to mirror an artifact whose bytes fail the integrity gate" $ \e2e -> do

@@ -14,10 +14,6 @@ module Ecluse.E2E.Harness.Npm (
     withPublishProject,
     installWithLifecycleProbe,
 
-    -- * Assertions
-    shouldSucceed,
-    shouldFail,
-
     -- * Constants
     publishTargetEnv,
     publishScope,
@@ -27,78 +23,53 @@ module Ecluse.E2E.Harness.Npm (
     publishVersion,
 ) where
 
-import Data.ByteString.Lazy qualified as LBS
-
 import Data.Text qualified as T
-import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
-import System.Exit (ExitCode (ExitSuccess))
+import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
-import System.Process.Typed (proc, readProcess, setEnv, setWorkingDir)
-import Test.Hspec (expectationFailure)
-import UnliftIO (bracket, handleAny)
 import UnliftIO.Environment (getEnvironment)
 
-import Ecluse.E2E.Harness.Docker (uniqueSuffix)
+import Ecluse.E2E.Harness.Client (runClient, withClientDir)
 import Ecluse.E2E.Harness.Types
-
--- | Fail the assertion with npm's output when the command failed.
-shouldSucceed :: (MonadIO m) => NpmResult -> m NpmResult
-shouldSucceed res = liftIO $ case npmExit res of
-    ExitSuccess -> pure res
-    _ -> expectationFailure ("npm failed!\nSTDOUT:\n" <> T.unpack (npmStdout res) <> "\nSTDERR:\n" <> T.unpack (npmStderr res)) >> pure res
-
--- | Fail the assertion with npm's output when the command unexpectedly succeeded.
-shouldFail :: (MonadIO m) => NpmResult -> m NpmResult
-shouldFail res = liftIO $ case npmExit res of
-    ExitSuccess -> expectationFailure ("npm incorrectly succeeded!\nSTDOUT:\n" <> T.unpack (npmStdout res) <> "\nSTDERR:\n" <> T.unpack (npmStderr res)) >> pure res
-    _ -> pure res
 
 -- | Isolate a consumer's npm state and remove its project directory after the action.
 withNpmProject :: E2E -> (NpmProject -> IO a) -> IO a
 withNpmProject e2e = withProjectContents e2e consumerPackageJson ""
 
 withProjectContents :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
-withProjectContents e2e packageJson npmrcContents use = do
-    sfx <- uniqueSuffix
-    tmpRoot <- getTemporaryDirectory
-    let projectDir = tmpRoot </> ("ecluse-e2e-npm-" <> sfx)
-        cacheDir = projectDir </> "cache"
-        prefixDir = projectDir </> "prefix"
-        npmrc = projectDir </> ".npmrc"
-    bracket
-        ( do
-            createDirectoryIfMissing True cacheDir
-            createDirectoryIfMissing True prefixDir
-            writeFileText (projectDir </> "package.json") packageJson
-            writeFileText npmrc npmrcContents
-            baseEnv <- getEnvironment
-            let overrides =
-                    [ ("npm_config_registry", toString (e2eRegistry e2e))
-                    , ("npm_config_cache", cacheDir)
-                    , ("npm_config_userconfig", npmrc)
-                    , ("npm_config_prefix", prefixDir)
-                    , ("npm_config_audit", "false")
-                    , ("npm_config_fund", "false")
-                    , ("npm_config_update_notifier", "false")
-                    , ("npm_config_progress", "false")
-                    , -- No npm child may run an upstream package's lifecycle scripts, an arbitrary-code-execution
-                      -- surface. This project sits outside the repo tree, beyond the root @.npmrc@'s reach.
-                      ("npm_config_ignore_scripts", "true")
-                    , -- npm's 10 s then 60 s retry backoff is sized for the public internet, and
-                      -- every registry here is a container on a local network. Keep the retries.
-                      ("npm_config_fetch_retry_mintimeout", "200")
-                    , ("npm_config_fetch_retry_maxtimeout", "1000")
-                    , ("HOME", projectDir)
-                    ]
-                cleanEnv =
-                    filter
-                        (\(k, _) -> k `notElem` map fst overrides && not ("npm_config_" `isPrefixOf` k))
-                        baseEnv
-                        <> overrides
-            pure NpmProject{npDir = projectDir, npEnv = cleanEnv}
-        )
-        (\_ -> handleAny (const pass) (removePathForcibly projectDir))
-        use
+withProjectContents e2e packageJson npmrcContents use =
+    withClientDir "npm" $ \projectDir -> do
+        let cacheDir = projectDir </> "cache"
+            prefixDir = projectDir </> "prefix"
+            npmrc = projectDir </> ".npmrc"
+        createDirectoryIfMissing True cacheDir
+        createDirectoryIfMissing True prefixDir
+        writeFileText (projectDir </> "package.json") packageJson
+        writeFileText npmrc npmrcContents
+        baseEnv <- getEnvironment
+        let overrides =
+                [ ("npm_config_registry", toString (e2eRegistry e2e))
+                , ("npm_config_cache", cacheDir)
+                , ("npm_config_userconfig", npmrc)
+                , ("npm_config_prefix", prefixDir)
+                , ("npm_config_audit", "false")
+                , ("npm_config_fund", "false")
+                , ("npm_config_update_notifier", "false")
+                , ("npm_config_progress", "false")
+                , -- No npm child may run an upstream package's lifecycle scripts, an arbitrary-code-execution
+                  -- surface. This project sits outside the repo tree, beyond the root @.npmrc@'s reach.
+                  ("npm_config_ignore_scripts", "true")
+                , -- npm's 10 s then 60 s retry backoff is sized for the public internet, and
+                  -- every registry here is a container on a local network. Keep the retries.
+                  ("npm_config_fetch_retry_mintimeout", "200")
+                , ("npm_config_fetch_retry_maxtimeout", "1000")
+                , ("HOME", projectDir)
+                ]
+            cleanEnv =
+                filter
+                    (\(k, _) -> k `notElem` map fst overrides && not ("npm_config_" `isPrefixOf` k))
+                    baseEnv
+                    <> overrides
+        use NpmProject{npDir = projectDir, npEnv = cleanEnv}
 
 -- | Prepare an isolated publisher with the token npm requires before contacting the proxy.
 withPublishProject :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
@@ -108,35 +79,27 @@ withPublishProject e2e name version =
         (publishPackageJson name version)
         (npmAuthLine (e2eRegistry e2e) publishAuthToken)
 
-runNpm :: NpmProject -> [String] -> IO NpmResult
-runNpm proj args = do
-    let cmd = setWorkingDir (npDir proj) . setEnv (npEnv proj) $ proc "npm" args
-    (code, out, err) <- readProcess cmd
-    pure
-        NpmResult
-            { npmExit = code
-            , npmStdout = decodeUtf8 (LBS.toStrict out)
-            , npmStderr = decodeUtf8 (LBS.toStrict err)
-            }
+runNpm :: NpmProject -> [String] -> IO ClientResult
+runNpm proj = runClient (npDir proj) (npEnv proj) "npm"
 
 -- | @npm install \<pkg\>@ in a project. It writes the lockfile for a later 'npmCiIn'.
-npmInstallIn :: NpmProject -> Text -> IO NpmResult
+npmInstallIn :: NpmProject -> Text -> IO ClientResult
 npmInstallIn proj pkg = runNpm proj ["install", toString pkg]
 
 -- | Install from the project's lockfile without resolving package metadata.
-npmCiIn :: NpmProject -> IO NpmResult
+npmCiIn :: NpmProject -> IO ClientResult
 npmCiIn proj = runNpm proj ["ci"]
 
 -- | Publish through the configured proxy with package lifecycle scripts disabled.
-npmPublishIn :: NpmProject -> IO NpmResult
+npmPublishIn :: NpmProject -> IO ClientResult
 npmPublishIn proj = runNpm proj ["publish"]
 
 -- | Install through the proxy in a temporary project that is removed after the command.
-npmInstall :: E2E -> Text -> IO NpmResult
+npmInstall :: E2E -> Text -> IO ClientResult
 npmInstall e2e pkg = withNpmProject e2e (`npmInstallIn` pkg)
 
 -- | Report whether installation executed a sentinel-writing lifecycle script that should be disabled.
-installWithLifecycleProbe :: E2E -> IO (NpmResult, Bool)
+installWithLifecycleProbe :: E2E -> IO (ClientResult, Bool)
 installWithLifecycleProbe e2e =
     withProjectContents e2e lifecycleProbePackageJson "" $ \proj -> do
         res <- runNpm proj ["install"]

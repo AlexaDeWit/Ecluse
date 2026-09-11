@@ -7,8 +7,9 @@ module Ecluse.E2E.Harness.Types (
     E2EConfig (..),
     defaultE2EConfig,
     GlobalDataPlane (..),
-    NpmResult (..),
+    ClientResult (..),
     NpmProject (..),
+    PipProject (..),
 ) where
 
 import Network.HTTP.Client (Manager)
@@ -18,6 +19,8 @@ import System.Exit (ExitCode)
 data E2E = E2E
     { e2eRegistry :: Text
     -- ^ The npm registry URL to point a client at (the proxy's npm mount).
+    , e2ePypiIndex :: Text
+    -- ^ The Simple-index URL to point a client at (the proxy's pypi mount).
     , e2eBaseUrl :: Text
     -- ^ The proxy's base URL on host loopback (no trailing slash).
     , e2eVerdaccio :: Text
@@ -62,11 +65,12 @@ data GlobalDataPlane = GlobalDataPlane
     , gdpWorkDir :: FilePath
     }
 
--- | The outcome of an @npm@ invocation: exit code plus captured output.
-data NpmResult = NpmResult
-    { npmExit :: ExitCode
-    , npmStdout :: Text
-    , npmStderr :: Text
+-- | The outcome of one client invocation: what ran, its exit code, and its captured output.
+data ClientResult = ClientResult
+    { crCommand :: Text
+    , crExit :: ExitCode
+    , crStdout :: Text
+    , crStderr :: Text
     }
     deriving stock (Show)
 
@@ -76,4 +80,14 @@ global npm state out and the proxy the only registry. The lockfile stays on for 
 data NpmProject = NpmProject
     { npDir :: FilePath
     , npEnv :: [(String, String)]
+    }
+
+{- | An isolated, throwaway @pip@ project: its own requirements file, install target and
+@HOME@ keep global pip state out and the proxy the only index.
+-}
+data PipProject = PipProject
+    { ppDir :: FilePath
+    , ppEnv :: [(String, String)]
+    , ppIndex :: Text
+    -- ^ The Simple-index URL this project resolves through.
     }

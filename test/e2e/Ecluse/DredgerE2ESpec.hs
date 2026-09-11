@@ -13,7 +13,7 @@ import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures (PkgSpec, dredgerDryRunPkg, dredgerKeepPkg, dredgerPkg, psName, psVersion)
+import Ecluse.E2E.Fixtures.Npm (PkgSpec, dredgerDryRunPkg, dredgerKeepPkg, dredgerPkg, psName, psVersion)
 import Ecluse.E2E.Harness
 import Ecluse.Test.Log (lineMessage)
 
