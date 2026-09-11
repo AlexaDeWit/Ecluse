@@ -31,7 +31,7 @@ module Ecluse.Core.Registry.Metadata (
 ) where
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
-import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, responseStatusCode), isAuthorisationFailure)
+import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, responseStatusCode), isAuthorisationFailure, isSuccessStatus)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError)
@@ -57,8 +57,8 @@ data MetadataClient = MetadataClient
     -- ^ One version's projection with the document's own @latest@. Errors retain the upstream failure.
     }
 
-{- | What one version read yields: the requested version, and the @latest@ tag the same document
-declared. Both come from one bounded read, so a caller needing the tag adds no second fetch.
+{- | The requested version and the @latest@ tag the same document declared. Both come from one
+bounded read, so a caller needing the tag adds no second fetch.
 -}
 data VersionRead = VersionRead
     { vrDetails :: Maybe PackageDetails
@@ -84,7 +84,7 @@ fetchThenProject tracing fetch name project =
             404 -> pure (Left MetadataAbsent)
             code
                 | isAuthorisationFailure code -> pure (Left (MetadataAuthorisationFailure code))
-                | code >= 200 && code < 300 -> spanMetadataDecode tracing name (pure (project (responseBody response)))
+                | isSuccessStatus code -> spanMetadataDecode tracing name (pure (project (responseBody response)))
                 | otherwise -> pure (Left (MetadataHttpFailure code))
 
 -- | Why a metadata fetch could not yield a usable result.
@@ -107,8 +107,8 @@ data MetadataError
 
 -- | A version lookup result shared by public admission and mirror workers.
 data VersionEvaluation
-    = {- | The version resolved and projected. Its 'PackageDetails' is ready for the rules
-      engine, and the second field is the same document's 'vrUpstreamLatest'.
+    = {- | The version resolved and projected, ready for the rules engine. The second field is
+      the same document's 'vrUpstreamLatest'.
       -}
       VersionPresent PackageDetails (Maybe Version)
     | -- | The package exists but does not supply the requested version.

@@ -7,9 +7,9 @@ admit-everything policy over it.
 
 The mirror worker re-runs current policy against a job's version before mirroring it (see
 "Ecluse.Core.Worker"), so any end-to-end worker test must supply per-ecosystem policies.
-'npmPolicyWith' is the one 'WorkerPolicy' wiring those tests share: npm's real by-URL
-request formation, the SHA-256 admission floor, and an open tarball-host gate, with the
-clock, byte cap, publish capability, resolver, and rules left to the caller.
+'npmPolicyWith' is the one 'WorkerPolicy' wiring those tests share: npm's real by-URL request
+formation, the SHA-256 admission floor, and an open tarball-host gate, with the clock, byte
+cap, publish capability, resolver, and rules left to the caller.
 -}
 module Ecluse.Test.Worker (
     npmPolicyWith,

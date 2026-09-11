@@ -3,13 +3,11 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The mirror-write capability: a shared publish transport, an adapter-provided protocol codec,
-and the married 'MirrorPublish' handle a worker bundle carries. The 'PublishCodec' is protocol:
-it assembles and shapes the request and says what the registry's status answer means. The
-'MirrorTransport' is everything else, so a new ecosystem contributes a codec and never a
-transport. It mints the bearer per call, which the codec attaches at its single attach point,
-and it seals every request a codec returns, so no codec can ship a mirror write that follows a
-redirect. Both effectful operations report failure as a __value__, 'FetchFault' on the probe and
-'PublishFault' on the write, so the worker's decisions stay total at the call site.
+and the married 'MirrorPublish' handle a worker bundle carries. The 'PublishCodec' is protocol: it
+shapes the request and reads the registry's status answer. The 'MirrorTransport' is everything else,
+so a new ecosystem contributes a codec and never a transport. It mints the bearer per call and seals
+every request, so no codec can ship a write that follows a redirect. Both effectful operations
+report failure as a __value__, so the worker's decisions stay total at the call site.
 -}
 module Ecluse.Core.Registry.Publish (
     -- * What one write declares
@@ -44,16 +42,15 @@ import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (Version)
 
-{- | What one mirror write declares: the version it adds, and the release tag the store must carry
-once it lands. The caller decides the tag over the inventory the write itself produces, so a codec
-never derives one from the version in hand.
+{- | The version one mirror write adds, and the release tag the store must carry once it lands.
+The caller decides the tag, so no codec derives one from the version in hand.
 -}
 data PublishPlan = PublishPlan
     { ppVersion :: Version
     -- ^ The version these bytes publish.
     , ppLatest :: Version
-    {- ^ The @latest@ target to declare. It is a version the store holds after this write, which
-    is the published version itself when nothing else is mirrored.
+    {- ^ The @latest@ target to declare, always a version the store holds after this write. It is
+    the published version itself when nothing else is mirrored.
     -}
     }
     deriving stock (Eq, Show)

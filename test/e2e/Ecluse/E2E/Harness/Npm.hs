@@ -13,6 +13,7 @@ module Ecluse.E2E.Harness.Npm (
     withNpmProject,
     withPublishProject,
     installWithLifecycleProbe,
+    installedVersion,
 
     -- * Constants
     npmTarballPath,
@@ -24,6 +25,8 @@ module Ecluse.E2E.Harness.Npm (
     publishVersion,
 ) where
 
+import Data.Aeson (Object, decodeFileStrict', (.:))
+import Data.Aeson.Types (parseMaybe)
 import Data.Text qualified as T
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
@@ -82,6 +85,20 @@ withPublishProject e2e name version =
 
 runNpm :: NpmProject -> [String] -> IO ClientResult
 runNpm proj = runClient (npDir proj) (npEnv proj) "npm"
+
+{- | The version a project resolved for an installed package, read from its own manifest.
+'Nothing' when the package is absent or its manifest declares no version.
+-}
+installedVersion :: NpmProject -> Text -> IO (Maybe Text)
+installedVersion proj pkg = do
+    present <- doesFileExist manifest
+    if present
+        then do
+            decoded <- decodeFileStrict' manifest
+            pure (parseMaybe (.: "version") =<< (decoded :: Maybe Object))
+        else pure Nothing
+  where
+    manifest = npDir proj </> "node_modules" </> toString pkg </> "package.json"
 
 -- | @npm install \<pkg\>@ in a project. It writes the lockfile for a later 'npmCiIn'.
 npmInstallIn :: NpmProject -> Text -> IO ClientResult

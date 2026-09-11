@@ -7,6 +7,7 @@ module Ecluse.E2E.Harness.Proxy (
     proxyGet,
     proxyHead,
     proxyPut,
+    awaitPackument,
 
     -- * Logs
     proxyContainerLogs,
@@ -33,6 +34,7 @@ import Network.HTTP.Types (hContentLength, statusCode)
 
 import Ecluse.E2E.Harness.Docker (awaitContainerLog, containerLogs)
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.Poll (pollUntil)
 
 -- | The HTTP status of a @GET@ to a proxy path (e.g. @\/npm\/e2e-allow@).
 proxyStatus :: E2E -> Text -> IO Int
@@ -48,6 +50,14 @@ proxyGet e2e path = do
 {- | @HEAD@ a proxy path. It returns the status, the declared @Content-Length@, and how many body
 bytes actually arrived, so a test can assert that a @HEAD@ streams no body.
 -}
+
+{- | Poll the mount for a package's merged listing until it answers @200@, up to ~20s. A case
+that needs the public leg warm calls this first, because 'withUpstreamPaused' resumes the stub
+without waiting for it to answer again.
+-}
+awaitPackument :: E2E -> Text -> IO Bool
+awaitPackument e2e pkg = pollUntil 40 500000 id ((== 200) <$> proxyStatus e2e ("/npm/" <> pkg))
+
 proxyHead :: E2E -> Text -> IO (Int, Maybe Int, Int)
 proxyHead e2e path = do
     base <- parseRequest (toString (e2eBaseUrl e2e <> path))

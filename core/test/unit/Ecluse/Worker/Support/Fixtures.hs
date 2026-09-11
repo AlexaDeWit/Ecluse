@@ -249,9 +249,7 @@ rules over its 'PackageDetails'.
 presentResolver :: PackageName -> Version -> IO VersionEvaluation
 presentResolver = taggedResolver Nothing
 
-{- | 'presentResolver' whose resolved snapshot also carries the upstream's own @latest@ target,
-for the release-tag cases.
--}
+-- | 'presentResolver' whose snapshot also carries the upstream's own @latest@ target.
 taggedResolver :: Maybe Version -> PackageName -> Version -> IO VersionEvaluation
 taggedResolver upstreamLatest name version =
     pure (VersionPresent (sampleDetails name version) upstreamLatest)

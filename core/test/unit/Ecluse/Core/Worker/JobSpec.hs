@@ -568,11 +568,6 @@ versionReadOf details upstreamLatest = VersionRead{vrDetails = details, vrUpstre
 npmVer :: Text -> Version
 npmVer = mkVersion Npm
 
-isRetried :: JobOutcome -> Bool
-isRetried = \case
-    Retried _ -> True
-    _ -> False
-
 -- Decode each captured publish document, failing the parse to 'Nothing' rather than throwing.
 decodedDocuments :: [ByteString] -> [Value]
 decodedDocuments documents = [value | document <- documents, Right value <- [eitherDecodeStrict' document]]

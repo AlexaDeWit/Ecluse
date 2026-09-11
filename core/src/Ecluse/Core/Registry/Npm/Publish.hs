@@ -36,6 +36,7 @@ import Ecluse.Core.Registry (
     PublishFault (PublishRejected),
     UrlFormationError,
     firstHashValue,
+    isSuccessStatus,
  )
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest, packageUrl, parseRequestEither, withToken)
@@ -67,7 +68,7 @@ strongestSriValue artifact = do
 
 classifyPublish :: Int -> Either PublishFault ()
 classifyPublish code
-    | code >= 200 && code < 300 = Right ()
+    | isSuccessStatus code = Right ()
     | code == 409 = Right () -- version already present, immutable, so success-equivalent
     | otherwise =
         Left (PublishRejected (PublishError ("publish failed with HTTP status " <> show code)))
@@ -94,9 +95,8 @@ publishRequest baseUrl credential name document = do
                     : requestHeaders base
             }
 
-{- | Assemble one version with caller-verified digests and bytes. The registry expands the tarball
-filename into its served URL. The declared @latest@ is the plan's, never the published version by
-default, because a registry left to choose can otherwise retag on completion order.
+{- | Assemble one version with caller-verified digests and bytes. The declared @latest@ is the
+plan's: a registry left to choose one can retag on completion order.
 -}
 npmPublishDocument ::
     PackageName ->

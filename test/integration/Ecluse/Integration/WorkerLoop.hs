@@ -71,8 +71,7 @@ waitFor :: IO Bool -> IO ()
 waitFor done = void (pollUntil 200 200_000 id done)
 
 {- | A WAI mirror-target stub answering each publish @PUT@ with @replyStatus@ and recording its
-path. The inventory @GET@ answers @404@, a store holding this package not at all, so no job takes
-the presence short-circuit and each write chooses its tag over its own version alone.
+path. The inventory @GET@ answers @404@, so no job takes the presence short-circuit.
 -}
 withMirrorTarget :: Status -> (Text -> IORef [ByteString] -> IO a) -> IO a
 withMirrorTarget replyStatus body = do

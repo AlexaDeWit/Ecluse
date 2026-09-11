@@ -73,8 +73,8 @@ denyPkg = (defaultPkgSpec "e2e-deny"){psInstallScript = True}
 mirrorPkg :: PkgSpec
 mirrorPkg = defaultPkgSpec "e2e-mirror"
 
-{- | A two-version package whose upstream @latest@ is @2.0.0@, for the mirror's release-tag
-round trip. Mirroring @1.0.0@ after @2.0.0@ must not retag the store.
+{- | A two-version package whose upstream @latest@ is @2.0.0@. Mirroring @1.0.0@ after @2.0.0@
+must not retag the store.
 -}
 latestPkg :: PkgSpec
 latestPkg = (defaultPkgSpec "e2e-latest"){psVersion = "2.0.0", psOlderVersions = ["1.0.0"]}

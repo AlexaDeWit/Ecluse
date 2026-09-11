@@ -91,9 +91,8 @@ data PublishLog = PublishLog
     , plArtifacts :: [MirrorArtifact]
     }
 
-{- | Record publications with a fixed outcome. The inventory probe answers @404@: the mirror
-holds this package not at all, which the worker reads as a known-empty inventory without
-consulting the version list.
+{- | Record publications with a fixed outcome. The inventory probe answers @404@, which the
+worker reads as a known-empty store without consulting the version list.
 -}
 recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 recordingPublish logRef outcome =

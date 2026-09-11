@@ -100,10 +100,11 @@ it did not set, so keep a deliberate release tag on your private registry, which
 listing prefers. First-party names never reach the mirror worker, and their release tags are
 untouched.
 
-A mirror job whose target metadata cannot be read is retried rather than published, because the
-tag cannot be chosen without the current inventory. Two workers mirroring the same package at the
-same instant still race: an npm publish carries no compare-and-set, so the last write wins. The
-next job for that package corrects the tag.
+A mirror job whose target metadata cannot be read is not published, because the tag cannot be
+chosen without the current inventory. It follows the worker's usual fault handling instead, which
+retries a transport failure and retires a fault no redelivery can clear. Two workers mirroring the
+same package at the same instant still race: an npm publish carries no compare-and-set, so the last
+write wins. The next job for that package corrects the tag.
 
 Before publication, the mirror worker verifies fetched bytes against the current admitted
 metadata. For npm `dist.integrity`, any matching SRI alternative at the strongest algorithm

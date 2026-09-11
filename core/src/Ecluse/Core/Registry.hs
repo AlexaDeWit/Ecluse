@@ -9,6 +9,7 @@ module Ecluse.Core.Registry (
     -- * Fetch payload
     RegistryResponse (..),
     isAuthorisationFailure,
+    isSuccessStatus,
 
     -- * Publish descriptor
     MirrorArtifact (..),
@@ -41,6 +42,10 @@ data RegistryResponse = RegistryResponse
 -- | Whether an upstream status explicitly refuses authentication or authorisation.
 isAuthorisationFailure :: Int -> Bool
 isAuthorisationFailure code = code == 401 || code == 403
+
+-- | Whether an upstream status reports success. Every leg reads this one test, so none can drift.
+isSuccessStatus :: Int -> Bool
+isSuccessStatus code = code >= 200 && code < 300
 
 -- | The artifact descriptor the mirror publish uses.
 data MirrorArtifact = MirrorArtifact

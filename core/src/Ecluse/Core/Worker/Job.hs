@@ -45,6 +45,7 @@ import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishFault (PublishFetch, PublishRejected),
     RegistryResponse (responseStatusCode),
+    isSuccessStatus,
     renderUrlFormationError,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
@@ -150,9 +151,8 @@ mirrorUnlessPresent policy receipt job =
                 pure Succeeded
             | otherwise -> reevaluatePolicy policy job >>= either pure (publishAdmitted policy receipt job inventory)
 
-{- Read what the mirror target holds, which decides both duplicate suppression and the release tag.
-An unreadable answer is not an empty store, so it reports a fault rather than let the write declare
-a tag chosen without it. An explicit 404 is a store that holds this package not at all. -}
+{- An unreadable answer is not an empty store, so it reports a fault rather than let the write
+declare a tag chosen without the inventory. A 404 is a store holding this package not at all. -}
 probeInventory :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome [Version])
 probeInventory policy job = do
     probed <- liftIO (mpProbeMetadata (wpPublish policy) (jobPackage job))
@@ -165,9 +165,6 @@ probeInventory policy job = do
             | otherwise -> case mpParseVersionList (wpPublish policy) response of
                 Left (ParseError detail) -> Left (Retried (probeParseReason job detail))
                 Right versions -> Right versions
-
-isSuccessStatus :: Int -> Bool
-isSuccessStatus code = code >= 200 && code < 300
 
 probeFaultReason :: MirrorJob -> FetchFault -> Text
 probeFaultReason job = \case
@@ -278,9 +275,8 @@ outcomeOfFetchFault render fault = verdict (render fault)
         FetchBoundExceeded _ -> DeadLettered
         FetchTransport _ -> Retried
 
-{- | The @latest@ one mirror write declares: the shared selector over the upstream's own tag and the
-versions the store holds once this write lands. The published version always survives, so the tag
-always has a target present at the store.
+{- | The @latest@ one mirror write declares, over the upstream tag and the post-write inventory.
+The published version always survives, so the chosen target is always present at the store.
 -}
 mirrorLatest :: Maybe Version -> [Version] -> Version -> Version
 mirrorLatest upstreamLatest inventory published =

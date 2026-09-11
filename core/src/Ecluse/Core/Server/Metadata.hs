@@ -108,9 +108,7 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
 selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
 selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
 
-{- | Project a whole-document snapshot onto one version's read, so the warm full cache answers a
-version request with the same pair a selective read would have produced.
--}
+-- | Project a snapshot onto one version's read, so a warm full-cache hit answers as a selective read would.
 readOfInfo :: Version -> PackageInfo -> VersionRead
 readOfInfo version info =
     VersionRead

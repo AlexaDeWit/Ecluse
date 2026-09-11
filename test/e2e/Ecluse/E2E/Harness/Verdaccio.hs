@@ -152,8 +152,9 @@ verdaccioArtifact e2e name version = do
     req <- parseRequest (toString (e2eVerdaccio e2e <> "/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz"))
     resp <- httpLbs req (e2eManager e2e)
     pure (statusCode (responseStatus resp), LBS.length (responseBody resp))
-{- | The store's own @dist-tags.latest@ target. 'Nothing' for an absent package or one carrying
-no such tag, and a failure for a packument that cannot be read.
+
+{- | The store's own @dist-tags.latest@ target. 'Nothing' for an absent package or an absent tag,
+and a failure for an unreadable packument.
 -}
 verdaccioLatest :: E2E -> Text -> IO (Maybe Text)
 verdaccioLatest e2e name = do

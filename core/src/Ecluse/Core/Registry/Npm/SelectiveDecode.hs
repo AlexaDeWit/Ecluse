@@ -7,8 +7,8 @@ document bytes without materialising the other versions.
 
 The whole-packument decode builds a 'Value' for every version, which dominates the serve-path
 cost on a packument of thousands of versions. The tarball gate consults a single version. This
-module walks the registry's own JSON token stream (@aeson@'s @Data.Aeson.Decoding@, no new
-dependency) and skips every other version's tokens without allocating them. The generic bounded
+module walks the registry's own JSON token stream (@aeson@'s @Data.Aeson.Decoding@) and skips
+every other version's tokens without allocating them. The generic bounded
 token-walk engine is "Ecluse.Core.Json.Selective". The win is on the parse, not the fetch: the
 proxy still reads the full bytes, because npm carries @time@ only in the full document.
 
@@ -19,10 +19,9 @@ non-whitespace after the top-level object, surface as 'SelectiveUndecodable' exa
 @eitherDecodeStrict@ fails them. Every value is depth-bounded at the
 'Ecluse.Core.Security.checkNestingDepth' budget that would apply to it.
 
-It materialises three pieces: the requested version's object, the document @name@, and the
-@dist-tags.latest@ target. The same @aeson@ 'Value' decoder the whole-document path uses
-produces them, so projecting them yields an identical
-'Ecluse.Core.Package.PackageDetails'.
+It materialises only the requested version's object, its @time@ stamp, the document @name@, and
+the @dist-tags.latest@ target. The same @aeson@ 'Value' decoder the whole-document path uses
+produces them, so projecting them yields an identical 'Ecluse.Core.Package.PackageDetails'.
 
 == What it deliberately does not re-validate
 
@@ -101,9 +100,9 @@ selectVersionFromPackument maxDepth version body
 emptySelection :: SelectedVersion
 emptySelection = SelectedVersion Nothing Nothing Nothing Nothing 0
 
-{- The walk's threaded state. A flag marks each captured top-level key so a later duplicate
-never overwrites the first, as @aeson@ resolves it. The selection alone cannot carry that: a
-captured key whose target was absent leaves 'Nothing', and so does "not yet seen". -}
+{- A flag marks each captured top-level key so a later duplicate never overwrites the first, as
+@aeson@ resolves it. The selection cannot carry that: an absent target and "not yet seen" both
+leave 'Nothing'. -}
 data WalkState = WalkState
     { wsSelection :: SelectedVersion
     , wsSeenName :: Bool
