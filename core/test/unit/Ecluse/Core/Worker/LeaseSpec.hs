@@ -3,18 +3,21 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Cover for the worker's visibility-lease controller. The in-memory queue never expires a
-delivery, so these cases model expiry themselves: an injected clock that moves only when the
-controller waits, a deadline per receipt, and a second consumer that takes whatever lapsed.
+delivery, so these cases model expiry themselves: an injected clock, a deadline per receipt,
+and a second consumer that takes whatever lapsed. The clock is stepped rather than timed (see
+'withWorldClock'), so no case turns on how promptly a thread is scheduled.
 -}
 module Ecluse.Core.Worker.LeaseSpec (spec) where
 
-import Control.Concurrent.STM (check)
+import Control.Concurrent.STM (check, retry)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
+import GHC.Conc (ThreadStatus (ThreadDied, ThreadFinished), threadStatus)
 import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
 import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Async (withAsync)
-import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Concurrent (ThreadId, myThreadId, threadDelay)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportTls, TransportUnreachable), TransportFault, transportFault)
@@ -109,8 +112,8 @@ spec = do
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
                 held <- leaseAt 0 leased
-                void (whileLeased held (liftIO (threadDelay 20_000)))
-            readIORef (lwRenewals world) `shouldReturn` []
+                void (whileLeased held (liftIO (threadDelay settleMicros)))
+            renewalsSoFar world `shouldReturn` []
 
         it "runs one renewal task per receipt across a full batch of ten, and none besides" $ do
             -- The task bound: ten small renewal tasks beside the single artifact task.
@@ -121,7 +124,7 @@ spec = do
                 void . whileLeased held . liftIO $ do
                     awaitRenewals world 30
                     redeliverable world `shouldReturn` []
-            renewed <- readIORef (lwRenewals world)
+            renewed <- renewalsSoFar world
             sortNub renewed `shouldBe` sort (map show [1 :: Int .. 10])
 
     describe "withLeasedBatch -- a renewal that cannot be kept drops only its own receipt" $ do
@@ -157,7 +160,7 @@ spec = do
             runLeases world (faultingFor ["a"] unreachable) batch $ \leased -> do
                 held <- leaseAt 0 leased
                 -- Wait for the drop, then offer the job: it must never run.
-                liftIO (awaitRenewals world 4 >> threadDelay 20_000)
+                liftIO (awaitRenewals world 4 >> threadDelay settleMicros)
                 started <- newIORef False
                 outcome <- whileLeased held (writeIORef started True)
                 liftIO (outcome `shouldBe` Nothing)
@@ -170,7 +173,7 @@ spec = do
                 held <- leaseAt 0 leased
                 void (whileLeased held (liftIO neverEnds))
             -- The first attempt plus the shipped retry budget, all inside the margin.
-            renewed <- readIORef (lwRenewals world)
+            renewed <- renewalsSoFar world
             length renewed `shouldBe` 4
 
         it "drops without a retry when the renewal spends the margin on its first attempt" $ do
@@ -182,7 +185,7 @@ spec = do
                 held <- leaseAt 0 leased
                 outcome <- whileLeased held (liftIO neverEnds)
                 liftIO (outcome `shouldBe` Nothing)
-            readIORef (lwRenewals world) `shouldReturn` ["a"]
+            renewalsSoFar world `shouldReturn` ["a"]
 
         it "drops at once on a fault no retry can clear" $ do
             -- The shared typed transience decides: a TLS refusal needs an operator, not a retry.
@@ -192,7 +195,7 @@ spec = do
                 held <- leaseAt 0 leased
                 outcome <- whileLeased held (liftIO neverEnds)
                 liftIO (outcome `shouldBe` Nothing)
-            readIORef (lwRenewals world) `shouldReturn` ["a"]
+            renewalsSoFar world `shouldReturn` ["a"]
 
         it "drops the receipt when the renewal task dies outside its typed contract" $ do
             -- The queue handle reports faults as values, so a throw anywhere in the task is an
@@ -225,9 +228,11 @@ spec = do
                 held <- leaseAt 0 leased
                 liftIO (awaitRenewals world 2)
                 disposing held pass
-                settled <- readIORef (lwRenewals world)
-                liftIO (threadDelay 20_000)
-                liftIO (readIORef (lwRenewals world) `shouldReturn` settled)
+                settled <- renewalsSoFar world
+                -- Force virtual time past several windows: a renewal still parked on the
+                -- disposed receipt would wake and ask, which is the bug this case would catch.
+                liftIO (advanceWorld world 120 >> threadDelay settleMicros)
+                liftIO (renewalsSoFar world `shouldReturn` settled)
 
         it "stops renewal even when the disposition's own queue call faulted" $ do
             -- A failed ack is absorbed, but it still ends the lease: the message is going to
@@ -238,9 +243,9 @@ spec = do
                 held <- leaseAt 0 leased
                 liftIO (awaitRenewals world 2)
                 void (disposing held (pure (Left unreachable :: Either TransportFault ())))
-                settled <- readIORef (lwRenewals world)
-                liftIO (threadDelay 20_000)
-                liftIO (readIORef (lwRenewals world) `shouldReturn` settled)
+                settled <- renewalsSoFar world
+                liftIO (advanceWorld world 120 >> threadDelay settleMicros)
+                liftIO (renewalsSoFar world `shouldReturn` settled)
 
     describe "withLeasedBatch -- cancellation" $
         it "leaves an unfinished receipt unacknowledged and stops every renewal" $ do
@@ -254,9 +259,16 @@ spec = do
                 void (whileLeased held (liftIO neverEnds))
                 disposing held (modifyIORef' disposed (+ 1))
             readIORef disposed `shouldReturn` 0
-            settled <- readIORef (lwRenewals world)
-            threadDelay 20_000
-            readIORef (lwRenewals world) `shouldReturn` settled
+            settled <- renewalsSoFar world
+            advanceWorld world 120
+            threadDelay settleMicros
+            renewalsSoFar world `shouldReturn` settled
+
+{- | The one real wait these cases keep: how long to let a thread that should be finished
+actually finish, before reading back what it did or did not do.
+-}
+settleMicros :: Int
+settleMicros = 20_000
 
 {- | A job that never ends on its own, so only a dropped lease stops it. Its result type is
 fixed, which is what lets a case assert on the 'Maybe' that 'whileLeased' hands back.
@@ -272,15 +284,24 @@ twelveHours = Seconds 43_200
 window30 :: Seconds
 window30 = Seconds 30
 
-{- | A queue world that models receipt expiry, which the in-memory backend cannot. Its clock
-ticks externally ('withWorldClock'), never from inside a wait, so one renewal task can never
-carry virtual time past a sibling's deadline before that sibling has woken.
+{- | A queue world that models receipt expiry, which the in-memory backend cannot. Its clock is
+__stepped, never timed__: it moves to the earliest instant any waiter is parked for, and only
+while every live renewal task is parked. A task that is slow to be scheduled therefore holds
+virtual time still rather than losing its lease to it, so a loaded runner cannot fail a case.
 -}
 data LeaseWorld = LeaseWorld
     { lwNow :: TVar Double
+    , -- Each parked waiter and the instant it is waiting for.
+      lwParked :: TVar (Map ThreadId Double)
+    , -- Every waiter that has parked at least once and whose thread has not since ended.
+      lwSeen :: TVar (Set ThreadId)
+    , -- How many of the renewal tasks have ended, so the clock stops waiting on them.
+      lwEnded :: TVar Int
+    , -- One renewal task runs per leased receipt, which is how many waiters to expect.
+      lwRenewalTasks :: Int
     , -- Each receipt's current deadline: when a second consumer could take the delivery.
       lwVisible :: IORef (Map Text Double)
-    , -- Every renewal the controller asked for, oldest first.
+    , -- Every renewal the controller asked for, newest first.
       lwRenewals :: IORef [Text]
     }
 
@@ -291,9 +312,21 @@ type RenewalAnswer = LeaseWorld -> Text -> IO (Either TransportFault ())
 newLeaseWorld :: Double -> [QueueMessage] -> IO LeaseWorld
 newLeaseWorld startedAt batch = do
     now <- newTVarIO startedAt
+    parked <- newTVarIO mempty
+    seen <- newTVarIO mempty
+    ended <- newTVarIO 0
     visible <- newIORef (Map.fromList (mapMaybe deadlineOf batch))
     renewals <- newIORef []
-    pure LeaseWorld{lwNow = now, lwVisible = visible, lwRenewals = renewals}
+    pure
+        LeaseWorld
+            { lwNow = now
+            , lwParked = parked
+            , lwSeen = seen
+            , lwEnded = ended
+            , lwRenewalTasks = length (mapMaybe msgLease batch)
+            , lwVisible = visible
+            , lwRenewals = renewals
+            }
   where
     deadlineOf message = do
         lease <- msgLease message
@@ -312,32 +345,78 @@ worldOps world answer =
 
 renewInWorld :: LeaseWorld -> RenewalAnswer -> Text -> Seconds -> IO (Either TransportFault ())
 renewInWorld world answer receipt (Seconds window) = do
-    modifyIORef' (lwRenewals world) (<> [receipt])
+    modifyIORef' (lwRenewals world) (receipt :)
     answer world receipt >>= \case
         Left fault -> pure (Left fault)
         Right () -> do
             now <- readTVarIO (lwNow world)
             Right () <$ modifyIORef' (lwVisible world) (Map.insert receipt (now + fromIntegral window))
 
--- Block until the clock reaches the instant. A waiter never moves the clock itself.
+{- Park the caller at its target and block there. Registering before blocking is what lets the
+stepper tell a waiter that is waiting from one that is between waits and must not be stepped
+over. -}
 waitUntilInWorld :: LeaseWorld -> MonoTime -> IO ()
-waitUntilInWorld world (MonoTime target) =
-    atomically (readTVar (lwNow world) >>= check . (>= target))
+waitUntilInWorld world (MonoTime target) = do
+    waiter <- myThreadId
+    atomically $ do
+        modifyTVar' (lwSeen world) (Set.insert waiter)
+        modifyTVar' (lwParked world) (Map.insert waiter target)
+    atomically $ do
+        readTVar (lwNow world) >>= check . (>= target)
+        modifyTVar' (lwParked world) (Map.delete waiter)
 
-{- Tick the world's clock for the body: one virtual second per 'worldTickMicros'. Every waiter
-wakes off the same tick, so a task that is slow to wake cannot have virtual time run past it.
--}
+{- Step the world's clock for the body. It settles on its own the moment every renewal task is
+parked, so no real-time pacing decides anything. The one timed part is reaping a task that
+ended instead of parking again, and reaping late only ever pauses the clock. -}
 withWorldClock :: LeaseWorld -> IO a -> IO a
-withWorldClock world body = withAsync ticking (const body)
+withWorldClock world body = withAsync stepping (const body)
   where
-    -- Signed, so the tick's own result type cannot drift into an ambiguous one.
-    ticking :: IO ()
-    ticking = forever (threadDelay worldTickMicros >> atomically (modifyTVar' (lwNow world) (+ 1)))
+    stepping :: IO ()
+    stepping = forever $ do
+        stepped <- timeout reapMicros (atomically (awaitStep world))
+        whenNothing_ stepped (reapEndedWaiters world)
 
-{- The real time one virtual second costs. A renewal falls due a third of the way into its
-window, so the two thirds left are thousands of times the real gap a wake-up needs. -}
-worldTickMicros :: Int
-worldTickMicros = 500
+-- Move virtual time to the earliest instant a waiter is parked for, once they all are.
+awaitStep :: LeaseWorld -> STM ()
+awaitStep world = do
+    parked <- readTVar (lwParked world)
+    ended <- readTVar (lwEnded world)
+    now <- readTVar (lwNow world)
+    case Map.elems parked of
+        target : rest
+            | Map.size parked == lwRenewalTasks world - ended
+            , earliest <- foldr min target rest
+            , earliest > now ->
+                writeTVar (lwNow world) earliest
+        _ -> retry
+
+{- Stop waiting on the tasks whose threads have ended, so a dropped or disposed receipt cannot
+stall the clock for its siblings. A thread that has finished never resumes, so this can only
+ever release the clock late, never early. -}
+reapEndedWaiters :: LeaseWorld -> IO ()
+reapEndedWaiters world = do
+    seen <- readTVarIO (lwSeen world)
+    finished <- filterM threadEnded (toList seen)
+    unless (null finished) . atomically $ do
+        modifyTVar' (lwSeen world) (`Set.difference` Set.fromList finished)
+        modifyTVar' (lwEnded world) (+ length finished)
+
+threadEnded :: ThreadId -> IO Bool
+threadEnded waiter = hasEnded <$> threadStatus waiter
+  where
+    hasEnded = \case
+        ThreadFinished -> True
+        ThreadDied -> True
+        _ -> False
+
+{- How long the stepper waits for the world to settle before it looks for an ended task. It
+paces nothing else: a step lands the instant the last renewal task parks. -}
+reapMicros :: Int
+reapMicros = 2_000
+
+-- | Force virtual time on, for a case that must give a stopped renewal a chance to misbehave.
+advanceWorld :: LeaseWorld -> Double -> IO ()
+advanceWorld world by = atomically (modifyTVar' (lwNow world) (+ by))
 
 -- | A renewal the backend always grants.
 keepsEveryLease :: RenewalAnswer
@@ -353,7 +432,7 @@ faultingFor receipts fault _ receipt
 slowFaultFor :: Text -> RenewalAnswer
 slowFaultFor named world receipt
     | receipt == named = do
-        atomically (modifyTVar' (lwNow world) (+ 30))
+        advanceWorld world 30
         pure (Left unreachable)
     | otherwise = pure (Right ())
 
@@ -362,6 +441,12 @@ unreachable = transportFault TransportUnreachable "simulated renewal outage"
 
 refused :: TransportFault
 refused = transportFault TransportTls "simulated certificate refusal"
+
+{- | What a second consumer would receive: every receipt whose window has lapsed unrenewed.
+| Every renewal the controller has asked for, oldest first.
+-}
+renewalsSoFar :: LeaseWorld -> IO [Text]
+renewalsSoFar = fmap reverse . readIORef . lwRenewals
 
 -- | What a second consumer would receive: every receipt whose window has lapsed unrenewed.
 redeliverable :: LeaseWorld -> IO [Text]
