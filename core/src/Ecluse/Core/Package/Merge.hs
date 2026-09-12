@@ -90,8 +90,8 @@ data MergePlan = MergePlan
     a collision. The serve layer takes that version's object from that source's raw @Value@.
     -}
     , mpDistTags :: Map Text Version
-    {- ^ @dist-tags@ reconciled over the survivors. 'selectLatest' resolves @latest@, the plan keeps
-    every other surviving-target tag, and it drops an absent-target tag.
+    {- ^ @dist-tags@ reconciled over the survivors. 'selectLatest' resolves @latest@ from the public
+    tag, the plan keeps every other surviving-target tag, and it drops an absent-target tag.
     -}
     , mpArtifacts :: Map Text (NonEmpty AdmittedEntry)
     -- ^ Exact admitted entries from each version's winning source snapshot.
@@ -153,6 +153,12 @@ instance (Eq a) => Ord (Ranked a) where
 keepBetter :: Ranked a -> Ranked a -> Ranked a
 keepBetter x y = if rankedRank x <= rankedRank y then x else y
 
+-- 'keepBetter' where either side may be absent, so a source that offered nothing never
+-- displaces one that did.
+keepBetterOf :: Maybe (Ranked a) -> Maybe (Ranked a) -> Maybe (Ranked a)
+keepBetterOf (Just x) (Just y) = Just (keepBetter x y)
+keepBetterOf x y = x <|> y
+
 {- $accumulator
 The merge folds each input's 'contribute' into the lawful 'Merge' 'Monoid', which 'planFrom' then
 projects to a 'MergePlan'. 'Merge' is opaque, so a 'SourceId' always names a real input position.
@@ -168,6 +174,10 @@ data Merge = Merge
     -- ^ Every candidate offered for each version key, unresolved.
     , mergeDistTags :: Map Text (Ranked Version)
     -- ^ The precedence-winning @dist-tags@ target offered for each tag.
+    , mergePublicLatest :: Maybe (Ranked Version)
+    {- ^ The @latest@ a 'GatedSource' offered, held apart because the 'mergeDistTags' union
+    resolves every tag to the trusted source.
+    -}
     , mergeName :: Maybe PackageName
     {- ^ The package identity. Every contribution carries the same name, because a check upstream
     of the merge validates each one against the requested name. 'Nothing' only for 'mempty'.
@@ -187,6 +197,8 @@ instance Semigroup Merge where
                 Map.unionWith Set.union (mergeVersions a) (shiftVersions (mergeVersions b))
             , mergeDistTags =
                 Map.unionWith keepBetter (mergeDistTags a) (shiftRanked <$> mergeDistTags b)
+            , mergePublicLatest =
+                keepBetterOf (mergePublicLatest a) (shiftRanked <$> mergePublicLatest b)
             , mergeName = mergeName a <|> mergeName b
             }
       where
@@ -203,6 +215,7 @@ instance Monoid Merge where
             { mergeCount = 0
             , mergeVersions = Map.empty
             , mergeDistTags = Map.empty
+            , mergePublicLatest = Nothing
             , mergeName = Nothing
             }
 
@@ -215,11 +228,15 @@ contribute prov (Snapshot digest info) =
         { mergeCount = 1
         , mergeVersions = Map.map candidateFor (infoVersions info)
         , mergeDistTags = Map.map (Ranked here) (infoDistTags info)
+        , mergePublicLatest = Ranked here <$> publicLatest
         , mergeName = Just (infoName info)
         }
   where
     -- Local SourceId 0. The Semigroup offset re-indexes it to the input position.
     here = (prov, 0)
+    publicLatest = case prov of
+        GatedSource -> Map.lookup "latest" (infoDistTags info)
+        TrustedSource -> Nothing
     candidateFor details =
         Set.singleton
             Candidate
@@ -294,14 +311,16 @@ planFrom acc = do
                 Nothing -> Map.delete "latest" carried
                 Just v -> Map.insert "latest" v carried
 
-    -- 'selectLatest' owns the keep-or-repoint precedence. The chosen argument is the
-    -- provenance-winning source's @latest@, consistent with the version and dist-tag folds.
+    -- 'selectLatest' owns the keep-or-repoint precedence.
     resolvedLatest :: Maybe Version
     resolvedLatest =
         selectLatest chosenLatest (map pkgVersion survivingDetails)
 
+    -- The public document's @latest@, falling back to the trusted one only when no public
+    -- document offered a tag, so a stale mirror tag never holds the served @latest@ back.
     chosenLatest :: Maybe Version
-    chosenLatest = rankedValue <$> Map.lookup "latest" (mergeDistTags acc)
+    chosenLatest =
+        rankedValue <$> (mergePublicLatest acc <|> Map.lookup "latest" (mergeDistTags acc))
 
     -- Publish times retain the same source authority as the served manifest.
     reconciledTimes :: Map Text UTCTime

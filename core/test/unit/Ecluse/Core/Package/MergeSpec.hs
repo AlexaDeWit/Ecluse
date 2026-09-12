@@ -72,6 +72,10 @@ withPublishedAt t info =
 packument :: [(Text, Text)] -> PackageInfo
 packument vs = packumentWith [(v, [unsafeHash SRI d]) | (v, d) <- vs]
 
+-- The fixture with its @latest@ tag aimed at one version, replacing the default.
+latestAt :: Text -> PackageInfo -> PackageInfo
+latestAt raw info = info{infoDistTags = Map.singleton "latest" (mkVersion Npm raw)}
+
 -- A well-formed sha512 SRI derived from a mnemonic label. Distinct labels yield distinct
 -- digests, and the same label always yields the same digest.
 validSriOf :: Text -> Text
@@ -252,13 +256,12 @@ spec = do
             (mpDivergences <$> plan) `shouldBe` Just Set.empty
 
         it "repoints latest to the highest surviving version when the chosen tag is gone" $ do
-            -- The trusted source's chosen latest (9.9.9) is absent from the union, so selectLatest
-            -- repoints to the highest stable survivor (3.0.0).
+            -- Neither source's latest (9.9.9) is in the union, so selectLatest repoints to the
+            -- highest stable survivor (3.0.0).
             let trusted =
-                    (packument [("1.0.0", sriAaa)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "9.9.9")
-                        }
-                gated = packument [("3.0.0", sriBbb), ("2.0.0", sriCcc)]
+                    latestAt "9.9.9" (packument [("1.0.0", sriAaa)])
+                gated =
+                    latestAt "9.9.9" (packument [("3.0.0", sriBbb), ("2.0.0", sriCcc)])
             (latestKey =<< mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
                 `shouldBe` Just "3.0.0"
 
@@ -504,51 +507,78 @@ spec = do
 
     describe "latest via the shared selector" $ do
         -- 'Ecluse.Core.Version.selectLatest' resolves latest and has its own exhaustive spec.
-        -- These cases only check that the merge wires it in.
-        it "keeps the chosen latest when it still survives (no promotion)" $ do
-            -- The trusted source tags latest at 1.0.0 and that version survives, so
-            -- latest stays 1.0.0 even though 2.0.0 exists in the union.
+        -- These cases check that the merge wires it in with the public source's tag as the chosen
+        -- one, so a stale private tag never decides the served latest.
+        it "keeps the public latest when its target survives (no promotion)" $ do
+            -- The public source holds latest at the older 1.0.0 on purpose, and that version
+            -- survives, so the tag stays there though 2.0.0 is also in the union.
             let trusted =
                     ( TrustedSource
-                    , (packument [("1.0.0", sriAaa)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "1.0.0")
-                        }
-                    )
-                gated = (GatedSource, packument [("2.0.0", sriBbb)])
-            (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "1.0.0"
-
-        it "chooses the chosen-latest by provenance (trusted's tag wins)" $ do
-            -- Both sources survive and both tag a latest. The trusted source's latest
-            -- is the chosen one, even though it is the lower version.
-            let trusted =
-                    ( TrustedSource
-                    , (packument [("1.0.0", sriAaa)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "1.0.0")
-                        }
+                    , latestAt "2.0.0" (packument [("2.0.0", sriAaa)])
                     )
                 gated =
                     ( GatedSource
-                    , (packument [("2.0.0", sriBbb)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "2.0.0")
-                        }
+                    , latestAt "1.0.0" (packument [("1.0.0", sriBbb), ("2.0.0", sriAaa)])
                     )
             (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "1.0.0"
+
+        it "takes the public latest over the private tag when both survive" $ do
+            -- The mirror's stored tag names 1.0.0 while the public registry has moved on to the
+            -- admitted 2.0.0. The served tag follows the public registry.
+            let trusted =
+                    ( TrustedSource
+                    , latestAt "1.0.0" (packument [("1.0.0", sriAaa)])
+                    )
+                gated =
+                    ( GatedSource
+                    , latestAt "2.0.0" (packument [("2.0.0", sriBbb)])
+                    )
+            (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "2.0.0"
+
+        it "repoints past a public latest that did not survive, never to the private tag" $ do
+            -- The public tag names 9.9.9, which admission held back, so the greatest surviving
+            -- stable takes the tag rather than the private source's 1.0.0.
+            let trusted =
+                    ( TrustedSource
+                    , latestAt "1.0.0" (packument [("1.0.0", sriAaa)])
+                    )
+                gated =
+                    ( GatedSource
+                    , latestAt "9.9.9" (packument [("2.0.0", sriBbb), ("3.0.0", sriCcc)])
+                    )
+            (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "3.0.0"
+
+        it "falls back to the private tag when no public source offered one" $ do
+            -- A first-party name, or a public outage served from the store: the private tag is
+            -- the only chosen candidate, and it stands while its target survives.
+            let trusted =
+                    ( TrustedSource
+                    , latestAt "1.0.0" (packument [("1.0.0", sriAaa), ("2.0.0", sriBbb)])
+                    )
+                gatedUntagged =
+                    (GatedSource, (packument [("3.0.0", sriCcc)]){infoDistTags = Map.empty})
+            (latestKey =<< mergePackuments [trusted]) `shouldBe` Just "1.0.0"
+            (latestKey =<< mergePackuments [trusted, gatedUntagged]) `shouldBe` Just "1.0.0"
 
         it "repoints to the highest stable survivor over a prerelease when chosen is gone" $ do
             -- The chosen latest (5.0.0) was denied or absent. Among the survivors, a
             -- stable release wins over a higher prerelease.
             let info =
-                    (packument [("2.0.0", sriAaa), ("3.0.0-rc.1", sriBbb)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "5.0.0")
-                        }
+                    latestAt "5.0.0" (packument [("2.0.0", sriAaa), ("3.0.0-rc.1", sriBbb)])
             (latestKey =<< mergePackuments [(GatedSource, info)]) `shouldBe` Just "2.0.0"
 
         it "falls back to a surviving prerelease when no stable survivor exists" $ do
-            let info =
-                    (packument [("3.0.0-rc.1", sriAaa), ("3.0.0-beta", sriBbb)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "5.0.0")
-                        }
-            (latestKey =<< mergePackuments [(GatedSource, info)]) `shouldBe` Just "3.0.0-rc.1"
+            -- No stable survives and the public tag is gone, so the repoint takes the greatest
+            -- surviving prerelease, over the private tag's lower one.
+            let trusted =
+                    ( TrustedSource
+                    , latestAt "3.0.0-beta" (packument [("3.0.0-beta", sriBbb)])
+                    )
+                gated =
+                    ( GatedSource
+                    , latestAt "5.0.0" (packument [("3.0.0-rc.1", sriAaa), ("3.0.0-beta", sriBbb)])
+                    )
+            (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "3.0.0-rc.1"
 
     describe "properties" $ do
         it "the survivors are exactly the union of every source's keys" $
@@ -675,6 +705,15 @@ spec = do
             (winnerOf "1.0.0" =<< forward) `shouldBe` Just 0
             (winnerOf "1.0.0" =<< backward) `shouldBe` Just 1
 
+        it "the public latest is stable under regrouping the fold" $ do
+            -- The public tag folds like every other ranked contribution, so regrouping the
+            -- associative fold cannot move the served latest.
+            let t = contribute TrustedSource (latestAt "1.0.0" (packument [("1.0.0", sriPriv)]))
+                g1 = contribute GatedSource (latestAt "2.0.0" (packument [("2.0.0", sriG1)]))
+                g2 = contribute GatedSource (packument [("3.0.0", sriG2)])
+            (latestKey =<< planFrom ((t <> g1) <> g2)) `shouldBe` Just "2.0.0"
+            (latestKey =<< planFrom (t <> (g1 <> g2))) `shouldBe` Just "2.0.0"
+
         it "mergePackuments is planFrom . foldMap contribute" $
             hedgehog $ do
                 sources <- forAll genSources
@@ -743,22 +782,34 @@ spec = do
                 right = planFrom (t <> (g1 <> g2))
             (mpDivergences <$> left) `shouldBe` (mpDivergences <$> right)
 
-        it "dist-tags: keep-unless-denied, absent-target dropped, by provenance" $ do
-            -- The merge drops 'next' because its target 9.9.9 is absent from the union.
+        it "dist-tags: latest from the public source, every other tag by provenance" $ do
+            -- 'beta' survives at the trusted source's target, 'next' drops because its target
+            -- 9.9.9 is absent from the union, and only latest leaves the trust order.
             let trusted =
                     ( TrustedSource
                     , (packument [("1.0.0", sriLowA)])
                         { infoDistTags =
                             Map.fromList
                                 [ ("latest", mkVersion Npm "1.0.0")
+                                , ("beta", mkVersion Npm "1.0.0")
                                 , ("next", mkVersion Npm "9.9.9")
                                 ]
                         }
                     )
-                gated = (GatedSource, packument [("2.0.0", sriLowB)])
+                gated =
+                    ( GatedSource
+                    , (packument [("2.0.0", sriLowB)])
+                        { infoDistTags =
+                            Map.fromList
+                                [ ("latest", mkVersion Npm "2.0.0")
+                                , ("beta", mkVersion Npm "2.0.0")
+                                ]
+                        }
+                    )
                 plan = mergePackuments [gated, trusted]
-            (latestKey =<< plan) `shouldBe` Just "1.0.0"
-            (sort . Map.keys . mpDistTags <$> plan) `shouldBe` Just ["latest"]
+            (latestKey =<< plan) `shouldBe` Just "2.0.0"
+            (Map.lookup "beta" . mpDistTags <$> plan) `shouldBe` Just (Just (mkVersion Npm "1.0.0"))
+            (sort . Map.keys . mpDistTags <$> plan) `shouldBe` Just ["beta", "latest"]
 
         it "single source is the degenerate identity: all survive, won by source 0" $
             hedgehog $ do
