@@ -228,10 +228,12 @@ spec = do
                 held <- leaseAt 0 leased
                 liftIO (awaitRenewals world 2)
                 disposing held pass
+                -- Force virtual time on, which wakes a renewal still parked on this receipt: it
+                -- must find the lease gone and end rather than ask again. Waiting for the reap
+                -- is what proves it ended, and the log must not have grown while it did.
+                liftIO (advanceWorld world 120)
                 settled <- renewalsSoFar world
-                -- Force virtual time past several windows: a renewal still parked on the
-                -- disposed receipt would wake and ask, which is the bug this case would catch.
-                liftIO (advanceWorld world 120 >> threadDelay settleMicros)
+                liftIO (awaitEndedTasks world 1)
                 liftIO (renewalsSoFar world `shouldReturn` settled)
 
         it "stops renewal even when the disposition's own queue call faulted" $ do
@@ -243,29 +245,31 @@ spec = do
                 held <- leaseAt 0 leased
                 liftIO (awaitRenewals world 2)
                 void (disposing held (pure (Left unreachable :: Either TransportFault ())))
+                liftIO (advanceWorld world 120)
                 settled <- renewalsSoFar world
-                liftIO (advanceWorld world 120 >> threadDelay settleMicros)
+                liftIO (awaitEndedTasks world 1)
                 liftIO (renewalsSoFar world `shouldReturn` settled)
 
     describe "withLeasedBatch -- cancellation" $
         it "leaves an unfinished receipt unacknowledged and stops every renewal" $ do
             -- Shutdown cancels the loop thread. An un-acked message simply redelivers, which is
             -- safe because publishing is idempotent, so nothing may be disposed on the way out.
+            -- Leaving the batch's scope cancels every task and waits for it, so the renewal log
+            -- is already settled by the time the timeout returns.
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             disposed <- newIORef (0 :: Int)
-            _ <- timeout 30_000 . runLeases world keepsEveryLease batch $ \leased -> do
+            _ <- timeout settleMicros . runLeases world keepsEveryLease batch $ \leased -> do
                 held <- leaseAt 0 leased
                 void (whileLeased held (liftIO neverEnds))
                 disposing held (modifyIORef' disposed (+ 1))
             readIORef disposed `shouldReturn` 0
             settled <- renewalsSoFar world
             advanceWorld world 120
-            threadDelay settleMicros
             renewalsSoFar world `shouldReturn` settled
 
-{- | The one real wait these cases keep: how long to let a thread that should be finished
-actually finish, before reading back what it did or did not do.
+{- | The one real wait left: how long a case lets the controller run before cancelling it, and
+how long a job that models a backend with no lease to renew takes.
 -}
 settleMicros :: Int
 settleMicros = 20_000
@@ -386,9 +390,17 @@ awaitStep world = do
         target : rest
             | Map.size parked == lwRenewalTasks world - ended
             , earliest <- foldr min target rest
-            , earliest > now ->
+            , earliest > now
+            , earliest <= worldHorizon ->
                 writeTVar (lwNow world) earliest
         _ -> retry
+
+{- How far virtual time may run. The stepper is otherwise free to race, so a case whose work
+thread is blocked in real time would reach a virtual instant that depends on how fast the
+runner is: far enough, on a fast one, to spend a receipt's twelve-hour ceiling. Every case
+works well inside this, and nothing may rely on passing it. -}
+worldHorizon :: Double
+worldHorizon = 1_000
 
 {- Stop waiting on the tasks whose threads have ended, so a dropped or disposed receipt cannot
 stall the clock for its siblings. A thread that has finished never resumes, so this can only
