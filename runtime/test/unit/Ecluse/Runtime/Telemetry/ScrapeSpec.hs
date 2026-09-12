@@ -79,7 +79,7 @@ listenerSpec = describe "scrapeListenerFrom" $ do
             let environment = [("OTEL_EXPORTER_PROMETHEUS_PORT", raw)]
             scrapeListenerFrom environment `shouldBe` ScrapeListener "localhost" 9464
             scrapeListenerWarnings environment
-                `shouldBe` ["OTEL_EXPORTER_PROMETHEUS_PORT is not a port number (" <> raw <> "). Serving the scrape exposition on 9464 instead."]
+                `shouldBe` ["OTEL_EXPORTER_PROMETHEUS_PORT is not a port number (" <> toText raw <> "). Serving the scrape exposition on 9464 instead."]
 
     it "counts a blank host as unset, so an empty variable cannot widen the bind" $
         scrapeListenerFrom [("OTEL_EXPORTER_PROMETHEUS_HOST", "   ")]
