@@ -101,8 +101,8 @@ spec = do
                     source <- newS3CveSource (Just endpoint)
                     slot <- newCveSlot
                     let env = SyncEnv (s3CveFetchFor source bucket objectKey (512 * 1024 * 1024)) Npm (tmpDir <> "/consumer.sqlite") slot
-                    first <- syncStep env Nothing
-                    acceptedEtag <- case first of
+                    initialSync <- syncStep env Nothing
+                    acceptedEtag <- case initialSync of
                         SyncSwapped etag _ -> pure etag
                         other -> fail ("expected first artifact swap, got " <> show other)
                     installed <- generationInstalledAt slot
