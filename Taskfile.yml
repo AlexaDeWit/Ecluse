@@ -352,6 +352,7 @@ tasks:
       - 'scripts/**/*.sh'
       - 'flake.lock'
     cmds:
+      - bash scripts/ci-build-diagnostics.test.sh
       - bash scripts/ci-gate-verdict.test.sh
       - bash scripts/coverage-tix.test.sh
       - bash scripts/docs-open.test.sh

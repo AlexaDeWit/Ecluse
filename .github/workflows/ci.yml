@@ -302,7 +302,7 @@ jobs:
       # path, and this job is the sole writer of the closure the e2e job restores.
       - name: Flake checks (Haddock, locks, Saerskriven)
         run: >-
-          nix build --out-link "$RUNNER_TEMP/flake-check" --print-build-logs
+          bash scripts/ci-build-diagnostics.sh nix build --out-link "$RUNNER_TEMP/flake-check" --print-build-logs
           .#checks.x86_64-linux.docs
           .#checks.x86_64-linux.freeze-sync
           .#checks.x86_64-linux.amazonka-lockstep
