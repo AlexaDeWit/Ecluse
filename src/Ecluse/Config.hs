@@ -3,6 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Configuration loading, mount resolution, and redacted operator diagnostics.
 module Ecluse.Config (
     Config (..),
     AppConfig (..),
@@ -71,7 +72,7 @@ module Ecluse.Config (
     resolvedKeyProvenance,
 ) where
 
-import Data.Aeson (Result (..), Value (..), encode, fromJSON)
+import Data.Aeson (Value (..), encode, parseJSON)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither, withObject, (.!=), (.:?))
@@ -99,6 +100,8 @@ import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule, readsAdvisories)
 import Ecluse.Core.Security (HostPort, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (registryPath, stripTrailingSlash)
+
+-- | The rule policy embedded in the shipped configuration.
 
 {- HLINT ignore defaultPolicy "Avoid restricted function" -}
 defaultPolicy :: RulePolicy
@@ -133,9 +136,6 @@ loadConfig envVars mBytes = do
         (errs, resolved) -> Left (errs <> fromLeft [] resolved)
     Right (Config appConfig mounts)
 
-{- | The ecosystems the operator overlay declares under @mounts@: the activation set, which the
-merged defaults never join. An unknown ecosystem key is refused here as well as at the parse.
--}
 declaredMounts :: Value -> Either [ConfigError] (Set Ecosystem)
 declaredMounts overridesAst = Set.fromList <$> traverse parseKey (mountKeysOf overridesAst)
   where
@@ -162,9 +162,9 @@ parseDocumentAst = \case
         Left err -> Left [ParseError ("the config document is invalid YAML: " <> T.pack (show err))]
 
 parseAppConfig :: Value -> Either [ConfigError] AppConfig
-parseAppConfig merged = case fromJSON merged of
-    Success appConfig -> Right appConfig
-    Error err -> Left [ParseError ("Configuration parse error: " <> T.pack err)]
+parseAppConfig merged = case parseEither parseJSON merged of
+    Right appConfig -> Right appConfig
+    Left err -> Left [ParseError ("Configuration parse error: " <> T.pack err)]
 
 parseRulesPatch :: Value -> Either String RulePatch
 parseRulesPatch = parseEither (withObject "Config" (\obj -> obj .:? "rules" .!= RulePatch Map.empty))
@@ -176,9 +176,6 @@ resolveGlobalPolicy overridesAst = do
         Left err -> Left [ParseError ("Rules parse error: " <> T.pack err)]
     first (pure . PolicyErrors) (resolvePolicy defaultPolicy globalRulePatch)
 
-{- | Resolve every active mount into its served 'Mount', aggregating failures so one load reports
-every incomplete mount. A declared @mirrorTarget@ makes it mirrored and requires a private upstream.
--}
 resolveMounts :: RulePolicy -> AppConfig -> Either [ConfigError] MountMap
 resolveMounts globalPolicy appConfig =
     case partitionEithers (map resolveOne (Map.toAscList (cfgMounts appConfig))) of
@@ -204,9 +201,6 @@ resolveMode globalPolicy eco mcfg = case (mntMirrorTarget mcfg, mntPrivateUpstre
     (Just _, Nothing) -> Left [MountMissingPrivateUpstream eco]
     (Nothing, mPrivate) -> resolveServeOnly globalPolicy eco mPrivate mcfg
 
-{- | Project a mirrored mount onto its served form. 'resolveStoreBackend' reads the mirror target's
-declared tag, so the resolved 'MirrorTarget' never pairs an endpoint with another store's plan.
--}
 resolveMirrored :: RulePolicy -> Ecosystem -> Target -> MirrorEndpoint -> MountConfig -> Either [ConfigError] Mount
 resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
     policy <- resolveMountPolicy globalPolicy mcfg
@@ -223,9 +217,6 @@ resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do
                             }
                     }
 
-{- | Project a serve-only mount onto its served form. It makes no mirror write, and
-its private upstream is optional, absent on the pure public gate.
--}
 resolveServeOnly :: RulePolicy -> Ecosystem -> Maybe Target -> MountConfig -> Either [ConfigError] Mount
 resolveServeOnly globalPolicy eco mPrivate mcfg = do
     policy <- resolveMountPolicy globalPolicy mcfg
@@ -274,8 +265,6 @@ resolvedKeyProvenance envVars mBytes = fromRight [] $ do
         merged = deepMerge defaultAst (deepMerge docAst envAst)
     pure (map (renderResolvedLeaf envAst docAst) (sortOn fst (leafPaths [] merged)))
 
--- Every leaf of a config AST with its dotted path (objects recurse, and anything
--- else, arrays included, is a leaf).
 leafPaths :: [Text] -> Value -> [(Text, Value)]
 leafPaths path (Object o) =
     concatMap (\(k, v) -> leafPaths (path <> [Key.toText k]) v) (KeyMap.toList o)
@@ -328,7 +317,6 @@ explicit @advisories.maxAgeSeconds@ overrides the derivation on every mount.
 mountAdvisoryAge :: AdvisoriesSettings -> Mount -> MaxAdvisoryAge
 mountAdvisoryAge advisories = maxAdvisoryAgeFor (advMaxAgeSeconds advisories) . mountRulesOf
 
--- The rules one mount's policy carries, as the configured values a precedence no longer wraps.
 mountRulesOf :: Mount -> [Rule]
 mountRulesOf = map prRule . mountPolicy
 
