@@ -70,9 +70,9 @@ instance FromJSON Criteria where
             fail "acceptance budgets must be finite and positive"
         pure crit
 
--- | Explicit ecosystem budgets. Uncalibrated sections emit measurements and fail the run.
+-- | Explicit, required budget sections for each supported ecosystem.
 newtype CriteriaCatalogue = CriteriaCatalogue
-    { catalogueCriteria :: Map Ecosystem (Maybe Criteria)
+    { catalogueCriteria :: Map Ecosystem Criteria
     }
     deriving stock (Eq, Show)
 
@@ -85,7 +85,7 @@ instance FromJSON CriteriaCatalogue where
             fail "acceptance criteria require npm and pypi sections"
         pure (CriteriaCatalogue sections)
       where
-        parseEntry :: (Text, Maybe Criteria) -> Parser (Ecosystem, Maybe Criteria)
+        parseEntry :: (Text, Criteria) -> Parser (Ecosystem, Criteria)
         parseEntry (name, crit) = case parseEcosystem name of
             Nothing -> fail ("unknown acceptance ecosystem: " <> toString name)
             Just eco -> pure (eco, crit)
@@ -143,8 +143,6 @@ data Assessment = Assessment
 data PackageOutcome
     = -- | A measured package: its sample, the full-document assessment, then the single-version assessment.
       Measured Sample Assessment Assessment
-    | -- | Measurements awaiting initial calibration, which cannot pass the run.
-      Uncalibrated Sample
     | -- | A package that could not be assessed: its name and the reason.
       Unavailable Text Text
     deriving stock (Eq, Show)
@@ -152,23 +150,20 @@ data PackageOutcome
 -- | One ecosystem's outcomes, in catalogue order.
 data Report = Report
     { reportEcosystem :: Ecosystem
-    , reportCalibrated :: Bool
     , reportOutcomes :: [PackageOutcome]
     }
     deriving stock (Eq, Show)
 
 -- | Evaluate each package's raw input against the criteria.
-evaluate :: Ecosystem -> Maybe Criteria -> [Either (Text, Text) Sample] -> Report
-evaluate eco crit = Report eco (isJust crit) . map outcome
+evaluate :: Ecosystem -> Criteria -> [Either (Text, Text) Sample] -> Report
+evaluate eco crit = Report eco . map outcome
   where
     outcome (Left (name, reason)) = Unavailable name reason
-    outcome (Right sample) = case crit of
-        Nothing -> Uncalibrated sample
-        Just budgets ->
-            Measured
-                sample
-                (assess (budgetFor budgets (sampleName sample)) (sampleFullOverheadMs sample))
-                (assess (singleVersionBudgetFor budgets (sampleName sample)) (sampleSingleVersionOverheadMs sample))
+    outcome (Right sample) =
+        Measured
+            sample
+            (assess (budgetFor crit (sampleName sample)) (sampleFullOverheadMs sample))
+            (assess (singleVersionBudgetFor crit (sampleName sample)) (sampleSingleVersionOverheadMs sample))
 
 assess :: Double -> Double -> Assessment
 assess budget overheadMs =
@@ -182,10 +177,10 @@ reportBreached = any isBreach . reportOutcomes
     isBreach (Measured _ full single) = breached full || breached single
     isBreach _ = False
 
--- | The process fails for any ecosystem's breach or uncalibrated criteria.
+-- | Either ecosystem's measured breach fails the process. Unavailable packages do not.
 reportExitCode :: [Report] -> ExitCode
 reportExitCode reports
-    | any reportBreached reports || not (all reportCalibrated reports) = ExitFailure 1
+    | any reportBreached reports = ExitFailure 1
     | otherwise = ExitSuccess
 
 breached :: Assessment -> Bool
@@ -254,7 +249,6 @@ renderSection op report =
     overall
         | breaches > 0 =
             "Result: BREACH: " <> show breaches <> " package(s) over budget" <> incompleteSuffix
-        | not (reportCalibrated report) = "Result: UNCALIBRATED (measurements only, run fails)" <> incompleteSuffix
         | otherwise =
             "Result: within budget" <> incompleteSuffix
     incompleteSuffix
@@ -287,8 +281,6 @@ renderSection op report =
                         <> headroomCell single (sampleSingleVersionOverheadMs s)
                    , renderVerdicts s full single
                    ]
-    row (Uncalibrated s) =
-        cells (sampleCells s <> ["uncalibrated", "n/a", "UNCALIBRATED"])
     row (Unavailable name reason) =
         cells [name, "--", "--", "--", "--", "--", "--", "unavailable: " <> reason]
 

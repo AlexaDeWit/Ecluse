@@ -1,5 +1,5 @@
 {
-  "_note": "Live performance acceptance budgets use roughly 2.2x the observed maxima of per-run medians. Each leg uses five timed passes per live document. A breach fails the non-required workflow. Unavailable registries are not budget breaches. Watch starts at 70% of a budget. npm retains its existing budgets, calibrated across seven daily CI runs from 2026-07-05 to 2026-07-11. PyPI uses the PEP 691 Simple JSON format. Its explicit null section awaits initial calibration from three sequential hosted runs and makes the draft run fail after reporting measurements. No PyPI budget is claimed before those measurements exist.",
+  "_note": "Live performance acceptance budgets use roughly 2.2x the observed maxima of per-run medians. Each leg uses five timed passes per live document. A breach fails the non-required workflow. Unavailable registries are not budget breaches. Watch starts at 70% of a budget. npm retains its budgets calibrated across seven daily CI runs from 2026-07-05 to 2026-07-11. PyPI uses PEP 691 Simple JSON. Its initial calibration uses three sequential hosted runs on 2026-09-12 at b821206aadad083b7751f94d5d24f58851986719, not seven days of observations. For each package and leg, multiply the largest reported median by 2.2 and round up to 0.01 ms. The PyPI defaults are the largest derived budgets for each leg. Recalibrate from recent observed maxima using the same headroom rule.",
   "ecosystems": {
     "npm": {
       "defaultBudgetMs": 100,
@@ -19,6 +19,44 @@
         "@aws-sdk/client-s3": 30
       }
     },
-    "pypi": null
+    "pypi": {
+      "_calibration": {
+        "date": "2026-09-12",
+        "head": "b821206aadad083b7751f94d5d24f58851986719",
+        "runs": [
+          "https://github.com/AlexaDeWit/Ecluse/actions/runs/34714057634",
+          "https://github.com/AlexaDeWit/Ecluse/actions/runs/34714279674",
+          "https://github.com/AlexaDeWit/Ecluse/actions/runs/34714526694"
+        ],
+        "passesPerLeg": 5,
+        "observedMaximaMs": {
+          "requests": {
+            "full": 3.83,
+            "selective": 0.922
+          },
+          "numpy": {
+            "full": 75.745,
+            "selective": 17.381
+          },
+          "boto3": {
+            "full": 82.05,
+            "selective": 15.39
+          }
+        },
+        "_availability": "All three PyPI packages were measured in every run. npm typescript was unavailable in all three runs: FetchBoundExceeded (BodyTooLarge 12582912). The other eight npm packages stayed within their unchanged budgets."
+      },
+      "defaultBudgetMs": 180.51,
+      "perPackageBudgetMs": {
+        "requests": 8.43,
+        "numpy": 166.64,
+        "boto3": 180.51
+      },
+      "defaultSingleVersionBudgetMs": 38.24,
+      "perPackageSingleVersionBudgetMs": {
+        "requests": 2.03,
+        "numpy": 38.24,
+        "boto3": 33.86
+      }
+    }
   }
 }
