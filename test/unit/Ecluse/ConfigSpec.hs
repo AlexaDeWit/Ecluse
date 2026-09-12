@@ -3,6 +3,7 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Loader and mount-resolution contracts against the shipped defaults.
 module Ecluse.ConfigSpec (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -23,12 +24,14 @@ import Ecluse.Config (
     defaultPolicy,
     loadConfig,
     mountPostureLines,
+    renderConfigError,
     resolvedKeyProvenance,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 
+-- | Configuration loading and operator diagnostics.
 spec :: Spec
 spec = do
     describe "the embedded default configuration" $ do
@@ -46,6 +49,33 @@ spec = do
                 (Right cfg, DeliveryBudget budget) ->
                     qsMaxReceiveCount (cfgQueue (configApp cfg)) `shouldBe` budget
                 (Left errs, _) -> expectationFailure ("the embedded defaults failed to load: " <> show errs)
+
+    describe "configuration type error paths" $ do
+        forM_
+            [ ("server.port", "ECLUSE_SERVER__PORT", "{\"server\":{\"port\":\"bad\"}}")
+            , ("server.shutdownDrainTimeout", "ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "{\"server\":{\"shutdownDrainTimeout\":\"bad\"}}")
+            , ("limits.maxVersionCount", "ECLUSE_LIMITS__MAX_VERSION_COUNT", "{\"limits\":{\"maxVersionCount\":\"bad\"}}")
+            , ("runtime.cores", "ECLUSE_RUNTIME__CORES", "{\"runtime\":{\"cores\":\"bad\"}}")
+            ]
+            $ \(field, envKey, doc) ->
+                it ("names " <> toString field <> " through document and environment loads") $
+                    forM_ [loadConfig [] (Just doc), loadConfig [(envKey, "bad")] Nothing] $ \result ->
+                        first (any (T.isInfixOf ("$." <> field) . renderConfigError)) result
+                            `shouldBe` Left True
+
+        it "names a nested group with the wrong type" $
+            first
+                (any (T.isInfixOf "$.advisories.quietTime" . renderConfigError))
+                (loadConfig [] (Just "{\"advisories\":{\"quietTime\":false}}"))
+                `shouldBe` Left True
+
+        it "omits supplied values from typed credential errors" $
+            case loadConfig [("ECLUSE_SERVER", "{\"authToken\":[\"credential-sentinel\"]}")] Nothing of
+                Left errs -> do
+                    let messages = map renderConfigError errs
+                    messages `shouldSatisfy` any (T.isInfixOf "server.authToken")
+                    messages `shouldSatisfy` (not . any (T.isInfixOf "credential-sentinel"))
+                Right _ -> expectationFailure "expected a credential type error"
 
     describe "mount modes (mirroring derived from the declared target)" $ do
         it "resolves a declared mirrorTarget to a mirrored mount" $ do
