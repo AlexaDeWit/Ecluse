@@ -91,6 +91,22 @@ sequenceDiagram
     Note over W,Mirror: at-least-once delivery + idempotent publish
 ```
 
+### Holding a receipt for the life of its job
+
+A durable queue hides a received message for a visibility window and hands it to another consumer
+once that window lapses. The worker runs a batch one job at a time, so the window is the wrong
+unit: a message waiting its turn, and a job slower than one window, would both be redelivered
+while the first worker still held them. Écluse therefore leases every receipt in a batch from the
+moment it arrives, renewing each one a third of the way into what is left of its window and never
+past the ceiling the backend puts on a single receipt.
+
+The failure policy is per-receipt continuation. A renewal that keeps failing inside its own
+receipt's margin drops that receipt alone: a running job is cancelled, a waiting one is skipped,
+and the message is left unacknowledged to redeliver normally. Siblings carry on while their own
+renewals succeed. Stopping the whole batch on the first renewal failure would be simpler, but it
+abandons healthy work for one transient fault. A transport-wide outage still stops the batch, one
+receipt at a time, because every renewal in it fails.
+
 ### The terminus for a job that can never succeed
 
 A transient failure retries because the worker does not ack the message. That works only while

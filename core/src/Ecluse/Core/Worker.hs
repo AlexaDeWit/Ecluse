@@ -31,7 +31,8 @@ here before any public request. Otherwise, through that bundle the loop:
 See individual modules for detailed behaviour:
 * "Ecluse.Core.Worker.Integrity" for the security gate on artifact digests.
 * "Ecluse.Core.Worker.Loop" for supervision and graceful shutdown.
-* "Ecluse.Core.Worker.Job" for the per-job decision within the visibility budget.
+* "Ecluse.Core.Worker.Job" for the per-job decision.
+* "Ecluse.Core.Worker.Lease" for keeping every received receipt hidden until its disposition.
 * "Ecluse.Core.Worker.Realise" for realising each verdict at the queue handle.
 
 See @docs\/architecture\/cloud-backends.md@ → "Mirror Queue" and "Process model".
@@ -53,13 +54,13 @@ module Ecluse.Core.Worker (
     processBatch,
     processJob,
     JobOutcome (..),
-    workerPublishVisibilityBudget,
 
     -- * Liveness
     WorkerHeartbeat,
     newWorkerHeartbeat,
     recordPoll,
     lastPoll,
+    workerJobStepAllowance,
     workerHeartbeatStaleAfter,
     heartbeatHealthy,
     Liveness (..),

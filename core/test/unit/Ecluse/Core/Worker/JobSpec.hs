@@ -102,8 +102,8 @@ spec = do
         it "publishes and reports success when the bytes match the re-admitted digest" $
             withUpstream $ \url ->
                 withRuntime (Right ()) $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
@@ -113,8 +113,8 @@ spec = do
             -- is not admit-but-uncomputable.
             withUpstream $ \url ->
                 withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI trueSha384Sri]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
@@ -124,8 +124,8 @@ spec = do
             -- floor had already admitted.
             withUpstream $ \url ->
                 withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SHA256 trueSha256]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
@@ -135,8 +135,8 @@ spec = do
             -- blake2b-512, matches, and publishes it.
             withUpstream $ \url ->
                 withRuntimePolicies (admitPoliciesWithDigests [unsafeHash Blake2b trueBlake2b]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
@@ -147,8 +147,8 @@ spec = do
                 -- other bytes than the upstream served, so the worker must NOT
                 -- publish. The payload carries no digest that could weaken this gate.
                 withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI falseSri]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldSatisfy` isDropped
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
@@ -158,8 +158,8 @@ spec = do
             -- tier publish document must come from current metadata.
             withUpstream $ \url ->
                 withRuntime (Right ()) $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldBe` Succeeded
                     descriptors <- plArtifacts <$> readIORef logRef
                     descriptors
@@ -174,8 +174,8 @@ spec = do
             -- An unreachable upstream (connection refused) is a transient fault, not a terminal
             -- one.
             withRuntime (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isRetried
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -185,8 +185,8 @@ spec = do
             -- the mirror-job span carries as an error status. It must name the authority and the
             -- bounded transport cause, never the location.
             withRuntime (Right ()) $ \runtime queue _logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith credentialBearingUnreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith credentialBearingUnreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 case outcome of
                     Retried reason -> do
                         reason `shouldSatisfy` T.isInfixOf "127.0.0.1:1"
@@ -198,8 +198,8 @@ spec = do
         it "treats a registry rejection as retryable (job left for redelivery)" $
             withUpstream $ \url ->
                 withRuntime (Left (PublishRejected (PublishError "503"))) $ \runtime queue _logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldSatisfy` isRetried
 
         it "renders a transport fault's retry reason with the prefix exactly once" $
@@ -207,8 +207,8 @@ spec = do
             -- would make the consumer add it again, doubling it in the log line.
             withUpstream $ \url ->
                 withRuntime (Left (PublishFetch (FetchTransport (transportFault TransportUnreachable "connection refused")))) $ \runtime queue _logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     case outcome of
                         Retried reason -> do
                             reason `shouldSatisfy` T.isInfixOf "connection refused"
@@ -219,8 +219,8 @@ spec = do
             -- A redelivery re-forms the same unformable URL from the same job payload, so the
             -- worker retires the job, the same verdict the publish leg reaches below.
             withRuntime (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unformableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unformableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isDropped
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -231,8 +231,8 @@ spec = do
             -- rejection.
             withUpstream $ \url ->
                 withRuntime (Left (PublishFetch (FetchUrlUnformable EmptyBaseUrl))) $ \runtime queue _logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldSatisfy` isDropped
     describe "processJob: ingest-time policy re-evaluation" $ do
         it "drops a job whose version current policy denies, without publishing" $
@@ -240,8 +240,8 @@ spec = do
             -- unmirrored. 'unreachableUrl' guards the re-evaluation: skipping it would surface a
             -- Retried, not this Dropped.
             withRuntimePolicies (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isDropped
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -249,8 +249,8 @@ spec = do
         it "publishes a job whose version current policy admits (happy path unregressed)" $
             withUpstream $ \url ->
                 withRuntimePolicies (npmPolicies presentResolver [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
@@ -258,8 +258,8 @@ spec = do
         it "drops a job whose version the upstream no longer offers (withdrawn), without publishing" $
             -- A version the upstream withdrew must not be mirrored, so the drop is non-retryable.
             withRuntimePolicies (npmPolicies (\_ _ -> pure VersionMissing) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isDropped
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -268,8 +268,8 @@ spec = do
             -- A transient metadata outage maps to the serve path's transient degrade: leave the
             -- job for redelivery rather than dropping it or publishing it unvetted.
             withRuntimePolicies (npmPolicies (\_ _ -> pure VersionMetadataUnavailable) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isRetried
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -277,8 +277,8 @@ spec = do
         it "drops a job whose ecosystem has no configured policy (fail-closed), without publishing" $
             -- A job for an ecosystem with no bundle is fail-closed: never mirrored unvetted.
             withRuntimePolicies mempty noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isDropped
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -292,8 +292,8 @@ spec = do
                     refusing = base{wpArtifact = (wpArtifact base){artifactByUrl = \_ _ -> Left EmptyBaseUrl}}
                     policies = Map.insert PyPI refusing (npmPolicies presentResolver [admitRule])
                 withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
@@ -309,8 +309,8 @@ spec = do
                     policies = Map.fromList [(Npm, npmBundle), (PyPI, decoyBundle)]
                 queue <- newTestMemoryQueue
                 withWiredRuntime queue policies noopWorkerMetricsPort $ \runtime -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef npmLog
                     length published `shouldBe` 1
@@ -321,8 +321,8 @@ spec = do
             -- The npm bundle's own builder refuses, with no other builder to fall back to. A
             -- redelivery would refuse identically, so the worker retires the job.
             withRuntimePolicies (withArtifactRequest (\_ _ -> Left EmptyBaseUrl) (npmPolicies presentResolver [admitRule])) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 case outcome of
                     Dropped reason -> reason `shouldSatisfy` T.isInfixOf "unformable artifact URL"
                     other -> expectationFailure ("expected a Dropped outcome from the refused request formation, got " <> show other)
@@ -334,8 +334,8 @@ spec = do
             -- the serve path applied before its public fetch. It refuses a URL injected or
             -- no-longer-honoured since enqueue, before any fetch.
             withRuntimePolicies (withHostGate (const False) (npmPolicies presentResolver [admitRule])) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isDropped
                 -- The reason names the authority the fetch would dial, never the URL:
                 -- a queue payload's location can carry userinfo or a signed query.
@@ -352,8 +352,8 @@ spec = do
             -- exactly as the serve gate would, so a no-longer-admissible artifact never enters the
             -- mirror.
             withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artHashes = [unsafeHash SHA1 trueSha1]}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isDropped
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -362,8 +362,8 @@ spec = do
             -- The stripped-digest degrade: current metadata offers nothing to tie the
             -- bytes to. The serve gate 403s it as MissingIntegrity, and the worker drops it.
             withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artHashes = []}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isDropped
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -372,8 +372,8 @@ spec = do
             -- The version survives upstream but its file set no longer names the admitted artifact.
             -- Redelivery cannot restore the file, so the drop is non-retryable.
             withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artFilename = "renamed-9.9.9.tgz"}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isDropped
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -383,8 +383,8 @@ spec = do
             -- transient 503 status. The worker leaves the job for redelivery rather than
             -- dropping a serviceable job or publishing it unvetted.
             withRuntimePolicies (npmPolicies presentResolver [cannotVetRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isRetried
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -397,8 +397,8 @@ spec = do
         it "drops a job whose name the deployment owns, making no public request" $
             -- 'unreachableUrl' would surface a Retried had the artifact bytes been fetched.
             withRuntimePolicies ownedPolicies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 -- The reason is the audit line the terminal path logs, so it names the package,
                 -- the version, and why the job was retired.
                 case outcome of
@@ -413,8 +413,8 @@ spec = do
             -- The privilege is read ahead of the dedup probe, so a name the deployment owns can
             -- never take the already-mirrored short circuit and report success.
             withRuntimeRegistry (\logRef -> mirrorListingPublish logRef (Right ()) [ver]) ownedPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldSatisfy` isDropped
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -424,8 +424,8 @@ spec = do
             -- re-evaluates, fetches, and publishes.
             withUpstream $ \url ->
                 withRuntimePolicies (withFirstParty (const False) admitPolicies) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
@@ -437,8 +437,8 @@ spec = do
             -- 'unreachableUrl' doubles as the no-fetch guard: were the probe's skip not
             -- taken, the artifact fetch would surface a Retried, not this Succeeded.
             withRuntimeRegistry (\logRef -> mirrorListingPublish logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob receipt job)
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
                 outcome `shouldBe` Succeeded
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -448,8 +448,8 @@ spec = do
             -- transient fault. Publishing anyway would declare a tag decided without it.
             withUpstream $ \url ->
                 withRuntimeRegistry (`probeUnreachablePublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldSatisfy` isRetried
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
@@ -457,8 +457,8 @@ spec = do
         it "retries without publishing when the mirror's answer does not project" $
             withUpstream $ \url ->
                 withRuntimeRegistry (`probeUnreadablePublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldSatisfy` isRetried
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
@@ -468,8 +468,8 @@ spec = do
             -- unknown, so the tag cannot be chosen and the job waits for a redelivery.
             withUpstream $ \url ->
                 withRuntimeRegistry (`probeRefusingPublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldSatisfy` isRetried
                     recorded <- readIORef logRef
                     plDocuments recorded `shouldBe` []
@@ -480,8 +480,8 @@ spec = do
             -- answer rides the dead-letter terminus rather than redelivering for ever.
             withUpstream $ \url ->
                 withRuntimeRegistry (`probeOverboundPublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldSatisfy` isDeadLettered
                     recorded <- readIORef logRef
                     plDocuments recorded `shouldBe` []
@@ -492,8 +492,8 @@ spec = do
             -- mirrored must still mirror its missing versions.
             withUpstream $ \url ->
                 withRuntimeRegistry (\logRef -> mirrorListingPublish logRef (Right ()) [otherVer]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob receipt job)
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
@@ -540,16 +540,16 @@ spec = do
                     (npmPolicies (taggedResolver (Just otherVer)) [admitRule])
                     noopWorkerMetricsPort
                     $ \runtime queue logRef -> do
-                        (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                        runWM runtime (processJob receipt job) `shouldReturn` Succeeded
+                        job <- enqueueAndReceive queue (jobWith url)
+                        runWM runtime (processJob job) `shouldReturn` Succeeded
                         plans <- plPlans <$> readIORef logRef
                         map ppLatest plans `shouldBe` [otherVer]
 
         it "declares its own version when the store holds nothing else" $
             withUpstream $ \url ->
                 withRuntime (Right ()) $ \runtime queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
-                    runWM runtime (processJob receipt job) `shouldReturn` Succeeded
+                    job <- enqueueAndReceive queue (jobWith url)
+                    runWM runtime (processJob job) `shouldReturn` Succeeded
                     plans <- plPlans <$> readIORef logRef
                     map ppLatest plans `shouldBe` [ver]
 

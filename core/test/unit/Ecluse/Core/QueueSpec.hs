@@ -112,7 +112,7 @@ spec = do
     -- count, so the rest of the message stays fixed.
     deliveredTimes :: Int -> QueueMessage
     deliveredTimes n =
-        QueueMessage{msgJob = sampleJob, msgReceipt = mkReceiptHandle "receipt", msgReceiveCount = n}
+        QueueMessage{msgJob = sampleJob, msgReceipt = mkReceiptHandle "receipt", msgReceiveCount = n, msgLease = Nothing}
 
     -- A backend stub recording what the buffer's drain loop delivered, and in what order. Its
     -- consumer fields are inert.

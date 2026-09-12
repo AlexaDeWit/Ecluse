@@ -11,6 +11,7 @@ module Ecluse.Core.Worker.Liveness (
     newWorkerHeartbeatWithClock,
     recordPoll,
     lastPoll,
+    workerJobStepAllowance,
     workerHeartbeatStaleAfter,
     heartbeatHealthy,
     Liveness (..),
@@ -52,11 +53,17 @@ job, or 'Nothing' before its first.
 lastPoll :: WorkerHeartbeat -> IO (Maybe UTCTime)
 lastPoll = readTVarIO . whLastPoll
 
-{- | Startup and progress allowance, exceeding two 'Ecluse.Core.Worker.Job.workerPublishVisibilityBudget'
-spans so a fetch followed by a publish does not trigger a restart.
+{- | How long one long job step may run: uploading the largest artifact the memory plan admits
+(512 MiB) over a 2 MiB-per-second link. Renewing a receipt's visibility never extends it.
+-}
+workerJobStepAllowance :: NominalDiffTime
+workerJobStepAllowance = 300
+
+{- | Startup and progress allowance: a fetch and a publish of that largest artifact plus a
+minute, so a slow job never restarts the process.
 -}
 workerHeartbeatStaleAfter :: NominalDiffTime
-workerHeartbeatStaleAfter = 660
+workerHeartbeatStaleAfter = 2 * workerJobStepAllowance + 60
 
 -- | Judge progress at @now@, using startup time only until the first successful progress.
 heartbeatHealthy :: UTCTime -> UTCTime -> Maybe UTCTime -> Bool

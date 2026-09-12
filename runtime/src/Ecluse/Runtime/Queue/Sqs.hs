@@ -9,7 +9,7 @@ Maps the handle's receive → process → ack shape onto SQS:
 * 'enqueue' → @SendMessage@ (the job encoded as the message body).
 * 'receive' → one long-poll @ReceiveMessage@ (a batch, @[]@ on an empty poll).
 * 'ack' → @DeleteMessage@ (the message is gone, never redelivered).
-* 'extendVisibility' → @ChangeMessageVisibility@ (hold a long publish).
+* 'extendVisibility' → @ChangeMessageVisibility@ (renew the worker's lease on a receipt).
 * 'deadLetter' → @ChangeMessageVisibility@ with the 'sqsTerminalBackoff' window and
   __no @DeleteMessage@__ (a terminal fault rides the redrive policy to the
   dead-letter queue).
@@ -20,7 +20,9 @@ then warn when nothing captures a poison message. 'newSqsQueue' also holds the h
 redelivery budget one delivery above an attached policy's own @maxReceiveCount@. The
 dead-letter queue therefore always captures first. @ReceiveMessage@ likewise asks for
 @ApproximateReceiveCount@ explicitly, since SQS omits it by default. That is the
-delivery count every 'Ecluse.Core.Queue.QueueMessage' carries.
+delivery count every 'Ecluse.Core.Queue.QueueMessage' carries. Each delivery also carries the
+lease the worker renews it under (see "Ecluse.Core.Queue.Lease"), stamped from an instant read
+before the poll so it never claims more time than SQS granted.
 
 The provider differences SQS embodies are 'SqsConfig' knobs with sane defaults: the
 visibility timeout, the long-poll window, and the batch limit. The SQS receipt handle
@@ -103,6 +105,7 @@ import Ecluse.Core.Queue (
     mkReceiptHandle,
     unReceiptHandle,
  )
+import Ecluse.Core.Queue.Lease (ReceiptLease, monotonicNow, receiptLease)
 import Ecluse.Core.Registry (parseErrorMessage)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -182,8 +185,11 @@ newSqsQueue logEnv egressUrl cfg = do
         MirrorQueue
             { enqueue = fmap void . run . SQS.newSendMessage queueUrl . encodeJob
             , receive = do
+                -- Stamped before the request, so a lease never outlives the window SQS granted.
+                receivedAt <- monotonicNow
+                let lease = receiptLease receivedAt (sqsVisibilityTimeout cfg) sqsInFlightMaximum
                 outcome <- run (receiveRequest cfg)
-                traverse (liftReceivedMessages logEnv egressUrl . receivedMessages) outcome
+                traverse (liftReceivedMessages logEnv egressUrl lease . receivedMessages) outcome
             , ack = fmap void . run . SQS.newDeleteMessage queueUrl . unReceiptHandle
             , extendVisibility = \receipt (Seconds secs) ->
                 fmap void . run $
@@ -219,6 +225,11 @@ receiveRequest cfg =
         ?~ [SQS.MessageAttribute_ApproximateReceiveCount]
   where
     Seconds visibilitySeconds = sqsVisibilityTimeout cfg
+
+{- The longest SQS keeps one receipt in flight, however often its visibility is renewed. A
+renewal never asks past it, so a lease that reaches it is dropped rather than silently lapsing. -}
+sqsInFlightMaximum :: Seconds
+sqsInFlightMaximum = Seconds 43_200
 
 -- The boot-time redrive probe.
 terminusRequest :: Text -> SQS.GetQueueAttributes
@@ -297,8 +308,8 @@ data SqsDropReason = MissingBody | MissingReceipt | UndecodableBody
 
 {- A message missing its body or receipt, which SQS always supplies, or one whose body
 does not decode, is dropped rather than crashing the poll. -}
-toQueueMessage :: (Text -> Either Text RegistryUrl) -> ReceivedMessage -> Either SqsDropReason QueueMessage
-toQueueMessage egressUrl received = do
+toQueueMessage :: (Text -> Either Text RegistryUrl) -> ReceiptLease -> ReceivedMessage -> Either SqsDropReason QueueMessage
+toQueueMessage egressUrl lease received = do
     body <- maybeToRight MissingBody (rmBody received)
     receipt <- maybeToRight MissingReceipt (rmReceipt received)
     job <- first (const UndecodableBody) (decodeJob mirrorJobPackage egressUrl body)
@@ -307,6 +318,7 @@ toQueueMessage egressUrl received = do
             { msgJob = job
             , msgReceipt = mkReceiptHandle receipt
             , msgReceiveCount = receiveCountOf (rmReceiveCount received)
+            , msgLease = Just lease
             }
 
 -- The delivery count SQS reported, or a first delivery when it reported none, an
@@ -314,17 +326,17 @@ toQueueMessage egressUrl received = do
 receiveCountOf :: Maybe Text -> Int
 receiveCountOf raw = max 1 (fromMaybe 1 (readDecimalText =<< raw))
 
-{- | Lift a received batch into deliverable 'QueueMessage's. A drop is logged, omitted, and
-left un-'ack'ed, so redelivery and dead-letter behaviour are unchanged.
+{- | Lift a received batch into deliverable 'QueueMessage's under one poll's lease. A drop is
+logged, omitted, and left un-'ack'ed, so redelivery and dead-letter behaviour are unchanged.
 -}
-liftReceivedMessages :: LogEnv -> (Text -> Either Text RegistryUrl) -> [ReceivedMessage] -> IO [QueueMessage]
-liftReceivedMessages logEnv egressUrl =
-    fmap catMaybes . traverse (liftReceivedMessage logEnv egressUrl)
+liftReceivedMessages :: LogEnv -> (Text -> Either Text RegistryUrl) -> ReceiptLease -> [ReceivedMessage] -> IO [QueueMessage]
+liftReceivedMessages logEnv egressUrl lease =
+    fmap catMaybes . traverse (liftReceivedMessage logEnv egressUrl lease)
 
 -- Deliver a received message, or log the drop at DebugS and yield Nothing.
-liftReceivedMessage :: LogEnv -> (Text -> Either Text RegistryUrl) -> ReceivedMessage -> IO (Maybe QueueMessage)
-liftReceivedMessage logEnv egressUrl received =
-    case toQueueMessage egressUrl received of
+liftReceivedMessage :: LogEnv -> (Text -> Either Text RegistryUrl) -> ReceiptLease -> ReceivedMessage -> IO (Maybe QueueMessage)
+liftReceivedMessage logEnv egressUrl lease received =
+    case toQueueMessage egressUrl lease received of
         Right queueMessage -> pure (Just queueMessage)
         Left reason -> Nothing <$ logSqsDrop logEnv reason (rmMessageId received)
 

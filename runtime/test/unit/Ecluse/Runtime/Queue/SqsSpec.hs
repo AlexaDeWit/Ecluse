@@ -21,6 +21,7 @@ import Ecluse.Core.Queue (
     defaultDeliveryBudget,
     encodeJob,
  )
+import Ecluse.Core.Queue.Lease (MonoTime (MonoTime), ReceiptLease, receiptLease)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Runtime.Queue.Sqs (
@@ -277,7 +278,7 @@ spec = do
     describe "liftReceivedMessages -- delivering a batch and logging poison drops" $ do
         it "delivers the well-formed sibling and drops each poison message in the batch" $ do
             logEnv <- newTestLogEnv
-            delivered <- liftReceivedMessages logEnv mkRegistryUrl poisonBatch
+            delivered <- liftReceivedMessages logEnv mkRegistryUrl testLease poisonBatch
             -- Only the well-formed message is delivered. The three poison ones are dropped and
             -- left un-acked for redelivery or dead-lettering.
             map msgJob delivered `shouldBe` [npmJob]
@@ -285,7 +286,7 @@ spec = do
         it "logs each drop at Debug with its reason and message id, never the body" $ do
             logEnv <- jsonLogEnv
             logged <- captureStdout $ do
-                _ <- liftReceivedMessages logEnv mkRegistryUrl poisonBatch
+                _ <- liftReceivedMessages logEnv mkRegistryUrl testLease poisonBatch
                 void (closeScribes logEnv)
             -- One Debug drop line per poison message, tagged with this module.
             T.count "\"sev\":\"Debug\"" logged `shouldBe` 3
@@ -301,15 +302,28 @@ spec = do
 
         it "carries the ApproximateReceiveCount through as the delivery count" $ do
             logEnv <- newTestLogEnv
-            delivered <- liftReceivedMessages logEnv mkRegistryUrl (map deliveredWithCount [Just "1", Just "3", Just "17"])
+            delivered <- liftReceivedMessages logEnv mkRegistryUrl testLease (map deliveredWithCount [Just "1", Just "3", Just "17"])
             map msgReceiveCount delivered `shouldBe` [1, 3, 17]
+
+        it "carries the poll's lease on every delivered message, so the worker can renew it" $ do
+            -- Without it the worker has no deadline to renew against, and every job races the
+            -- visibility window it was received under.
+            logEnv <- newTestLogEnv
+            delivered <- liftReceivedMessages logEnv mkRegistryUrl testLease (map deliveredWithCount [Just "1", Just "2"])
+            map msgLease delivered `shouldBe` [Just testLease, Just testLease]
 
         it "reads a missing or unusable count as a first delivery" $ do
             -- Only evidence may put a message past its budget. SQS omits the attribute unless a
             -- request asks for it, and an unusable value says nothing, so neither retires a job.
             logEnv <- newTestLogEnv
-            delivered <- liftReceivedMessages logEnv mkRegistryUrl (map deliveredWithCount [Nothing, Just "", Just "not-a-number", Just "0", Just "-4"])
+            delivered <- liftReceivedMessages logEnv mkRegistryUrl testLease (map deliveredWithCount [Nothing, Just "", Just "not-a-number", Just "0", Just "-4"])
             map msgReceiveCount delivered `shouldBe` [1, 1, 1, 1, 1]
+
+{- | The lease one poll's batch is delivered under: a thirty-second window from a fixed origin,
+with SQS's twelve-hour ceiling on the receipt.
+-}
+testLease :: ReceiptLease
+testLease = receiptLease (MonoTime 1000) (Seconds 30) (Seconds 43_200)
 
 {- | A job body for @ecosystem@ naming @wireName@, split into the separate @namespace@ and @name@
 fields 'encodeJob' writes. Every other field is well-formed.

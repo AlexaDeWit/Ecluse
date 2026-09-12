@@ -54,7 +54,7 @@ import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Queue (
     MirrorJob,
     MirrorQueue (ack, deadLetter, receive),
-    QueueMessage (msgReceipt),
+    QueueMessage (msgJob),
     ReceiptHandle,
     enqueue,
  )
@@ -279,13 +279,13 @@ receive_ queue =
         Left fault -> fail ("receive faulted on the test queue: " <> show fault)
         Right messages -> pure messages
 
--- Enqueue a job, receive it, and return its receipt handle, so a test drives the per-job
--- processing with a real handle.
-enqueueAndReceive :: MirrorQueue -> MirrorJob -> IO (ReceiptHandle, MirrorJob)
+-- Enqueue a job and take the single delivery back off the queue, so a test drives the
+-- per-job processing with the job as the queue handed it over.
+enqueueAndReceive :: MirrorQueue -> MirrorJob -> IO MirrorJob
 enqueueAndReceive queue job = do
     enqueue_ queue job
     receive_ queue >>= \case
-        [message] -> pure (msgReceipt message, job)
+        [message] -> pure (msgJob message)
         other -> fail ("expected exactly one message, got " <> show other)
 
 -- | Run a stub upstream that serves 'tarballBytes' and yields its base URL to the body.

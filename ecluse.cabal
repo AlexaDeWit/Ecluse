@@ -117,6 +117,7 @@ library ecluse-core
     Ecluse.Core.Package.Pep503
     Ecluse.Core.Queue
     Ecluse.Core.Snapshot
+    Ecluse.Core.Queue.Lease
     Ecluse.Core.Queue.Memory
     Ecluse.Core.Registry
     Ecluse.Core.Registry.Adapter
@@ -211,6 +212,7 @@ library ecluse-core
       Ecluse.Core.Worker.Fetch
       Ecluse.Core.Worker.Integrity
       Ecluse.Core.Worker.Job
+      Ecluse.Core.Worker.Lease
       Ecluse.Core.Worker.Liveness
       Ecluse.Core.Worker.Loop
       Ecluse.Core.Worker.Realise
@@ -702,6 +704,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Package.MergeSpec
     Ecluse.Core.Package.Pep503Spec
     Ecluse.Core.PackageSpec
+    Ecluse.Core.Queue.LeaseSpec
     Ecluse.Core.Queue.MemorySpec
     Ecluse.Core.QueueSpec
     Ecluse.Core.SnapshotSpec
@@ -785,6 +788,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.WireSpec
     Ecluse.Core.Worker.IntegritySpec
     Ecluse.Core.Worker.JobSpec
+    Ecluse.Core.Worker.LeaseSpec
     Ecluse.Core.Worker.LivenessSpec
     Ecluse.Core.Worker.LoopSpec
     Ecluse.Core.Worker.RealiseSpec
