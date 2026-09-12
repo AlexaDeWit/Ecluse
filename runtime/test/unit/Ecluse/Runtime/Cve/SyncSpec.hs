@@ -27,7 +27,7 @@ import UnliftIO.Exception (throwIO)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
-import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, swapIn, withSlotLookup)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, swapIn, withSlotGeneration, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apOsvNewestModified, apOsvSource), noProvenance)
@@ -218,7 +218,7 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
 
     it "removes withdrawn evidence while retaining independent denies, fixes, and deletion guards" $
         withSyncEnv $ \_ slot envWith -> do
-            let deps = inertRuleDeps{rdWithCveLookup = withSlotLookup slot, rdCurrentAdvisoryEtag = currentAdvisoryEtag slot}
+            let deps = inertRuleDeps{rdWithCveLookup = withSlotGeneration slot, rdCurrentAdvisoryEtag = currentAdvisoryEtag slot}
                 cvss = DenyIfCve (DenyIfCveParams 5 FailDeny)
                 epss = DenyIfEpss (DenyIfEpssParams 0.25 FailDeny)
             ctx <- mkEvalContext (pure (UTCTime (fromGregorian 2026 1 1) 0)) (currentAdvisoryEtag slot)
@@ -249,13 +249,13 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                     for_ ["1.0.0", "4.0.0"] $ \version -> do
                         verdict <- evalRule deps ctx rule (completeEvidence (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm version)))
                         case verdict of
-                            Deny _ -> active `shouldBe` True
+                            Deny _ _ -> active `shouldBe` True
                             NoDecision _ -> active `shouldBe` False
                             other -> expectationFailure ("unexpected withdrawal denial verdict: " <> show other)
                     for_ ["withdrawal-overlap", "corpus-vuln"] $ \name -> do
                         verdict <- evalRule deps ctx rule (completeEvidence (sampleDetails (unscopedNpm name) (mkVersion Npm "1.0.0")))
                         verdict `shouldSatisfy` \case
-                            Deny _ -> True
+                            Deny _ _ -> True
                             _ -> False
                     sweepWithdrawal deps ctx rule False "withdrawal-only" `shouldReturn` not active
                     sweepWithdrawal deps ctx rule False "withdrawal-overlap" `shouldReturn` False
@@ -284,7 +284,7 @@ sweepWithdrawal deps ctx rule firstParty rawName = do
     counters <- newSweepState
     let handle = fakeMaintenance store
         mount = (testMount handle rules [rule]){smFirstParty = const firstParty}
-    sweepPackage testPacing (recPorts recorded) counters mount ctx generation name stored `shouldReturn` Nothing
+    sweepPackage testPacing (recPorts recorded) counters mount ctx name stored `shouldReturn` Nothing
     contents <- readFakeContents store
     pure (maybe False (not . null) (Map.lookup name contents))
 

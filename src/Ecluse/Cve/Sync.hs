@@ -40,7 +40,7 @@ import Ecluse.Config (
     advisoryStoreBucket,
  )
 import Ecluse.Core.Breaker (BreakerReporter)
-import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotLookup)
+import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
@@ -77,7 +77,7 @@ ecosystem's advisory database, and abstain when the sync plan carries no slot fo
 cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> FaultReporter -> Ecosystem -> RuleDeps
 cveRuleDepsFor plan reporter faultReporter eco =
     RuleDeps
-        { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotLookup . syncSlot . csEnv) (Map.lookup eco plan)
+        { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotGeneration . syncSlot . csEnv) (Map.lookup eco plan)
         , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . syncSlot . csEnv) (Map.lookup eco plan)
         , rdBreakerReporter = reporter
         , rdFaultReporter = faultReporter

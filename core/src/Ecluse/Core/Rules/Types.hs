@@ -292,8 +292,8 @@ Other verdict reasons enter the deny-by-default audit trail in boot order.
 data RuleVerdict
     = -- | This rule admits the package (with a human reason). Decisive.
       Allow Reason
-    | -- | This rule blocks the package (with a human reason). Decisive.
-      Deny Reason
+    | -- | A decisive denial, with its acquired advisory ETag or none for a non-advisory rule.
+      Deny (Maybe DbEtag) Reason
     | -- | This rule has no opinion. The reason stays for the audit trail. A no-op.
       NoDecision Reason
     | {- | Deterministic inability to vet: an absent database, or a fact nothing read. Never enters
@@ -330,8 +330,8 @@ deciding rule by __name__ (see 'ruleName'), independent of how the engine evalua
 data Decision
     = -- | Admitted by the named rule, with its reason.
       Admitted Text Reason
-    | -- | Blocked by the named rule, with its reason.
-      Blocked Text Reason
+    | -- | Blocked by the named rule, with the advisory ETag that supplied its evidence and its reason.
+      Blocked Text (Maybe DbEtag) Reason
     | {- | No rule was decisive. Deny-by-default; carries every non-decisive reason,
       in boot order, so the denial response can explain what was considered.
       -}

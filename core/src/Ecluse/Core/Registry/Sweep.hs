@@ -13,7 +13,6 @@ module Ecluse.Core.Registry.Sweep (
 
 import Data.Conduit (ConduitT, await, fuseBothMaybe, runConduit)
 
-import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Package (PackageName)
@@ -184,18 +183,17 @@ candidateCycle pacing ports counters mount =
     stepUntilHalt candidateBucket (walkBuckets (alphabetOf mount))
   where
     candidateBucket prefix =
-        withCandidates ports mount $ \candidates etag ctx ->
-            streamCandidates pacing ports counters mount ctx etag (inCandidates candidates) prefix
+        withCandidates ports mount $ \candidates ctx ->
+            streamCandidates pacing ports counters mount ctx (inCandidates candidates) prefix
 
-{- One bucket's candidates and the generation they came from, in one bracket so both come from the
-same database. A generation swapped mid-bucket defers a name it newly covers by one cycle. -}
-withCandidates :: SweepPorts -> SweepMount -> (CandidateSet -> Maybe DbEtag -> EvalContext -> IO a) -> IO a
+{- One bucket's candidates under a pinned lookup. Later rule evaluations acquire their own lookups.
+A generation swapped mid-bucket defers a name it newly covers by one cycle. -}
+withCandidates :: SweepPorts -> SweepMount -> (CandidateSet -> EvalContext -> IO a) -> IO a
 withCandidates ports mount act =
     rdWithCveLookup (smRuleDeps mount) $ \mLookup -> do
-        candidates <- candidateSet (smProjectName mount) (smConfigured mount) mLookup
-        etag <- sweepAdvisoryEtag ports (smEcosystem mount)
-        ctx <- mkEvalContext (sweepNow ports) (pure etag)
-        act candidates etag ctx
+        candidates <- candidateSet (smProjectName mount) (smConfigured mount) (snd <$> mLookup)
+        ctx <- mkEvalContext (sweepNow ports) (pure (fst <$> mLookup))
+        act candidates ctx
 
 {- Say once per mount when no generation is loaded. Only the identity half then sweeps, so a rule
 set that reads advisories decided on less than it names, which is the gap recorded here. -}
@@ -239,7 +237,7 @@ walkFrom pacing ports counters mount resume = go
     sweepBucket prefix names = do
         etag <- sweepAdvisoryEtag ports (smEcosystem mount)
         ctx <- mkEvalContext (sweepNow ports) (pure etag)
-        sweepChunks pacing ports counters mount ctx etag names
+        sweepChunks pacing ports counters mount ctx names
             >>= maybe (onCursor pacing ports mount (`writeCursor` prefix)) (pure . Just)
 
 {- One bucket's listing, consumed page by page so nothing holds it whole. This cycle's own halt
@@ -250,11 +248,10 @@ streamCandidates ::
     SweepState ->
     SweepMount ->
     EvalContext ->
-    Maybe DbEtag ->
     (PackageName -> Bool) ->
     NamePrefix ->
     IO (Maybe CycleHalt)
-streamCandidates pacing ports counters mount ctx etag keep prefix =
+streamCandidates pacing ports counters mount ctx keep prefix =
     outcome <$> runConduit (fuseBothMaybe (obListPackagesIn (observed mount) prefix) foldPages)
   where
     -- The sweep's own halt is read first: it is the arm that abandoned the stream.
@@ -268,7 +265,7 @@ streamCandidates pacing ports counters mount ctx etag keep prefix =
         await >>= \case
             Nothing -> pure Nothing
             Just page ->
-                lift (sweepChunks pacing ports counters mount ctx etag (filter keep page))
+                lift (sweepChunks pacing ports counters mount ctx (filter keep page))
                     >>= maybe foldPages (pure . Just)
 
 -- Pause only when another name needs examination, including after a page or bucket ends.
@@ -278,10 +275,9 @@ sweepChunks ::
     SweepState ->
     SweepMount ->
     EvalContext ->
-    Maybe DbEtag ->
     [PackageName] ->
     IO (Maybe CycleHalt)
-sweepChunks pacing ports counters mount ctx etag = stepUntilHalt paced
+sweepChunks pacing ports counters mount ctx = stepUntilHalt paced
   where
     paced name = do
         progress <- readIORef (stChunkProgress counters)
@@ -289,7 +285,7 @@ sweepChunks pacing ports counters mount ctx etag = stepUntilHalt paced
             sweepDelay ports (swpChunkPause pacing)
             writeIORef (stChunkProgress counters) 0
         modifyIORef' (stChunkProgress counters) (+ 1)
-        sweepOne pacing ports counters mount ctx etag name
+        sweepOne pacing ports counters mount ctx name
 
 -- One package: what the store serves for it, then the shared decision step over those versions.
 sweepOne ::
@@ -298,13 +294,12 @@ sweepOne ::
     SweepState ->
     SweepMount ->
     EvalContext ->
-    Maybe DbEtag ->
     PackageName ->
     IO (Maybe CycleHalt)
-sweepOne pacing ports counters mount ctx etag name =
+sweepOne pacing ports counters mount ctx name =
     withStoreRetry pacing ports mount (obEnumerateVersions (observed mount) name) >>= \case
         Left halt -> pure (Just halt)
-        Right stored -> sweepPackage pacing ports counters mount ctx etag name stored
+        Right stored -> sweepPackage pacing ports counters mount ctx name stored
 
 {- The bucket the last run of this walk completed. A store with nowhere to keep one resumes from
 the first bucket every cycle, which is a value here rather than a branch. -}

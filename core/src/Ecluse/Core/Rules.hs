@@ -60,8 +60,8 @@ import Ecluse.Core.Version (renderVersion)
 
 -- | Pin one advisory generation for an evaluation, or supply 'Nothing' before the first sync.
 data RuleDeps = RuleDeps
-    { rdWithCveLookup :: forall a. (Maybe CveLookup -> IO a) -> IO a
-    -- ^ Bracketed access to the current advisory database view, if one is loaded.
+    { rdWithCveLookup :: forall a. (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
+    -- ^ Bracketed access to the lookup and ETag acquired together, if a database is loaded.
     , rdCurrentAdvisoryEtag :: IO (Maybe DbEtag)
     {- ^ A non-pinning read of the active advisory database's 'DbEtag', or 'Nothing' when none
     is loaded. It holds no generation open, so it never delays a shadow-swap.
@@ -114,13 +114,13 @@ evalRule _ ctx (AllowIfOlderThan minAge) ev =
 evalRule _ _ DenyInstallTimeExecution ev =
     pure $ case evInstallCode ev of
         Unread -> needsFact "DenyInstallTimeExecution" "the install-time execution signal"
-        Known (RunsCodeOnInstall how) -> Deny ("runs code on install: " <> how)
+        Known (RunsCodeOnInstall how) -> Deny Nothing ("runs code on install: " <> how)
         Known NoCodeOnInstall -> NoDecision "no install-time code execution"
         Known CodeExecUnknown -> NoDecision "install-time code execution not yet determined"
 evalRule _ _ (DenyByIdentity ident) ev =
     pure $
         if matchesIdentity ident ev
-            then Deny ("identity " <> ident <> " is revoked by operator")
+            then Deny Nothing ("identity " <> ident <> " is revoked by operator")
             else NoDecision ("identity is not the revoked " <> ident)
 evalRule _ _ (AllowByIdentity ident) ev =
     pure $
@@ -130,15 +130,15 @@ evalRule _ _ (AllowByIdentity ident) ev =
 evalRule deps _ AllowIfRemediatesCve ev =
     rdWithCveLookup deps $ \case
         Nothing -> pure (NoDecision "no advisory database is loaded")
-        Just cve -> remediationVerdict cve ev
+        Just (_, cve) -> remediationVerdict cve ev
 evalRule deps _ (DenyIfCve params) ev =
     rdWithCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfCve" (dicOnUnavailable params))
-        Just cve -> advisoryDenyVerdict DenyMissingScore "CVSS" (dicMinCvss params) arSeverity cve ev
+        Just (etag, cve) -> advisoryDenyVerdict etag DenyMissingScore "CVSS" (dicMinCvss params) arSeverity cve ev
 evalRule deps _ (DenyIfEpss params) ev =
     rdWithCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))
-        Just cve -> advisoryDenyVerdict AbstainMissingScore "EPSS" (dieMinEpss params) arEpss cve ev
+        Just (etag, cve) -> advisoryDenyVerdict etag AbstainMissingScore "EPSS" (dieMinEpss params) arEpss cve ev
 
 {- The verdict when the evidence carries no reading of a fact the rule consults. It is fail-closed so
 the fold stops here, rather than letting a lower-precedence rule decide past an unresolved one. -}
@@ -150,8 +150,8 @@ fault, because no in-process retry could load one, so the harness never retries 
 noAdvisoryDbVerdict :: Text -> FailureAlignment -> RuleVerdict
 noAdvisoryDbVerdict rule alignment = CannotVet alignment (rule <> ": no advisory database loaded")
 
-advisoryDenyVerdict :: MissingScorePolicy -> Text -> Double -> (AdvisoryRange -> Maybe Double) -> CveLookup -> RuleEvidence -> IO RuleVerdict
-advisoryDenyVerdict missing metric threshold scoreOf cve ev = do
+advisoryDenyVerdict :: DbEtag -> MissingScorePolicy -> Text -> Double -> (AdvisoryRange -> Maybe Double) -> CveLookup -> RuleEvidence -> IO RuleVerdict
+advisoryDenyVerdict etag missing metric threshold scoreOf cve ev = do
     ranges <- cveAdvisoriesFor cve name
     let blocking =
             ordNub
@@ -162,7 +162,7 @@ advisoryDenyVerdict missing metric threshold scoreOf cve ev = do
                 ]
     pure $ case blocking of
         [] -> NoDecision ("no advisory at or above the " <> metric <> " threshold affects this version")
-        ids -> Deny ("affected by " <> T.intercalate ", " ids <> " (" <> metric <> " >= " <> show threshold <> ")")
+        ids -> Deny (Just etag) ("affected by " <> T.intercalate ", " ids <> " (" <> metric <> " >= " <> show threshold <> ")")
   where
     eco = pkgEcosystem (evName ev)
     name = TS.toText (pkgCanonical (evName ev))
@@ -382,7 +382,7 @@ awaitInOrder ((r, a) : rest) reasons = do
 decisive :: Text -> RuleEvaluation -> Maybe Decision
 decisive name = \case
     Decided (Allow reason) -> Just (Admitted name reason)
-    Decided (Deny reason) -> Just (Blocked name reason)
+    Decided (Deny etag reason) -> Just (Blocked name etag reason)
     Decided (NoDecision _) -> Nothing
     Decided (CannotVet FailDeny reason) -> Just (Undecidable (WillResolve Nothing) reason)
     Decided (CannotVet FailNoDecision _) -> Nothing
@@ -394,7 +394,7 @@ reasonOf :: RuleEvaluation -> Reason
 reasonOf (Unavailable _ _ reason) = reason
 reasonOf (Decided verdict) = case verdict of
     Allow reason -> reason
-    Deny reason -> reason
+    Deny _ reason -> reason
     NoDecision reason -> reason
     CannotVet _ reason -> reason
 
@@ -448,7 +448,7 @@ renderDecision ev decision =
      in case decision of
             Admitted name reason ->
                 subject <> " was approved by " <> name <> ": " <> reason
-            Blocked name reason ->
+            Blocked name _ reason ->
                 subject <> " was denied by " <> name <> ": " <> reason
             BlockedByDefault reasons ->
                 subject

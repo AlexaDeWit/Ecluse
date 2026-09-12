@@ -9,6 +9,7 @@ module Ecluse.Core.Cve.Slot (
     CveSlot,
     newCveSlot,
     withSlotLookup,
+    withSlotGeneration,
     currentAdvisoryEtag,
     AdvisorySource (..),
     currentAdvisorySource,
@@ -60,7 +61,11 @@ newCveSlot = CveSlot <$> newTVarIO Nothing <*> getMonotonicTime
 pins the generation, so a concurrent 'swapIn' cannot close it mid-read.
 -}
 withSlotLookup :: CveSlot -> (Maybe CveLookup -> IO a) -> IO a
-withSlotLookup slot use = bracket acquire release (use . fmap (cveDbLookup . genDb))
+withSlotLookup slot use = withSlotGeneration slot (use . fmap snd)
+
+-- | Borrow a lookup and its own ETag together until the action returns or is cancelled.
+withSlotGeneration :: CveSlot -> (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
+withSlotGeneration slot use = bracket acquire release (use . fmap (\g -> (genEtag g, cveDbLookup (genDb g))))
   where
     acquire = atomically $ do
         mGen <- readTVar (slotCell slot)

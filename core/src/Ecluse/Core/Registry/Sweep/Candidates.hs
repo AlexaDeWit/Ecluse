@@ -26,8 +26,8 @@ The ecosystem parser preserves their shared identity.
 newtype CandidateSet = CandidateSet (Set PackageName)
     deriving stock (Eq, Show)
 
-{- | Every name the loaded advisory generation covers, plus every name an identity deny pins. Read
-it inside the generation's own bracket, so the set and its verdicts come from one generation.
+{- | Every name a pinned lookup covers, plus the identity-denied names.
+Later rule evaluations acquire their own lookups and can use a newer generation.
 -}
 candidateSet :: ProjectName -> [Rule] -> Maybe CveLookup -> IO CandidateSet
 candidateSet project rules mLookup = do

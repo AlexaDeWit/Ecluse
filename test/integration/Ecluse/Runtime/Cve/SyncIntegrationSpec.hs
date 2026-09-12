@@ -26,7 +26,7 @@ import Conduit (runResourceT)
 import Ecluse (mountBindingFor)
 import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
-import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
+import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Rules (RuleDeps (..), prepare)
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
@@ -81,7 +81,7 @@ spec =
                             slot <- newCveSlot
                             let ruleDeps =
                                     RuleDeps
-                                        { rdWithCveLookup = withSlotLookup slot
+                                        { rdWithCveLookup = withSlotGeneration slot
                                         , rdCurrentAdvisoryEtag = currentAdvisoryEtag slot
                                         , rdBreakerReporter = noBreakerReporter
                                         , rdFaultReporter = noFaultReporter

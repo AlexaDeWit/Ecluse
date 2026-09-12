@@ -69,11 +69,8 @@ import Ecluse.Core.Worker.Types
 acks the message or leaves it to redeliver.
 -}
 data JobOutcome
-    = {- | The publish succeeded, so the job is acked. This covers an idempotent
-      redelivery too: a version already present at the mirror target answers a
-      status the ecosystem's codec classifies as success (npm's @409@), so it
-      surfaces here as 'Succeeded' rather than a distinct case. So does the same
-      presence confirmed by the pre-fetch probe, before any bytes moved.
+    = {- | The publish succeeded or the mirror already held the version.
+      The worker acknowledges either result, including idempotent redelivery.
       -}
       Succeeded
     | {- | A __non-retryable__ rejection (a tampered artifact, an unformable request URL).
@@ -104,9 +101,8 @@ data RetryLeg
       AfterPublish
     deriving stock (Eq, Show)
 
-{- | Process one mirror job end to end and return the 'JobOutcome' that decides whether the worker
-acks the message or lets it redeliver. The worker re-runs current policy before publishing, because
-the enqueue-to-process window is unbounded and the mirror is later served without the rules.
+{- | Re-check policy before publishing because the queue wait is unbounded and mirrored bytes bypass later rules.
+The outcome determines whether the worker acknowledges the message or permits redelivery.
 -}
 processJob :: MirrorJob -> WorkerM JobOutcome
 processJob job = katipAddNamespace "job" $ do
@@ -126,9 +122,7 @@ processJob job = katipAddNamespace "job" $ do
         DeadLettered reason -> JobSpanOutcome "dead-lettered" (Just reason)
         Retried _ reason -> JobSpanOutcome "retried" (Just reason)
 
--- Order the steps cheapest first: a duplicate retires for one metadata round trip and a now-denied
--- job drops before its bytes are downloaded. Every step past the lookup rides the ecosystem's own
--- bundle, so no job can consult a foreign ecosystem's probe, rules, or publish.
+-- Use one ecosystem bundle throughout so a job cannot consult another ecosystem's policy or registry.
 reevaluateThenMirror :: MirrorJob -> WorkerM JobOutcome
 reevaluateThenMirror job = do
     policies <- asks wrPolicies
@@ -242,7 +236,7 @@ realises. 'admissionTransience' alone splits retry from drop, so no path can div
 outcomeOfAdmission :: MirrorJob -> ArtifactAdmission -> Either JobOutcome MirrorArtifact
 outcomeOfAdmission job admission = case admission of
     AdmissionAdmit filename artifact digests -> Right (readmittedDescriptor filename artifact digests)
-    AdmissionDenied (Blocked ruleName reason) ->
+    AdmissionDenied (Blocked ruleName _ reason) ->
         refused ("current policy denies " <> renderJob job <> ": blocked by " <> ruleName <> " (" <> reason <> ")")
     AdmissionDenied _ ->
         refused ("current policy denies " <> renderJob job <> ": no rule admits it")

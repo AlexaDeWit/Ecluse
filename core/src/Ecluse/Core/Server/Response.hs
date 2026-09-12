@@ -2,46 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The serve-outcome model, the per-outcome status mapping, and the agnostic
-shape of an error body.
-
-Every client-facing reply is the rendering of one __serve outcome__: admit the
-request, or reject it. An error therefore maps to the status a client can act on
-rather than a generic 403\/500. The model and the per-outcome status mapping live
-here. The WAI layer that turns an 'ArtifactStatus' into an actual response and
-streams the body is separate (see @docs\/architecture\/web-layer.md@).
-
-This module decides the HTTP /status/ of a refusal but holds __no body shape of
-its own__. The bytes a client reads an error from are an ecosystem's: npm's
-@{"error": …}@ JSON, a different surface for PyPI. The ecosystem's route-scoped
-'Ecluse.Core.Server.Contract.ResponseContract' supplies the response constructor and
-codec, and the agnostic pipeline selects it through injected reply factories.
-'appendHelp' is the ecosystem-neutral operation those factories reuse: it joins the
-operator help message onto a denial.
-
-== The outcome model
-
-A 'ServeDecision' is 'Admit' or 'Reject' with a 'Rejection' carrying a
-'RejectReason'. A rejection is either __by policy__ (a rule denied the version,
-including deny-by-default) or __unavailable__. An unavailable rejection could not be
-decided, and carries its 'Transience': whether the evaluator believes the condition
-will self-heal. The whole verdict pipeline ("Ecluse.Core.Rules") feeds this. A rules
-'Decision' projects to a 'ServeDecision' via 'serveDecisionOf'.
-
-== Status follows the cause
-
-For a __concrete artifact__ (one specific version) the outcome renders to a
-single 'ArtifactStatus'. The load-bearing rule is __503 only when we believe it
-will resolve__. A transient upstream or advisory condition invites a retry. A
-permanent or internal inability to decide ('WontResolve') is a @500@, because
-retrying it cannot help and we should not invite it. A policy rejection is a
-@403@ whose body the route's response contract shapes. A __packument__ request has
-no single status: the pipeline filters its versions and chooses the status over the
-surviving set. This module therefore maps __per outcome__, not per request.
-
-'appendHelp' appends the operator help message, when configured, to every denial, so
-clients are told where to ask. How the joined text is then wrapped into bytes is the
-route contract's concern.
+{- | Map policy and upstream outcomes to HTTP statuses. Artifact requests use one outcome,
+while packuments choose a status from the surviving versions. Ecosystem contracts own response bodies.
 -}
 module Ecluse.Core.Server.Response (
     -- * Serve outcomes
@@ -115,41 +77,18 @@ data RejectReason
       is the rule that decided, for the audit trail and the denial body.
       -}
       ByPolicy RuleName
-    | {- | The version could not be decided. An effectful rule the evaluator needed
-      could not be consulted (advisory source down, timeout). This is
-      __fail-closed__: a never-vetted version is not admitted just because the
-      scanner is unreachable. The 'Transience' says whether a retry can help.
-      -}
+    | -- | The version could not be vetted. Refuse it, with transience indicating whether a retry can help.
       Unavailable Transience
-    | {- | The version's selected artifact carries __no integrity digest of any
-      kind__ (neither an SRI nor a legacy shasum), so its bytes cannot be tied to
-      a tamper-evident fingerprint. Nothing can detect a divergence, so such a
-      version is inadmissible from an /untrusted/ (public) upstream and admission
-      refuses it outright. This is a deliberate, deny-by-default __admission
-      policy__, not a rule decision and not a retryable inability: it maps to a
-      @403@. The trusted private upstream is exempt, and this reason never arises
-      on that path.
+    | {- | A public artifact lacks a digest, so admission cannot verify its bytes and refuses with @403@.
+      Trusted private artifacts are exempt.
       -}
       MissingIntegrity
-    | {- | The version's selected artifact carries an integrity digest, but its
-      strongest one is __weaker than the configured minimum algorithm__ (e.g. a
-      legacy SHA-1 shasum only, under the default SHA-256 floor). A collision-broken
-      digest cannot tie the bytes to a tamper-evident fingerprint, so the version is
-      inadmissible from an /untrusted/ (public) upstream. This reason is distinct
-      from 'MissingIntegrity' (which has no digest at all), so the audit trail says
-      which. It is a deny-by-default __admission policy__ that maps to a @403@. The
-      trusted private upstream is exempt, and this reason never arises on that path.
+    | {- | A public artifact's strongest digest falls below the configured floor, so admission refuses with @403@.
+      Trusted private artifacts are exempt.
       -}
       BelowIntegrityFloor
-    | {- | A responding upstream returned an __invalid response__ for the requested
-      package. Its packument self-reported a name for a /different/ package, so that
-      origin is untrusted for this request and contributes no document to the merge.
-      It is a /gateway/ fault, not a policy verdict and not a retryable inability.
-      When no origin yields a valid packument and a responding one was invalid this
-      way, the packument request maps to a @502@. A genuine absence (no such package
-      at all) is distinct, and is not refused this way. This reason arises on the
-      packument path only, because the artifact path never validates a packument
-      name.
+    | {- | An upstream packument names a different package and cannot enter the merge.
+      When no valid origin remains, the packument request returns @502@.
       -}
       UpstreamInvalid
     deriving stock (Eq, Show)
@@ -166,7 +105,7 @@ newtype RuleName = RuleName Text
 serveDecisionOf :: PackageDetails -> Decision -> ServeDecision
 serveDecisionOf pd decision = case decision of
     Admitted{} -> Admit
-    Blocked name _ -> Reject (rejectAs (ByPolicy (RuleName name)))
+    Blocked name _ _ -> Reject (rejectAs (ByPolicy (RuleName name)))
     BlockedByDefault{} -> Reject (rejectAs (ByPolicy (RuleName "BlockedByDefault")))
     Undecidable transience _ -> rejectUnavailable transience rendered
   where
@@ -234,17 +173,12 @@ data PackumentStatus
       response body collects the denial reasons.
       -}
       PackumentForbidden
-    | {- | @503@: no version survived, but at least one exclusion may self-heal (a
-      transient rule outcome, or a needed upstream that was unavailable). A retry may
-      yet yield survivors. The 'RetryAfter', if any was suggested, becomes the
-      @Retry-After@ header.
+    | {- | @503@: no version survived and an exclusion can recover.
+      A suggested delay becomes the @Retry-After@ header.
       -}
       PackumentUnavailable (Maybe RetryAfter)
-    | {- | @502@: no version survived, because a responding upstream returned an
-      __invalid response__ and no origin yielded a valid packument. The invalid
-      response is a packument self-reporting a different package's name. A gateway
-      fault, distinct from a genuine absence (no such package) and from a retryable
-      outage. The upstream answered, but with a document for the wrong package.
+    | {- | @502@: no valid origin remained and an upstream packument named a different package.
+      This gateway fault differs from absence or a retryable outage.
       -}
       PackumentBadGateway
     | {- | @500@: no version survived, no exclusion is retryable, and at least one is

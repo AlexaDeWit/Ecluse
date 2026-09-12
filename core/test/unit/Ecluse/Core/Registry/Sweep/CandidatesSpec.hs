@@ -10,7 +10,7 @@ module Ecluse.Core.Registry.Sweep.CandidatesSpec (spec) where
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup, DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
@@ -64,12 +64,12 @@ intersectionSpec = describe "candidateSet" $ do
     it "selects Flask_Thing and obtains a shared denial from its flask-thing advisory" $ do
         let name = mkPackageName PyPI Nothing "Flask_Thing"
             cve = coveringLookup ["flask-thing"]
-            deps = inertRuleDeps{rdWithCveLookup = \use -> use (Just cve)}
+            deps = inertRuleDeps{rdWithCveLookup = \use -> use (Just (DbEtag "etag-1", cve))}
             ctx = EvalContext (UTCTime (fromGregorian 2026 1 1) 0) Nothing
         candidates <- candidateSet (adapterProjectName pypiAdapter) [] (Just cve)
         inCandidates candidates name `shouldBe` True
         evalRule deps ctx advisoryRule (completeEvidence (sampleDetails name v1_0_0))
-            `shouldReturn` Deny "affected by CVE-2026-0001 (CVSS >= 7.0)"
+            `shouldReturn` Deny (Just (DbEtag "etag-1")) "affected by CVE-2026-0001 (CVSS >= 7.0)"
 
     it "carries every name the loaded generation covers" $ do
         candidates <- candidateSet project [] (Just (coveringLookup ["left-pad", "@babel/core"]))

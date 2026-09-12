@@ -126,6 +126,9 @@ healthy, and an error line repeats at each cycle interval naming the advisory ge
 count. The process stays up on purpose: exiting would bring a pod restart, and the restart would
 begin sweeping the same poisoned generation again.
 
+The halt credits the exact denial that reached the cap. A preview crossing inside a batch credits
+that same threshold item, even when later denials use other generations.
+
 Investigate the generation that filled the cap. Then either restart the Dredger, or raise the cap
 deliberately and restart it.
 
@@ -196,10 +199,9 @@ own after a halt.
 
 ## What the Dredger tells you
 
-Every deletion writes a line naming the package, version, denying rule, and advisory generation
-marker. A decision without a loaded database records `none`. During a concurrent database swap,
-that marker can differ from the lookup used by the rule.
-[#1204](https://github.com/AlexaDeWit/Ecluse/issues/1204) tracks the attribution correction.
+Every deletion names the package, version, denying rule, and the ETag acquired with the advisory
+lookup that supplied its winning evidence. An identity-only denial records `none`, even when a
+database is loaded. Concurrent rules and retries retain their own evidence.
 
 Whatever stops a cycle repeats an error line at **each cycle interval** until it clears or an
 operator restarts the Dredger. Nothing halts silently. That covers a withheld consent marker, a

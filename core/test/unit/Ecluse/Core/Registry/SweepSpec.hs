@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreCursor (writeCursor),
     StoreFacts (factNameAlphabet),
     StoreFault (StoreFault, faultRetry, faultTransport),
-    StoreMaintenance (classifyStore, enumerateVersions, listPackagesIn, storeCursor, verifyConsent),
+    StoreMaintenance (classifyStore, enumerateVersions, listPackagesIn, readStoreManifest, storeCursor, verifyConsent),
     StoreObservation (obVerifyConsent),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
@@ -80,6 +80,7 @@ spec = do
     fullWalkSpec
     epssSpec
     pacingSpec
+    generationSpec
 
 permissionSpec :: Spec
 permissionSpec = describe "consent and classification" $ do
@@ -254,7 +255,7 @@ previewMountFor store =
 
 -- A generation the sweep can read, which leaves the identity half to pin the candidate names.
 loadedDeps :: RuleDeps
-loadedDeps = inertRuleDeps{rdWithCveLookup = \use -> use (Just (fakeCveLookup []))}
+loadedDeps = inertRuleDeps{rdWithCveLookup = \use -> use (Just (DbEtag "etag-1", fakeCveLookup []))}
 
 {- One retry after the wait the fault itself advises. A fault that survives it halts the cycle,
 and the next cycle re-attempts, so an outage reports once per interval and clears on its own. -}
@@ -467,7 +468,7 @@ pacingSpec = describe "cycle chunk pacing" $ do
                     }
             pacing = testPacing{swpChunkSize = 1, swpDeletionCap = 1}
         outcome <- sweepCycle pacing (recPorts rec') [testMount handle [denyRule] [DenyByIdentity "left-pad"]]
-        outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 generation)
+        outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 Nothing)
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
         recDelays rec' `shouldReturn` 0
 
@@ -577,7 +578,7 @@ sweepAdvisories :: [AdvisoryRange] -> [Rule] -> IO (CycleOutcome, Map PackageNam
 sweepAdvisories ranges configured = do
     store <- seededStore
     rec' <- recordingPorts generation
-    let deps = inertRuleDeps{rdWithCveLookup = \use -> use (Just (fakeCveLookup [("left-pad", ar) | ar <- ranges]))}
+    let deps = inertRuleDeps{rdWithCveLookup = \use -> use (Just (DbEtag "etag-1", fakeCveLookup [("left-pad", ar) | ar <- ranges]))}
     prepared <- prepare deps (map atDefaultPrecedence configured)
     let mount = (testMount (fakeMaintenance store) prepared configured){smRuleDeps = deps}
     outcome <- sweepCycle testPacing (recPorts rec') [mount]
@@ -633,3 +634,25 @@ packageName = mkPackageName Npm Nothing
 
 version :: Text -> Version
 version = mkVersion Npm
+
+generationSpec :: Spec
+generationSpec = describe "deletion evidence generation" $
+    for_ [SweepCandidates, SweepEverything] $ \shape ->
+        it ("credits the lookup acquired after the manifest swaps generation in " <> show shape) $ do
+            store <- seededStore
+            active <- newIORef (DbEtag "generation-A", fakeCveLookup [("left-pad", advisory "OLD" (Just 0.01))])
+            let replacement = (DbEtag "generation-B", fakeCveLookup [("left-pad", advisory "NEW-ONLY" (Just 0.95))])
+                deps = inertRuleDeps{rdWithCveLookup = \use -> readIORef active >>= use . Just}
+                configured = [DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)]
+                original = fakeMaintenance store
+                changing = original{readStoreManifest = \name -> writeIORef active replacement *> readStoreManifest original name}
+            rules <- prepare deps (map atDefaultPrecedence configured)
+            rec' <- recordingPorts (Just (DbEtag "generation-A"))
+            let mount = (testMount changing rules configured){smRuleDeps = deps}
+            outcome <- sweepCycle testPacing{swpShape = shape, swpDeletionCap = 1} (recPorts rec') [mount]
+            outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 (Just (DbEtag "generation-B")))
+            tallyDeleted (outcomeTally outcome) `shouldBe` 1
+            info <- recInfo rec'
+            let deletions = filter (T.isInfixOf "blocked by") info
+            length deletions `shouldBe` 1
+            deletions `shouldSatisfy` all (\line -> T.isInfixOf "NEW-ONLY" line && T.isInfixOf "generation-B" line)

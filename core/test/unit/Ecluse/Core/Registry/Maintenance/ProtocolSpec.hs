@@ -254,7 +254,6 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
                                     counters
                                     (testMount tracked [denyRule] [])
                                     ctx
-                                    Nothing
                                     leftpad
                                     [StoredVersion v VersionServed | v <- versions]
                                     `shouldReturn` Nothing
@@ -288,7 +287,6 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
                 counters
                 (testMount handle [denyRule] [])
                 ctx
-                Nothing
                 leftpad
                 [StoredVersion (version raw) VersionServed | raw <- ["1.0.0", "2.0.0"]]
                 `shouldReturn` Nothing

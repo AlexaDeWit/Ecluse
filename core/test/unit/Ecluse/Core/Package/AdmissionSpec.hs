@@ -2,16 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The shared admission oracle, and the differential guarantee it holds. The serve
-gate and the mirror worker decide one artifact the same way, and the worker's tamper
-gate can verify anything the admission floor admits.
-
-The unit cases pin each 'ArtifactAdmission' arm. The golden cases replay two
-worker\/serve divergences and keep them closed: the floor-admitted-but-unverifiable
-gap of issue 409, and the multi-component SRI split-brain of issue 738. The Hedgehog
-property states the standing contract over arbitrary digest sets:
-__floor-admitted implies worker-verifiable__, under one shared authority order, with
-tampered bytes always refused.
+{- | Shared admission decisions for serving and mirroring.
+Properties require the worker to verify every floor-admitted digest set and reject tampered bytes.
 -}
 module Ecluse.Core.Package.AdmissionSpec (spec) where
 
@@ -198,16 +190,14 @@ spec = do
             let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
             admitted <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
             admissionTransience admitted `shouldBe` Nothing
-            admissionTransience (AdmissionDenied (Blocked "test-deny" "denied by current policy")) `shouldBe` Nothing
+            admissionTransience (AdmissionDenied (Blocked "test-deny" Nothing "denied by current policy")) `shouldBe` Nothing
             admissionTransience AdmissionFileAbsent `shouldBe` Nothing
             admissionTransience AdmissionBelowFloor `shouldBe` Nothing
             admissionTransience AdmissionIntegrityMissing `shouldBe` Nothing
 
     describe "the closed divergences, replayed (golden corpus)" $ do
         it "#738: a multi-component SRI is admitted at the floor AND verified by the worker" $ do
-            -- Serve admitted on the first component while the worker compared against the joined
-            -- tail, so the version was served and never mirrored. Per-component hashes keep both
-            -- gates on the same digest.
+            -- Admission and mirroring must compare the same individual digest from a multi-component SRI.
             let joined = Package.sriSha512Of sampleBytes <> " " <> Package.sriSha256Of sampleBytes
                 hashes = sriHashesOf joined
                 details = detailsWith hashes

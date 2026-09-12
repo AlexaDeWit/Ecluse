@@ -194,7 +194,6 @@ deleteCases store = describe "the handle's chunked delete" $ do
                                 counters
                                 (testMount tracked [denyRule] [])
                                 ctx
-                                Nothing
                                 aPackage
                                 [StoredVersion v VersionServed | v <- versions]
                                 `shouldReturn` Just (HaltDeletionCap count count Nothing)
@@ -226,7 +225,6 @@ deleteCases store = describe "the handle's chunked delete" $ do
             counters
             (testMount handle [denyRule] [])
             ctx
-            Nothing
             aPackage
             [StoredVersion v VersionServed | v <- versions]
             `shouldReturn` Just (HaltDeletionCap 101 101 Nothing)
