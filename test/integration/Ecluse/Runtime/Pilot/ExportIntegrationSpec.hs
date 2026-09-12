@@ -90,14 +90,11 @@ spec = do
                     mkMinimalValidDb dbPath "pkg-a"
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
                     let export = runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket objectKey dbPath)
-                        storedObject = do
-                            resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))
-                            pure (listToMaybe (fromMaybe [] (S3.contents resp)))
+                        storedObject = runResourceT $ AWS.send base (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey objectKey))
 
                     export
                     published <- storedObject
-                    -- Without this the comparison below would pass on an absent first listing.
-                    published `shouldSatisfy` isJust
+                    published ^. S3L.headObjectResponse_lastModified `shouldSatisfy` isJust
                     source <- newS3CveSource (Just endpoint)
                     slot <- newCveSlot
                     let env = SyncEnv (s3CveFetchFor source bucket objectKey (512 * 1024 * 1024)) Npm (tmpDir <> "/consumer.sqlite") slot
@@ -107,20 +104,20 @@ spec = do
                         other -> fail ("expected first artifact swap, got " <> show other)
                     installed <- generationInstalledAt slot
                     (asPushedAt =<<) <$> currentAdvisorySource slot
-                        `shouldReturn` ((^. S3L.object_lastModified) <$> published)
+                        `shouldReturn` (published ^. S3L.headObjectResponse_lastModified)
 
-                    -- The store stamps whole seconds, so the export repeats until the stamp has
-                    -- to have moved. A publisher that wrote only on a change never moves it.
-                    let advancedPast before object = fmap S3Object.lastModified object > fmap S3Object.lastModified before
+                    -- HTTP Last-Modified carries whole seconds, unlike the listing's fractional timestamp.
+                    -- Wait for a change that the consumer's HEAD and GET responses can observe.
+                    let advancedPast before object = object ^. S3L.headObjectResponse_lastModified > before ^. S3L.headObjectResponse_lastModified
                     pollUntil 21 500_000 id (export >> (advancedPast published <$> storedObject))
                         >>= (`shouldBe` True)
 
                     -- The bytes never changed, so the object is the same one, re-published.
                     republished <- storedObject
-                    fmap S3Object.eTag republished `shouldBe` fmap S3Object.eTag published
+                    republished ^. S3L.headObjectResponse_eTag `shouldBe` published ^. S3L.headObjectResponse_eTag
                     syncStep env (Just acceptedEtag) >>= \case
                         SyncUnchanged -> pass
                         other -> expectationFailure ("expected metadata-only observation, got " <> show other)
                     (asPushedAt =<<) <$> currentAdvisorySource slot
-                        `shouldReturn` ((^. S3L.object_lastModified) <$> republished)
+                        `shouldReturn` (republished ^. S3L.headObjectResponse_lastModified)
                     generationInstalledAt slot `shouldReturn` installed
