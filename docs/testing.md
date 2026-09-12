@@ -278,6 +278,21 @@ silently never ran still fails the gate. Such a PR uploads no coverage, so the r
 `codecov/project` status stays pending by design, and the repo owner merges it by
 administrator bypass.
 
+The Haddock job wraps its flake checks with `scripts/ci-build-diagnostics.sh`. On Linux,
+the wrapper observes output bytes through two `tee` processes and their `/proc` IO counters.
+Output silence produces process, memory and disk snapshots on stderr. Snapshots exclude
+command arguments and environment variables. Missing diagnostics do not change the build result.
+Cancellation stops the command's process group after a two-second grace period.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CI_BUILD_QUIET_SECONDS` | `120` | Seconds without output before a snapshot, also the minimum interval between snapshots |
+| `CI_BUILD_POLL_SECONDS` | `1` | Seconds between output checks |
+| `CI_BUILD_MAX_SNAPSHOTS` | `20` | Maximum snapshots per invocation |
+
+Each diagnostic command has a five-second deadline and a 201-line output limit.
+`task test-scripts` checks output streaming, exit status, snapshot limits and cancellation without a Haskell build.
+
 ## Coverage: Codecov (gating)
 
 CI measures coverage per gating suite and reports it to [Codecov](https://about.codecov.io/).
