@@ -162,10 +162,10 @@ spec = do
 
         it "leaves the store's contents untouched, because it holds nothing that writes" $ do
             store <- newFakeStore seededConfig
-            before <- readFakeContents store
+            held <- readFakeContents store
             void (collectPages (obListPackagesIn (fakeObservation store) wholeNameSpace))
             void (obEnumerateVersions (fakeObservation store) plainName)
-            readFakeContents store `shouldReturn` before
+            readFakeContents store `shouldReturn` held
 
     describe "the fake store under a fault" $ do
         it "faults every read" $ do

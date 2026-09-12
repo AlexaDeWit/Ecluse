@@ -154,8 +154,7 @@ spec = describe "planExecutable" $ do
 
     it "plans the pilot through the same phase, on its own arm" $ do
         -- Nothing here needs a live environment, so ports that refuse outright leave the role
-        -- clearing exactly as working ones do. The gate still stands ahead of it, which is
-        -- where the Pilot's own refusal is spent.
+        -- clearing as working ones do. The gate ahead of it is where the Pilot's refusal is spent.
         pilot <- expectExecutable BootWithoutPipeline (\_ _ _ -> Nothing) refusingQueue refusingStore
         plannedArm (epRoleWiring pilot) `shouldBe` "pilot"
         bpRole (epBootPlan pilot) `shouldBe` BootWithoutPipeline

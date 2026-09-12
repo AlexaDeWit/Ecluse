@@ -15,7 +15,6 @@ module Ecluse.Composition.Vet (
     -- * The accumulating pass
     Vet,
     runVet,
-    vetRole,
     withRole,
     decided,
 
@@ -52,14 +51,8 @@ instance Applicative Vet where
 runVet :: RegistryRole -> Vet a -> ([Advisory], Either [BootError] a)
 runVet role (Vet run) = second validationToEither (run role)
 
-{- | The role the pass runs for. A witness one role alone may hold is built from this, so no other
-role's pass can issue one.
--}
-vetRole :: Vet RegistryRole
-vetRole = Vet $ \role -> ([], Success role)
-
-{- | Continue a pass with the role it runs for. The role is no finding, so selecting a check by it
-hides none: every rule the continuation names still runs and still accumulates.
+{- | Continue a pass with the role it runs for, which is how a witness one role alone may hold is
+built. The role is no finding, so selecting a check by it hides none.
 -}
 withRole :: (RegistryRole -> Vet a) -> Vet a
 withRole select = Vet $ \role -> let Vet run = select role in run role

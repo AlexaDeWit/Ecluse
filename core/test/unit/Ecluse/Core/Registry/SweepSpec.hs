@@ -24,6 +24,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factNameAlphabet),
     StoreFault (StoreFault, faultRetry, faultTransport),
     StoreMaintenance (classifyStore, enumerateVersions, listPackagesIn, storeCursor, verifyConsent),
+    StoreObservation (obVerifyConsent),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
     inBucket,
@@ -37,7 +38,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltConsentWithheld, HaltDeletionCap, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
     EvidenceGaps (gapAdvisoryGeneration),
-    PrerequisiteStatus (PrerequisiteMet, PrerequisiteUnmet),
+    PrerequisiteStatus (PrerequisiteMet, PrerequisiteUnmet, PrerequisiteUnread),
     SweepMount (smConfigured, smFirstParty, smRuleDeps),
     SweepPacing (swpChunkPause, swpChunkSize, swpDeletionCap, swpShape),
     SweepPorts (sweepDelay),
@@ -204,11 +205,38 @@ previewSpec = describe "a preview cycle" $ do
         (_, outcome) <- previewCycle testPacing store
         map tpConsent (outcomePrerequisites outcome) `shouldBe` [PrerequisiteMet]
         map tpClassification (outcomePrerequisites outcome) `shouldBe` [PrerequisiteMet]
+
+    it "carries on when a standing permission could not be read, and reports that as well" $ do
+        -- Nothing a preview reads settles the permission, which is a finding rather than an end to
+        -- the enumeration: the counts still stand and the status still follows completeness.
+        store <- seededStore
+        rec' <- recordingPortsUnder previewingReport generation
+        outcome <- sweepCycle testPacing (recPorts rec') [unreadableConsent store]
+        outcomeHalt outcome `shouldBe` Nothing
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+        outcomeComplete outcome `shouldBe` True
+        map tpConsent (outcomePrerequisites outcome) `shouldSatisfy` all unread
+        warnings <- recWarnings rec'
+        warnings `shouldSatisfy` any (T.isInfixOf "deletion consent could not be read")
   where
     walkPacing = testPacing{swpShape = SweepEverything}
 
     -- Both seeded names lead with l, so one bucket holds them and the other is walked empty.
     bucketedConfig = seededConfig{fakeFacts = (fakeFacts seededConfig){factNameAlphabet = mkNameAlphabet "lx"}}
+
+    unread = \case
+        PrerequisiteUnread _ -> True
+        _ -> False
+
+-- A preview whose consent read alone faults, so the listing it walks still answers.
+unreadableConsent :: FakeStore -> SweepMount
+unreadableConsent store =
+    (previewMount observing [denyRule] [DenyByIdentity "left-pad"]){smRuleDeps = loadedDeps}
+  where
+    observing =
+        (fakeObservation store)
+            { obVerifyConsent = pure (Left (protocolFault "the store did not answer the consent read"))
+            }
 
 {- A cycle over the store's observing calls alone, under a generation the rules can read, so a
 complete preview is one whose only open question is the permission it reported. -}

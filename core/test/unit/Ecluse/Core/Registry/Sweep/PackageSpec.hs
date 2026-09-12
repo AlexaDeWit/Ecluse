@@ -27,8 +27,11 @@ import Ecluse.Core.Registry.Metadata (Manifest)
 import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltDeletionCap),
+    EvidenceGaps (gapManifests),
     SweepMount (smFirstParty),
     SweepPacing (swpDeletionCap),
+    SweepState (stEvidence),
+    evidenceComplete,
     newSweepState,
  )
 import Ecluse.Core.Rules (PreparedRule, prepare)
@@ -151,6 +154,13 @@ identityOnlySpec = describe "a manifest the store did not serve" $ do
         (rec', _) <- unreadStep [] ["1.0.0"]
         errors <- recErrors rec'
         errors `shouldSatisfy` any (T.isInfixOf "decided on identity alone")
+
+    it "records the gap it decided across, so a count taken here reads as partial" $ do
+        store <- storeWith [version "1.0.0"] Nothing
+        rec' <- recordingPorts generation
+        gaps <- stepEvidence rec' (mount store []) (served ["1.0.0"])
+        gapManifests gaps `shouldBe` 1
+        evidenceComplete gaps `shouldBe` False
 
     it "keeps a version the backend refused to delete, so the next request still serves it" $ do
         rules <- identityDeny
@@ -314,6 +324,14 @@ sweepOne rules stored inManifest = do
     rec' <- recordingPorts generation
     void (runStep rec' testPacing (mount store rules) (served stored))
     pure (rec', store)
+
+-- One package's step, keeping what the cycle could not read rather than the halt it did not raise.
+stepEvidence :: RecordedSweep -> SweepMount -> [StoredVersion] -> IO EvidenceGaps
+stepEvidence rec' mount' stored = do
+    counters <- newSweepState
+    ctx <- evalContext
+    void (sweepPackage testPacing (recPorts rec') counters mount' ctx generation packageName stored)
+    readIORef (stEvidence counters)
 
 runStep :: RecordedSweep -> SweepPacing -> SweepMount -> [StoredVersion] -> IO (Maybe CycleHalt)
 runStep rec' pacing mount' stored = do

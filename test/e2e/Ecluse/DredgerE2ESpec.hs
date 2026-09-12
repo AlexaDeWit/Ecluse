@@ -61,11 +61,15 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         finalStore `shouldBe` Map.delete (psName dredgerPkg) initial
         verdaccioNamesUnder e2e "" `shouldReturn` Map.keys finalStore
 
-    it "reports a dry run's would-delete count and preserves the complete store snapshot" $ \(plane, e2e) -> do
+    it "reports a preview as partial without an advisory generation, and preserves the store snapshot" $ \(plane, e2e) -> do
         initial <- verdaccioSnapshot e2e
         run <- runDredgerOnce plane ["--once", "--dry-run"] (sweepEnv dredgerDryRunPkg)
-        assertFullSweep "dry run, would delete " dredgerDryRunPkg initial run
+        -- The shipped rule set reads advisories and no generation is loaded here, so the preview
+        -- counted from part of the store. Its status says so, and its counts still report the reach.
+        roleExit run `shouldSatisfy` (/= ExitSuccess)
+        assertSweepLines "dry run, would delete " dredgerDryRunPkg initial run
         roleOutput run `shouldSatisfy` T.isInfixOf "previewing only: this run holds nothing that could delete"
+        roleOutput run `shouldSatisfy` T.isInfixOf "This preview deleted nothing, so it proves no authority to delete"
         verdaccioSnapshot e2e `shouldReturn` initial
 
     it "refuses missing consent, names the key, and leaves every version intact" $ \(plane, e2e) -> do
@@ -82,7 +86,7 @@ identityScenarios = describe "identity denies with no advisory database" $ do
             guardCount = length (Map.findWithDefault [] publishDredgerName initial)
         run <- runDredgerOnce plane ["--once"] [("ECLUSE_RULES", rules), ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", publishScope)]
         (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
-        sweepMessages run `shouldBe` ["mirror sweep cycle complete: examined 0, deleted 0, kept 0, guard-skipped " <> show guardCount]
+        sweepMessages run `shouldBe` [cycleLine ["examined 0", "deleted 0", "kept 0", "guard-skipped " <> show guardCount]]
         verdaccioVersions e2e publishDredgerName `shouldReturn` firstPartyVersions
         verdaccioSnapshot e2e `shouldReturn` initial
 
@@ -125,6 +129,12 @@ identityRule name = renderRules ["revoke-swept" .= object ["type" .= ("DenyByIde
 
 assertFullSweep :: Text -> PkgSpec -> Map Text [Text] -> RoleRun -> Expectation
 assertFullSweep opening pkg initial run = do
+    (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
+    assertSweepLines opening pkg initial run
+
+-- | The lines a full walk over the seeded store wrote, for a run whose own status the case asserts.
+assertSweepLines :: Text -> PkgSpec -> Map Text [Text] -> RoleRun -> Expectation
+assertSweepLines opening pkg initial run = do
     let versions = Map.findWithDefault [] (psName pkg) initial
         guardCount = length (Map.findWithDefault [] publishDredgerName initial)
         examined = sum (map length (Map.elems initial)) - guardCount
@@ -134,9 +144,8 @@ assertFullSweep opening pkg initial run = do
             , "kept " <> show (examined - length versions)
             , "guard-skipped " <> show guardCount
             ]
-    (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
     versions `shouldBe` [psVersion pkg]
-    sweepMessages run `shouldMatchList` (map auditLine versions <> ["mirror sweep cycle complete: " <> T.intercalate ", " fields])
+    sweepMessages run `shouldMatchList` (map auditLine versions <> [cycleLine fields])
   where
     auditLine version =
         opening
@@ -146,6 +155,14 @@ assertFullSweep opening pkg initial run = do
             <> ": blocked by DenyByIdentity (identity "
             <> psName pkg
             <> " is revoked by operator); advisory generation none"
+
+{- The cycle's closing line. The shipped rule set reads advisories, so a cycle with no generation
+loaded reports the gap it decided across beside its counts. -}
+cycleLine :: [Text] -> Text
+cycleLine fields =
+    "mirror sweep cycle complete: "
+        <> T.intercalate ", " fields
+        <> "; counted from partial evidence: 1 mount decided without an advisory generation"
 
 revocationScenario :: SpecWith GlobalDataPlane
 revocationScenario =

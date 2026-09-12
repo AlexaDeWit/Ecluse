@@ -22,7 +22,6 @@ import Ecluse.Composition.Vet (
     decided,
     rule,
     runVet,
-    vetRole,
     withRole,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -104,7 +103,7 @@ accumulationSpec = describe "accumulation" $ do
 inputSpec :: Spec
 inputSpec = describe "the pass's own inputs" $ do
     it "reads back the role it runs for, so a role-specific witness has a source" $
-        observe vetRole `shouldBe` [([], Right MirrorWriter), ([], Right MirrorPruner)]
+        observe (withRole pure) `shouldBe` [([], Right MirrorWriter), ([], Right MirrorPruner)]
 
     it "chooses a check by the role it runs for, and still runs every rule that check names" $
         -- The role is no finding, so selecting on it hides none: the chosen side still accumulates.
