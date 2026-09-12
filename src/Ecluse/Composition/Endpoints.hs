@@ -30,7 +30,7 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (
-    Severity (Advise, Refuse),
+    Severity (Advise, Ignore, Refuse),
     Vet,
     rule,
  )
@@ -61,9 +61,7 @@ vetEndpoints mounts = cleared <$ endpointRules mounts
   where
     cleared = VettedEndpoints (Map.mapMaybe (fmap (PublicationTarget . tgtUrl . peTarget) . mntPublicationTarget) mounts)
 
-{- | A publication target that holds no other registry role. The publish path relays the
-publisher's own credential, so the relay takes this vetted value and never a configured URL.
--}
+-- | A publication target cleared for this role. The relay requires this value, never a configured URL.
 newtype PublicationTarget = PublicationTarget RegistryUrl
     deriving stock (Eq, Show)
 
@@ -77,6 +75,7 @@ endpointRules :: Map Ecosystem MountConfig -> Vet ()
 endpointRules mounts =
     publicationOffPublicUpstreams mounts
         *> publicationOffNeighbourEndpoints mounts
+        *> publicationOffOwnPrivateUpstream mounts
         *> mirrorOffPublicUpstreams mounts
         *> mirrorOffPrivateUpstreams mounts
         *> mirrorOffOwnPublicationTarget mounts
@@ -98,6 +97,17 @@ publicationOffNeighbourEndpoints =
             [KeyPrivateUpstream, KeyMirrorTarget, KeyPublicationTarget]
             OtherMount
             ByRegistry
+
+-- Dredger requires the private read cache to be separate from user publications.
+publicationOffOwnPrivateUpstream :: Map Ecosystem MountConfig -> Vet ()
+publicationOffOwnPrivateUpstream =
+    vetCollisions severity $
+        EndpointComparison KeyPublicationTarget [KeyPrivateUpstream] SameMount ByRegistry
+  where
+    severity = \case
+        MirrorWriter -> Ignore
+        MirrorPruner -> Refuse publicationOnMountEndpoint
+        MirrorPreviewer -> Refuse publicationOnMountEndpoint
 
 -- The mirror write carries this proxy's own credential, which must never reach a public registry.
 mirrorOffPublicUpstreams :: Map Ecosystem MountConfig -> Vet ()

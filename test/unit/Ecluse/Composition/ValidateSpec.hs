@@ -15,6 +15,7 @@ import Ecluse.Composition.BootError (
         MirrorTargetOnMountEndpoint,
         MirrorTargetWithoutPublish,
         MissingAdapter,
+        PublicationTargetOnMountEndpoint,
         PublicationTargetOnPublicUpstream,
         PublicationTargetWithoutPublish,
         PublishStaticCredentialNeedsEdge
@@ -31,7 +32,7 @@ import Ecluse.Composition.Support (
     staticEnvVars,
     withoutPrivateUpstreamUrl,
  )
-import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPublications, vpSettings),
     VettedMount (vmEcosystem),
@@ -58,6 +59,31 @@ spec = do
     clearedSpec
     refusalSpec
     firstPartyAuthoritySpec
+    privatePublicationSpec
+
+privatePublicationSpec :: Spec
+privatePublicationSpec = describe "vetBoot private upstream and publication target collision" $ do
+    let collision = PublicationTargetOnMountEndpoint Npm Npm "privateUpstream" "https://private.example.test"
+
+    forM_ [MirrorPruner, MirrorPreviewer] $ \role -> describe (show role) $ do
+        it "returns no plan despite a usable maintenance backend" $ do
+            config <- expectConfig (publishingAt "https://private.example.test" codeArtifactEnvVars) Nothing
+            let (advisories, outcome) = runVet role (vetBoot config)
+            advisories `shouldBe` []
+            fmap (Map.keys . vpMirrorStores) outcome `shouldBe` Left [collision]
+
+        it "accumulates the collision and the unavailable maintenance backend" $
+            refusalsFor role (publishingAt "https://private.example.test" staticEnvVars)
+                `shouldReturn` [collision, noMaintenanceBackend]
+
+        it "clears a usable store when publication is separate" $ do
+            plan <- expectVetted role (publishingAt "https://publish.example.test" codeArtifactEnvVars)
+            fmap clearedRepository (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just (Just "mirror")
+
+    it "clears the same-mount publication for proxy and mirror writers" $ do
+        plan <- expectVetted MirrorWriter (publishingAt "https://private.example.test" codeArtifactEnvVars)
+        fmap (registryUrlText . publicationTargetUrl . vpubTarget) (Map.lookup Npm (vpPublications plan))
+            `shouldBe` Just "https://private.example.test"
 
 firstPartyAuthoritySpec :: Spec
 firstPartyAuthoritySpec = describe "first-party authority" $
@@ -185,9 +211,12 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
                            ]
 
 publishingEnv :: [(String, String)]
-publishingEnv =
+publishingEnv = publishingAt "https://publish.example.test" staticEnvVars
+
+publishingAt :: String -> [(String, String)] -> [(String, String)]
+publishingAt url env =
     overrideEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme" $
-        overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test" staticEnvVars
+        overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" url env
 
 staticPublishEnv :: [(String, String)]
 staticPublishEnv = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN" "publish-write-token" publishingEnv
