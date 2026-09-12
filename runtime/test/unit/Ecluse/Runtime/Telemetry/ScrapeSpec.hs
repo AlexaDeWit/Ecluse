@@ -68,6 +68,19 @@ listenerSpec = describe "scrapeListenerFrom" $ do
             ]
             `shouldBe` ScrapeListener "0.0.0.0" 19464
 
+    it "accepts 0 for an OS-assigned port and 65535" $ do
+        scrapeListenerFrom [("OTEL_EXPORTER_PROMETHEUS_PORT", "0")]
+            `shouldBe` ScrapeListener "localhost" 0
+        scrapeListenerFrom [("OTEL_EXPORTER_PROMETHEUS_PORT", "65535")]
+            `shouldBe` ScrapeListener "localhost" 65535
+
+    it "falls back and warns for ports outside the listener range" $
+        for_ ["-1", "65536"] $ \raw -> do
+            let environment = [("OTEL_EXPORTER_PROMETHEUS_PORT", raw)]
+            scrapeListenerFrom environment `shouldBe` ScrapeListener "localhost" 9464
+            scrapeListenerWarnings environment
+                `shouldBe` ["OTEL_EXPORTER_PROMETHEUS_PORT is not a port number (" <> toText raw <> "). Serving the scrape exposition on 9464 instead."]
+
     it "counts a blank host as unset, so an empty variable cannot widen the bind" $
         scrapeListenerFrom [("OTEL_EXPORTER_PROMETHEUS_HOST", "   ")]
             `shouldBe` ScrapeListener "localhost" 9464
