@@ -90,8 +90,8 @@ data MergePlan = MergePlan
     a collision. The serve layer takes that version's object from that source's raw @Value@.
     -}
     , mpDistTags :: Map Text Version
-    {- ^ @dist-tags@ reconciled over the survivors. 'selectLatest' resolves @latest@ from the public
-    tag, the plan keeps every other surviving-target tag, and it drops an absent-target tag.
+    {- ^ @dist-tags@ reconciled over the survivors. @latest@ comes from the public tag or the
+    ordering, never the private one. Other tags carry by precedence, and an absent target drops.
     -}
     , mpArtifacts :: Map Text (NonEmpty AdmittedEntry)
     -- ^ Exact admitted entries from each version's winning source snapshot.
@@ -316,11 +316,10 @@ planFrom acc = do
     resolvedLatest =
         selectLatest chosenLatest (map pkgVersion survivingDetails)
 
-    -- The public document's @latest@, falling back to the trusted one only when no public
-    -- document offered a tag, so a stale mirror tag never holds the served @latest@ back.
+    -- The public document's @latest@ and nothing else: a private document, mirror store or not,
+    -- is never authoritative here, so 'selectLatest' projects over the survivors without one.
     chosenLatest :: Maybe Version
-    chosenLatest =
-        rankedValue <$> (mergePublicLatest acc <|> Map.lookup "latest" (mergeDistTags acc))
+    chosenLatest = rankedValue <$> mergePublicLatest acc
 
     -- Publish times retain the same source authority as the served manifest.
     reconciledTimes :: Map Text UTCTime

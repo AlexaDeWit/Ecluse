@@ -63,7 +63,8 @@ and distribution files instead, with no mirror or publication step.
    through the policy, and serves the merged listing. A public version the policy did not admit is
    absent from it, so a resolver never picks it. The served `dist-tags.latest` follows the public
    registry's own tag when that version is admitted. Otherwise it names the highest admitted
-   version, stable before prerelease.
+   version, stable before prerelease. A private registry's or a mirror store's own `latest` tag is
+   never served.
 2. **The tarball.** A private hit streams through unfiltered, and a private miss is gated on its
    public metadata. When admitted, Écluse streams the tarball from the public registry while a
    mirror job copies it into the mirror target in the background. Mirroring is demand-driven, so
@@ -98,8 +99,9 @@ target when the mirror holds it. Otherwise it names the highest stable version p
 highest prerelease when no stable version is present. Mirroring one version never makes that
 version `latest` by itself, so back-filling an old version does not change what an unqualified
 install resolves. Écluse owns `latest` on every public package it mirrors and overwrites a value
-it did not set. The merged listing serves that stored tag only when the public registry did not
-answer. First-party names never reach the mirror worker, and their release tags are untouched.
+it did not set. That stored tag governs a client pointed straight at the mirror, never the listing
+Écluse serves. First-party names never reach the mirror worker, and their release tags are
+untouched.
 
 A mirror job whose target metadata cannot be read is not published, because the tag cannot be
 chosen without the current inventory. It follows the worker's usual fault handling instead, which
