@@ -27,7 +27,7 @@ import UnliftIO.Exception (throwIO)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
-import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, swapIn, withSlotGeneration, withSlotLookup)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, swapIn, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apOsvNewestModified, apOsvSource), noProvenance)
@@ -122,7 +122,7 @@ installedSource slot =
     currentAdvisorySource slot >>= maybe (throwIO (TestContractEscape "no generation installed")) pure
 
 probesFor :: CveSlot -> Text -> IO (Maybe Bool)
-probesFor slot pkg = withSlotLookup slot (traverse (\l -> cveRemediationProbe l pkg "1.0.0"))
+probesFor slot pkg = withSlotGeneration slot (traverse (\(_, l) -> cveRemediationProbe l pkg "1.0.0"))
 
 pollInterval :: Int
 pollInterval = 25_000
@@ -209,9 +209,9 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                 syncStep env (Just (DbEtag "active")) >>= \case
                     SyncUnchanged -> pass
                     other -> expectationFailure ("expected unchanged generation, got " <> show other)
-                withSlotLookup slot $ \case
+                withSlotGeneration slot $ \case
                     Nothing -> expectationFailure "withdrawal refusal lost the synced database"
-                    Just lookup' -> do
+                    Just (_, lookup') -> do
                         cveRemediationProbe lookup' "withdrawal-only" "2.0.0" `shouldReturn` True
                         rows <- cveAdvisoriesFor lookup' "withdrawal-only"
                         map arCveId rows `shouldBe` replicate 2 "GHSA-withdrawal"
@@ -231,9 +231,9 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                             actual `shouldBe` DbEtag etag
                             lookup "row_count" meta `shouldBe` Just (if active then "6" else "2")
                         other -> expectationFailure ("expected withdrawal generation swap, got " <> show other)
-                withSlotLookup slot $ \case
+                withSlotGeneration slot $ \case
                     Nothing -> expectationFailure "withdrawal test has no synced database"
-                    Just lookup' -> do
+                    Just (_, lookup') -> do
                         cveRemediationProbe lookup' "withdrawal-only" "2.0.0" `shouldReturn` active
                         cveRemediationProbe lookup' "withdrawal-overlap" "2.0.0" `shouldReturn` active
                         cveRemediationProbe lookup' "withdrawal-overlap" "3.0.0" `shouldReturn` True
@@ -550,7 +550,7 @@ spec = do
                 swapIn slot (DbEtag "e1") Nothing oldDb
                 insideReader <- newEmptyMVar
                 releaseReader <- newEmptyMVar
-                pinned <- async $ withSlotLookup slot $ \_ -> do
+                pinned <- async $ withSlotGeneration slot $ \_ -> do
                     putMVar insideReader ()
                     takeMVar releaseReader
                 takeMVar insideReader

@@ -520,11 +520,11 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
             let versions = ["1.0.0", "2.0.0", "3.0.0"]
                 generations = map (Just . DbEtag) ["first", "threshold", "last"]
             store <- storeWith (map version versions) (Just (sampleManifest packageName (map version versions)))
-            pending <- newIORef generations
+            queuedGenerations <- newIORef generations
             let deciding =
                     denyRule
                         { prepEval = \_ _ -> do
-                            etag <- atomicModifyIORef' pending (\case [] -> ([], Nothing); item : rest -> (rest, item))
+                            etag <- atomicModifyIORef' queuedGenerations (\case [] -> ([], Nothing); item : rest -> (rest, item))
                             pure (Deny etag "acquired advisory evidence")
                         }
                 swept =

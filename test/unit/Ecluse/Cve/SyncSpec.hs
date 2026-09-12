@@ -22,7 +22,7 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Composition.Support (expectAppConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (DbEtag (..))
-import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
+import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness, rdWithCveLookup))
 import Ecluse.Core.Rules.Freshness (
@@ -75,7 +75,7 @@ spec = do
                     syncDbPath (csEnv handle) `shouldBe` dataDir </> "npm-osv-schema4.db"
                     -- Not ready and serving nothing until the first sync.
                     readTVarIO (csReady handle) `shouldReturn` False
-                    withSlotLookup (syncSlot (csEnv handle)) (pure . isJust) `shouldReturn` False
+                    withSlotGeneration (syncSlot (csEnv handle)) (pure . isJust) `shouldReturn` False
                 doesFileExist (dataDir </> "npm-osv-schema4.db.tmp") `shouldReturn` False
                 doesFileExist (dataDir </> "npm-osv-schema4.db") `shouldReturn` True
 

@@ -8,7 +8,6 @@ reader, or to the swapper when no readers remain, even if the swapper is cancell
 module Ecluse.Core.Cve.Slot (
     CveSlot,
     newCveSlot,
-    withSlotLookup,
     withSlotGeneration,
     currentAdvisoryEtag,
     AdvisorySource (..),
@@ -56,12 +55,6 @@ data CveSlot = CveSlot
 -- | A fresh, empty slot: readers see 'Nothing' until the first 'swapIn'.
 newCveSlot :: IO CveSlot
 newCveSlot = CveSlot <$> newTVarIO Nothing <*> getMonotonicTime
-
-{- | Borrow the current generation's lookup for the duration of one action. The bracket
-pins the generation, so a concurrent 'swapIn' cannot close it mid-read.
--}
-withSlotLookup :: CveSlot -> (Maybe CveLookup -> IO a) -> IO a
-withSlotLookup slot use = withSlotGeneration slot (use . fmap snd)
 
 -- | Borrow a lookup and its own ETag together until the action returns or is cancelled.
 withSlotGeneration :: CveSlot -> (Maybe (DbEtag, CveLookup) -> IO a) -> IO a

@@ -525,12 +525,12 @@ provenanceSpec = describe "advisory evidence across concurrent evaluations" $ do
         laterFinished <- newEmptyMVar
         let firstDeps = advisoryRuleDeps "first" "FIRST" (takeMVar laterFinished)
             laterDeps = advisoryRuleDeps "later" "LATER" pass
-        first <- mkRule "CVSS" 300 fastConfig FailDeny (evalRule firstDeps ctx cveRule)
+        earlier <- mkRule "CVSS" 300 fastConfig FailDeny (evalRule firstDeps ctx cveRule)
         later <- mkRule "EPSS" 300 fastConfig FailDeny $ \ev -> do
             verdict <- evalRule laterDeps ctx epssRule ev
             putMVar laterFinished ()
             pure verdict
-        evalRules ctx [first, later] (pkg Nothing 0)
+        evalRules ctx [earlier, later] (pkg Nothing 0)
             `shouldReturn` Blocked "CVSS" (Just (DbEtag "first")) "affected by FIRST (CVSS >= 7.0)"
 
     it "retains the successful retry's acquired generation" $ do

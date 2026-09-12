@@ -572,7 +572,9 @@ epssSpec = describe "individual missing EPSS scores under the production evaluat
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
   where
     epssRule = DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)
-    advisory identifier = AdvisoryRange identifier Nothing (Just "0") Unbounded
+
+advisory :: Text -> Maybe Double -> AdvisoryRange
+advisory identifier = AdvisoryRange identifier Nothing (Just "0") Unbounded
 
 sweepAdvisories :: [AdvisoryRange] -> [Rule] -> IO (CycleOutcome, Map PackageName [StoredVersion])
 sweepAdvisories ranges configured = do
