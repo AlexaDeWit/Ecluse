@@ -4,6 +4,7 @@
 
 module Ecluse.Runtime.Telemetry.InstrumentsSpec (spec) where
 
+import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, getCurrentTime)
 import GHC.Clock (getMonotonicTime)
 import OpenTelemetry.Attributes (Attributes)
 import OpenTelemetry.Metric.Core (ObservableResult (ObservableResult))
@@ -55,7 +56,9 @@ import Ecluse.Runtime.Telemetry.Instruments (
     recordUpstreamFetch,
     recordUpstreamFetchError,
     registerAdvisoryDatabaseAge,
+    registerAdvisorySourceAge,
     reportAdvisoryDatabaseAge,
+    reportAdvisorySourceAge,
     timedSeconds,
  )
 
@@ -124,6 +127,27 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         reported <- newIORef []
         now <- getMonotonicTime
         reportAdvisoryDatabaseAge PyPI (pure (now + 60)) (capture reported)
+        readIORef reported `shouldReturn` [(0, metricAttributes [LEcosystem PyPI])]
+
+    it "registers the advisory source-age callback against the inert instrument without throwing" $ do
+        m <- newMetrics telemetryDisabled
+        registerAdvisorySourceAge m Npm (pure Nothing)
+        pure () :: Expectation
+
+    it "reports the advisory source's age as whole seconds since the artifact was published" $ do
+        reported <- newIORef []
+        now <- getCurrentTime
+        reportAdvisorySourceAge Npm (pure (Just (addUTCTime (negate 3600) now))) (capture reported)
+        readIORef reported `shouldReturn` [(3600, metricAttributes [LEcosystem Npm])]
+
+    it "observes nothing when no artifact has been published yet" $ do
+        reported <- newIORef []
+        reportAdvisorySourceAge PyPI (pure Nothing) (capture reported)
+        readIORef reported `shouldReturn` []
+
+    it "reports zero rather than a negative source age for a publication time in the future" $ do
+        reported <- newIORef []
+        reportAdvisorySourceAge PyPI (pure (Just (UTCTime (fromGregorian 2999 1 1) 0))) (capture reported)
         readIORef reported `shouldReturn` [(0, metricAttributes [LEcosystem PyPI])]
 
     it "binds the compile port to one ecosystem, and stays total for a name outside the closed enum" $ do

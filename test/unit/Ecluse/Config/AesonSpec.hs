@@ -350,6 +350,25 @@ spec = describe "decodeDocument" $ do
             loadConfig [] (Just "{\"advisories\":{\"quietTime\":{\"cargo\":604800}}}")
                 `shouldSatisfy` decodeErrorMentions "Invalid ecosystem in advisories.quietTime: cargo"
 
+    describe "advisories.maxAgeSeconds" $ do
+        it "is unset by default, so each mount derives its own maximum" $
+            case loadConfig [] Nothing of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc -> advMaxAgeSeconds (cfgAdvisories (configApp doc)) `shouldBe` Nothing
+
+        it "takes an operator's explicit maximum" $
+            case loadConfig [("ECLUSE_ADVISORIES__MAX_AGE_SECONDS", "518400")] Nothing of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc -> advMaxAgeSeconds (cfgAdvisories (configApp doc)) `shouldBe` Just 518400
+
+        it "refuses zero, which would expire every push at once" $
+            loadConfig [] (Just "{\"advisories\":{\"maxAgeSeconds\":0}}")
+                `shouldSatisfy` decodeErrorMentions "advisories.maxAgeSeconds"
+
+        it "refuses a value that is not a count of seconds" $
+            loadConfig [] (Just "{\"advisories\":{\"maxAgeSeconds\":\"six days\"}}")
+                `shouldSatisfy` decodeErrorMentions "advisories.maxAgeSeconds"
+
     describe "deprecated divergence configuration" $ do
         for_ ["ECLUSE_INTEGRITY__DIVERGENCE_POLICY", "ECLUSE_MOUNTS__NPM__INTEGRITY__DIVERGENCE_POLICY"] $ \key -> do
             for_ ["warn", " WARN "] $ \value ->

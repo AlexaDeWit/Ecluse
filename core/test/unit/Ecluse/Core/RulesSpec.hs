@@ -8,7 +8,7 @@ Advisory regressions preserve ecosystem identity and display spelling.
 module Ecluse.Core.RulesSpec (spec) where
 
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
+import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
@@ -18,7 +18,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Breaker (noBreakerReporter)
+import Ecluse.Core.Breaker (Breaker, initialBreaker, noBreakerReporter, recordFailure)
 import Ecluse.Core.Cve (AdvisoryRange (..))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
@@ -37,6 +37,8 @@ import Ecluse.Test.Rules (
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 import Ecluse.Core.Rules
+import Ecluse.Core.Rules.Effectful (EffectfulConfig (ecBreakerCooldown, ecBreakerThreshold))
+import Ecluse.Core.Rules.Freshness
 import Ecluse.Core.Rules.Types
 
 -- | A fixed "now" so age-based tests are deterministic.
@@ -104,6 +106,7 @@ depsWith rows =
         , rdCurrentAdvisoryEtag = pure Nothing
         , rdBreakerReporter = noBreakerReporter
         , rdFaultReporter = noFaultReporter
+        , rdAdvisoryFreshness = pure AdvisoryFresh
         }
 
 {- | One advisory naming @thing\@1.0.0@ (the version 'pkg' builds) as its exact
@@ -149,8 +152,103 @@ canonical :: Decision -> Decision
 canonical (BlockedByDefault reasons) = BlockedByDefault (sort reasons)
 canonical d = d
 
+{- | The maximum a mount deriving from a seven-day quarantine gets: six days. Every reading
+below is taken against it, so the boundary cases read as an operator's would.
+-}
+sixDayLimit :: MaxAdvisoryAge
+sixDayLimit = maxAdvisoryAgeFor Nothing [AllowIfOlderThan (7 * nominalDay)]
+
+-- | Capabilities whose serving artifact was pushed the given age before 'now'.
+pushedAgo :: NominalDiffTime -> RuleDeps -> RuleDeps
+pushedAgo age deps =
+    deps{rdAdvisoryFreshness = pure (assessAdvisoryAge sixDayLimit now (Just (addUTCTime (negate age) now)))}
+
+-- | Capabilities whose serving artifact is three days past the six-day maximum.
+expired :: RuleDeps -> RuleDeps
+expired = pushedAgo (9 * nominalDay)
+
+{- | The same rule with its breaker already open at 'now'. An open breaker fast-fails the rule's
+own IO, so it establishes that the push-age gate runs ahead of breaker admission.
+-}
+openBreakerOn :: PreparedRule -> IO PreparedRule
+openBreakerOn rule = case prepResilience rule of
+    Nothing -> pure rule
+    Just res -> do
+        tripped <- newTVarIO (trippedBreaker (resConfig res))
+        pure rule{prepResilience = Just res{resBreaker = tripped, resClock = pure now}}
+
+trippedBreaker :: EffectfulConfig -> Breaker
+trippedBreaker cfg = foldl' recordOne initialBreaker [1 .. ecBreakerThreshold cfg]
+  where
+    recordOne breaker _ = recordFailure (ecBreakerThreshold cfg) (ecBreakerCooldown cfg) now breaker
+
+expirySpec :: Spec
+expirySpec = describe "an expired advisory push" $ do
+    for_ [DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision)] $ \rule ->
+        it (toString (ruleName rule <> " refuses under onUnavailable: skip, past a lower age allow")) $
+            decideWith
+                (expired (depsWith (affecting (Just 9.8) (Just 0.9))))
+                (map atDefaultPrecedence [rule, AllowIfOlderThan (7 * nominalDay)])
+                (pkg Nothing 99)
+                >>= (`shouldSatisfy` isUndecidable)
+
+    it "is eligible at an age equal to the maximum" $
+        decideWith
+            (pushedAgo (6 * nominalDay) (depsWith (affecting (Just 9.8) Nothing)))
+            [atDefaultPrecedence (denyCveAt 8.0)]
+            (pkg Nothing 0)
+            >>= \d -> blockedBy d `shouldBe` Just "DenyIfCve"
+
+    it "expires on the clock alone, with the same generation still serving" $ do
+        let deps = depsWith (affecting (Just 9.8) Nothing)
+            policy = [atDefaultPrecedence (denyCveAt 8.0)]
+        decideWith (pushedAgo (5 * nominalDay) deps) policy (pkg Nothing 0)
+            >>= \d -> blockedBy d `shouldBe` Just "DenyIfCve"
+        decideWith (pushedAgo (7 * nominalDay) deps) policy (pkg Nothing 0)
+            >>= (`shouldSatisfy` isUndecidable)
+
+    it "leaves a higher-precedence identity allow to decide" $
+        decideWith
+            (expired (depsWith (affecting (Just 9.8) Nothing)))
+            (map atDefaultPrecedence [AllowByIdentity "thing@1.0.0", denyCveAt 8.0])
+            (pkg Nothing 0)
+            >>= \d -> admittedBy d `shouldBe` Just "AllowByIdentity"
+
+    it "abstains on the remediation allow rather than admitting on expired evidence" $
+        decideWith (expired (depsWith fixRows)) [atDefaultPrecedence AllowIfRemediatesCve] (pkg Nothing 0)
+            >>= (`shouldSatisfy` isBlockedByDefault)
+
+    it "abstains on a remediation allow ranked above the deny, so the refusal takes effect" $
+        decideWith
+            (expired (depsWith fixRows))
+            [at 300 AllowIfRemediatesCve, atDefaultPrecedence (denyCveAt 8.0)]
+            (pkg Nothing 0)
+            >>= (`shouldSatisfy` isUndecidable)
+
+    it "keeps same-precedence ordering, so the earlier name reports the refusal" $ do
+        decision <-
+            decideWith
+                (expired (depsWith (affecting (Just 9.8) (Just 0.9))))
+                (map atDefaultPrecedence [denyEpssAt 0.5, denyCveAt 8.0])
+                (pkg Nothing 0)
+        case decision of
+            Undecidable _ reason -> reason `shouldSatisfy` T.isPrefixOf "DenyIfCve: "
+            other -> expectationFailure ("expected a refusal, got " <> show other)
+
+    it "refuses ahead of an already-open breaker, which would otherwise skip the rule" $ do
+        prepared <-
+            prepare
+                (expired (depsWith (affecting (Just 9.8) Nothing)))
+                [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 8.0 FailNoDecision))]
+        opened <- traverse openBreakerOn prepared
+        decision <- evalRules ctx opened (pkg Nothing 0)
+        case decision of
+            Undecidable _ reason -> reason `shouldSatisfy` T.isInfixOf "past the maximum"
+            other -> expectationFailure ("expected a refusal, got " <> show other)
+
 spec :: Spec
 spec = do
+    expirySpec
     describe "advisory package identity" $ do
         for_ [denyCveAt 0, denyEpssAt 0] $ \rule ->
             it (toString (ruleName rule <> " queries the canonical PyPI name")) $ do

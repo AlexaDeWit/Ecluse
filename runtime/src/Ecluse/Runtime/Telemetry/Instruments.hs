@@ -2,31 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The runtime metric instruments and the typed emit helpers the hot path records
-through: the IO layer over the pure @ecluse.*@ catalogue
-("Ecluse.Core.Telemetry.Metrics").
-
-"Ecluse.Core.Telemetry.Metrics" defines /what/ the catalogue is: the names and the
-closed set of bounded labels. This module turns that catalogue into live OpenTelemetry
-instruments and exposes one typed @record*@ per signal. Each helper takes only the
-bounded label values its metric carries, never a free identifier. The type therefore
-enforces the bounded-label discipline at the call site. The attribute set an instrument ever
-sees is drawn from a small fixed product of the label domains.
-
-== Gating: inert when telemetry is off
-
-'newMetrics' builds the instruments from the 'Telemetry' handle's meter provider when
-telemetry is enabled, and from the SDK's __no-op meter provider__ when it is not. A
-no-op instrument discards every measurement, so the hot path calls the @record*@
-helpers __unconditionally__. They are genuinely inert when telemetry is off: no
-per-call branch, no provider fabricated at the edge. The 'Metrics' handle is therefore
-total, with a real instrument for every signal whichever posture the proxy is in. The
-no-op recording function ignores its arguments, so the 'metricAttributes' a call passes
-is never forced. No attribute set is materialised when telemetry is off, only a thunk
-that is discarded.
-
-@docs\/architecture\/observability.md@ describes the catalogue and the cardinality
-rule.
+{- | The live OpenTelemetry instruments over the pure @ecluse.*@ catalogue
+("Ecluse.Core.Telemetry.Metrics"), and one typed @record*@ per signal. Each helper takes only the
+bounded label values its metric carries, so the type enforces the cardinality rule at the call
+site. With telemetry off, 'newMetrics' builds from the SDK's no-op meter provider, so the hot path
+records unconditionally: no per-call branch, and the 'metricAttributes' a call passes is never
+forced. @docs\/architecture\/observability.md@ describes the catalogue.
 -}
 module Ecluse.Runtime.Telemetry.Instruments (
     -- * The instrument handle
@@ -77,9 +58,11 @@ module Ecluse.Runtime.Telemetry.Instruments (
     recordAdvisorySyncAttempt,
     recordAdvisorySyncDuration,
 
-    -- * Advisory database age (observable)
+    -- * Advisory ages (observable)
     registerAdvisoryDatabaseAge,
     reportAdvisoryDatabaseAge,
+    registerAdvisorySourceAge,
+    reportAdvisorySourceAge,
 
     -- * Advisory compile
     recordAdvisoryCompileAccepted,
@@ -87,6 +70,7 @@ module Ecluse.Runtime.Telemetry.Instruments (
     recordAdvisoryCompileRun,
 ) where
 
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import GHC.Clock (getMonotonicTime)
 import OpenTelemetry.Metric.Core (
     Counter (counterAdd),
@@ -172,6 +156,7 @@ data Metrics = Metrics
     , mAdvisorySyncAttempts :: Counter Int64
     , mAdvisorySyncDuration :: Histogram
     , mAdvisoryDatabaseAgeSeconds :: ObservableGauge Int64
+    , mAdvisorySourceAgeSeconds :: ObservableGauge Int64
     , mAdvisoryCompileAccepted :: Counter Int64
     , mAdvisoryCompileDropped :: Counter Int64
     , mAdvisoryCompileRuns :: Counter Int64
@@ -217,6 +202,7 @@ newMetrics telemetry = do
         <*> counter meter AdvisorySyncAttempts "{attempt}" "advisory sync attempts by ecosystem and result"
         <*> histogram meter AdvisorySyncDuration "advisory sync attempt latency by ecosystem and result"
         <*> observableGauge meter AdvisoryDatabaseAgeSeconds "seconds since this ecosystem's serving advisory database was installed"
+        <*> observableGauge meter AdvisorySourceAgeSeconds "seconds since this ecosystem's serving advisory artifact was published"
         <*> counter meter AdvisoryCompileAccepted "{advisory}" "advisory entries a compile pass accepted, by ecosystem"
         <*> counter meter AdvisoryCompileDropped "{advisory}" "advisory entries a compile pass dropped, by ecosystem and cause"
         <*> counter meter AdvisoryCompileRuns "{run}" "advisory compile passes by ecosystem and result"
@@ -461,26 +447,40 @@ recordAdvisorySyncDuration :: (MonadIO m) => Metrics -> Ecosystem -> AdvisorySyn
 recordAdvisorySyncDuration m eco result seconds =
     record (mAdvisorySyncDuration m) seconds [LEcosystem eco, LAdvisorySyncResult result]
 
-{- | Attach one ecosystem's advisory-database age to @ecluse.advisory.database.age.seconds@.
-
-@installedAt@ is the slot's install stamp ('Ecluse.Core.Cve.Slot.generationInstalledAt'). The SDK
-invokes the callback at each collection, so the reported age climbs on its own: no task has to be
-alive to push it, and a sync task that dies or restarts cannot freeze or reset it. Registering is
-inert when telemetry is off, because the no-op instrument never calls back.
+{- | Attach one ecosystem's advisory-database age to @ecluse.advisory.database.age.seconds@. The
+SDK calls back at each collection, so a sync task that dies cannot freeze or reset the age.
 -}
 registerAdvisoryDatabaseAge :: Metrics -> Ecosystem -> IO Double -> IO ()
 registerAdvisoryDatabaseAge m eco installedAt =
     void (observableGaugeRegisterCallback (mAdvisoryDatabaseAgeSeconds m) (reportAdvisoryDatabaseAge eco installedAt))
 
-{- | What one collection of @ecluse.advisory.database.age.seconds@ reports: whole seconds from the
-install stamp to now, under the ecosystem label. The reading is monotonic, so an age is never
-negative, and the clamp holds that even for a stamp from the future.
+{- | What one collection reports: whole seconds from the install stamp to now. The clamp holds the
+age non-negative even for a stamp from the future.
 -}
 reportAdvisoryDatabaseAge :: Ecosystem -> IO Double -> ObservableResult Int64 -> IO ()
 reportAdvisoryDatabaseAge eco installedAt result = do
     stamp <- installedAt
     now <- getMonotonicTime
     observe result (max 0 (floor (now - stamp))) (metricAttributes [LEcosystem eco])
+
+{- | Attach one ecosystem's advisory-source age to @ecluse.advisory.source.age.seconds@: the age
+the CVE-deny path expires on, where 'registerAdvisoryDatabaseAge' is an installation diagnostic.
+-}
+registerAdvisorySourceAge :: Metrics -> Ecosystem -> IO (Maybe UTCTime) -> IO ()
+registerAdvisorySourceAge m eco pushedAt =
+    void (observableGaugeRegisterCallback (mAdvisorySourceAgeSeconds m) (reportAdvisorySourceAge eco pushedAt))
+
+{- | What one collection reports: whole seconds from the publication time to now. With no push
+time to measure, it observes nothing rather than a zero.
+-}
+reportAdvisorySourceAge :: Ecosystem -> IO (Maybe UTCTime) -> ObservableResult Int64 -> IO ()
+reportAdvisorySourceAge eco pushedAt result =
+    pushedAt
+        >>= traverse_
+            ( \stamp -> do
+                now <- getCurrentTime
+                observe result (max 0 (floor (diffUTCTime now stamp))) (metricAttributes [LEcosystem eco])
+            )
 
 -- | Record the advisory entries one compile pass accepted (@ecluse.advisory.compile.accepted@).
 recordAdvisoryCompileAccepted :: (MonadIO m) => Metrics -> Ecosystem -> Int -> m ()

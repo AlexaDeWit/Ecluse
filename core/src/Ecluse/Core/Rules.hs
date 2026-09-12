@@ -14,6 +14,7 @@ module Ecluse.Core.Rules (
 
     -- * The engine's prepared rule
     PreparedRule (..),
+    AdvisoryGate (..),
     Resilience (..),
     prepare,
 
@@ -25,6 +26,7 @@ module Ecluse.Core.Rules (
     evalRules,
     renderDecision,
     renderDuration,
+    renderExpiredPush,
     cveIdsInReason,
 
     -- * The resilience harness
@@ -51,8 +53,9 @@ import Ecluse.Core.Rules.Effectful (
     newBreaker,
     runResilient,
  )
+import Ecluse.Core.Rules.Freshness (AdvisoryAge (..), AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale))
 import Ecluse.Core.Rules.Types
-import Ecluse.Core.Text (displayExceptionT)
+import Ecluse.Core.Text (displayExceptionT, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
 -- | Pin one advisory generation for an evaluation, or supply 'Nothing' before the first sync.
@@ -69,6 +72,10 @@ data RuleDeps = RuleDeps
     -}
     , rdFaultReporter :: FaultReporter
     -- ^ Reports exhausted faults to the operator log without exposing them to clients.
+    , rdAdvisoryFreshness :: IO AdvisoryFreshness
+    {- ^ How old the serving artifact's push is, read again at every evaluation. The wall clock
+    alone ages it, so an unchanged artifact expires in a warm process.
+    -}
     }
 
 {- | Lookup faults escape to the resilience policy attached by 'prepare'. A rule that reads a fact
@@ -222,10 +229,24 @@ data PreparedRule = PreparedRule
     -- ^ The precedence at which this rule competes. Higher wins in the boot order.
     , prepResilience :: Maybe Resilience
     -- ^ The resilience policy, or 'Nothing' for a rule run directly.
+    , prepAdvisoryGate :: Maybe AdvisoryGate
+    {- ^ The push-age gate an advisory-reading rule answers to, or 'Nothing' for a rule that
+    reads no advisory database.
+    -}
     , prepEval :: EvalContext -> RuleEvidence -> IO RuleVerdict
     {- ^ The rule's raw verdict for one version. For a resilient rule it may do IO that
     fails or hangs, and 'runEffectfulRule' wraps it.
     -}
+    }
+
+{- | One advisory-reading rule's push-age gate: the reading, and what an expired push resolves the
+rule to. Expiry is unavailability a rule may not waive, so a deny's alignment is fixed here.
+-}
+data AdvisoryGate = AdvisoryGate
+    { agAlignment :: FailureAlignment
+    -- ^ The alignment an expired push resolves under, which configuration cannot change.
+    , agFreshness :: IO AdvisoryFreshness
+    -- ^ The push-age reading, taken fresh for every evaluation.
     }
 
 -- | Allocate each effectful rule's breaker once. Unconfirmed remediation claims abstain.
@@ -240,8 +261,24 @@ prepareRule deps (PrecededRule prec rule) = do
             { prepName = ruleName rule
             , prepPrecedence = prec
             , prepResilience = resilience
+            , prepAdvisoryGate = advisoryGateFor deps rule
             , prepEval = \ctx -> evalRule deps ctx rule
             }
+
+{- The gate each advisory-reading rule carries. Expired evidence refuses on the deny rules and
+abstains on the remediation allow, so the deny's refusal is what the version meets. -}
+advisoryGateFor :: RuleDeps -> Rule -> Maybe AdvisoryGate
+advisoryGateFor deps = \case
+    DenyIfCve{} -> gate FailDeny
+    DenyIfEpss{} -> gate FailDeny
+    AllowIfRemediatesCve -> gate FailNoDecision
+    AllowScope{} -> Nothing
+    AllowIfOlderThan{} -> Nothing
+    DenyInstallTimeExecution -> Nothing
+    DenyByIdentity{} -> Nothing
+    AllowByIdentity{} -> Nothing
+  where
+    gate alignment = Just AdvisoryGate{agAlignment = alignment, agFreshness = rdAdvisoryFreshness deps}
 
 -- The resilience a rule needs. The effectful CVE rule carries the fail-open policy,
 -- allocating its per-source breaker. The pure rules carry none.
@@ -301,15 +338,14 @@ evalRules ctx rules ev = step (bootOrder rules) []
     step [] reasons = pure (BlockedByDefault (reverse reasons))
     step (r : rs) reasons
         | isNothing (prepResilience r) = do
-            -- A direct rule is zero-cost, so run it in place. Reaching it means every
-            -- earlier rule was non-decisive, so it moots no speculated IO.
-            evaluated <- tryAny (prepEval r ctx ev)
+            -- A direct rule is zero-cost, so run it in place; reaching it moots no speculated
+            -- IO. It still goes through the one runner, so no rule can skip its own gate.
+            evaluated <- tryAny (runEffectfulRule ctx r ev)
             case evaluated of
                 Left escape ->
                     -- A direct-rule exception breaks its contract and must refuse admission.
                     pure (Undecidable (WillResolve Nothing) (prepName r <> ": the rule threw: " <> displayExceptionT escape))
-                Right verdict -> do
-                    let res = Decided verdict
+                Right res ->
                     case decisive (prepName r) res of
                         Just d -> pure d
                         Nothing -> step rs (reasonOf res : reasons)
@@ -362,11 +398,39 @@ reasonOf (Decided verdict) = case verdict of
     NoDecision reason -> reason
     CannotVet _ reason -> reason
 
--- | Apply resilience to effectful rules. Direct-rule exceptions remain the caller's responsibility.
+{- | Apply the push-age gate, then resilience. The gate runs ahead of breaker admission, which an
+open breaker would otherwise skip past. Direct-rule exceptions remain the caller's responsibility.
+-}
 runEffectfulRule :: EvalContext -> PreparedRule -> RuleEvidence -> IO RuleEvaluation
-runEffectfulRule ctx rule ev = case prepResilience rule of
-    Nothing -> Decided <$> prepEval rule ctx ev
-    Just res -> runResilient res (prepName rule) (prepEval rule ctx) ev
+runEffectfulRule ctx rule ev =
+    expiredEvidence rule >>= \case
+        Just verdict -> pure (Decided verdict)
+        Nothing -> case prepResilience rule of
+            Nothing -> Decided <$> prepEval rule ctx ev
+            Just res -> runResilient res (prepName rule) (prepEval rule ctx) ev
+
+-- The verdict an expired push resolves a gated rule to, or nothing while its evidence is eligible.
+expiredEvidence :: PreparedRule -> IO (Maybe RuleVerdict)
+expiredEvidence rule = case prepAdvisoryGate rule of
+    Nothing -> pure Nothing
+    Just gate ->
+        agFreshness gate <&> \case
+            AdvisoryStale observed -> Just (CannotVet (agAlignment gate) (prepName rule <> ": " <> renderExpiredPush observed))
+            AdvisoryAging{} -> Nothing
+            AdvisoryFresh -> Nothing
+
+{- | Why an expired push refuses: its age, the maximum it passed, and when it landed, so an
+operator can tell an update outage from a maximum set too short.
+-}
+renderExpiredPush :: AdvisoryAge -> Text
+renderExpiredPush observed =
+    "the advisory push is "
+        <> renderDuration (advisoryAge observed)
+        <> " old, past the maximum of "
+        <> renderDuration (advisoryMaxAge observed)
+        <> " (pushed at "
+        <> renderIso8601Utc (advisoryPushedAt observed)
+        <> ")"
 
 {- | A human-readable summary of a decision, suitable for logs and the denial
 response body.

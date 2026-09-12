@@ -77,6 +77,7 @@ catalogueSpec = describe "metric-name catalogue" $ do
                             , "ecluse.advisory.sync.attempts"
                             , "ecluse.advisory.sync.duration"
                             , "ecluse.advisory.database.age.seconds"
+                            , "ecluse.advisory.source.age.seconds"
                             , "ecluse.advisory.compile.accepted"
                             , "ecluse.advisory.compile.dropped"
                             , "ecluse.advisory.compile.runs"

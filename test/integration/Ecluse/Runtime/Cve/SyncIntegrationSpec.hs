@@ -29,6 +29,7 @@ import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Rules (RuleDeps (..), prepare)
+import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
@@ -36,7 +37,7 @@ import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Integration.Ministack (endpointFor, quietLogEnv, withMinistack)
 import Ecluse.Pilot (PilotCompileOptions (..), runPilotCompile)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
-import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), newS3CveSource, runCveSync, s3CveFetchFor)
+import Ecluse.Runtime.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncHooks (SyncHooks, hookFirstSync, hookPushAge), SyncSchedule (..), newS3CveSource, runCveSync, s3CveFetchFor)
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
@@ -84,6 +85,7 @@ spec =
                                         , rdCurrentAdvisoryEtag = currentAdvisoryEtag slot
                                         , rdBreakerReporter = noBreakerReporter
                                         , rdFaultReporter = noFaultReporter
+                                        , rdAdvisoryFreshness = pure AdvisoryFresh
                                         }
                                 syncEnv =
                                     SyncEnv
@@ -94,7 +96,7 @@ spec =
                                         }
                                 schedule = SyncSchedule{schedBootBackoff = [50_000, 50_000], schedPollDelay = 100_000}
                             app <- proxyApp ruleDeps privateUrl publicUrl
-                            withAsync (runQuiet (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort syncEnv schedule pass)) $ \_ -> do
+                            withAsync (runQuiet (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort syncEnv schedule (SyncHooks{hookFirstSync = pass, hookPushAge = pass}))) $ \_ -> do
                                 -- Phase 1 control: no database, and the fix is too young for the
                                 -- quarantine, so the fast lane abstains and no version survives.
                                 denied <- getPath "/npm/corpus-vuln" app

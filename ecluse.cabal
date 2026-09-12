@@ -164,6 +164,7 @@ library ecluse-core
     Ecluse.Core.Registry.WireSupport
     Ecluse.Core.Rules
     Ecluse.Core.Rules.Effectful
+    Ecluse.Core.Rules.Freshness
     Ecluse.Core.Rules.Types
     Ecluse.Core.Security
     Ecluse.Core.Security.Authority
@@ -747,6 +748,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.ServedDocumentSpec
     Ecluse.Core.Registry.WireSupportSpec
     Ecluse.Core.Rules.EffectfulSpec
+    Ecluse.Core.Rules.FreshnessSpec
     Ecluse.Core.Rules.TypesSpec
     Ecluse.Core.RulesSpec
     Ecluse.Core.Security.AuthoritySpec

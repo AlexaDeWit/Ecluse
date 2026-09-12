@@ -362,8 +362,9 @@ reach the fault logger. [Operational monitoring](@/docs/operations.md#alerting-o
 the current signals and their limits. Admission evidence and ERROR-level outage reporting are
 tracked in [#1230](https://github.com/AlexaDeWit/Ecluse/issues/1230).
 
-Maximum source-age enforcement is not implemented. The agreed change in
-[#1221](https://github.com/AlexaDeWit/Ecluse/issues/1221) will refuse stale OSV evidence even with
-`onUnavailable: skip`. Individual missing scores differ from whole-feed failure.
-Pilot still requires a successful EPSS feed. Optional enrichment failure and consumer qualification
-remain planned in [#1224](https://github.com/AlexaDeWit/Ecluse/issues/1224).
+`onUnavailable: skip` does not waive the maximum push age. Once the serving artifact is older
+than that maximum, both advisory denies refuse, and `AllowIfRemediatesCve` abstains. See
+[Advisory push age](@/docs/operations.md#advisory-push-age) for the maximum, its default
+derivation, and the alarm that precedes it. Individual missing scores differ from whole-feed
+failure. Pilot still requires a successful EPSS feed. Optional enrichment failure and consumer
+qualification remain planned in [#1224](https://github.com/AlexaDeWit/Ecluse/issues/1224).

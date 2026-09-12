@@ -173,6 +173,7 @@ spec = do
                         { prepName = "EffRule"
                         , prepPrecedence = 300
                         , prepResilience = Just (Resilience defaultEffectfulConfig FailDeny breaker noBreakerReporter getCurrentTime noFaultReporter)
+                        , prepAdvisoryGate = Nothing
                         , prepEval = \_ _ -> pure (NoDecision "noop")
                         }
             evalTier [effectful] `shouldBe` Metric.Effectful

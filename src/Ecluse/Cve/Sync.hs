@@ -14,6 +14,8 @@ module Ecluse.Cve.Sync (
     sweepStaleTemps,
     sweepStep,
     cveRuleDepsFor,
+    advisoryFreshnessFor,
+    reportPushAge,
     katipFaultReporter,
     cveSyncReadiness,
     cveSyncScheduleFor,
@@ -23,7 +25,8 @@ module Ecluse.Cve.Sync (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Katip (LogEnv, Severity (WarningS), SimpleLogPayload, runKatipContextT, sl)
+import Data.Time (UTCTime, getCurrentTime)
+import Katip (LogEnv, Severity (ErrorS, WarningS), SimpleLogPayload, runKatipContextT, sl)
 import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
 import System.FilePath (isExtensionOf, (</>))
 import System.IO.Error (IOError, catchIOError)
@@ -37,10 +40,17 @@ import Ecluse.Config (
     advisoryStoreBucket,
  )
 import Ecluse.Core.Breaker (BreakerReporter)
-import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, generationInstalledAt, newCveSlot, withSlotLookup)
+import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
+import Ecluse.Core.Rules.Freshness (
+    AdvisoryAge (advisoryAge, advisoryMaxAge, advisoryPushedAt),
+    AdvisoryFreshness (AdvisoryFresh),
+    MaxAdvisoryAge,
+    ageAlarmStep,
+    assessAdvisoryAge,
+ )
 import Ecluse.Core.Server.Readiness (
     MountReadiness (MountAwaitingFirstSync, MountReady),
     Readiness,
@@ -52,11 +62,12 @@ import Ecluse.Core.Supervision (
     superviseLoop,
     transientPolicy,
  )
+import Ecluse.Core.Text (renderIso8601Utc)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
-import Ecluse.Runtime.Cve.Sync (S3CveSource, SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, newS3CveSource, runCveSync, s3CveFetchFor)
+import Ecluse.Runtime.Cve.Sync (S3CveSource, SyncEnv (..), SyncHooks (SyncHooks, hookFirstSync, hookPushAge), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, newS3CveSource, runCveSync, s3CveFetchFor)
 import Ecluse.Runtime.Log (logLine, moduleField)
 import Ecluse.Runtime.Telemetry (Telemetry)
-import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisorySyncMetricsPortOf, registerAdvisoryDatabaseAge)
+import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisorySyncMetricsPortOf, registerAdvisoryDatabaseAge, registerAdvisorySourceAge)
 import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf)
 
 {- | The rules' boot-bound capabilities for one mount ecosystem. A mount's rules read only their own
@@ -69,7 +80,53 @@ cveRuleDepsFor plan reporter faultReporter eco =
         , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . syncSlot . csEnv) (Map.lookup eco plan)
         , rdBreakerReporter = reporter
         , rdFaultReporter = faultReporter
+        , rdAdvisoryFreshness = advisoryFreshnessFor plan eco
         }
+
+{- | How old one mount's serving artifact's push is. An ecosystem the plan carries no handle for
+has no advisory stack at all, so nothing ages and the absent-database path decides instead.
+-}
+advisoryFreshnessFor :: Map.Map Ecosystem CveSyncHandle -> Ecosystem -> IO AdvisoryFreshness
+advisoryFreshnessFor plan eco = maybe (pure AdvisoryFresh) advisoryFreshnessOf (Map.lookup eco plan)
+
+{- | One handle's reading: the slot's publication time against this mount's maximum, on the
+handle's own clock. A failed poll never swaps, so a warm process keeps the last time it read.
+-}
+advisoryFreshnessOf :: CveSyncHandle -> IO AdvisoryFreshness
+advisoryFreshnessOf handle = do
+    now <- csClock handle
+    assessAdvisoryAge (csMaxAge handle) now <$> advisoryPushTime handle
+
+{- | Report one ecosystem's push age when it passes half its maximum, once per crossing. The latch
+re-arms when a fresh push brings the age back under, so a long outage does not repeat every poll.
+-}
+reportPushAge :: LogEnv -> Ecosystem -> CveSyncHandle -> IO ()
+reportPushAge logEnv eco handle = do
+    freshness <- advisoryFreshnessOf handle
+    crossing <- atomically $ do
+        latched <- readTVar (csAgeAlarmed handle)
+        let (latched', crossed) = ageAlarmStep latched freshness
+        writeTVar (csAgeAlarmed handle) latched'
+        pure crossed
+    whenJust crossing (logPushAge logEnv eco)
+
+-- What the crossing line carries: enough to tell an update outage from a maximum set too short.
+logPushAge :: LogEnv -> Ecosystem -> AdvisoryAge -> IO ()
+logPushAge logEnv eco observed =
+    logLine
+        logEnv
+        ( moduleField "Ecluse.Cve.Sync"
+            <> sl "ecosystem" (ecosystemName eco)
+            <> sl "pushed_at" (renderIso8601Utc (advisoryPushedAt observed))
+            <> sl "age_seconds" (round (advisoryAge observed) :: Integer)
+            <> sl "max_age_seconds" (round (advisoryMaxAge observed) :: Integer)
+        )
+        ErrorS
+        "the advisory push age has passed half its maximum; past the maximum, CVE-based denial refuses"
+
+-- The publication time the serving artifact carries, or nothing before the first sync.
+advisoryPushTime :: CveSyncHandle -> IO (Maybe UTCTime)
+advisoryPushTime handle = (asPushedAt =<<) <$> currentAdvisorySource (syncSlot (csEnv handle))
 
 {- | A 'FaultReporter' logging an exhausted rule's fault detail, so a fault stays diagnosable
 rather than a bare @Unavailable@. The detail is bounded, carries no secret, and reaches no client.
@@ -111,18 +168,24 @@ cveSyncTasks logEnv metrics telemetry schedule plan =
     [ void . runKatipContextT logEnv (mempty :: SimpleLogPayload) "cve-sync" $
         superviseLoop
             (transientPolicy ("cve-sync[" <> show (syncEcosystem (csEnv handle)) <> "]") backgroundLoopBackoff)
-            (runCveSync syncMetrics syncTracing (csEnv handle) schedule (atomically (writeTVar (csReady handle) True)))
-    | handle <- Map.elems plan
+            (runCveSync syncMetrics syncTracing (csEnv handle) schedule (hooksFor eco handle))
+    | (eco, handle) <- Map.toList plan
     ]
   where
     syncMetrics = advisorySyncMetricsPortOf metrics
     syncTracing = advisorySyncTracingPortOf telemetry
+    hooksFor eco handle =
+        SyncHooks
+            { hookFirstSync = atomically (writeTVar (csReady handle) True)
+            , hookPushAge = reportPushAge logEnv eco handle
+            }
 
 -- | Register once per role. Callbacks read the slots, so observations survive sync-task restarts.
 registerAdvisoryAges :: Metrics -> Map.Map Ecosystem CveSyncHandle -> IO ()
 registerAdvisoryAges metrics plan =
-    for_ (Map.toList plan) $ \(eco, handle) ->
+    for_ (Map.toList plan) $ \(eco, handle) -> do
         registerAdvisoryDatabaseAge metrics eco (generationInstalledAt (syncSlot (csEnv handle)))
+        registerAdvisorySourceAge metrics eco (advisoryPushTime handle)
 
 {- | The pace every shell background loop retries a transient fault at: one second after the
 first failure, doubling to a thirty-second ceiling.
@@ -138,27 +201,34 @@ data CveSyncHandle = CveSyncHandle
     {- ^ The sync task's environment. Its 'syncSlot' is the slot this ecosystem's mount
     rules borrow through.
     -}
+    , csMaxAge :: MaxAdvisoryAge
+    -- ^ This mount's effective maximum push age, derived once at boot from its own rules.
+    , csClock :: IO UTCTime
+    -- ^ The wall clock the push age is read on, injected so a suite can fix it.
+    , csAgeAlarmed :: TVar Bool
+    -- ^ Whether the half-maximum crossing has already been reported for the current push.
     }
 
 {- | Build the advisory-sync plan, one 'CveSyncHandle' per vetted mount ecosystem, or nothing with
 no store. A mount the build does not ship awaits an artifact that never comes, so it stays unready.
 -}
-planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> [Ecosystem] -> IO (Map.Map Ecosystem CveSyncHandle)
-planCveSync logEnv s3Endpoint appCfg ecosystems = case advUrl (cfgAdvisories appCfg) of
+planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> [(Ecosystem, MaxAdvisoryAge)] -> IO (Map.Map Ecosystem CveSyncHandle)
+planCveSync logEnv s3Endpoint appCfg limits = case advUrl (cfgAdvisories appCfg) of
     Nothing -> pure Map.empty
     Just store -> do
         let dataDir = advDataDir (cfgAdvisories appCfg)
         createDirectoryIfMissing True dataDir
         sweepStaleTemps logEnv dataDir
         cveSource <- newS3CveSource s3Endpoint
-        Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource store) ecosystems
+        Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource store) limits
 
 -- 'cveSource' captures the S3 environment once, so every ecosystem's transport shares one
 -- credential discovery. The store addresses the remote object, the local copy its bare file name.
-cveSyncHandleFor :: AppConfig -> S3CveSource -> AdvisoryStoreUrl -> Ecosystem -> IO (Ecosystem, CveSyncHandle)
-cveSyncHandleFor appCfg cveSource store eco = do
+cveSyncHandleFor :: AppConfig -> S3CveSource -> AdvisoryStoreUrl -> (Ecosystem, MaxAdvisoryAge) -> IO (Ecosystem, CveSyncHandle)
+cveSyncHandleFor appCfg cveSource store (eco, maxAge) = do
     slot <- newCveSlot
     ready <- newTVarIO False
+    alarmed <- newTVarIO False
     let fileName = osvDbFileName (ecosystemName eco)
         maxBytes = limMaxAdvisoryDatabaseBytes (cfgLimits appCfg)
         syncEnv =
@@ -173,7 +243,16 @@ cveSyncHandleFor appCfg cveSource store eco = do
                 , syncDbPath = advDataDir (cfgAdvisories appCfg) </> fileName
                 , syncSlot = slot
                 }
-    pure (eco, CveSyncHandle{csReady = ready, csEnv = syncEnv})
+    pure
+        ( eco
+        , CveSyncHandle
+            { csReady = ready
+            , csEnv = syncEnv
+            , csMaxAge = maxAge
+            , csClock = getCurrentTime
+            , csAgeAlarmed = alarmed
+            }
+        )
 
 {- | Sweep the in-progress downloads an interrupted run left behind, which an @emptyDir@ keeps
 across a container restart. The sweep is best effort, per 'sweepStep'.

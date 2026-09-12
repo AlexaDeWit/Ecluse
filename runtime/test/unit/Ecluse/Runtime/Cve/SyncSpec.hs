@@ -49,6 +49,7 @@ import Ecluse.Runtime.Cve.Sync (
     OsvDbCapExceeded (OsvDbCapExceeded),
     OsvDbFetchFault (OsvDbTransport),
     SyncEnv (..),
+    SyncHooks (SyncHooks, hookFirstSync, hookPushAge),
     SyncOutcome (..),
     SyncSchedule (..),
     cappedAt,
@@ -149,7 +150,13 @@ newSwapCounter = do
     pure (swaps, atomically (modifyTVar' swaps (+ 1)))
 
 runUnobserved :: SyncEnv -> SyncSchedule -> IO () -> KatipContextT IO ()
-runUnobserved = runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort
+runUnobserved env schedule notify =
+    runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort env schedule (notifyOnly notify)
+
+-- Hooks that only notify. These specs assert on sync outcomes, and the push-age alarm is the
+-- shell's ("Ecluse.Cve.Sync"), so it has nothing to observe here.
+notifyOnly :: IO () -> SyncHooks
+notifyOnly notify = SyncHooks{hookFirstSync = notify, hookPushAge = pass}
 
 -- The first poll interval outlasts every test, leaving only the immediate boot attempt.
 oneAttempt :: SyncSchedule
@@ -166,7 +173,7 @@ observeAttempts :: Int -> SyncSchedule -> SyncEnv -> IO Observed
 observeAttempts wanted schedule env = do
     (metricsPort, readAttempts, readDurations) <- recordingAdvisorySyncMetricsPort
     (tracingPort, readSpans) <- recordingAdvisorySyncTracingPort
-    withAsync (runQuietKatip (runCveSync metricsPort tracingPort env schedule pass)) $ \_ -> do
+    withAsync (runQuietKatip (runCveSync metricsPort tracingPort env schedule (notifyOnly pass))) $ \_ -> do
         waitFor (show wanted <> " bracketed sync attempt(s)") ((>= wanted) . length <$> readSpans)
         Observed <$> readSpans <*> readAttempts <*> readDurations
 

@@ -2,14 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Test and bench fixtures for driving "Ecluse.Core.Rules".
-
-The module name follows this support library's @Ecluse.X -> Ecluse.Test.X@ convention.
-The suites and the performance harnesses share these fixtures to evaluate a rule policy
-without the boot-bound capabilities the live composition injects. 'inertRuleDeps' stands
-in for the advisory-database and breaker-observer capabilities. 'constRule' builds a
-prepared rule of a fixed verdict, bypassing config preparation. The decision predicates
-read back what the engine credited.
+{- | Test and bench fixtures for driving "Ecluse.Core.Rules", shared by the suites and the
+performance harnesses so neither wires the boot-bound capabilities the live composition injects.
 -}
 module Ecluse.Test.Rules (
     -- * Boot-bound capability fixtures
@@ -46,11 +40,12 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Package.Filter (FilterPlan, filterPlanFromDecisions)
 import Ecluse.Core.Rules (
     FaultReporter (..),
-    PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience),
+    PreparedRule (PreparedRule, prepAdvisoryGate, prepEval, prepName, prepPrecedence, prepResilience),
     RuleDeps (..),
     evalRules,
     prepare,
  )
+import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, Undecidable),
     EvalContext,
@@ -74,6 +69,7 @@ inertRuleDeps =
         , rdCurrentAdvisoryEtag = pure Nothing
         , rdBreakerReporter = noBreakerReporter
         , rdFaultReporter = noFaultReporter
+        , rdAdvisoryFreshness = pure AdvisoryFresh
         }
 
 {- | The inert 'FaultReporter': it records nothing. It lives here rather than in the library
@@ -97,6 +93,7 @@ constRule ruleName verdict =
         { prepName = ruleName
         , prepPrecedence = 0
         , prepResilience = Nothing
+        , prepAdvisoryGate = Nothing
         , prepEval = \_ _ -> pure verdict
         }
 

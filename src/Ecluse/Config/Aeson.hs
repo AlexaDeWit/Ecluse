@@ -182,6 +182,7 @@ advisoriesDecoder =
         <*> requiredKey "epssFeedUrl" parseHttpUrl
         <*> nestedKey "quietTime" parseQuietTimes
         <*> requiredKey "epssQuietTime" parseDelaySeconds
+        <*> optionalKey "maxAgeSeconds" parseDelaySeconds
 
 runtimeDecoder :: GroupDecoder RuntimeSettings
 runtimeDecoder =

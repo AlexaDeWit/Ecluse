@@ -34,7 +34,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltDeletionCap),
     SweepAudit (auditError, auditInfo),
     SweepExecution (SweepCounts, SweepRemoves),
-    SweepMount (smFirstParty, smRules, smStore),
+    SweepMount (smConfigured, smFirstParty, smRuleDeps, smRules, smStore),
     SweepPacing (swpDeletionCap),
     SweepPorts (sweepAudit, sweepReport),
     SweepReport (reportCapHalts, reportOpening, reportRemoval),
@@ -46,8 +46,9 @@ import Ecluse.Core.Registry.Sweep.Types (
     renderStoreFault,
     unreadManifest,
  )
-import Ecluse.Core.Rules (evalRules)
-import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvidence, completeEvidence, identityEvidence)
+import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), evalRules, renderExpiredPush)
+import Ecluse.Core.Rules.Freshness (AdvisoryAge, AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale))
+import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvidence, completeEvidence, identityEvidence, readsAdvisories, ruleName)
 import Ecluse.Core.Server.Metadata (selectVersion)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept))
 import Ecluse.Core.Version (Version, renderVersion)
@@ -136,9 +137,10 @@ disposeOf ::
     PackageName ->
     [Condemned] ->
     IO (Maybe CycleHalt)
-disposeOf pacing ports counters mount etag name condemned
-    | null condemned = pure Nothing
+disposeOf pacing ports counters mount etag name decided
+    | null decided = pure Nothing
     | otherwise = do
+        condemned <- stillEligible ports counters mount name decided
         issued <- readIORef (stIssued counters)
         let allowance = max 0 (cap - issued)
             (taken, held) = splitAt (if capHalts then allowance else length condemned) condemned
@@ -160,6 +162,36 @@ disposeOf pacing ports counters mount etag name condemned
 
     -- A run that counts past the cap says once where a run that halts on it would have stopped.
     crossedCap issued reached = not capHalts && issued < cap && reached >= cap
+
+{- The push age can expire between a version's decision and this hand-over, across a long manifest
+read or a batch, and a delete is permanent. So the advisory-named condemnations are read again. -}
+stillEligible :: SweepPorts -> SweepState -> SweepMount -> PackageName -> [Condemned] -> IO [Condemned]
+stillEligible ports counters mount name condemned =
+    rdAdvisoryFreshness (smRuleDeps mount) >>= \case
+        AdvisoryFresh -> pure condemned
+        AdvisoryAging{} -> pure condemned
+        AdvisoryStale observed -> do
+            let (withheld, keeping) = partition (advisoryNamed mount . cdRule) condemned
+            unless (null withheld) $ do
+                traverse_ (const (record ports counters SweepGuardSkipped)) withheld
+                announceExpired ports name observed withheld
+            pure keeping
+
+-- Whether a rule name credited to a condemnation is one of this mount's advisory-reading rules.
+advisoryNamed :: SweepMount -> Text -> Bool
+advisoryNamed mount credited = credited `elem` [ruleName r | r <- smConfigured mount, readsAdvisories r]
+
+-- The versions the expired push spared, named so an operator sees what a recovered Pilot would act on.
+announceExpired :: SweepPorts -> PackageName -> AdvisoryAge -> [Condemned] -> IO ()
+announceExpired ports name observed withheld =
+    auditError
+        (sweepAudit ports)
+        ( renderPackageName name
+            <> ": "
+            <> show (length withheld)
+            <> " versions an advisory rule denied stay in the store, because "
+            <> renderExpiredPush observed
+        )
 
 -- The halt the cap raises, carrying what an operator needs to judge the generation that filled it.
 cappedHalt :: SweepPacing -> Int -> Maybe DbEtag -> CycleHalt

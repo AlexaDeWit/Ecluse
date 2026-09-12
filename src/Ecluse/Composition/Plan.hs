@@ -3,13 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The boot's config-decidable tier: one pure pass from the loaded configuration to every
-decision a role's boot settles without touching its environment again, plus the ordered lines
-that report them.
-
-'resolveBootPlan' is the whole of that tier. The boot ('Ecluse.Boot.withBootEnv') logs its lines
-and hands the plan to the role, and the dry-run checker ('Ecluse.CheckConfig.runCheckConfig')
-prints the same lines and applies nothing. Every refusal here is one the checker reaches, as its
-own verdict or, for a role it does not vet under, as a 'roleRefusalWarnings' line.
+decision a role settles without touching its environment again, plus the ordered lines that
+report them. The boot logs those lines and the dry-run checker prints the same ones, so every
+refusal here is one 'Ecluse.CheckConfig.runCheckConfig' reaches too.
 -}
 module Ecluse.Composition.Plan (
     -- * The config-decidable tier
@@ -68,6 +64,7 @@ import Ecluse.Config (
     LimitsSettings (limMaxArtifactCount, limMaxNestingDepth, limMaxVersionCount),
     MountConfig (mntPublicationTarget),
     RuntimeSettings (rtPrivateConnectionsPerHost, rtPublicConnectionsPerHost, rtServeMaxInFlight),
+    advisoryAgeLines,
     mountPostureLines,
     resolvedKeyProvenance,
  )
@@ -230,6 +227,7 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
                 , mdMemoryLines mirror
                 , mirrorRuntimeLines (mpQueueMemoryMaxDepth memoryPlan) (mdRuntime mirror)
                 , mountPostureLines config
+                , advisoryAgeLines config
                 ]
         , bpWarnings = mpDegradations memoryPlan <> mirrorRuntimeWarnings (mdRuntime mirror)
         }

@@ -180,6 +180,41 @@ have. Two remedies:
 
 The alarm never refuses a version. It reports what the artifact says about its own sources.
 
+## Advisory push age
+
+`DenyIfCve` and `DenyIfEpss` decide on evidence, and evidence goes out of date. Past a maximum
+age, both refuse instead of deciding: the request gets a retryable `503`, and the denial message
+says how old the push is and what the maximum was. `onUnavailable: skip` does not waive it, and an
+open circuit breaker does not skip past it. `AllowIfRemediatesCve` abstains on the same evidence,
+so the quarantine governs rather than the fast lane.
+
+The age is the time since Pilot last pushed the artifact, taken from the published object's own
+timestamp. Pilot writes that object after every successful run, so unchanged bytes still move it.
+A restart re-reads it from the object, and a failed poll leaves it where it was.
+
+`advisories.maxAgeSeconds` sets the maximum. Unset, each mount derives its own: a day ahead of
+that mount's earliest `AllowIfOlderThan` quarantine, and never under three days. The shipped
+seven-day quarantine gives six days, so you see the failure before the next quarantined cohort
+would have been admitted. A mount with no quarantine rule gets three days. The boot log names the
+value and where it came from, once per mount.
+
+At half the maximum, Écluse logs `error` once, naming the ecosystem, the push time, the age, and
+the maximum. It logs once per crossing, not once per poll, and re-arms when a fresh push brings
+the age back under half. `ecluse.advisory.source.age.seconds` carries the same age for a
+dashboard.
+
+Two remedies:
+
+| What you found | What to do |
+|---|---|
+| Pilot has stopped pushing. | Get it running again. Its own logs say whether the fetch, the compile, or the upload failed. |
+| The maximum is shorter than your update cadence. | Set `advisories.maxAgeSeconds` to a value you can meet, and accept the older evidence that comes with it. |
+
+Readiness does not change. `GET /readyz` still reports the mount as ready, because the database is
+loaded and every rule that does not read it still decides. Only the CVE-deny path refuses. The
+Dredger stops deleting on an advisory match for the same reason, while an identity deny still
+acts under its usual guards.
+
 ## Telemetry (opt-in)
 
 Metadata reads record HTTP refusals on `ecluse.upstream.fetch.errors` with cause

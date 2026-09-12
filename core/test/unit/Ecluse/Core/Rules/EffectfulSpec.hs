@@ -101,6 +101,7 @@ mkRuleClocked clock reporter name prec cfg align eval = do
             { prepName = name
             , prepPrecedence = prec
             , prepResilience = Just (Resilience cfg align breaker reporter clock noFaultReporter)
+            , prepAdvisoryGate = Nothing
             , prepEval = \_ ev -> eval ev
             }
 
@@ -127,6 +128,7 @@ pureAt prec rule =
         { prepName = ruleName rule
         , prepPrecedence = prec
         , prepResilience = Nothing
+        , prepAdvisoryGate = Nothing
         , prepEval = \evalCtx -> evalRule inertRuleDeps evalCtx rule
         }
 
@@ -252,6 +254,7 @@ spec = do
                         { prepName = "DirectBomb"
                         , prepPrecedence = 300
                         , prepResilience = Nothing
+                        , prepAdvisoryGate = Nothing
                         , prepEval = \_ _ -> throwIO (TestContractEscape "the rule threw")
                         }
             decision <- evalRules ctx [bomb, pureAt 200 (AllowScope (mkScope "myorg"))] (pkg (Just "myorg") 0)
@@ -379,6 +382,7 @@ spec = do
                         { prepName = "DenyCve"
                         , prepPrecedence = 1
                         , prepResilience = Just (Resilience fastConfig{ecBackoff = []} FailDeny breaker noBreakerReporter (pure now) reporter)
+                        , prepAdvisoryGate = Nothing
                         , prepEval = \_ _ -> throwIO (CveQueryFault "advisories-for" "SQLite3 returned ErrorNotADatabase")
                         }
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)

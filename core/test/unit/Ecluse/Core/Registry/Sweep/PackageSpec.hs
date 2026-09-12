@@ -9,11 +9,12 @@ module Ecluse.Core.Registry.Sweep.PackageSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
+import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Test.Hspec
 
-import Ecluse.Core.Cve (DbEtag (DbEtag))
+import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
     StoreMaintenance (deleteVersions, readStoreManifest),
@@ -28,21 +29,25 @@ import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltDeletionCap),
     EvidenceGaps (gapManifests),
-    SweepMount (smFirstParty),
+    SweepMount (smConfigured, smFirstParty, smRuleDeps),
     SweepPacing (swpDeletionCap),
     SweepState (stEvidence),
     evidenceComplete,
     newSweepState,
  )
-import Ecluse.Core.Rules (PreparedRule, prepare)
+import Ecluse.Core.Rules (PreparedRule, RuleDeps (rdAdvisoryFreshness, rdWithCveLookup), prepare)
+import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh), assessAdvisoryAge, maxAdvisoryAgeFor)
 import Ecluse.Core.Rules.Types (
+    DenyIfCveParams (DenyIfCveParams),
     EvalContext,
+    FailureAlignment (FailDeny),
     PrecededRule (PrecededRule),
-    Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity),
+    Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity, DenyIfCve),
     mkEvalContext,
  )
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Package (sampleManifest)
 import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, inertRuleDeps)
@@ -60,6 +65,7 @@ spec = do
     outcomeSpec
     capSpec
     dryRunSpec
+    expirySpec
 
 {- Only a named decisive deny deletes. Deny by default and a rule that could not vet both keep,
 because the store may hold the only surviving copy. -}
@@ -380,3 +386,67 @@ packageName = mkPackageName Npm Nothing "left-pad"
 
 version :: Text -> Version
 version = mkVersion Npm
+
+{- An expired advisory push is not authority to delete. The rule refuses rather than denying, and
+a push that expires after the verdict is read again before the batch leaves. -}
+expirySpec :: Spec
+expirySpec = describe "an expired advisory push" $ do
+    it "keeps a version an affecting advisory would have condemned" $ do
+        (rec', store) <- advisorySweep (pure expiredReading)
+        recResults rec' `shouldReturn` [SweepExamined, SweepKept]
+        held store `shouldReturn` [version "1.0.0"]
+
+    it "spares a version when the push expires between the verdict and the hand-over" $ do
+        crossing <- newIORef [AdvisoryFresh]
+        (rec', store) <- advisorySweep (nextReading crossing)
+        recResults rec' `shouldReturn` [SweepExamined, SweepGuardSkipped]
+        held store `shouldReturn` [version "1.0.0"]
+
+    it "lets an identity deny act, because it reads no advisory database" $ do
+        store <- storeWith [version "1.0.0"] (Just (sampleManifest packageName [version "1.0.0"]))
+        let deps = advisoryDeps (pure expiredReading)
+        rules <- prepare deps [atDefaultPrecedence (DenyByIdentity "left-pad@1.0.0")]
+        rec' <- recordingPorts generation
+        let swept = (mount store rules){smRuleDeps = deps, smConfigured = [DenyByIdentity "left-pad@1.0.0", denyCveRule]}
+        void (runStep rec' testPacing swept (served ["1.0.0"]))
+        recResults rec' `shouldReturn` [SweepExamined, SweepDeleted]
+        held store `shouldReturn` []
+
+-- One package swept by the real advisory deny over a database that affects its only version.
+advisorySweep :: IO AdvisoryFreshness -> IO (RecordedSweep, FakeStore)
+advisorySweep freshness = do
+    store <- storeWith [version "1.0.0"] (Just (sampleManifest packageName [version "1.0.0"]))
+    let deps = advisoryDeps freshness
+    rules <- prepare deps [atDefaultPrecedence denyCveRule]
+    rec' <- recordingPorts generation
+    let swept = (mount store rules){smRuleDeps = deps, smConfigured = [denyCveRule]}
+    void (runStep rec' testPacing swept (served ["1.0.0"]))
+    pure (rec', store)
+
+-- Capabilities whose database affects the fixture version, under the given push-age reading.
+advisoryDeps :: IO AdvisoryFreshness -> RuleDeps
+advisoryDeps freshness =
+    inertRuleDeps
+        { rdWithCveLookup = \use -> use (Just (fakeCveLookup [("left-pad", affectingRange)]))
+        , rdAdvisoryFreshness = freshness
+        }
+
+affectingRange :: AdvisoryRange
+affectingRange = AdvisoryRange "GHSA-affect-0001" (Just 9.8) (Just "0") (FixedBefore "2.0.0") Nothing
+
+denyCveRule :: Rule
+denyCveRule = DenyIfCve (DenyIfCveParams 8.0 FailDeny)
+
+-- Take the next queued reading, then stay expired, so a case drives one crossing and no more.
+nextReading :: IORef [AdvisoryFreshness] -> IO AdvisoryFreshness
+nextReading queued = atomicModifyIORef' queued $ \case
+    [] -> ([], expiredReading)
+    (next : rest) -> (rest, next)
+
+-- A push three days past the six-day maximum a seven-day quarantine derives.
+expiredReading :: AdvisoryFreshness
+expiredReading =
+    assessAdvisoryAge
+        (maxAdvisoryAgeFor Nothing [AllowIfOlderThan (7 * nominalDay)])
+        epoch
+        (Just (addUTCTime (negate (9 * nominalDay)) epoch))

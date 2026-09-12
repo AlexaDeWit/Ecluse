@@ -24,6 +24,7 @@ module Ecluse.Runtime.Cve.Sync (
 
     -- * The scheduled task
     SyncSchedule (..),
+    SyncHooks (..),
     runCveSync,
     bootBackoffDelays,
 ) where
@@ -203,24 +204,37 @@ then the burst concedes to the steady poll. The poll interval, not this, is the 
 bootBackoffDelays :: [Int]
 bootBackoffDelays = [1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000]
 
-{- | Retry at boot, then poll forever. A refused artifact ends the boot burst.
-@notifyFirstSync@ runs after every swap and must be idempotent.
+{- | What the shell hangs off one sync task. Both run inside the task, so neither may block it,
+and both must tolerate being called again.
 -}
+data SyncHooks = SyncHooks
+    { hookFirstSync :: IO ()
+    -- ^ Runs after every swap, so it must be idempotent.
+    , hookPushAge :: IO ()
+    {- ^ Runs after every step, settled or not, so the push age is read on a poll that
+    changed nothing.
+    -}
+    }
+
+-- | Retry at boot, then poll forever. A refused artifact ends the boot burst.
 runCveSync ::
     (MonadUnliftIO m, KatipContext m) =>
     AdvisorySyncMetricsPort ->
     AdvisorySyncTracingPort ->
     SyncEnv ->
     SyncSchedule ->
-    IO () ->
+    SyncHooks ->
     m ()
-runCveSync metrics tracing env schedule notifyFirstSync = do
+runCveSync metrics tracing env schedule hooks = do
     seen <- burst
     poll seen
   where
     eco = show (syncEcosystem env) :: Text
 
-    step = observedStep metrics tracing env eco notifyFirstSync
+    step lastSeen = do
+        outcome <- observedStep metrics tracing env eco (hookFirstSync hooks) lastSeen
+        liftIO (hookPushAge hooks)
+        pure outcome
 
     -- 'lastSeen' is fixed at 'Nothing' because the only not-settled outcomes ('SyncAbsent',
     -- 'SyncFetchFaulted') return it untouched, so it never changes across the burst.
