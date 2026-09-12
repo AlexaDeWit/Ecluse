@@ -18,6 +18,7 @@ import TestContainers (containerAddress)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
+import Amazonka.S3.Lens qualified as S3L
 import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
 import Ecluse.Config.AdvisoryStore (advisoryObjectKey, advisoryStoreBucket, mkAdvisoryStoreUrl)
@@ -31,6 +32,7 @@ import Ecluse.Runtime.Pilot.Export (exportToS3)
 import Ecluse.Test.Osv (mkMinimalValidDb)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
+import Lens.Micro ((^.))
 
 spec :: Spec
 spec = do
@@ -105,7 +107,7 @@ spec = do
                         other -> fail ("expected first artifact swap, got " <> show other)
                     installed <- generationInstalledAt slot
                     (asPushedAt =<<) <$> currentAdvisorySource slot
-                        `shouldReturn` (S3Object.lastModified =<< published)
+                        `shouldReturn` ((^. S3L.object_lastModified) <$> published)
 
                     -- The store stamps whole seconds, so the export repeats until the stamp has
                     -- to have moved. A publisher that wrote only on a change never moves it.
@@ -120,5 +122,5 @@ spec = do
                         SyncUnchanged -> pass
                         other -> expectationFailure ("expected metadata-only observation, got " <> show other)
                     (asPushedAt =<<) <$> currentAdvisorySource slot
-                        `shouldReturn` (S3Object.lastModified =<< republished)
+                        `shouldReturn` ((^. S3L.object_lastModified) <$> republished)
                     generationInstalledAt slot `shouldReturn` installed
