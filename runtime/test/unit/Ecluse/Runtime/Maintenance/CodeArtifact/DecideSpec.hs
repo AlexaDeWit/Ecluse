@@ -29,7 +29,6 @@ import Ecluse.Core.Registry.Maintenance (
     RetryAdvice (RetryDelayed, RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
     StoreFault (..),
-    StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoved),
     VersionPresence (VersionServed, VersionWithdrawn),
     mkNameAlphabet,
@@ -63,8 +62,8 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     packageCoordinates,
     packageNameFrom,
     packagesOfPage,
+    presenceOf,
     repositoryOfResponse,
-    versionsOfPage,
  )
 import Ecluse.Test.Maintenance (withBucket)
 
@@ -72,6 +71,7 @@ spec :: Spec
 spec = do
     formatSpec
     codecSpec
+    presenceSpec
     requestSpec
     ceilingSpec
     deleteFoldSpec
@@ -122,28 +122,26 @@ codecSpec = describe "the npm codec" $ do
                     ?~ "babel"
         packagesOfPage Npm [scoped] `shouldBe` [scopedName]
 
-    it "serves only a published or unlisted version, and withdraws the rest" $ do
-        let summary = CA.newPackageVersionSummary
-            page =
-                versionsOfPage
-                    Npm
-                    [ summary "1.0.0" CA.PackageVersionStatus_Published
-                    , summary "1.1.0" CA.PackageVersionStatus_Unlisted
-                    , summary "1.2.0" CA.PackageVersionStatus_Archived
-                    , summary "1.3.0" CA.PackageVersionStatus_Deleted
-                    , summary "1.4.0" CA.PackageVersionStatus_Disposed
-                    , summary "1.5.0" CA.PackageVersionStatus_Unfinished
-                    ]
-        map storedPresence page
-            `shouldBe` [ VersionServed
-                       , VersionServed
-                       , VersionWithdrawn
-                       , VersionWithdrawn
-                       , VersionWithdrawn
-                       , VersionWithdrawn
-                       ]
-        map (renderVersion . storedVersion) page
-            `shouldBe` ["1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0", "1.5.0"]
+presenceSpec :: Spec
+presenceSpec = describe "presenceOf" $ do
+    it "serves a published or unlisted version" $
+        map
+            presenceOf
+            [CA.PackageVersionStatus_Published, CA.PackageVersionStatus_Unlisted]
+            `shouldBe` [VersionServed, VersionServed]
+
+    it "withdraws every other status CodeArtifact names" $
+        map
+            presenceOf
+            [ CA.PackageVersionStatus_Archived
+            , CA.PackageVersionStatus_Deleted
+            , CA.PackageVersionStatus_Disposed
+            , CA.PackageVersionStatus_Unfinished
+            ]
+            `shouldBe` replicate 4 VersionWithdrawn
+
+    it "withdraws a status this build does not know, rather than serve an unread one" $
+        presenceOf (CA.PackageVersionStatus' "SOME_LATER_STATUS") `shouldBe` VersionWithdrawn
 
 requestSpec :: Spec
 requestSpec = describe "the requests the leaf builds" $ maybe noNpmFormat requestCases npmStore

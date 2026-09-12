@@ -60,6 +60,8 @@ the exact entries that admission kept. The npm and PyPI adapters own their wire 
 ecosystem awaiting its database leaves the healthy mounts routable.
 `Ecluse.Core.Osv.Provenance` holds what each advisory source said about itself, which Pilot writes
 into the artifact and reads against the operator's quiet-time threshold.
+`Ecluse.Runtime.Maintenance.CodeArtifact.Read` holds the CodeArtifact calls that only observe, and
+the evidence one observed version keeps: its exact repository, status, revision, and origin.
 
 [`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules
 engine, and the mirror queue. The threat model (OWASP Threat Dragon, STRIDE) lives in

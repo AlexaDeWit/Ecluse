@@ -410,6 +410,7 @@ library ecluse-runtime
     Ecluse.Runtime.Log
     Ecluse.Runtime.Maintenance.CodeArtifact
     Ecluse.Runtime.Maintenance.CodeArtifact.Decide
+    Ecluse.Runtime.Maintenance.CodeArtifact.Read
     Ecluse.Runtime.Pilot.Export
     Ecluse.Runtime.Queue.Sqs
     Ecluse.Runtime.Server
@@ -984,6 +985,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Cve.SyncSpec
     Ecluse.Runtime.LogSpec
     Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec
+    Ecluse.Runtime.Maintenance.CodeArtifact.ReadSpec
     Ecluse.Runtime.Maintenance.CodeArtifactSpec
     Ecluse.Runtime.Queue.SqsSpec
     Ecluse.Runtime.Server.DrainSpec
