@@ -37,7 +37,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     evidenceComplete,
     newSweepState,
  )
-import Ecluse.Core.Rules (PreparedRule, RuleDeps (rdAdvisoryFreshness, rdWithCveLookup), prepare)
+import Ecluse.Core.Rules (PreparedRule (prepEval), RuleDeps (rdAdvisoryFreshness, rdWithCveLookup), prepare)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryFreshness (AdvisoryFresh, AdvisoryUndated),
     AdvisoryPublication (PublishedAt),
@@ -50,6 +50,7 @@ import Ecluse.Core.Rules.Types (
     FailureAlignment (FailDeny),
     PrecededRule (PrecededRule),
     Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity, DenyIfCve),
+    RuleVerdict (Deny),
     mkEvalContext,
  )
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
@@ -73,6 +74,7 @@ spec = do
     capSpec
     dryRunSpec
     expirySpec
+    generationCapSpec
 
 {- Only a named decisive deny deletes. Deny by default and a rule that could not vet both keep,
 because the store may hold the only surviving copy. -}
@@ -277,12 +279,11 @@ capSpec = describe "the per-cycle deletion cap" $ do
                     counters
                     (testMount handle [denyRule] [])
                     ctx
-                    generation
                     packageName
                     (served ["1.0.0", "2.0.0", "3.0.0"])
             readIORef calls `shouldReturn` [take 2 versions]
             readIORef (stIssued counters) `shouldReturn` 2
-            halt `shouldBe` Just (HaltDeletionCap 2 2 generation)
+            halt `shouldBe` Just (HaltDeletionCap 2 2 Nothing)
             recResults rec'
                 `shouldReturn` (replicate 3 SweepExamined <> [SweepGuardSkipped] <> replicate successful SweepDeleted <> replicate (2 - successful) SweepKept)
 
@@ -291,7 +292,7 @@ capSpec = describe "the per-cycle deletion cap" $ do
         rec' <- recordingPorts generation
         halt <- runStep rec' testPacing{swpDeletionCap = 1} (mount store [denyRule]) (served ["1.0.0", "2.0.0"])
         case halt of
-            Just (HaltDeletionCap cap issued etag) -> (cap, issued, etag) `shouldBe` (1, 1, generation)
+            Just (HaltDeletionCap cap issued etag) -> (cap, issued, etag) `shouldBe` (1, 1, Nothing)
             other -> expectationFailure ("expected the cap halt, got: " <> show other)
         recResults rec'
             `shouldReturn` [SweepExamined, SweepExamined, SweepGuardSkipped, SweepDeleted]
@@ -376,14 +377,14 @@ stepEvidence :: RecordedSweep -> SweepMount -> [StoredVersion] -> IO EvidenceGap
 stepEvidence rec' mount' stored = do
     counters <- newSweepState
     ctx <- evalContext
-    void (sweepPackage testPacing (recPorts rec') counters mount' ctx generation packageName stored)
+    void (sweepPackage testPacing (recPorts rec') counters mount' ctx packageName stored)
     readIORef (stEvidence counters)
 
 runStep :: RecordedSweep -> SweepPacing -> SweepMount -> [StoredVersion] -> IO (Maybe CycleHalt)
 runStep rec' pacing mount' stored = do
     counters <- newSweepState
     ctx <- evalContext
-    sweepPackage pacing (recPorts rec') counters mount' ctx generation packageName stored
+    sweepPackage pacing (recPorts rec') counters mount' ctx packageName stored
 
 -- A store holding those versions, serving that manifest, or serving none at all.
 storeWith :: [Version] -> Maybe Manifest -> IO FakeStore
@@ -488,7 +489,7 @@ advisorySweep freshness = do
 advisoryDeps :: IO AdvisoryFreshness -> RuleDeps
 advisoryDeps freshness =
     inertRuleDeps
-        { rdWithCveLookup = \use -> use (Just (fakeCveLookup [("left-pad", affectingRange)]))
+        { rdWithCveLookup = \use -> use (Just (DbEtag "etag-1", fakeCveLookup [("left-pad", affectingRange)]))
         , rdAdvisoryFreshness = freshness
         }
 
@@ -511,3 +512,63 @@ expiredReading =
         (maxAdvisoryAgeFor Nothing [AllowIfOlderThan (7 * nominalDay)])
         epoch
         (PublishedAt (addUTCTime (negate (9 * nominalDay)) epoch))
+
+generationCapSpec :: Spec
+generationCapSpec = describe "the generation that reaches the cap" $ do
+    for_ [False, True] $ \preview ->
+        it ("credits the middle selected denial with an existing charge, preview=" <> show preview) $ do
+            let versions = ["1.0.0", "2.0.0", "3.0.0"]
+                generations = map (Just . DbEtag) ["first", "threshold", "last"]
+            store <- storeWith (map version versions) (Just (sampleManifest packageName (map version versions)))
+            queuedGenerations <- newIORef generations
+            let deciding =
+                    denyRule
+                        { prepEval = \_ _ -> do
+                            etag <- atomicModifyIORef' queuedGenerations (\case [] -> ([], Nothing); item : rest -> (rest, item))
+                            pure (Deny etag "acquired advisory evidence")
+                        }
+                swept =
+                    if preview
+                        then previewMount (fakeObservation store) [deciding] []
+                        else mount store [deciding]
+            rec' <- if preview then recordingPortsUnder previewingReport generation else recordingPorts generation
+            counters <- newSweepState
+            writeIORef (stIssued counters) 1
+            ctx <- evalContext
+            halt <- sweepPackage testPacing{swpDeletionCap = 3} (recPorts rec') counters swept ctx packageName (served versions)
+            halt `shouldBe` if preview then Nothing else Just (HaltDeletionCap 3 3 (Just (DbEtag "threshold")))
+            readIORef (stIssued counters) `shouldReturn` if preview then 4 else 3
+            info <- recInfo rec'
+            let deletions = filter (T.isInfixOf "blocked by") info
+            length deletions `shouldBe` if preview then 3 else 2
+            zipWith T.isInfixOf ["first", "threshold", "last"] deletions
+                `shouldSatisfy` and
+            when preview $
+                filter (T.isInfixOf "deletion cap") info
+                    `shouldSatisfy` (\lines' -> length lines' == 1 && all (T.isInfixOf "threshold") lines')
+
+    it "credits no advisory when an identity denial reaches the cap" $ do
+        store <- storeWith [version "1.0.0"] (Just (sampleManifest packageName [version "1.0.0"]))
+        rules <- identityDeny
+        rec' <- recordingPorts generation
+        runStep rec' testPacing{swpDeletionCap = 1} (mount store rules) (served ["1.0.0"])
+            `shouldReturn` Just (HaltDeletionCap 1 1 Nothing)
+        info <- recInfo rec'
+        filter (T.isInfixOf "blocked by") info `shouldSatisfy` all (T.isInfixOf "advisory generation none")
+
+    it "selects the threshold after withholding stale advisory evidence" $ do
+        let versions = ["1.0.0", "2.0.0"]
+            configured = [DenyByIdentity "left-pad@2.0.0", denyCveRule]
+        store <- storeWith (map version versions) (Just (sampleManifest packageName (map version versions)))
+        freshness <- newIORef [AdvisoryFresh]
+        let deps = advisoryDeps (nextReading expiredReading freshness)
+        rules <- prepare deps (map atDefaultPrecedence configured)
+        rec' <- recordingPorts generation
+        let swept = (mount store rules){smRuleDeps = deps, smConfigured = configured}
+        runStep rec' testPacing{swpDeletionCap = 1} swept (served versions)
+            `shouldReturn` Just (HaltDeletionCap 1 1 Nothing)
+        held store `shouldReturn` [version "1.0.0"]
+        info <- recInfo rec'
+        let deletions = filter (T.isInfixOf "blocked by") info
+        length deletions `shouldBe` 1
+        deletions `shouldSatisfy` all (\line -> T.isInfixOf "2.0.0" line && T.isInfixOf "advisory generation none" line)

@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Shared pipeline refusal behaviour under upstream faults and malformed responses.
 module Ecluse.Core.Server.Pipeline.SharedIntegrationSpec (spec) where
 
 import Data.Aeson (Value (Object, String))
@@ -13,9 +14,10 @@ import Ecluse.Server.Pipeline.TestSupport
 import Ecluse.Test.Wai
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
-import UnliftIO.Exception (impureThrow, throwString)
+import UnliftIO.Exception (impureThrow, throwIO)
 
 import Ecluse.Core.Breaker (noBreakerReporter)
+import Ecluse.Core.Cve (CveQueryFault (CveQueryFault))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
 import Ecluse.Core.Rules (PreparedRule (..), Resilience (..))
 import Ecluse.Core.Rules.Effectful (EffectfulConfig (..), defaultEffectfulConfig, newBreaker)
@@ -49,11 +51,11 @@ mkEffectful name prec cfg align eval = do
 
 downEffectfulRule :: IO PreparedRule
 downEffectfulRule =
-    mkEffectful "DownAdvisory" 400 defaultEffectfulConfig{ecBackoff = []} FailDeny (\_ -> throwString "advisory source down")
+    mkEffectful "DownAdvisory" 400 defaultEffectfulConfig{ecBackoff = []} FailDeny (\_ -> throwIO (CveQueryFault "advisories-for" "advisory source down"))
 
 denyingEffectfulRule :: IO PreparedRule
 denyingEffectfulRule =
-    mkEffectful "DenyAdvisory" 400 defaultEffectfulConfig FailDeny (\_ -> pure (Deny "affected by a known advisory"))
+    mkEffectful "DenyAdvisory" 400 defaultEffectfulConfig FailDeny (\_ -> pure (Deny Nothing "affected by a known advisory"))
 
 allowingEffectfulRule :: IO PreparedRule
 allowingEffectfulRule =

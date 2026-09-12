@@ -216,7 +216,7 @@ spec = do
 
         it "an effectful denial rejects ByPolicy, naming the effectful rule" $ do
             let pd = pkg "public" 30 NoCodeOnInstall
-            case serveDecisionOf pd (Blocked "DenyAdvisory" "affected by an advisory") of
+            case serveDecisionOf pd (Blocked "DenyAdvisory" Nothing "affected by an advisory") of
                 Reject rej -> do
                     rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyAdvisory")
                     rejectionMessage rej `shouldSatisfy` T.isInfixOf "DenyAdvisory"

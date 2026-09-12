@@ -8,7 +8,7 @@ reader, or to the swapper when no readers remain, even if the swapper is cancell
 module Ecluse.Core.Cve.Slot (
     CveSlot,
     newCveSlot,
-    withSlotLookup,
+    withSlotGeneration,
     currentAdvisoryEtag,
     AdvisorySource (..),
     currentAdvisorySource,
@@ -56,11 +56,9 @@ data CveSlot = CveSlot
 newCveSlot :: IO CveSlot
 newCveSlot = CveSlot <$> newTVarIO Nothing <*> getMonotonicTime
 
-{- | Borrow the current generation's lookup for the duration of one action. The bracket
-pins the generation, so a concurrent 'swapIn' cannot close it mid-read.
--}
-withSlotLookup :: CveSlot -> (Maybe CveLookup -> IO a) -> IO a
-withSlotLookup slot use = bracket acquire release (use . fmap (cveDbLookup . genDb))
+-- | Borrow a lookup and its own ETag together until the action returns or is cancelled.
+withSlotGeneration :: CveSlot -> (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
+withSlotGeneration slot use = bracket acquire release (use . fmap (\g -> (genEtag g, cveDbLookup (genDb g))))
   where
     acquire = atomically $ do
         mGen <- readTVar (slotCell slot)

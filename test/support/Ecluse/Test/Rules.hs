@@ -102,7 +102,7 @@ an absent advisory database, so a fail-closed evaluation reaches an undecidable 
 -}
 admitRule, denyRule, cannotVetRule :: PreparedRule
 admitRule = constRule "test-admit" (Allow "admitted for test")
-denyRule = constRule "test-deny" (Deny "denied by current policy")
+denyRule = constRule "test-deny" (Deny Nothing "denied by current policy")
 cannotVetRule = constRule "test-cannot-vet" (CannotVet FailDeny "no advisory database is loaded")
 
 -- | The rule name credited for an admission or a block, if any (the engine credits by name).
@@ -111,7 +111,7 @@ admittedBy = \case
     Admitted ruleName _ -> Just ruleName
     _ -> Nothing
 blockedBy = \case
-    Blocked ruleName _ -> Just ruleName
+    Blocked ruleName _ _ -> Just ruleName
     _ -> Nothing
 
 isApproved, isUndecidable :: Decision -> Bool

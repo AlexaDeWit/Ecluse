@@ -228,7 +228,7 @@ namespaceTransitionSpec = describe "declaring a namespace after public ingestion
         recorded <- recordingPorts Nothing
         counters <- newSweepState
         ctx <- mkEvalContext (pure (UTCTime (fromGregorian 2026 1 1) 0)) (pure Nothing)
-        sweepPackage testPacing (recPorts recorded) counters protectedMount ctx Nothing transitionName retained `shouldReturn` Nothing
+        sweepPackage testPacing (recPorts recorded) counters protectedMount ctx transitionName retained `shouldReturn` Nothing
         recResults recorded `shouldReturn` [SweepGuardSkipped, SweepGuardSkipped]
         readFakeContents store `shouldReturn` inventory
         withProxyEnvQueueDeps queue privateUp publicUp Nothing afterDeclaration $ \app env _port -> do

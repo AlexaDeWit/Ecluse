@@ -88,8 +88,8 @@ data SweepMount = SweepMount
     candidate set reads the names an identity deny pins out of these.
     -}
     , smRuleDeps :: RuleDeps
-    {- ^ The mount's rule dependencies, which the candidate set reads the advisory generation's
-    covered names through, under the same bracket a verdict is taken in.
+    {- ^ The mount's dependencies for candidate discovery and per-rule lookup acquisition.
+    Candidate discovery and a later verdict can use different generations.
     -}
     , smProjectName :: ProjectName
     -- ^ The ecosystem's own name parser, which both halves of the candidate set are read through.
@@ -244,7 +244,7 @@ data CycleHalt
     | -- | The store refills itself from elsewhere, so deleting from it changes nothing.
       HaltStorePreserved Ecosystem Text Text
     | {- | The cycle reached its deletion cap, carrying the cap, what it handed over, and the
-      advisory generation it decided under. It latches: no later cycle runs.
+      advisory generation of the exact denial that reached the cap. No later cycle runs.
       -}
       HaltDeletionCap Int Int (Maybe DbEtag)
     | -- | A store call produced no answer and its retry advice ran out, carrying the fault.

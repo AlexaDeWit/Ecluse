@@ -19,7 +19,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Breaker (Breaker, initialBreaker, noBreakerReporter, recordFailure)
-import Ecluse.Core.Cve (AdvisoryRange (..))
+import Ecluse.Core.Cve (AdvisoryRange (..), DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
 import Ecluse.Core.Package
@@ -69,7 +69,7 @@ isNoDecision (NoDecision _) = True
 isNoDecision _ = False
 
 isDeny :: RuleVerdict -> Bool
-isDeny (Deny _) = True
+isDeny (Deny _ _) = True
 isDeny _ = False
 
 isCannotVet :: RuleVerdict -> Bool
@@ -102,7 +102,7 @@ decide = decideWith inertRuleDeps
 depsWith :: [(Text, AdvisoryRange)] -> RuleDeps
 depsWith rows =
     RuleDeps
-        { rdWithCveLookup = \use -> use (Just (fakeCveLookup rows))
+        { rdWithCveLookup = \use -> use (Just (DbEtag "etag-1", fakeCveLookup rows))
         , rdCurrentAdvisoryEtag = pure Nothing
         , rdBreakerReporter = noBreakerReporter
         , rdFaultReporter = noFaultReporter
@@ -372,7 +372,7 @@ spec = do
     describe "evalRule (DenyIfCve)" $ do
         it "denies an affected version whose advisory meets the threshold, naming it" $
             evalRule (depsWith (affecting (Just 9.8) Nothing)) ctx (denyCveAt 8.0) (pkg Nothing 0)
-                >>= (`shouldBe` Deny "affected by GHSA-affect-0001 (CVSS >= 8.0)")
+                >>= (`shouldBe` Deny (Just (DbEtag "etag-1")) "affected by GHSA-affect-0001 (CVSS >= 8.0)")
         it "abstains when the affecting advisory is below the threshold" $
             evalRule (depsWith (affecting (Just 5.0) Nothing)) ctx (denyCveAt 8.0) (pkg Nothing 0)
                 >>= (`shouldSatisfy` isNoDecision)
@@ -394,7 +394,7 @@ spec = do
     describe "evalRule (DenyIfEpss)" $ do
         it "denies an affected version whose advisory meets the threshold, naming it" $
             evalRule (depsWith (affecting Nothing (Just 0.75))) ctx (denyEpssAt 0.5) (pkg Nothing 0)
-                >>= (`shouldBe` Deny "affected by GHSA-affect-0001 (EPSS >= 0.5)")
+                >>= (`shouldBe` Deny (Just (DbEtag "etag-1")) "affected by GHSA-affect-0001 (EPSS >= 0.5)")
         it "denies at the threshold exactly, which is where an at-or-above gate closes" $
             evalRule (depsWith (affecting Nothing (Just 0.5))) ctx (denyEpssAt 0.5) (pkg Nothing 0)
                 >>= (`shouldSatisfy` isDeny)
@@ -411,7 +411,7 @@ spec = do
                     affecting Nothing Nothing
                         <> [("thing", AdvisoryRange "CVE-2026-10002" Nothing (Just "0") Unbounded (Just 0.75))]
             evalRule (depsWith rows) ctx (denyEpssAt 0.5) (pkg Nothing 0)
-                >>= (`shouldBe` Deny "affected by CVE-2026-10002 (EPSS >= 0.5)")
+                >>= (`shouldBe` Deny (Just (DbEtag "etag-1")) "affected by CVE-2026-10002 (EPSS >= 0.5)")
         it "abstains when the version sits outside the affected range" $ do
             let rows = [("thing", AdvisoryRange "GHSA-affect-0002" Nothing (Just "0") (FixedBefore "1.0.0") (Just 0.99))]
             evalRule (depsWith rows) ctx (denyEpssAt 0.5) (pkg Nothing 0)
@@ -810,7 +810,7 @@ spec = do
             renderDecision pd (Admitted "AllowScope" "scope @myorg is allow-listed")
                 `shouldSatisfy` (\t -> T.isInfixOf "AllowScope" t && T.isInfixOf "approved" t)
         it "renders a block naming the rule and its reason" $
-            renderDecision pd (Blocked "DenyAdvisory" "affected by an advisory")
+            renderDecision pd (Blocked "DenyAdvisory" Nothing "affected by an advisory")
                 `shouldSatisfy` (\t -> T.isInfixOf "DenyAdvisory" t && T.isInfixOf "affected by an advisory" t)
         it "renders a deny-by-default explaining no rule allowed it" $
             renderDecision pd (BlockedByDefault ["scope is not the allow-listed @myorg"])

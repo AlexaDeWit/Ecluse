@@ -16,7 +16,7 @@ import UnliftIO.Exception (mask_)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), DbEtag (..))
-import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, observeAdvisoryPublication, swapIn, withSlotLookup)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, observeAdvisoryPublication, swapIn, withSlotGeneration)
 import Ecluse.Core.Osv.Provenance (noProvenance)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Test.Cve (fakeCveLookup)
@@ -30,20 +30,20 @@ fakeDb tag closeLog =
         , cveDbProvenance = noProvenance
         }
 
-generationSeen :: Maybe CveLookup -> IO (Maybe Bool)
-generationSeen = traverse (\l -> cveRemediationProbe l "gen-b" "1.0.0")
+generationSeen :: Maybe (DbEtag, CveLookup) -> IO (Maybe Bool)
+generationSeen = traverse (\(_, l) -> cveRemediationProbe l "gen-b" "1.0.0")
 
 spec :: Spec
 spec = describe "CveSlot" $ do
     it "hands Nothing before the first swap (the pre-first-sync abstain path)" $ do
         slot <- newCveSlot
-        withSlotLookup slot (pure . isJust) `shouldReturn` False
+        withSlotGeneration slot (pure . fmap fst) `shouldReturn` Nothing
 
     it "hands the installed generation's view after a swap" $ do
         closeLog <- newIORef []
         slot <- newCveSlot
         swapIn slot (DbEtag "gen-a") Nothing (fakeDb "gen-a" closeLog)
-        withSlotLookup slot (traverse (\l -> cveRemediationProbe l "gen-a" "1.0.0"))
+        withSlotGeneration slot (traverse (\(_, l) -> cveRemediationProbe l "gen-a" "1.0.0"))
             `shouldReturn` Just True
         readIORef closeLog `shouldReturn` []
 
@@ -57,7 +57,7 @@ spec = describe "CveSlot" $ do
         installed <- generationInstalledAt slot
         observeAdvisoryPublication slot (DbEtag "other") stamp
         (asPushedAt =<<) <$> currentAdvisorySource slot `shouldReturn` Nothing
-        withSlotLookup slot $ \_ -> do
+        withSlotGeneration slot $ \_ -> do
             observeAdvisoryPublication slot (DbEtag "gen-a") stamp
             (asPushedAt =<<) <$> currentAdvisorySource slot `shouldReturn` stamp
             generationInstalledAt slot `shouldReturn` installed
@@ -72,7 +72,7 @@ spec = describe "CveSlot" $ do
 
         insideReader <- newEmptyMVar
         releaseReader <- newEmptyMVar
-        pinned <- async $ withSlotLookup slot $ \mLookup -> do
+        pinned <- async $ withSlotGeneration slot $ \mLookup -> do
             putMVar insideReader ()
             takeMVar releaseReader
             generationSeen mLookup
@@ -87,7 +87,7 @@ spec = describe "CveSlot" $ do
         wait swapper
         readIORef closeLog `shouldReturn` ["gen-a"]
 
-        withSlotLookup slot generationSeen `shouldReturn` Just True
+        withSlotGeneration slot generationSeen `shouldReturn` Just True
 
     for_ [False, True] $ \cancelReader ->
         it ("retires after swapper cancellation and reader " <> if cancelReader then "cancellation" else "release") $ do
@@ -98,10 +98,11 @@ spec = describe "CveSlot" $ do
             releaseReader <- newEmptyMVar
             insideSwapper <- newEmptyMVar
             withAsync
-                ( withSlotLookup slot $ \lookupA -> do
+                ( withSlotGeneration slot $ \acquired -> do
                     putMVar insideReader ()
                     takeMVar releaseReader
-                    generationSeen lookupA `shouldReturn` Just False
+                    fmap fst acquired `shouldBe` Just (DbEtag "gen-a")
+                    generationSeen acquired `shouldReturn` Just False
                 )
                 $ \pinned -> do
                     takeMVar insideReader
@@ -114,7 +115,8 @@ spec = describe "CveSlot" $ do
                             takeMVar insideSwapper
                             timeout 1_000_000 (cancel swapper) `shouldReturn` Just ()
                             currentAdvisoryEtag slot `shouldReturn` Just (DbEtag "gen-b")
-                            withSlotLookup slot generationSeen `shouldReturn` Just True
+                            withSlotGeneration slot (pure . fmap fst) `shouldReturn` Just (DbEtag "gen-b")
+                            withSlotGeneration slot generationSeen `shouldReturn` Just True
                             readIORef closeLog `shouldReturn` []
                             if cancelReader
                                 then timeout 1_000_000 (cancel pinned) `shouldReturn` Just ()
@@ -137,7 +139,7 @@ spec = describe "CveSlot" $ do
             closingDb = db{cveDbClose = putMVar insideClose () >> takeMVar finishClose >> cveDbClose db}
         swapIn slot (DbEtag "gen-a") Nothing closingDb
         withAsync
-            (withSlotLookup slot $ \_ -> putMVar insideReader () >> takeMVar releaseReader)
+            (withSlotGeneration slot $ \_ -> putMVar insideReader () >> takeMVar releaseReader)
             $ \pinned -> do
                 takeMVar insideReader
                 withAsync
@@ -183,7 +185,7 @@ spec = describe "CveSlot" $ do
         entered <- newTVarIO (0 :: Int)
         gate <- newEmptyMVar
         readers <- forM [1 :: Int .. 8] $ \_ -> async $
-            withSlotLookup slot $ \mLookup -> do
+            withSlotGeneration slot $ \mLookup -> do
                 atomically (modifyTVar' entered (+ 1))
                 readMVar gate
                 generationSeen mLookup
@@ -232,7 +234,7 @@ spec = describe "CveSlot" $ do
         swapIn slot (DbEtag "gen-a") Nothing (fakeDb "gen-a" closeLog)
         installed <- generationInstalledAt slot
         threadDelay 2_000
-        void (withSlotLookup slot (pure . isJust))
+        void (withSlotGeneration slot (pure . isJust))
         void (currentAdvisoryEtag slot)
         generationInstalledAt slot `shouldReturn` installed
 

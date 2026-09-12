@@ -78,7 +78,7 @@ publicArtifactGateSpec = describe "publicArtifactGate -- the shared admission ve
         statusOf AdmissionFileAbsent `shouldBe` Just NotFound
 
     it "renders a policy denial as a 403" $
-        statusOf (AdmissionDenied (Blocked "test-deny" "denied by current policy")) `shouldBe` Just Forbidden
+        statusOf (AdmissionDenied (Blocked "test-deny" Nothing "denied by current policy")) `shouldBe` Just Forbidden
 
     it "renders an artifact the integrity floor refuses as a 403" $ do
         statusOf AdmissionBelowFloor `shouldBe` Just Forbidden

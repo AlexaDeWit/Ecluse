@@ -53,11 +53,10 @@ sweepPackage ::
     SweepState ->
     SweepMount ->
     EvalContext ->
-    Maybe DbEtag ->
     PackageName ->
     [StoredVersion] ->
     IO (Maybe CycleHalt)
-sweepPackage pacing ports counters mount ctx etag name stored
+sweepPackage pacing ports counters mount ctx name stored
     | smFirstParty mount name = Nothing <$ traverse_ (const (record ports counters SweepGuardSkipped)) served
     | otherwise =
         obReadManifest (ssObserve (smStore mount)) name >>= \case
@@ -71,7 +70,7 @@ sweepPackage pacing ports counters mount ctx etag name stored
 
     decideAll evidence = do
         condemned <- catMaybes <$> traverse (decideVersion ports counters mount ctx evidence) served
-        disposeOf pacing ports counters mount etag name condemned
+        disposeOf pacing ports counters mount name condemned
 
 {- The store served no metadata, so each version is decided on the identity the listing carries. The
 shared fetch discards the response status, so a package the store no longer serves arrives here too. -}
@@ -98,6 +97,7 @@ and its deletion both read this, so neither can credit a rule the other did not.
 data Condemned = Condemned
     { cdVersion :: Version
     , cdRule :: Text
+    , cdAdvisoryEtag :: Maybe DbEtag
     , cdReason :: Reason
     }
 
@@ -114,7 +114,7 @@ decideVersion ::
 decideVersion ports counters mount ctx evidence version = do
     record ports counters SweepExamined
     evalRules ctx (smRules mount) (evidence version) >>= \case
-        Blocked rule reason -> pure (Just Condemned{cdVersion = version, cdRule = rule, cdReason = reason})
+        Blocked rule etag reason -> pure (Just Condemned{cdVersion = version, cdRule = rule, cdAdvisoryEtag = etag, cdReason = reason})
         _ -> record ports counters SweepKept $> Nothing
 
 {- Hand the condemned versions over, up to what the cycle's cap still allows. The cap counts
@@ -124,11 +124,10 @@ disposeOf ::
     SweepPorts ->
     SweepState ->
     SweepMount ->
-    Maybe DbEtag ->
     PackageName ->
     [Condemned] ->
     IO (Maybe CycleHalt)
-disposeOf pacing ports counters mount etag name decided
+disposeOf pacing ports counters mount name decided
     | null decided = pure Nothing
     | otherwise = do
         condemned <- stillEligible ports counters mount name decided
@@ -136,14 +135,15 @@ disposeOf pacing ports counters mount etag name decided
         let allowance = max 0 (cap - issued)
             (taken, held) = splitAt (if capHalts then allowance else length condemned) condemned
             reached = issued + length taken
+            thresholdEtag = cdAdvisoryEtag =<< listToMaybe (drop (cap - issued - 1) taken)
         traverse_ (const (record ports counters SweepGuardSkipped)) held
         unless (null taken) $ do
-            traverse_ (announce ports etag name) taken
+            traverse_ (announce ports name) taken
             writeIORef (stIssued counters) reached
-            when (crossedCap issued reached) (announceCap ports cap reached etag)
+            when (crossedCap issued reached) (announceCap ports cap reached thresholdEtag)
             outcomes <- sendDeletes (smStore mount) name (map cdVersion taken)
             traverse_ (recordOutcome ports counters name) outcomes
-        pure (cappedHalt pacing reached etag <$ guard (halts reached))
+        pure (cappedHalt pacing reached thresholdEtag <$ guard (halts reached))
   where
     cap = swpDeletionCap pacing
     capHalts = reportCapHalts (sweepReport ports)
@@ -202,8 +202,8 @@ announceCap ports cap reached etag =
 
 {- Every deletion's audit line: the package, the version, the rule that denied it, and the
 advisory generation pinned when it was decided. -}
-announce :: SweepPorts -> Maybe DbEtag -> PackageName -> Condemned -> IO ()
-announce ports etag name condemned =
+announce :: SweepPorts -> PackageName -> Condemned -> IO ()
+announce ports name condemned =
     auditInfo (sweepAudit ports) $
         reportOpening (sweepReport ports)
             <> renderPackageName name
@@ -214,7 +214,7 @@ announce ports etag name condemned =
             <> " ("
             <> cdReason condemned
             <> "); advisory generation "
-            <> renderGeneration etag
+            <> renderGeneration (cdAdvisoryEtag condemned)
 
 -- The backend owns chunk limits and stops later requests after a fault.
 sendDeletes :: SweepStore -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]

@@ -2,12 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Resilience, concurrent rule precedence, and evidence attribution.
 module Ecluse.Core.Rules.EffectfulSpec (spec) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwIO, throwString)
+import UnliftIO.Exception (bracket_, throwIO)
 
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
@@ -17,11 +18,13 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..), noBreakerReporter)
-import Ecluse.Core.Cve (CveQueryFault (CveQueryFault))
+import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveLookup (cveAdvisoriesFor), CveQueryFault (CveQueryFault), DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules (
     PreparedRule (..),
+    RuleDeps (rdWithCveLookup),
     evalRule,
     evalRules,
     runEffectfulRule,
@@ -33,6 +36,7 @@ import Ecluse.Core.Rules.Effectful (
     defaultEffectfulConfig,
     newBreaker,
  )
+import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
 import Ecluse.Test.Rules (
     admittedBy,
@@ -119,7 +123,7 @@ constRule name prec cfg align outcome = mkRule name prec cfg align (\_ -> pure o
 
 -- | An effectful rule whose IO always throws (its source is down).
 failingRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> IO PreparedRule
-failingRule name prec cfg align = mkRule name prec cfg align (\_ -> throwString "source down")
+failingRule name prec cfg align = mkRule name prec cfg align (\_ -> throwIO TestSourceUnavailable)
 
 -- | A built-in rule prepared (no resilience) at a precedence, evaluated via 'evalRule'.
 pureAt :: Int -> Rule -> PreparedRule
@@ -153,12 +157,13 @@ genTieOutcome :: Gen RuleVerdict
 genTieOutcome =
     Gen.element
         [ Allow "vetted clean"
-        , Deny "known-bad version"
+        , Deny Nothing "known-bad version"
         , CannotVet FailDeny "no advisory database loaded"
         ]
 
 spec :: Spec
 spec = do
+    provenanceSpec
     describe "defaultEffectfulConfig -- the shipped resilience knobs" $
         it "pins the documented defaults (timeout, backoff schedule, breaker, no Retry-After)" $ do
             -- The shipped policy a caller inherits when it overrides only the eval.
@@ -175,13 +180,13 @@ spec = do
             ran <- newIORef (0 :: Int)
             effLater <- mkRule "EffAfter" 200 fastConfig FailDeny $ \_ -> do
                 modifyIORef' ran (+ 1)
-                throwString "should never run"
+                throwIO TestSourceUnavailable
             decision <- evalRules ctx [effLater, pureAt 300 DenyInstallTimeExecution] (withInstallScripts (pkg Nothing 0))
             blockedBy decision `shouldBe` Just "DenyInstallTimeExecution"
             readIORef ran `shouldReturn` 0
 
         it "an effectful deny outranks a lower pure allow (boot order decides)" $ do
-            rule <- constRule "EffDeny" 300 fastConfig FailDeny (Deny "known-bad version")
+            rule <- constRule "EffDeny" 300 fastConfig FailDeny (Deny Nothing "known-bad version")
             decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
             blockedBy decision `shouldBe` Just "EffDeny"
 
@@ -189,7 +194,7 @@ spec = do
             ran <- newIORef (0 :: Int)
             rule <- mkRule "EffDeny" 100 fastConfig FailDeny $ \_ -> do
                 modifyIORef' ran (+ 1)
-                pure (Deny "blocked")
+                pure (Deny Nothing "blocked")
             decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
             admittedBy decision `shouldBe` Just "AllowScope"
             readIORef ran `shouldReturn` 0
@@ -267,7 +272,7 @@ spec = do
     describe "evalRules -- deterministic speculative parallelism" $ do
         it "credits the earliest-in-boot-order decisive rule, not the first to return" $ do
             -- The slow deny outranks the fast allow, so the decision never depends on timing.
-            slowDeny <- mkRule "EffDeny" 300 fastConfig FailDeny (\_ -> threadDelay 40_000 >> pure (Deny "slow deny"))
+            slowDeny <- mkRule "EffDeny" 300 fastConfig FailDeny (\_ -> threadDelay 40_000 >> pure (Deny Nothing "slow deny"))
             fastAllow <- constRule "EffAllow" 200 fastConfig FailNoDecision (Allow "fast allow")
             decision <- evalRules ctx [fastAllow, slowDeny] (pkg Nothing 0)
             blockedBy decision `shouldBe` Just "EffDeny"
@@ -276,7 +281,7 @@ spec = do
             -- The laggard sleeps 10s before setting 'done', so a 'done' left False proves
             -- the engine cancelled it once the winner was known.
             done <- newIORef False
-            winner <- constRule "EffWinner" 300 fastConfig FailDeny (Deny "blocked")
+            winner <- constRule "EffWinner" 300 fastConfig FailDeny (Deny Nothing "blocked")
             laggard <- mkRule "EffLaggard" 200 fastConfig FailNoDecision $ \_ -> do
                 threadDelay 10_000_000
                 writeIORef done True
@@ -291,7 +296,7 @@ spec = do
             -- order settles the tie by name, so reversing the list cannot flip the decision.
             let mk =
                     sequence
-                        [ constRule "EffDeny" 300 fastConfig FailDeny (Deny "known-bad version")
+                        [ constRule "EffDeny" 300 fastConfig FailDeny (Deny Nothing "known-bad version")
                         , failingRule "EffUnavail" 300 fastConfig FailDeny
                         ]
             forward <- mk >>= \rules -> evalRules ctx rules (pkg Nothing 0)
@@ -328,7 +333,7 @@ spec = do
             attempts <- newIORef (0 :: Int)
             rule <- mkRule "Flaky" 1 fastConfig{ecBackoff = [0]} FailDeny $ \_ -> do
                 n <- atomicModifyIORef' attempts (\k -> (k + 1, k + 1))
-                if n < 2 then throwString "blip" else pure (Allow "recovered")
+                if n < 2 then throwIO TestSourceUnavailable else pure (Allow "recovered")
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
             outcome `shouldBe` Decided (Allow "recovered")
             readIORef attempts `shouldReturn` 2 -- the initial attempt plus one retry
@@ -336,7 +341,7 @@ spec = do
             attempts <- newIORef (0 :: Int)
             rule <- mkRule "Down" 1 fastConfig{ecBackoff = [0, 0]} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
-                throwString "still down"
+                throwIO TestSourceUnavailable
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
             outcome `shouldSatisfy` isUnavailable
             readIORef attempts `shouldReturn` 3 -- the initial attempt plus two retries
@@ -344,7 +349,7 @@ spec = do
             attempts <- newIORef (0 :: Int)
             rule <- mkRule "Down" 1 fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
-                throwString "down"
+                throwIO TestSourceUnavailable
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             readIORef attempts `shouldReturn` 2
@@ -355,9 +360,6 @@ spec = do
             readIORef attempts `shouldReturn` 2
 
         it "absorbs the advisory handle's confined CveQueryFault: Unavailable, breaker advanced" $ do
-            -- 'CveQueryFault' is a confined typed exception absorbed here. It resolves as
-            -- the rule's aligned Unavailable and counts towards the breaker, so a broken
-            -- advisory database degrades to fast-fail instead of throwing through evalRules.
             attempts <- newIORef (0 :: Int)
             rule <- mkRule "DenyCve" 1 fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
@@ -392,9 +394,7 @@ spec = do
             any (\(_, detail) -> "SQLite3 returned ErrorNotADatabase" `T.isInfixOf` detail) reports `shouldBe` True
 
         it "a deterministic CannotVet is taken at face value -- never retried, never trips the breaker" $ do
-            -- The no-advisory-database verdict is deterministic and in-process, so no retry
-            -- changes it and it must not count towards the breaker. A genuine fault still
-            -- does. Regressing this is a self-inflicted 503 outage before the first sync.
+            -- An absent database must not trip the breaker before the first sync.
             evals <- newIORef (0 :: Int)
             rule <- mkRule "DenyCve" 1 fastConfig{ecBackoff = [0, 0], ecBreakerThreshold = 2} FailDeny $ \_ -> do
                 modifyIORef' evals (+ 1)
@@ -411,13 +411,13 @@ spec = do
             rule <- mkRuleClock clock "Recover" 1 fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
                 bad <- readIORef failRef
-                if bad then throwString "down" else pure (Deny "now reachable")
+                if bad then throwIO TestSourceUnavailable else pure (Deny Nothing "now reachable")
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             writeIORef failRef False
             setClock (addUTCTime 31 now)
             recovered <- runEffectfulRule ctx rule (pkg Nothing 0)
-            recovered `shouldBe` Decided (Deny "now reachable")
+            recovered `shouldBe` Decided (Deny Nothing "now reachable")
 
         it "an exhausted FailNoDecision rule resolves to a fail-open Unavailable with a named reason" $ do
             rule <- failingRule "EffAllow" 1 fastConfig FailNoDecision
@@ -429,7 +429,7 @@ spec = do
             attempts <- newIORef (0 :: Int)
             rule <- mkRuleClock clock "Down" 1 fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
-                throwString "still down"
+                throwIO TestSourceUnavailable
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             -- Past the first cooldown (opened until now + 30): the next call half-opens.
@@ -448,7 +448,7 @@ spec = do
             rule <- mkRuleClock clock "Slow" 1 fastConfig{ecBreakerThreshold = 1, ecBreakerCooldown = 5} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
                 setClock (addUTCTime 10 now) -- the retry run outlasts the 5s cooldown
-                throwString "down"
+                throwIO TestSourceUnavailable
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             readIORef attempts `shouldReturn` 1 -- tripped: opens until (now + 10) + 5 = now + 15
             -- now + 12 is past the pre-retry window (now + 5) but inside the real one
@@ -461,13 +461,13 @@ spec = do
             attempts <- newIORef (0 :: Int)
             rule <- mkRule "Flaky" 1 defaultEffectfulConfig FailDeny $ \_ -> do
                 n <- atomicModifyIORef' attempts (\k -> (k + 1, k + 1))
-                if n < 2 then throwString "blip" else pure (Allow "recovered")
+                if n < 2 then throwIO TestSourceUnavailable else pure (Allow "recovered")
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
             outcome `shouldBe` Decided (Allow "recovered")
             readIORef attempts `shouldReturn` 2
 
         it "exhausts under the shipped default config (no suggested Retry-After)" $ do
-            rule <- mkRule "Down" 1 defaultEffectfulConfig{ecBackoff = []} FailDeny (\_ -> throwString "down")
+            rule <- mkRule "Down" 1 defaultEffectfulConfig{ecBackoff = []} FailDeny (\_ -> throwIO TestSourceUnavailable)
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
             outcome `shouldBe` Unavailable (WillResolve Nothing) FailDeny "Down: the rule could not be evaluated"
 
@@ -477,7 +477,7 @@ spec = do
             recovered <- newIORef False
             rule <- mkRuleClocked clock reporter "Down" 1 fastConfig{ecBreakerThreshold = 1, ecBreakerCooldown = 30} FailDeny $ \_ ->
                 readIORef recovered >>= \case
-                    False -> throwString "down"
+                    False -> throwIO TestSourceUnavailable
                     True -> pure (Allow "recovered")
             _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             readIORef breakerLog `shouldReturn` [Open (addUTCTime 30 now)]
@@ -488,7 +488,7 @@ spec = do
             readIORef breakerLog `shouldReturn` [Open (addUTCTime 30 now), HalfOpen, Closed 0]
 
         it "records nothing through the default no-op reporter, still resolving fail-closed" $ do
-            rule <- mkRule "Down" 1 fastConfig{ecBreakerThreshold = 1} FailDeny (\_ -> throwString "down")
+            rule <- mkRule "Down" 1 fastConfig{ecBreakerThreshold = 1} FailDeny (\_ -> throwIO TestSourceUnavailable)
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
             outcome `shouldSatisfy` isUnavailable
 
@@ -513,3 +513,63 @@ spec = do
                 rule <- liftIO (constRule "Eff" effPrec fastConfig FailNoDecision outcome)
                 decision <- liftIO (evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] p)
                 admittedBy decision === Just "AllowScope"
+
+data TestSourceUnavailable = TestSourceUnavailable
+    deriving stock (Show)
+
+instance Exception TestSourceUnavailable
+
+provenanceSpec :: Spec
+provenanceSpec = describe "advisory evidence across concurrent evaluations" $ do
+    it "retains the earlier rule's generation when a later advisory rule finishes first" $ do
+        laterFinished <- newEmptyMVar
+        let firstDeps = advisoryRuleDeps "first" "FIRST" (takeMVar laterFinished)
+            laterDeps = advisoryRuleDeps "later" "LATER" pass
+        earlier <- mkRule "CVSS" 300 fastConfig FailDeny (evalRule firstDeps ctx cveRule)
+        later <- mkRule "EPSS" 300 fastConfig FailDeny $ \ev -> do
+            verdict <- evalRule laterDeps ctx epssRule ev
+            putMVar laterFinished ()
+            pure verdict
+        evalRules ctx [earlier, later] (pkg Nothing 0)
+            `shouldReturn` Blocked "CVSS" (Just (DbEtag "first")) "affected by FIRST (CVSS >= 7.0)"
+
+    it "retains the successful retry's acquired generation" $ do
+        attempts <- newIORef (0 :: Int)
+        let firstDeps = advisoryRuleDeps "failed" "FAILED" (throwIO TestSourceUnavailable)
+            retryDeps = advisoryRuleDeps "retry" "RETRY" pass
+            deps =
+                inertRuleDeps
+                    { rdWithCveLookup = \use -> do
+                        attempt <- atomicModifyIORef' attempts (\n -> (n + 1, n))
+                        rdWithCveLookup (if attempt == 0 then firstDeps else retryDeps) use
+                    }
+        rule <- mkRule "CVSS" 300 fastConfig{ecBackoff = [0]} FailDeny (evalRule deps ctx cveRule)
+        evalRules ctx [rule] (pkg Nothing 0)
+            `shouldReturn` Blocked "CVSS" (Just (DbEtag "retry")) "affected by RETRY (CVSS >= 7.0)"
+        readIORef attempts `shouldReturn` 2
+
+    it "cancels a later lookup and keeps the winner's provenance" $ do
+        entered <- newEmptyMVar
+        released <- newIORef False
+        waiting <- newEmptyMVar
+        let winnerDeps = advisoryRuleDeps "winner" "WINNER" (takeMVar entered)
+            blockedDeps = advisoryRuleDeps "cancelled" "CANCELLED" (putMVar entered () *> takeMVar waiting)
+            laterDeps = blockedDeps{rdWithCveLookup = bracket_ pass (writeIORef released True) . rdWithCveLookup blockedDeps}
+        winner <- mkRule "CVSS" 300 fastConfig FailDeny (evalRule winnerDeps ctx cveRule)
+        later <- mkRule "EPSS" 300 fastConfig FailDeny (evalRule laterDeps ctx epssRule)
+        evalRules ctx [winner, later] (pkg Nothing 0)
+            `shouldReturn` Blocked "CVSS" (Just (DbEtag "winner")) "affected by WINNER (CVSS >= 7.0)"
+        readIORef released `shouldReturn` True
+
+advisoryRuleDeps :: Text -> Text -> IO () -> RuleDeps
+advisoryRuleDeps etag identifier beforeQuery =
+    inertRuleDeps{rdWithCveLookup = \use -> use (Just (DbEtag etag, lookup'))}
+  where
+    original = fakeCveLookup [("thing", AdvisoryRange identifier (Just 9.8) (Just "0") Unbounded (Just 0.95))]
+    lookup' = original{cveAdvisoriesFor = \name -> beforeQuery *> cveAdvisoriesFor original name}
+
+cveRule :: Rule
+cveRule = DenyIfCve (DenyIfCveParams 7.0 FailDeny)
+
+epssRule :: Rule
+epssRule = DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)
