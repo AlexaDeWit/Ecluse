@@ -159,7 +159,7 @@ advisoryAgeSpec :: Spec
 advisoryAgeSpec = describe "runDredger advisory database ages" $
     it "emits each configured ecosystem and observes generation swaps through its registered callbacks" $
         withDredgerAges $ \meterEnv handles -> do
-            let install handle etag = swapIn (syncSlot (csEnv handle)) (DbEtag etag) (fakeCveDb [])
+            let install handle etag = swapIn (syncSlot (csEnv handle)) (DbEtag etag) Nothing (fakeCveDb [])
             for_ handles $ \(_, handle) -> install handle "first-generation"
             threadDelay 1_100_000
             initialPoints <- advisoryAgePoints meterEnv

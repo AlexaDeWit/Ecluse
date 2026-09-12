@@ -180,6 +180,8 @@ advisoriesDecoder =
         <*> plainKey "dataDir"
         <*> requiredKey "osvExportBaseUrl" parseHttpUrl
         <*> requiredKey "epssFeedUrl" parseHttpUrl
+        <*> nestedKey "quietTime" parseQuietTimes
+        <*> requiredKey "epssQuietTime" parseDelaySeconds
 
 runtimeDecoder :: GroupDecoder RuntimeSettings
 runtimeDecoder =
@@ -206,6 +208,19 @@ dredgerDecoder =
         <*> requiredKey "cyclePause" parseDelaySeconds
         <*> optionalKey "deletionCap" parsePositiveInt
         <*> plainKey "fullWalk"
+
+{- | Parse the per-ecosystem quiet-time thresholds. The key is the ecosystem, spelled as a
+mounts key is, so an unknown one fails the load rather than configuring nothing.
+-}
+parseQuietTimes :: KeyMap.KeyMap Value -> Parser (Map.Map Ecosystem NominalDiffTime)
+parseQuietTimes km = Map.fromList <$> traverse parseQuietTimeEntry (KeyMap.toList km)
+
+parseQuietTimeEntry :: (Key.Key, Value) -> Parser (Ecosystem, NominalDiffTime)
+parseQuietTimeEntry (k, v) = do
+    eco <- case parseEcosystem (Key.toText k) of
+        Just e -> pure e
+        Nothing -> fail ("Invalid ecosystem in advisories.quietTime: " <> T.unpack (Key.toText k))
+    (eco,) <$> parseDelaySeconds ("advisories.quietTime." <> T.unpack (Key.toText k)) v
 
 {- | Parse every mount in the merged @mounts@ object, the shipped per-ecosystem templates
 included. "Ecluse.Config" decides which of them are active and must be complete.
@@ -271,8 +286,7 @@ parseSeconds field = \case
         Just n -> boundedSeconds field n
         Nothing -> secondsFailure field (show t)
     -- 'toBoundedInteger' refuses a fractional or out-of-'Int64' value, and its exponent guard
-    -- rejects a pathological 1e999999999999 without ever realising the integer. A hostile config
-    -- value then fails the load instead of hanging or exhausting memory at boot.
+    -- rejects a pathological 1e999999999999 without ever realising the integer.
     Number n -> case toBoundedInteger n :: Maybe Int64 of
         Just val -> boundedSeconds field (toInteger val)
         Nothing -> secondsFailure field (show n)

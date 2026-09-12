@@ -28,6 +28,11 @@ module Ecluse.Core.Osv.Stream (
     resetIngestStats,
     systemicDrop,
     PilotIngestAborted (..),
+
+    -- * What one attempt learned about its source
+    OsvAttempt (..),
+    readOsvAttempt,
+    resetOsvAttempt,
 ) where
 
 import Codec.Archive.Zip.Conduit.Types (ZipEntry (..))
@@ -35,14 +40,17 @@ import Codec.Archive.Zip.Conduit.UnZip (unZipStream)
 import Conduit
 import Data.Aeson (decodeStrict)
 import Data.ByteString qualified as BS
+import Data.Time (UTCTime)
 import Katip (KatipContext, Severity (..), logFM, ls)
-import Network.HTTP.Simple (getResponseBody, httpSource, parseRequest, setRequestCheckStatus)
+import Network.HTTP.Simple (getResponseBody, getResponseHeader, httpSource, parseRequest, setRequestCheckStatus)
+import Network.HTTP.Types.Header (hLastModified)
 import OpenTelemetry.Trace.Core (SpanKind (Internal), TracerProvider, addAttribute)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
-import Ecluse.Core.Osv.Advisory (ExtractedOsv, OsvAdvisory, extPackage, extractFromAdvisory, orderableBounds, osvId, unorderableBounds)
+import Ecluse.Core.Osv.Advisory (ExtractedOsv, OsvAdvisory, extPackage, extractFromAdvisory, orderableBounds, osvId, osvModified, unorderableBounds)
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvEcosystemTag, osvMaxAdvisoryFanOut))
 import Ecluse.Core.Osv.Epss (EpssScores)
+import Ecluse.Core.Osv.Provenance (parseHttpDate, parseSourceTime)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Telemetry.Span (closeOptionalSpan, openOptionalSpan)
 
@@ -73,11 +81,29 @@ data IngestStats = IngestStats
     {- ^ Rows kept with a bound the grammar cannot parse ('orderableBounds'). Counted in
     rows, so it stays out of 'systemicDrop'.
     -}
+    , statUnusableModified :: !Int
+    {- ^ Records whose @modified@ no grammar reads, or which date it after the run's clock.
+    Their rows are kept and only the date is ignored, so this counts records, not drops.
+    -}
     }
     deriving stock (Eq, Show)
 
 emptyIngestStats :: IngestStats
-emptyIngestStats = IngestStats 0 0 0 0
+emptyIngestStats = IngestStats 0 0 0 0 0
+
+{- | What one ingest attempt learned about its source beside the rows. A retry replaces it
+whole, so it always describes the attempt that produced the tally beside it.
+-}
+data OsvAttempt = OsvAttempt
+    { oaLastModified :: Maybe UTCTime
+    -- ^ The @Last-Modified@ the export answered this attempt with.
+    , oaNewestModified :: Maybe UTCTime
+    -- ^ The newest @modified@ across the records this attempt read.
+    }
+    deriving stock (Eq, Show)
+
+emptyOsvAttempt :: OsvAttempt
+emptyOsvAttempt = OsvAttempt Nothing Nothing
 
 -- The mutable drop tally for one ingest pass. Opaque: read it with 'readIngestStats'.
 newtype IngestCounter = IngestCounter {counterRef :: IORef IngestStats}
@@ -92,13 +118,17 @@ data OsvIngest = OsvIngest
     -}
     , ingestEpss :: EpssScores
     -- ^ The pass's EPSS table, joined onto each advisory as it is extracted.
+    , ingestNow :: UTCTime
+    -- ^ The run's clock, which every record's @modified@ is judged against.
+    , ingestAttempt :: IORef OsvAttempt
     }
 
--- | A fresh ingest context with the given bounds, feed and EPSS table, and a zeroed tally.
-newOsvIngest :: (MonadIO m) => IngestLimits -> OsvEcosystem -> EpssScores -> m OsvIngest
-newOsvIngest limits eco scores = do
+-- | A fresh ingest context with the given bounds, feed, EPSS table and clock, and a zeroed tally.
+newOsvIngest :: (MonadIO m) => IngestLimits -> OsvEcosystem -> EpssScores -> UTCTime -> m OsvIngest
+newOsvIngest limits eco scores now = do
     counter <- IngestCounter <$> newIORef emptyIngestStats
-    pure (OsvIngest limits counter eco scores)
+    attempt <- newIORef emptyOsvAttempt
+    pure (OsvIngest limits counter eco scores now attempt)
 
 -- | Read the current drop tally.
 readIngestStats :: (MonadIO m) => OsvIngest -> m IngestStats
@@ -109,6 +139,16 @@ and zeroes the tally alongside it, so the tally reflects only the final attempt.
 -}
 resetIngestStats :: (MonadIO m) => OsvIngest -> m ()
 resetIngestStats ingest = writeIORef (counterRef (ingestCounter ingest)) emptyIngestStats
+
+-- | Read what the current attempt learned about its source.
+readOsvAttempt :: (MonadIO m) => OsvIngest -> m OsvAttempt
+readOsvAttempt ingest = readIORef (ingestAttempt ingest)
+
+{- | Forget the source metadata, alongside 'resetIngestStats'. A retry re-reads the export, so
+last attempt's response header and record dates must not survive into this one's artifact.
+-}
+resetOsvAttempt :: (MonadIO m) => OsvIngest -> m ()
+resetOsvAttempt ingest = writeIORef (ingestAttempt ingest) emptyOsvAttempt
 
 -- | Whether the drop tally requires Pilot to refuse publication.
 systemicDrop :: IngestStats -> Bool
@@ -143,7 +183,9 @@ streamOsvUrl mTracerProvider ingest urlStr = do
             forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText urlStr))
             -- Reject non-2xx responses before unzip so the retry policy sees HTTP failures.
             req <- liftIO $ setRequestCheckStatus <$> parseRequest urlStr
-            httpSource req (\res -> getResponseBody res .| parseOsvStream mTracerProvider ingest)
+            httpSource req $ \res -> do
+                recordResponseDate ingest (getResponseHeader hLastModified res)
+                getResponseBody res .| parseOsvStream mTracerProvider ingest
         )
 
 -- | Parse the zip stream and emit ExtractedOsv, bounded by @ingest@.
@@ -189,6 +231,7 @@ handleEntry ingest entry = \case
 admitAdvisory :: (KatipContext m) => OsvIngest -> OsvAdvisory -> ConduitT (Either ZipEntry ByteString) ExtractedOsv m ()
 admitAdvisory ingest adv = do
     lift $ bumpAccepted (ingestCounter ingest)
+    lift $ recordModified ingest adv
     lift $ warnOnFanOut ingest adv extracted
     lift $ forM_ (nonEmpty unorderable) (warnOnUnorderable ingest adv)
     yieldMany extracted
@@ -219,6 +262,30 @@ warnOnFanOut ingest adv extracted =
     n = length extracted
     limit = osvMaxAdvisoryFanOut (ingestEcosystem ingest)
 
+-- The export's own @Last-Modified@, from the response that carried the rows. An absent or
+-- unreadable header records nothing.
+recordResponseDate :: (MonadIO m) => OsvIngest -> [ByteString] -> m ()
+recordResponseDate ingest headers =
+    modifyIORef' (ingestAttempt ingest) $ \attempt ->
+        attempt{oaLastModified = parseHttpDate . decodeUtf8 =<< listToMaybe headers}
+
+-- A date no grammar reads, and a date the source cannot know yet, are both counted and both
+-- dropped from the reading, never clamped. The record's rows are kept either way.
+recordModified :: (MonadIO m) => OsvIngest -> OsvAdvisory -> m ()
+recordModified ingest adv = for_ (osvModified adv) $ \written ->
+    case usableStamp (ingestNow ingest) written of
+        Nothing -> bumpUnusableModified (ingestCounter ingest)
+        Just stamp ->
+            modifyIORef' (ingestAttempt ingest) $ \attempt ->
+                attempt{oaNewestModified = max (Just stamp) (oaNewestModified attempt)}
+
+-- The instant a record's written date names, when the run can use it at all.
+usableStamp :: UTCTime -> Text -> Maybe UTCTime
+usableStamp now written = do
+    stamp <- parseSourceTime written
+    guard (stamp <= now)
+    pure stamp
+
 bumpAccepted :: (MonadIO m) => IngestCounter -> m ()
 bumpAccepted (IngestCounter ref) = modifyIORef' ref (\s -> s{statAccepted = statAccepted s + 1})
 
@@ -230,6 +297,9 @@ bumpMalformed (IngestCounter ref) = modifyIORef' ref (\s -> s{statDroppedMalform
 
 bumpUnorderable :: (MonadIO m) => IngestCounter -> Int -> m ()
 bumpUnorderable (IngestCounter ref) n = modifyIORef' ref (\s -> s{statUnorderable = statUnorderable s + n})
+
+bumpUnusableModified :: (MonadIO m) => IngestCounter -> m ()
+bumpUnusableModified (IngestCounter ref) = modifyIORef' ref (\s -> s{statUnusableModified = statUnusableModified s + 1})
 
 zipEntryNameText :: ZipEntry -> Text
 zipEntryNameText entry = case zipEntryName entry of

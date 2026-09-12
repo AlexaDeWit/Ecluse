@@ -54,6 +54,10 @@ data OsvAdvisory = OsvAdvisory
     , osvDatabaseSpecific :: Maybe OsvDatabaseSpecific
     , osvWithdrawn :: Maybe UTCTime
     -- ^ A withdrawn record supplies no active evidence, even when it retains affected ranges.
+    , osvModified :: Maybe Text
+    {- ^ When the source database last changed this record, as written. It is read where the
+    pass judges it, so a value no grammar accepts costs the date and not the record.
+    -}
     }
     deriving stock (Show, Eq)
 
@@ -66,6 +70,7 @@ instance FromJSON OsvAdvisory where
             <*> v .:? "severity"
             <*> v .:? "database_specific"
             <*> v .:? "withdrawn"
+            <*> v .:? "modified"
 
 {- | One entry of an advisory's @severity@ array: a scoring-system tag (@CVSS_V3@) and
 its value. For a CVSS system that value is the /vector string/, not a number.

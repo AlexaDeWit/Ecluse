@@ -14,7 +14,7 @@ import Control.Monad.Trans.Resource (runResourceT)
 import Data.Text qualified as T
 import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
+import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
 import TestContainers (containerAddress)
 
 import Amazonka qualified as AWS
@@ -26,7 +26,7 @@ import Ecluse.Config.Ambient (parseEndpointUrl)
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
-import Ecluse.Test.Poll (retryingIO)
+import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
 
 spec :: Spec
@@ -67,3 +67,40 @@ spec = do
                     case objects of
                         [obj] -> S3Object.key obj `shouldBe` S3.ObjectKey "dummy.sqlite"
                         _ -> fail ("Expected 1 object, got " <> show (length objects))
+
+            it "uploads again when the artifact's bytes have not changed" $ \container -> do
+                -- A quiet upstream compiles the same bytes every cycle. The publisher must
+                -- still write the object, because its store timestamp is the consumer's clock.
+                withSystemTempDirectory "ecluse-osv-republish" $ \tmpDir -> do
+                    let (host, port) = containerAddress container 4566
+                        endpointUrl = "http://" <> host <> ":" <> T.pack (show port)
+                    store <- either (fail . toString) pure (mkAdvisoryStoreUrl "advisories.url" "s3://test-osv-republish-bucket")
+                    let bucket = advisoryStoreBucket store
+                    endpoint <- either (const (fail ("S3ExportSpec: unparseable endpoint for " <> toString host))) pure (parseEndpointUrl endpointUrl)
+                    base <- buildS3Env (Just endpoint)
+                    let regioned = base{AWS.region = AWS.Region' "us-east-1"}
+                    retryingIO 21 500_000 (void (runResourceT (AWS.send regioned (S3.newCreateBucket (S3.BucketName bucket)))))
+
+                    let dbPath = tmpDir <> "/unchanged.sqlite"
+                        objectKey = advisoryObjectKey store (takeFileName dbPath)
+                    liftIO $ writeFile dbPath "unchanged sqlite data"
+                    logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
+                    let export = runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket objectKey dbPath)
+                        storedObject = do
+                            resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))
+                            pure (listToMaybe (fromMaybe [] (S3.contents resp)))
+
+                    export
+                    published <- storedObject
+                    -- Without this the comparison below would pass on an absent first listing.
+                    published `shouldSatisfy` isJust
+
+                    -- The store stamps whole seconds, so the export repeats until the stamp has
+                    -- to have moved. A publisher that wrote only on a change never moves it.
+                    let advancedPast before object = fmap S3Object.lastModified object > fmap S3Object.lastModified before
+                    pollUntil 21 500_000 id (export >> (advancedPast published <$> storedObject))
+                        >>= (`shouldBe` True)
+
+                    -- The bytes never changed, so the object is the same one, re-published.
+                    republished <- storedObject
+                    fmap S3Object.eTag republished `shouldBe` fmap S3Object.eTag published

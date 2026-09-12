@@ -11,6 +11,7 @@ Oversized and scoreless feeds fail the pass. Individual missing scores remain ab
 module Ecluse.Core.Osv.Epss (
     -- * The feed
     maxEpssFeedBytes,
+    EpssFeed (..),
     fetchEpssScores,
     EpssFeedTooLarge (..),
     EpssFeedEmpty (..),
@@ -23,6 +24,10 @@ module Ecluse.Core.Osv.Epss (
 
     -- * One feed row
     parseEpssLine,
+
+    -- * The feed's preamble
+    EpssPreamble (..),
+    parseEpssPreamble,
 ) where
 
 import Conduit
@@ -30,9 +35,12 @@ import Data.Conduit.Combinators qualified as C
 import Data.Conduit.Zlib (ungzip)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Katip (KatipContext, Severity (InfoS), logFM, ls)
-import Network.HTTP.Simple (getResponseBody, httpSource, parseRequest, setRequestCheckStatus)
+import Network.HTTP.Simple (getResponseBody, getResponseHeader, httpSource, parseRequest, setRequestCheckStatus)
+import Network.HTTP.Types.Header (hLastModified)
 
+import Ecluse.Core.Osv.Provenance (parseHttpDate, parseSourceTime)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Stream (boundBytes)
 
@@ -61,6 +69,47 @@ data EpssFeedEmpty = EpssFeedEmpty
     deriving stock (Eq, Show)
 
 instance Exception EpssFeedEmpty
+
+{- | One fetch of the feed: the scores it carries, and what it says about itself. The feed
+declares its own score date, so a stalled feed is visible without a second source of truth.
+-}
+data EpssFeed = EpssFeed
+    { efScores :: EpssScores
+    , efLastModified :: Maybe UTCTime
+    -- ^ The @Last-Modified@ the fetch was answered with.
+    , efScoreDate :: Maybe UTCTime
+    -- ^ The @score_date@ the preamble declares, a bare date read as its UTC start of day.
+    , efModelVersion :: Maybe Text
+    -- ^ The scoring model the preamble declares.
+    }
+    deriving stock (Eq, Show)
+
+{- | What the feed's leading comment line declares. FIRST.org writes it as
+@#model_version:v2026.08.01,score_date:2026-08-29T00:00:00+0000@.
+-}
+data EpssPreamble = EpssPreamble
+    { epScoreDate :: Maybe UTCTime
+    , epModelVersion :: Maybe Text
+    }
+    deriving stock (Eq, Show)
+
+{- | Read the feed's leading comment line. A line that is not a comment, a comment naming
+neither field, and a date the grammar cannot read all yield absence, never a substitute value.
+-}
+parseEpssPreamble :: ByteString -> EpssPreamble
+parseEpssPreamble raw = case T.stripPrefix "#" (decodeUtf8 raw) of
+    Nothing -> EpssPreamble Nothing Nothing
+    Just body ->
+        EpssPreamble
+            { epScoreDate = parseSourceTime =<< field "score_date" body
+            , epModelVersion = field "model_version" body
+            }
+  where
+    -- The score date holds colons of its own, so each field splits on its first one only.
+    field name body = find (not . T.null) (mapMaybe (valueOf name) (T.splitOn "," body))
+    valueOf name entry =
+        let (key, value) = T.breakOn ":" entry
+         in if T.strip key == name then Just (T.strip (T.drop 1 value)) else Nothing
 
 {- | The scores from one fetch of the feed. Keys are upper-cased CVE ids, so a case
 difference between the feed and an advisory's aliases cannot silently miss the join.
@@ -108,24 +157,52 @@ parseEpssLine raw = case T.splitOn "," (decodeUtf8 raw) of
 {- | Fetch the feed and decode it into a score table, bounded by @cap@ bytes on each side of
 decompression. A non-2xx, undecodable, over-large, or scoreless feed throws: the pass must fail.
 -}
-fetchEpssScores :: (MonadResource m, MonadThrow m, KatipContext m) => Int -> String -> m EpssScores
+fetchEpssScores :: (MonadResource m, MonadThrow m, KatipContext m) => Int -> String -> m EpssFeed
 fetchEpssScores cap urlStr = do
     -- 'setRequestCheckStatus' throws at the header boundary, so a 502 reaches the caller's
     -- backoff as a retryable fault instead of feeding an error page to the decompressor.
     req <- liftIO (setRequestCheckStatus <$> parseRequest urlStr)
-    scores <- runConduit (httpSource req (\res -> getResponseBody res .| decodeEpssFeed cap))
+    -- The header is read from the response that carried the rows, so the date and the scores
+    -- describe one fetch.
+    (decoded, served) <- runConduit $ httpSource req $ \res -> do
+        accumulated <- getResponseBody res .| decodeEpssFeed cap
+        pure (accumulated, responseDate res)
+    let scores = faScores decoded
     when (epssScoreCount scores == 0) (throwM EpssFeedEmpty)
     logFM InfoS (ls ("Ingested " <> show (epssScoreCount scores) <> " EPSS scores from " <> authorityLabel (toText urlStr)))
-    pure scores
+    pure
+        EpssFeed
+            { efScores = scores
+            , efLastModified = served
+            , efScoreDate = epScoreDate (faPreamble decoded)
+            , efModelVersion = epModelVersion (faPreamble decoded)
+            }
+  where
+    responseDate res = parseHttpDate . decodeUtf8 =<< listToMaybe (getResponseHeader hLastModified res)
+
+-- The running decode of one feed: the preamble the first line carries, and the scores the
+-- rest of them do.
+data FeedAccum = FeedAccum
+    { faFirst :: !Bool
+    , faPreamble :: EpssPreamble
+    , faScores :: EpssScores
+    }
 
 -- The feed's wire form: gzip, then CSV rows. Bounding the served stream keeps an endless one
 -- from hanging the pass, and bounding its expansion keeps a bomb from exhausting the heap.
-decodeEpssFeed :: (MonadIO m, MonadThrow m) => Int -> ConduitT ByteString o m EpssScores
+decodeEpssFeed :: (MonadIO m, MonadThrow m) => Int -> ConduitT ByteString o m FeedAccum
 decodeEpssFeed cap =
     boundBytes cap (throwM . CompressedTooLarge cap)
         .| transPipe liftIO ungzip
         .| boundBytes cap (throwM . DecompressedTooLarge cap)
         .| C.linesUnboundedAscii
-        .| C.foldl addRow (mkEpssScores [])
+        .| C.foldl addLine (FeedAccum True (EpssPreamble Nothing Nothing) (mkEpssScores []))
+
+-- Only the first line can be the preamble, so a comment further down the feed cannot restate
+-- the score date.
+addLine :: FeedAccum -> ByteString -> FeedAccum
+addLine acc line
+    | faFirst acc = acc{faFirst = False, faPreamble = parseEpssPreamble line, faScores = scored}
+    | otherwise = acc{faScores = scored}
   where
-    addRow acc line = maybe acc (`addScore` acc) (parseEpssLine line)
+    scored = maybe (faScores acc) (`addScore` faScores acc) (parseEpssLine line)

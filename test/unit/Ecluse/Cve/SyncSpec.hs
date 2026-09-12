@@ -104,13 +104,13 @@ spec = do
     describe "cveRuleDepsFor -- per-ecosystem capability dispatch" $ do
         it "borrows through the mount ecosystem's own slot" $ do
             handle <- stubSyncHandle
-            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") (fakeCveDb [])
+            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") Nothing (fakeCveDb [])
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
             rdWithCveLookup (deps Npm) (pure . isJust) `shouldReturn` True
 
         it "abstains for an ecosystem the plan does not carry" $ do
             handle <- stubSyncHandle
-            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") (fakeCveDb [])
+            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") Nothing (fakeCveDb [])
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
             rdWithCveLookup (deps PyPI) (pure . isJust) `shouldReturn` False
 

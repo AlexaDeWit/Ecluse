@@ -130,7 +130,7 @@ partialAdvisoryApp upstreamBase policy = do
 advisoriesLanded :: Map.Map Ecosystem CveSyncHandle -> Ecosystem -> IO ()
 advisoriesLanded handles eco =
     for_ (Map.lookup eco handles) $ \handle -> do
-        swapIn (syncSlot (csEnv handle)) (DbEtag "landed") (fakeCveDb [])
+        swapIn (syncSlot (csEnv handle)) (DbEtag "landed") Nothing (fakeCveDb [])
         atomically (writeTVar (csReady handle) True)
 
 {- | The policy both mounts run. The advisory deny outranks the age allow, so a mount whose slot

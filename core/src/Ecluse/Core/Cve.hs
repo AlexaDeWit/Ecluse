@@ -35,6 +35,7 @@ import UnliftIO.Exception (catch, catchAny, onException, throwIO)
 
 import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, coveredNamesQuery, openHardenedConnection, probeQuery, provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Osv.Provenance (AdvisoryProvenance, decodeProvenance)
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Version (compareVersions, mkVersion, parseVersionKey)
 
@@ -89,6 +90,10 @@ data CveDb = CveDb
     {- ^ The artifact's @meta@ provenance rows (Pilot version, ecosystem, build timestamp,
     source URL, row count), snapshotted at open and key-sorted for the audit trail.
     -}
+    , cveDbProvenance :: AdvisoryProvenance
+    {- ^ What the artifact records about the sources it was compiled from, decoded once at
+    open. An artifact written before those keys decodes as absence.
+    -}
     }
 
 -- | Reject incompatible artifacts as values. Opening faults leave no connection behind.
@@ -115,6 +120,7 @@ mkCveDb conn meta =
           -- 'cveDbClose').
           cveDbClose = close conn `catchAny` const pass
         , cveDbMeta = meta
+        , cveDbProvenance = decodeProvenance meta
         }
 
 -- The SQLite edge: the driver's 'SQLError' never escapes the handle, only this module's

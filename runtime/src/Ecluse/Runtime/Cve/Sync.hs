@@ -8,6 +8,7 @@ Each mount retries at boot, then polls for new artifacts. An empty slot denies b
 module Ecluse.Runtime.Cve.Sync (
     -- * The injected transport
     CveFetch (..),
+    FetchedObject (..),
     DbEtag (..),
     OsvDbFetchFault (..),
     OsvDbCapExceeded (..),
@@ -47,10 +48,12 @@ import Amazonka.S3.Lens qualified as S3L
 import Lens.Micro ((^.))
 
 import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, DbEtag (..), openCveDb)
-import Ecluse.Core.Cve.Slot (CveSlot, swapIn)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisorySource, swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
+import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apEpssScoreDate, apOsvNewestModified, apOsvSource))
 import Ecluse.Core.Osv.Schema (MetaKey (MetaBuiltAt, MetaRowCount), renderMetaKey)
+import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Stream (boundBytes)
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Telemetry.Metrics (
@@ -58,7 +61,7 @@ import Ecluse.Core.Telemetry.Metrics (
  )
 import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (asmpSyncAttempt, asmpSyncDuration), timedSeconds)
 import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (astpSyncAttemptSpan))
-import Ecluse.Core.Text (readDecimalText)
+import Ecluse.Core.Text (readDecimalText, renderIso8601Utc)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
@@ -69,11 +72,21 @@ data CveFetch = CveFetch
     {- ^ The remote artifact's current ETag. @Right Nothing@ when the object does not exist (not yet
     published). Every fetch failure, a transport fault included, is the 'Left' value.
     -}
-    , fetchDownload :: FilePath -> IO (Either OsvDbFetchFault DbEtag)
+    , fetchDownload :: FilePath -> IO (Either OsvDbFetchFault FetchedObject)
     {- ^ Download the artifact to the given path, byte-bounded. The ETag is the download's own, so a
     publish racing the poll is recorded truthfully. A 'Left' may leave a partial file at that path.
     -}
     }
+
+{- | What one download learned about the object it fetched. The publication time is the store's
+own, so it advances on every Pilot push, including a push of unchanged bytes.
+-}
+data FetchedObject = FetchedObject
+    { foEtag :: DbEtag
+    , foPushedAt :: Maybe UTCTime
+    -- ^ The object's own timestamp, 'Nothing' when the store reported none.
+    }
+    deriving stock (Eq, Show)
 
 {- | Why an artifact fetch did not yield usable bytes. Every one is a value on the 'CveFetch'
 channel, never an exception, and 'syncStep' folds it into its outcome.
@@ -156,10 +169,10 @@ syncNewArtifact env = do
             case opened of
                 Left rejection -> do
                     discardTemp temp
-                    pure (SyncRejected fetched rejection)
+                    pure (SyncRejected (foEtag fetched) rejection)
                 Right db -> publishVerified env temp fetched db
 
-publishVerified :: SyncEnv -> FilePath -> DbEtag -> CveDb -> IO SyncOutcome
+publishVerified :: SyncEnv -> FilePath -> FetchedObject -> CveDb -> IO SyncOutcome
 publishVerified env temp fetched db = mask $ \restore -> do
     -- The verified connection follows the inode through the rename. This side still owns it,
     -- so a failure closes the connection and discards the download.
@@ -167,8 +180,8 @@ publishVerified env temp fetched db = mask $ \restore -> do
         `onException` (cveDbClose db >> discardTemp temp)
     -- 'swapIn' owns the connection from entry, so nothing wraps it: a failure while the displaced
     -- generation drains must never close the newly live database. The mask pins the handoff.
-    swapIn (syncSlot env) fetched db
-    pure (SyncSwapped fetched (cveDbMeta db))
+    swapIn (syncSlot env) (foEtag fetched) (foPushedAt fetched) db
+    pure (SyncSwapped (foEtag fetched) (cveDbMeta db))
 
 -- Best-effort: the temp may already be renamed away or never created.
 discardTemp :: FilePath -> IO ()
@@ -264,6 +277,8 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
                 pure (AdvisoryFetchFailed, (False, lastSeen))
             SyncSwapped etag meta -> do
                 logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show (metadataSummary meta)))
+                source <- liftIO (currentAdvisorySource (syncSlot env))
+                logFM InfoS (ls ("cve-sync[" <> eco <> "]: serving artifact source: " <> maybe unrecordedValue renderAdvisorySource source))
                 liftIO notifyFirstSync
                 pure (AdvisorySwapped, (True, Just etag))
             SyncUnchanged -> do
@@ -277,6 +292,26 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
                 -- Remember the ETag so the same refused artifact is not re-downloaded.
                 -- A fixed re-publish carries a new one. Identical bytes cannot end differently.
                 pure (AdvisoryRefused, (True, Just etag))
+
+{- Where the serving artifact came from, for the swap line. The source renders as its authority
+alone, on the same rule as 'metadataSummary' below: artifact text never reaches a log verbatim. -}
+renderAdvisorySource :: AdvisorySource -> Text
+renderAdvisorySource source =
+    "pushed_at="
+        <> stamp (asPushedAt source)
+        <> " osv_source="
+        <> maybe unrecordedValue authorityLabel (apOsvSource prov)
+        <> " osv_newest_modified="
+        <> stamp (apOsvNewestModified prov)
+        <> " epss_score_date="
+        <> stamp (apEpssScoreDate prov)
+  where
+    prov = asProvenance source
+    stamp = maybe unrecordedValue renderIso8601Utc
+
+-- What a value the artifact never recorded reads as, so absence is not read as a zero.
+unrecordedValue :: Text
+unrecordedValue = "<unrecorded>"
 
 -- Legacy artifacts contain arbitrary text. Only parsed, bounded values reach the log.
 metadataSummary :: [(Text, Text)] -> (Maybe UTCTime, Maybe Word64)
@@ -325,7 +360,7 @@ s3HeadEtag awsEnv bucket key =
             | isNotFound err -> Right Nothing
             | otherwise -> Left (OsvDbTransport (classifyAwsTransport err))
 
-s3Download :: AWS.Env -> Text -> Text -> Int -> FilePath -> IO (Either OsvDbFetchFault DbEtag)
+s3Download :: AWS.Env -> Text -> Text -> Int -> FilePath -> IO (Either OsvDbFetchFault FetchedObject)
 s3Download awsEnv bucket key maxBytes dest = classified . runResourceT $ do
     resp <- AWS.send awsEnv (S3.newGetObject (S3.BucketName bucket) (S3.ObjectKey key))
     -- The declared length fails fast. The streaming cap is the enforcement: a
@@ -333,11 +368,12 @@ s3Download awsEnv bucket key maxBytes dest = classified . runResourceT $ do
     for_ (resp ^. S3L.getObjectResponse_contentLength) $ \len ->
         when (len > fromIntegral maxBytes) (throwIO (OsvDbCapExceeded maxBytes))
     AWS.sinkBody (resp ^. S3L.getObjectResponse_body) (cappedAt maxBytes .| C.sinkFile dest)
-    pure (maybe (Left OsvDbNoEtag) (Right . dbEtag) (resp ^. S3L.getObjectResponse_eTag))
+    let fetched etag = FetchedObject{foEtag = dbEtag etag, foPushedAt = resp ^. S3L.getObjectResponse_lastModified}
+    pure (maybe (Left OsvDbNoEtag) (Right . fetched) (resp ^. S3L.getObjectResponse_eTag))
   where
     -- The adapter boundary: fold the two typed escapes into the value channel. Nothing else
     -- is caught, so a filesystem fault writing the destination propagates as residue.
-    classified :: IO (Either OsvDbFetchFault DbEtag) -> IO (Either OsvDbFetchFault DbEtag)
+    classified :: IO (Either OsvDbFetchFault FetchedObject) -> IO (Either OsvDbFetchFault FetchedObject)
     classified act =
         act
             `catch` (\(err :: AWS.Error) -> pure (Left (OsvDbTransport (classifyAwsTransport err))))

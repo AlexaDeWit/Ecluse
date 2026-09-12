@@ -395,6 +395,12 @@ data AdvisoriesSettings = AdvisoriesSettings
     , advDataDir :: FilePath
     , advOsvExportBaseUrl :: Url
     , advEpssFeedUrl :: Url
+    , advQuietTime :: Map Ecosystem NominalDiffTime
+    {- ^ Pilot only: how long one ecosystem's advisory export may go unchanged before Pilot
+    logs the quiet-time alarm. An ecosystem with no entry takes the shipped seven days.
+    -}
+    , advEpssQuietTime :: NominalDiffTime
+    -- ^ Pilot only: the same threshold for the EPSS feed's declared score date.
     }
     deriving stock (Eq, Show)
 

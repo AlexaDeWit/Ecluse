@@ -27,9 +27,10 @@ import UnliftIO.Exception (mask_, throwIO)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
-import Ecluse.Core.Cve.Slot (CveSlot, currentAdvisoryEtag, newCveSlot, withSlotLookup)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, newCveSlot, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
+import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apOsvNewestModified, apOsvSource), noProvenance)
 import Ecluse.Core.Osv.Schema (osvDbFileName, osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (IngestStats (IngestStats), PilotIngestAborted (PilotIngestAborted))
 import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
@@ -44,6 +45,7 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Runtime.Cve.Sync (
     CveFetch (..),
     DbEtag (..),
+    FetchedObject (..),
     OsvDbCapExceeded (OsvDbCapExceeded),
     OsvDbFetchFault (OsvDbTransport),
     SyncEnv (..),
@@ -84,16 +86,38 @@ withSyncEnv use =
         use dir slot envWith
 
 fetchServing :: Maybe Text -> (FilePath -> IO ()) -> CveFetch
-fetchServing mEtag write =
+fetchServing = fetchServingAt Nothing
+
+-- 'fetchServing' with the publication time the store reports for the object.
+fetchServingAt :: Maybe UTCTime -> Maybe Text -> (FilePath -> IO ()) -> CveFetch
+fetchServingAt pushedAt mEtag write =
     CveFetch
         { fetchHeadEtag = pure (Right (DbEtag <$> mEtag))
         , fetchDownload = \dest -> case mEtag of
             Nothing -> throwIO (TestContractEscape "download called with no object present")
-            Just etag -> write dest $> Right (DbEtag etag)
+            Just etag -> write dest $> Right (FetchedObject (DbEtag etag) pushedAt)
         }
 
 transportDown :: OsvDbFetchFault
 transportDown = OsvDbTransport (transportFault TransportUnreachable "transport down")
+
+-- The publication time the store reports for a served object.
+publishedAt :: UTCTime
+publishedAt = UTCTime (fromGregorian 2026 9 1) 0
+
+-- Run one boot attempt against a capturing scribe and hand back everything it logged.
+captureSwapLog :: SyncEnv -> IO Text
+captureSwapLog env = do
+    (swaps, notify) <- newSwapCounter
+    captureStdout $ do
+        logEnv <- jsonLogEnv
+        withAsync (runKatipContextT logEnv () mempty (runUnobserved env oneAttempt notify)) $ \_ ->
+            awaitCount "provenance swap" swaps 1
+        void (closeScribes logEnv)
+
+installedSource :: CveSlot -> IO AdvisorySource
+installedSource slot =
+    currentAdvisorySource slot >>= maybe (throwIO (TestContractEscape "no generation installed")) pure
 
 probesFor :: CveSlot -> Text -> IO (Maybe Bool)
 probesFor slot pkg = withSlotLookup slot (traverse (\l -> cveRemediationProbe l pkg "1.0.0"))
@@ -172,7 +196,7 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                     other -> expectationFailure ("expected active generation swap, got " <> show other)
                 accepted <- readFileBS path
                 compileOsvZipDbTo Npm withdrawn (takeDirectory path)
-                    `shouldThrow` (\(PilotIngestAborted stats) -> stats == IngestStats 1 0 0 0)
+                    `shouldThrow` (\(PilotIngestAborted stats) -> stats == IngestStats 1 0 0 0 0)
                 readFileBS path `shouldReturn` accepted
                 syncStep env (Just (DbEtag "active")) >>= \case
                     SyncUnchanged -> pass
@@ -284,6 +308,28 @@ spec = do
                     T.length logged `shouldSatisfy` (< 2048)
                     probesFor slot "pkg-a" `shouldReturn` Just True
 
+        it "names where the serving artifact came from on every swap" $
+            withSyncEnv $ \_ _ envWith -> do
+                let meta =
+                        [ ("osv_source", "https://osv.example.test/npm/all.zip")
+                        , ("osv_newest_modified", "2026-08-30T00:00:00Z")
+                        , ("epss_score_date", "2026-08-29T00:00:00Z")
+                        ]
+                    env = envWith (fetchServingAt (Just publishedAt) (Just "e1") (\path -> mkMinimalValidDbWithMeta path "pkg-a" meta))
+                logged <- captureSwapLog env
+                -- The recorded URL renders as its authority, so artifact text never reaches the log.
+                logged `shouldSatisfy` T.isInfixOf "serving artifact source: pushed_at=2026-09-01T00:00:00Z"
+                logged `shouldSatisfy` T.isInfixOf "osv_source=osv.example.test:443"
+                logged `shouldSatisfy` T.isInfixOf "osv_newest_modified=2026-08-30T00:00:00Z"
+                logged `shouldSatisfy` T.isInfixOf "epss_score_date=2026-08-29T00:00:00Z"
+
+        it "reads a value an older artifact never recorded as absent, not as a zero" $
+            withSyncEnv $ \_ _ envWith -> do
+                logged <- captureSwapLog (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
+                logged
+                    `shouldSatisfy` T.isInfixOf
+                        "serving artifact source: pushed_at=<unrecorded> osv_source=<unrecorded> osv_newest_modified=<unrecorded> epss_score_date=<unrecorded>"
+
     describe "syncStep" $ do
         it "reports the object absent without attempting a download" $
             withSyncEnv $ \_ _ envWith -> do
@@ -310,6 +356,41 @@ spec = do
                 probesFor slot "pkg-a" `shouldReturn` Just True
                 doesFileExist (syncDbPath env) `shouldReturn` True
                 doesFileExist (syncDbPath env <> ".tmp") `shouldReturn` False
+
+        it "carries the artifact's provenance and the object's publication time onto the slot" $
+            withSyncEnv $ \_ slot envWith -> do
+                let write dest =
+                        mkMinimalValidDbWithMeta
+                            dest
+                            "pkg-a"
+                            [ ("osv_source", "https://osv.example.test/npm/all.zip")
+                            , ("osv_newest_modified", "2026-08-30T00:00:00Z")
+                            ]
+                void (syncStep (envWith (fetchServingAt (Just publishedAt) (Just "e1") write)) Nothing)
+                source <- installedSource slot
+                asPushedAt source `shouldBe` Just publishedAt
+                apOsvSource (asProvenance source) `shouldBe` Just "https://osv.example.test/npm/all.zip"
+                apOsvNewestModified (asProvenance source) `shouldBe` Just (UTCTime (fromGregorian 2026 8 30) 0)
+
+        it "reads an artifact carrying none of the provenance keys as absence, never a refusal" $
+            withSyncEnv $ \_ slot envWith -> do
+                syncStep (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))) Nothing >>= \case
+                    SyncSwapped _ _ -> pass
+                    other -> expectationFailure ("expected SyncSwapped on an older artifact, got " <> show other)
+                source <- installedSource slot
+                asProvenance source `shouldBe` noProvenance
+                asPushedAt source `shouldBe` Nothing
+
+        it "keeps the last decoded provenance and publication time across a failed poll" $
+            withSyncEnv $ \_ slot envWith -> do
+                let write dest = mkMinimalValidDbWithMeta dest "pkg-a" [("osv_source", "https://osv.example.test/npm/all.zip")]
+                void (syncStep (envWith (fetchServingAt (Just publishedAt) (Just "e1") write)) Nothing)
+                syncStep (envWith (headOnlyFetch (Left transportDown))) (Just (DbEtag "e1")) >>= \case
+                    SyncFetchFaulted _ -> pass
+                    other -> expectationFailure ("expected SyncFetchFaulted, got " <> show other)
+                source <- installedSource slot
+                asPushedAt source `shouldBe` Just publishedAt
+                apOsvSource (asProvenance source) `shouldBe` Just "https://osv.example.test/npm/all.zip"
 
         it "a second artifact displaces the first" $
             withSyncEnv $ \_ slot envWith -> do
@@ -378,7 +459,7 @@ spec = do
                             , fetchDownload = \dest -> do
                                 modifyIORef' downloads (+ 1)
                                 mkDbWithMalformedProvenance dest
-                                pure (Right (DbEtag "e2"))
+                                pure (Right (FetchedObject (DbEtag "e2") Nothing))
                             }
                     env = envWith fetch
                 syncStep env (Just (DbEtag "e1")) >>= \case
@@ -433,7 +514,7 @@ spec = do
                                     if n <= 2
                                         then Left transportDown
                                         else Right (Just (DbEtag "e1"))
-                            , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (DbEtag "e1")
+                            , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (FetchedObject (DbEtag "e1") Nothing)
                             }
                     schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 5_000_000}
                 withAsync (runQuietKatip (runUnobserved (envWith flaky) schedule onSwap)) $ \_ -> do
@@ -453,7 +534,7 @@ spec = do
                                 readTVar published <&> \case
                                     False -> Right Nothing
                                     True -> Right (Just (DbEtag "e1"))
-                            , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (DbEtag "e1")
+                            , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (FetchedObject (DbEtag "e1") Nothing)
                             }
                     schedule = SyncSchedule{schedBootBackoff = [5_000, 5_000], schedPollDelay = 25_000}
                     burstAttempts = length (schedBootBackoff schedule) + 1
@@ -475,7 +556,7 @@ spec = do
                             , fetchDownload = \dest -> do
                                 modifyIORef' downloads (+ 1)
                                 mkDbWithWrongEpoch dest
-                                pure (Right (DbEtag "bad"))
+                                pure (Right (FetchedObject (DbEtag "bad") Nothing))
                             }
                     schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 20_000}
                 withAsync (runQuietKatip (runUnobserved (envWith fetch) schedule pass)) $ \_ -> do

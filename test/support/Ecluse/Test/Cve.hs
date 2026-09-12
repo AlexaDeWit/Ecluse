@@ -16,6 +16,7 @@ module Ecluse.Test.Cve (
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..))
 import Ecluse.Core.Osv.Epss (epssForIds, mkEpssScores, parseEpssLine)
+import Ecluse.Core.Osv.Provenance (noProvenance)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 
 {- | Build the fake from (package name, range) rows. The remediation probe is exact string equality
@@ -34,7 +35,7 @@ fakeCveLookup rows =
 retires a displaced generation builds its own recording handle instead.
 -}
 fakeCveDb :: [(Text, AdvisoryRange)] -> CveDb
-fakeCveDb rows = CveDb{cveDbLookup = fakeCveLookup rows, cveDbClose = pass, cveDbMeta = []}
+fakeCveDb rows = CveDb{cveDbLookup = fakeCveLookup rows, cveDbClose = pass, cveDbMeta = [], cveDbProvenance = noProvenance}
 
 -- | Individual gaps in a nonempty feed, joined through the production score parser.
 unscoredEpssCases :: [(String, Maybe Double)]

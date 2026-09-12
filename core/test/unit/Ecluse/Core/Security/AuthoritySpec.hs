@@ -13,6 +13,7 @@ import Ecluse.Core.Security (
     HostPort (HostPort),
     allowedHostPorts,
     authorityLabel,
+    credentialFreeUrl,
     hostAddress,
     hostPortAddress,
     hostPortAddressWithDefault,
@@ -40,6 +41,7 @@ spec = do
     hostPortAddressSpec
     hostPortAddressWithDefaultSpec
     authorityLabelSpec
+    credentialFreeUrlSpec
     refuseCredentialMaterialSpec
     splitHostPortSpec
 
@@ -197,6 +199,22 @@ authorityLabelSpec = describe "authorityLabel" $ do
         authorityLabel "https://deploy@/thing" `shouldBe` "<unresolved>"
         authorityLabel "https://registry.npmjs.org:0/x" `shouldBe` "<unresolved>"
         authorityLabel "https://registry.npmjs.org:https/x" `shouldBe` "<unresolved>"
+
+credentialFreeUrlSpec :: Spec
+credentialFreeUrlSpec = describe "credentialFreeUrl" $ do
+    it "drops userinfo and keeps the path the source is identified by" $
+        credentialFreeUrl "https://deploy:hunter2@osv.example.test/npm/all.zip"
+            `shouldBe` "https://osv.example.test/npm/all.zip"
+    it "drops a pre-signed query string whole" $
+        credentialFreeUrl "https://bucket.s3.amazonaws.com/all.zip?X-Amz-Signature=deadbeef&X-Amz-Credential=AKIA"
+            `shouldBe` "https://bucket.s3.amazonaws.com/all.zip"
+    it "drops a fragment" $
+        credentialFreeUrl "https://osv.example.test/npm/all.zip#deploy-token" `shouldBe` "https://osv.example.test/npm/all.zip"
+    it "yields the scheme and authority alone for a URL that writes no path" $
+        credentialFreeUrl "https://osv.example.test" `shouldBe` "https://osv.example.test"
+    it "keeps a bracketed IPv6 literal and its port, dropping only the userinfo" $
+        credentialFreeUrl "https://deploy:hunter2@[2606:4700::1111]:8443/npm/all.zip"
+            `shouldBe` "https://[2606:4700::1111]:8443/npm/all.zip"
 
 {- Every operator-configured URL passes this rule at load. Boot echoes each resolved key, so a
 value that survives the refusal is one the echo can print as written. -}

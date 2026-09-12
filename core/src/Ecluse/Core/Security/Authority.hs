@@ -25,6 +25,7 @@ module Ecluse.Core.Security.Authority (
 
     -- * Log-safe rendering
     authorityLabel,
+    credentialFreeUrl,
 ) where
 
 import Data.Text qualified as T
@@ -76,6 +77,21 @@ attacker-influenced or credential-bearing URL must never reach a log line or a s
 -}
 authorityLabel :: Text -> Text
 authorityLabel = maybe unresolvedAuthority renderHostPort . hostPortAddress
+
+{- | A fetched URL with every credential carrier removed: userinfo, query, and fragment, the
+last two whole, because either can hold a signed-URL credential.
+
+>>> credentialFreeUrl "https://deploy:hunter2@osv.example.test/npm/all.zip?sig=abc#frag"
+"https://osv.example.test/npm/all.zip"
+-}
+credentialFreeUrl :: Text -> Text
+credentialFreeUrl raw = scheme <> authorityOf raw <> path
+  where
+    (written, separator) = T.breakOn "://" raw
+    (scheme, afterScheme) = case T.stripPrefix "://" separator of
+        Just rest -> (written <> "://", rest)
+        Nothing -> ("", raw)
+    path = T.takeWhile (`notElem` ['?', '#']) (T.dropWhile (/= '/') afterScheme)
 
 -- What a value carrying no dialable authority renders as. The angle brackets match the
 -- convention the resolved-configuration provenance lines use for a withheld value.

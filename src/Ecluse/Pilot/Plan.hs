@@ -18,6 +18,7 @@ module Ecluse.Pilot.Plan (
     -- * The upstreams a compile reads
     configuredSources,
     compileSources,
+    quietTimeFor,
 
     -- * The one-shot run
     PilotCompileOptions (..),
@@ -27,10 +28,11 @@ module Ecluse.Pilot.Plan (
     uploadTarget,
 ) where
 
+import Data.Map.Strict qualified as Map
 import System.FilePath (takeFileName)
 
 import Ecluse.Config (
-    AdvisoriesSettings (advCompileInterval, advEpssFeedUrl, advOsvExportBaseUrl, advUrl),
+    AdvisoriesSettings (advCompileInterval, advEpssFeedUrl, advEpssQuietTime, advOsvExportBaseUrl, advQuietTime, advUrl),
     AdvisoryStoreUrl,
     advisoryObjectKey,
     advisoryStoreBucket,
@@ -40,6 +42,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (CompileSources (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory), osvEcosystemNamed)
+import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
 import Ecluse.Core.Supervision (secondsToMicros)
 
 -- | What the scheduled export loop does with the advisory settings and the mounted ecosystems.
@@ -79,6 +82,18 @@ configuredSources advisories eco =
         { csOsvExportUrl = osvExportUrl (unUrl (advOsvExportBaseUrl advisories)) (osvExportDirectory eco)
         , csEpssFeedUrl = toString (unUrl (advEpssFeedUrl advisories))
         }
+
+{- | The quiet-time thresholds one compile is judged against. An ecosystem with no configured
+threshold, and a one-shot compile of a name this build does not serve, take 'defaultQuietTime'.
+-}
+quietTimeFor :: AdvisoriesSettings -> Maybe Ecosystem -> QuietTime
+quietTimeFor advisories mEco =
+    QuietTime
+        { qtOsv = maybe defaultQuietTime configured mEco
+        , qtEpss = advEpssQuietTime advisories
+        }
+  where
+    configured eco = Map.findWithDefault defaultQuietTime eco (advQuietTime advisories)
 
 {- | The upstreams a one-shot run reads: its own overrides over 'configuredSources'. Each feed
 overrides on its own, so pinning one leaves the other configured.
