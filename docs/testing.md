@@ -153,6 +153,54 @@ The pip case carries the same prohibition. A source distribution runs its own bu
 install, so the harness passes `--only-binary=:all:` and installs a wheel alone, and it points
 `PIP_CONFIG_FILE` at `/dev/null` because `--isolated` still reads the global and site config files.
 
+## Benchmarks (non-gating)
+
+Use the benchmark tier to assess cost alongside the seven Cabal test suites. None of its
+three workflows gates a merge or belongs in branch protection as a required check.
+The workflow YAML owns schedules and run options.
+Each workflow puts its report in the GitHub run summary and uploads the listed files on that run's page.
+Reports support manual comparisons only. No workflow stores a cross-run baseline or consumes another run's results.
+
+| Workflow | Measurement | Downloadable report files |
+|---|---|---|
+| [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt` |
+| [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Full-document and selective-decode overhead on live registry documents against reviewed budgets | `perf-acceptance-report.md` |
+| [Load](../.github/workflows/bench-load.yml) | Throughput and latency under concurrent requests through the composed proxy | `bench-load-results.md` |
+
+Read a red result according to its measurement:
+
+- Work-per-request benchmarks fail on build errors, harness crashes, or failed complexity assertions. They do not compare performance against regression thresholds.
+- Performance acceptance fails on an overhead budget breach. An unavailable live registry produces an unavailable result, not a breach.
+  Its report separates upstream time from Écluse overhead. A breach needs a human decision about a code regression or a budget revision.
+- Load benchmarks use `oha` against the composed proxy. They fail when the harness cannot boot, `oha` cannot run, or a scenario serves nothing.
+  Throughput and latency have no regression threshold. Shared-runner noise and the load run's cost make it unsuitable as a per-PR signal.
+
+Budget values and calibration belong in [acceptance/criteria.json](../acceptance/criteria.json).
+Corpus pins and capture policy belong in [bench/corpus/pins.json](../bench/corpus/pins.json).
+
+## Onboarding an ecosystem
+
+An ecosystem counts as onboarded when it supplies each item below for its supported operations.
+Register new modules in [ecluse.cabal](../ecluse.cabal) and the applicable harness entry point.
+`<Ecosystem>` denotes the module component, such as `Npm` or `PyPI`, and `<ecosystem>` denotes the corpus directory name.
+The pending links identify work needed to bring existing ecosystems up to this bar.
+
+| Obligation | Expected file or module pattern | Worked examples and current gaps |
+|---|---|---|
+| Unit contracts, gating in `ecluse-core-unit` | Mirror `Ecluse.Core.Registry.<Ecosystem>.*` with `core/test/unit/Ecluse/Core/Registry/<Ecosystem>/*Spec.hs`, including the adapter contracts | [npm](../core/test/unit/Ecluse/Core/Registry/Npm/) and [PyPI](../core/test/unit/Ecluse/Core/Registry/PyPI/). The shared [adapter spec](../core/test/unit/Ecluse/Core/Registry/AdapterSpec.hs) pins ecosystem dispatch. |
+| Adapter integration, gating in `ecluse-integration` | `test/integration/Ecluse/Core/Registry/<Ecosystem>/AdapterIntegrationSpec.hs` for metadata and artifact routes against local upstreams | [PyPI adapter](../test/integration/Ecluse/Core/Registry/PyPI/AdapterIntegrationSpec.hs). Existing npm coverage lives in [PipelineIntegrationSpec](../test/integration/Ecluse/Core/Server/PipelineIntegrationSpec.hs) and its [pipeline specs](../test/integration/Ecluse/Core/Server/Pipeline/), without a separate adapter module. |
+| At least one real-client install, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | npm and pip installs currently share [E2ESpec.hs](../test/e2e/Ecluse/E2ESpec.hs), using [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. [#1304](https://github.com/AlexaDeWit/Ecluse/issues/1304) supplies the per-ecosystem spec layout. |
+| Work-per-request instance and corpus | An `EcosystemBench` instance wired into `bench/Main.hs`, with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | Current npm wiring is in [bench/Main.hs](../bench/Main.hs) and [Ecluse.Bench.Corpus](../bench/Ecluse/Bench/Corpus.hs), using the [npm corpus](../bench/corpus/npm/). [#1301](https://github.com/AlexaDeWit/Ecluse/issues/1301) adds the record and PyPI instance, corpus, and generator checks. |
+| Performance acceptance budgets | Ecosystem budgets in `acceptance/criteria.json`, consumed by `acceptance/app/Main.hs` using the benchmark corpus | [npm budgets](../acceptance/criteria.json) and the [driver](../acceptance/app/Main.hs) exist. [#1302](https://github.com/AlexaDeWit/Ecluse/issues/1302) adds ecosystem sections and PyPI full-document and selective-decode budgets. |
+| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Main.hs` | [Npm.hs](../bench/load/Ecluse/BenchLoad/Npm.hs) supplies the existing scenarios. [#1303](https://github.com/AlexaDeWit/Ecluse/issues/1303) adds `PyPI.hs` for index, wheel, and cache scenarios. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |
+
+The shared residency gate remains in
+[`test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs`](../test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs).
+Extend its cases if an ecosystem adds a distinct artifact relay path.
+Live protocol checks use `test/smoke/Ecluse/Core/Registry/<Ecosystem>SmokeSpec.hs`, following
+the [npm example](../test/smoke/Ecluse/Core/Registry/NpmSmokeSpec.hs). PyPI has no corresponding protocol smoke module yet.
+Smoke coverage never replaces a gating case.
+
 ## OSV advisory fixtures
 
 Advisory-shaped test data has one source of truth: the committed OSV JSON under `test/fixtures/osv/`

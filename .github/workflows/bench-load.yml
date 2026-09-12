@@ -1,17 +1,6 @@
 name: Load test
 
-# The load benchmark tier: throughput and latency under concurrent load against the
-# real composed proxy, driven by `oha`. It runs on a nightly schedule and on manual
-# dispatch only, never per pull request. Shared-runner throughput is too noisy to be a
-# useful per-PR signal, and a load run is heavier than the per-PR work-per-request
-# micro-benches.
-#
-# Like those micro-benches, this is a standalone, INFORM-ONLY tier. ci.yml's `gate` does
-# not depend on it, so it never blocks a merge. Its only red state is a LITERAL failure:
-# the harness cannot boot, `oha` cannot run, or a scenario served nothing. It never
-# computes a perf-regression fail. The run summary reports throughput and latency for a
-# human to read and trend, never against a threshold. There is no cross-run baseline: a
-# run's results are downloadable from its own page, and no other run consumes them.
+# Benchmark policy: ../../docs/testing.md#benchmarks-non-gating
 on:
   workflow_dispatch:
     inputs:
@@ -30,7 +19,6 @@ on:
         description: "Synthetic artifact size in bytes for the worker and tarball scenarios (default 363520, about the median popular-package tarball; sweep this to probe the relay's byte rate)"
         required: false
   schedule:
-    # Nightly, off-peak UTC. A trend a human reads in the morning, never a gate.
     - cron: "17 4 * * *"
 
 # One run per ref. Never cancel a scheduled or dispatched run mid-flight.
@@ -88,10 +76,7 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # The harness renders its per-scenario tables to the run summary itself, via
-      # $GITHUB_STEP_SUMMARY. `tee` also captures them as this run's downloadable
-      # results. `task bench-load` never gates on performance, so this step fails
-      # only on a genuine harness failure (a non-zero exit).
+      # pipefail preserves the harness exit code through tee's output capture.
       - name: Run load tests
         run: |
           set -eo pipefail
@@ -102,9 +87,7 @@ jobs:
           # flags do not survive the per-scenario re-exec.
           nix develop .#ci --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
 
-      # This run's results, downloadable from the run page. A convenience for a human
-      # comparing by hand: there is no cross-run baseline store. Uploaded even on a
-      # failed run, so the partial output survives.
+      # Preserve partial output when the harness fails.
       - name: Upload this run's results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
