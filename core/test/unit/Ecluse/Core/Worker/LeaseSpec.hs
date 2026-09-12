@@ -8,10 +8,12 @@ controller waits, a deadline per receipt, and a second consumer that takes whate
 -}
 module Ecluse.Core.Worker.LeaseSpec (spec) where
 
+import Control.Concurrent.STM (check)
 import Data.Map.Strict qualified as Map
 import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
 import Test.Hspec
 import UnliftIO (timeout)
+import UnliftIO.Async (withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
@@ -75,7 +77,7 @@ spec = do
                 held <- leaseAt 0 leased
                 void . whileLeased held . liftIO $ do
                     awaitRenewals world 5
-                    readIORef (lwNow world) >>= (`shouldSatisfy` (> 30))
+                    readTVarIO (lwNow world) >>= (`shouldSatisfy` (> 30))
                     redeliverable world `shouldReturn` []
 
         it "keeps a sibling receipt hidden while it waits its turn behind the first job" $ do
@@ -87,7 +89,7 @@ spec = do
                 held <- leaseAt 0 leased
                 void . whileLeased held . liftIO $ do
                     awaitRenewals world 8
-                    readIORef (lwNow world) >>= (`shouldSatisfy` (> 30))
+                    readTVarIO (lwNow world) >>= (`shouldSatisfy` (> 30))
                     redeliverable world `shouldReturn` []
 
         it "renews on what is left of a window a slow poll has already spent" $ do
@@ -198,7 +200,7 @@ spec = do
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             let residue = (worldOps world keepsEveryLease){loWaitUntil = \_ -> throwIO (TestContractEscape "simulated renewal residue")}
-            runLeasesWith residue batch $ \leased -> do
+            runLeasesWith world residue batch $ \leased -> do
                 held <- leaseAt 0 leased
                 outcome <- whileLeased held (liftIO neverEnds)
                 liftIO (outcome `shouldBe` Nothing)
@@ -271,10 +273,11 @@ window30 :: Seconds
 window30 = Seconds 30
 
 {- | A queue world that models receipt expiry, which the in-memory backend cannot. Its clock
-moves only when the controller waits, so every case is deterministic.
+ticks externally ('withWorldClock'), never from inside a wait, so one renewal task can never
+carry virtual time past a sibling's deadline before that sibling has woken.
 -}
 data LeaseWorld = LeaseWorld
-    { lwNow :: IORef Double
+    { lwNow :: TVar Double
     , -- Each receipt's current deadline: when a second consumer could take the delivery.
       lwVisible :: IORef (Map Text Double)
     , -- Every renewal the controller asked for, oldest first.
@@ -287,7 +290,7 @@ type RenewalAnswer = LeaseWorld -> Text -> IO (Either TransportFault ())
 -- | A world holding the batch's leases, with its clock at the given instant.
 newLeaseWorld :: Double -> [QueueMessage] -> IO LeaseWorld
 newLeaseWorld startedAt batch = do
-    now <- newIORef startedAt
+    now <- newTVarIO startedAt
     visible <- newIORef (Map.fromList (mapMaybe deadlineOf batch))
     renewals <- newIORef []
     pure LeaseWorld{lwNow = now, lwVisible = visible, lwRenewals = renewals}
@@ -302,7 +305,7 @@ worldOps :: LeaseWorld -> RenewalAnswer -> LeaseOps
 worldOps world answer =
     LeaseOps
         { loRenew = renewInWorld world answer . unReceiptHandle
-        , loNow = MonoTime <$> readIORef (lwNow world)
+        , loNow = MonoTime <$> readTVarIO (lwNow world)
         , loWaitUntil = waitUntilInWorld world
         , loRetryDelays = [0, 0, 0]
         }
@@ -313,16 +316,28 @@ renewInWorld world answer receipt (Seconds window) = do
     answer world receipt >>= \case
         Left fault -> pure (Left fault)
         Right () -> do
-            now <- readIORef (lwNow world)
+            now <- readTVarIO (lwNow world)
             Right () <$ modifyIORef' (lwVisible world) (Map.insert receipt (now + fromIntegral window))
 
-{- Move the clock to the waiting task's target, never past it, so ten tasks waiting at once
-advance it once rather than ten times. The real pause lets the others run.
--}
+-- Block until the clock reaches the instant. A waiter never moves the clock itself.
 waitUntilInWorld :: LeaseWorld -> MonoTime -> IO ()
-waitUntilInWorld world (MonoTime target) = do
-    atomicModifyIORef' (lwNow world) (\now -> (max now target, ()))
-    threadDelay 200
+waitUntilInWorld world (MonoTime target) =
+    atomically (readTVar (lwNow world) >>= check . (>= target))
+
+{- Tick the world's clock for the body: one virtual second per 'worldTickMicros'. Every waiter
+wakes off the same tick, so a task that is slow to wake cannot have virtual time run past it.
+-}
+withWorldClock :: LeaseWorld -> IO a -> IO a
+withWorldClock world body = withAsync ticking (const body)
+  where
+    -- Signed, so the tick's own result type cannot drift into an ambiguous one.
+    ticking :: IO ()
+    ticking = forever (threadDelay worldTickMicros >> atomically (modifyTVar' (lwNow world) (+ 1)))
+
+{- The real time one virtual second costs. A renewal falls due a third of the way into its
+window, so the two thirds left are thousands of times the real gap a wake-up needs. -}
+worldTickMicros :: Int
+worldTickMicros = 500
 
 -- | A renewal the backend always grants.
 keepsEveryLease :: RenewalAnswer
@@ -338,7 +353,7 @@ faultingFor receipts fault _ receipt
 slowFaultFor :: Text -> RenewalAnswer
 slowFaultFor named world receipt
     | receipt == named = do
-        atomicModifyIORef' (lwNow world) (\now -> (now + 30, ()))
+        atomically (modifyTVar' (lwNow world) (+ 30))
         pure (Left unreachable)
     | otherwise = pure (Right ())
 
@@ -351,7 +366,7 @@ refused = transportFault TransportTls "simulated certificate refusal"
 -- | What a second consumer would receive: every receipt whose window has lapsed unrenewed.
 redeliverable :: LeaseWorld -> IO [Text]
 redeliverable world = do
-    now <- readIORef (lwNow world)
+    now <- readTVarIO (lwNow world)
     Map.keys . Map.filter (<= now) <$> readIORef (lwVisible world)
 
 -- Wait, bounded, until the controller has asked for at least this many renewals.
@@ -362,7 +377,7 @@ awaitRenewals world wanted =
 -- Wait, bounded, until the renewals have carried the world's clock past this instant.
 awaitClock :: LeaseWorld -> Double -> IO ()
 awaitClock world wanted =
-    void (pollUntil 2_000 1_000 (>= wanted) (readIORef (lwNow world)))
+    void (pollUntil 2_000 1_000 (>= wanted) (readTVarIO (lwNow world)))
 
 -- | One delivery of the sample job, leased for a window under a ceiling from the same instant.
 delivery :: Text -> Seconds -> Seconds -> QueueMessage
@@ -381,13 +396,13 @@ unleased receipt =
 
 -- | Run a leased batch against one world, discarding the log lines the controller writes.
 runLeases :: LeaseWorld -> RenewalAnswer -> [QueueMessage] -> ([LeasedReceipt] -> KatipContextT IO a) -> IO a
-runLeases world answer = runLeasesWith (worldOps world answer)
+runLeases world answer = runLeasesWith world (worldOps world answer)
 
 -- | 'runLeases' over caller-built ops, for a case that perturbs the clock or the waiting itself.
-runLeasesWith :: LeaseOps -> [QueueMessage] -> ([LeasedReceipt] -> KatipContextT IO a) -> IO a
-runLeasesWith ops batch body = do
+runLeasesWith :: LeaseWorld -> LeaseOps -> [QueueMessage] -> ([LeasedReceipt] -> KatipContextT IO a) -> IO a
+runLeasesWith world ops batch body = do
     logEnv <- newTestLogEnv
-    runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (withLeasedBatch ops batch body)
+    withWorldClock world (runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (withLeasedBatch ops batch body))
 
 -- A lease the batch does not hold is a broken premise, so it fails loudly.
 leaseAt :: (MonadIO m) => Int -> [LeasedReceipt] -> m LeasedReceipt
