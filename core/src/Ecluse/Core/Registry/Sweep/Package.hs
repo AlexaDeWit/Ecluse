@@ -2,14 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | One package, the sweep's work unit. Both cycle shapes decide a version the same way here.
-
-The metadata comes from the store being dredged, never the public upstream: one manifest read per
-package. A version the manifest omits, or a package whose read faulted, is decided on the identity
-the listing establishes. A version is deleted only on a named decisive deny, because deletion is
-permanent and the store may hold the only surviving copy. The mount's own execution decides what
-becomes of a condemned version, so a preview reaches no delete because it holds none.
--}
+-- | Decide stored versions from the store's evidence and hand named denials to its execution.
 module Ecluse.Core.Registry.Sweep.Package (
     sweepPackage,
 ) where
@@ -20,14 +13,11 @@ import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     StoreDeletion (dlDeleteVersions),
-    StoreFacts (factDeleteCeiling),
     StoreFault,
-    StoreObservation (obFacts, obReadManifest),
+    StoreObservation (obReadManifest),
     StoredVersion (storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionRemoving, VersionUnreached),
     VersionPresence (VersionServed),
-    chunksOfCeiling,
-    deleteAll,
     refusalCode,
     refusalDetail,
  )
@@ -226,16 +216,12 @@ announce ports etag name condemned =
             <> "); advisory generation "
             <> renderGeneration etag
 
-{- Dispose of the batch the way this run's own execution does: through the store's delete, split
-to the backend's ceiling, or counted where the run holds no delete to reach. -}
+-- The backend owns chunk limits and stops later requests after a fault.
 sendDeletes :: SweepStore -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
 sendDeletes store name versions = case ssExecute store of
-    SweepRemoves deletion ->
-        deleteAll (fmap Right . dlDeleteVersions deletion name) (chunksOfCeiling ceiling' versions)
+    SweepRemoves deletion -> dlDeleteVersions deletion name versions
     -- The audit line above has already put the reach on record, so the count reads from it.
     SweepCounts -> pure [(version, VersionRemoved) | version <- versions]
-  where
-    ceiling' = factDeleteCeiling (obFacts (ssObserve store))
 
 {- What the backend reported for one version. A refusal or an unreached call leaves the version
 in the store, so it counts as kept and reports for an operator to follow up. -}

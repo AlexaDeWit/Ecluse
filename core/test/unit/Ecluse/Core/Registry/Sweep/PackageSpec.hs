@@ -17,9 +17,11 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
-    StoreMaintenance (deleteVersions, readStoreManifest),
+    DeleteCeiling (AtMost),
+    StoreFacts (factDeleteCeiling),
+    StoreMaintenance (deleteVersions, readStoreManifest, storeFacts),
     StoredVersion (StoredVersion, storedVersion),
-    VersionOutcome (VersionRefused, VersionUnreached),
+    VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed, VersionWithdrawn),
     protocolFault,
     storeRefusal,
@@ -31,7 +33,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     EvidenceGaps (gapManifests),
     SweepMount (smConfigured, smFirstParty, smRuleDeps),
     SweepPacing (swpDeletionCap),
-    SweepState (stEvidence),
+    SweepState (stEvidence, stIssued),
     evidenceComplete,
     newSweepState,
  )
@@ -251,6 +253,39 @@ outcomeSpec = describe "what the backend reported" $ do
 
 capSpec :: Spec
 capSpec = describe "the per-cycle deletion cap" $ do
+    for_ [0, 1] $ \successful ->
+        it ("hands the selected batch over once and charges unreached versions after " <> show successful <> " successes") $ do
+            let versions = map version ["1.0.0", "2.0.0", "3.0.0"]
+                fault = protocolFault "the store never answered"
+            store <- storeWith versions (Just (sampleManifest packageName versions))
+            calls <- newIORef []
+            rec' <- recordingPorts generation
+            counters <- newSweepState
+            let original = fakeMaintenance store
+                handle =
+                    original
+                        { storeFacts = (storeFacts original){factDeleteCeiling = AtMost 1}
+                        , deleteVersions = \_ selected -> do
+                            modifyIORef' calls (<> [selected])
+                            pure (zip selected (replicate successful VersionRemoved <> repeat (VersionUnreached fault)))
+                        }
+            context <- evalContext
+            halt <-
+                sweepPackage
+                    testPacing{swpDeletionCap = 2}
+                    (recPorts rec')
+                    counters
+                    (testMount handle [denyRule] [])
+                    context
+                    generation
+                    packageName
+                    (served ["1.0.0", "2.0.0", "3.0.0"])
+            readIORef calls `shouldReturn` [take 2 versions]
+            readIORef (stIssued counters) `shouldReturn` 2
+            halt `shouldBe` Just (HaltDeletionCap 2 2 generation)
+            recResults rec'
+                `shouldReturn` (replicate 3 SweepExamined <> [SweepGuardSkipped] <> replicate successful SweepDeleted <> replicate (2 - successful) SweepKept)
+
     it "hands over what the cap allows, holds the rest back, and halts" $ do
         store <- storeWith (map version ["1.0.0", "2.0.0"]) (Just (sampleManifest packageName (map version ["1.0.0", "2.0.0"])))
         rec' <- recordingPorts generation
