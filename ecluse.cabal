@@ -20,6 +20,7 @@ build-type:    Simple
 extra-source-files:
   acceptance/criteria.json
   bench/corpus/npm/*.json
+  bench/corpus/pypi/*.json
   bench/corpus/pins.json
   core/test/unit/fixtures/npm/*.json
   core/test/unit/fixtures/version-ordering.txt
@@ -577,8 +578,12 @@ library ecluse-test-support
     Ecluse.Test.Container.Image
     Ecluse.Test.Containers
     Ecluse.Test.Corpus
+    Ecluse.Test.Corpus.Npm
+    Ecluse.Test.Corpus.PyPI
     Ecluse.Test.Credential
     Ecluse.Test.Cve
+    Ecluse.Test.EcosystemBench
+    Ecluse.Test.EcosystemBench.Types
     Ecluse.Test.Json
     Ecluse.Test.Log
     Ecluse.Test.Maintenance

@@ -2,63 +2,38 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Work-per-request benches for the response-bound guards ("Ecluse.Core.Security"):
-the bounded body read that caps an upstream response, the JSON nesting-depth guard, and
-the version-count guard. These cheap checks protect the proxy from a hostile or oversized
-upstream document.
-
-The bounded read runs over a multi-megabyte body. The structural guards run over each
-corpus document, so the benches report their cost across the real distribution. They also
-run over a synthetic packument scaled toward @100k@ versions, the size at which an
-accidentally super-linear guard would bite. The synthetic generator serves __only__ that
-stress case.
+{- | Measure response bounds over each ecosystem's wire documents and projected releases.
+Parsed documents enter the nesting guard without timing their decoding.
 -}
-module Ecluse.Core.SecurityBench (
-    benchmarks,
-) where
+module Ecluse.Core.SecurityBench (benchmarks) where
 
-import Data.Aeson (Value)
 import Data.ByteString qualified as BS
-import Ecluse.Bench.Corpus (
-    LoadedEntry,
-    entryInfo,
-    entryName,
-    syntheticPackageInfo,
-    syntheticPackumentValue,
- )
+import Ecluse.Bench.Corpus (entryInfo, entryName, syntheticPackageInfo)
 import Ecluse.Core.Package (PackageInfo)
-import Ecluse.Core.Security (
-    LimitError,
-    boundedRead,
-    checkNestingDepth,
-    checkVersionCount,
-    defaultLimits,
- )
+import Ecluse.Core.Security (LimitError, boundedRead, checkVersionCount, defaultLimits)
+import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnf, whnfIO)
 
--- | The bounded-read and structural-guard benches.
-benchmarks :: [LoadedEntry] -> Benchmark
-benchmarks loaded =
-    bgroup
-        "security guards"
-        ( [ env (pure bodyChunks) $ \chunks ->
-                bench "boundedRead (8 MiB body, 64 KiB chunks)" (whnfIO (boundedReadDepth chunks))
-          ]
+-- | Exercise bounded reads and both structural guards on real and synthetic inputs.
+benchmarks :: EcosystemBench -> Benchmark
+benchmarks ecosystem =
+    bgroup "security guards" $
+        [env (pure bodyChunks) $ \chunks -> bench "boundedRead (8 MiB body, 64 KiB chunks)" (whnfIO (boundedReadDepth chunks))]
             <> [ bgroup
-                    (entryName le)
-                    [ bench "checkNestingDepth" (whnf nestingDepth value)
-                    , bench "checkVersionCount" (whnf versionCountDepth (entryInfo le))
+                    (entryName entry)
+                    [ bench "checkNestingDepth" (whnf (ebNestingDepth ecosystem) document)
+                    , bench "checkVersionCount" (whnf versionCountDepth (entryInfo entry))
                     ]
-               | le@(_, _, value) <- loaded
+               | entry@(_, _, _, document) <- ebCorpus ecosystem
                ]
-            <> [ bench "checkNestingDepth (synthetic / 100000)" (whnf nestingDepth (syntheticPackumentValue 100000))
-               , bench "checkVersionCount (synthetic / 2000)" (whnf versionCountDepth (syntheticPackageInfo 2000))
+            <> [ bench
+                    "checkNestingDepth (synthetic / 100000)"
+                    (whnf (either (const (-1)) (ebNestingDepth ecosystem)) (ebReadDocument ecosystem (ebSynthetic ecosystem 100000)))
+               , bench
+                    "checkVersionCount (synthetic / 2000)"
+                    (whnf (either (const (-1)) versionCountDepth) (syntheticPackageInfo ecosystem 2000))
                ]
-        )
 
-{- | Drain a chunked body through 'boundedRead', forcing the assembled length. Each run
-builds a fresh cursor, so every measured iteration reads the whole body from the start.
--}
 boundedReadDepth :: [ByteString] -> IO Int
 boundedReadDepth chunks = do
     cursor <- newIORef chunks
@@ -69,22 +44,11 @@ boundedReadDepth chunks = do
         [] -> ([], BS.empty)
         (c : cs) -> (cs, c)
 
-{- | An 8 MiB body presented as 64 KiB chunks. Every chunk shares one buffer, so the
-input is compact while 'boundedRead' still accumulates the full eight megabytes.
--}
 bodyChunks :: [ByteString]
 bodyChunks = replicate 128 (BS.replicate 65536 0x61)
 
--- | Run the nesting-depth guard, forcing its decision (which traverses the value).
-nestingDepth :: Value -> Int
-nestingDepth value = either limitErrorCode (const 1) (checkNestingDepth defaultLimits value)
-
--- | Run the version-count guard, forcing its decision.
 versionCountDepth :: PackageInfo -> Int
 versionCountDepth info = either limitErrorCode (const 1) (checkVersionCount defaultLimits info)
 
-{- | A sentinel for the limit-exceeded branch the benches never expect, so the result is
-a forced 'Int'.
--}
 limitErrorCode :: LimitError -> Int
 limitErrorCode _ = -1

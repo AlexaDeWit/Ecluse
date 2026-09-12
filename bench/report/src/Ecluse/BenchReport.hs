@@ -2,31 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The pure rendering core behind the @bench-report@ executable. It turns the
-work-per-request benchmark CSV (@tasty-bench --csv@) into the structured Markdown
-report the CI run summary shows. It stays apart from the file-reading shell, so the
-tests exercise the parse, the grouping, and the rendering deterministically.
-
-The CSV is @tasty-bench@'s own format: a @Name,Mean (ps),2*Stdev (ps)@ header, then
-one row per bench. The header gains @Allocated,Copied,Peak Memory@ when the RTS runs
-with @-T@, as the benchmark component bakes in. The @Name@ column is the dot-joined
-tasty path, quoted RFC-4180 style only when it carries a comma or a quote. Two of its
-quirks shape this module:
-
-  * __The dot-joined path is ambiguous.__ Group names contain dots
-    (@rules.evalRules@) but no current leaf bench name does. 'splitName' therefore
-    takes the last dot segment as the bench and everything before it as the group. A
-    future bench whose own name contains a dot would fold its head into the group
-    heading: a cosmetic misfiling, never lost data.
-
-  * __Peak Memory is not a per-bench figure.__ It is the RTS's process-wide
-    high-water mark, at megabyte granularity. The column therefore only ever rises
-    down the file. The report's reading notes say so, because a per-bench reading
-    would mislead.
-
-The generator tests and complexity assertions that share the benchmark tree are HUnit
-cases, which @tasty-bench@ omits from the CSV. Their verdicts survive only in the raw
-console output, which the report carries in a collapsed section.
+{- | Render benchmark CSV rows as grouped Markdown with separate ecosystem sections.
+Console output carries generator and complexity verdicts omitted from the CSV.
 -}
 module Ecluse.BenchReport (
     -- * The parsed CSV
@@ -50,9 +27,7 @@ import Data.Foldable1 qualified as Foldable1
 import Data.Text qualified as T
 import Numeric (showFFloat)
 
-{- | One bench's CSV row, as 'parseCsv' reads it. The GC-stats columns are absent when the
-run lacked @+RTS -T@.
--}
+-- | A CSV row with optional GC statistics when the run enabled RTS statistics.
 data BenchRow = BenchRow
     { rowGroup :: Text
     -- ^ The tasty path above the bench: the group heading it appears under.
@@ -76,9 +51,7 @@ data BenchRow = BenchRow
 tierPrefix :: Text
 tierPrefix = "All.ecluse-core (work-per-request)."
 
-{- | Split a CSV @Name@ into its group heading and bench name at the last dot. That is
-correct only while groups contain dots and no leaf name does, as is true today.
--}
+-- | Split the last dot-delimited component as the leaf, retaining dotted group names.
 splitName :: Text -> (Text, Text)
 splitName name =
     case T.breakOnEnd "." stripped of
@@ -87,9 +60,7 @@ splitName name =
   where
     stripped = fromMaybe name (T.stripPrefix tierPrefix name <|> T.stripPrefix "All." name)
 
-{- | Parse the @tasty-bench --csv@ output. It accepts the six-column GC-stats shape
-(@+RTS -T@, the CI posture) and the plain three-column shape, and rejects anything else.
--}
+-- | Accept GC-statistics or time-only CSV, rejecting unknown headers and malformed rows.
 parseCsv :: Text -> Either Text [BenchRow]
 parseCsv raw =
     case filter (not . T.null) (map (T.dropWhileEnd (== '\r')) (T.lines raw)) of
@@ -98,8 +69,6 @@ parseCsv raw =
             gcStats <- parseHeader header
             traverse (parseRow gcStats) rows
 
--- Whether the header is the GC-stats shape (True) or the plain time-only shape
--- (False). Any other header counts as malformed.
 parseHeader :: Text -> Either Text Bool
 parseHeader header = do
     fields <- splitRecord header
@@ -108,7 +77,6 @@ parseHeader header = do
         ["Name", "Mean (ps)", "2*Stdev (ps)"] -> Right False
         _ -> Left ("unrecognised CSV header: " <> header)
 
--- One data row, at the arity the header promised.
 parseRow :: Bool -> Text -> Either Text BenchRow
 parseRow gcStats line = do
     fields <- splitRecord line
@@ -157,9 +125,7 @@ splitRecord line = go line
             Just rest' -> first ((chunk <> "\"") <>) <$> quoted rest'
             Nothing -> Right (chunk, T.drop 1 rest)
 
-{- | Group parsed rows under their group headings. Both the groups' first-appearance
-order and the row order within each survive: the tree order the bench run reported in.
--}
+-- | Group rows by heading, preserving first appearance and row order.
 groupRows :: [BenchRow] -> [(Text, NonEmpty BenchRow)]
 groupRows rows =
     [ (grp, grouped)
@@ -167,18 +133,14 @@ groupRows rows =
     , grouped <- maybeToList (nonEmpty (filter ((== grp) . rowGroup) rows))
     ]
 
-{- | What 'renderReport' works from. The console output is the only carrier of the
-generator-test and complexity-assertion verdicts.
--}
+-- | CSV results and the console verdicts that benchmark rows omit.
 data ReportInput = ReportInput
     { riCsv :: Either Text [BenchRow]
     , riConsoleLog :: Maybe Text
     }
     deriving stock (Eq, Show)
 
-{- | Render the full Markdown report. A failed or empty CSV renders the loud note in place
-of the tables, so the summary never silently shows nothing.
--}
+-- | Render measurements or an explicit missing-results note when CSV parsing failed.
 renderReport :: ReportInput -> Text
 renderReport input =
     T.unlines (preamble <> body <> consoleSection (riConsoleLog input) <> readingNotes)
@@ -190,7 +152,19 @@ renderReport input =
             let groups = groupRows rows
              in operatingPoint (length rows) (length groups)
                     <> atAGlance groups
-                    <> concatMap groupSection groups
+                    <> ecosystemSections groups
+
+ecosystemSections :: [(Text, NonEmpty BenchRow)] -> [Text]
+ecosystemSections groups = concatMap section (ordNub (map (ecosystemSection . fst) groups))
+  where
+    section ecosystem =
+        maybe [] (\name -> ["### " <> name, ""]) ecosystem
+            <> concatMap
+                (groupSectionAt (if isJust ecosystem then "#### " else "### "))
+                (filter ((== ecosystem) . ecosystemSection . fst) groups)
+
+ecosystemSection :: Text -> Maybe Text
+ecosystemSection group = fst . T.breakOn "." <$> T.stripPrefix "ecosystem: " group
 
 preamble :: [Text]
 preamble =
@@ -198,7 +172,7 @@ preamble =
     , ""
     , "Inform-only: time and allocations are reported for a human to read and trend, never"
         <> " compared to a threshold. Allocations (from GC stats, +RTS -T) are the"
-        <> " machine-independent signal to track across commits; time varies with the runner."
+        <> " machine-independent signal to track across commits. Time varies with the runner."
         <> " The run's only red state is a literal benchmark failure: a build error, a crashed"
         <> " harness, or a tripped complexity assertion."
     , ""
@@ -208,7 +182,7 @@ noResults :: Text -> [Text]
 noResults err =
     [ "**No benchmark results to render** -- " <> err <> "."
     , ""
-    , "This note only means the summary has no table to show; a genuine benchmark"
+    , "This note only means the summary has no table to show. A benchmark"
         <> " failure reds the run on its own. The run's artifact and the raw console"
         <> " output carry whatever the run produced."
     , ""
@@ -221,17 +195,17 @@ operatingPoint benches groups =
     , "| knob | value |"
     , "| --- | --- |"
     , opRow "benches measured" (show benches <> " benches in " <> show groups <> " groups")
-    , opRow "corpus" "real-world packument captures (bench/corpus/npm) plus synthetic scaled inputs"
-    , opRow "optimisation" "-O1, the shipped build posture; no benchmark-only flags"
+    , opRow "corpus" "frozen ecosystem captures (bench/corpus) plus synthetic scaled inputs"
+    , opRow "optimisation" "-O1, the shipped build posture"
     , opRow
         "precision"
-        ( "each bench iterates until its relative stdev meets the run's --stdev target;"
+        ( "each bench iterates until its relative stdev meets the run's --stdev target."
             <> " the 2*stdev column is the achieved bound"
         )
     , opRow
         "correctness guards"
         ( "generator tests and complexity assertions run in the same tree (raw output"
-            <> " below); a trip is this run's one red state"
+            <> " below). A trip is this run's one red state"
         )
     , ""
     ]
@@ -248,8 +222,6 @@ atAGlance groups =
         <> map glanceRow groups
         <> [""]
 
--- One at-a-glance row per group, linked to its detail section and headlined by its
--- slowest bench.
 glanceRow :: (Text, NonEmpty BenchRow) -> Text
 glanceRow (grp, rows) =
     cells
@@ -262,9 +234,9 @@ glanceRow (grp, rows) =
   where
     slowest = Foldable1.maximumBy (compare `on` rowMeanPs) rows
 
-groupSection :: (Text, NonEmpty BenchRow) -> [Text]
-groupSection (grp, rows) =
-    [ "### " <> grp
+groupSectionAt :: Text -> (Text, NonEmpty BenchRow) -> [Text]
+groupSectionAt heading (grp, rows) =
+    [ heading <> grp
     , ""
     , "| bench | mean | 2*stdev | allocated | copied | peak |"
     , "| --- | --: | --: | --: | --: | --: |"
@@ -286,7 +258,7 @@ groupSection (grp, rows) =
 consoleSection :: Maybe Text -> [Text]
 consoleSection = \case
     Nothing ->
-        [ "_The console log was not captured; the generator-test and complexity-assertion"
+        [ "_The console log was not captured. The generator-test and complexity-assertion"
             <> " verdicts are only in the job log._"
         , ""
         ]
@@ -307,18 +279,17 @@ readingNotes :: [Text]
 readingNotes =
     [ "### Reading the numbers"
     , ""
-    , "- **Inform-only.** Time is runner-dependent; nothing here gates, and there is no"
+    , "- **Inform-only.** Time is runner-dependent. Nothing here gates, and there is no"
         <> " cross-run baseline."
     , "- **Allocated and copied are per-iteration GC-stats deltas** -- the"
         <> " machine-independent signal to trend."
     , "- **Peak memory is a process-wide high-water mark** at megabyte granularity: it"
         <> " only ever rises down the table, so read it as the run's footprint, never as"
         <> " one bench's cost."
-    , "- **The generator tests and complexity assertions are not in the CSV**; their"
+    , "- **The generator tests and complexity assertions are not in the CSV**. Their"
         <> " verdicts live in the raw console output, and a trip is the run's one red state."
     ]
 
--- A Markdown table row from its cells.
 cells :: [Text] -> Text
 cells xs = "| " <> T.intercalate " | " xs <> " |"
 
@@ -331,20 +302,14 @@ anchor = T.map dashify . T.toLower . T.filter keep
     dashify ' ' = '-'
     dashify c = c
 
-{- | A picosecond duration scaled to a readable unit (ps, ns, us, ms, s) at three
-significant figures.
--}
+-- | Format picoseconds at three significant figures using the appropriate time unit.
 formatPs :: Integer -> Text
 formatPs = scaled 1000 ("ps" :| ["ns", "us", "ms", "s"])
 
-{- | A byte count scaled to a readable unit (B, KiB, MiB, GiB) at three significant
-figures.
--}
+-- | Format bytes at three significant figures using binary units.
 formatBytes :: Integer -> Text
 formatBytes = scaled 1024 ("B" :| ["KiB", "MiB", "GiB"])
 
--- Scale a quantity through successive units (one division by the step each), then
--- render it at three significant figures against the unit it settled on.
 scaled :: Double -> NonEmpty Text -> Integer -> Text
 scaled step units n = pick (fromIntegral n) units
   where
@@ -358,9 +323,7 @@ scaled step units n = pick (fromIntegral n) units
         | otherwise = fmt 2 v
     fmt d v = toText (showFFloat (Just d) v "")
 
-{- | Drop ANSI CSI escape sequences (colours, cursor moves) from console output, so
-the raw log embeds cleanly in Markdown.
--}
+-- | Remove console colour and cursor sequences before embedding Markdown output.
 stripAnsi :: Text -> Text
 stripAnsi t = case T.breakOn "\ESC[" t of
     (before, "") -> before

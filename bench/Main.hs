@@ -2,113 +2,96 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Run work-per-request benchmarks and synthetic-corpus checks in one Tasty tree.
-Allocated bytes provide the machine-independent comparison. Timing remains informational.
+{- | Run work-per-request benchmarks and generator contracts for every registered ecosystem.
+Cache and stream measurements share no format-specific inputs and run once.
 -}
 module Main (main) where
 
-import Data.Aeson (Value (Object, String))
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Ecluse.Bench.Corpus (
-    benchPackageName,
-    benchPackageText,
-    loadCorpus,
-    projectInfo,
-    syntheticPackumentBytes,
-    syntheticPackumentValue,
-    versionKeysOf,
-    withLoaded,
- )
+import Ecluse.Bench.Corpus (benchEvalContext, syntheticInput)
 import Ecluse.Core.CacheBench qualified as CacheBench
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.MergeBench qualified as MergeBench
-import Ecluse.Core.Package (infoVersions, mkPackageName)
-import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
-import Ecluse.Core.Registry.Npm.Filter (rewriteVersion)
-import Ecluse.Core.Registry.Npm.Project (parseVersionList)
-import Ecluse.Core.Registry.Npm.Route (tarballPath)
+import Ecluse.Core.Package (artUrl, infoVersions, pkgArtifacts)
 import Ecluse.Core.RouteBench qualified as RouteBench
 import Ecluse.Core.RulesBench qualified as RulesBench
 import Ecluse.Core.SecurityBench qualified as SecurityBench
 import Ecluse.Core.SelectiveBench qualified as SelectiveBench
 import Ecluse.Core.ServeBench qualified as ServeBench
 import Ecluse.Core.StreamBench qualified as StreamBench
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.VersionBench qualified as VersionBench
 import Ecluse.Core.WireBench qualified as WireBench
 import Ecluse.Test.Corpus (syntheticProxyBase)
+import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
+import Ecluse.Test.Server.Transform (serveDocumentBytes)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Bench (bgroup, defaultMain)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 main :: IO ()
 main = do
-    -- Decode the curated corpus once, before the measured window, so no bench times it.
-    -- Eager, not a tasty 'env' resource, which the bench reporters mishandle mixed with HUnit.
-    corpusEntries <- withLoaded <$> loadCorpus
+    ecosystems <- ecosystemBenches
     cacheBenchmarks <- CacheBench.benchmarks
     defaultMain
         [ bgroup
             "ecluse-core (work-per-request)"
-            [ RouteBench.benchmarks
-            , WireBench.benchmarks corpusEntries
-            , SelectiveBench.benchmarks corpusEntries
-            , VersionBench.benchmarks corpusEntries
-            , RulesBench.benchmarks corpusEntries
-            , MergeBench.benchmarks corpusEntries
-            , ServeBench.benchmarks corpusEntries
-            , StreamBench.benchmarks
-            , SecurityBench.benchmarks corpusEntries
-            , cacheBenchmarks
-            ]
-        , generatorTests
+            (map ecosystemGroup ecosystems <> [StreamBench.benchmarks, cacheBenchmarks])
+        , testGroup "synthetic generators" (map generatorTests ecosystems)
         ]
 
-generatorTests :: TestTree
-generatorTests =
+ecosystemGroup :: EcosystemBench -> TestTree
+ecosystemGroup ecosystem =
+    bgroup
+        ("ecosystem: " <> toString (ecosystemName (ebEcosystem ecosystem)))
+        [ group ecosystem
+        | group <-
+            [ RouteBench.benchmarks
+            , WireBench.benchmarks
+            , SelectiveBench.benchmarks
+            , VersionBench.benchmarks
+            , RulesBench.benchmarks
+            , MergeBench.benchmarks
+            , ServeBench.benchmarks
+            , SecurityBench.benchmarks
+            ]
+        ]
+
+generatorTests :: EcosystemBench -> TestTree
+generatorTests ecosystem =
     testGroup
-        "synthetic packument generator"
-        [ testCase "yields the requested version count" $
-            length (versionKeysOf (syntheticPackumentValue sampleCount)) @?= sampleCount
-        , testCase "decodes with every version preserved" $
-            case parseVersionList (RegistryResponse 200 (syntheticPackumentBytes sampleCount)) of
-                Left err -> assertFailure ("synthetic packument did not decode: " <> show err)
-                Right versions -> length versions @?= sampleCount
-        , testCase "projects with every version preserved" $
-            Map.size (infoVersions (projectInfo benchPackageName (syntheticPackumentValue sampleCount)))
-                @?= sampleCount
-        , testCase "rewrites every tarball onto the proxy origin" $ do
-            let urls = tarballUrlsOf (rewriteAllVersions (syntheticPackumentValue sampleCount))
-            length urls @?= sampleCount
+        (toString (ecosystemName (ebEcosystem ecosystem)))
+        [ testCase "decodes every generated release" $ do
+            versions <- expectRight (ebDecode ecosystem name raw)
+            length versions @?= sampleCount
+        , testCase "projects every measured synthetic size" $
+            for_ [1, 32, 500, 2000, 4096, 8192] $ \count -> do
+                (info, _) <- expectRight (ebProject ecosystem name (ebSynthetic ecosystem count))
+                Map.size (infoVersions info) @?= count
+        , testCase "selective projection agrees with the full release" $ do
+            (info, _) <- expectRight (ebProject ecosystem name raw)
+            for_ (Map.keys (infoVersions info)) $ \key -> do
+                selected <- expectRight (ebSelective ecosystem name (mkVersion (ebEcosystem ecosystem) key) raw)
+                selected @?= Map.lookup key (infoVersions info)
+        , testCase "rewrites every artifact onto the proxy origin" $ do
+            input@(_, original) <- expectRight (syntheticInput ecosystem sampleCount)
+            bytes <- serveDocumentBytes (ebMetadata ecosystem) benchEvalContext input
+            (served, _) <- expectRight (ebProject ecosystem name bytes)
+            let artifacts info = concatMap (toList . pkgArtifacts) (Map.elems (infoVersions info))
+            Map.size (infoVersions served) @?= sampleCount
+            length (artifacts served) @?= length (artifacts original)
             assertBool
-                "every rewritten tarball should sit under the proxy origin"
-                (all (rewrittenPrefix `T.isPrefixOf`) urls)
+                "every artifact URL uses the proxy origin"
+                (all (((syntheticProxyBase <> "/") `T.isPrefixOf`) . artUrl) (artifacts served))
+        , testCase "prepares the large wire-guard input" $ do
+            document <- expectRight (ebReadDocument ecosystem (ebSynthetic ecosystem 100000))
+            ebNestingDepth ecosystem document @?= 1
         ]
   where
-    sampleCount :: Int
     sampleCount = 500
+    name = ebSyntheticName ecosystem
+    raw = ebSynthetic ecosystem sampleCount
 
-    rewriteAllVersions :: Value -> Value
-    rewriteAllVersions = \case
-        Object top
-            | Just (Object versions) <- KeyMap.lookup "versions" top ->
-                Object (KeyMap.insert "versions" (Object (fmap (rewriteVersion versionPrefix) versions)) top)
-        other -> other
-
-    versionPrefix :: Text -> Maybe Text
-    versionPrefix file = (\path -> syntheticProxyBase <> "/" <> path) <$> tarballPath (mkPackageName Npm Nothing benchPackageText) file
-
-    rewrittenPrefix :: Text
-    rewrittenPrefix = syntheticProxyBase <> "/" <> benchPackageText <> "/-/"
-
-tarballUrlsOf :: Value -> [Text]
-tarballUrlsOf value =
-    [ url
-    | Object top <- [value]
-    , Just (Object versions) <- [KeyMap.lookup "versions" top]
-    , (_, versionValue) <- KeyMap.toList versions
-    , Object versionObject <- [versionValue]
-    , Just (Object dist) <- [KeyMap.lookup "dist" versionObject]
-    , Just (String url) <- [KeyMap.lookup "tarball" dist]
-    ]
+expectRight :: (Show err) => Either err value -> IO value
+expectRight = either (assertFailure . show) pure

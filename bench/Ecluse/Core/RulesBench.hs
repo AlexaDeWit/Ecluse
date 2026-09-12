@@ -2,64 +2,40 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Work-per-request benches for the rules engine ("Ecluse.Core.Rules"): evaluating a
-rule set against every version of a packument. That sweep decides which versions survive
-a metadata response.
-
-The realistic benches run over the curated real-world corpus, with each package's real
-version set and per-version signals. A synthetic bench scales the version count and
-asserts the sweep stays linear, guarding the accidentally quadratic regression a
-per-version rule fold can hide. Evaluation is effectful: the engine 'prepare's rules,
-then evaluates each version in 'IO'. The per-version sweep is therefore the measured 'IO'
-work. The synthetic generator serves __only__ this complexity-scaling assertion, never
-the realistic case.
+{- | Measure rule evaluation over each ecosystem's projected metadata.
+Synthetic release counts check the growth of the same rule sweep.
 -}
-module Ecluse.Core.RulesBench (
-    benchmarks,
-) where
+module Ecluse.Core.RulesBench (benchmarks) where
 
 import Data.Map.Strict qualified as Map
-import Ecluse.Bench.Corpus (
-    LoadedEntry,
-    benchEvalContext,
-    benchRules,
-    entryInfo,
-    entryName,
-    syntheticPackageInfo,
- )
+import Ecluse.Bench.Corpus (benchEvalContext, benchRules, entryInfo, entryName, syntheticPackageInfo)
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
 import Ecluse.Core.Package (PackageInfo, infoVersions)
 import Ecluse.Core.Rules (evalRules, prepare)
-import Ecluse.Core.Rules.Types (
-    Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
-    completeEvidence,
- )
+import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), completeEvidence)
+import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.Rules (inertRuleDeps)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 
--- | The rule-sweep benches: realistic over the corpus, scaled over synthetic versions.
-benchmarks :: [LoadedEntry] -> Benchmark
-benchmarks loaded =
+-- | Measure captured rule sweeps and their growth across synthetic release counts.
+benchmarks :: EcosystemBench -> Benchmark
+benchmarks ecosystem =
     bgroup "rules.evalRules" $
-        [ bench (entryName le) (whnfAppIO rulesDepth (entryInfo le))
-        | le <- loaded
+        [ bench (entryName entry) (whnfAppIO rulesDepth (entryInfo entry))
+        | entry <- ebCorpus ecosystem
         ]
             <> [ notWorseThanLinearIO
                     "scales linearly in version count"
                     (64, 8192)
-                    (syntheticPackageInfo . fromIntegral)
-                    rulesDepth
+                    (syntheticPackageInfo ecosystem . fromIntegral)
+                    (either (const (pure (-1))) rulesDepth)
                ]
 
-{- | Evaluate the rule set against every version, forcing each decision. This sweep is the
-per-request work a packument response performs, since 'prepare' runs once at boot.
--}
 rulesDepth :: PackageInfo -> IO Int
 rulesDepth info = do
     prepared <- prepare inertRuleDeps benchRules
     sum <$> traverse (fmap decisionCode . evalRules benchEvalContext prepared . completeEvidence) (Map.elems (infoVersions info))
 
--- | A distinct code per decision arm, forcing the engine's verdict to a constructor.
 decisionCode :: Decision -> Int
 decisionCode = \case
     Admitted{} -> 1

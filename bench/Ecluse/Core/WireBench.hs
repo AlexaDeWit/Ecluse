@@ -2,50 +2,31 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Measure npm metadata decoding and projection over the captured package corpus.
-Each result forces every version through its decoded or projected fields.
+{- | Measure each adapter's wire decoding and full metadata projection.
+Both operations receive the original bytes on every iteration.
 -}
-module Ecluse.Core.WireBench (
-    benchmarks,
-) where
+module Ecluse.Core.WireBench (benchmarks) where
 
-import Data.Aeson (Value)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
-import Ecluse.Bench.Corpus (LoadedEntry, entryName)
-import Ecluse.Core.Package (PackageInfo, PackageName, artHashes, infoVersions, pkgArtifacts)
-import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
-import Ecluse.Core.Registry.Metadata (MetadataError)
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
-import Ecluse.Core.Registry.Npm.Project (parseVersionList)
-import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Test.Corpus (CorpusPackage (cpPackage))
+import Ecluse.Bench.Corpus (entryName)
+import Ecluse.Core.Package (PackageInfo, artHashes, infoVersions, pkgArtifacts)
+import Ecluse.Test.Corpus (cpPackage)
+import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf)
 
--- | The decode and projection benches over each corpus entry.
-benchmarks :: [LoadedEntry] -> Benchmark
-benchmarks loaded =
+-- | Decode and project each captured document through its registered adapter.
+benchmarks :: EcosystemBench -> Benchmark
+benchmarks ecosystem =
     bgroup
         "wire+project (per package)"
         [ bgroup
-            (entryName le)
-            [ bench "decode" (whnf decodeDepth raw)
-            , bench "decode+project" (whnf projectDepth (raw, cpPackage cp))
+            (entryName entry)
+            [ bench "decode" (whnf (either (const (-1)) length . ebDecode ecosystem (cpPackage package)) raw)
+            , bench "decode+project" (whnf (either (const (-1)) (infoDepth . fst) . ebProject ecosystem (cpPackage package)) raw)
             ]
-        | le@(cp, raw, _) <- loaded
+        | entry@(package, raw, _, _) <- ebCorpus ecosystem
         ]
 
--- | Decode bytes through 'parseVersionList', forcing every version.
-decodeDepth :: ByteString -> Int
-decodeDepth raw = either (const (-1)) length (parseVersionList (RegistryResponse 200 raw))
-
--- | Decode and project to 'PackageInfo' in one pass, forcing every version.
-projectDepth :: (ByteString, PackageName) -> Int
-projectDepth (raw, name) = infoDepthE (projectNpmManifest defaultLimits name raw)
-
-infoDepthE :: Either MetadataError (PackageInfo, Value) -> Int
-infoDepthE = either (const (-1)) (infoDepth . fst)
-
--- | Force every projected version by folding a deep field (the artifact digests) across the version map.
 infoDepth :: PackageInfo -> Int
-infoDepth info = Map.foldr (\pd acc -> length (artHashes (NE.head (pkgArtifacts pd))) + acc) 0 (infoVersions info)
+infoDepth info = Map.foldr (\details total -> sum (map (length . artHashes) (NE.toList (pkgArtifacts details))) + total) 0 (infoVersions info)

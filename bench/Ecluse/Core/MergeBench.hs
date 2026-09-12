@@ -2,8 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Measure merging overlapping source snapshots from the corpus and synthetic fixtures.
-Snapshot construction stays outside the measured merge operation.
+{- | Measure merge operations over each ecosystem's projected corpus.
+Synthetic inputs check the operation's growth with release count.
 -}
 module Ecluse.Core.MergeBench (
     benchmarks,
@@ -11,7 +11,6 @@ module Ecluse.Core.MergeBench (
 
 import Data.Map.Strict qualified as Map
 import Ecluse.Bench.Corpus (
-    LoadedEntry,
     entryInfo,
     entryName,
     syntheticPackageInfo,
@@ -24,21 +23,22 @@ import Ecluse.Core.Package.Merge (
     mergePackuments,
  )
 import Ecluse.Core.Snapshot (Snapshot (Snapshot), digestOf)
+import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.Snapshot (syntheticSnapshot)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf)
 
 -- | The merge benches: realistic over the corpus, scaled over synthetic versions.
-benchmarks :: [LoadedEntry] -> Benchmark
-benchmarks loaded =
+benchmarks :: EcosystemBench -> Benchmark
+benchmarks ecosystem =
     bgroup "package.mergePackuments" $
         [ bench (entryName le) (whnf mergeDepth (Snapshot (digestOf bytes) (entryInfo le)))
-        | le@(_, bytes, _) <- loaded
+        | le@(_, bytes, _, _) <- ebCorpus ecosystem
         ]
             <> [ notWorseThanLinear
                     "scales linearly in version count"
                     (64, 8192)
-                    (syntheticSnapshot . syntheticPackageInfo . fromIntegral)
-                    mergeDepth
+                    (fmap syntheticSnapshot . syntheticPackageInfo ecosystem . fromIntegral)
+                    (either (const (-1)) mergeDepth)
                ]
 
 mergeDepth :: Snapshot PackageInfo -> Int

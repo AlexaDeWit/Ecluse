@@ -1,58 +1,25 @@
 #!/usr/bin/env bash
-#
-# Capture the real-world packument corpus that drives both benchmark layers, from
-# pinned npm registry packuments.
-#
-# The corpus packages and their capture pins live in bench/corpus/pins.json, a
-# plain data file: NOT an npm project, NOT Renovate-managed. That file is the
-# shared registry catalogue. This script reads its `pins` (npm name -> captured
-# version). The Haskell Ecluse.Test.RegistryCapture reads the same file, its
-# `pins` and its `smokeNames`, so both sides have one curated source.
-#
-# The committed captures are FROZEN benchmark data. This script is the
-# regeneration tool, the analogue of scripts/gen-version-fixtures.sh. Run it
-# DELIBERATELY when the pins or the capture policy change, never on an automatic
-# bump. Its output (bench/corpus/npm/*.full.json) is committed, and the
-# work-per-request micro-benches (Ecluse.Bench.Corpus) and the load benchmarks
-# harness (Ecluse.BenchLoad.Npm) read it at run time.
-#
-# Usage:  task gen-bench-corpus   (runs inside the Nix dev shell, which carries
-#                                  node + node-semver on NODE_PATH)
-#
-# Determinism against the pin: for each package@version pin, this script fetches
-# the live full packument. It then reduces the packument to the versions at or
-# below the pin. A re-run without a pin change reproduces the same fixture,
-# because it drops every version published after the pin. The dataset stays
-# committed and deterministic, and moves only when someone edits a pin and
-# re-runs the script.
-#
-# Capture policy (preserve the real shape, trim only noise):
-#   * KEEP every stable release (no prerelease tag) at or below the pin, with its
-#     full per-version manifest. That manifest carries the heterogeneous shape the
-#     hot paths read and re-serialise: dependency, peerDependencies, engines,
-#     deprecated, scripts, and dist.
-#   * DROP the degenerate nightly/canary/dev/insiders PRERELEASE versions. They are
-#     near-identical day-to-day builds (the synthetic generator's degeneracy). For
-#     typescript/react they are the bulk of the size while adding no real shape.
-#   * DROP pure-noise fields no hot path reads: top-level readme/users/_attachments,
-#     and per-version readme / npm operational internals.
-# This script deliberately does NOT regenerate express.full.json. That is the
-# pre-existing untrimmed anchor under core/test/unit/fixtures/npm/, reused in
-# place by the bench and shared with the unit suite.
+# Capture frozen registry metadata using bench/corpus/pins.json.
+# npm uses node-semver to retain stable releases through the pin.
+# PyPI retains PEP 691 files uploaded by the pinned release's last upload.
+# Registry edits and deletions can change a deliberate recapture. Review its diff.
+# Set BENCH_CORPUS_ECOSYSTEM=npm or pypi to capture one ecosystem.
 set -euo pipefail
 
 pins_file="${1:-bench/corpus/pins.json}"
 outdir="${2:-bench/corpus/npm}"
 mkdir -p "$outdir"
 
-node - "$pins_file" "$outdir" <<'JS'
+node - "$pins_file" "$outdir" "${BENCH_CORPUS_ECOSYSTEM:-all}" <<'JS'
 const fs = require("fs");
 const https = require("https");
 const path = require("path");
 const semver = require("semver");
 
-const [pinsPath, outDir] = process.argv.slice(2);
-const pins = JSON.parse(fs.readFileSync(pinsPath, "utf8")).pins || {};
+const [pinsPath, outDir, ecosystem] = process.argv.slice(2);
+const catalogue = JSON.parse(fs.readFileSync(pinsPath, "utf8"));
+const pins = catalogue.pins || {};
+if (!["all", "npm", "pypi"].includes(ecosystem)) throw new Error("unknown corpus ecosystem: " + ecosystem);
 
 // The package name as a filesystem-safe fixture stem: drop the leading scope '@'
 // and turn the scope separator '/' into '-' (so '@types/node' -> 'types-node').
@@ -66,10 +33,11 @@ function registryPath(name) {
   return "/" + name.replace("/", "%2f");
 }
 
-function fetchPackument(name) {
+function fetchDocument(host, requestPath, accept) {
+  const name = host + requestPath;
   return new Promise((resolve, reject) => {
     const req = https.get(
-      { host: "registry.npmjs.org", path: registryPath(name), headers: { accept: "application/json" } },
+      { host, path: requestPath, headers: { accept } },
       (res) => {
         if (res.statusCode !== 200) {
           res.resume();
@@ -92,9 +60,6 @@ function fetchPackument(name) {
   });
 }
 
-// Strip the per-version noise fields no hot path reads, preserving the manifest's
-// real heterogeneous shape (dependencies, peerDependencies, engines, deprecated,
-// scripts, dist, ...).
 function trimVersion(v) {
   for (const k of [
     "readme", "gitHead", "_npmUser", "_npmOperationalInternal", "_hasShrinkwrap",
@@ -107,11 +72,9 @@ function trimVersion(v) {
 
 async function capture(name, pin) {
   if (!semver.valid(pin)) throw new Error(`${name}: pin "${pin}" is not a valid semver version`);
-  const pkmt = await fetchPackument(name);
+  const pkmt = await fetchDocument("registry.npmjs.org", registryPath(name), "application/json");
   const versions = pkmt.versions || {};
 
-  // Keep every stable release at or below the pin; drop prereleases and anything
-  // published past the pin (so the capture is deterministic w.r.t. the pin).
   const kept = {};
   for (const [v, manifestEntry] of Object.entries(versions)) {
     if (semver.valid(v) && semver.prerelease(v) === null && semver.lte(v, pin)) {
@@ -120,23 +83,17 @@ async function capture(name, pin) {
   }
   if (Object.keys(kept).length === 0) throw new Error(`${name}: no stable versions <= ${pin}`);
 
-  // Restrict the time map to the kept versions, keeping the created/modified
-  // bookkeeping keys the projection ignores but a real document carries.
   const time = {};
   const srcTime = pkmt.time || {};
   if (srcTime.created !== undefined) time.created = srcTime.created;
   if (srcTime.modified !== undefined) time.modified = srcTime.modified;
   for (const v of Object.keys(kept)) if (srcTime[v] !== undefined) time[v] = srcTime[v];
 
-  // Rebuild dist-tags so latest is the pin (a kept version) and every other tag that
-  // survives points at a kept version, so no tag dangles onto a dropped prerelease.
   const distTags = { latest: pin };
   for (const [tag, v] of Object.entries(pkmt["dist-tags"] || {})) {
     if (tag !== "latest" && kept[v] !== undefined) distTags[tag] = v;
   }
 
-  // Reassemble a faithful packument: the real top-level fields the wire decode reads,
-  // minus the pure-noise blobs (readme/users/_attachments and the _id/_rev couch keys).
   const out = {};
   out.name = pkmt.name;
   out["dist-tags"] = distTags;
@@ -152,9 +109,51 @@ async function capture(name, pin) {
   console.log(`${name.padEnd(22)} @ ${pin.padEnd(10)} -> ${path.basename(file).padEnd(28)} ${String(Object.keys(kept).length).padStart(5)} versions  ${String(kb).padStart(6)} KiB`);
 }
 
+async function capturePyPI(name, pin) {
+  const pinPath = "/pypi/" + encodeURIComponent(name) + "/" + encodeURIComponent(pin) + "/json";
+  const release = await fetchDocument("pypi.org", pinPath, "application/json");
+  if (!Array.isArray(release.urls) || release.urls.length === 0) throw new Error(name + ": pin has no files");
+  const timestamp = (value, label) => {
+    const time = typeof value === "string" ? Date.parse(value) : NaN;
+    if (!Number.isFinite(time)) throw new Error(name + ": missing or invalid upload time for " + label);
+    return time;
+  };
+  const cutoff = Math.max(...release.urls.map(file => timestamp(file.upload_time_iso_8601, file.filename)));
+  const indexPath = "/simple/" + encodeURIComponent(name) + "/";
+  const index = await fetchDocument("pypi.org", indexPath, "application/vnd.pypi.simple.v1+json");
+  if (!Array.isArray(index.files)) throw new Error(name + ": Simple index has no files");
+  const files = index.files.filter(file => timestamp(file["upload-time"], file.filename) <= cutoff);
+  if (files.length === 0) throw new Error(name + ": capture has no files");
+  const versions = new Set(files.map(file => {
+    const filename = file.filename;
+    if (filename.endsWith(".whl")) return filename.split("-")[1];
+    const stem = filename.replace(/\.(tar\.gz|tar\.bz2|tar\.xz|zip)$/, "");
+    return stem.slice(name.length + 1);
+  }));
+  const out = { ...index, files };
+  if (Array.isArray(index.versions)) out.versions = index.versions.filter(version => versions.has(version));
+  delete out["_last-serial"];
+  if (out.meta) delete out.meta["_last-serial"];
+  const destination = path.join(path.dirname(outDir), "pypi");
+  fs.mkdirSync(destination, { recursive: true });
+  fs.writeFileSync(path.join(destination, name + ".simple.json"), JSON.stringify(out));
+  fs.writeFileSync(path.join(destination, name + ".capture.json"), JSON.stringify({
+    package: name, version: pin,
+    source: "https://pypi.org" + indexPath,
+    mediaType: "application/vnd.pypi.simple.v1+json",
+    pinSource: "https://pypi.org" + pinPath,
+    uploadCutoff: new Date(cutoff).toISOString(),
+    files: files.length
+  }));
+  console.log(name + " @ " + pin + ": " + files.length + " Simple files through " + new Date(cutoff).toISOString());
+}
+
 (async () => {
-  for (const [name, pin] of Object.entries(pins)) {
-    await capture(name, pin);
+  if (ecosystem !== "pypi") {
+    for (const [name, pin] of Object.entries(pins)) await capture(name, pin);
+  }
+  if (ecosystem !== "npm") {
+    for (const [name, pin] of Object.entries(catalogue.pypiPins || {})) await capturePyPI(name, pin);
   }
 })().catch((e) => {
   console.error("gen-bench-corpus failed: " + e.message);
@@ -162,4 +161,4 @@ async function capture(name, pin) {
 });
 JS
 
-echo "captured $(ls -1 "$outdir"/*.full.json | wc -l) packument(s) into $outdir"
+echo "captured ${BENCH_CORPUS_ECOSYSTEM:-all} corpus"
