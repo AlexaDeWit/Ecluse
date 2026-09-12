@@ -591,7 +591,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm
     Ecluse.Test.Registry.PyPI
     Ecluse.Test.Registry.PyPI.Wire
-    Ecluse.Test.Registry.Rubygems.Wire
+    Ecluse.Test.Registry.RubyGems.Wire
     Ecluse.Test.RegistryCapture
     Ecluse.Test.Rules
     Ecluse.Test.Sweep
@@ -793,7 +793,7 @@ test-suite ecluse-core-unit
     Ecluse.Test.LogSpec
     Ecluse.Test.MaintenanceSpec
     Ecluse.Test.Registry.PyPI.WireSpec
-    Ecluse.Test.Registry.Rubygems.WireSpec
+    Ecluse.Test.Registry.RubyGems.WireSpec
     Ecluse.Test.RegistryCaptureSpec
     Ecluse.Test.SupportLinkageSpec
     Ecluse.Worker.Support

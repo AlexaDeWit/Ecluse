@@ -40,7 +40,7 @@ import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Project (parseVersionList)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Registry.PyPI.Wire qualified as PyPI
-import Ecluse.Test.Registry.Rubygems.Wire qualified as Rubygems
+import Ecluse.Test.Registry.RubyGems.Wire qualified as RubyGems
 
 -- | The curated package catalogue: the per-ecosystem smoke names and the benchmark-corpus capture pins, decoded from the shared JSON source.
 data Catalogue = Catalogue
@@ -117,7 +117,7 @@ parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
 parseRegistryVersions eco body = case eco of
     Npm -> rightToMaybe (map renderVersion <$> parseVersionList (RegistryResponse 200 (BSL.toStrict body)))
     PyPI -> PyPI.projectVersions <$> decode' body
-    RubyGems -> Rubygems.listingVersions <$> decode' body
+    RubyGems -> RubyGems.listingVersions <$> decode' body
   where
     decode' :: (FromJSON a) => LByteString -> Maybe a
     decode' = rightToMaybe . eitherDecode
