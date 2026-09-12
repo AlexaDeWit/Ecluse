@@ -1,19 +1,6 @@
 name: Performance Acceptance
 
-# The live performance-acceptance harness. It fetches LIVE packuments for the curated
-# catalogue set and checks Écluse's work-per-request overhead against the
-# version-controlled acceptance budget (acceptance/criteria.json).
-#
-# Standalone and deliberately NON-REQUIRED. The deterministic work-per-request and load
-# benchmarks red only on a literal crash. This job instead REDS on a real budget breach,
-# as a visible red check on the pull request. The team then reacts when real-world
-# conditions degrade, and decides: code regression, or reality outgrew the budget?
-# The `gate` job in ci.yml does not depend on it, and it must not be a branch-protection
-# required check. The red therefore informs without ever blocking a merge. The run is
-# live and non-deterministic, so the harness reports a flaky registry as unavailable,
-# never a breach. It exits non-zero only on an over-budget measurement. The run summary
-# separates the upstream and Écluse overhead legs, leaving room for a later
-# upstream-normalisation column.
+# Benchmark policy: ../../docs/testing.md#benchmarks-non-gating
 on:
   pull_request:
   push:
@@ -67,20 +54,13 @@ jobs:
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # Run the harness. It appends its summary to $GITHUB_STEP_SUMMARY itself and
-      # prints the same report to stdout. `tee` captures that copy as this run's
-      # downloadable report. The pipefail option preserves the harness exit code
-      # through the pipe: non-zero ONLY on a real budget breach, which reds this
-      # (non-required) check. No expression interpolation reaches the run body, so
-      # the step stays injection-free.
+      # pipefail preserves the harness exit code through tee's output capture.
       - name: Run performance acceptance
         run: |
           set -eo pipefail
           nix develop .#ci --command task perf-acceptance 2>&1 | tee perf-acceptance-report.md
 
-      # This run's rendered report, downloadable from the run page even when the run
-      # reds on a breach. A convenience for a human comparing runs by hand: there is
-      # no cross-run baseline store.
+      # Preserve the report when the harness fails.
       - name: Upload this run's report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

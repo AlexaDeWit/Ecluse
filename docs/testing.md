@@ -156,14 +156,24 @@ install, so the harness passes `--only-binary=:all:` and installs a wheel alone,
 ## Benchmarks (non-gating)
 
 Use the benchmark tier to assess cost alongside the seven Cabal test suites. None of its
-three workflows gates a merge. The links below own scheduling, failure semantics, and run options.
+three workflows gates a merge or belongs in branch protection as a required check.
+The workflow YAML owns schedules and run options.
 Each workflow puts its report in the GitHub run summary and uploads the listed files on that run's page.
+Reports support manual comparisons only. No workflow stores a cross-run baseline or consumes another run's results.
 
 | Workflow | Measurement | Downloadable report files |
 |---|---|---|
 | [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt` |
 | [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Full-document and selective-decode overhead on live registry documents against reviewed budgets | `perf-acceptance-report.md` |
 | [Load](../.github/workflows/bench-load.yml) | Throughput and latency under concurrent requests through the composed proxy | `bench-load-results.md` |
+
+Read a red result according to its measurement:
+
+- Work-per-request benchmarks fail on build errors, harness crashes, or failed complexity assertions. They do not compare performance against regression thresholds.
+- Performance acceptance fails on an overhead budget breach. An unavailable live registry produces an unavailable result, not a breach.
+  Its report separates upstream time from Écluse overhead. A breach needs a human decision about a code regression or a budget revision.
+- Load benchmarks use `oha` against the composed proxy. They fail when the harness cannot boot, `oha` cannot run, or a scenario serves nothing.
+  Throughput and latency have no regression threshold. Shared-runner noise and the load run's cost make it unsuitable as a per-PR signal.
 
 Budget values and calibration belong in [acceptance/criteria.json](../acceptance/criteria.json).
 Corpus pins and capture policy belong in [bench/corpus/pins.json](../bench/corpus/pins.json).
