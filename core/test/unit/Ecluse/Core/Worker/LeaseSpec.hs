@@ -415,7 +415,7 @@ reapMicros :: Int
 reapMicros = 2_000
 
 -- | Force virtual time on, for a case that must give a stopped renewal a chance to misbehave.
-advanceWorld :: LeaseWorld -> Double -> IO ()
+advanceWorld :: (MonadIO m) => LeaseWorld -> Double -> m ()
 advanceWorld world by = atomically (modifyTVar' (lwNow world) (+ by))
 
 -- | A renewal the backend always grants.
@@ -443,28 +443,28 @@ refused :: TransportFault
 refused = transportFault TransportTls "simulated certificate refusal"
 
 -- | Every renewal the controller has asked for, oldest first.
-renewalsSoFar :: LeaseWorld -> IO [Text]
+renewalsSoFar :: (MonadIO m) => LeaseWorld -> m [Text]
 renewalsSoFar = fmap reverse . readIORef . lwRenewals
 
 -- | What a second consumer would receive: every receipt whose window has lapsed unrenewed.
-redeliverable :: LeaseWorld -> IO [Text]
+redeliverable :: (MonadIO m) => LeaseWorld -> m [Text]
 redeliverable world = do
     now <- readTVarIO (lwNow world)
     Map.keys . Map.filter (<= now) <$> readIORef (lwVisible world)
 
 -- Wait, bounded, until the controller has asked for at least this many renewals.
-awaitRenewals :: LeaseWorld -> Int -> IO ()
+awaitRenewals :: (MonadIO m) => LeaseWorld -> Int -> m ()
 awaitRenewals world wanted =
     void (pollUntil 2_000 1_000 (>= wanted) (length <$> readIORef (lwRenewals world)))
 
 {- Wait, bounded, until the stepper has reaped this many ended renewal tasks. A reap counts only
 a thread that has already finished, so the receipt's lease was marked dropped before it. -}
-awaitEndedTasks :: LeaseWorld -> Int -> IO ()
+awaitEndedTasks :: (MonadIO m) => LeaseWorld -> Int -> m ()
 awaitEndedTasks world wanted =
     void (pollUntil 2_000 1_000 (>= wanted) (readTVarIO (lwEnded world)))
 
 -- Wait, bounded, until the renewals have carried the world's clock past this instant.
-awaitClock :: LeaseWorld -> Double -> IO ()
+awaitClock :: (MonadIO m) => LeaseWorld -> Double -> m ()
 awaitClock world wanted =
     void (pollUntil 2_000 1_000 (>= wanted) (readTVarIO (lwNow world)))
 
