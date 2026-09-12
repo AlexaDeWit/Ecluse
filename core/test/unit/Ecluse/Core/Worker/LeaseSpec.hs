@@ -228,11 +228,12 @@ spec = do
                 held <- leaseAt 0 leased
                 liftIO (awaitRenewals world 2)
                 disposing held pass
-                -- Force virtual time on, which wakes a renewal still parked on this receipt: it
-                -- must find the lease gone and end rather than ask again. Waiting for the reap
-                -- is what proves it ended, and the log must not have grown while it did.
-                liftIO (advanceWorld world 120)
+                -- The log is read first, because a correct controller can never add to it once
+                -- the disposition returned. Forcing virtual time on then wakes a renewal still
+                -- parked on this receipt, which must find the lease gone and end rather than ask
+                -- again, and waiting for the reap is what proves it ended.
                 settled <- renewalsSoFar world
+                liftIO (advanceWorld world 120)
                 liftIO (awaitEndedTasks world 1)
                 liftIO (renewalsSoFar world `shouldReturn` settled)
 
@@ -245,8 +246,8 @@ spec = do
                 held <- leaseAt 0 leased
                 liftIO (awaitRenewals world 2)
                 void (disposing held (pure (Left unreachable :: Either TransportFault ())))
-                liftIO (advanceWorld world 120)
                 settled <- renewalsSoFar world
+                liftIO (advanceWorld world 120)
                 liftIO (awaitEndedTasks world 1)
                 liftIO (renewalsSoFar world `shouldReturn` settled)
 
