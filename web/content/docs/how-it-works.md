@@ -77,7 +77,7 @@ floor, but a conventional private npm artifact hit bypasses that metadata path.
 Those reads rely on the client's integrity checks.
 A public/private digest conflict logs a WARNING with both digests and increments the divergence
 counter. Comparison uses complete digest sets for each shared filename and algorithm.
-Hex case and hex/SRI spelling do not affect agreement. Alarm digests use lowercase hex.
+Hexadecimal case does not affect agreement. Diagnostics keep the original digest spelling.
 The private version and its tags stay listed, and direct private artifact reads still work.
 The alarm remains when a public rule denies the conflicting copy. The denied public version stays
 excluded. Only metadata that passes identity, artifact-location, and integrity checks supplies conflict evidence.

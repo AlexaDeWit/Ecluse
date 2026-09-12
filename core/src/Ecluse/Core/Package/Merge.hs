@@ -32,11 +32,13 @@ import Data.Time (UTCTime)
 import Ecluse.Core.Package (
     Artifact (..),
     Hash,
-    HashAlg,
+    HashAlg (SRI),
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
+    hashAlg,
     hashValue,
+    sriBody,
  )
 import Ecluse.Core.Package.Entry (AdmittedEntry (..))
 import Ecluse.Core.Package.Hash (canonicalHashValue)
@@ -103,11 +105,11 @@ data MergePlan = MergePlan
     }
     deriving stock (Eq, Show)
 
--- | Distinct sorted file, asserted algorithm, and canonical digest triples. Only shared file/algorithm keys can contradict.
+-- | Sorted file, asserted algorithm, and diagnostic digest triples. Only shared file/algorithm keys can contradict.
 newtype IntegrityFingerprint = IntegrityFingerprint [(Text, Maybe HashAlg, Text)]
     deriving stock (Eq, Ord, Show)
 
--- | Distinct sorted filename, algorithm, and lowercase hex triples. Invalid record updates retain their raw text.
+-- | Sorted filename, algorithm, and original digest-body triples, including duplicates.
 integrityHashes :: IntegrityFingerprint -> [(Text, Maybe HashAlg, Text)]
 integrityHashes (IntegrityFingerprint hs) = hs
 
@@ -290,10 +292,13 @@ planFrom acc = do
             [ Divergence{divVersion = key, divWinning = win, divLosing = lose}
             | (key, cs) <- Map.toList (mergeVersions acc)
             , Set.size cs > 1
-            , let win = candFingerprint (winnerOf cs)
-            , let distinct = Set.fromList [candFingerprint c | c <- Set.toList cs]
-            , lose <- Set.toList distinct
-            , contradicts win lose
+            , let winner = winnerOf cs
+            , let win = candFingerprint winner
+            , let winningDigests = digestsByKey (candDetails winner)
+            , candidate <- Set.toList cs
+            , let lose = candFingerprint candidate
+            , lose /= win
+            , contradicts winningDigests (digestsByKey (candDetails candidate))
             ]
 
     -- The accumulator has already resolved same-tag collisions by provenance, so the carried
@@ -330,31 +335,40 @@ integrityDivergences trusted public =
         | (key, (privateDetails, publicDetails)) <- Map.toList (Map.intersectionWith (,) trusted public)
         , let win = fingerprint privateDetails
         , let lose = fingerprint publicDetails
-        , contradicts win lose
+        , contradicts (digestsByKey privateDetails) (digestsByKey publicDetails)
         ]
 
--- Sorted triples make the comparison order-independent across artifacts and hashes. Keying by
--- 'assertedAlg', not the raw wrapper tag, compares what each digest claims about each file.
+-- Diagnostics retain the existing digest spelling, sorted order, and duplicate entries.
 fingerprint :: PackageDetails -> IntegrityFingerprint
 fingerprint =
     IntegrityFingerprint
-        . Set.toAscList
-        . Set.fromList
+        . sort
         . concatMap artHashPairs
         . toList
         . pkgArtifacts
   where
-    artHashPairs art = [(artFilename art, assertedAlg h, comparableBody h) | h <- artHashes art]
+    artHashPairs art = [(artFilename art, assertedAlg h, diagnosticBody h) | h <- artHashes art]
 
--- Record updates can bypass 'mkHash'. Keep that text as diagnostic evidence when decoding fails.
+diagnosticBody :: Hash -> Text
+diagnosticBody h = case hashAlg h of
+    SRI -> sriBody (hashValue h)
+    _ -> hashValue h
+
+-- Record updates can bypass 'mkHash'. Invalid text remains distinct comparison evidence.
 comparableBody :: Hash -> Text
 comparableBody h = fromMaybe (hashValue h) (canonicalHashValue h)
 
--- An omitted file or algorithm makes no conflicting claim.
-contradicts :: IntegrityFingerprint -> IntegrityFingerprint -> Bool
-contradicts a b =
-    or (Map.intersectionWith (/=) (digestsByKey a) (digestsByKey b))
-  where
-    digestsByKey :: IntegrityFingerprint -> Map (Text, Maybe HashAlg) (Set Text)
-    digestsByKey (IntegrityFingerprint triples) =
-        Map.fromListWith Set.union [((file, alg), Set.singleton digest) | (file, alg, digest) <- triples]
+type DigestSets = Map (Text, Maybe HashAlg) (Set Text)
+
+digestsByKey :: PackageDetails -> DigestSets
+digestsByKey details =
+    Map.fromListWith
+        Set.union
+        [ ((artFilename art, assertedAlg h), Set.singleton (comparableBody h))
+        | art <- toList (pkgArtifacts details)
+        , h <- artHashes art
+        ]
+
+-- An omitted file or algorithm makes no conflicting claim. Shared keys require complete set equality.
+contradicts :: DigestSets -> DigestSets -> Bool
+contradicts a b = or (Map.intersectionWith (/=) a b)

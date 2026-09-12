@@ -5,7 +5,8 @@
 -- | Merge precedence, divergence signals, and accumulator laws.
 module Ecluse.Core.Package.MergeSpec (spec) where
 
-import Data.ByteArray.Encoding (Base (Base16, Base64), convertFromBase, convertToBase)
+import Data.Aeson (object, (.=))
+import Data.Aeson.Key qualified as Key
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -22,9 +23,12 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Merge hiding (contribute, mergePackuments)
 import Ecluse.Core.Package.Merge qualified as Merge
+import Ecluse.Core.Registry.PyPI.Project (projectSimpleIndexFromValue)
+import Ecluse.Core.Registry.WireSupport (Projection (Projected))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash)
 import Ecluse.Test.Package qualified as Package
+import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Snapshot (syntheticSnapshot)
 
 mergePackuments :: [(Provenance, PackageInfo)] -> Maybe MergePlan
@@ -124,10 +128,7 @@ sha1Dead = validSha1Of "deadbeef"
 sha256Def = validSha256Of "def"
 
 sriPair :: Text -> (Text, Maybe HashAlg, Text)
-sriPair s = ("thing.tgz", sriAlgorithm s, hex)
-  where
-    decoded = convertFromBase Base64 (encodeUtf8 (sriBody s) :: ByteString) :: Either String ByteString
-    hex = either toText (decodeUtf8 . (convertToBase Base16 :: ByteString -> ByteString)) decoded
+sriPair s = ("thing.tgz", sriAlgorithm s, sriBody s)
 
 -- The surviving version keys (the merged union), sorted.
 survivorKeys :: MergePlan -> [Text]
@@ -447,6 +448,24 @@ spec = do
                             , (GatedSource, packumentWith [("1.0.0", right)] <$ syntheticSnapshot ("public" :: Text))
                             ]
 
+                it ("merges equal hex bytes preserved by PyPI projection for " <> show alg) $ do
+                    let projectName = mkPackageName PyPI Nothing "thing"
+                        index wire =
+                            object
+                                [ "name" .= ("thing" :: Text)
+                                , "files" .= [withFileKeys [("hashes", object [Key.fromText (renderHashAlg alg) .= wire])] (simpleFile "thing-1.2.3.tar.gz")]
+                                ]
+                        values = [hexOf "same bytes", T.toUpper (hexOf "same bytes")]
+                    case traverse (projectSimpleIndexFromValue projectName . index) values of
+                        Right [Projected trusted, Projected public] -> do
+                            forM_ (zip values [trusted, public]) $ \(wire, info) ->
+                                [hashValue h | details <- Map.elems (infoVersions info), art <- toList (pkgArtifacts details), h <- artHashes art]
+                                    `shouldBe` [wire]
+                            let plan = mergePackuments [(TrustedSource, trusted), (GatedSource, public)]
+                            (mpDivergences <$> plan) `shouldBe` Just Set.empty
+                            (mpSurvivors <$> plan) `shouldBe` Just (Map.singleton "1.2.3" 0)
+                        other -> expectationFailure ("expected both PyPI projections, got " <> show other)
+
                 it ("agrees across hex case and SRI for " <> show alg) $
                     forM_ [upper "A", sri "A"] $ \equivalent ->
                         (mpDivergences <$> mergeHashes [hex "A"] [equivalent]) `shouldBe` Just Set.empty
@@ -457,12 +476,22 @@ spec = do
 
                 it ("retains strict set equality for " <> show alg) $
                     forM_ [[sri "B"], [sri "A", sri "B"]] $ \different -> do
-                        let plan = mergeHashes [hex "A", upper "A", sri "A"] different
+                        let plan = mergeHashes [hex "A", upper "A", sri "A", hex "A"] different
                         (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
                         (map (integrityHashes . divWinning) . Set.toList . mpDivergences <$> plan)
-                            `shouldBe` Just [[("thing.tgz", Just alg, hexOf "A")]]
+                            `shouldBe` Just [sort [("thing.tgz", Just alg, body) | body <- [hexOf "A", T.toUpper (hexOf "A"), sriBody (sriOf "A"), hexOf "A"]]]
 
-                it ("preserves the whole merge plan across " <> show alg <> " representations") $
+                it ("keeps distinct diagnostic spellings for losing " <> show alg <> " copies") $ do
+                    let plan =
+                            mergePackuments
+                                [ (TrustedSource, packumentWith [("1.0.0", [hex "A"])])
+                                , (GatedSource, packumentWith [("1.0.0", [hex "B"])])
+                                , (GatedSource, packumentWith [("1.0.0", [upper "B"])])
+                                ]
+                    (map (integrityHashes . divLosing) . Set.toList . mpDivergences <$> plan)
+                        `shouldBe` Just (sort [[("thing.tgz", Just alg, hexOf "B")], [("thing.tgz", Just alg, T.toUpper (hexOf "B"))]])
+
+                it ("preserves serving decisions and divergence presence across " <> show alg <> " representations") $
                     hedgehog $ do
                         bytesA <- forAll (Gen.bytes (Range.linear 0 200))
                         bytesB <- forAll (Gen.bytes (Range.linear 0 200))
@@ -471,7 +500,13 @@ spec = do
                             right = hex bytesA : [hex bytesB | extra]
                             representedLeft = [upper bytesA, sri bytesA]
                             representedRight = sri bytesA : [sri bytesB | extra]
-                        mergeHashes left right === mergeHashes representedLeft representedRight
+                        original <- H.evalMaybe (mergeHashes left right)
+                        represented <- H.evalMaybe (mergeHashes representedLeft representedRight)
+                        mpSurvivors original === mpSurvivors represented
+                        mpArtifacts original === mpArtifacts represented
+                        mpDistTags original === mpDistTags represented
+                        mpTime original === mpTime represented
+                        Set.null (mpDivergences original) === Set.null (mpDivergences represented)
 
         it "retains invalid record-update text in divergence diagnostics" $ do
             let original = unsafeHash SRI sriX
@@ -479,7 +514,7 @@ spec = do
                 trusted = (TrustedSource, packumentWith [("1.0.0", [invalid])])
                 gated = (GatedSource, packumentWith [("1.0.0", [unsafeHash SHA256 sha256Def])])
             (map (integrityHashes . divWinning) . Set.toList . mpDivergences <$> mergePackuments [trusted, gated])
-                `shouldBe` Just [[("thing.tgz", Just SHA256, "sha256-invalid")]]
+                `shouldBe` Just [[("thing.tgz", Just SHA256, "invalid")]]
 
     describe "precedence is by provenance, not input order" $ do
         -- dist-tags and time must resolve collisions by provenance (trusted wins),

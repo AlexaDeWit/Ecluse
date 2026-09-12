@@ -61,7 +61,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents), FakeStoreConfig (fakeClass, fakeConsent, fakeContents, fakeManifests), defaultFakeStoreConfig, newFakeStore)
-import Ecluse.Test.Package (hexSha1Of, hexSha512Of, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
+import Ecluse.Test.Package (hexSha1Of, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
@@ -354,9 +354,9 @@ assertConflictLog expected logged = do
             let encoded = decodeUtf8 (LBS.toStrict (encode entry))
                 expectedMessage =
                     "cross-upstream integrity divergence: the trusted copy of leftpad is served, but a public copy contradicts it on a shared integrity algorithm for 1 version(s): 1.0.0 (trusted {leftpad-1.0.0.tgz sha512:"
-                        <> hexSha512Of "leftpad artifact bytes (privately tampered)"
+                        <> T.drop 7 (sha512Integrity "leftpad artifact bytes (privately tampered)")
                         <> "} vs public {leftpad-1.0.0.tgz sha512:"
-                        <> hexSha512Of artifactBytes
+                        <> T.drop 7 (sha512Integrity artifactBytes)
                         <> "})"
             KeyMap.lookup "msg" fields `shouldBe` Just (String expectedMessage)
             encoded `shouldSatisfy` T.isInfixOf "\"package\":\"leftpad\""
