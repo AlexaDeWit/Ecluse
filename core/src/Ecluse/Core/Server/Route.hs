@@ -4,7 +4,6 @@
 {-# LANGUAGE ExistentialQuantification #-}
 
 {- | A route is one record for a URL the proxy serves.
-
 It holds the method, template, action, and documentation. A route table folds into a mount
 router where the first match wins and all other requests receive a @404@. The manifest renders
 'Ecluse.Core.Server.RouteDescription' projections of the records the router runs.
