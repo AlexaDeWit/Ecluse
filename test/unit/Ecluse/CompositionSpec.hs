@@ -101,7 +101,7 @@ a fixed clock, inert rule deps, and reporters that record nothing. -}
 testWiringPorts :: WiringPorts
 testWiringPorts =
     WiringPorts
-        { wpReporters = const noCredentialReporters
+        { wpReporters = const (const noCredentialReporters)
         , wpResolveAdapter = mountBindingFor
         , wpClock = pure fixedNow
         , wpRuleDeps = const inertRuleDeps
@@ -155,9 +155,7 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
                     -- The mirror serve plan is wired from the mount's config: an
                     -- admitted public artifact enqueues toward the declared target.
                     mirrorTargetText (pdMirror deps) `shouldBe` Just "https://mirror.example.test"
-                    -- The binding derives the tarball-host gate from the upstreams the deps carry,
-                    -- never from a second reading of the configuration. npm declares no ecosystem
-                    -- artifact hosts.
+                    -- npm declares no ecosystem artifact hosts.
                     pdTarballHostGate deps
                         `shouldBe` upstreamTarballHostGate (mountUpstreams [] (pdPrivateBaseUrl deps) (pdPublicBaseUrl deps) (pdMirror deps))
             Right other -> expectationFailure ("expected exactly one binding, got " <> show (length other))
@@ -356,9 +354,7 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
             Right _ -> expectationFailure "expected a publication-allow-missing boot error"
 
     it "fails when a static publish credential is set without a verifiable inbound edge" $ do
-        -- ECLUSE_SERVER__AUTH_TOKEN unset is the default open edge. With
-        -- ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN set, any unauthenticated client could
-        -- publish within scope under Ecluse's own write credential, so the boot refuses.
+        -- An open edge must not give anonymous clients the static publication credential.
         let testEnvVars =
                 [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL", "https://publish.example.test")
                 , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme")

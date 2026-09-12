@@ -52,7 +52,7 @@ module Ecluse.Runtime.Telemetry.Instruments (
 
     -- * Credentials
     recordCredentialRefresh,
-    recordCredentialTokenTtl,
+    registerCredentialTokenTtl,
 
     -- * Advisory sync
     recordAdvisorySyncAttempt,
@@ -121,11 +121,7 @@ import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (..), AdvisorySy
 import Ecluse.Core.Telemetry.Span (ecluseScope)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryMeterProvider)
 
-{- | The live metric instruments, one per @ecluse.*@ signal, built by 'newMetrics' on one meter.
-
-@http.server.request.duration@ is not here. The WAI instrumentation emits it from the server-span
-meter ("Ecluse.Runtime.Telemetry.Tracing"), so duplicating it would double the series.
--}
+-- | Domain instruments. WAI emits @http.server.request.duration@ from its own meter.
 data Metrics = Metrics
     { mServeDecision :: Counter Int64
     , mServeAdmissionInFlight :: UpDownCounter Int64
@@ -152,7 +148,7 @@ data Metrics = Metrics
     , mMirrorPublishDuration :: Histogram
     , mDredgerVersions :: Counter Int64
     , mCredentialRefresh :: Counter Int64
-    , mCredentialTokenTtlSeconds :: Gauge Int64
+    , mCredentialTokenTtlSeconds :: ObservableGauge Int64
     , mAdvisorySyncAttempts :: Counter Int64
     , mAdvisorySyncDuration :: Histogram
     , mAdvisoryDatabaseAgeSeconds :: ObservableGauge Int64
@@ -162,11 +158,7 @@ data Metrics = Metrics
     , mAdvisoryCompileRuns :: Counter Int64
     }
 
-{- | Build the metric instruments from a 'Telemetry' handle.
-
-When telemetry is disabled the instruments are created on the SDK's no-op meter provider, so every
-@record*@ helper is inert.
--}
+-- | Build instruments on the telemetry meter, or the SDK's no-op meter when disabled.
 newMetrics :: Telemetry -> IO Metrics
 newMetrics telemetry = do
     let meterProvider :: MeterProvider
@@ -198,7 +190,7 @@ newMetrics telemetry = do
         <*> histogram meter MirrorPublishDuration "mirror publish latency"
         <*> counter meter DredgerVersions "{version}" "mirror-store versions a sweep cycle disposed of, by result"
         <*> counter meter CredentialRefresh "{refresh}" "credential refreshes by result and provider"
-        <*> gauge meter CredentialTokenTtlSeconds "remaining outbound-token lifetime by provider"
+        <*> observableGauge meter CredentialTokenTtlSeconds "remaining outbound-token lifetime by provider"
         <*> counter meter AdvisorySyncAttempts "{attempt}" "advisory sync attempts by ecosystem and result"
         <*> histogram meter AdvisorySyncDuration "advisory sync attempt latency by ecosystem and result"
         <*> observableGauge meter AdvisoryDatabaseAgeSeconds "seconds since this ecosystem's serving advisory database was installed"
@@ -223,9 +215,7 @@ gauge :: Meter -> MetricName -> Text -> IO (Gauge Int64)
 gauge meter name description =
     meterCreateGaugeInt64 meter (metricName name) Nothing (Just description) defaultAdvisoryParameters
 
--- An asynchronous instrument: it carries no value of its own and reports what its registered
--- callbacks observe at each collection. It ships with none, so nothing reports until a
--- 'registerAdvisoryDatabaseAge' call attaches one.
+-- Reports nothing until a callback is registered.
 observableGauge :: Meter -> MetricName -> Text -> IO (ObservableGauge Int64)
 observableGauge meter name description =
     meterCreateObservableGaugeInt64 meter (metricName name) Nothing (Just description) defaultAdvisoryParameters []
@@ -284,10 +274,7 @@ advisorySyncMetricsPortOf m =
         , asmpSyncDuration = recordAdvisorySyncDuration m
         }
 
-{- | Project the instruments onto the core 'AdvisoryCompileMetricsPort' that
-"Ecluse.Core.Osv.Compile" records through, bound to the ecosystem the pass compiles. The label
-domain is the closed 'Ecosystem' enum, so a pass over a name outside it records no series at all.
--}
+-- | Bind compile observations to an ecosystem. An unknown ecosystem records no series.
 advisoryCompileMetricsPortOf :: Metrics -> Maybe Ecosystem -> AdvisoryCompileMetricsPort
 advisoryCompileMetricsPortOf m = maybe inertCompilePort boundPort
   where
@@ -322,10 +309,7 @@ recordServeAdmissionQueued :: (MonadIO m) => Metrics -> m ()
 recordServeAdmissionQueued m =
     addOne (mServeAdmissionQueued m) []
 
-{- Record one cross-upstream integrity divergence (@ecluse.registry.merge.divergence@),
-incremented once per contradicting version. Label-free: the package, version, and digest
-bodies live on the @WARNING@ log line, never a metric label (the bounded-label discipline).
--}
+-- Count one divergence per contradicting version. Identifiers stay on the warning log, never labels.
 recordMergeDivergence :: (MonadIO m) => Metrics -> m ()
 recordMergeDivergence m =
     addOne (mMergeDivergence m) []
@@ -430,12 +414,14 @@ recordCredentialRefresh :: (MonadIO m) => Metrics -> Provider -> CredentialResul
 recordCredentialRefresh m provider result =
     addOne (mCredentialRefresh m) [LProvider provider, LCredentialResult result]
 
-{- | Record an outbound token's remaining lifetime in whole seconds
-(@ecluse.credential.token.ttl.seconds@). A stuck refresh alarms as the gauge decays towards zero.
--}
-recordCredentialTokenTtl :: (MonadIO m) => Metrics -> Provider -> Int -> m ()
-recordCredentialTokenTtl m provider seconds =
-    set (mCredentialTokenTtlSeconds m) (fromIntegral seconds) [LProvider provider]
+-- | Collect the shortest active expiry per provider as non-negative whole seconds remaining.
+registerCredentialTokenTtl :: Metrics -> IO UTCTime -> IO [(Provider, UTCTime)] -> IO ()
+registerCredentialTokenTtl m clock expiries =
+    void $ observableGaugeRegisterCallback (mCredentialTokenTtlSeconds m) $ \result -> do
+        now <- clock
+        current <- expiries
+        for_ current $ \(provider, expiry) ->
+            observe result (max 0 (floor (diffUTCTime expiry now))) (metricAttributes [LProvider provider])
 
 -- | Record one advisory sync attempt to @ecluse.advisory.sync.attempts@.
 recordAdvisorySyncAttempt :: (MonadIO m) => Metrics -> Ecosystem -> AdvisorySyncResult -> m ()

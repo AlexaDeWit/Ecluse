@@ -54,7 +54,9 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
 - `ecluse.registry.merge.divergence` is the cross-upstream integrity alarm. It increments per
   contradicting version, and the package and version go on the paired `WARNING` line, never on a
   label. See the [threat model](https://ecluse-proxy.com/docs/threat-model/).
-- `ecluse.credential.token.ttl.seconds` alarms a stuck refresh. `ecluse.credential.refresh` carries
+- `ecluse.credential.token.ttl.seconds` alarms a stuck refresh by measuring expiry at collection,
+  even when no refresh completes. The shortest active expiry per provider prevents a healthy
+  credential from hiding an expired one. See the [operator policy](https://ecluse-proxy.com/docs/operations/#credential-expiry). `ecluse.credential.refresh` carries
   (result, provider). `provider` is the store the mount declared its mirror target under, one of
   `registry`, `codeArtifact`, or `verdaccio`, spelled as the configuration spells the tag, so one
   word filters a dashboard and names the key an operator would edit.

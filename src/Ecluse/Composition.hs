@@ -98,8 +98,8 @@ type ResolveAdapter = Ecosystem -> PackumentDeps -> Maybe PublishDeps -> Maybe M
 assembly without opening a listener.
 -}
 data WiringPorts = WiringPorts
-    { wpReporters :: StoreTag -> CredentialReporters
-    -- ^ Where a store's credential provider records its mint breaker and refresh outcomes.
+    { wpReporters :: Ecosystem -> StoreTag -> CredentialReporters
+    -- ^ Reporters keyed by the shared credential's canonical ecosystem and store label.
     , wpResolveAdapter :: ResolveAdapter
     -- ^ The ecosystem-to-binding resolver, 'Nothing' for an ecosystem this build ships no adapter for.
     , wpClock :: IO UTCTime

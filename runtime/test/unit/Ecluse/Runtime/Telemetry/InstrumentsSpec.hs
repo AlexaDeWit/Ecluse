@@ -21,7 +21,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Cause (Connection, Decode, Timeout),
     CredentialResult (RefreshFailed, Refreshed),
     Decision (Admit, Deny, Unavailable),
-    Label (LEcosystem),
+    Label (LEcosystem, LProvider),
     MirrorResult (Failed, Published),
     Provider (ProviderCodeArtifact, ProviderRegistry, ProviderVerdaccio),
     ReasonClass (ReasonMissingIntegrity, ReasonPolicy),
@@ -44,7 +44,6 @@ import Ecluse.Runtime.Telemetry.Instruments (
     recordCacheEntries,
     recordCacheRequest,
     recordCredentialRefresh,
-    recordCredentialTokenTtl,
     recordMirrorEnqueueFailure,
     recordMirrorEnqueued,
     recordMirrorJobProcessed,
@@ -57,16 +56,35 @@ import Ecluse.Runtime.Telemetry.Instruments (
     recordUpstreamFetchError,
     registerAdvisoryDatabaseAge,
     registerAdvisorySourceAge,
+    registerCredentialTokenTtl,
     reportAdvisoryDatabaseAge,
     reportAdvisorySourceAge,
     timedSeconds,
  )
+import Ecluse.Runtime.Test.Telemetry (gaugePoints, withTestTelemetry)
+import Ecluse.Test.Support (newTestClock)
 
 {- | Tests that the instrument handle is inert when telemetry is off: every @record*@ helper
 is total and silent against the no-op meter, so the hot path can instrument unconditionally.
 -}
 spec :: Spec
 spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ do
+    it "collects a decreasing lifetime, floors fractional seconds and retains zero after expiry" $
+        withTestTelemetry $ \telemetry meterEnv -> do
+            let start = UTCTime (fromGregorian 2026 9 12) 0
+            (clock, setClock) <- newTestClock start
+            m <- newMetrics telemetry
+            registerCredentialTokenTtl m clock (pure [(ProviderCodeArtifact, addUTCTime 10.9 start)])
+            let points = gaugePoints "ecluse.credential.token.ttl.seconds" meterEnv
+                expected seconds = [(metricAttributes [LProvider ProviderCodeArtifact], seconds)]
+            points `shouldReturn` expected 10
+            setClock (addUTCTime 4 start)
+            points `shouldReturn` expected 6
+            setClock (addUTCTime 10.9 start)
+            points `shouldReturn` expected 0
+            setClock (addUTCTime 100 start)
+            points `shouldReturn` expected 0
+
     it "builds the instrument handle against the no-op meter when telemetry is disabled" $ do
         _ <- newMetrics telemetryDisabled
         pure () :: Expectation
@@ -97,7 +115,7 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         recordCredentialRefresh m ProviderCodeArtifact Refreshed
         recordCredentialRefresh m ProviderRegistry RefreshFailed
         recordCredentialRefresh m ProviderVerdaccio Refreshed
-        recordCredentialTokenTtl m ProviderCodeArtifact 3600
+        registerCredentialTokenTtl m getCurrentTime (pure [])
         traverse_
             (recordAdvisorySyncAttempt m Npm)
             [AdvisorySwapped, AdvisoryUnchanged, AdvisoryNonePublished, AdvisoryFetchFailed, AdvisoryRefused]
