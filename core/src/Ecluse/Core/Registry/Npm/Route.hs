@@ -96,7 +96,7 @@ import Ecluse.Core.Server.Route (
     routerOf,
     safeSegment,
  )
-import Ecluse.Core.Server.RouteSpec (ParamSpec (ParamSpec), RouteSpec, catchAllSpecs, specsOf)
+import Ecluse.Core.Server.RouteDescription (ParamSpec (ParamSpec), RouteSpec, catchAllSpecs, specsOf)
 import Ecluse.Core.Version (Version, mkVersion)
 
 -- | Match the first applicable route, otherwise answer 'npmNotFound'.

@@ -10,7 +10,7 @@ needs. A write route contributes @PUT@, a submission route @POST@, and a removal
 capture type, builder, and typed response value disappear. Each operation's 'ResponseDoc's
 still come from the same 'Ecluse.Core.Server.Contract.ResponseContract' runtime dispatch uses.
 -}
-module Ecluse.Core.Server.RouteSpec (
+module Ecluse.Core.Server.RouteDescription (
     -- * The documented view
     RouteSpec (..),
     PathSeg (..),
