@@ -2,14 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The read side of the advisory database's atomic shadow-swap: one slot per ecosystem,
-holding the generation serving now, or 'Nothing' before the first sync. Readers borrow it
-through 'withSlotLookup'. 'swapIn' installs a newly-verified generation, waits for the displaced
-one's readers to drain, then closes it. The sync task has already renamed the new artifact over
-the old one's only file name, so that close releases the old inode's last reference: pruning is
-a property the OS enforces, never a delete this code could mistime. The slot outlives the sync
-task that fills it, so it alone carries what the serving artifact records about its sources,
-when its object was published, and when the generation went live.
+{- | Advisory generations stay pinned for each lookup. Retirement belongs to the last
+reader, or to the swapper when no readers remain, even if the swapper is cancelled.
 -}
 module Ecluse.Core.Cve.Slot (
     CveSlot,
@@ -22,21 +16,19 @@ module Ecluse.Core.Cve.Slot (
     swapIn,
 ) where
 
-import Control.Concurrent.STM (check)
 import Data.Time (UTCTime)
 import GHC.Clock (getMonotonicTime)
-import UnliftIO.Exception (bracket)
+import UnliftIO.Exception (bracket, mask_, uninterruptibleMask_)
 
 import Ecluse.Core.Cve (CveDb (..), CveLookup, DbEtag)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance)
 
-{- | One installed generation: the owning resource, its artifact ETag, what the artifact says
-about its sources, its live-reader count, and the monotonic time it went live.
--}
 data Generation = Generation
     { genDb :: CveDb
     , genEtag :: DbEtag
     , genSource :: AdvisorySource
+    , genRetired :: TVar Bool
+    , genClosed :: TMVar ()
     , genReaders :: TVar Int
     , genInstalledAt :: Double
     }
@@ -73,7 +65,13 @@ withSlotLookup slot use = bracket acquire release (use . fmap (cveDbLookup . gen
         mGen <- readTVar (slotCell slot)
         for_ mGen (\g -> modifyTVar' (genReaders g) (+ 1))
         pure mGen
-    release = traverse_ (\g -> atomically (modifyTVar' (genReaders g) (subtract 1)))
+    release = traverse_ $ \g -> do
+        shouldClose <- atomically $ do
+            modifyTVar' (genReaders g) (subtract 1)
+            remaining <- readTVar (genReaders g)
+            retired <- readTVar (genRetired g)
+            pure (retired && remaining == 0)
+        when shouldClose (closeGeneration g)
 
 {- | The active generation's artifact 'DbEtag', or 'Nothing' before the first sync. The
 read does not pin the generation, so it never delays a 'swapIn'.
@@ -98,16 +96,25 @@ generationInstalledAt slot =
 The slot owns @newDb@ from entry, so no caller cleanup may close it.
 -}
 swapIn :: CveSlot -> DbEtag -> Maybe UTCTime -> CveDb -> IO ()
-swapIn slot etag pushedAt newDb = do
+swapIn slot etag pushedAt newDb = mask_ $ do
     readers <- newTVarIO (0 :: Int)
+    retired <- newTVarIO False
+    closed <- newEmptyTMVarIO
     installedAt <- getMonotonicTime
     let source = AdvisorySource{asProvenance = cveDbProvenance newDb, asPushedAt = pushedAt}
     displaced <- atomically $ do
         old <- readTVar (slotCell slot)
-        writeTVar (slotCell slot) (Just (Generation newDb etag source readers installedAt))
-        pure old
-    for_ displaced $ \g -> do
-        atomically (readTVar (genReaders g) >>= check . (== 0))
-        -- 'cveDbClose' never throws (the handle absorbs close faults), so the
-        -- swallow the module header describes needs no guard here.
-        cveDbClose (genDb g)
+        writeTVar (slotCell slot) (Just (Generation newDb etag source retired closed readers installedAt))
+        for old $ \g -> do
+            writeTVar (genRetired g) True
+            remaining <- readTVar (genReaders g)
+            pure (g, remaining == 0)
+    for_ displaced $ \(g, shouldClose) -> do
+        when shouldClose (closeGeneration g)
+        atomically (readTMVar (genClosed g))
+
+-- The close contract never throws. Protect only close and completion, never the reader drain.
+closeGeneration :: Generation -> IO ()
+closeGeneration g = uninterruptibleMask_ $ do
+    cveDbClose (genDb g)
+    atomically (putTMVar (genClosed g) ())

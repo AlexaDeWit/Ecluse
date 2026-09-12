@@ -258,8 +258,8 @@ controls. It accepts the file only after a cheapest-first verification: epoch st
 scan, the required tables' strict-schema conformance, ecosystem. It then renames the accepted
 file atomically and shadow-swaps it into the read path
 ([`Ecluse.Core.Cve.Slot`](../../core/src/Ecluse/Core/Cve/Slot.hs)). The swap waits for the
-displaced generation's readers to drain, so pruning is the kernel's reclamation, never a
-mistimed delete. The proxy discards a refused artifact and remembers its ETag. The last-good
+displaced generation's readers to drain. The last reader closes a retired generation even
+if the sync task is cancelled, so pruning remains the kernel's reclamation. The proxy discards a refused artifact and remembers its ETag. The last-good
 generation keeps serving. [Readiness](web-layer.md#meta-routes-ping-health-and-search) waits
 for each ecosystem's first sync while the listener serves throughout. An absent database only
 abstains into deny-by-default.

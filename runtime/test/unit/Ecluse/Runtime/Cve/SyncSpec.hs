@@ -26,8 +26,8 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (mask_, throwIO)
 import UnliftIO.Timeout (timeout)
 
-import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
-import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, newCveSlot, withSlotLookup)
+import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apOsvNewestModified, apOsvSource), noProvenance)
@@ -57,6 +57,7 @@ import Ecluse.Runtime.Cve.Sync (
     syncStep,
  )
 import Ecluse.Runtime.Test.Cve (headOnlyFetch)
+import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, runQuietKatip)
 import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta, osvZipOf)
@@ -493,9 +494,11 @@ spec = do
                     other -> expectationFailure ("expected SyncUnchanged on the remembered ETag, got " <> show other)
                 readIORef downloads `shouldReturn` 1
 
-        it "a swapper cancelled while draining never closes the newly published generation" $
+        it "a swapper cancelled while draining retires the old generation and preserves the new one" $
             withSyncEnv $ \_ slot envWith -> do
-                void (syncStep (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))) Nothing)
+                closes <- newIORef (0 :: Int)
+                let oldDb = CveDb (fakeCveLookup []) (modifyIORef' closes (+ 1)) [] noProvenance
+                swapIn slot (DbEtag "e1") Nothing oldDb
                 insideReader <- newEmptyMVar
                 releaseReader <- newEmptyMVar
                 insideSwapper <- newEmptyMVar
@@ -510,9 +513,11 @@ spec = do
                 -- cancellation to that blocking point, avoiding a timed wait.
                 swapper <- async (mask_ (syncStep (envWith (fetchServing (Just "e2") buildPkgB)) (Just (DbEtag "e1"))))
                 takeMVar insideSwapper
-                cancel swapper
+                timeout pollBudget (cancel swapper) `shouldReturn` Just ()
+                readIORef closes `shouldReturn` 0
                 putMVar releaseReader ()
-                void (waitCatch pinned)
+                timeout pollBudget (void (waitCatch pinned)) `shouldReturn` Just ()
+                readIORef closes `shouldReturn` 1
                 waitCatch swapper >>= \case
                     Left err | Just AsyncCancelled <- fromException err -> pass
                     finished -> expectationFailure ("expected the swapper to be cancelled inside its drain, got " <> show finished)
