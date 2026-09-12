@@ -213,6 +213,26 @@ an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format
 | Store maintenance | Store, per mount | The CodeArtifact control plane, or, for a `verdaccio` store, the ecosystem protocol's own listing and unpublish requests. A `registry` store carries none, so `ecluse dredger` refuses a mirror target under that tag and names it |
 | Walk cursor | Store, per mount | One CodeArtifact repository tag per ecosystem. A `verdaccio` store keeps none, so a full walk over it does not resume |
 
+### Onboarding a backend
+
+A new backend supplies deterministic tests for each handle it provides before it counts as onboarded.
+Mirror each implementation module with `Spec`, `IntegrationSpec`, or `SmokeSpec` under the matching suite root.
+Register those modules in [ecluse.cabal](../../ecluse.cabal).
+The [tier rules](../testing.md#what-gates-and-what-doesnt) decide placement from the external collaborator.
+
+| Handle | Required tier and file pattern | Existing example |
+|---|---|---|
+| `MirrorQueue` | `ecluse-runtime-unit`: `runtime/test/unit/Ecluse/Runtime/Queue/<Backend>Spec.hs` for deterministic adapter behaviour. `ecluse-integration`: `test/integration/Ecluse/Runtime/Queue/<Backend>IntegrationSpec.hs` for the emulated service. | [SqsSpec](../../runtime/test/unit/Ecluse/Runtime/Queue/SqsSpec.hs) and [SqsIntegrationSpec](../../test/integration/Ecluse/Runtime/Queue/SqsIntegrationSpec.hs). [AwsEndToEndIntegrationSpec](../../test/integration/Ecluse/AwsEndToEndIntegrationSpec.hs) exercises the composed serve-to-worker path. |
+| `CredentialProvider` | `ecluse-runtime-unit`: `runtime/test/unit/Ecluse/Runtime/Credential/<Backend>Spec.hs` for a stubbed mint. `ecluse-smoke`: `test/smoke/Ecluse/Runtime/Credential/<Backend>SmokeSpec.hs` for a mint that needs the live cloud. | [CodeArtifactSpec](../../runtime/test/unit/Ecluse/Runtime/Credential/CodeArtifactSpec.hs) is the gating mirror of [CodeArtifactSmokeSpec](../../test/smoke/Ecluse/Runtime/Credential/CodeArtifactSmokeSpec.hs). The live mint cannot gate. |
+| `StoreMaintenance` | `ecluse-runtime-unit`: `runtime/test/unit/Ecluse/Runtime/Maintenance/<Backend>Spec.hs` and matching child specs for control-plane responses. Add `test/integration/Ecluse/Runtime/Maintenance/<Backend>IntegrationSpec.hs` when an emulator supplies those operations. | [CodeArtifactSpec](../../runtime/test/unit/Ecluse/Runtime/Maintenance/CodeArtifactSpec.hs) and its [child specs](../../runtime/test/unit/Ecluse/Runtime/Maintenance/CodeArtifact/) cover the control plane with doubles. The protocol implementation uses [Npm/MaintenanceSpec](../../core/test/unit/Ecluse/Core/Registry/Npm/MaintenanceSpec.hs) in `ecluse-core-unit`. [DredgerE2ESpec](../../test/e2e/Ecluse/DredgerE2ESpec.hs) exercises Verdaccio in `ecluse-e2e`, not live CodeArtifact. |
+
+Extend `test/unit/Ecluse/Composition/{MirrorQueue,Credential,Maintenance}Spec.hs` for the new backend's composition choices in `ecluse-unit`.
+Shared credential refresh, caching, and expiry policy stays in `ecluse-core-unit`, with a fake clock and mint in
+[`CredentialSpec`](../../core/test/unit/Ecluse/Core/CredentialSpec.hs) and
+[`Refresh/InternalSpec`](../../core/test/unit/Ecluse/Core/Credential/Refresh/InternalSpec.hs).
+Any new smoke case must name its deterministic unit or integration mirror, following the CodeArtifact pair above.
+Backends that add an ecosystem also owe the [ecosystem checklist](../testing.md#onboarding-an-ecosystem).
+
 ### The credential mint
 
 Outbound auth (proxy to registry) is the mint facet of a hosted store. A `CredentialProvider`
