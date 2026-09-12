@@ -12,7 +12,7 @@ module Ecluse.Runtime.Telemetry.Reporters (
     deferredMirrorEnqueueFailure,
 ) where
 
-import Data.Foldable1 (minimum1)
+import Data.Foldable1 qualified as Foldable1
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Data.Universe.Class (universe)
@@ -52,7 +52,7 @@ installMetrics deferred metrics = do
         pure
             [ (provider, expiry)
             | provider <- universe
-            , Just expiry <- [viaNonEmpty minimum1 [stamp | (label, stamp) <- Map.elems expiries, label == provider]]
+            , Just expiry <- [viaNonEmpty Foldable1.minimum [stamp | (label, stamp) <- Map.elems expiries, label == provider]]
             ]
     writeIORef (dmMetrics deferred) (Just metrics)
 

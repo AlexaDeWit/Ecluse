@@ -26,7 +26,7 @@ module Ecluse.Composition.Credential (
     codeArtifactIdentityGroups,
 ) where
 
-import Data.Foldable1 (minimum1)
+import Data.Foldable1 qualified as Foldable1
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition.BootError (BootError (..), refuseOnThrow)
@@ -98,7 +98,7 @@ initSharedCodeArtifact ::
     (CodeArtifactConfig, (StoreTag, NonEmpty Ecosystem)) ->
     IO (Either [BootError] [(Ecosystem, CredentialProvider)])
 initSharedCodeArtifact reportersFor (caConfig, (tag, ecosystems)) =
-    fmap fannedOut <$> refuseOnThrow CodeArtifactMintFailed (newCodeArtifactProvider (reportersFor (minimum1 ecosystems) tag) caConfig)
+    fmap fannedOut <$> refuseOnThrow CodeArtifactMintFailed (newCodeArtifactProvider (reportersFor (Foldable1.minimum ecosystems) tag) caConfig)
   where
     fannedOut provider = [(eco, provider) | eco <- toList ecosystems]
 
