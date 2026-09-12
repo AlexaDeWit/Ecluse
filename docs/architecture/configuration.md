@@ -215,7 +215,10 @@ error, not a silent skip:
   `ecluse dredger` deletes from each mount's `mirrorTarget`, so it
   also refuses a `mirrorTarget` equal to any mount's `privateUpstream` or to its own mount's
   `publicationTarget`. `ecluse proxy` and `ecluse mirror` boot on those mirror collisions and warn once per
-  collapsed pair, and the operator prunes that mirror by hand. One combinator turns each detected
+  collapsed pair, and the operator prunes that mirror by hand. Dredger, including preview, also
+  refuses a private upstream equal to its own publication target: its private read cache must
+  remain separate from user publications. Proxy and mirror retain their existing behaviour for
+  that pair and issue no advisory. One combinator turns each detected
   collision into the outcome the booting role earns, so a refusal on one path and a warning on
   another always come from the same rule. The comparison is by full registry URL, not by host,
   because repositories of one CodeArtifact domain differ only in path, and a repository's per-format

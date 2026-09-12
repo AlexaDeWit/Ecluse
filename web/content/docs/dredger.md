@@ -15,6 +15,11 @@ can retain another copy after mirror deletion. Follow
 account for those retained copies. Automated cleanup of both locations is planned in
 [#1227](https://github.com/AlexaDeWit/Ecluse/issues/1227), not implemented.
 
+Dredger refuses to boot when a mount's `privateUpstream` and `publicationTarget` name the same
+registry. Preview applies the same refusal. The private read cache must remain separate from
+user publications. Distinct repository paths on one host remain valid. Proxy and mirror still
+accept this same-mount pair.
+
 The Dredger takes no ingress. It exposes only `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`.
 
 ## What one cycle does

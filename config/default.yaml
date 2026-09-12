@@ -300,7 +300,8 @@ mounts:
     # It requires server.authToken, or the boot refuses.
     # The target receives a credential, so the boot refuses one on any mount's
     # publicUpstream host, or equal to another mount's privateUpstream, mirrorTarget, or
-    # publicationTarget. Its own mount's privateUpstream or mirrorTarget stays legal.
+    # publicationTarget. Dredger, including preview, also refuses this mount's
+    # privateUpstream or mirrorTarget as the publication target. Proxy and mirror allow them.
     # publicationTarget:
     #   codeArtifact:
     #     url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
