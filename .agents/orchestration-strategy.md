@@ -156,13 +156,16 @@ work. Every brief also carries the comment budget as a numbered acceptance crite
 comment is one or two lines, a new module header is at most eight, and the implementer reports
 each comment block the diff adds, with its line count, in its report to the team lead
 ([`../docs/haddock.md`](../docs/haddock.md) §3 and §5). The brief also restates the owner's
-boy-scout rule, which every agent loads from `CLAUDE.md`: a file the slice edits leaves with its
-existing comments at the cap, trimmed in the same change, scoped to that file and
-behaviour-preserving. The commit message names the trims and carries any justification for a
-block left over cap. The PR body carries none of this: it is the goal, the motivation, and the
-consequence, per [CONTRIBUTING, Pull requests](../CONTRIBUTING.md#pull-requests). Without the
-boy-scout sentence an implementer reads "stay in scope" as "touch nothing beside your hunk" and
-leaves the comment wall standing.
+boy-scout rule: a file the slice edits leaves with its existing comments at the cap, trimmed in
+the same change, scoped to that file and behaviour-preserving. That rule lives in the owner's own
+harness-level instruction file, outside this repository, so an implementer reads it only when the
+brief carries it. The same holds for every other convention that file owns, the banned-term list
+and the punctuation rule among them. Transcribe them. Never assume them. The commit message names
+the trims and carries any justification for a block left over cap. The PR body carries none of
+this: it is the goal, the motivation, and the consequence, per
+[CONTRIBUTING, Pull requests](../CONTRIBUTING.md#pull-requests). Without the boy-scout sentence
+an implementer reads "stay in scope" as "touch nothing beside your hunk" and leaves the comment
+wall standing.
 
 **Pin the model**. There is no effort dial. Left unset, the Agent tool's `model` argument takes the
 general-purpose agent's default. That default may be lighter than the team lead's own model. The
