@@ -269,14 +269,14 @@ capSpec = describe "the per-cycle deletion cap" $ do
                             modifyIORef' calls (<> [selected])
                             pure (zip selected (replicate successful VersionRemoved <> repeat (VersionUnreached fault)))
                         }
-            context <- evalContext
+            ctx <- evalContext
             halt <-
                 sweepPackage
                     testPacing{swpDeletionCap = 2}
                     (recPorts rec')
                     counters
                     (testMount handle [denyRule] [])
-                    context
+                    ctx
                     generation
                     packageName
                     (served ["1.0.0", "2.0.0", "3.0.0"])

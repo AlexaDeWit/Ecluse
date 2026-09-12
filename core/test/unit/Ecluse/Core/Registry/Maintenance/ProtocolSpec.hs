@@ -240,7 +240,7 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
                                 recorded <- newIORef []
                                 rec' <- recordingPorts Nothing
                                 counters <- newSweepState
-                                context <- mkEvalContext getCurrentTime (pure Nothing)
+                                ctx <- mkEvalContext getCurrentTime (pure Nothing)
                                 let tracked =
                                         handle
                                             { deleteVersions = \name selected -> do
@@ -253,7 +253,7 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
                                     (recPorts rec')
                                     counters
                                     (testMount tracked [denyRule] [])
-                                    context
+                                    ctx
                                     Nothing
                                     leftpad
                                     [StoredVersion v VersionServed | v <- versions]
@@ -281,13 +281,13 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
         withStore True answerRefusingEdit $ \handle stub -> do
             rec' <- recordingPorts Nothing
             counters <- newSweepState
-            context <- mkEvalContext getCurrentTime (pure Nothing)
+            ctx <- mkEvalContext getCurrentTime (pure Nothing)
             sweepPackage
                 testPacing
                 (recPorts rec')
                 counters
                 (testMount handle [denyRule] [])
-                context
+                ctx
                 Nothing
                 leftpad
                 [StoredVersion (version raw) VersionServed | raw <- ["1.0.0", "2.0.0"]]

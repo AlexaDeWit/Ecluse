@@ -179,7 +179,7 @@ deleteCases store = describe "the handle's chunked delete" $ do
                             recorded <- newIORef []
                             rec' <- recordingPorts Nothing
                             counters <- newSweepState
-                            context <- mkEvalContext getCurrentTime (pure Nothing)
+                            ctx <- mkEvalContext getCurrentTime (pure Nothing)
                             let tracked =
                                     handle
                                         { deleteVersions = \name selected -> do
@@ -193,7 +193,7 @@ deleteCases store = describe "the handle's chunked delete" $ do
                                 (recPorts rec')
                                 counters
                                 (testMount tracked [denyRule] [])
-                                context
+                                ctx
                                 Nothing
                                 aPackage
                                 [StoredVersion v VersionServed | v <- versions]
@@ -219,13 +219,13 @@ deleteCases store = describe "the handle's chunked delete" $ do
             handle = (handleOver store plane){readStoreManifest = \_ -> pure (Right (sampleManifest aPackage versions))}
         rec' <- recordingPorts Nothing
         counters <- newSweepState
-        context <- mkEvalContext getCurrentTime (pure Nothing)
+        ctx <- mkEvalContext getCurrentTime (pure Nothing)
         sweepPackage
             testPacing{swpDeletionCap = 101}
             (recPorts rec')
             counters
             (testMount handle [denyRule] [])
-            context
+            ctx
             Nothing
             aPackage
             [StoredVersion v VersionServed | v <- versions]
