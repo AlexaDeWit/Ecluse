@@ -41,6 +41,7 @@ import Ecluse.Core.Package (
     sriBody,
  )
 import Ecluse.Core.Package.Entry (AdmittedEntry (..))
+import Ecluse.Core.Package.Hash (canonicalHashValue)
 import Ecluse.Core.Package.Integrity (assertedAlg)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
 import Ecluse.Core.Version (Version, renderVersion, selectLatest)
@@ -104,13 +105,11 @@ data MergePlan = MergePlan
     }
     deriving stock (Eq, Show)
 
--- | Sorted file, asserted algorithm, and digest triples. Only shared file/algorithm keys can contradict.
+-- | Sorted file, asserted algorithm, and diagnostic digest triples. Only shared file/algorithm keys can contradict.
 newtype IntegrityFingerprint = IntegrityFingerprint [(Text, Maybe HashAlg, Text)]
     deriving stock (Eq, Ord, Show)
 
-{- | The sorted @(artifact filename, asserted algorithm, comparable digest body)@ triples, for an
-audit trail.
--}
+-- | Sorted filename, algorithm, and original digest-body triples, including duplicates.
 integrityHashes :: IntegrityFingerprint -> [(Text, Maybe HashAlg, Text)]
 integrityHashes (IntegrityFingerprint hs) = hs
 
@@ -185,10 +184,7 @@ data Merge = Merge
     }
     deriving stock (Eq, Show)
 
-{- | Associative with 'mempty' as identity, and intentionally __not__ commutative: @(<>)@ re-indexes
-the right operand's 'SourceId's past the left operand's inputs, so a 'SourceId' keeps naming the
-caller's list position. Precedence resolves by provenance, so the survivors do not depend on order.
--}
+-- Source IDs follow input positions, so regrouping preserves the result but permutation changes labels.
 instance Semigroup Merge where
     a <> b =
         Merge
@@ -296,10 +292,13 @@ planFrom acc = do
             [ Divergence{divVersion = key, divWinning = win, divLosing = lose}
             | (key, cs) <- Map.toList (mergeVersions acc)
             , Set.size cs > 1
-            , let win = candFingerprint (winnerOf cs)
-            , let distinct = Set.fromList [candFingerprint c | c <- Set.toList cs]
-            , lose <- Set.toList distinct
-            , contradicts win lose
+            , let winner = winnerOf cs
+            , let win = candFingerprint winner
+            , let winningDigests = digestsByKey (candDetails winner)
+            , candidate <- Set.toList cs
+            , let lose = candFingerprint candidate
+            , lose /= win
+            , contradicts winningDigests (digestsByKey (candDetails candidate))
             ]
 
     -- The accumulator has already resolved same-tag collisions by provenance, so the carried
@@ -336,11 +335,10 @@ integrityDivergences trusted public =
         | (key, (privateDetails, publicDetails)) <- Map.toList (Map.intersectionWith (,) trusted public)
         , let win = fingerprint privateDetails
         , let lose = fingerprint publicDetails
-        , contradicts win lose
+        , contradicts (digestsByKey privateDetails) (digestsByKey publicDetails)
         ]
 
--- Sorted triples make the comparison order-independent across artifacts and hashes. Keying by
--- 'assertedAlg', not the raw wrapper tag, compares what each digest claims about each file.
+-- Diagnostics retain the existing digest spelling, sorted order, and duplicate entries.
 fingerprint :: PackageDetails -> IntegrityFingerprint
 fingerprint =
     IntegrityFingerprint
@@ -349,20 +347,28 @@ fingerprint =
         . toList
         . pkgArtifacts
   where
-    artHashPairs art = [(artFilename art, assertedAlg h, comparableBody h) | h <- artHashes art]
+    artHashPairs art = [(artFilename art, assertedAlg h, diagnosticBody h) | h <- artHashes art]
 
--- Comparing bodies is sound because the encoding is uniform within a shared resolved
--- algorithm: sha1 hex on both sides, sha256/sha512 SRI base64 on both sides.
-comparableBody :: Hash -> Text
-comparableBody h = case hashAlg h of
+diagnosticBody :: Hash -> Text
+diagnosticBody h = case hashAlg h of
     SRI -> sriBody (hashValue h)
     _ -> hashValue h
 
--- An omitted file or algorithm makes no conflicting claim.
-contradicts :: IntegrityFingerprint -> IntegrityFingerprint -> Bool
-contradicts a b =
-    or (Map.intersectionWith (/=) (digestsByKey a) (digestsByKey b))
-  where
-    digestsByKey :: IntegrityFingerprint -> Map (Text, Maybe HashAlg) (Set Text)
-    digestsByKey (IntegrityFingerprint triples) =
-        Map.fromListWith Set.union [((file, alg), Set.singleton digest) | (file, alg, digest) <- triples]
+-- Record updates can bypass 'mkHash'. Invalid text remains distinct comparison evidence.
+comparableBody :: Hash -> Text
+comparableBody h = fromMaybe (hashValue h) (canonicalHashValue h)
+
+type DigestSets = Map (Text, Maybe HashAlg) (Set Text)
+
+digestsByKey :: PackageDetails -> DigestSets
+digestsByKey details =
+    Map.fromListWith
+        Set.union
+        [ ((artFilename art, assertedAlg h), Set.singleton (comparableBody h))
+        | art <- toList (pkgArtifacts details)
+        , h <- artHashes art
+        ]
+
+-- An omitted file or algorithm makes no conflicting claim. Shared keys require complete set equality.
+contradicts :: DigestSets -> DigestSets -> Bool
+contradicts a b = or (Map.intersectionWith (/=) a b)

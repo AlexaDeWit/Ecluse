@@ -4,6 +4,7 @@
 
 module Ecluse.Core.Package.HashSpec (spec) where
 
+import Data.Text qualified as T
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -12,6 +13,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Package.Hash (
     HashAlg (..),
+    canonicalHashValue,
     hashAlg,
     hashValue,
     mkHash,
@@ -20,6 +22,8 @@ import Ecluse.Core.Package.Hash (
     renderHashAlg,
     sriAlgorithm,
  )
+
+import Ecluse.Test.Package qualified as Package
 
 spec :: Spec
 spec = do
@@ -32,9 +36,6 @@ spec = do
                 `shouldBe` Right SRI
 
         it "rejects a multi-component integrity (one Hash holds exactly one component)" $
-            -- npm may serve "sha512-… sha256-…" on the wire. mkSriHashes splits it into one Hash
-            -- per component, so the floor ranking and the worker's verification read the same
-            -- component.
             mkHash
                 SRI
                 "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
@@ -91,6 +92,42 @@ spec = do
             -- The SRI set is sha256, sha384, and sha512. A well-formed sha1 base64 body
             -- names no SRI algorithm, so it does not construct.
             mkHash SRI "sha1-2jmj7l5rSw0yVb/vlWAYkK/YBwk=" `shouldSatisfy` isLeft
+
+    describe "canonicalHashValue" $ do
+        it "compares SHA-1 hex case without changing its original spelling" $ do
+            let hex = Package.hexSha1Of "same bytes"
+            forM_ [hex, T.toUpper hex] $ \wire -> do
+                let parsed = mkHash SHA1 wire
+                (canonicalHashValue <$> parsed) `shouldBe` Right (Just hex)
+                (hashValue <$> parsed) `shouldBe` Right wire
+
+        forM_
+            [ (SHA256, Package.hexSha256Of, Package.sriSha256Of)
+            , (SHA384, Package.hexSha384Of, Package.sriSha384Of)
+            , (SHA512, Package.hexSha512Of, Package.sriSha512Of)
+            ]
+            $ \(alg, hexOf, sriOf) -> do
+                it ("compares hex case and SRI by bytes for " <> show alg) $ do
+                    let hex = hexOf "same bytes"
+                        sri = sriOf "same bytes"
+                    forM_ [(alg, hex), (alg, T.toUpper hex), (SRI, sri)] $ \(wireAlg, value) -> do
+                        let parsed = mkHash wireAlg value
+                        (canonicalHashValue <$> parsed) `shouldBe` Right (Just hex)
+                        (hashValue <$> parsed) `shouldBe` Right value
+
+                it ("is representation-invariant for arbitrary " <> show alg <> " digests") $
+                    hedgehog $ do
+                        bytes <- forAll (Gen.bytes (Range.linear 0 200))
+                        let hex = hexOf bytes
+                        forM_ [(alg, hex), (alg, T.toUpper hex), (SRI, sriOf bytes)] $ \(wireAlg, value) ->
+                            (canonicalHashValue <$> mkHash wireAlg value) === Right (Just hex)
+
+        it "rejects invalid record updates without changing their raw spelling" $ do
+            let original = Package.unsafeHash SRI (Package.sriSha256Of "bytes")
+            forM_ ["sha3-AAAA", "sha256-", "sha256-not-base64", " sha256-AAAA "] $ \value -> do
+                let changed = original{hashValue = value}
+                canonicalHashValue changed `shouldBe` Nothing
+                hashValue changed `shouldBe` value
 
     describe "mkSriHashes" $ do
         it "splits a multi-component wire string into one Hash per component" $

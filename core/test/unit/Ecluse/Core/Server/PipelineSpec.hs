@@ -352,8 +352,13 @@ assertConflictLog expected logged = do
         Object fields -> do
             KeyMap.lookup "sev" fields `shouldBe` Just (String "Warning")
             let encoded = decodeUtf8 (LBS.toStrict (encode entry))
-            encoded `shouldSatisfy` T.isInfixOf (T.drop 7 (sha512Integrity "leftpad artifact bytes (privately tampered)"))
-            encoded `shouldSatisfy` T.isInfixOf (T.drop 7 (sha512Integrity artifactBytes))
+                expectedMessage =
+                    "cross-upstream integrity divergence: the trusted copy of leftpad is served, but a public copy contradicts it on a shared integrity algorithm for 1 version(s): 1.0.0 (trusted {leftpad-1.0.0.tgz sha512:"
+                        <> T.drop 7 (sha512Integrity "leftpad artifact bytes (privately tampered)")
+                        <> "} vs public {leftpad-1.0.0.tgz sha512:"
+                        <> T.drop 7 (sha512Integrity artifactBytes)
+                        <> "})"
+            KeyMap.lookup "msg" fields `shouldBe` Just (String expectedMessage)
             encoded `shouldSatisfy` T.isInfixOf "\"package\":\"leftpad\""
             encoded `shouldSatisfy` T.isInfixOf "\"versions\":\"1.0.0\""
         _ -> expectationFailure "a structured log entry must be an object"
