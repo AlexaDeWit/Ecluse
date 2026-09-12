@@ -2,40 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Performance-acceptance evaluation: the pure core of the live
-performance-acceptance harness.
-
-The harness fetches real packuments from the live registries and times Écluse's
-work-per-request over each. It then asks one question: __is the per-request overhead
-within the acceptance budget under today's real-world conditions?__ A breach is a
-prompt for a human decision, a code regression or reality outgrowing the provisioned
-budget, never an automatic block.
-
-The harness measures two overheads per package, each with its own budget:
-
-  * The __full-packument__ transform (decode, project, rule sweep, filter, URL
-    rewrite, re-serialise) that backs a metadata read of every version.
-  * The __single-version__ selective decode the tarball gate consults to serve one
-    package version. This is the cold path's per-package overhead, which a
-    whole-document decode dominates on the heavy many-version packuments and a
-    selective decode does not. Tracking it separately keeps an improvement to the
-    single-version path visible in the report rather than lost behind the
-    full-packument figure.
-
-This module is the deterministic part: the version-controlled acceptance 'Criteria',
-the per-package 'evaluate', and the 'renderReport' summary. 'evaluate' turns a
-measured 'Sample' into a per-leg 'Assessment' against its budget.
-
-The live fetch and timing live in the harness executable. Everything here is pure and
-unit-tested, so a test exercises the acceptance decision deterministically rather than
-only against the live registries.
-
-The criteria come from a __version-controlled__ JSON file ('criteriaPath'), so moving
-the bar is an explicit, reviewed act.
+{- | Budgets and reports for live registry performance acceptance.
+Each ecosystem keeps its own package budgets, while either processing leg can fail the run.
 -}
 module Ecluse.Acceptance (
     -- * Acceptance criteria
     Criteria (..),
+    CriteriaCatalogue (..),
     criteriaPath,
     loadCriteria,
     decodeCriteria,
@@ -50,6 +23,7 @@ module Ecluse.Acceptance (
     Report (..),
     evaluate,
     reportBreached,
+    reportExitCode,
 
     -- * Rendering
     OperatingPoint (..),
@@ -59,18 +33,20 @@ module Ecluse.Acceptance (
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
+import Data.Aeson.Types (Parser)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI), ecosystemName, parseEcosystem)
+import System.Exit (ExitCode (ExitFailure, ExitSuccess))
+
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Numeric (showFFloat)
 
-{- | The acceptance budget: the maximum Écluse work-per-request overhead, in milliseconds,
-allowed before the run reds. Per-package overrides cover the heavy, many-version packuments.
--}
+-- | Positive overhead budgets in milliseconds, scoped to one ecosystem.
 data Criteria = Criteria
     { critDefaultBudgetMs :: Double
-    -- ^ The full-packument overhead budget applied to any package without an override.
+    -- ^ The full-document overhead budget applied to any package without an override.
     , critPerPackageBudgetMs :: Map Text Double
-    -- ^ Per-package full-packument budget overrides, keyed by the package name.
+    -- ^ Per-package full-document budget overrides, keyed by the package name.
     , critDefaultSingleVersionBudgetMs :: Double
     -- ^ The single-version overhead budget applied to any package without an override.
     , critPerPackageSingleVersionBudgetMs :: Map Text Double
@@ -79,32 +55,56 @@ data Criteria = Criteria
     deriving stock (Eq, Show)
 
 instance FromJSON Criteria where
-    parseJSON = withObject "Criteria" $ \o ->
-        Criteria
-            <$> o .: "defaultBudgetMs"
-            <*> o .:? "perPackageBudgetMs" .!= mempty
-            <*> o .: "defaultSingleVersionBudgetMs"
-            <*> o .:? "perPackageSingleVersionBudgetMs" .!= mempty
+    parseJSON = withObject "Criteria" $ \o -> do
+        crit <-
+            Criteria
+                <$> o .: "defaultBudgetMs"
+                <*> o .:? "perPackageBudgetMs" .!= mempty
+                <*> o .: "defaultSingleVersionBudgetMs"
+                <*> o .:? "perPackageSingleVersionBudgetMs" .!= mempty
+        let budgets =
+                [critDefaultBudgetMs crit, critDefaultSingleVersionBudgetMs crit]
+                    <> Map.elems (critPerPackageBudgetMs crit)
+                    <> Map.elems (critPerPackageSingleVersionBudgetMs crit)
+        unless (all (\n -> n > 0 && not (isInfinite n || isNaN n)) budgets) $
+            fail "acceptance budgets must be finite and positive"
+        pure crit
 
-{- | The committed criteria's path, relative to the package root the harness runs
-from. Version-controlled so that moving the bar is an explicit, reviewed change.
--}
+-- | Explicit, required budget sections for each supported ecosystem.
+newtype CriteriaCatalogue = CriteriaCatalogue
+    { catalogueCriteria :: Map Ecosystem Criteria
+    }
+    deriving stock (Eq, Show)
+
+instance FromJSON CriteriaCatalogue where
+    parseJSON = withObject "CriteriaCatalogue" $ \o -> do
+        raw <- o .: "ecosystems"
+        entries <- traverse parseEntry (Map.toList raw)
+        let sections = Map.fromList entries
+        unless (all (`Map.member` sections) [Npm, PyPI]) $
+            fail "acceptance criteria require npm and pypi sections"
+        pure (CriteriaCatalogue sections)
+      where
+        parseEntry :: (Text, Criteria) -> Parser (Ecosystem, Criteria)
+        parseEntry (name, crit) = case parseEcosystem name of
+            Nothing -> fail ("unknown acceptance ecosystem: " <> toString name)
+            Just eco -> pure (eco, crit)
+
+-- | The committed criteria's path, relative to the package root the harness runs from.
 criteriaPath :: FilePath
 criteriaPath = "acceptance/criteria.json"
 
 -- | Decode 'Criteria' from raw JSON bytes.
-decodeCriteria :: LByteString -> Either String Criteria
+decodeCriteria :: LByteString -> Either String CriteriaCatalogue
 decodeCriteria = eitherDecode
 
-{- | Read and decode the committed criteria from 'criteriaPath'. It fails loudly when the file
-is missing or malformed, because that is a committed-config defect.
--}
-loadCriteria :: IO Criteria
+-- | Read and decode the committed criteria from 'criteriaPath'.
+loadCriteria :: IO CriteriaCatalogue
 loadCriteria = do
     raw <- readFileLBS criteriaPath
     either (\e -> fail (criteriaPath <> " did not decode: " <> e)) pure (decodeCriteria raw)
 
--- | The full-packument overhead budget for a package: its override, or the default.
+-- | The full-document overhead budget for a package: its override, or the default.
 budgetFor :: Criteria -> Text -> Double
 budgetFor crit name =
     Map.findWithDefault (critDefaultBudgetMs crit) name (critPerPackageBudgetMs crit)
@@ -114,26 +114,19 @@ singleVersionBudgetFor :: Criteria -> Text -> Double
 singleVersionBudgetFor crit name =
     Map.findWithDefault (critDefaultSingleVersionBudgetMs crit) name (critPerPackageSingleVersionBudgetMs crit)
 
-{- | One package's live measurement. The upstream fetch, the full-packument transform, and
-the single-version decode stay separate, so no upstream cost reads as an Écluse one.
--}
+-- | One package's live measurements, with each duration in milliseconds.
 data Sample = Sample
     { sampleName :: Text
-    -- ^ The package name measured.
     , sampleVersions :: Int
-    -- ^ The number of published versions in the fetched packument.
+    -- ^ The number of published versions in the fetched document.
     , sampleUpstreamMs :: Double
-    -- ^ Wall-clock time to fetch the packument from the live registry, in milliseconds.
+    -- ^ Fetch time, separate from both processing legs.
     , sampleFullOverheadMs :: Double
-    -- ^ Wall-clock time for Écluse's full-packument work-per-request over it, in milliseconds.
     , sampleSingleVersionOverheadMs :: Double
-    -- ^ Wall-clock time for the single-version selective decode of its latest version, in milliseconds.
     }
     deriving stock (Eq, Show)
 
-{- | The verdict for a measured leg: within its budget, or over it by a margin
-(in milliseconds).
--}
+-- | The verdict for a measured leg: within its budget, or over it by a margin (in milliseconds).
 data Verdict
     = Within
     | Breached Double
@@ -146,27 +139,24 @@ data Assessment = Assessment
     }
     deriving stock (Eq, Show)
 
-{- | A package's outcome in a run: measured, or not assessable. A fetch or decode failure is
-__not__ a breach, because only an over-budget measurement reds the run.
--}
+-- | A package's outcome in a run: measured, or not assessable.
 data PackageOutcome
-    = -- | A measured package: its sample, the full-packument assessment, then the single-version assessment.
+    = -- | A measured package: its sample, the full-document assessment, then the single-version assessment.
       Measured Sample Assessment Assessment
     | -- | A package that could not be assessed: its name and the reason.
       Unavailable Text Text
     deriving stock (Eq, Show)
 
--- | A whole run's outcomes, in input order.
-newtype Report = Report
-    { reportOutcomes :: [PackageOutcome]
+-- | One ecosystem's outcomes, in catalogue order.
+data Report = Report
+    { reportEcosystem :: Ecosystem
+    , reportOutcomes :: [PackageOutcome]
     }
     deriving stock (Eq, Show)
 
-{- | Evaluate each package's raw input against the criteria. A @Left (name, reason)@ carries
-through as an unavailable package and never counts as a breach.
--}
-evaluate :: Criteria -> [Either (Text, Text) Sample] -> Report
-evaluate crit = Report . map outcome
+-- | Evaluate each package's raw input against the criteria.
+evaluate :: Ecosystem -> Criteria -> [Either (Text, Text) Sample] -> Report
+evaluate eco crit = Report eco . map outcome
   where
     outcome (Left (name, reason)) = Unavailable name reason
     outcome (Right sample) =
@@ -175,29 +165,29 @@ evaluate crit = Report . map outcome
             (assess (budgetFor crit (sampleName sample)) (sampleFullOverheadMs sample))
             (assess (singleVersionBudgetFor crit (sampleName sample)) (sampleSingleVersionOverheadMs sample))
 
--- | Assess one overhead leg against its budget.
 assess :: Double -> Double -> Assessment
 assess budget overheadMs =
     let margin = overheadMs - budget
      in Assessment budget (if margin > 0 then Breached margin else Within)
 
-{- | Whether any measured leg breached its budget: the run's red condition. An
-unavailable package never counts, because a flaky registry is not a perf regression.
--}
+-- | Whether any measured leg breached its budget: the run's red condition.
 reportBreached :: Report -> Bool
 reportBreached = any isBreach . reportOutcomes
   where
     isBreach (Measured _ full single) = breached full || breached single
     isBreach _ = False
 
--- | Whether an assessment is over budget.
+-- | Either ecosystem's measured breach fails the process. Unavailable packages do not.
+reportExitCode :: [Report] -> ExitCode
+reportExitCode reports
+    | any reportBreached reports = ExitFailure 1
+    | otherwise = ExitSuccess
+
 breached :: Assessment -> Bool
 breached (Assessment _ (Breached _)) = True
 breached _ = False
 
-{- | The run-shape facts the summary names, so a reader interprets the numbers without opening
-the harness.
--}
+-- | Timed passes per leg and the total catalogue size.
 data OperatingPoint = OperatingPoint
     { opPassesPerLeg :: Int
     -- ^ Timed passes per leg. The reported figure is their median.
@@ -206,39 +196,37 @@ data OperatingPoint = OperatingPoint
     }
     deriving stock (Eq, Show)
 
-{- | The budget-to-observed multiple for one leg: how many times its overhead fits inside its
-budget. 'Nothing' when the observed figure is not positive, where the multiple is meaningless.
--}
+-- | Budget divided by overhead. Non-positive observations have no meaningful ratio.
 headroom :: Double -> Double -> Maybe Double
 headroom budget observed
     | observed <= 0 = Nothing
     | otherwise = Just (budget / observed)
 
-{- | The fraction of its budget a within-budget leg may consume before the report marks it
-__watch__, an early warning while the exit code stays green. Budgets sit at roughly 2.2x the
-observed CI maxima, so 0.7 stays quiet near a healthy 45% and trips at about 1.55x that maximum.
--}
+-- | Mark a leg for attention when it consumes 70% of its budget.
 watchFraction :: Double
 watchFraction = 0.7
 
--- Whether a within-budget leg is on watch. The budget guard keeps the ratio defined.
 watching :: Assessment -> Double -> Bool
 watching a observed = case assessVerdict a of
     Within -> assessBudgetMs a > 0 && observed / assessBudgetMs a >= watchFraction
     Breached _ -> False
 
-{- | Render a run as a Markdown summary: an overall verdict line, the operating
-point, then a per-package table. The table keeps the __upstream__, __full-packument
-overhead__, and __single-version overhead__ legs in separate columns, so an
-upstream-normalisation view fits later without reshaping the table.
+-- | Render one table per ecosystem, separating upstream latency from processing overhead.
+renderReport :: OperatingPoint -> [Report] -> Text
+renderReport op reports =
+    T.unlines
+        [ "## Live performance-acceptance (Context B)"
+        , ""
+        , "Catalogue: " <> show (opCatalogueSize op) <> " packages (bench/corpus/pins.json)."
+        , "Full overhead: decode, projection, rules, assembly, and serialisation."
+        , "Single-version overhead: selective projection and forcing artifact digests."
+        , "Input copies, target selection, and snapshot digests are prepared outside processing timers."
+        , ""
+        ]
+        <> foldMap (renderSection op) reports
 
-Each measured row names its budgets, its per-leg headroom, and a verdict. The verdict
-is @within@, a @watch@ on a leg at or above 'watchFraction' of its budget, or a breach
-naming the leg and its margin. The report lists unavailable packages as such, never
-as breaches.
--}
-renderReport :: OperatingPoint -> Report -> Text
-renderReport op report =
+renderSection :: OperatingPoint -> Report -> Text
+renderSection op report =
     T.unlines (headerLines <> operatingLines <> tableLines <> footerLines)
   where
     outcomes = reportOutcomes report
@@ -253,14 +241,14 @@ renderReport op report =
             ]
 
     headerLines =
-        [ "## Live performance-acceptance (Context B)"
+        [ "### " <> ecosystemName (reportEcosystem report)
         , ""
         , overall
         , ""
         ]
     overall
         | breaches > 0 =
-            "Result: BREACH -- " <> show breaches <> " package(s) over budget" <> incompleteSuffix
+            "Result: BREACH: " <> show breaches <> " package(s) over budget" <> incompleteSuffix
         | otherwise =
             "Result: within budget" <> incompleteSuffix
     incompleteSuffix
@@ -272,9 +260,9 @@ renderReport op report =
         , ""
         , "| knob | value |"
         , "| --- | --- |"
-        , cells ["catalogue", show (opCatalogueSize op) <> " packages (bench/corpus/pins.json)"]
+        , cells ["catalogue", show (length outcomes) <> " packages (bench/corpus/pins.json)"]
         , cells ["timing", "median of " <> show (opPassesPerLeg op) <> " timed passes per leg"]
-        , cells ["budgets", "acceptance/criteria.json (version-controlled; moving the bar is a reviewed change)"]
+        , cells ["budgets", "acceptance/criteria.json (version-controlled. Budget changes require review)"]
         , ""
         ]
 
@@ -285,38 +273,42 @@ renderReport op report =
             <> map row outcomes
 
     row (Measured s full single) =
-        cells
-            [ sampleName s
-            , show (sampleVersions s)
-            , fmt1 (sampleUpstreamMs s)
-            , fmt1 (sampleFullOverheadMs s)
-            , fmt1 (sampleSingleVersionOverheadMs s)
-            , fmt1 (assessBudgetMs full) <> " / " <> fmt1 (assessBudgetMs single)
-            , headroomCell full (sampleFullOverheadMs s)
-                <> " / "
-                <> headroomCell single (sampleSingleVersionOverheadMs s)
-            , renderVerdicts s full single
-            ]
+        cells $
+            sampleCells s
+                <> [ fmt 1 (assessBudgetMs full) <> " / " <> fmt 1 (assessBudgetMs single)
+                   , headroomCell full (sampleFullOverheadMs s)
+                        <> " / "
+                        <> headroomCell single (sampleSingleVersionOverheadMs s)
+                   , renderVerdicts s full single
+                   ]
     row (Unavailable name reason) =
         cells [name, "--", "--", "--", "--", "--", "--", "unavailable: " <> reason]
 
-    headroomCell a observed = maybe "n/a" (\h -> fmt1 h <> "x") (headroom (assessBudgetMs a) observed)
+    headroomCell a observed = maybe "n/a" (\h -> fmt 1 h <> "x") (headroom (assessBudgetMs a) observed)
 
     footerLines = unavailableNote <> watchNote
     unavailableNote
         | unavailable > 0 =
-            ["", "_" <> show unavailable <> " package(s) could not be fetched or decoded; a flaky registry is not a breach._"]
+            ["", "_" <> show unavailable <> " package(s) could not be fetched or decoded. Registry failure is not a breach._"]
         | otherwise = []
     watchNote
         | watched > 0 =
             [ ""
             , "_watch marks a leg at or above "
-                <> fmt0 (watchFraction * 100)
-                <> "% of its budget: early warning, not a failure -- only a breach exits non-zero._"
+                <> fmt 0 (watchFraction * 100)
+                <> "% of its budget. A watch does not fail the run._"
             ]
         | otherwise = []
 
--- A measured row's verdict cell.
+sampleCells :: Sample -> [Text]
+sampleCells s =
+    [ sampleName s
+    , show (sampleVersions s)
+    , fmt 3 (sampleUpstreamMs s)
+    , fmt 3 (sampleFullOverheadMs s)
+    , fmt 3 (sampleSingleVersionOverheadMs s)
+    ]
+
 renderVerdicts :: Sample -> Assessment -> Assessment -> Text
 renderVerdicts s full single =
     case catMaybes [tag "full" full (sampleFullOverheadMs s), tag "1-ver" single (sampleSingleVersionOverheadMs s)] of
@@ -324,20 +316,14 @@ renderVerdicts s full single =
         marks -> T.intercalate ", " marks
   where
     tag label a observed = case assessVerdict a of
-        Breached margin -> Just ("BREACH " <> label <> " +" <> fmt1 margin <> " ms")
+        Breached margin -> Just ("BREACH " <> label <> " +" <> fmt 1 margin <> " ms")
         Within
             | watching a observed ->
-                Just ("watch -- " <> label <> " at " <> fmt0 (observed / assessBudgetMs a * 100) <> "% of budget")
+                Just ("watch: " <> label <> " at " <> fmt 0 (observed / assessBudgetMs a * 100) <> "% of budget")
             | otherwise -> Nothing
 
--- A Markdown table row from its cells.
 cells :: [Text] -> Text
 cells xs = "| " <> T.intercalate " | " xs <> " |"
 
--- A double rendered to one decimal place (non-scientific), for the summary table.
-fmt1 :: Double -> Text
-fmt1 x = toText (showFFloat (Just 1) x "")
-
--- A double rendered with no decimal places (non-scientific), for whole percentages.
-fmt0 :: Double -> Text
-fmt0 x = toText (showFFloat (Just 0) x "")
+fmt :: Int -> Double -> Text
+fmt places x = toText (showFFloat (Just places) x "")

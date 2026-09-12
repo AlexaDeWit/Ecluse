@@ -2,132 +2,131 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Live performance acceptance over the curated package catalogue.
-The harness compares upstream latency with full and selective metadata processing costs.
+{- | Live performance acceptance using the registered benchmark catalogue.
+The shared catalogue selects packages and adapters, while measurements use freshly fetched bytes.
 -}
 module Main (main) where
 
 import Control.Exception qualified as Exception
-import Data.Aeson (eitherDecode)
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BSL
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, getCurrentTime)
 import GHC.Clock (getMonotonicTime)
-import Network.HTTP.Client (Manager, newManager)
+import Network.HTTP.Client (Manager, Request, newManager, responseTimeout, responseTimeoutMicro)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 
-import Ecluse.Acceptance (OperatingPoint (OperatingPoint), Sample (..), evaluate, loadCriteria, renderReport, reportBreached)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Acceptance (CriteriaCatalogue (catalogueCriteria), OperatingPoint (OperatingPoint), Sample (..), evaluate, loadCriteria, renderReport, reportExitCode)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry (parseErrorMessage)
-import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue, projectName)
-import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
+import Ecluse.Core.Registry (RegistryResponse (..), isSuccessStatus)
+import Ecluse.Core.Registry.Exchange (boundedFetch)
+import Ecluse.Core.Registry.Npm.Request qualified as Npm
+import Ecluse.Core.Registry.PyPI.Request qualified as PyPI
+import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext))
-import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
+import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot), digestOf)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue, parseRegistryVersions)
-import Ecluse.Test.Server.Transform (SelectedDepth (Depth), selectiveDepth, serveTransformSize)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName)
+import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
+import Ecluse.Test.Server.Transform (SelectedDepth (Depth), detailsDepth, serveDocumentSize)
 
+-- | Report both ecosystems and forward their combined verdict as the process exit status.
 main :: IO ()
 main = do
     criteria <- loadCriteria
-    catalogue <- loadCatalogue
+    benches <- ecosystemBenches
+    configured <- forM benches $ \bench ->
+        case Map.lookup (ebEcosystem bench) (catalogueCriteria criteria) of
+            Nothing -> fail ("missing acceptance criteria for " <> toString (ecosystemName (ebEcosystem bench)))
+            Just budgets -> pure (bench, budgets)
     manager <- newManager tlsManagerSettings
     now <- getCurrentTime
-    let names = Map.keys (catBenchPins catalogue)
-    inputs <- traverse (measurePackage manager now) names
-    let report = evaluate criteria inputs
-        rendered = renderReport (OperatingPoint sampleCount (length names)) report
+    reports <- forM configured $ \(bench, budgets) -> do
+        inputs <- traverse (measurePackage manager now bench . corpusPackage) (ebCorpus bench)
+        pure (evaluate (ebEcosystem bench) budgets inputs)
+    let count = sum (map (length . ebCorpus) benches)
+        rendered = renderReport (OperatingPoint sampleCount count) reports
     putText rendered
-    -- In CI, mirror the summary into the GitHub step summary. A breach is then
-    -- visible on the pull request, without the workflow shelling around the harness.
     lookupEnv "GITHUB_STEP_SUMMARY" >>= traverse_ (`appendFileText` rendered)
-    when (reportBreached report) exitFailure
-
-{- | Measure Écluse's overhead over one package's live packument: the full transform and
-the single-version selective decode. A @Left (name, reason)@ marks it unavailable, never a breach.
--}
-measurePackage :: Manager -> UTCTime -> Text -> IO (Either (Text, Text) Sample)
-measurePackage manager now name = case projectName name of
-    Left e -> pure (Left (name, "catalogue pin is not a usable npm name: " <> parseErrorMessage e))
-    Right pkg -> do
-        t0 <- getMonotonicTime
-        mBody <- fetchPackumentBody manager Npm name
-        t1 <- getMonotonicTime
-        case mBody of
-            Nothing -> pure (Left (name, "registry unreachable or non-2xx"))
-            Just body -> case targetVersion body of
-                Nothing -> pure (Left (name, "packument exposed no versions"))
-                Just version -> do
-                    let raw = BSL.toStrict body
-                    fulls <- replicateM sampleCount (measureFull now pkg body)
-                    single <- measureSingleVersion pkg version raw
-                    pure $ case (sequence fulls, single) of
-                        (Just fullSecs, Just singleSec) ->
-                            Right
-                                Sample
-                                    { sampleName = name
-                                    , sampleVersions = maybe 0 length (parseRegistryVersions Npm body)
-                                    , sampleUpstreamMs = (t1 - t0) * 1000
-                                    , sampleFullOverheadMs = median fullSecs * 1000
-                                    , sampleSingleVersionOverheadMs = singleSec * 1000
-                                    }
-                        _ -> Left (name, "packument did not decode or project")
-
-{- | The version a single-version read targets: the last key in the packument's version
-list, the realistic install target. 'Nothing' when the packument exposes no versions.
--}
-targetVersion :: LByteString -> Maybe Version
-targetVersion body = mkVersion Npm . NE.last <$> (nonEmpty =<< parseRegistryVersions Npm body)
-
-{- | Time one pass of the full-packument transform, forcing the result inside the timed
-region so the figure covers the real work. 'Nothing' when the body does not decode or project.
--}
-measureFull :: UTCTime -> PackageName -> LByteString -> IO (Maybe Double)
-measureFull now pkg body = do
-    t0 <- getMonotonicTime
-    done <- runTransform now pkg body
-    t1 <- getMonotonicTime
-    pure (if done then Just (t1 - t0) else Nothing)
-
-measureSingleVersion :: PackageName -> Version -> ByteString -> IO (Maybe Double)
-measureSingleVersion pkg version raw = do
-    copies <- replicateM sampleCount (Exception.evaluate (BS.copy raw))
-    passes <- traverse timePass copies
-    pure $ case catMaybes passes of
-        [] -> Nothing
-        secs -> Just (median secs)
+    exitWith (reportExitCode reports)
   where
-    timePass r = do
+    corpusPackage (package, _, _, _) = package
+
+measurePackage :: Manager -> UTCTime -> EcosystemBench -> CorpusPackage -> IO (Either (Text, Text) Sample)
+measurePackage manager now bench package = do
+    t0 <- getMonotonicTime
+    fetched <- fetchDocument manager (ebEcosystem bench) pkg
+    t1 <- getMonotonicTime
+    case fetched of
+        Left reason -> pure (Left (name, reason))
+        Right raw -> case ebDecode bench pkg raw >>= maybe (Left "document exposed no versions") Right . nonEmpty of
+            Left reason -> pure (Left (name, reason))
+            Right versions -> do
+                digest <- Exception.evaluate (digestOf raw)
+                target <- Exception.evaluate (mkVersion (ebEcosystem bench) (NE.last versions))
+                versionCount <- Exception.evaluate (length versions)
+                full <- measurePasses (runFull now bench pkg digest) raw
+                single <- measurePasses (runSelective bench pkg target) raw
+                pure $ case (full, single) of
+                    (Just fullSecs, Just singleSecs) ->
+                        Right
+                            Sample
+                                { sampleName = name
+                                , sampleVersions = versionCount
+                                , sampleUpstreamMs = (t1 - t0) * 1000
+                                , sampleFullOverheadMs = fullSecs * 1000
+                                , sampleSingleVersionOverheadMs = singleSecs * 1000
+                                }
+                    _ -> Left (name, "document did not decode or project")
+  where
+    pkg = cpPackage package
+    name = cpName package
+
+fetchDocument :: Manager -> Ecosystem -> PackageName -> IO (Either Text ByteString)
+fetchDocument manager eco pkg = case liveRequest eco pkg of
+    Left reason -> pure (Left reason)
+    Right request -> do
+        result <- boundedFetch manager defaultLimits request{responseTimeout = responseTimeoutMicro (30 * 1000 * 1000)}
+        pure $ case result of
+            Left fault -> Left (show fault)
+            Right response
+                | isSuccessStatus (responseStatusCode response) -> Right (responseBody response)
+                | otherwise -> Left ("registry HTTP " <> show (responseStatusCode response))
+
+liveRequest :: Ecosystem -> PackageName -> Either Text Request
+liveRequest eco pkg = case eco of
+    Npm -> first show (Npm.metadataRequest "https://registry.npmjs.org" Nothing Npm.Full noValidators pkg)
+    PyPI -> first show (PyPI.simpleIndexRequest "https://pypi.org" Nothing noValidators pkg)
+    RubyGems -> Left "no registered performance adapter for rubygems"
+
+-- Allocate each copy in IO before timing. Evaluating one pure copy thunk would share it across passes.
+measurePasses :: (ByteString -> IO Bool) -> ByteString -> IO (Maybe Double)
+measurePasses operation raw = do
+    copies <- BS.useAsCStringLen raw (replicateM sampleCount . BS.packCStringLen)
+    passes <- forM copies $ \copy -> do
         t0 <- getMonotonicTime
-        depth <- Exception.evaluate (selectiveDepth pkg (r, version))
+        done <- operation copy
         t1 <- getMonotonicTime
-        pure $ case depth of
-            Depth _ -> Just (t1 - t0)
-            _ -> Nothing
+        pure (if done then Just (t1 - t0) else Nothing)
+    pure (median <$> sequence passes)
 
-{- | Decode, project, and run the full serve transform, forcing the served size before the
-timer stops. 'False' marks a body that did not decode or project.
--}
-runTransform :: UTCTime -> PackageName -> LByteString -> IO Bool
-runTransform now pkg body =
-    case eitherDecode body of
-        Left _ -> pure False
-        Right value -> case parsePackageInfoFromValue pkg value of
-            Right (Projected info) -> do
-                size <- serveTransformSize (EvalContext now Nothing) (Snapshot (digestOf (toStrict body)) value, info)
-                size `seq` pure True
-            Right (NameMismatch _) -> pure False
-            Left _ -> pure False
+runFull :: UTCTime -> EcosystemBench -> PackageName -> ContentDigest -> ByteString -> IO Bool
+runFull now bench pkg digest raw = case ebProject bench pkg raw of
+    Left _ -> pure False
+    Right (info, document) -> do
+        size <- serveDocumentSize (ebMetadata bench) (EvalContext now Nothing) (Snapshot digest document, info)
+        Exception.evaluate (size > 0)
 
--- The number of passes timed per package. The harness reports their median, to damp
--- noise.
+runSelective :: EcosystemBench -> PackageName -> Version -> ByteString -> IO Bool
+runSelective bench pkg version raw = Exception.evaluate $
+    case detailsDepth <$> ebSelective bench pkg version raw of
+        Right (Depth depth) -> depth `seq` True
+        _ -> False
+
 sampleCount :: Int
 sampleCount = 5
 
--- The median of a list, total (0 on empty). 'sampleCount' is odd, so this is the
--- middle element of the sorted samples.
 median :: [Double] -> Double
 median xs = fromMaybe 0 (sort xs !!? (length xs `div` 2))

@@ -1,19 +1,63 @@
 {
-  "_note": "Acceptance criteria for the live performance-acceptance harness (Context B; cabal executable perf-acceptance, task perf-acceptance). Version-controlled on purpose: moving the bar is an explicit, reviewed act. Two overheads are budgeted per package. `defaultBudgetMs`/`perPackageBudgetMs` bound the full-packument work-per-request (decode -> project -> rule sweep -> merge -> served-body assembly with the fused rewrite -> re-serialise) over a single live packument. `defaultSingleVersionBudgetMs`/`perPackageSingleVersionBudgetMs` bound the single-version selective decode the cold tarball gate consults to serve one package version (its latest) -- the per-package overhead a whole-document decode dominates and a selective decode does not, tracked on its own so a single-version improvement stays visible. A breach of either leg reds the (non-required) check to prompt a human decision -- code regression vs reality outgrew the budget -- and never blocks merge. These bounds are calibrated from the per-leg observed maxima across the seven daily CI runs of 2026-07-05 to 2026-07-11, with roughly 2.2x headroom to absorb shared-runner noise and real-world packument growth; the run summary's watch marks (a leg at 70%+ of its budget) give early warning before a red. Recalibrate the same way as the real runs accrue -- take the recent observed maxima from the run summaries and re-apply the headroom; that is what version-controlling them is for.",
-  "defaultBudgetMs": 100.0,
-  "perPackageBudgetMs": {
-    "@types/node": 300.0,
-    "typescript": 500.0,
-    "react": 250.0,
-    "webpack": 120.0,
-    "@aws-sdk/client-s3": 100.0
-  },
-  "defaultSingleVersionBudgetMs": 25.0,
-  "perPackageSingleVersionBudgetMs": {
-    "@types/node": 100.0,
-    "typescript": 125.0,
-    "react": 50.0,
-    "webpack": 40.0,
-    "@aws-sdk/client-s3": 30.0
+  "_note": "Live performance acceptance budgets use roughly 2.2x the observed maxima of per-run medians. Each leg uses five timed passes per live document. A breach fails the non-required workflow. Unavailable registries are not budget breaches. Watch starts at 70% of a budget. npm retains its budgets calibrated across seven daily CI runs from 2026-07-05 to 2026-07-11. PyPI uses PEP 691 Simple JSON. Its initial calibration uses three sequential hosted runs on 2026-09-12 for feature head b821206aadad083b7751f94d5d24f58851986719, not seven days of observations. The first run used a PR merge checkout, as detailed in _checkoutProvenance. For each package and leg, multiply the largest reported median by 2.2 and round up to 0.01 ms. The PyPI defaults are the largest derived budgets for each leg. Recalibrate from recent observed maxima using the same headroom rule.",
+  "ecosystems": {
+    "npm": {
+      "defaultBudgetMs": 100,
+      "perPackageBudgetMs": {
+        "@types/node": 300,
+        "typescript": 500,
+        "react": 250,
+        "webpack": 120,
+        "@aws-sdk/client-s3": 100
+      },
+      "defaultSingleVersionBudgetMs": 25,
+      "perPackageSingleVersionBudgetMs": {
+        "@types/node": 100,
+        "typescript": 125,
+        "react": 50,
+        "webpack": 40,
+        "@aws-sdk/client-s3": 30
+      }
+    },
+    "pypi": {
+      "_calibration": {
+        "date": "2026-09-12",
+        "head": "b821206aadad083b7751f94d5d24f58851986719",
+        "_checkoutProvenance": "The head field names the feature commit. PR run 34714057634 checked out merge commit 2b76ec4c460f1146ee9edf1f73e7f60eef54f768, with parents e80cbb7e11947ffe1b97d7ae54d61b78f924070c and b821206aadad083b7751f94d5d24f58851986719. Dispatch runs 34714279674 and 34714526694 checked out b821206aadad083b7751f94d5d24f58851986719 directly. The merge-only base changes covered npm optional-null selective parsing, fault diagnostics, tests, and Cabal entries. They did not change PyPI processing. Every selected maximum came from direct-checkout run 34714526694.",
+        "runs": [
+          "https://github.com/AlexaDeWit/Ecluse/actions/runs/34714057634",
+          "https://github.com/AlexaDeWit/Ecluse/actions/runs/34714279674",
+          "https://github.com/AlexaDeWit/Ecluse/actions/runs/34714526694"
+        ],
+        "passesPerLeg": 5,
+        "observedMaximaMs": {
+          "requests": {
+            "full": 3.83,
+            "selective": 0.922
+          },
+          "numpy": {
+            "full": 75.745,
+            "selective": 17.381
+          },
+          "boto3": {
+            "full": 82.05,
+            "selective": 15.39
+          }
+        },
+        "_availability": "All three PyPI packages were measured in every run. npm typescript was unavailable in all three runs: FetchBoundExceeded (BodyTooLarge 12582912). The other eight npm packages stayed within their unchanged budgets."
+      },
+      "defaultBudgetMs": 180.51,
+      "perPackageBudgetMs": {
+        "requests": 8.43,
+        "numpy": 166.64,
+        "boto3": 180.51
+      },
+      "defaultSingleVersionBudgetMs": 38.24,
+      "perPackageSingleVersionBudgetMs": {
+        "requests": 2.03,
+        "numpy": 38.24,
+        "boto3": 33.86
+      }
+    }
   }
 }
