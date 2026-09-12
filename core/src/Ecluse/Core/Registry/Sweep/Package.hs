@@ -14,6 +14,8 @@ module Ecluse.Core.Registry.Sweep.Package (
     sweepPackage,
 ) where
 
+import Data.List (partition)
+
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
