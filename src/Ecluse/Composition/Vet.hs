@@ -15,7 +15,7 @@ module Ecluse.Composition.Vet (
     -- * The accumulating pass
     Vet,
     runVet,
-    vetRole,
+    withRole,
     decided,
 
     -- * Rules and their severity
@@ -51,11 +51,11 @@ instance Applicative Vet where
 runVet :: RegistryRole -> Vet a -> ([Advisory], Either [BootError] a)
 runVet role (Vet run) = second validationToEither (run role)
 
-{- | The role the pass runs for. A witness one role alone may hold is built from this, so no other
-role's pass can issue one.
+{- | Continue a pass with the role it runs for, which is how a witness one role alone may hold is
+built. The role is no finding, so selecting a check by it hides none.
 -}
-vetRole :: Vet RegistryRole
-vetRole = Vet $ \role -> ([], Success role)
+withRole :: (RegistryRole -> Vet a) -> Vet a
+withRole select = Vet $ \role -> let Vet run = select role in run role
 
 {- | Carry an outcome a producer decided for itself into the pass, so its refusals join the rest.
 'rule' cannot express one already settled, or one whose severity turns on more than 'RegistryRole'.

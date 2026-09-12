@@ -38,6 +38,8 @@ data BootRole
       BootMirrorPipeline MirrorRole
     | -- | @ecluse dredger@: it permanently deletes.
       BootStorePruner
+    | -- | @ecluse dredger --dry-run@: it reads every mirror target and changes none of them.
+      BootStorePreview
     | -- | @ecluse pilot@ and @ecluse check-config@: they neither mirror nor delete.
       BootWithoutPipeline
     deriving stock (Eq, Generic, Show)
@@ -58,6 +60,7 @@ bootInvocation :: BootRole -> Text
 bootInvocation = \case
     BootMirrorPipeline role -> roleInvocation role
     BootStorePruner -> "ecluse dredger"
+    BootStorePreview -> "ecluse dredger --dry-run"
     BootWithoutPipeline -> "ecluse pilot"
 
 -- | The registry role a command's rules apply under. Only the Dredger deletes.
@@ -65,6 +68,7 @@ registryRoleOf :: BootRole -> RegistryRole
 registryRoleOf = \case
     BootMirrorPipeline _ -> MirrorWriter
     BootStorePruner -> MirrorPruner
+    BootStorePreview -> MirrorPreviewer
     BootWithoutPipeline -> MirrorWriter
 
 -- | The mirror-pipeline half a command runs, 'Nothing' where it runs none.
@@ -72,6 +76,7 @@ pipelineRoleOf :: BootRole -> Maybe MirrorRole
 pipelineRoleOf = \case
     BootMirrorPipeline role -> Just role
     BootStorePruner -> Nothing
+    BootStorePreview -> Nothing
     BootWithoutPipeline -> Nothing
 
 -- | The mirror-pipeline halves one process runs, selected by the command line.
@@ -101,4 +106,8 @@ data RegistryRole
       MirrorWriter
     | -- | @ecluse dredger@: it permanently deletes from every mount's mirror target.
       MirrorPruner
+    | {- | @ecluse dredger --dry-run@: it reads every mount's mirror target under the same checks
+      and holds nothing that writes to one.
+      -}
+      MirrorPreviewer
     deriving stock (Eq, Show)

@@ -16,7 +16,7 @@ import Ecluse.Core.Cve (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
-    StoreMaintenance (deleteVersions, readStoreManifest, rehearseDelete),
+    StoreMaintenance (deleteVersions, readStoreManifest),
     StoredVersion (StoredVersion, storedVersion),
     VersionOutcome (VersionRefused, VersionUnreached),
     VersionPresence (VersionServed, VersionWithdrawn),
@@ -27,8 +27,11 @@ import Ecluse.Core.Registry.Metadata (Manifest)
 import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltDeletionCap),
-    SweepMount (smFirstParty, smStore),
+    EvidenceGaps (gapManifests),
+    SweepMount (smFirstParty),
     SweepPacing (swpDeletionCap),
+    SweepState (stEvidence),
+    evidenceComplete,
     newSweepState,
  )
 import Ecluse.Core.Rules (PreparedRule, prepare)
@@ -40,10 +43,10 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Package (sampleManifest)
 import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, inertRuleDeps)
-import Ecluse.Test.Sweep (RecordedSweep (..), recordingPorts, recordingPortsUnder, rehearsingReport, testMount, testPacing)
+import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPorts, recordingPortsUnder, testMount, testPacing)
 
 epoch :: UTCTime
 epoch = UTCTime (fromGregorian 2026 1 1) 0
@@ -152,6 +155,13 @@ identityOnlySpec = describe "a manifest the store did not serve" $ do
         errors <- recErrors rec'
         errors `shouldSatisfy` any (T.isInfixOf "decided on identity alone")
 
+    it "records the gap it decided across, so a count taken here reads as partial" $ do
+        store <- storeWith [version "1.0.0"] Nothing
+        rec' <- recordingPorts generation
+        gaps <- stepEvidence rec' (mount store []) (served ["1.0.0"])
+        gapManifests gaps `shouldBe` 1
+        evidenceComplete gaps `shouldBe` False
+
     it "keeps a version the backend refused to delete, so the next request still serves it" $ do
         rules <- identityDeny
         store <- refusingStore' Nothing (VersionRefused (storeRefusal "ACCESS_DENIED" "the identity may not delete"))
@@ -255,24 +265,24 @@ capSpec = describe "the per-cycle deletion cap" $ do
         (rec', _) <- sweepOne [denyRule] ["1.0.0"] ["1.0.0"]
         recErrors rec' `shouldReturn` []
 
-{- A dry run holds a handle with no real delete in it, so this module cannot delete because
-nothing it is given can. It counts under its own arm and the cap only logs. -}
+{- A dry run holds the store's observing calls and an execution that counts, so this module cannot
+delete because nothing it is given can. The cap only logs. -}
 dryRunSpec :: Spec
 dryRunSpec = describe "a dry run" $ do
     it "counts what it would delete under its own arm and deletes nothing" $ do
-        (rec', store) <- rehearseOne testPacing ["1.0.0"]
+        (rec', store) <- previewOne testPacing ["1.0.0"]
         recResults rec' `shouldReturn` [SweepExamined, SweepWouldDelete]
         held store `shouldReturn` [version "1.0.0"]
 
     it "says it would delete rather than that it is deleting" $ do
-        (rec', _) <- rehearseOne testPacing ["1.0.0"]
+        (rec', _) <- previewOne testPacing ["1.0.0"]
         info <- recInfo rec'
         info `shouldSatisfy` any (T.isInfixOf "dry run, would delete")
 
     it "counts the full reach past the cap and never halts on it" $ do
-        -- The cap is the breaker on real deletions, so under a rehearsal it only logs: an operator
+        -- The cap is the breaker on real deletions, so under a preview it only logs: an operator
         -- reads the whole count a real run would reach rather than a count that stopped at one.
-        (rec', store) <- rehearseOne testPacing{swpDeletionCap = 1} ["1.0.0", "2.0.0"]
+        (rec', store) <- previewOne testPacing{swpDeletionCap = 1} ["1.0.0", "2.0.0"]
         recResults rec'
             `shouldReturn` [SweepExamined, SweepExamined, SweepWouldDelete, SweepWouldDelete]
         held store `shouldReturn` map version ["1.0.0", "2.0.0"]
@@ -280,20 +290,18 @@ dryRunSpec = describe "a dry run" $ do
     it "reports once where a run that halts on the cap would have stopped" $ do
         -- The line is what an operator sizes the cap from ahead of the first real sweep, so it
         -- names the cap and the count, and it is written at the crossing rather than per version.
-        (rec', _) <- rehearseOne testPacing{swpDeletionCap = 1} ["1.0.0", "2.0.0"]
+        (rec', _) <- previewOne testPacing{swpDeletionCap = 1} ["1.0.0", "2.0.0"]
         info <- recInfo rec'
         filter (T.isInfixOf "deletion cap") info
             `shouldSatisfy` \lines' -> length lines' == 1 && all (T.isInfixOf "handed over 2 versions") lines'
 
-{- One package's step under a rehearsal's report, over a store whose delete is the backend's own
-rehearsal. Nothing here knows which run it is in; the report is what differs. -}
-rehearseOne :: SweepPacing -> [Text] -> IO (RecordedSweep, FakeStore)
-rehearseOne pacing stored = do
+{- One package's step under a preview's report, over a mount holding the store's observing calls
+alone. Nothing here asks which run it is in: the execution it was handed is what differs. -}
+previewOne :: SweepPacing -> [Text] -> IO (RecordedSweep, FakeStore)
+previewOne pacing stored = do
     store <- storeWith (map version stored) (Just (sampleManifest packageName (map version stored)))
-    rec' <- recordingPortsUnder rehearsingReport generation
-    let handle = fakeMaintenance store
-        rehearsed = (mount store [denyRule]){smStore = handle{deleteVersions = fromMaybe (deleteVersions handle) (rehearseDelete handle)}}
-    void (runStep rec' pacing rehearsed (served stored))
+    rec' <- recordingPortsUnder previewingReport generation
+    void (runStep rec' pacing (previewMount (fakeObservation store) [denyRule] []) (served stored))
     pure (rec', store)
 
 -- One package's step over a store that serves no metadata at all for it.
@@ -317,11 +325,19 @@ sweepOne rules stored inManifest = do
     void (runStep rec' testPacing (mount store rules) (served stored))
     pure (rec', store)
 
+-- One package's step, keeping what the cycle could not read rather than the halt it did not raise.
+stepEvidence :: RecordedSweep -> SweepMount -> [StoredVersion] -> IO EvidenceGaps
+stepEvidence rec' mount' stored = do
+    counters <- newSweepState
+    ctx <- evalContext
+    void (sweepPackage testPacing (recPorts rec') counters mount' ctx generation packageName stored)
+    readIORef (stEvidence counters)
+
 runStep :: RecordedSweep -> SweepPacing -> SweepMount -> [StoredVersion] -> IO (Maybe CycleHalt)
 runStep rec' pacing mount' stored = do
     counters <- newSweepState
     ctx <- evalContext
-    sweepPackage pacing (recPorts rec') counters mount' (smStore mount') ctx generation packageName stored
+    sweepPackage pacing (recPorts rec') counters mount' ctx generation packageName stored
 
 -- A store holding those versions, serving that manifest, or serving none at all.
 storeWith :: [Version] -> Maybe Manifest -> IO FakeStore

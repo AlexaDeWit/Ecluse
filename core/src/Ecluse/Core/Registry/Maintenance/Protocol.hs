@@ -7,7 +7,9 @@ Deletion needs the raw document revision, with listing bounds separate from serv
 Consent and refill classification rely on operator configuration.
 -}
 module Ecluse.Core.Registry.Maintenance.Protocol (
+    ProtocolRead (..),
     ProtocolStore (..),
+    newProtocolObservation,
     newProtocolMaintenance,
 ) where
 
@@ -44,6 +46,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFault (..),
     StoreMaintenance (..),
     StoreManifestRead,
+    StoreObservation (..),
     StoreRefusal,
     StoredVersion (StoredVersion, storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved),
@@ -62,42 +65,60 @@ import Ecluse.Core.Registry.Publish (PublishCodec (pcParseVersionList, pcProbeRe
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Version (Version)
 
--- | One protocol-only store: where it is, what its protocol does to it, and the consent it carries.
-data ProtocolStore = ProtocolStore
-    { psOrigin :: OriginClient
-    -- ^ The store's coordinates, its write credential, and the bound every read is held to.
-    , psListing :: StoreListing
+{- | One protocol-only store as a reader reaches it: where it is, how its protocol enumerates it,
+and the consent an operator declared for it. Nothing here changes the store.
+-}
+data ProtocolRead = ProtocolRead
+    { prOrigin :: OriginClient
+    -- ^ The store's coordinates, its credential, and the bound every read is held to.
+    , prListing :: StoreListing
     -- ^ The ecosystem's package listing verb.
-    , psDelete :: VersionDelete
-    -- ^ The ecosystem's version-delete verb.
-    , psCodec :: PublishCodec
+    , prCodec :: PublishCodec
     -- ^ The ecosystem's publish codec, whose presence probe already reads a store's version list for the mirror worker.
-    , psReadManifest :: StoreManifestRead
+    , prReadManifest :: StoreManifestRead
     -- ^ One package's metadata as this store serves it, assembled at the composition root.
-    , psBackendName :: Text
+    , prBackendName :: Text
     -- ^ The store backend's name, which the boot line records the Dredger's blast radius as.
-    , psPermitDeletion :: Bool
+    , prPermitDeletion :: Bool
     -- ^ Whether the operator marked this store for deletion.
-    , psConsentDescriptor :: Text
+    , prConsentDescriptor :: Text
     -- ^ How an operator marks it, logged verbatim when consent is withheld.
     }
+
+-- | One protocol-only store a caller may delete from: its reads, beside the verb that removes a version.
+data ProtocolStore = ProtocolStore
+    { psRead :: ProtocolRead
+    , psDelete :: VersionDelete
+    }
+
+-- | The calls that only enumerate and read, built without the delete verb.
+newProtocolObservation :: ProtocolRead -> StoreObservation
+newProtocolObservation store =
+    StoreObservation
+        { obFacts = protocolFacts (prBackendName store)
+        , obListPackagesIn = listBucket store
+        , obEnumerateVersions = listVersions store
+        , obReadManifest = prReadManifest store
+        , obVerifyConsent = pure (Right (consentVerdict store))
+        , obClassifyStore = pure (Right (storeClass store))
+        }
 
 -- | Delete versions individually because each edit changes the document revision needed by the next.
 newProtocolMaintenance :: ProtocolStore -> StoreMaintenance
 newProtocolMaintenance store =
     StoreMaintenance
-        { storeFacts = protocolFacts (psBackendName store)
-        , listPackagesIn = listBucket store
-        , enumerateVersions = listVersions store
-        , readStoreManifest = psReadManifest store
+        { storeFacts = obFacts observed
+        , listPackagesIn = obListPackagesIn observed
+        , enumerateVersions = obEnumerateVersions observed
+        , readStoreManifest = obReadManifest observed
         , deleteVersions = deleteStoredVersions store
-        , -- The protocol spells no request that reports what a delete would do without doing it.
-          rehearseDelete = Nothing
-        , verifyConsent = pure (Right (consentVerdict store))
-        , classifyStore = pure (Right (storeClass store))
+        , verifyConsent = obVerifyConsent observed
+        , classifyStore = obClassifyStore observed
         , -- The protocol writes nothing but a publish, so a walk over this store keeps no cursor.
           storeCursor = Nothing
         }
+  where
+    observed = newProtocolObservation (psRead store)
 
 {- The store re-admits a version published again after a delete, and has applied it by the time it
 answers. It reports no alphabet: the listing below reads one document whole, bucket or no bucket. -}
@@ -116,32 +137,32 @@ that revision, so a batch of two would send the second against a revision that n
 deleteCeiling :: DeleteCeiling
 deleteCeiling = AtMost 1
 
-consentVerdict :: ProtocolStore -> ConsentVerdict
+consentVerdict :: ProtocolRead -> ConsentVerdict
 consentVerdict store
-    | psPermitDeletion store = ConsentGranted
-    | otherwise = ConsentWithheld (psConsentDescriptor store)
+    | prPermitDeletion store = ConsentGranted
+    | otherwise = ConsentWithheld (prConsentDescriptor store)
 
 {- No protocol read can see whether this store refills itself from an uplink, so the operator's
 own key is the only evidence either way. -}
-storeClass :: ProtocolStore -> StoreClass
+storeClass :: ProtocolRead -> StoreClass
 storeClass store
-    | psPermitDeletion store = StoreDestroyable
-    | otherwise = StorePreserved (psConsentDescriptor store)
+    | prPermitDeletion store = StoreDestroyable
+    | otherwise = StorePreserved (prConsentDescriptor store)
 
 {- One bucket of the store's names, as the single page its one listing document holds. The
 protocol spells no prefix filter, so the bucket is applied to what came back. -}
-listBucket :: ProtocolStore -> NamePrefix -> ConduitT () [PackageName] IO (Maybe StoreFault)
+listBucket :: ProtocolRead -> NamePrefix -> ConduitT () [PackageName] IO (Maybe StoreFault)
 listBucket store prefix =
     lift (listPackages store) >>= \case
         Left fault -> pure (Just fault)
         Right names -> Nothing <$ yield (filter (inBucket prefix) names)
 
-listPackages :: ProtocolStore -> IO (Either StoreFault [PackageName])
+listPackages :: ProtocolRead -> IO (Either StoreFault [PackageName])
 listPackages store =
-    sendFormed store (listingRequest (psListing store) (psOrigin store)) <&> \case
+    sendFormed store (listingRequest (prListing store) (prOrigin store)) <&> \case
         Left fault -> Left fault
         Right (status, body)
-            | status == 200 -> first (parseFault "package listing") (listingParse (psListing store) body)
+            | status == 200 -> first (parseFault "package listing") (listingParse (prListing store) body)
             | otherwise -> Left (listingUnavailable status)
 
 listingUnavailable :: Int -> StoreFault
@@ -159,16 +180,16 @@ listingUnavailable status =
 
 {- The presence probe's read, which already projects a store's version list for the mirror
 worker. A store that holds no document for a package holds no versions of it either. -}
-listVersions :: ProtocolStore -> PackageName -> IO (Either StoreFault [StoredVersion])
+listVersions :: ProtocolRead -> PackageName -> IO (Either StoreFault [StoredVersion])
 listVersions store name =
-    sendFormed store (pcProbeRequest (psCodec store) (originBase store) (originToken store) name) <&> \case
+    sendFormed store (pcProbeRequest (prCodec store) (originBase store) (originToken store) name) <&> \case
         Left fault -> Left fault
         Right (status, body)
             | status == 404 -> Right []
             | isSuccessStatus status -> first (parseFault "version list") (served status body)
             | otherwise -> Left (readFault "version list" status)
   where
-    served status body = map stored <$> pcParseVersionList (psCodec store) (RegistryResponse status body)
+    served status body = map stored <$> pcParseVersionList (prCodec store) (RegistryResponse status body)
     stored version = StoredVersion{storedVersion = version, storedPresence = VersionServed}
 
 deleteStoredVersions :: ProtocolStore -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
@@ -180,7 +201,7 @@ and send each in turn. A refusal is this version's alone, and a fault ends the w
 deleteChunk :: ProtocolStore -> PackageName -> [Version] -> IO (Either StoreFault [(Version, VersionOutcome)])
 deleteChunk store name = \case
     [version] ->
-        sendFormed store (deleteDocumentRequest (psDelete store) (psOrigin store) name) >>= \case
+        sendFormed (psRead store) (deleteDocumentRequest (psDelete store) (prOrigin (psRead store)) name) >>= \case
             Left fault -> pure (Left fault)
             Right (status, body)
                 | status == 404 -> pure (refused version absentDocument)
@@ -194,10 +215,10 @@ deleteChunk store name = \case
 
 applyDelete :: ProtocolStore -> PackageName -> Version -> Int -> ByteString -> IO (Either StoreFault [(Version, VersionOutcome)])
 applyDelete store name version status body =
-    case deleteRequests (psDelete store) (psOrigin store) name version (RegistryResponse status body) of
+    case deleteRequests (psDelete store) (prOrigin (psRead store)) name version (RegistryResponse status body) of
         Left refusal -> pure (refused version refusal)
         Right requests ->
-            sendSequence store (toList requests) <&> fmap outcomeOf
+            sendSequence (psRead store) (toList requests) <&> fmap outcomeOf
   where
     outcomeOf = \case
         Nothing -> [(version, VersionRemoved)]
@@ -205,7 +226,7 @@ applyDelete store name version status body =
 
 {- Send each request in order, stopping at the first refusal. That can leave the version
 half-removed, so the code an operator looks up names which call stopped. -}
-sendSequence :: ProtocolStore -> [Request] -> IO (Either StoreFault (Maybe StoreRefusal))
+sendSequence :: ProtocolRead -> [Request] -> IO (Either StoreFault (Maybe StoreRefusal))
 sendSequence store = go (1 :: Int)
   where
     go _ [] = pure (Right Nothing)
@@ -224,21 +245,21 @@ sendSequence store = go (1 :: Int)
 refused :: Version -> StoreRefusal -> Either StoreFault [(Version, VersionOutcome)]
 refused version refusal = Right [(version, VersionRefused refusal)]
 
-send :: ProtocolStore -> Request -> IO (Either StoreFault (Int, ByteString))
+send :: ProtocolRead -> Request -> IO (Either StoreFault (Int, ByteString))
 send store request =
     first storeFaultOfFetch
         <$> boundedExchange (,) (ocManager origin) (ocLimits origin) request
   where
-    origin = psOrigin store
+    origin = prOrigin store
 
-sendFormed :: ProtocolStore -> Either UrlFormationError Request -> IO (Either StoreFault (Int, ByteString))
+sendFormed :: ProtocolRead -> Either UrlFormationError Request -> IO (Either StoreFault (Int, ByteString))
 sendFormed store = formThen unformableFault (send store)
 
-originBase :: ProtocolStore -> Text
-originBase = registryUrlText . ocBaseUrl . psOrigin
+originBase :: ProtocolRead -> Text
+originBase = registryUrlText . ocBaseUrl . prOrigin
 
-originToken :: ProtocolStore -> Maybe Secret
-originToken = fmap credSecret . ocToken . psOrigin
+originToken :: ProtocolRead -> Maybe Secret
+originToken = fmap credSecret . ocToken . prOrigin
 
 parseFault :: Text -> ParseError -> StoreFault
 parseFault subject err =

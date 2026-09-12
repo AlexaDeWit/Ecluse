@@ -12,11 +12,12 @@ module Ecluse.Test.Sweep (
     recordingPorts,
     recordingPortsUnder,
     deletingReport,
-    rehearsingReport,
+    previewingReport,
 
     -- * What a cycle runs over
     testPacing,
     testMount,
+    previewMount,
 ) where
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
@@ -24,7 +25,7 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Registry.Adapter (adapterProjectName)
-import Ecluse.Core.Registry.Maintenance (StoreMaintenance)
+import Ecluse.Core.Registry.Maintenance (StoreMaintenance, StoreObservation)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Sweep.Types (
     SweepAudit (SweepAudit, auditError, auditInfo, auditWarn),
@@ -33,6 +34,9 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepMetrics, sweepNow, sweepReport),
     SweepReport (SweepReport, reportCapHalts, reportOpening, reportRemoval),
     SweepShape (SweepCandidates),
+    SweepStore,
+    deletingStore,
+    previewStore,
  )
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Rules.Types (Rule)
@@ -61,7 +65,7 @@ and the advisory generation is whatever the case names.
 recordingPorts :: Maybe DbEtag -> IO RecordedSweep
 recordingPorts = recordingPortsUnder deletingReport
 
--- | 'recordingPorts' over a chosen report, for a case about a rehearsal's own counters.
+-- | 'recordingPorts' over a chosen report, for a case about a preview's own counters.
 recordingPortsUnder :: SweepReport -> Maybe DbEtag -> IO RecordedSweep
 recordingPortsUnder report etag = do
     info <- newIORef []
@@ -105,11 +109,20 @@ testPacing =
         , swpShape = SweepCandidates
         }
 
-{- | An npm mount over a fake store: the rules a case prepared, the configured rules its candidate
-set reads, and a belt that shields nothing. Override 'smFirstParty' for a case about the belt.
+{- | An npm mount over a fake store, as a run that deletes holds it: the rules a case prepared and
+a belt that shields nothing. Override 'smFirstParty' for a case about the belt.
 -}
 testMount :: StoreMaintenance -> [PreparedRule] -> [Rule] -> SweepMount
-testMount store rules configured =
+testMount = mountOver . deletingStore
+
+{- | The same mount as a preview holds it: the store's observing calls, and an execution that
+counts. Nothing it carries can delete or record a walk marker.
+-}
+previewMount :: StoreObservation -> [PreparedRule] -> [Rule] -> SweepMount
+previewMount = mountOver . previewStore
+
+mountOver :: SweepStore -> [PreparedRule] -> [Rule] -> SweepMount
+mountOver store rules configured =
     SweepMount
         { smEcosystem = Npm
         , smStore = store
@@ -121,14 +134,14 @@ testMount store rules configured =
         }
 
 {- | The report a real run carries: a removal counts as a deletion, and reaching the cap stops the
-cycle. A case about a rehearsal builds its own through 'Ecluse.Dredger.Plan.sweepReportFor'.
+cycle. A case about a preview builds its own through 'Ecluse.Dredger.Plan.sweepReportFor'.
 -}
 deletingReport :: SweepReport
 deletingReport = SweepReport{reportRemoval = SweepDeleted, reportOpening = "deleting ", reportCapHalts = True}
 
-{- | The report a rehearsal carries: a removal counts under its own arm, and the cap only logs, so
+{- | The report a preview carries: a removal counts under its own arm, and the cap only logs, so
 the run reports the full reach a real one would have.
 -}
-rehearsingReport :: SweepReport
-rehearsingReport =
+previewingReport :: SweepReport
+previewingReport =
     SweepReport{reportRemoval = SweepWouldDelete, reportOpening = "dry run, would delete ", reportCapHalts = False}

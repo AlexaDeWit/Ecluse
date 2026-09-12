@@ -117,16 +117,16 @@ import Ecluse.Composition.Executable (
     epRoleWiring,
     planExecutable,
  )
-import Ecluse.Composition.Maintenance (buildStoreMaintenance)
+import Ecluse.Composition.Maintenance (storeBuilds)
 import Ecluse.Composition.Plan (BootPlan (bpS3Endpoint))
 import Ecluse.Composition.Types (
-    BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
+    BootRole (BootMirrorPipeline, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
  )
 import Ecluse.Config (Config (configApp))
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Dredger (runDredger)
-import Ecluse.Dredger.Plan (DredgerOptions)
+import Ecluse.Dredger.Plan (DredgerOptions (doMode), dredgerBootRole)
 import Ecluse.Mirror
 import Ecluse.Pilot
 import Ecluse.Proxy
@@ -149,7 +149,9 @@ runCommand = \case
     RunCheckConfig -> shutdownAfter runCheckConfig
     RunService role -> withBootEnv (BootMirrorPipeline role) (startPlannedRole noDredgerOptions)
     RunPilot -> withBootEnv BootWithoutPipeline (startPlannedRole noDredgerOptions)
-    RunDredger opts -> withBootEnv BootStorePruner (startPlannedRole (Just opts))
+    -- The flags settle which store role the process boots under, so the vetting pass below runs
+    -- for the authority this invocation will hold.
+    RunDredger opts -> withBootEnv (dredgerBootRole (doMode opts)) (startPlannedRole (Just opts))
     -- A one-shot compile vets under the Pilot's role and then does its own work rather than
     -- that role's long-running one, so it is the one boot whose behaviour the plan cannot name.
     RunPilotCompile opts ->
@@ -170,13 +172,13 @@ startPlannedRole dredgerOptions bootEnv = do
             mountBindingFor
             buildMirrorQueue
             initCredentialProviders
-            buildStoreMaintenance
+            storeBuilds
             (beBootPlan bootEnv)
             >>= orExit renderBootErrors
     case epRoleWiring plan of
         MirrorPipelineWiring mirror -> shutdownAfter (withServiceRuntime bootEnv plan mirror runMirrorPipeline)
-        -- Only 'RunDredger' names the deleting role, so it is the only command that reaches here
-        -- and the options it settled are always in hand.
+        -- Only 'RunDredger' names a store role, so it is the only command that reaches here and
+        -- the options it settled are always in hand.
         StorePrunerWiring pruner -> maybe (pure ShutdownRequested) (sweepUnder bootEnv pruner) dredgerOptions
         PilotWiring exportPlan -> shutdownAfter (runPilot bootEnv exportPlan)
 

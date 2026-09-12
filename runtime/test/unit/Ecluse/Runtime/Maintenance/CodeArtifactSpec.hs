@@ -29,6 +29,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFault (..),
     StoreMaintenance (..),
     StoreManifestRead,
+    StoreObservation (obListPackagesIn),
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed),
@@ -42,6 +43,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact (
     ControlPlane (..),
     maintenanceFor,
     maintenanceForEnv,
+    observationFor,
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     CodeArtifactStore (..),
@@ -97,9 +99,11 @@ factCases store = describe "the CodeArtifact handle's standing facts" $ do
         outcome <- readStoreManifest (handleOver store inertPlane) aPackage
         fmap detailOf (leftToMaybe outcome) `shouldBe` Just "the spec wired no manifest read"
 
-    it "offers no rehearsal, because CodeArtifact has no call that reports one" $ do
-        handle <- handleFor store
-        isJust (rehearseDelete handle) `shouldBe` False
+    it "enumerates over a read plane alone, which carries no call that changes the repository" $ do
+        answer <- answersFrom [packagesPage Nothing ["lodash"]]
+        let observed = observationFor testAlphabet unwiredRead store inertReader{rpListPackages = const answer}
+        outcome <- withBucket "" (collectPages . obListPackagesIn observed)
+        fmap (map renderPackageName) outcome `shouldBe` Right ["lodash"]
 
 enumerationCases :: CodeArtifactStore -> Spec
 enumerationCases store = describe "the handle's paged enumerations" $ do

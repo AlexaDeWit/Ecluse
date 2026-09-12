@@ -276,7 +276,7 @@ sweepWithdrawal deps ctx rule firstParty rawName = do
     counters <- newSweepState
     let handle = fakeMaintenance store
         mount = (testMount handle rules [rule]){smFirstParty = const firstParty}
-    sweepPackage testPacing (recPorts recorded) counters mount handle ctx generation name stored `shouldReturn` Nothing
+    sweepPackage testPacing (recPorts recorded) counters mount ctx generation name stored `shouldReturn` Nothing
     contents <- readFakeContents store
     pure (maybe False (not . null) (Map.lookup name contents))
 

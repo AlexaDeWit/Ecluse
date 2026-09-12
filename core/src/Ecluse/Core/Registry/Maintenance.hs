@@ -10,6 +10,12 @@ module Ecluse.Core.Registry.Maintenance (
     -- * The handle
     StoreMaintenance (..),
 
+    -- * Its two halves, held apart
+    StoreObservation (..),
+    StoreDeletion (..),
+    observationOf,
+    deletionOf,
+
     -- * What the backend does
     StoreFacts (..),
     DeleteCeiling (..),
@@ -105,8 +111,6 @@ data StoreMaintenance = StoreMaintenance
     -- ^ Read through the store's credential and ecosystem codec, including every stored version.
     , deleteVersions :: PackageName -> [Version] -> IO [(Version, VersionOutcome)]
     -- ^ Accept any batch size and return exactly one outcome per supplied version.
-    , rehearseDelete :: Maybe (PackageName -> [Version] -> IO [(Version, VersionOutcome)])
-    -- ^ A backend dry run that deletes nothing. 'Nothing' means the backend has no dry-run operation.
     , verifyConsent :: IO (Either StoreFault ConsentVerdict)
     -- ^ Whether the operator has marked this store for deletion.
     , classifyStore :: IO (Either StoreFault StoreClass)
@@ -114,6 +118,48 @@ data StoreMaintenance = StoreMaintenance
     , storeCursor :: Maybe StoreCursor
     -- ^ Optional persisted progress. Without it, every walk starts at the first bucket.
     }
+
+{- | The calls that only observe a store. A caller handed one can enumerate it, read a package's
+metadata, and read the two standing permissions, and can change nothing.
+-}
+data StoreObservation = StoreObservation
+    { obFacts :: StoreFacts
+    -- ^ What the backend does, readable without a call.
+    , obListPackagesIn :: NamePrefix -> ConduitT () [PackageName] IO (Maybe StoreFault)
+    -- ^ Stream a bucket's pages, ending with its failure or 'Nothing' on completion.
+    , obEnumerateVersions :: PackageName -> IO (Either StoreFault [StoredVersion])
+    -- ^ Every version the store holds for one package, paged to exhaustion.
+    , obReadManifest :: StoreManifestRead
+    -- ^ Read through the store's credential and ecosystem codec, including every stored version.
+    , obVerifyConsent :: IO (Either StoreFault ConsentVerdict)
+    -- ^ Whether the operator has marked this store for deletion.
+    , obClassifyStore :: IO (Either StoreFault StoreClass)
+    -- ^ Whether deleting from this store destroys anything.
+    }
+
+-- | The calls that change a store, which only a role authorised to delete from it holds.
+data StoreDeletion = StoreDeletion
+    { dlDeleteVersions :: PackageName -> [Version] -> IO [(Version, VersionOutcome)]
+    -- ^ Accept any batch size and return exactly one outcome per supplied version.
+    , dlCursor :: Maybe StoreCursor
+    -- ^ Optional persisted progress. Without it, every walk starts at the first bucket.
+    }
+
+-- | The observing half of a whole handle.
+observationOf :: StoreMaintenance -> StoreObservation
+observationOf store =
+    StoreObservation
+        { obFacts = storeFacts store
+        , obListPackagesIn = listPackagesIn store
+        , obEnumerateVersions = enumerateVersions store
+        , obReadManifest = readStoreManifest store
+        , obVerifyConsent = verifyConsent store
+        , obClassifyStore = classifyStore store
+        }
+
+-- | The changing half of a whole handle.
+deletionOf :: StoreMaintenance -> StoreDeletion
+deletionOf store = StoreDeletion{dlDeleteVersions = deleteVersions store, dlCursor = storeCursor store}
 
 -- | Backend capabilities and limits fixed for this handle's lifetime.
 data StoreFacts = StoreFacts

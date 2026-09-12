@@ -34,11 +34,11 @@ import Ecluse.Composition.Executable (
     RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
     planExecutable,
  )
-import Ecluse.Composition.Maintenance (BuildStoreMaintenance)
+import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
 import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, staticEnvVars)
 import Ecluse.Composition.Types (
-    BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
+    BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (ServeAndMirror),
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -48,7 +48,7 @@ import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
 import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo))
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Port (passthroughTracingPort)
 
 {- | Tests the boot's effectful planning phase. Every role plans through it, and every refusal a
@@ -118,6 +118,14 @@ spec = describe "planExecutable" $ do
             StorePrunerWiring wiring -> map smEcosystem (pwMounts wiring) `shouldBe` [Npm]
             other -> expectationFailure ("expected the store pruner arm, got the " <> toString (plannedArm other) <> " arm")
 
+    it "plans the preview role through the observing build alone" $ do
+        -- The role picks its own build, so a preview's boot never runs the one holding a delete.
+        preview <-
+            expectExecutableWith codeArtifactEnvVars BootStorePreview (\_ _ _ -> Nothing) refusingQueue observingOnly
+        case epRoleWiring preview of
+            StorePrunerWiring wiring -> map smEcosystem (pwMounts wiring) `shouldBe` [Npm]
+            other -> expectationFailure ("expected the store pruner arm, got the " <> toString (plannedArm other) <> " arm")
+
     it "reports a store maintenance client the live environment cannot build" $ do
         -- The client discovers an AWS identity when it is built, so an environment with none
         -- refuses here rather than failing the Dredger's first call against the store.
@@ -146,8 +154,7 @@ spec = describe "planExecutable" $ do
 
     it "plans the pilot through the same phase, on its own arm" $ do
         -- Nothing here needs a live environment, so ports that refuse outright leave the role
-        -- clearing exactly as working ones do. The gate still stands ahead of it, which is
-        -- where the Pilot's own refusal is spent.
+        -- clearing as working ones do. The gate ahead of it is where the Pilot's refusal is spent.
         pilot <- expectExecutable BootWithoutPipeline (\_ _ _ -> Nothing) refusingQueue refusingStore
         plannedArm (epRoleWiring pilot) `shouldBe` "pilot"
         bpRole (epBootPlan pilot) `shouldBe` BootWithoutPipeline
@@ -188,13 +195,26 @@ call this phase folds into a refusal.
 refusingQueue :: BuildMirrorQueue
 refusingQueue _ _ _ = throwIO NoCredentials
 
--- | A store builder that hands out the in-memory fake, so the pruner's arm reaches no cloud.
-inertStore :: BuildStoreMaintenance
-inertStore _ _ _ = fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
+-- | Store builds that hand out the in-memory fake, so the pruner's arms reach no cloud.
+inertStore :: StoreBuilds
+inertStore =
+    StoreBuilds
+        { sbDeleting = \_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
+        , sbObserving = \_ _ _ -> fakeObservation <$> newFakeStore defaultFakeStoreConfig
+        }
 
--- | A store builder that throws as @amazonka@ does when it discovers no credentials.
-refusingStore :: BuildStoreMaintenance
-refusingStore _ _ _ = throwIO NoCredentials
+-- | Store builds that throw as @amazonka@ does when it discovers no credentials.
+refusingStore :: StoreBuilds
+refusingStore =
+    StoreBuilds
+        { sbDeleting = \_ _ _ -> throwIO NoCredentials
+        , sbObserving = \_ _ _ -> throwIO NoCredentials
+        }
+
+-- | Store builds whose deleting arm fails the case, so only a preview's own build can answer.
+observingOnly :: StoreBuilds
+observingOnly =
+    inertStore{sbDeleting = \_ _ _ -> fail "a preview must not build the deleting handle"}
 
 -- | A credential build that mints nothing, so a case reaches no cloud.
 inertCredentials :: BuildCredentials
@@ -236,11 +256,11 @@ advisoryStoreUrl :: String
 advisoryStoreUrl = "s3://advisories.example.test/ecluse"
 
 -- | Plan a boot over 'staticEnvVars' for one role, through the given ports.
-planFor :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> BuildStoreMaintenance -> IO (Either [BootError] ExecutablePlan)
+planFor :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> StoreBuilds -> IO (Either [BootError] ExecutablePlan)
 planFor = planWith staticEnvVars
 
 -- | 'planFor' over a named environment layer, for a refusal 'staticEnvVars' cannot reach.
-planWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> BuildStoreMaintenance -> IO (Either [BootError] ExecutablePlan)
+planWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> StoreBuilds -> IO (Either [BootError] ExecutablePlan)
 planWith envVars role resolveAdapter buildQueue = planUnder envVars role resolveAdapter buildQueue inertCredentials
 
 -- | 'planWith' over a chosen credential build, for the deleting role's own mint.
@@ -250,7 +270,7 @@ planUnder ::
     ResolveAdapter ->
     BuildMirrorQueue ->
     BuildCredentials ->
-    BuildStoreMaintenance ->
+    StoreBuilds ->
     IO (Either [BootError] ExecutablePlan)
 planUnder envVars role resolveAdapter buildQueue buildCredentials buildStore = do
     config <- expectConfig envVars Nothing
@@ -259,11 +279,11 @@ planUnder envVars role resolveAdapter buildQueue buildCredentials buildStore = d
     planExecutable logEnv passthroughTracingPort resolveAdapter buildQueue buildCredentials buildStore bootPlan
 
 -- | 'planFor', failing the test on a refusal.
-expectExecutable :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> BuildStoreMaintenance -> IO ExecutablePlan
+expectExecutable :: BootRole -> ResolveAdapter -> BuildMirrorQueue -> StoreBuilds -> IO ExecutablePlan
 expectExecutable = expectExecutableWith staticEnvVars
 
 -- | 'planWith', failing the test on a refusal.
-expectExecutableWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> BuildStoreMaintenance -> IO ExecutablePlan
+expectExecutableWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> StoreBuilds -> IO ExecutablePlan
 expectExecutableWith envVars role resolveAdapter buildQueue buildStore =
     planWith envVars role resolveAdapter buildQueue buildStore
         >>= either (\errs -> fail ("planning refused: " <> show errs)) pure

@@ -3,10 +3,11 @@
 -- SPDX-License-Identifier: MIT
 
 {- | An in-memory 'Ecluse.Core.Registry.Maintenance.StoreMaintenance', the third
-implementation of the handle. It answers from a seeded map that its own deletes mutate, so a
-sweep driven against it observes the store changing, and it keeps a walk cursor in an 'IORef'.
-Its defaults take the opposite arm of every backend-varying fact from the CodeArtifact leaf,
-which is what shows that a fact is a value the handle supplies rather than a branch a caller takes.
+implementation of the handle, beside the observing calls over the same seeded state. It answers
+from a map that its own deletes mutate, so a sweep driven against it observes the store changing,
+and it keeps a walk cursor in an 'IORef'. Its defaults take the opposite arm of every
+backend-varying fact from the CodeArtifact leaf, which is what shows that a fact is a value the
+handle supplies rather than a branch a caller takes.
 -}
 module Ecluse.Test.Maintenance (
     FakeStore (..),
@@ -32,6 +33,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (..),
     StoreFault,
     StoreMaintenance (..),
+    StoreObservation (..),
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoving),
     inBucket,
@@ -85,9 +87,11 @@ defaultFakeStoreConfig =
         , fakeManifests = Map.empty
         }
 
--- | A fake store: the handle a caller drives, and the state a test asserts against.
+-- | A fake store: the calls a caller drives, and the state a test asserts against.
 data FakeStore = FakeStore
     { fakeMaintenance :: StoreMaintenance
+    , fakeObservation :: StoreObservation
+    -- ^ The observing calls over the same state, built without a delete rather than beside one.
     , readFakeContents :: IO (Map PackageName [StoredVersion])
     , readFakeCursor :: IO (Maybe NamePrefix)
     }
@@ -97,27 +101,39 @@ newFakeStore :: FakeStoreConfig -> IO FakeStore
 newFakeStore config = do
     contents <- newIORef (fakeContents config)
     cursor <- newIORef Nothing
+    let observed = fakeObserving config contents
     pure
         FakeStore
             { fakeMaintenance =
                 StoreMaintenance
-                    { storeFacts = fakeFacts config
-                    , listPackagesIn = listBucket config contents
-                    , enumerateVersions = \name ->
-                        orFault config (Map.findWithDefault [] name <$> readIORef contents)
-                    , readStoreManifest = pure . readSeededManifest config
+                    { storeFacts = obFacts observed
+                    , listPackagesIn = obListPackagesIn observed
+                    , enumerateVersions = obEnumerateVersions observed
+                    , readStoreManifest = obReadManifest observed
                     , deleteVersions = \name versions -> case fakeFault config of
                         Just fault -> pure (unreachedBatch fault versions)
                         Nothing -> atomicModifyIORef' contents (removeVersions name versions)
-                    , rehearseDelete = Just $ \name versions ->
-                        snd . removeVersions name versions <$> readIORef contents
-                    , verifyConsent = orFault config (pure (fakeConsent config))
-                    , classifyStore = orFault config (pure (fakeClass config))
+                    , verifyConsent = obVerifyConsent observed
+                    , classifyStore = obClassifyStore observed
                     , storeCursor = fakeStoreCursor config cursor
                     }
+            , fakeObservation = observed
             , readFakeContents = readIORef contents
             , readFakeCursor = readIORef cursor
             }
+
+-- The calls that read the seeded state. Nothing here can reach the delete above.
+fakeObserving :: FakeStoreConfig -> IORef (Map PackageName [StoredVersion]) -> StoreObservation
+fakeObserving config contents =
+    StoreObservation
+        { obFacts = fakeFacts config
+        , obListPackagesIn = listBucket config contents
+        , obEnumerateVersions = \name ->
+            orFault config (Map.findWithDefault [] name <$> readIORef contents)
+        , obReadManifest = pure . readSeededManifest config
+        , obVerifyConsent = orFault config (pure (fakeConsent config))
+        , obClassifyStore = orFault config (pure (fakeClass config))
+        }
 
 {- The names in one bucket, cut into pages of the configured size. A configured fault ends the
 stream before its first page, which is the shape a store that never answered takes. -}

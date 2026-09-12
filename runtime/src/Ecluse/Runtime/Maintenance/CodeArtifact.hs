@@ -11,6 +11,7 @@ decisions live in "Ecluse.Runtime.Maintenance.CodeArtifact.Decide".
 -}
 module Ecluse.Runtime.Maintenance.CodeArtifact (
     newCodeArtifactMaintenance,
+    newCodeArtifactObservation,
     maintenanceForEnv,
 
     -- * The calls the handle makes
@@ -18,6 +19,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact (
     controlPlaneFor,
     readPlaneFor,
     maintenanceFor,
+    observationFor,
 ) where
 
 import Amazonka qualified as AWS
@@ -35,6 +37,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFault,
     StoreMaintenance (..),
     StoreManifestRead,
+    StoreObservation (..),
     StoredVersion,
     VersionOutcome,
     chunksOfCeiling,
@@ -90,6 +93,14 @@ newCodeArtifactMaintenance alphabet readManifest store =
     maintenanceForEnv alphabet readManifest store
         <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
 
+{- | Build the observing calls alone for one repository, over an environment discovered the same
+way. No deletion, no tag write, and no publication is built, so the caller holds none.
+-}
+newCodeArtifactObservation :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
+newCodeArtifactObservation alphabet readManifest store =
+    observationFor alphabet readManifest store . readPlaneFor
+        <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+
 {- | Build the handle over a caller-supplied @amazonka@ 'AWS.Env'. Exposed so a test can hold the
 handle, and the facts it supplies, without discovering an ambient AWS identity.
 -}
@@ -123,16 +134,28 @@ assembled, which together are every effect it has.
 maintenanceFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
 maintenanceFor alphabet readManifest store plane =
     StoreMaintenance
-        { storeFacts = codeArtifactFacts alphabet
-        , listPackagesIn = pageSource . packagePage (cpRead plane) store
-        , enumerateVersions = pageAll . versionPage (cpRead plane) store
-        , readStoreManifest = readManifest
+        { storeFacts = obFacts observed
+        , listPackagesIn = obListPackagesIn observed
+        , enumerateVersions = obEnumerateVersions observed
+        , readStoreManifest = obReadManifest observed
         , deleteVersions = deleteChunks plane store
-        , -- CodeArtifact has no call that reports what a delete would do without doing it.
-          rehearseDelete = Nothing
-        , verifyConsent = readConsent (cpRead plane) store
-        , classifyStore = fmap (fmap classifyRepository) (describeStore (cpRead plane) store)
+        , verifyConsent = obVerifyConsent observed
+        , classifyStore = obClassifyStore observed
         , storeCursor = Just (walkCursor alphabet plane store)
+        }
+  where
+    observed = observationFor alphabet readManifest store (cpRead plane)
+
+-- | The observing calls over one 'ReadPlane', which is every effect they have.
+observationFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ReadPlane -> StoreObservation
+observationFor alphabet readManifest store observer =
+    StoreObservation
+        { obFacts = codeArtifactFacts alphabet
+        , obListPackagesIn = pageSource . packagePage observer store
+        , obEnumerateVersions = pageAll . versionPage observer store
+        , obReadManifest = readManifest
+        , obVerifyConsent = readConsent observer store
+        , obClassifyStore = fmap (fmap classifyRepository) (describeStore observer store)
         }
 
 sendStore :: (AWS.AWSRequest a) => AWS.Env -> a -> IO (Either StoreFault (AWS.AWSResponse a))

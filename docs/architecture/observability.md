@@ -66,8 +66,10 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
 - `ecluse.dredger.versions` (a counter) carries (result), one of `examined`, `deleted`,
   `would_delete`, `kept`, or `guard_skipped`. Every version a sweep cycle examines counts once as
   `examined` and once more under what the cycle did with it, so deletions read as a fraction of what
-  was seen. A dry run counts under `would_delete` and never `deleted`, so a rehearsal cannot be
-  mistaken for a deletion. A cycle whose `deleted` count jumps is worth an alarm: the deletion cap
+  was seen. A dry run counts under `would_delete` and never `deleted`, so a preview cannot be
+  mistaken for a deletion. A cycle that decided with no advisory generation loaded, whatever its
+  shape, writes the missing-generation `ERROR` line and closes its counts with the partial-evidence
+  suffix, so a count taken across that gap is never read as a whole-store count. A cycle whose `deleted` count jumps is worth an alarm: the deletion cap
   halts such a cycle for the life of the process, and the halt's `ERROR` line names the cap and the
   advisory generation. The package, the version, and the denying rule stay on the sweep's audit
   line, never a label.

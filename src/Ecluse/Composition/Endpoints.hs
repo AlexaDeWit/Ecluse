@@ -28,7 +28,7 @@ import Ecluse.Composition.BootError (
         StoreTagConflict
     ),
  )
-import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (
     Severity (Advise, Refuse),
     Vet,
@@ -142,11 +142,13 @@ storeTagConflict pair =
         (taggedKeyName (epOtherKey pair) (epOtherTarget pair))
         (registryUrlText (tgtUrl (epTarget pair)))
 
--- A mirror target on another declared endpoint: the deleting role refuses, the writing roles warn.
+{- A mirror target on another declared endpoint: the deleting role refuses, its preview refuses
+under the same reading, and the writing roles warn. -}
 mirrorCollapse :: (EndpointPair -> Advisory) -> RegistryRole -> Severity EndpointPair
 mirrorCollapse toAdvisory = \case
     MirrorWriter -> Advise toAdvisory
     MirrorPruner -> Refuse mirrorOnMountEndpoint
+    MirrorPreviewer -> Refuse mirrorOnMountEndpoint
 
 {- Each advisory carries the mirror target's own URL, so the warning quotes the spelling the
 mount configured rather than the endpoint it collided with. -}

@@ -33,6 +33,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFault (faultRetry, faultTransport),
     StoreMaintenance (..),
     StoreManifestRead,
+    StoreObservation (obClassifyStore, obListPackagesIn, obVerifyConsent),
     StoredVersion (storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed),
@@ -40,8 +41,14 @@ import Ecluse.Core.Registry.Maintenance (
     noNameAlphabet,
     refusalCode,
     storeFaultOfMetadata,
+    wholeNameSpace,
  )
-import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolStore (..), newProtocolMaintenance)
+import Ecluse.Core.Registry.Maintenance.Protocol (
+    ProtocolRead (..),
+    ProtocolStore (ProtocolStore, psDelete, psRead),
+    newProtocolMaintenance,
+    newProtocolObservation,
+ )
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
@@ -88,9 +95,13 @@ factsSpec = describe "what the backend supplies without a call" $ do
         withStore True answerNothing $ \handle _ ->
             isNothing (storeCursor handle) `shouldBe` True
 
-    it "offers no rehearsal, because the protocol spells no dry-run request" $
-        withStore True answerNothing $ \handle _ ->
-            isNothing (rehearseDelete handle) `shouldBe` True
+    it "reads a store whose consent is withheld through the observing calls alone" $
+        withObservation False answerStore $ \observed stub -> do
+            names <- collectPages (obListPackagesIn observed wholeNameSpace)
+            names `shouldBe` Right [unscopedNpm "leftpad", unscopedNpm "rightpad"]
+            obVerifyConsent observed `shouldReturn` Right (ConsentWithheld consentKey)
+            obClassifyStore observed `shouldReturn` Right (StorePreserved consentKey)
+            map fst <$> calls stub `shouldReturn` ["GET"]
 
     it "reads consent and classification off the operator's key, with no call" $
         withStore True answerNothing $ \handle _ -> do
@@ -298,6 +309,20 @@ withStoreUnder permitted limits answer action =
   where
     reply captured = let (status, body) = answer captured in (status, [], body)
 
+-- The same store as a reader reaches it: the observing calls, built without the delete verb.
+withObservation ::
+    Bool ->
+    (Captured -> (Status, LBS.ByteString)) ->
+    (StoreObservation -> Stub -> IO a) ->
+    IO a
+withObservation permitted answer action =
+    withRoutedStub reply $ \stub -> do
+        manager <- newManager defaultManagerSettings
+        store <- protocolStore permitted (originAt manager defaultLimits (stubLocalhostUrl stub))
+        action (newProtocolObservation (psRead store)) stub
+  where
+    reply captured = let (status, body) = answer captured in (status, [], body)
+
 originAt :: Manager -> Limits -> Text -> OriginClient
 originAt manager limits baseUrl =
     OriginClient
@@ -315,14 +340,17 @@ protocolStore permitted origin = do
     delete <- required "version delete" (maintenanceVersionDelete npmMaintenance)
     pure
         ProtocolStore
-            { psOrigin = origin
-            , psReadManifest = readManifestOver origin
-            , psListing = listing
+            { psRead =
+                ProtocolRead
+                    { prOrigin = origin
+                    , prReadManifest = readManifestOver origin
+                    , prListing = listing
+                    , prCodec = npmPublishCodec
+                    , prBackendName = "verdaccio"
+                    , prPermitDeletion = permitted
+                    , prConsentDescriptor = consentKey
+                    }
             , psDelete = delete
-            , psCodec = npmPublishCodec
-            , psBackendName = "verdaccio"
-            , psPermitDeletion = permitted
-            , psConsentDescriptor = consentKey
             }
   where
     required verb = maybe (fail ("npm fills no " <> verb <> " verb")) pure

@@ -24,6 +24,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factNameAlphabet),
     StoreFault (StoreFault, faultRetry, faultTransport),
     StoreMaintenance (classifyStore, enumerateVersions, listPackagesIn, storeCursor, verifyConsent),
+    StoreObservation (obVerifyConsent),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
     inBucket,
@@ -35,30 +36,45 @@ import Ecluse.Core.Registry.Maintenance (
 import Ecluse.Core.Registry.Sweep (sweepCycle, withStoreRetry)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltConsentWithheld, HaltDeletionCap, HaltStoreFault, HaltStorePreserved),
-    CycleOutcome (outcomeHalt, outcomeTally),
-    SweepMount (smRuleDeps),
+    CycleOutcome (outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
+    EvidenceGaps (gapAdvisoryGeneration),
+    PrerequisiteStatus (PrerequisiteMet, PrerequisiteUnmet, PrerequisiteUnread),
+    SweepMount (smConfigured, smFirstParty, smRuleDeps),
     SweepPacing (swpChunkPause, swpChunkSize, swpDeletionCap, swpShape),
     SweepPorts (sweepDelay),
     SweepShape (SweepCandidates, SweepEverything),
-    SweepTally (tallyDeleted, tallyExamined, tallyKept),
+    SweepTally (tallyDeleted, tallyExamined, tallyGuardSkipped, tallyKept),
+    TargetPrerequisites (tpClassification, tpConsent),
+    outcomeComplete,
+    prerequisitesMet,
  )
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup), prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny), Rule (DenyByIdentity, DenyIfCve, DenyIfEpss))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
 import Ecluse.Test.Maintenance (
-    FakeStore (fakeMaintenance, readFakeContents, readFakeCursor),
+    FakeStore (fakeMaintenance, fakeObservation, readFakeContents, readFakeCursor),
     FakeStoreConfig (..),
     defaultFakeStoreConfig,
     newFakeStore,
+    withBucket,
  )
 import Ecluse.Test.Package (sampleManifest)
 import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps)
-import Ecluse.Test.Sweep (RecordedSweep (..), recordingPorts, testMount, testPacing)
+import Ecluse.Test.Sweep (
+    RecordedSweep (..),
+    previewMount,
+    previewingReport,
+    recordingPorts,
+    recordingPortsUnder,
+    testMount,
+    testPacing,
+ )
 
 spec :: Spec
 spec = do
     permissionSpec
+    previewSpec
     retrySpec
     candidateCycleSpec
     fullWalkSpec
@@ -110,6 +126,135 @@ permissionSpec = describe "consent and classification" $ do
         void (runCycle testPacing (withStore store counting))
         void (runCycle testPacing (withStore store counting))
         readIORef reads' `shouldReturn` 4
+
+{- A preview holds the store's observing calls and an execution that counts, so it reaches no
+delete and no marker. The two standing permissions become findings rather than halts. -}
+previewSpec :: Spec
+previewSpec = describe "a preview cycle" $ do
+    it "enumerates and counts without the consent marker, reporting it unmet" $ do
+        store <- newFakeStore seededConfig{fakeConsent = ConsentWithheld "attach it"}
+        (rec', outcome) <- previewCycle testPacing store
+        outcomeHalt outcome `shouldBe` Nothing
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+        map tpConsent (outcomePrerequisites outcome) `shouldBe` [PrerequisiteUnmet "attach it"]
+        warnings <- recWarnings rec'
+        warnings `shouldSatisfy` any (T.isInfixOf "deletion consent is not met: attach it")
+
+    it "reports a store that refills itself rather than refusing to sweep it" $ do
+        store <- newFakeStore seededConfig{fakeClass = StorePreserved "it has an upstream"}
+        (_, outcome) <- previewCycle testPacing store
+        outcomeHalt outcome `shouldBe` Nothing
+        map tpClassification (outcomePrerequisites outcome)
+            `shouldBe` [PrerequisiteUnmet "it has an upstream"]
+
+    it "leaves every version in the store, because it holds nothing that deletes" $ do
+        store <- newFakeStore seededConfig{fakeConsent = ConsentWithheld "attach it"}
+        seeded <- readFakeContents store
+        (_, outcome) <- previewCycle testPacing store
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+        readFakeContents store `shouldReturn` seeded
+
+    it "counts the names the first-party belt shields apart from what it would delete" $ do
+        store <- seededStore
+        rec' <- recordingPortsUnder previewingReport generation
+        outcome <-
+            sweepCycle
+                testPacing
+                (recPorts rec')
+                [(previewMountFor store){smFirstParty = (== packageName "left-pad")}]
+        tallyGuardSkipped (outcomeTally outcome) `shouldBe` 1
+        tallyDeleted (outcomeTally outcome) `shouldBe` 0
+
+    it "walks from the first bucket and leaves the store's own marker where it was" $ do
+        store <- newFakeStore bucketedConfig
+        withBucket "l" $ \completed -> do
+            traverse_ (\cursor -> void (writeCursor cursor completed)) (storeCursor (fakeMaintenance store))
+            (_, outcome) <- previewCycle walkPacing store
+            tallyExamined (outcomeTally outcome) `shouldBe` 2
+            readFakeCursor store `shouldReturn` Just completed
+
+    it "reads as complete though a prerequisite it reported is unmet" $ do
+        store <- newFakeStore seededConfig{fakeConsent = ConsentWithheld "attach it"}
+        (_, outcome) <- previewCycle testPacing store
+        outcomeComplete outcome `shouldBe` True
+        all prerequisitesMet (outcomePrerequisites outcome) `shouldBe` False
+
+    it "reads as partial when a rule that reads advisories decided without a generation" $ do
+        store <- seededStore
+        rec' <- recordingPortsUnder previewingReport generation
+        let unloaded =
+                (previewMountFor store)
+                    { smRuleDeps = inertRuleDeps
+                    , smConfigured = [DenyByIdentity "left-pad", DenyIfCve (DenyIfCveParams 8.0 FailDeny)]
+                    }
+        outcome <- sweepCycle testPacing (recPorts rec') [unloaded]
+        gapAdvisoryGeneration (outcomeEvidence outcome) `shouldBe` 1
+        outcomeComplete outcome `shouldBe` False
+        info <- recInfo rec'
+        info `shouldSatisfy` any (T.isInfixOf "counted from partial evidence")
+
+    it "reads as complete without a generation where no rule reads one" $ do
+        store <- seededStore
+        rec' <- recordingPortsUnder previewingReport generation
+        outcome <-
+            sweepCycle testPacing (recPorts rec') [(previewMountFor store){smRuleDeps = inertRuleDeps}]
+        outcomeComplete outcome `shouldBe` True
+
+    it "reads both standing permissions as met where the store carries them" $ do
+        store <- seededStore
+        (_, outcome) <- previewCycle testPacing store
+        map tpConsent (outcomePrerequisites outcome) `shouldBe` [PrerequisiteMet]
+        map tpClassification (outcomePrerequisites outcome) `shouldBe` [PrerequisiteMet]
+
+    it "carries on when a standing permission could not be read, and reports that as well" $ do
+        -- Nothing a preview reads settles the permission, which is a finding rather than an end to
+        -- the enumeration: the counts still stand and the status still follows completeness.
+        store <- seededStore
+        rec' <- recordingPortsUnder previewingReport generation
+        outcome <- sweepCycle testPacing (recPorts rec') [unreadableConsent store]
+        outcomeHalt outcome `shouldBe` Nothing
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+        outcomeComplete outcome `shouldBe` True
+        map tpConsent (outcomePrerequisites outcome) `shouldSatisfy` all unread
+        warnings <- recWarnings rec'
+        warnings `shouldSatisfy` any (T.isInfixOf "deletion consent could not be read")
+  where
+    walkPacing = testPacing{swpShape = SweepEverything}
+
+    -- Both seeded names lead with l, so one bucket holds them and the other is walked empty.
+    bucketedConfig = seededConfig{fakeFacts = (fakeFacts seededConfig){factNameAlphabet = mkNameAlphabet "lx"}}
+
+    unread = \case
+        PrerequisiteUnread _ -> True
+        _ -> False
+
+-- A preview whose consent read alone faults, so the listing it walks still answers.
+unreadableConsent :: FakeStore -> SweepMount
+unreadableConsent store =
+    (previewMount observing [denyRule] [DenyByIdentity "left-pad"]){smRuleDeps = loadedDeps}
+  where
+    observing =
+        (fakeObservation store)
+            { obVerifyConsent = pure (Left (protocolFault "the store did not answer the consent read"))
+            }
+
+{- A cycle over the store's observing calls alone, under a generation the rules can read, so a
+complete preview is one whose only open question is the permission it reported. -}
+previewCycle :: SweepPacing -> FakeStore -> IO (RecordedSweep, CycleOutcome)
+previewCycle pacing store = do
+    rec' <- recordingPortsUnder previewingReport generation
+    outcome <- sweepCycle pacing (recPorts rec') [previewMountFor store]
+    pure (rec', outcome)
+
+previewMountFor :: FakeStore -> SweepMount
+previewMountFor store =
+    (previewMount (fakeObservation store) [denyRule] [DenyByIdentity "left-pad"])
+        { smRuleDeps = loadedDeps
+        }
+
+-- A generation the sweep can read, which leaves the identity half to pin the candidate names.
+loadedDeps :: RuleDeps
+loadedDeps = inertRuleDeps{rdWithCveLookup = \use -> use (Just (fakeCveLookup []))}
 
 {- One retry after the wait the fault itself advises. A fault that survives it halts the cycle,
 and the next cycle re-attempts, so an outage reports once per interval and clears on its own. -}
