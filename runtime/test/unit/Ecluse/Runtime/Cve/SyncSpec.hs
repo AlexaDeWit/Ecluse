@@ -23,7 +23,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Expectation, Spec, anyException, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (AsyncCancelled (AsyncCancelled), async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (mask_, throwIO)
+import UnliftIO.Exception (throwIO)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
@@ -501,18 +501,12 @@ spec = do
                 swapIn slot (DbEtag "e1") Nothing oldDb
                 insideReader <- newEmptyMVar
                 releaseReader <- newEmptyMVar
-                insideSwapper <- newEmptyMVar
                 pinned <- async $ withSlotLookup slot $ \_ -> do
                     putMVar insideReader ()
                     takeMVar releaseReader
                 takeMVar insideReader
-                let buildPkgB dest = do
-                        putMVar insideSwapper ()
-                        mkMinimalValidDb dest "pkg-b"
-                -- The pinned reader blocks the drain after publication. The mask defers
-                -- cancellation to that blocking point, avoiding a timed wait.
-                swapper <- async (mask_ (syncStep (envWith (fetchServing (Just "e2") buildPkgB)) (Just (DbEtag "e1"))))
-                takeMVar insideSwapper
+                swapper <- async (syncStep (envWith (fetchServing (Just "e2") (`mkMinimalValidDb` "pkg-b"))) (Just (DbEtag "e1")))
+                waitFor "generation e2 publication" ((== Just (DbEtag "e2")) <$> currentAdvisoryEtag slot)
                 timeout pollBudget (cancel swapper) `shouldReturn` Just ()
                 readIORef closes `shouldReturn` 0
                 putMVar releaseReader ()
