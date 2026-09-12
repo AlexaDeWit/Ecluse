@@ -21,13 +21,16 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
+import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), classifyArtifacts)
 import Ecluse.Core.Package.Merge hiding (contribute, mergePackuments)
 import Ecluse.Core.Package.Merge qualified as Merge
+import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Core.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash)
 import Ecluse.Test.Package qualified as Package
+import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Snapshot (syntheticSnapshot)
 
@@ -432,6 +435,30 @@ spec = do
             (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
 
     describe "canonical digest sets" $ do
+        it "merges npm SHA-1 case variants beside identical admitted SRI" $ do
+            let sri = sriSha512Of "same bytes"
+                hex = hexSha1Of "same bytes"
+                values = [hex, T.toUpper hex]
+                document wire = NpmFixture.packumentValue "thing" "1.2.3" [("1.2.3", manifest wire)] [] []
+                manifest wire =
+                    NpmFixture.versionValue
+                        (NpmFixture.versionSpec "thing" "1.2.3" "https://registry.npmjs.org/thing/-/thing-1.2.3.tgz")
+                            { NpmFixture.vsIntegrity = Just sri
+                            , NpmFixture.vsShasum = Just wire
+                            }
+            case traverse (parsePackageInfoFromValue name . document) values of
+                Right [Projected trusted, Projected public] -> do
+                    forM_ (zip values [trusted, public]) $ \(wire, info) -> do
+                        let details = Map.elems (infoVersions info)
+                            hashes = [h | version <- details, art <- toList (pkgArtifacts version), h <- artHashes art]
+                        [hashValue h | h <- hashes, hashAlg h == SHA1] `shouldBe` [wire]
+                        [hashValue h | h <- hashes, hashAlg h == SRI] `shouldBe` [sri]
+                        map (classifyArtifacts Package.defaultMinIntegrity . pkgArtifacts) details `shouldBe` [MeetsFloor]
+                    let plan = mergePackuments [(TrustedSource, trusted), (GatedSource, public)]
+                    (mpDivergences <$> plan) `shouldBe` Just Set.empty
+                    (mpSurvivors <$> plan) `shouldBe` Just (Map.singleton "1.2.3" 0)
+                other -> expectationFailure ("expected both npm projections, got " <> show other)
+
         forM_
             [ (SHA256, Package.hexSha256Of, Package.sriSha256Of)
             , (SHA384, Package.hexSha384Of, Package.sriSha384Of)

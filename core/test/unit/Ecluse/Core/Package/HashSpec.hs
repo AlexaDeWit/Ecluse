@@ -94,6 +94,13 @@ spec = do
             mkHash SRI "sha1-2jmj7l5rSw0yVb/vlWAYkK/YBwk=" `shouldSatisfy` isLeft
 
     describe "canonicalHashValue" $ do
+        it "compares SHA-1 hex case without changing its original spelling" $ do
+            let hex = Package.hexSha1Of "same bytes"
+            forM_ [hex, T.toUpper hex] $ \wire -> do
+                let parsed = mkHash SHA1 wire
+                (canonicalHashValue <$> parsed) `shouldBe` Right (Just hex)
+                (hashValue <$> parsed) `shouldBe` Right wire
+
         forM_
             [ (SHA256, Package.hexSha256Of, Package.sriSha256Of)
             , (SHA384, Package.hexSha384Of, Package.sriSha384Of)
