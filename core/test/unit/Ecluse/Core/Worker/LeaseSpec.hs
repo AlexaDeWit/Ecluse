@@ -160,7 +160,7 @@ spec = do
             runLeases world (faultingFor ["a"] unreachable) batch $ \leased -> do
                 held <- leaseAt 0 leased
                 -- Wait for the drop, then offer the job: it must never run.
-                liftIO (awaitRenewals world 4 >> threadDelay settleMicros)
+                liftIO (awaitRenewals world 4 >> awaitEndedTasks world 1)
                 started <- newIORef False
                 outcome <- whileLeased held (writeIORef started True)
                 liftIO (outcome `shouldBe` Nothing)
@@ -442,9 +442,7 @@ unreachable = transportFault TransportUnreachable "simulated renewal outage"
 refused :: TransportFault
 refused = transportFault TransportTls "simulated certificate refusal"
 
-{- | What a second consumer would receive: every receipt whose window has lapsed unrenewed.
-| Every renewal the controller has asked for, oldest first.
--}
+-- | Every renewal the controller has asked for, oldest first.
 renewalsSoFar :: LeaseWorld -> IO [Text]
 renewalsSoFar = fmap reverse . readIORef . lwRenewals
 
@@ -458,6 +456,12 @@ redeliverable world = do
 awaitRenewals :: LeaseWorld -> Int -> IO ()
 awaitRenewals world wanted =
     void (pollUntil 2_000 1_000 (>= wanted) (length <$> readIORef (lwRenewals world)))
+
+{- Wait, bounded, until the stepper has reaped this many ended renewal tasks. A reap counts only
+a thread that has already finished, so the receipt's lease was marked dropped before it. -}
+awaitEndedTasks :: LeaseWorld -> Int -> IO ()
+awaitEndedTasks world wanted =
+    void (pollUntil 2_000 1_000 (>= wanted) (readTVarIO (lwEnded world)))
 
 -- Wait, bounded, until the renewals have carried the world's clock past this instant.
 awaitClock :: LeaseWorld -> Double -> IO ()
