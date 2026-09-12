@@ -320,7 +320,7 @@ gatePublic tracing metrics deps name ctx trustedVersions = \case
         (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
         mpRuleEvalDuration metrics (evalTier (pdRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
-        let plan = filterPlanFromDecisions decisions admissible
+        let plan = filterPlanFromDecisions decisions
             deniedEvidence = Map.withoutKeys (Map.intersection (infoVersions admissible) trustedVersions) (fpSurvivors plan)
         pure $
             if Set.null (fpSurvivors plan)
