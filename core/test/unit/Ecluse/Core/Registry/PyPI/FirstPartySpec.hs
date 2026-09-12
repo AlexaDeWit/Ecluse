@@ -16,6 +16,8 @@ import Ecluse.Core.Registry.PyPI.FirstParty (
     underPyPIPrefix,
  )
 
+import Ecluse.Test.Registry.PyPI (pypiEntryVerdicts)
+
 spec :: Spec
 spec = do
     describe "PyPIPrefix" $ do
@@ -35,12 +37,17 @@ spec = do
                 `shouldBe` False
 
     describe "projectFirstPartyEntry" $ do
-        -- The grammar the configured list is read through. A segment no distribution name or
-        -- prefix can equal privileges nothing, so it fails here rather than binding at request
-        -- time. "Ecluse.Config.AesonSpec" pins the same verdicts through the config surface.
-        for_ entryVerdicts $ \(entry, valid) ->
+        for_ pypiEntryVerdicts $ \(entry, valid) ->
             it (show entry <> (if valid then " is an entry" else " is refused")) $
                 isRight (projectFirstPartyEntry entry) `shouldBe` valid
+
+        it "canonicalises exact names with case and internal separator aliases" $
+            map projectFirstPartyEntry ["Acme_Tools", "acme.tools", "ACME-TOOLS", "acme._-tools"]
+                `shouldBe` replicate 4 (Right (PyPIOwnedName (pypiName "acme-tools")))
+
+        it "canonicalises all supported prefix spellings" $
+            map projectFirstPartyEntry ["acme-*", "acme_*", "acme.*", "ACME-*"]
+                `shouldBe` replicate 4 (projectFirstPartyEntry "acme-*")
 
         it "reads a bare name as a canonical distribution and a starred one as a prefix" $
             case mkPyPIPrefix "widgets" of
@@ -70,23 +77,3 @@ spec = do
 -- A PyPI name, in the ecosystem whose canonical form is PEP 503's.
 pypiName :: Text -> PackageName
 pypiName = mkPackageName PyPI Nothing
-
-{- Every entry the grammar must refuse or accept. A prefix is a separator then @*@, and anything
-outside PEP 503's name alphabet, or that canonicalises to nothing, is refused. -}
-entryVerdicts :: [(Text, Bool)]
-entryVerdicts =
-    [ ("acme", True)
-    , ("Acme_Tools", True)
-    , ("acme-*", True)
-    , ("acme_*", True)
-    , ("acme.*", True)
-    , ("acme*", False)
-    , ("-*", False)
-    , ("*acme", False)
-    , ("*", False)
-    , ("@acme", False)
-    , ("acme/tools", False)
-    , ("acme tools", False)
-    , (",", False)
-    , (".", False)
-    ]

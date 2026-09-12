@@ -2,10 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared PyPI filenames and PEP 691 entries
-for projection, routing, and performance checks.
+{- | Shared PyPI declaration cases, filenames, and PEP 691 entries
+for configuration, projection, routing, and performance checks.
 -}
 module Ecluse.Test.Registry.PyPI (
+    pypiEntryVerdicts,
     simpleFile,
     withFileKeys,
     separatorHeavySdist,
@@ -39,3 +40,33 @@ withFileKeys overrides = \case
 -- | A malformed sdist with distinct suffixes for allocation and scaling measurements.
 separatorHeavySdist :: Text -> Int -> Text -> Text
 separatorHeavySdist project count suffix = project <> "-1" <> T.replicate count "_a" <> "_" <> suffix <> ".tar.gz"
+
+-- | Accepted and refused declarations shared by the parser and configuration suites.
+pypiEntryVerdicts :: [(Text, Bool)]
+pypiEntryVerdicts =
+    [ ("acme", True)
+    , ("Acme_Tools", True)
+    , ("ACME", True)
+    , ("acme._-tools", True)
+    , (T.replicate 100 "a", True)
+    , (T.replicate 101 "a", False)
+    , ("-acme", False)
+    , ("_acme", False)
+    , (".acme", False)
+    , ("acme-", False)
+    , ("acme_", False)
+    , ("acme.", False)
+    , ("acme-*", True)
+    , ("acme_*", True)
+    , ("acme.*", True)
+    , ("ACME-*", True)
+    , ("acme*", False)
+    , ("-*", False)
+    , ("*acme", False)
+    , ("*", False)
+    , ("@acme", False)
+    , ("acme/tools", False)
+    , ("acme tools", False)
+    , (",", False)
+    , (".", False)
+    ]

@@ -205,6 +205,13 @@ you do not own. The star has to follow a separator, and `acme*` is refused, beca
 ran past the separator would privilege names you do not own. Declare the bare `acme` too if you
 publish a distribution under that exact name.
 
+Exact PyPI declarations must follow the routed project-name grammar: at most 100 ASCII
+characters, with a letter or digit at each end. Internal `.`, `_`, and `-` separators remain
+accepted and normalised. Previously accepted exact declarations longer than 100 characters or
+with leading or trailing separators now fail configuration loading. Replace them with valid
+project names before upgrading. Prefix declarations `acme-*`, `acme_*`, and `acme.*` remain
+equivalent and accepted.
+
 Setting `firstParty` on an npm mount narrows what a scoped install reaches. A name under one of
 your scopes that the private upstream does not have answers `404`, and Écluse does not fall back to
 the public registry for it. That refusal is the point: a public package published under a scope you
