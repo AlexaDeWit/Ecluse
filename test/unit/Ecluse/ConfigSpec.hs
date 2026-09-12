@@ -19,6 +19,7 @@ import Ecluse.Config (
     MountRegistries (regMode),
     QueueSettings (qsMaxReceiveCount),
     RulePolicy (..),
+    advisoryAgeLines,
     defaultPolicy,
     loadConfig,
     mountPostureLines,
@@ -102,6 +103,24 @@ spec = do
             forM_ [registry, private, public] $ \cfg ->
                 length (mountPostureLines cfg) `shouldBe` 1
 
+    describe "the advisory push-age limit reported at boot" $ do
+        it "derives six days from the shipped seven-day quarantine, naming the rule" $ do
+            cfg <- configFor privateMountDoc
+            advisoryAgeLines cfg
+                `shouldBe` ["mount \"npm\": CVE-based denial refuses on an advisory push older than 6 days, derived a day ahead of this mount's earliest AllowIfOlderThan quarantine of 7 days"]
+
+        it "names an explicit maximum as its own basis" $ do
+            cfg <- expectConfig (pubUrlEnv <> [("ECLUSE_ADVISORIES__MAX_AGE_SECONDS", "3600")]) (Just privateMountDoc)
+            advisoryAgeLines cfg `shouldSatisfy` any (T.isInfixOf "1 hour, set by advisories.maxAgeSeconds")
+
+        it "holds the floor under a two-day quarantine" $ do
+            cfg <- expectConfig (pubUrlEnv <> [("ECLUSE_RULES", "{\"min-age\":{\"ageSeconds\":172800}}")]) (Just privateMountDoc)
+            advisoryAgeLines cfg `shouldSatisfy` any (T.isInfixOf "3 days, the shipped floor")
+
+        it "reports nothing for a mount whose rules read no advisory database" $ do
+            cfg <- expectConfig (pubUrlEnv <> [("ECLUSE_RULES", "{\"remediation-fast-track\":{\"enabled\":false}}")]) (Just privateMountDoc)
+            advisoryAgeLines cfg `shouldBe` []
+
     describe "resolvedKeyProvenance" $ do
         it "labels each resolved key with the layer that supplied it" $ do
             let provenance =
@@ -131,6 +150,10 @@ pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 -- | Load a config document under the client-facing base URL every active mount needs.
 configFor :: ByteString -> IO Config
 configFor doc = expectConfig pubUrlEnv (Just doc)
+
+-- | The serve-only npm mount the advisory-age cases load, which carries the shipped rule policy.
+privateMountDoc :: ByteString
+privateMountDoc = npmMountDoc [("privateUpstream", "https://priv.example.test")]
 
 -- | An npm mount document declaring each named endpoint at its URL under the @registry@ tag.
 npmMountDoc :: [(Text, Text)] -> ByteString

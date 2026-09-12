@@ -66,6 +66,8 @@ module Ecluse.Config (
     loadConfig,
     sameRegistry,
     mountPostureLines,
+    mountAdvisoryAge,
+    advisoryAgeLines,
     resolvedKeyProvenance,
 ) where
 
@@ -87,7 +89,13 @@ import Ecluse.Config.Rule
 import Ecluse.Config.Target (resolveStoreBackend, vetTargetTag)
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
-import Ecluse.Core.Rules.Types (PrecededRule)
+import Ecluse.Core.Rules (renderDuration)
+import Ecluse.Core.Rules.Freshness (
+    AdvisoryAgeBasis (AgeBeforeQuarantine, AgeConfigured, AgeFloor),
+    MaxAdvisoryAge (maxAdvisoryAge, maxAdvisoryAgeBasis),
+    maxAdvisoryAgeFor,
+ )
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule, readsAdvisories)
 import Ecluse.Core.Security (HostPort, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (registryPath, stripTrailingSlash)
@@ -313,6 +321,44 @@ maintenanceClientLine (eco, mount) = do
         "mount \""
             <> ecosystemName eco
             <> "\": the store maintenance client is built at boot against the live environment. check-config does not attempt this build."
+
+{- | One mount's effective maximum advisory push age, derived from that mount's own rules. An
+explicit @advisories.maxAgeSeconds@ overrides the derivation on every mount.
+-}
+mountAdvisoryAge :: AdvisoriesSettings -> Mount -> MaxAdvisoryAge
+mountAdvisoryAge advisories = maxAdvisoryAgeFor (advMaxAgeSeconds advisories) . mountRulesOf
+
+-- The rules one mount's policy carries, as the configured values a precedence no longer wraps.
+mountRulesOf :: Mount -> [Rule]
+mountRulesOf = map prRule . mountPolicy
+
+{- | The effective maximum push age of every mount whose rules read the advisory database, with
+the basis that produced it. A mount that reads no advisories has no limit to report.
+-}
+advisoryAgeLines :: Config -> [Text]
+advisoryAgeLines config =
+    [ ageLine eco (mountAdvisoryAge advisories mount)
+    | (eco, mount) <- Map.toAscList (configMounts config)
+    , any readsAdvisories (mountRulesOf mount)
+    ]
+  where
+    advisories = cfgAdvisories (configApp config)
+
+ageLine :: Ecosystem -> MaxAdvisoryAge -> Text
+ageLine eco limit =
+    "mount \""
+        <> ecosystemName eco
+        <> "\": CVE-based denial refuses on an advisory push older than "
+        <> renderDuration (maxAdvisoryAge limit)
+        <> ", "
+        <> renderBasis (maxAdvisoryAgeBasis limit)
+
+renderBasis :: AdvisoryAgeBasis -> Text
+renderBasis = \case
+    AgeConfigured -> "set by advisories.maxAgeSeconds"
+    AgeBeforeQuarantine quarantine ->
+        "derived a day ahead of this mount's earliest AllowIfOlderThan quarantine of " <> renderDuration quarantine
+    AgeFloor -> "the shipped floor, which no derivation goes below"
 
 postureLine :: (Ecosystem, Mount) -> Text
 postureLine (eco, mount) = case regMode (mountRegistries mount) of

@@ -86,6 +86,11 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
   alive. One threshold therefore alarms on a stale database, on a sync that stopped swapping, and
   on a sync task that is crash-looping. Before the first swap it reads from the slot's creation,
   which is process start.
+- `ecluse.advisory.source.age.seconds` (a gauge) carries (ecosystem). It reads the seconds since
+  the serving artifact was published, which is the age the CVE-deny path expires on. That makes it
+  the one to alarm on for data freshness, while `ecluse.advisory.database.age.seconds` above stays
+  an installation diagnostic for this process. It observes nothing before the first sync, and
+  nothing where the store reported no publication time.
 - `ecluse.advisory.compile.accepted` and `ecluse.advisory.compile.dropped` (both counters) carry
   (ecosystem), and the dropped counter adds (cause), one of `oversize` or `malformed`. Pilot records
   both once per compile pass, so a backend computes the drop rate from the pair. The dropped entry's

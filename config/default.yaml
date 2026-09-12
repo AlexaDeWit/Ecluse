@@ -148,6 +148,15 @@ advisories:
   # Pilot only: the same threshold for the score date the EPSS feed declares, in seconds. One
   # key, because one feed serves every ecosystem.
   epssQuietTime: 604800
+  # How old the published advisory artifact may be, in seconds, before DenyIfCve and DenyIfEpss
+  # refuse rather than decide. The age is the time since Pilot last pushed the artifact, which a
+  # restart and a failed poll both leave alone. Past it, the CVE-deny path answers 503 even under
+  # `onUnavailable: skip`, and the Dredger stops deleting on an advisory match. Readiness does not
+  # change. Unset, each mount derives its own: a day ahead of that mount's earliest
+  # AllowIfOlderThan quarantine, never under three days. The shipped seven-day quarantine gives
+  # six days, and a mount with no quarantine rule gets three. Set this to override every
+  # derivation, above or below it. The boot log names the value and where it came from.
+  # maxAgeSeconds: 518400
   # The object store the compiled advisory databases sync from, as
   # s3://<bucket>[/<prefix>]. The scheme picks the provider, the way queue.url does, and
   # a scheme this build does not know is refused at load. AWS_ENDPOINT_URL still points

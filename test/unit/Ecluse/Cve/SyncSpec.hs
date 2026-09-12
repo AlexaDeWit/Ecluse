@@ -10,6 +10,7 @@ module Ecluse.Cve.SyncSpec (spec) where
 import Control.Retry (simulatePolicy)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, getCurrentTime, nominalDay)
 import Katip (closeScribes)
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
 import System.Environment (setEnv)
@@ -23,13 +24,19 @@ import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (DbEtag (..))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup))
+import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness, rdWithCveLookup))
+import Ecluse.Core.Rules.Freshness (
+    AdvisoryFreshness (AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
+    MaxAdvisoryAge,
+    maxAdvisoryAgeFor,
+ )
+import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Server.Readiness (
     MountReadiness (MountAwaitingFirstSync, MountReady),
     Readiness (AwaitingMounts, Routable),
  )
 import Ecluse.Core.Supervision (delayListPolicy)
-import Ecluse.Cve.Sync (CveSyncHandle (..), cveRuleDepsFor, cveSyncReadiness, cveSyncScheduleFor, planCveSync, sweepStaleTemps, sweepStep)
+import Ecluse.Cve.Sync (CveSyncHandle (..), advisoryFreshnessFor, cveRuleDepsFor, cveSyncReadiness, cveSyncScheduleFor, planCveSync, reportPushAge, sweepStaleTemps, sweepStep)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
 import Ecluse.Runtime.Test.Cve (refusingFetch)
 import Ecluse.Test.Cve (fakeCveDb)
@@ -61,7 +68,7 @@ spec = do
                         ]
                         (Just mountedNpmDoc)
                 logEnv <- newTestLogEnv
-                plan <- planCveSync logEnv Nothing cfg [Npm]
+                plan <- planCveSync logEnv Nothing cfg [(Npm, sixDayLimit)]
                 Map.keys plan `shouldBe` [Npm]
                 for_ (Map.lookup Npm plan) $ \handle -> do
                     syncEcosystem (csEnv handle) `shouldBe` Npm
@@ -113,6 +120,60 @@ spec = do
             swapIn (syncSlot (csEnv handle)) (DbEtag "e1") Nothing (fakeCveDb [])
             let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
             rdWithCveLookup (deps PyPI) (pure . isJust) `shouldReturn` False
+
+    describe "advisoryFreshnessFor -- the push-age reading the rules gate on" $ do
+        it "is fresh before the first sync, leaving the absent-database path to decide" $ do
+            handle <- stubHandleAt sixDayLimit (pure alarmNow)
+            advisoryFreshnessFor (Map.singleton Npm handle) Npm `shouldReturn` AdvisoryFresh
+
+        it "is fresh for an ecosystem the plan does not carry" $ do
+            handle <- stubHandleAt sixDayLimit (pure alarmNow)
+            advisoryFreshnessFor (Map.singleton Npm handle) PyPI `shouldReturn` AdvisoryFresh
+
+        it "expires a push past the maximum and keeps it across a poll that swaps nothing" $ do
+            handle <- stubHandleAt sixDayLimit (pure alarmNow)
+            install handle (agoDays 9)
+            reading <- advisoryFreshnessFor (Map.singleton Npm handle) Npm
+            reading `shouldSatisfy` isStale
+            advisoryFreshnessFor (Map.singleton Npm handle) Npm `shouldReturn` reading
+
+        it "refuses on a serving generation the store gave no publication time for" $ do
+            handle <- stubHandleAt sixDayLimit (pure alarmNow)
+            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") Nothing (fakeCveDb [])
+            advisoryFreshnessFor (Map.singleton Npm handle) Npm `shouldReturn` AdvisoryUndated
+
+        it "resets on a fresh push of the same artifact" $ do
+            handle <- stubHandleAt sixDayLimit (pure alarmNow)
+            install handle (agoDays 9)
+            install handle (agoDays 1)
+            advisoryFreshnessFor (Map.singleton Npm handle) Npm `shouldReturn` AdvisoryFresh
+
+        it "carries that reading onto the mount's rule capabilities" $ do
+            handle <- stubHandleAt sixDayLimit (pure alarmNow)
+            install handle (agoDays 9)
+            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
+            rdAdvisoryFreshness (deps Npm) >>= (`shouldSatisfy` isStale)
+
+    describe "reportPushAge -- the consumer's early warning" $
+        it "logs at Error once per crossing, naming the push, the age, and the limit" $ do
+            logEnv <- jsonLogEnv
+            handle <- stubHandleAt sixDayLimit (pure alarmNow)
+            logged <- captureStdout $ do
+                install handle (agoDays 4)
+                reportPushAge logEnv Npm handle
+                -- Latched: a second poll over the same push stays silent.
+                reportPushAge logEnv Npm handle
+                -- A fresh push re-arms the alarm, and the next crossing reports again.
+                install handle (agoDays 1)
+                reportPushAge logEnv Npm handle
+                install handle (agoDays 5)
+                reportPushAge logEnv Npm handle
+                void (closeScribes logEnv)
+            T.count "\"sev\":\"Error\"" logged `shouldBe` 2
+            logged `shouldSatisfy` T.isInfixOf "\"ecosystem\":\"npm\""
+            logged `shouldSatisfy` T.isInfixOf "\"age_seconds\":345600"
+            logged `shouldSatisfy` T.isInfixOf "\"max_age_seconds\":518400"
+            logged `shouldSatisfy` T.isInfixOf "\"pushed_at\":\"2026-09-08T00:00:00Z\""
 
     describe "cveSyncReadiness -- the per-mount first-sync verdict" $ do
         it "is routable with no advisory store (an empty plan)" $
@@ -167,9 +228,14 @@ landed handle = atomically (writeTVar (csReady handle) True)
 -- A handle as 'planCveSync' would build it, minus the transport (the tests
 -- above never fetch): a fresh empty slot and a readiness flag at False.
 stubSyncHandle :: IO CveSyncHandle
-stubSyncHandle = do
+stubSyncHandle = stubHandleAt sixDayLimit getCurrentTime
+
+-- | As 'stubSyncHandle', under a chosen maximum and clock, for the push-age cases.
+stubHandleAt :: MaxAdvisoryAge -> IO UTCTime -> IO CveSyncHandle
+stubHandleAt maxAge clock = do
     slot <- newCveSlot
     ready <- newTVarIO False
+    alarmed <- newTVarIO False
     pure
         CveSyncHandle
             { csReady = ready
@@ -180,7 +246,30 @@ stubSyncHandle = do
                     , syncDbPath = "unused.db"
                     , syncSlot = slot
                     }
+            , csMaxAge = maxAge
+            , csClock = clock
+            , csAgeAlarmed = alarmed
             }
+
+-- | The maximum a mount deriving from the shipped seven-day quarantine gets: six days.
+sixDayLimit :: MaxAdvisoryAge
+sixDayLimit = maxAdvisoryAgeFor Nothing [AllowIfOlderThan (7 * nominalDay)]
+
+-- | A fixed "now" so the push-age cases read the same age on every run.
+alarmNow :: UTCTime
+alarmNow = UTCTime (fromGregorian 2026 9 12) 0
+
+agoDays :: Integer -> UTCTime
+agoDays days = addUTCTime (negate (fromInteger days * nominalDay)) alarmNow
+
+-- One generation landing with the given publication time, as a successful sync would install it.
+install :: CveSyncHandle -> UTCTime -> IO ()
+install handle pushedAt = swapIn (syncSlot (csEnv handle)) (DbEtag "e1") (Just pushedAt) (fakeCveDb [])
+
+isStale :: AdvisoryFreshness -> Bool
+isStale = \case
+    AdvisoryStale{} -> True
+    _ -> False
 
 -- The S3 env discovers credentials from the process environment. The plan only wires
 -- the transport and makes no request, so dummies satisfy it.

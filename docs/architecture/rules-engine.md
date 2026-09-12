@@ -188,6 +188,12 @@ every threshold**, so the rule always denies malware while `minCvss` governs the
   refuses the version with a retryable `503`. **`FailNoDecision`** skips the rule and logs
   loudly. This is the inverse of `AllowIfRemediatesCve`: neither an allow nor a deny that cannot
   confirm safety may admit.
+- **`CannotVet FailDeny`** when the serving artifact's push is older than the mount's maximum,
+  whatever `onUnavailable` says. Expiry is unavailability the operator cannot waive, so the
+  alignment is fixed here rather than configured. The gate runs before breaker admission, which
+  an open breaker would otherwise skip past, and `AllowIfRemediatesCve` abstains on the same
+  reading so the refusal is what the version meets. The maximum and its derivation are in
+  [Advisory push age](https://ecluse-proxy.com/docs/operations/#advisory-push-age).
 
 Enabling it on a cold mirror can deny historical versions an existing build depends on, so it
 ships off. Warm the mirror first, as

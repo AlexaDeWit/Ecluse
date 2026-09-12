@@ -401,6 +401,10 @@ data AdvisoriesSettings = AdvisoriesSettings
     -}
     , advEpssQuietTime :: NominalDiffTime
     -- ^ Pilot only: the same threshold for the EPSS feed's declared score date.
+    , advMaxAgeSeconds :: Maybe NominalDiffTime
+    {- ^ How old a published advisory artifact may be before CVE-based denial refuses. Unset,
+    each mount derives its own from its quarantine rules.
+    -}
     }
     deriving stock (Eq, Show)
 

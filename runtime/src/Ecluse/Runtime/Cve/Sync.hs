@@ -24,6 +24,7 @@ module Ecluse.Runtime.Cve.Sync (
 
     -- * The scheduled task
     SyncSchedule (..),
+    SyncHooks (..),
     runCveSync,
     bootBackoffDelays,
 ) where
@@ -203,24 +204,37 @@ then the burst concedes to the steady poll. The poll interval, not this, is the 
 bootBackoffDelays :: [Int]
 bootBackoffDelays = [1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000]
 
-{- | Retry at boot, then poll forever. A refused artifact ends the boot burst.
-@notifyFirstSync@ runs after every swap and must be idempotent.
+{- | What the shell hangs off one sync task. Both run inside the task, so neither may block it,
+and both must tolerate being called again.
 -}
+data SyncHooks = SyncHooks
+    { hookFirstSync :: IO ()
+    -- ^ Runs after every swap, so it must be idempotent.
+    , hookPushAge :: IO ()
+    {- ^ Runs after every step, settled or not, so the push age is read on a poll that
+    changed nothing.
+    -}
+    }
+
+-- | Retry at boot, then poll forever. A refused artifact ends the boot burst.
 runCveSync ::
     (MonadUnliftIO m, KatipContext m) =>
     AdvisorySyncMetricsPort ->
     AdvisorySyncTracingPort ->
     SyncEnv ->
     SyncSchedule ->
-    IO () ->
+    SyncHooks ->
     m ()
-runCveSync metrics tracing env schedule notifyFirstSync = do
+runCveSync metrics tracing env schedule hooks = do
     seen <- burst
     poll seen
   where
     eco = show (syncEcosystem env) :: Text
 
-    step = observedStep metrics tracing env eco notifyFirstSync
+    step lastSeen = do
+        outcome <- observedStep metrics tracing env eco (hookFirstSync hooks) lastSeen
+        liftIO (hookPushAge hooks)
+        pure outcome
 
     -- 'lastSeen' is fixed at 'Nothing' because the only not-settled outcomes ('SyncAbsent',
     -- 'SyncFetchFaulted') return it untouched, so it never changes across the burst.
@@ -279,6 +293,7 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
                 logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show (metadataSummary meta)))
                 source <- liftIO (currentAdvisorySource (syncSlot env))
                 logFM InfoS (ls ("cve-sync[" <> eco <> "]: serving artifact source: " <> maybe unrecordedValue renderAdvisorySource source))
+                whenNothing_ (asPushedAt =<< source) (undatedArtifact eco etag)
                 liftIO notifyFirstSync
                 pure (AdvisorySwapped, (True, Just etag))
             SyncUnchanged -> do
@@ -292,6 +307,21 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
                 -- Remember the ETag so the same refused artifact is not re-downloaded.
                 -- A fixed re-publish carries a new one. Identical bytes cannot end differently.
                 pure (AdvisoryRefused, (True, Just etag))
+
+{- An artifact the object store gave no publication time for: its age cannot be established, so
+CVE-based denial refuses on it. One line per swap, because only a swap can install one. -}
+undatedArtifact :: (KatipContext m) => Text -> DbEtag -> m ()
+undatedArtifact eco etag =
+    logFM
+        ErrorS
+        ( ls
+            ( "cve-sync["
+                <> eco
+                <> "]: the object store reported no publication time for the artifact it served (etag="
+                <> show etag
+                <> "), so its age cannot be established and CVE-based denial refuses until a push carries one"
+            )
+        )
 
 {- Where the serving artifact came from, for the swap line. The source renders as its authority
 alone, on the same rule as 'metadataSummary' below: artifact text never reaches a log verbatim. -}

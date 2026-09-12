@@ -2,23 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @ecluse.*@ metric catalogue and its bounded-label discipline.
-
-An inline proxy sees thousands of distinct packages, so the failure mode for metrics is
-a series explosion. A single high-cardinality label (a package name, a version, a denial
-message), multiplied across every package, turns a handful of series into millions. This
-module is the structural defence. It defines the catalogue of metric names and,
-crucially, the closed set of label types a metric may carry, every one a small,
-fixed-domain enum.
-
-== Bounded labels
-
-'Label' is a closed sum pairing a bounded-domain key with a bounded value. The
-high-cardinality identifiers (@package@, @version@, @scope@, a denial @message@) have no
-constructor, so the type system keeps them off a metric. They ride the spans and the
-structured log line ("Ecluse.Log") instead. The exception is @rule@, a rule's configured
-name, bounded by a deployment's small fixed rule set rather than by an enum, and the sole
-label carrying free text. @docs\/architecture\/observability.md@ holds the catalogue.
+{- | The @ecluse.*@ metric catalogue and its bounded-label discipline. An inline proxy sees
+thousands of distinct packages, so one high-cardinality label turns a handful of series into
+millions. 'Label' is a closed sum over bounded-domain keys and values: @package@, @version@,
+@scope@, and a denial @message@ have no constructor, so the type keeps them off a metric, and they
+ride the spans and the log line instead. @rule@ is the exception, bounded by a deployment's own
+rule set rather than by an enum. @docs\/architecture\/observability.md@ holds the catalogue.
 -}
 module Ecluse.Core.Telemetry.Metrics (
     -- * The metric-name catalogue
@@ -144,8 +133,14 @@ data MetricName
       AdvisorySyncAttempts
     | -- | @ecluse.advisory.sync.duration@: advisory sync attempt latency by ecosystem and result (histogram).
       AdvisorySyncDuration
-    | -- | @ecluse.advisory.database.age.seconds@: seconds since this ecosystem's last swap (gauge).
+    | {- | @ecluse.advisory.database.age.seconds@: seconds since this ecosystem's last swap
+      (gauge). It measures this process's own installation, not the data.
+      -}
       AdvisoryDatabaseAgeSeconds
+    | {- | @ecluse.advisory.source.age.seconds@: seconds since this ecosystem's serving artifact
+      was published (gauge). It is the age the CVE-deny path expires on.
+      -}
+      AdvisorySourceAgeSeconds
     | -- | @ecluse.advisory.compile.accepted@: advisory entries a compile pass accepted (counter).
       AdvisoryCompileAccepted
     | -- | @ecluse.advisory.compile.dropped@: advisory entries a compile pass dropped, by cause (counter).
@@ -189,6 +184,7 @@ metricName = \case
     AdvisorySyncAttempts -> "ecluse.advisory.sync.attempts"
     AdvisorySyncDuration -> "ecluse.advisory.sync.duration"
     AdvisoryDatabaseAgeSeconds -> "ecluse.advisory.database.age.seconds"
+    AdvisorySourceAgeSeconds -> "ecluse.advisory.source.age.seconds"
     AdvisoryCompileAccepted -> "ecluse.advisory.compile.accepted"
     AdvisoryCompileDropped -> "ecluse.advisory.compile.dropped"
     AdvisoryCompileRuns -> "ecluse.advisory.compile.runs"

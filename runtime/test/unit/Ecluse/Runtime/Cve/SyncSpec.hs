@@ -49,6 +49,7 @@ import Ecluse.Runtime.Cve.Sync (
     OsvDbCapExceeded (OsvDbCapExceeded),
     OsvDbFetchFault (OsvDbTransport),
     SyncEnv (..),
+    SyncHooks (SyncHooks, hookFirstSync, hookPushAge),
     SyncOutcome (..),
     SyncSchedule (..),
     cappedAt,
@@ -149,7 +150,13 @@ newSwapCounter = do
     pure (swaps, atomically (modifyTVar' swaps (+ 1)))
 
 runUnobserved :: SyncEnv -> SyncSchedule -> IO () -> KatipContextT IO ()
-runUnobserved = runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort
+runUnobserved env schedule notify =
+    runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort env schedule (notifyOnly notify)
+
+-- Hooks that only notify. These specs assert on sync outcomes, and the push-age alarm is the
+-- shell's ("Ecluse.Cve.Sync"), so it has nothing to observe here.
+notifyOnly :: IO () -> SyncHooks
+notifyOnly notify = SyncHooks{hookFirstSync = notify, hookPushAge = pass}
 
 -- The first poll interval outlasts every test, leaving only the immediate boot attempt.
 oneAttempt :: SyncSchedule
@@ -166,7 +173,7 @@ observeAttempts :: Int -> SyncSchedule -> SyncEnv -> IO Observed
 observeAttempts wanted schedule env = do
     (metricsPort, readAttempts, readDurations) <- recordingAdvisorySyncMetricsPort
     (tracingPort, readSpans) <- recordingAdvisorySyncTracingPort
-    withAsync (runQuietKatip (runCveSync metricsPort tracingPort env schedule pass)) $ \_ -> do
+    withAsync (runQuietKatip (runCveSync metricsPort tracingPort env schedule (notifyOnly pass))) $ \_ -> do
         waitFor (show wanted <> " bracketed sync attempt(s)") ((>= wanted) . length <$> readSpans)
         Observed <$> readSpans <*> readAttempts <*> readDurations
 
@@ -329,6 +336,18 @@ spec = do
                 logged
                     `shouldSatisfy` T.isInfixOf
                         "serving artifact source: pushed_at=<unrecorded> osv_source=<unrecorded> osv_newest_modified=<unrecorded> epss_score_date=<unrecorded>"
+
+        it "reports an artifact the store gave no publication time for at Error, once for that swap" $
+            withSyncEnv $ \_ _ envWith -> do
+                logged <- captureSwapLog (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
+                T.count "reported no publication time" logged `shouldBe` 1
+                logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
+                logged `shouldSatisfy` T.isInfixOf "CVE-based denial refuses until a push carries one"
+
+        it "says nothing of the kind for an artifact the store dated" $
+            withSyncEnv $ \_ _ envWith -> do
+                logged <- captureSwapLog (envWith (fetchServingAt (Just publishedAt) (Just "e1") (`mkMinimalValidDb` "pkg-a")))
+                logged `shouldSatisfy` (not . T.isInfixOf "reported no publication time")
 
     describe "syncStep" $ do
         it "reports the object absent without attempting a download" $

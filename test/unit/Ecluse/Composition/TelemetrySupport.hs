@@ -24,8 +24,11 @@ import OpenTelemetry.Resource (emptyMaterializedResources)
 import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, shutdownTracerProvider)
 import UnliftIO (bracket)
 
+import Data.Time (getCurrentTime)
+
 import Ecluse.Core.Cve.Slot (newCveSlot)
 import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Rules.Freshness (MaxAdvisoryAge, maxAdvisoryAgeFor)
 import Ecluse.Cve.Sync (CveSyncHandle (..))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (SyncEnv))
 import Ecluse.Runtime.Telemetry (Telemetry (TelemetryEnabled), TelemetryProviders (TelemetryProviders))
@@ -45,8 +48,13 @@ newAdvisoryHandles :: [Ecosystem] -> IO [(Ecosystem, CveSyncHandle)]
 newAdvisoryHandles ecosystems = forM ecosystems $ \eco -> do
     slot <- newCveSlot
     ready <- newTVarIO True
+    alarmed <- newTVarIO False
     let env = SyncEnv (headOnlyFetch (Right Nothing)) eco "unused.db" slot
-    pure (eco, CveSyncHandle ready env)
+    pure (eco, CveSyncHandle ready env derivedMaxAge getCurrentTime alarmed)
+
+-- | The maximum push age a mount with no quarantine rule derives: the shipped floor.
+derivedMaxAge :: MaxAdvisoryAge
+derivedMaxAge = maxAdvisoryAgeFor Nothing []
 
 -- | Collect the SDK's age observations without registering a callback in the test.
 advisoryAgePoints :: SdkMeterEnv -> IO [(Attributes, Int64)]

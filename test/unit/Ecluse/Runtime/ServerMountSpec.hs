@@ -31,7 +31,7 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
-import Ecluse.Cve.Sync (CveSyncHandle (csEnv, csReady), cveRuleDepsFor, cveSyncReadiness)
+import Ecluse.Cve.Sync (CveSyncHandle (csClock, csEnv, csReady), cveRuleDepsFor, cveSyncReadiness)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
 import Ecluse.Runtime.Server (ServerConfig (scCheckReady), application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
@@ -126,11 +126,14 @@ partialAdvisoryApp upstreamBase policy = do
         cfg = (mkServerConfig bindings){scCheckReady = cveSyncReadiness handles}
     pure (application cfg env, handles)
 
--- | One mount's first sync landing: its slot fills, and its one-way readiness flag flips.
+{- | One mount's first sync landing: its slot fills, and its one-way readiness flag flips. The
+object carries a publication time, as every stored one does, so its age is established.
+-}
 advisoriesLanded :: Map.Map Ecosystem CveSyncHandle -> Ecosystem -> IO ()
 advisoriesLanded handles eco =
     for_ (Map.lookup eco handles) $ \handle -> do
-        swapIn (syncSlot (csEnv handle)) (DbEtag "landed") Nothing (fakeCveDb [])
+        pushedAt <- csClock handle
+        swapIn (syncSlot (csEnv handle)) (DbEtag "landed") (Just pushedAt) (fakeCveDb [])
         atomically (writeTVar (csReady handle) True)
 
 {- | The policy both mounts run. The advisory deny outranks the age allow, so a mount whose slot
