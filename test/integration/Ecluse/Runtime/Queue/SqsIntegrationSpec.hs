@@ -81,7 +81,7 @@ spec =
                 map msgJob (stillHidden1 <> stillHidden2) `shouldBe` []
 
             it "renews a received job's visibility for as long as the worker holds it (issue #1208)" $ \container -> do
-                -- The lease controller against real SQS: a job that outruns its one-second
+                -- The lease controller against real SQS: a job that outruns its two-second
                 -- window stays hidden, so no second consumer can take it mid-mirror.
                 queue <- freshQueue container "mirror-lease" defaultQueueOptions{qoVisibilityTimeout = Seconds 2}
                 unwrapQ (enqueue queue sampleJob)

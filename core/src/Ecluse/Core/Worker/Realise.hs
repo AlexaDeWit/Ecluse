@@ -94,9 +94,8 @@ decideDelivery message = do
         Retried leg reason ->
             retryDisposition leg <$ logFM WarningS (ls ("leaving mirror job un-acked for retry (redelivered by a durable queue, re-mirrored on next demand by the in-memory one): " <> reason))
 
-{- Only a failed publish resets the window. A transient failure before it keeps its lease, so the
-message redelivers one window after its last renewal rather than the instant the job gave up: an
-upstream outage would otherwise spend the queue's whole redelivery budget in seconds. -}
+{- Only a failed publish resets the window. A transient failure before it keeps its lease, so an
+upstream outage cannot spend the queue's whole redelivery budget in seconds. -}
 retryDisposition :: RetryLeg -> Disposition
 retryDisposition = \case
     AfterPublish -> DisposeRelease

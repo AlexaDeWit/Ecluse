@@ -194,8 +194,7 @@ spec = do
 
         it "drops the receipt when the renewal task dies outside its typed contract" $ do
             -- The queue handle reports faults as values, so a throw anywhere in the task is an
-            -- invariant break. The task's exit marks the receipt dropped whatever killed it, so
-            -- a job can never keep running on a lease nothing is renewing.
+            -- invariant break. Its exit must still drop the receipt, or the job runs unleased.
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             let residue = (worldOps world keepsEveryLease){loWaitUntil = \_ -> throwIO (TestContractEscape "simulated renewal residue")}

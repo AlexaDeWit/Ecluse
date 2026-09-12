@@ -86,9 +86,8 @@ waitUntilMonotonic target = do
     let pause = monoSecondsBetween now target
     when (pause > 0) (threadDelay (round (pause * 1_000_000)))
 
-{- | The renewal retry pacing: three further attempts inside about two seconds, inside the margin
-of the thirty-second window the SQS backend receives under. A shorter window stops the retries on
-the margin check instead, so the budget never outlives the lease it is trying to hold.
+{- | The renewal retry pacing: three further attempts inside about two seconds. Each delay is
+spent after the margin check, so the budget fits the fixed thirty-second SQS window alone.
 -}
 leaseRetryDelays :: [Int]
 leaseRetryDelays = [200_000, 500_000, 1_000_000]
@@ -162,8 +161,7 @@ data RenewalStep
     | RenewalRefused Text
 
 {- Renew one receipt until it is disposed, or until a renewal it cannot keep drops it. However
-the task ends, including on residue the contained renewal cannot reach, it marks the receipt
-dropped: a job must never keep running on a lease nothing is renewing. -}
+the task ends, residue included, its exit is what marks the receipt dropped. -}
 renewalLoop :: (MonadUnliftIO m, KatipContext m) => LeaseOps -> ReceiptLease -> LeasedReceipt -> m ()
 renewalLoop ops lease leased = go `finally` atomically (writeTVar (lrDropped leased) True)
   where
@@ -226,8 +224,7 @@ renewOrResidue ops receipt window =
     residue e = transportFault TransportProtocol ("visibility renewal escaped its typed contract: " <> displayExceptionT e)
 
 {- Give up on one receipt: stop renewing it and leave it unacknowledged, so the backend
-redelivers it once the window lapses. Returning from here ends the task, and that exit is what
-cancels or skips the receipt's job. -}
+redelivers it once the window lapses. -}
 dropReceipt :: (MonadUnliftIO m, KatipContext m) => LeasedReceipt -> Text -> m ()
 dropReceipt leased detail = do
     logFM WarningS (ls ("dropping a mirror receipt whose visibility could not be renewed: " <> detail))

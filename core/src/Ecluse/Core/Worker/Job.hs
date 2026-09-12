@@ -84,9 +84,8 @@ data JobOutcome
       because a plain delete would silently discard it on a durable queue.
       -}
       DeadLettered Text
-    | {- | A __transient__ fault: a fetch failure, or a registry rejection worth
-      retrying. The message is left un-acked so it redelivers. Carries the leg it failed on
-      and the reason.
+    | {- | A __transient__ fault: a fetch failure, or a registry rejection worth retrying. The
+      message is left un-acked so it redelivers, carrying the leg it gave up on.
       -}
       Retried RetryLeg Text
     deriving stock (Eq, Show)
@@ -96,8 +95,7 @@ to reset the message's visibility, so the two legs cannot be conflated at the qu
 -}
 data RetryLeg
     = {- | The job gave up before it published: the inventory probe, the re-evaluation, or the
-      artifact fetch. The message keeps its lease and redelivers when that window lapses, so a
-      long upstream outage cannot burn the queue's redelivery budget in seconds.
+      artifact fetch. The message keeps its lease and redelivers when that window lapses.
       -}
       BeforePublish
     | {- | The publish itself failed transiently, after the bytes were fetched and verified.
@@ -280,9 +278,8 @@ readmittedDescriptor filename artifact digests =
         , maSize = artSize artifact
         }
 
-{- | The worker's terminal-versus-transient split over the shared exchange-fault channel.
-The artifact fetch and the mirror write read this one table, so no fault splits between them.
-The caller names its own leg, because only the fault's cause is shared, never the disposition.
+{- | The worker's terminal-versus-transient split over the shared exchange-fault channel. The
+artifact fetch and the mirror write read this one table, and each names its own retry leg.
 -}
 outcomeOfFetchFault :: RetryLeg -> (FetchFault -> Text) -> FetchFault -> JobOutcome
 outcomeOfFetchFault leg render fault = verdict (render fault)
