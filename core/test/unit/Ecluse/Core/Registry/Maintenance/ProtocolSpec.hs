@@ -11,6 +11,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (Status, status200, status201, status404, status408, status429, status500, status503, statusCode)
 import Test.Hspec
@@ -34,7 +35,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreMaintenance (..),
     StoreManifestRead,
     StoreObservation (obClassifyStore, obListPackagesIn, obVerifyConsent),
-    StoredVersion (storedPresence, storedVersion),
+    StoredVersion (StoredVersion, storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed),
     collectPages,
@@ -54,12 +55,17 @@ import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
+import Ecluse.Core.Registry.Sweep.Types (SweepState (stIssued), newSweepState)
+import Ecluse.Core.Rules.Types (mkEvalContext)
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepExamined, SweepKept))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Rules (denyRule)
 import Ecluse.Test.Stub (
     Captured (capBody, capHeaders, capMethod, capPath),
     Stub,
@@ -68,6 +74,7 @@ import Ecluse.Test.Stub (
     stubLocalhostUrl,
     withRoutedStub,
  )
+import Ecluse.Test.Sweep (RecordedSweep (recPorts, recResults), recordingPorts, testMount, testPacing)
 import Ecluse.Test.Wai (freePort, localhost, selfBaseUrlOf)
 
 -- | Verify bounded reads, request order, and deletion outcomes against an HTTP store.
@@ -216,6 +223,79 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
 
 deletionSpec :: Spec
 deletionSpec = describe "deletion over the protocol's own request sequence" $ do
+    for_ [1, 2 :: Int] $ \faultAt ->
+        for_ [False, True] $ \throughSweep ->
+            it ("stops after protocol request fault " <> show faultAt <> ", through sweep: " <> show throughSweep) $ do
+                let raws = take (faultAt + 1) ["1.0.0", "2.0.0", "3.0.0"]
+                    versions = map version raws
+                    faultPath = "/leftpad/-/leftpad-" <> encodeUtf8 (show faultAt :: Text) <> ".0.0.tgz/-rev/3-abc"
+                    answer captured
+                        | capMethod captured == "GET" = (status200, encode (packumentWithVersions raws (capAuthority captured)))
+                        | capPath captured == faultPath = (status201, LBS.replicate 20000 0x61)
+                        | otherwise = (status201, "{\"ok\":true}")
+                withBoundedStore midSequenceBound answer $ \handle stub -> do
+                    outcomes <-
+                        if throughSweep
+                            then do
+                                recorded <- newIORef []
+                                rec' <- recordingPorts Nothing
+                                counters <- newSweepState
+                                ctx <- mkEvalContext getCurrentTime (pure Nothing)
+                                let tracked =
+                                        handle
+                                            { deleteVersions = \name selected -> do
+                                                result <- deleteVersions handle name selected
+                                                writeIORef recorded result
+                                                pure result
+                                            }
+                                sweepPackage
+                                    testPacing
+                                    (recPorts rec')
+                                    counters
+                                    (testMount tracked [denyRule] [])
+                                    ctx
+                                    Nothing
+                                    leftpad
+                                    [StoredVersion v VersionServed | v <- versions]
+                                    `shouldReturn` Nothing
+                                readIORef (stIssued counters) `shouldReturn` length versions
+                                recResults rec'
+                                    `shouldReturn` (replicate (length versions) SweepExamined <> replicate (faultAt - 1) SweepDeleted <> replicate 2 SweepKept)
+                                readIORef recorded
+                            else deleteVersions handle leftpad versions
+                    map fst outcomes `shouldBe` versions
+                    map snd (take (faultAt - 1) outcomes) `shouldBe` replicate (faultAt - 1) VersionRemoved
+                    map (unreachedRetry . snd) (drop (faultAt - 1) outcomes) `shouldBe` replicate 2 (Just RetryFutile)
+                    let expected =
+                            concatMap
+                                ( \raw ->
+                                    [ ("GET", "/leftpad")
+                                    , ("PUT", "/leftpad/-rev/3-abc")
+                                    , ("DELETE", "/leftpad/-/leftpad-" <> encodeUtf8 raw <> ".tgz/-rev/3-abc")
+                                    ]
+                                )
+                                (take faultAt raws)
+                    drop (if throughSweep then 1 else 0) <$> calls stub `shouldReturn` expected
+
+    it "continues the sweep after the store refuses a version's edit" $
+        withStore True answerRefusingEdit $ \handle stub -> do
+            rec' <- recordingPorts Nothing
+            counters <- newSweepState
+            ctx <- mkEvalContext getCurrentTime (pure Nothing)
+            sweepPackage
+                testPacing
+                (recPorts rec')
+                counters
+                (testMount handle [denyRule] [])
+                ctx
+                Nothing
+                leftpad
+                [StoredVersion (version raw) VersionServed | raw <- ["1.0.0", "2.0.0"]]
+                `shouldReturn` Nothing
+            recResults rec' `shouldReturn` [SweepExamined, SweepExamined, SweepKept, SweepKept]
+            calls stub
+                `shouldReturn` [("GET", "/leftpad"), ("GET", "/leftpad"), ("PUT", "/leftpad/-rev/3-abc"), ("GET", "/leftpad"), ("PUT", "/leftpad/-rev/3-abc")]
+
     it "removes the final version with one package DELETE after the document read" $
         withStore True (answerSingleVersion status201 "{\"ok\":true}") $ \handle stub -> do
             deleteVersions handle leftpad [version "1.0.0"]

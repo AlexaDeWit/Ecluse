@@ -179,6 +179,11 @@ abstraction](registry-model.md#registry-abstraction):
    their own, and each backend builds one directly, so `ecluse dredger --dry-run` reaches no write
    at all.
 
+The sweep hands each cap-selected version batch to the backend once. The backend applies its
+request ceiling and stops later requests after a request fault. Earlier successes stay recorded,
+and a per-version refusal does not stop later requests. The cap charges the entire selected batch,
+including versions left unreached after a fault.
+
 ### Walking a store
 
 The handle lists a store one bucket of its name space at a time, as a stream of pages, so nothing
