@@ -245,9 +245,11 @@ track which input a survivor came from, so the serve layer can index back to the
   [Integrity floors](security.md#integrity-floors).
 - **Reconcile over the union.** `dist-tags.latest` follows the
   [keep-unless-denied, stable-preferring rule](rules-engine.md#applying-verdicts-to-a-packument):
-  kept when it survives, else repointed to the highest stable survivor. The merge drops other tags
-  at an absent version, and restricts `time` to the surviving versions while keeping `created` and
-  `modified`.
+  kept when it survives, else repointed to the highest stable survivor. The kept tag is the public
+  document's alone: a private document's own `latest`, mirror store or not, is never consulted, so
+  a stale tag cannot hold `latest` back. The merge carries every other tag from the
+  highest-precedence source and drops it at an absent version, and restricts `time` to the
+  surviving versions while keeping `created` and `modified`.
 - **Private access authority.** An explicit private `401` or `403` refuses the request even when
   public metadata succeeds. The refusal precedes merge and conditional response selection.
   See the [operator policy](../../web/content/docs/configuration.md#first-party-namespaces).

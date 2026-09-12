@@ -81,6 +81,7 @@ spec :: Spec
 spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)" $ do
     admissionLifetimeSpec
     divergenceEvidenceSpec
+    distTagSpec
 
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
         it ("records private artifact HTTP " <> show (statusCode upstreamStatus) <> " as " <> show expected <> " for GET and HEAD") $
@@ -247,10 +248,11 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
     it "keeps the warning and counter after a named public denial with both digests fixed" $
         withConflictOrigins (conflictPublicApp id) divergentPrivateApp $ \rt base divergences publicHits -> do
             denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
-            for_ [(base, ["1.0.0", "2.0.0"], 1), (base{pdRules = denied}, ["1.0.0"], 2)] $ \(deps, keys, count) -> do
+            -- The public tag names 2.0.0 while it survives; the deny leaves only the private 1.0.0.
+            for_ [(base, "2.0.0", ["1.0.0", "2.0.0"], 1), (base{pdRules = denied}, "1.0.0", ["1.0.0"], 2)] $ \(deps, latest, keys, count) -> do
                 logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
                     resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
-                    assertPrivatePackument keys resp
+                    assertPrivatePackument latest keys resp
                 assertConflictLog True logged
                 divergences `shouldReturn` count
             readIORef publicHits `shouldReturn` 1
@@ -260,7 +262,7 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
             denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
             logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
                 resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpad defaultRequest)
-                assertPrivatePackument ["1.0.0", "2.0.0"] resp
+                assertPrivatePackument "2.0.0" ["1.0.0", "2.0.0"] resp
             assertConflictLog True logged
             divergences `shouldReturn` 1
 
@@ -279,7 +281,7 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
                     denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
                     logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
                         resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpad defaultRequest)
-                        assertPrivatePackument ["1.0.0"] resp
+                        assertPrivatePackument "1.0.0" ["1.0.0"] resp
                     assertConflictLog False logged
                     divergences `shouldReturn` 0
 
@@ -289,14 +291,14 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
             denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
             logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
                 resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied, pdMinIntegrity = floorSpec}) (servePackument npmPackumentReplies leftpad defaultRequest)
-                assertTrustedPackument (sriSha256Of "private bytes") ["1.0.0"] resp
+                assertTrustedPackument (sriSha256Of "private bytes") "1.0.0" ["1.0.0"] resp
             assertConflictLog False logged
             divergences `shouldReturn` 0
 
     it "does not fetch public conflict evidence for a first-party name" $
         withConflictOrigins (conflictPublicApp id) divergentPrivateApp $ \rt base divergences publicHits -> do
             resp <- captureServe npmPackumentContract rt (mountWith base{pdFirstParty = (== leftpad)}) (servePackument npmPackumentReplies leftpad defaultRequest)
-            assertPrivatePackument ["1.0.0"] resp
+            assertPrivatePackument "1.0.0" ["1.0.0"] resp
             divergences `shouldReturn` 0
             readIORef publicHits `shouldReturn` 0
 
@@ -307,6 +309,29 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
                 statusCode (responseStatus resp) `shouldBe` 403
                 divergences `shouldReturn` 0
                 readIORef publicHits `shouldReturn` 1
+
+distTagSpec :: Spec
+distTagSpec = describe "served dist-tags.latest" $ do
+    it "serves the greatest admitted version when the public latest is denied" $ do
+        -- The public tag names 3.0.0, which the deny holds back before the merge sees it, and
+        -- the store's own tag names 1.0.0. The ordering decides, so neither tag is served.
+        denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
+        let public = publicAppOver ["1.0.0", "2.0.0", "3.0.0"] "3.0.0" (\v -> v{vsHasInstallScript = vsVersion v == "3.0.0"})
+        withConflictOrigins public (privateAppOver ["1.0.0"] "1.0.0") $ \rt base _divergences _ -> do
+            resp <- captureServe npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpad defaultRequest)
+            fields <- servedFields resp
+            KeyMap.lookup "dist-tags" fields `shouldBe` Just (object ["latest" .= ("2.0.0" :: Text)])
+            servedKeys fields `shouldBe` Just ["1.0.0", "2.0.0"]
+
+    it "keeps a public latest held on an older version while its target survives" $ do
+        -- The public maintainer holds latest at 1.0.0 though 2.0.0 is admitted, and the store
+        -- tags 2.0.0. Maintainer intent wins over both the ordering and the store.
+        let public = publicAppOver ["1.0.0", "2.0.0"] "1.0.0" id
+        withConflictOrigins public (privateAppOver ["1.0.0", "2.0.0"] "2.0.0") $ \rt base _divergences _ -> do
+            resp <- captureServe npmPackumentContract rt (mountWith base) (servePackument npmPackumentReplies leftpad defaultRequest)
+            fields <- servedFields resp
+            KeyMap.lookup "dist-tags" fields `shouldBe` Just (object ["latest" .= ("1.0.0" :: Text)])
+            servedKeys fields `shouldBe` Just ["1.0.0", "2.0.0"]
 
 withConflictOrigins :: Application -> Application -> (ServeRuntime -> PackumentDeps -> IO Int -> IORef Int -> IO ()) -> IO ()
 withConflictOrigins public private action = do
@@ -333,35 +358,51 @@ assertConflictLog expected logged = do
             encoded `shouldSatisfy` T.isInfixOf "\"versions\":\"1.0.0\""
         _ -> expectationFailure "a structured log entry must be an object"
 
-assertPrivatePackument :: [Text] -> Response -> Expectation
-assertPrivatePackument = assertTrustedPackument (sha512Integrity "leftpad artifact bytes (privately tampered)")
-
-assertTrustedPackument :: Text -> [Text] -> Response -> Expectation
-assertTrustedPackument integrity keys resp = do
-    statusCode (responseStatus resp) `shouldBe` 200
+-- The served document's top-level fields.
+servedFields :: Response -> IO (KeyMap.KeyMap Value)
+servedFields resp = do
     value <- case resp of
         ResponseBuilder _ _ builder -> either fail pure (eitherDecode (toLazyByteString builder))
         _ -> fail "expected a packument response builder"
     case value of
-        Object fields -> do
-            KeyMap.lookup "dist-tags" fields `shouldBe` Just (object ["latest" .= ("1.0.0" :: Text)])
-            case KeyMap.lookup "versions" fields of
-                Just (Object versions) -> do
-                    sort (map Key.toText (KeyMap.keys versions)) `shouldBe` keys
-                    KeyMap.lookup "1.0.0" versions
-                        `shouldBe` Just (versionValue ((versionSpec "leftpad" "1.0.0" "http://proxy.test/leftpad/-/leftpad-1.0.0.tgz"){vsIntegrity = Just integrity, vsExtraPairs = ["_retained" .= ("private field" :: Text)]}))
-                _ -> expectationFailure "expected served version objects"
-        _ -> expectationFailure "expected a packument object"
+        Object fields -> pure fields
+        _ -> fail "expected a packument object"
+
+-- The served version keys, sorted. 'Nothing' when the document carries no version object.
+servedKeys :: KeyMap.KeyMap Value -> Maybe [Text]
+servedKeys fields = case KeyMap.lookup "versions" fields of
+    Just (Object versions) -> Just (sort (map Key.toText (KeyMap.keys versions)))
+    _ -> Nothing
+
+assertPrivatePackument :: Text -> [Text] -> Response -> Expectation
+assertPrivatePackument = assertTrustedPackument (sha512Integrity "leftpad artifact bytes (privately tampered)")
+
+assertTrustedPackument :: Text -> Text -> [Text] -> Response -> Expectation
+assertTrustedPackument integrity latest keys resp = do
+    statusCode (responseStatus resp) `shouldBe` 200
+    fields <- servedFields resp
+    KeyMap.lookup "dist-tags" fields `shouldBe` Just (object ["latest" .= latest])
+    servedKeys fields `shouldBe` Just keys
+    case KeyMap.lookup "versions" fields of
+        Just (Object versions) ->
+            KeyMap.lookup "1.0.0" versions
+                `shouldBe` Just (versionValue ((versionSpec "leftpad" "1.0.0" "http://proxy.test/leftpad/-/leftpad-1.0.0.tgz"){vsIntegrity = Just integrity, vsExtraPairs = ["_retained" .= ("private field" :: Text)]}))
+        _ -> expectationFailure "expected served version objects"
 
 conflictPublicApp :: (VersionSpec -> VersionSpec) -> Application
-conflictPublicApp change req respond =
+conflictPublicApp change = publicAppOver ["1.0.0", "2.0.0"] "2.0.0" (change . withInstallScript)
+  where
+    withInstallScript v = v{vsHasInstallScript = True}
+
+-- A public document over the given versions, tagged at the named one. Every version predates the
+-- age rule, so only a named deny holds one back.
+publicAppOver :: [Text] -> Text -> (VersionSpec -> VersionSpec) -> Application
+publicAppOver versions latest change req respond =
     respond (responseLBS status200 [(hContentType, "application/json")] (encode document))
   where
     host = maybe "localhost" snd (find ((== hHost) . fst) (requestHeaders req))
-    versions = ["1.0.0", "2.0.0"]
-    entry ver = versionValue (change ((versionSpec "leftpad" ver ("http://" <> decodeUtf8 host <> "/leftpad/-/leftpad-" <> ver <> ".tgz")){vsIntegrity = Just (sha512Integrity artifactBytes), vsHasInstallScript = True}))
-    document = packumentValue "leftpad" "2.0.0" [(ver, entry ver) | ver <- versions] ["1.0.0" .= old, "2.0.0" .= old] []
-    old = "2019-01-01T00:00:00.000Z" :: Text
+    entry ver = versionValue (change ((versionSpec "leftpad" ver ("http://" <> decodeUtf8 host <> "/leftpad/-/leftpad-" <> ver <> ".tgz")){vsIntegrity = Just (sha512Integrity artifactBytes)}))
+    document = packumentValue "leftpad" latest [(ver, entry ver) | ver <- versions] [Key.fromText ver .= oldPublishTime | ver <- versions] []
 
 admissionLifetimeSpec :: Spec
 admissionLifetimeSpec = describe "admission lifetime after removing an allow" $
@@ -603,22 +644,28 @@ artifactBytes :: ByteString
 artifactBytes = "leftpad artifact bytes"
 
 packumentWithIntegrity :: ByteString -> Text -> Value
-packumentWithIntegrity host integrity =
+packumentWithIntegrity host integrity = privatePackumentOver host integrity ["1.0.0"] "1.0.0"
+
+-- A private document over the given versions, tagged at the named one.
+privatePackumentOver :: ByteString -> Text -> [Text] -> Text -> Value
+privatePackumentOver host integrity versions latest =
     packumentValue
         "leftpad"
-        "1.0.0"
-        [
-            ( "1.0.0"
-            , versionValue
-                ( (versionSpec "leftpad" "1.0.0" ("http://" <> decodeUtf8 host <> "/leftpad/-/leftpad-1.0.0.tgz"))
-                    { vsIntegrity = Just integrity
-                    , vsExtraPairs = ["_retained" .= ("private field" :: Text)]
-                    }
-                )
-            )
-        ]
-        ["1.0.0" .= ("2019-01-01T00:00:00.000Z" :: Text)]
+        latest
+        [(ver, entry ver) | ver <- versions]
+        [Key.fromText ver .= oldPublishTime | ver <- versions]
         []
+  where
+    entry ver =
+        versionValue
+            ( (versionSpec "leftpad" ver ("http://" <> decodeUtf8 host <> "/leftpad/-/leftpad-" <> ver <> ".tgz"))
+                { vsIntegrity = Just integrity
+                , vsExtraPairs = ["_retained" .= ("private field" :: Text)]
+                }
+            )
+
+oldPublishTime :: Text
+oldPublishTime = "2019-01-01T00:00:00.000Z"
 
 packumentFor :: ByteString -> Value
 packumentFor host = packumentWithIntegrity host (sha512Integrity artifactBytes)
@@ -630,10 +677,18 @@ divergentPrivateApp :: Application
 divergentPrivateApp = privateAppWithIntegrity (sha512Integrity "leftpad artifact bytes (privately tampered)")
 
 privateAppWithIntegrity :: Text -> Application
-privateAppWithIntegrity integrity req respond =
+privateAppWithIntegrity integrity = privateAppAt integrity ["1.0.0"] "1.0.0"
+
+-- A private upstream serving the given versions under its own latest tag, with digests that
+-- agree with the public copy, so nothing diverges.
+privateAppOver :: [Text] -> Text -> Application
+privateAppOver = privateAppAt (sha512Integrity artifactBytes)
+
+privateAppAt :: Text -> [Text] -> Text -> Application
+privateAppAt integrity versions latest req respond =
     case rawPathInfo req of
         "/leftpad" ->
-            respond (responseLBS status200 [(hContentType, "application/json")] (encode (packumentWithIntegrity host integrity)))
+            respond (responseLBS status200 [(hContentType, "application/json")] (encode (privatePackumentOver host integrity versions latest)))
         _ -> respond (responseLBS status404 [] "")
   where
     host = maybe "localhost" snd (find ((== hHost) . fst) (requestHeaders req))

@@ -136,4 +136,4 @@ filterPlan :: RuleDeps -> EvalContext -> [PrecededRule] -> PackageInfo -> IO Fil
 filterPlan deps ctx rules info = do
     prepared <- prepare deps rules
     decisions <- traverse (evalRules ctx prepared . completeEvidence) (infoVersions info)
-    pure (filterPlanFromDecisions decisions info)
+    pure (filterPlanFromDecisions decisions)

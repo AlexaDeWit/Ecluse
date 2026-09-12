@@ -34,7 +34,7 @@ import Ecluse.Core.Rules.Types (Decision (Admitted))
 import Ecluse.Core.Security (AllowedHostPorts, artifactAuthorityHonoured, authorityLabel, hostAddress, hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText, resolveTarballUrl)
 import Ecluse.Core.Text (urlFilename)
-import Ecluse.Core.Version (Version, renderVersion, selectLatest)
+import Ecluse.Core.Version (renderVersion)
 
 {- | The filtering decisions for one public packument, for the adapter to replay onto the raw
 upstream @Value@. It carries only decisions, never a finished, re-serialisable document.
@@ -43,10 +43,6 @@ data FilterPlan = FilterPlan
     { fpSurvivors :: Set Text
     {- ^ The surviving version keys (the raw 'Ecluse.Core.Package.infoVersions' keys):
     exactly those the rules engine approved. Empty when no version survived.
-    -}
-    , fpLatest :: Maybe Version
-    {- ^ @dist-tags.latest@ resolved over the survivors: kept while it survives, else repointed
-    (stable-preferring) to the highest survivor. Always one of 'fpSurvivors', or 'Nothing'.
     -}
     , fpDecisions :: [Decision]
     {- ^ Every version's 'Decision', admitted ones included, in version-key order so the adapter can
@@ -58,11 +54,10 @@ data FilterPlan = FilterPlan
 {- | Build a 'FilterPlan' from per-version 'Decision's already taken. A version survives iff its
 decision is 'Admitted', so an undecided one drops fail-closed.
 -}
-filterPlanFromDecisions :: Map Text Decision -> PackageInfo -> FilterPlan
-filterPlanFromDecisions decisions info =
+filterPlanFromDecisions :: Map Text Decision -> FilterPlan
+filterPlanFromDecisions decisions =
     FilterPlan
         { fpSurvivors = survivors
-        , fpLatest = selectLatest chosen survivingVersions
         , fpDecisions = Map.elems decisions
         }
   where
@@ -75,20 +70,6 @@ filterPlanFromDecisions decisions info =
     isApproved = \case
         Admitted{} -> True
         _ -> False
-
-    -- The parsed 'Version' a raw key projects to, if present in the packument. It
-    -- both maps surviving keys to 'Version's and resolves @latest@.
-    versionOf :: Text -> Maybe Version
-    versionOf raw = pkgVersion <$> Map.lookup raw (infoVersions info)
-
-    -- The upstream @latest@ tag's target. 'selectLatest' decides survival itself, so this version
-    -- need only be present, not surviving.
-    chosen :: Maybe Version
-    chosen = Map.lookup "latest" (infoDistTags info) >>= versionOf . renderVersion
-
-    -- 'selectLatest'\'s @survivors@: the surviving versions' parsed 'Version's.
-    survivingVersions :: [Version]
-    survivingVersions = mapMaybe versionOf (Set.toList survivors)
 
 {- | Restrict a 'PackageInfo' to the surviving version keys, pruning @dist-tags@ to targets
 that survive. 'Ecluse.Core.Package.Merge.mergePackuments' treats the result as already gated.

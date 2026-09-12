@@ -10,8 +10,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
-import Hedgehog (Gen, annotateShow, assert, forAll, (===))
-import Hedgehog qualified as H
+import Hedgehog (Gen, assert, forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Hspec
@@ -34,7 +33,7 @@ import Ecluse.Core.Rules.Types (
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
  )
 import Ecluse.Core.Security (AllowedHostPorts, ecosystemArtifactAuthorities)
-import Ecluse.Core.Version (compareVersions, isStable, mkVersion, parseVersionKey, renderVersion)
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName)
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isApproved)
 
@@ -42,7 +41,6 @@ import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isAppr
 spec :: Spec
 spec = do
     survivorSpec
-    latestSpec
     decisionsSpec
     propertiesSpec
     enforceArtifactLocationsSpec
@@ -97,29 +95,6 @@ survivorSpec = describe "fpSurvivors" $ do
         plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "2.0.0") [("1.0.0", 1, False), ("2.0.0", 1, False)])
         fpSurvivors plan `shouldBe` Set.empty
 
-latestSpec :: Spec
-latestSpec = describe "fpLatest" $ do
-    it "keeps a surviving upstream latest rather than promoting a higher survivor" $ do
-        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "1.0.0") [("1.0.0", 30, False), ("2.0.0", 30, False)])
-        latestRaw plan `shouldBe` Just "1.0.0"
-
-    it "repoints latest down to a surviving version when the chosen latest is denied" $ do
-        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "2.0.0") [("1.0.0", 30, False), ("2.0.0", 1, False)])
-        latestRaw plan `shouldBe` Just "1.0.0"
-
-    it "prefers the highest stable survivor when repointing over a prerelease" $ do
-        plan <-
-            filterPlan
-                inertRuleDeps
-                ctx
-                policy
-                (infoOf (Just "3.0.0") [("1.0.0", 30, False), ("2.0.0-rc.1", 30, False), ("3.0.0", 1, False)])
-        latestRaw plan `shouldBe` Just "1.0.0"
-
-    it "is Nothing when nothing survives" $ do
-        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "1.0.0") [("1.0.0", 1, False)])
-        fpLatest plan `shouldBe` Nothing
-
 decisionsSpec :: Spec
 decisionsSpec = describe "fpDecisions" $ do
     it "carries one decision per version (survivors and denials alike)" $ do
@@ -147,39 +122,6 @@ propertiesSpec = describe "properties" $ do
             when (Set.null (fpSurvivors plan)) $
                 assert (not (any isApproved (fpDecisions plan)))
 
-    it "latest, when present, is always a surviving version" $
-        hedgehog $ do
-            spec' <- forAll genSpec
-            plan <- liftIO (filterPlan inertRuleDeps ctx policy (toInfo spec'))
-            case fpLatest plan of
-                Nothing -> assert (Set.null (fpSurvivors plan))
-                Just v -> assert (renderVersion v `Set.member` fpSurvivors plan)
-
-    it "a surviving upstream latest is kept, never promoted to a higher survivor" $
-        hedgehog $ do
-            spec' <- forAll genSpec
-            plan <- liftIO (filterPlan inertRuleDeps ctx policy (toInfo spec'))
-            case specLatest spec' of
-                Just chosen
-                    | chosen `Set.member` fpSurvivors plan ->
-                        latestRaw plan === Just chosen
-                _ -> H.success
-
-    it "a repointed latest is the highest stable survivor when any survivor is stable" $
-        hedgehog $ do
-            spec' <- forAll genSpec
-            plan <- liftIO (filterPlan inertRuleDeps ctx policy (toInfo spec'))
-            let survivors = fpSurvivors plan
-                chosenSurvived = maybe False (`Set.member` survivors) (specLatest spec')
-                stableSurvivors = filter isStableRaw (Set.toList survivors)
-            when (not chosenSurvived && not (null stableSurvivors)) $
-                case latestRaw plan of
-                    Just l -> do
-                        annotateShow (l, stableSurvivors)
-                        assert (isStableRaw l)
-                        assert (all (\s -> compareVersions (mkVersion Npm s) (mkVersion Npm l) /= Just GT) stableSurvivors)
-                    Nothing -> annotateShow survivors >> H.failure
-
 data GenSpec = GenSpec
     { specLatest :: Maybe Text
     , specVersions :: [(Text, Integer, Bool)]
@@ -187,7 +129,7 @@ data GenSpec = GenSpec
     deriving stock (Show)
 
 toInfo :: GenSpec -> PackageInfo
-toInfo (GenSpec latest vs) = infoOf latest vs
+toInfo spec' = infoOf (specLatest spec') (specVersions spec')
 
 approvedKeys :: GenSpec -> Set Text
 approvedKeys =
@@ -211,12 +153,6 @@ genSpec = do
 
 versionPool :: [Text]
 versionPool = ["1.0.0", "1.1.0", "2.0.0-rc.1", "2.0.0", "3.0.0-beta", "10.0.0"]
-
-latestRaw :: FilterPlan -> Maybe Text
-latestRaw = fmap renderVersion . fpLatest
-
-isStableRaw :: Text -> Bool
-isStableRaw raw = either (const False) isStable (parseVersionKey Npm raw)
 
 enforceArtifactLocationsSpec :: Spec
 enforceArtifactLocationsSpec = describe "enforceArtifactLocations (served artifact locations)" $ do

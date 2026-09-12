@@ -72,6 +72,10 @@ withPublishedAt t info =
 packument :: [(Text, Text)] -> PackageInfo
 packument vs = packumentWith [(v, [unsafeHash SRI d]) | (v, d) <- vs]
 
+-- The fixture with its @latest@ tag aimed at one version, replacing the default.
+latestAt :: Text -> PackageInfo -> PackageInfo
+latestAt raw info = info{infoDistTags = Map.singleton "latest" (mkVersion Npm raw)}
+
 -- A well-formed sha512 SRI derived from a mnemonic label. Distinct labels yield distinct
 -- digests, and the same label always yields the same digest.
 validSriOf :: Text -> Text
@@ -252,13 +256,12 @@ spec = do
             (mpDivergences <$> plan) `shouldBe` Just Set.empty
 
         it "repoints latest to the highest surviving version when the chosen tag is gone" $ do
-            -- The trusted source's chosen latest (9.9.9) is absent from the union, so selectLatest
-            -- repoints to the highest stable survivor (3.0.0).
+            -- Neither source's latest (9.9.9) is in the union, so selectLatest repoints to the
+            -- highest stable survivor (3.0.0).
             let trusted =
-                    (packument [("1.0.0", sriAaa)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "9.9.9")
-                        }
-                gated = packument [("3.0.0", sriBbb), ("2.0.0", sriCcc)]
+                    latestAt "9.9.9" (packument [("1.0.0", sriAaa)])
+                gated =
+                    latestAt "9.9.9" (packument [("3.0.0", sriBbb), ("2.0.0", sriCcc)])
             (latestKey =<< mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
                 `shouldBe` Just "3.0.0"
 
@@ -283,9 +286,8 @@ spec = do
                 `shouldBe` Just ["1.0.0", "2.0.0"]
 
     describe "collision resolution & divergence correction (the supply-chain signal)" $ do
-        -- A version in both a trusted and a gated source is a collision, and the trusted copy
-        -- wins. Disagreeing integrity is flagged as a tampering signal, never dropped here.
-        -- Fail-closed is the caller's decision.
+        -- A cross-provenance collision goes to the trusted copy. Disagreeing integrity is flagged
+        -- as a tampering signal, never dropped: fail-closed is the caller's decision.
         let trusted = packument [("1.0.0", sriPrivate)] -- source 0
             gated = packument [("1.0.0", sriPublic)] -- source 1
             plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
@@ -319,9 +321,8 @@ spec = do
             (Map.lookup "2.0.0" . mpTime <$> plan) `shouldBe` Just (Just t0)
 
     describe "divergence compares on shared algorithms, not the whole digest set" $ do
-        -- A divergence needs two copies to contradict on an algorithm they both carry. An
-        -- asymmetric digest set is not a contradiction: an older registry may serve only a legacy
-        -- shasum while npmjs serves that shasum plus a modern SRI, over the same bytes.
+        -- A divergence needs two copies to contradict on a shared algorithm. An asymmetric digest
+        -- set is not one: a legacy shasum alone against that shasum plus an SRI is the same bytes.
         let sha1 = unsafeHash SHA1
             sri = unsafeHash SRI
 
@@ -374,9 +375,8 @@ spec = do
                     other -> expectationFailure ("expected exactly one divergence, got " <> show other)
 
     describe "divergence keys per artifact, not per version (#739)" $ do
-        -- A multi-artifact ecosystem (PyPI sdist plus wheels) spreads a version's digests across
-        -- files. The fingerprint keys each digest by its file, so a differing file set cannot read
-        -- as tampering and only a shared file's shared algorithm can contradict.
+        -- A multi-artifact ecosystem spreads a version's digests across files, so the fingerprint
+        -- keys each digest by its file: only a shared file's shared algorithm can contradict.
         let sri = unsafeHash SRI
             withArtifacts arts info =
                 info{infoVersions = Map.map (\d -> d{pkgArtifacts = arts}) (infoVersions info)}
@@ -409,14 +409,12 @@ spec = do
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
     describe "divergence keys on the resolved algorithm, not the raw digest tag" $ do
-        -- The comparison buckets each digest by the algorithm it asserts, not by the opaque SRI
-        -- wrapper tag. That closes a false positive (two algorithms over the same bytes) and a
-        -- false negative (one algorithm expressed two ways).
+        -- Bucketing by the asserted algorithm, not the opaque SRI wrapper tag, closes a false
+        -- positive (two algorithms over the same bytes) and a false negative (one, spelled twice).
 
         it "a sha256 SRI and a sha512 SRI for the same bytes are asymmetric, not a divergence" $ do
             -- A private mirror may recompute integrity as sha256 while the public copy serves
-            -- sha512 over the same bytes. The two share no resolved algorithm, so this is
-            -- asymmetry.
+            -- sha512 over the same bytes. They share no resolved algorithm, so it is asymmetry.
             let trusted = (TrustedSource, packumentWith [("1.0.0", [unsafeHash SRI (validSha256SriOf "same")])])
                 gated = (GatedSource, packumentWith [("1.0.0", [unsafeHash SRI (validSriOf "same")])])
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
@@ -504,51 +502,85 @@ spec = do
 
     describe "latest via the shared selector" $ do
         -- 'Ecluse.Core.Version.selectLatest' resolves latest and has its own exhaustive spec.
-        -- These cases only check that the merge wires it in.
-        it "keeps the chosen latest when it still survives (no promotion)" $ do
-            -- The trusted source tags latest at 1.0.0 and that version survives, so
-            -- latest stays 1.0.0 even though 2.0.0 exists in the union.
+        -- These cases pin the chosen input: the public tag, never the private one.
+        it "keeps the public latest when its target survives (no promotion)" $ do
+            -- The public source holds latest at the older 1.0.0 on purpose, and that version
+            -- survives, so the tag stays there though 2.0.0 is also in the union.
             let trusted =
                     ( TrustedSource
-                    , (packument [("1.0.0", sriAaa)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "1.0.0")
-                        }
-                    )
-                gated = (GatedSource, packument [("2.0.0", sriBbb)])
-            (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "1.0.0"
-
-        it "chooses the chosen-latest by provenance (trusted's tag wins)" $ do
-            -- Both sources survive and both tag a latest. The trusted source's latest
-            -- is the chosen one, even though it is the lower version.
-            let trusted =
-                    ( TrustedSource
-                    , (packument [("1.0.0", sriAaa)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "1.0.0")
-                        }
+                    , latestAt "2.0.0" (packument [("2.0.0", sriAaa)])
                     )
                 gated =
                     ( GatedSource
-                    , (packument [("2.0.0", sriBbb)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "2.0.0")
-                        }
+                    , latestAt "1.0.0" (packument [("1.0.0", sriBbb), ("2.0.0", sriAaa)])
                     )
             (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "1.0.0"
+
+        it "takes the public latest over the private tag when both survive" $ do
+            -- The mirror's stored tag names 1.0.0 while the public registry has moved on to the
+            -- admitted 2.0.0. The served tag follows the public registry.
+            let trusted =
+                    ( TrustedSource
+                    , latestAt "1.0.0" (packument [("1.0.0", sriAaa)])
+                    )
+                gated =
+                    ( GatedSource
+                    , latestAt "2.0.0" (packument [("2.0.0", sriBbb)])
+                    )
+            (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "2.0.0"
+
+        it "repoints past a public latest naming a version the input never carried" $ do
+            -- The serve path prunes a held-back target before the merge, so this shape reaches
+            -- the merge only from an unpruned caller. The private tag still does not stand in.
+            let trusted =
+                    ( TrustedSource
+                    , latestAt "1.0.0" (packument [("1.0.0", sriAaa)])
+                    )
+                gated =
+                    ( GatedSource
+                    , latestAt "9.9.9" (packument [("2.0.0", sriBbb), ("3.0.0", sriCcc)])
+                    )
+            (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "3.0.0"
+
+        it "projects over the survivors when no public source contributed" $ do
+            -- A first-party name, or a public outage served from the store. The private tag names
+            -- the surviving 1.0.0 and is still not consulted, so the ordering decides.
+            let trusted =
+                    ( TrustedSource
+                    , latestAt "1.0.0" (packument [("1.0.0", sriAaa), ("2.0.0", sriBbb)])
+                    )
+            (latestKey =<< mergePackuments [trusted]) `shouldBe` Just "2.0.0"
+
+        it "projects over the survivors when the public source carried no latest" $ do
+            -- The production shape of a held-back tag: the serve path strips it before the merge,
+            -- so the gated contribution offers no latest and the private tag does not stand in.
+            let trusted =
+                    ( TrustedSource
+                    , latestAt "1.0.0" (packument [("1.0.0", sriAaa)])
+                    )
+                gatedUntagged =
+                    (GatedSource, (packument [("3.0.0", sriCcc)]){infoDistTags = Map.empty})
+            (latestKey =<< mergePackuments [trusted, gatedUntagged]) `shouldBe` Just "3.0.0"
 
         it "repoints to the highest stable survivor over a prerelease when chosen is gone" $ do
             -- The chosen latest (5.0.0) was denied or absent. Among the survivors, a
             -- stable release wins over a higher prerelease.
             let info =
-                    (packument [("2.0.0", sriAaa), ("3.0.0-rc.1", sriBbb)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "5.0.0")
-                        }
+                    latestAt "5.0.0" (packument [("2.0.0", sriAaa), ("3.0.0-rc.1", sriBbb)])
             (latestKey =<< mergePackuments [(GatedSource, info)]) `shouldBe` Just "2.0.0"
 
         it "falls back to a surviving prerelease when no stable survivor exists" $ do
-            let info =
-                    (packument [("3.0.0-rc.1", sriAaa), ("3.0.0-beta", sriBbb)])
-                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "5.0.0")
-                        }
-            (latestKey =<< mergePackuments [(GatedSource, info)]) `shouldBe` Just "3.0.0-rc.1"
+            -- No stable survives and the public tag is gone, so the repoint takes the greatest
+            -- surviving prerelease, over the private tag's lower one.
+            let trusted =
+                    ( TrustedSource
+                    , latestAt "3.0.0-beta" (packument [("3.0.0-beta", sriBbb)])
+                    )
+                gated =
+                    ( GatedSource
+                    , latestAt "5.0.0" (packument [("3.0.0-rc.1", sriAaa), ("3.0.0-beta", sriBbb)])
+                    )
+            (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "3.0.0-rc.1"
 
     describe "properties" $ do
         it "the survivors are exactly the union of every source's keys" $
@@ -675,6 +707,15 @@ spec = do
             (winnerOf "1.0.0" =<< forward) `shouldBe` Just 0
             (winnerOf "1.0.0" =<< backward) `shouldBe` Just 1
 
+        it "the public latest is stable under regrouping the fold" $ do
+            -- The public tag folds like every other ranked contribution, so regrouping the
+            -- associative fold cannot move the served latest.
+            let t = contribute TrustedSource (latestAt "1.0.0" (packument [("1.0.0", sriPriv)]))
+                g1 = contribute GatedSource (latestAt "2.0.0" (packument [("2.0.0", sriG1)]))
+                g2 = contribute GatedSource (packument [("3.0.0", sriG2)])
+            (latestKey =<< planFrom ((t <> g1) <> g2)) `shouldBe` Just "2.0.0"
+            (latestKey =<< planFrom (t <> (g1 <> g2))) `shouldBe` Just "2.0.0"
+
         it "mergePackuments is planFrom . foldMap contribute" $
             hedgehog $ do
                 sources <- forAll genSources
@@ -682,10 +723,8 @@ spec = do
 
     describe "the laws do not erode the trust hierarchy" $ do
         it "the trust order IS the hierarchy: TrustedSource < GatedSource (keystone -- do not reorder)" $
-            -- Not a trivial Ord check. 'TrustedSource' sorts before 'GatedSource', and "smallest
-            -- wins" in 'Set.findMin' and 'keepBetter' is what gives the private upstream its
-            -- authority. Reorder those constructors and a tampered public copy wins every
-            -- collision.
+            -- Not a trivial Ord check: "smallest wins" in 'Set.findMin' and 'keepBetter' is what
+            -- gives the private upstream its authority. Reorder these and a tampered copy wins.
             compare TrustedSource GatedSource `shouldBe` LT
 
         it "trusted wins a collision; the divergence's winner is the trusted copy" $ do
@@ -743,22 +782,34 @@ spec = do
                 right = planFrom (t <> (g1 <> g2))
             (mpDivergences <$> left) `shouldBe` (mpDivergences <$> right)
 
-        it "dist-tags: keep-unless-denied, absent-target dropped, by provenance" $ do
-            -- The merge drops 'next' because its target 9.9.9 is absent from the union.
+        it "dist-tags: latest from the public source, every other tag by provenance" $ do
+            -- 'beta' survives at the trusted source's target, 'next' drops because its target
+            -- 9.9.9 is absent from the union, and only latest leaves the trust order.
             let trusted =
                     ( TrustedSource
                     , (packument [("1.0.0", sriLowA)])
                         { infoDistTags =
                             Map.fromList
                                 [ ("latest", mkVersion Npm "1.0.0")
+                                , ("beta", mkVersion Npm "1.0.0")
                                 , ("next", mkVersion Npm "9.9.9")
                                 ]
                         }
                     )
-                gated = (GatedSource, packument [("2.0.0", sriLowB)])
+                gated =
+                    ( GatedSource
+                    , (packument [("2.0.0", sriLowB)])
+                        { infoDistTags =
+                            Map.fromList
+                                [ ("latest", mkVersion Npm "2.0.0")
+                                , ("beta", mkVersion Npm "2.0.0")
+                                ]
+                        }
+                    )
                 plan = mergePackuments [gated, trusted]
-            (latestKey =<< plan) `shouldBe` Just "1.0.0"
-            (sort . Map.keys . mpDistTags <$> plan) `shouldBe` Just ["latest"]
+            (latestKey =<< plan) `shouldBe` Just "2.0.0"
+            (Map.lookup "beta" . mpDistTags <$> plan) `shouldBe` Just (Just (mkVersion Npm "1.0.0"))
+            (sort . Map.keys . mpDistTags <$> plan) `shouldBe` Just ["beta", "latest"]
 
         it "single source is the degenerate identity: all survive, won by source 0" $
             hedgehog $ do
@@ -773,9 +824,8 @@ spec = do
 
         it "the always-invariant decisions survive any permutation of any inputs" $
             hedgehog $ do
-                -- 'genSources' collides keys freely, same-provenance included, so only the
-                -- surviving key set and the winning provenance are order-independent. 'SourceId'
-                -- labels move.
+                -- 'genSources' collides keys freely, same-provenance included, so only the key set
+                -- and the winning provenance are order-independent. 'SourceId' labels move.
                 sources <- forAll genSources
                 perm <- forAll (Gen.shuffle sources)
                 base <- H.evalMaybe (mergePackuments sources)
@@ -800,9 +850,8 @@ spec = do
                 mpTime forward === mpTime backward
 
         it "within one provenance, the divergence winner is positional (documented boundary)" $ do
-            -- Provenance cannot break a same-provenance tie, so the lower 'SourceId' (the earlier
-            -- position) wins. Collisions in the npm topology always cross provenance, so this is
-            -- the documented boundary of the order-independence guarantee.
+            -- A same-provenance tie falls to the lower 'SourceId'. Collisions always cross
+            -- provenance in the npm topology, so this is the order-independence boundary.
             let a = (GatedSource, packument [("1.0.0", sriCapA)]) -- earlier wins
                 b = (GatedSource, packument [("1.0.0", sriCapB)])
                 forward = Set.toList . mpDivergences <$> mergePackuments [a, b]
