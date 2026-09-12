@@ -1,5 +1,5 @@
 {
-  "_note": "Live performance acceptance budgets use roughly 2.2x the observed maxima of per-run medians. Each leg uses five timed passes per live document. A breach fails the non-required workflow. Unavailable registries are not budget breaches. Watch starts at 70% of a budget. npm retains its budgets calibrated across seven daily CI runs from 2026-07-05 to 2026-07-11. PyPI uses PEP 691 Simple JSON. Its initial calibration uses three sequential hosted runs on 2026-09-12 at b821206aadad083b7751f94d5d24f58851986719, not seven days of observations. For each package and leg, multiply the largest reported median by 2.2 and round up to 0.01 ms. The PyPI defaults are the largest derived budgets for each leg. Recalibrate from recent observed maxima using the same headroom rule.",
+  "_note": "Live performance acceptance budgets use roughly 2.2x the observed maxima of per-run medians. Each leg uses five timed passes per live document. A breach fails the non-required workflow. Unavailable registries are not budget breaches. Watch starts at 70% of a budget. npm retains its budgets calibrated across seven daily CI runs from 2026-07-05 to 2026-07-11. PyPI uses PEP 691 Simple JSON. Its initial calibration uses three sequential hosted runs on 2026-09-12 for feature head b821206aadad083b7751f94d5d24f58851986719, not seven days of observations. The first run used a PR merge checkout, as detailed in _checkoutProvenance. For each package and leg, multiply the largest reported median by 2.2 and round up to 0.01 ms. The PyPI defaults are the largest derived budgets for each leg. Recalibrate from recent observed maxima using the same headroom rule.",
   "ecosystems": {
     "npm": {
       "defaultBudgetMs": 100,
@@ -23,6 +23,7 @@
       "_calibration": {
         "date": "2026-09-12",
         "head": "b821206aadad083b7751f94d5d24f58851986719",
+        "_checkoutProvenance": "The head field names the feature commit. PR run 34714057634 checked out merge commit 2b76ec4c460f1146ee9edf1f73e7f60eef54f768, with parents e80cbb7e11947ffe1b97d7ae54d61b78f924070c and b821206aadad083b7751f94d5d24f58851986719. Dispatch runs 34714279674 and 34714526694 checked out b821206aadad083b7751f94d5d24f58851986719 directly. The merge-only base changes covered npm optional-null selective parsing, fault diagnostics, tests, and Cabal entries. They did not change PyPI processing. Every selected maximum came from direct-checkout run 34714526694.",
         "runs": [
           "https://github.com/AlexaDeWit/Ecluse/actions/runs/34714057634",
           "https://github.com/AlexaDeWit/Ecluse/actions/runs/34714279674",
