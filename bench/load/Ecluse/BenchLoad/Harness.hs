@@ -4,41 +4,9 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE RankNTypes #-}
 
-{- | The ecosystem-agnostic core of the load benchmarks harness: the load knobs, the
-per-ecosystem fixture interface, the runtime-statistics capture, and the report rendering.
-It holds everything that is the same whatever upstream ecosystem a scenario drives.
-
-== The extension point
-
-Today the proxy serves only npm, but it is built to front several upstream ecosystems
-(PyPI, RubyGems, …). The load harness is therefore split into one reusable __structure__
-and a small per-ecosystem __interface__:
-
-  * the structure lives here and in "Ecluse.BenchLoad.Oha", and every ecosystem reuses it
-    unchanged: the @oha@ driver, the runtime-statistics capture, the scenario runner, and
-    the report rendering.
-
-  * the interface is an 'UpstreamFixture' (the Handle pattern: a record carrying an
-    ecosystem and its 'Scenario's), written once per ecosystem. A 'Scenario' holds only
-    the ecosystem-specific __setup and teardown__ ('scenarioBoot'). It boots that
-    ecosystem's stub upstream(s) with the injected latency and payload size, wires the
-    proxy, and yields a 'Driver' telling the harness what to drive. npm is the first and
-    only instance ("Ecluse.BenchLoad.Npm"). Adding PyPI is "write @pypiFixture@", not
-    "rewrite the harness".
-
-== Per-scenario process isolation
-
-Each 'Scenario' runs in its __own process__: the driver re-execs the binary once per
-scenario (see "Main"). Peak residency comes from the RTS as a process-wide high-water
-mark. A fresh process per scenario is what keeps each scenario's residency its own, rather
-than the running maximum of every scenario before it.
-
-== Inform-only
-
-The load benchmarks tier never asserts a throughput pass\/fail. A human reads and trends
-the figures, and nothing compares them to a threshold. The one red state is a __literal
-failure__: the harness cannot boot, @oha@ cannot run, or a scenario served nothing. The
-harness surfaces that as a thrown exception (a non-zero exit).
+{- | Shared load settings, fixture drivers, runtime counters, and report rendering.
+Each scenario runs in a child process so its peak residency belongs to that scenario.
+Throughput and latency are informational. Fixture boot failures still fail the run.
 -}
 module Ecluse.BenchLoad.Harness (
     -- * Load knobs
@@ -189,7 +157,7 @@ data UpstreamFixture = UpstreamFixture
     { fixtureEcosystem :: Ecosystem
     -- ^ The upstream ecosystem this fixture exercises.
     , fixtureScenarios :: [Scenario]
-    -- ^ The fixture's load scenarios (npm's three mandatory traffic shapes).
+    -- ^ The traffic shapes this ecosystem supports.
     }
 
 {- | One load scenario: its identity and the ecosystem-specific setup and teardown that
@@ -455,7 +423,8 @@ renderReports knobs capabilities ecosystem reports =
         , opRow "public pool" publicPoolNote
         , opRow "GHC capabilities" (show capabilities <> " (scenario children pinned to the driver's count)")
         , opRow "packument corpus" "real-world captures (the packument scenarios serve the corpus)"
-        , opRow "cache-eviction bound" (show (lkCacheMaxEntries knobs) <> " entries over a working set of up to " <> show (lkWorkingSet knobs))
+        , opRow "configured cache entries" (show (lkCacheMaxEntries knobs))
+        , opRow "configured working-set cap" (show (lkWorkingSet knobs) <> " projects")
         , opRow "worker artifact" ("~" <> fmtKiB (lkPayloadBytes knobs))
         , ""
         , "### At a glance"
