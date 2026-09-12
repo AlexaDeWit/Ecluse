@@ -15,7 +15,6 @@ import Data.Time (UTCTime, getCurrentTime)
 import GHC.Clock (getMonotonicTime)
 import Network.HTTP.Client (Manager, Request, newManager, responseTimeout, responseTimeoutMicro)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
-import System.Exit (exitWith)
 
 import Ecluse.Acceptance (CriteriaCatalogue (catalogueCriteria), OperatingPoint (OperatingPoint), Sample (..), evaluate, loadCriteria, renderReport, reportExitCode)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName)
@@ -102,10 +101,10 @@ liveRequest eco pkg = case eco of
     PyPI -> first show (PyPI.simpleIndexRequest "https://pypi.org" Nothing noValidators pkg)
     RubyGems -> Left "no registered performance adapter for rubygems"
 
--- Copies keep each pass independent. Their allocation is outside the measured region.
+-- Allocate each copy in IO before timing. Evaluating one pure copy thunk would share it across passes.
 measurePasses :: (ByteString -> IO Bool) -> ByteString -> IO (Maybe Double)
 measurePasses operation raw = do
-    copies <- replicateM sampleCount (Exception.evaluate (BS.copy raw))
+    copies <- BS.useAsCStringLen raw (replicateM sampleCount . BS.packCStringLen)
     passes <- forM copies $ \copy -> do
         t0 <- getMonotonicTime
         done <- operation copy
