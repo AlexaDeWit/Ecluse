@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | 'CveFetch' doubles for suites that drive the advisory sync without a network.
-
-Each one throws 'TestContractEscape' from the arm the case asserts is never reached, so a
-call the design forbids surfaces as a typed failure rather than a silent success.
--}
+-- | Advisory transport doubles. Unexpected calls throw 'TestContractEscape'.
 module Ecluse.Runtime.Test.Cve (
     headOnlyFetch,
     refusingFetch,
@@ -14,17 +10,14 @@ module Ecluse.Runtime.Test.Cve (
 
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Cve (DbEtag)
-import Ecluse.Runtime.Cve.Sync (CveFetch (..), OsvDbFetchFault)
+import Ecluse.Runtime.Cve.Sync (CveFetch (..), FetchedObject, OsvDbFetchFault)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
-{- | A fetch that answers the given HEAD result and refuses to download. Its cases decide on the
-ETag alone, so reaching the download arm is a broken premise.
--}
-headOnlyFetch :: Either OsvDbFetchFault (Maybe DbEtag) -> CveFetch
-headOnlyFetch etagResult =
+-- | A HEAD response whose download arm throws if the test unexpectedly reaches it.
+headOnlyFetch :: Either OsvDbFetchFault (Maybe FetchedObject) -> CveFetch
+headOnlyFetch headResult =
     CveFetch
-        { fetchHeadEtag = pure etagResult
+        { fetchHead = pure headResult
         , fetchDownload = \_ -> throwIO (TestContractEscape "must not download")
         }
 
@@ -32,6 +25,6 @@ headOnlyFetch etagResult =
 refusingFetch :: CveFetch
 refusingFetch =
     CveFetch
-        { fetchHeadEtag = throwIO (TestContractEscape "must not fetch")
+        { fetchHead = throwIO (TestContractEscape "must not fetch")
         , fetchDownload = \_ -> throwIO (TestContractEscape "must not fetch")
         }

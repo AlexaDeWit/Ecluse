@@ -2,9 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Pilot's advisory-database upload against a real S3, the @ministack@ container's.
-It proves the object lands under the key the configured store derives, through the
-ambient @AWS_ENDPOINT_URL@ override a released image carries. Needs a Docker daemon.
+{- | Advisory publication and consumer polling against the ministack S3 service.
+Requires a Docker daemon.
 -}
 module Ecluse.Runtime.Pilot.ExportIntegrationSpec (
     spec,
@@ -14,7 +13,7 @@ import Control.Monad.Trans.Resource (runResourceT)
 import Data.Text qualified as T
 import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
 import TestContainers (containerAddress)
 
 import Amazonka qualified as AWS
@@ -23,9 +22,13 @@ import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
 import Ecluse.Config.AdvisoryStore (advisoryObjectKey, advisoryStoreBucket, mkAdvisoryStoreUrl)
 import Ecluse.Config.Ambient (parseEndpointUrl)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisorySource, generationInstalledAt, newCveSlot)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
+import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncOutcome (..), newS3CveSource, s3CveFetchFor, syncStep)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
+import Ecluse.Test.Osv (mkMinimalValidDb)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
 
@@ -69,8 +72,7 @@ spec = do
                         _ -> fail ("Expected 1 object, got " <> show (length objects))
 
             it "uploads again when the artifact's bytes have not changed" $ \container -> do
-                -- A quiet upstream compiles the same bytes every cycle. The publisher must
-                -- still write the object, because its store timestamp is the consumer's clock.
+                -- Republishing one accepted artifact preserves its bytes, including built_at.
                 withSystemTempDirectory "ecluse-osv-republish" $ \tmpDir -> do
                     let (host, port) = containerAddress container 4566
                         endpointUrl = "http://" <> host <> ":" <> T.pack (show port)
@@ -83,7 +85,7 @@ spec = do
 
                     let dbPath = tmpDir <> "/unchanged.sqlite"
                         objectKey = advisoryObjectKey store (takeFileName dbPath)
-                    liftIO $ writeFile dbPath "unchanged sqlite data"
+                    mkMinimalValidDb dbPath "pkg-a"
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
                     let export = runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket objectKey dbPath)
                         storedObject = do
@@ -94,6 +96,16 @@ spec = do
                     published <- storedObject
                     -- Without this the comparison below would pass on an absent first listing.
                     published `shouldSatisfy` isJust
+                    source <- newS3CveSource (Just endpoint)
+                    slot <- newCveSlot
+                    let env = SyncEnv (s3CveFetchFor source bucket objectKey (512 * 1024 * 1024)) Npm (tmpDir <> "/consumer.sqlite") slot
+                    first <- syncStep env Nothing
+                    acceptedEtag <- case first of
+                        SyncSwapped etag _ -> pure etag
+                        other -> fail ("expected first artifact swap, got " <> show other)
+                    installed <- generationInstalledAt slot
+                    (asPushedAt =<<) <$> currentAdvisorySource slot
+                        `shouldReturn` (S3Object.lastModified =<< published)
 
                     -- The store stamps whole seconds, so the export repeats until the stamp has
                     -- to have moved. A publisher that wrote only on a change never moves it.
@@ -104,3 +116,9 @@ spec = do
                     -- The bytes never changed, so the object is the same one, re-published.
                     republished <- storedObject
                     fmap S3Object.eTag republished `shouldBe` fmap S3Object.eTag published
+                    syncStep env (Just acceptedEtag) >>= \case
+                        SyncUnchanged -> pass
+                        other -> expectationFailure ("expected metadata-only observation, got " <> show other)
+                    (asPushedAt =<<) <$> currentAdvisorySource slot
+                        `shouldReturn` (S3Object.lastModified =<< republished)
+                    generationInstalledAt slot `shouldReturn` installed

@@ -15,7 +15,7 @@ import Data.Conduit.Combinators qualified as C
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Katip (KatipContextT, closeScribes, runKatipContextT)
 import System.Directory (copyFile, doesFileExist)
 import System.FilePath (takeDirectory, (</>))
@@ -27,7 +27,7 @@ import UnliftIO.Exception (throwIO)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
-import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, newCveSlot, swapIn, withSlotLookup)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apOsvNewestModified, apOsvSource), noProvenance)
@@ -94,7 +94,7 @@ fetchServing = fetchServingAt Nothing
 fetchServingAt :: Maybe UTCTime -> Maybe Text -> (FilePath -> IO ()) -> CveFetch
 fetchServingAt pushedAt mEtag write =
     CveFetch
-        { fetchHeadEtag = pure (Right (DbEtag <$> mEtag))
+        { fetchHead = pure (Right ((\etag -> FetchedObject (DbEtag etag) pushedAt) <$> mEtag))
         , fetchDownload = \dest -> case mEtag of
             Nothing -> throwIO (TestContractEscape "download called with no object present")
             Just etag -> write dest $> Right (FetchedObject (DbEtag etag) pushedAt)
@@ -360,7 +360,7 @@ spec = do
 
         it "does nothing when the remote ETag matches the last seen one" $
             withSyncEnv $ \_ _ envWith -> do
-                let fetch = headOnlyFetch (Right (Just (DbEtag "e1")))
+                let fetch = headOnlyFetch (Right (Just (FetchedObject (DbEtag "e1") Nothing)))
                 syncStep (envWith fetch) (Just (DbEtag "e1")) >>= \case
                     SyncUnchanged -> pass
                     other -> expectationFailure ("expected SyncUnchanged, got " <> show other)
@@ -412,6 +412,55 @@ spec = do
                 asPushedAt source `shouldBe` Just publishedAt
                 apOsvSource (asProvenance source) `shouldBe` Just "https://osv.example.test/npm/all.zip"
 
+        it "refreshes an accepted republication without downloading or resetting installation age" $
+            withSyncEnv $ \_ slot envWith -> do
+                void (syncStep (envWith (fetchServingAt (Just publishedAt) (Just "e1") (`mkMinimalValidDb` "pkg-a"))) Nothing)
+                installed <- generationInstalledAt slot
+                original <- installedSource slot
+                let newer = addUTCTime 60 publishedAt
+                    fetch = headOnlyFetch (Right (Just (FetchedObject (DbEtag "e1") (Just newer))))
+                syncStep (envWith fetch) (Just (DbEtag "e1")) >>= \case
+                    SyncUnchanged -> pass
+                    other -> expectationFailure ("expected metadata-only SyncUnchanged, got " <> show other)
+                installedSource slot `shouldReturn` original{asPushedAt = Just newer}
+                generationInstalledAt slot `shouldReturn` installed
+                probesFor slot "pkg-a" `shouldReturn` Just True
+
+        it "keeps accepted publication time on unchanged, older, or undated HEAD responses" $
+            withSyncEnv $ \_ slot envWith -> do
+                void (syncStep (envWith (fetchServingAt (Just publishedAt) (Just "e1") (`mkMinimalValidDb` "pkg-a"))) Nothing)
+                original <- installedSource slot
+                for_ [Just publishedAt, Just (addUTCTime (-60) publishedAt), Nothing] $ \stamp -> do
+                    let fetch = headOnlyFetch (Right (Just (FetchedObject (DbEtag "e1") stamp)))
+                    void (syncStep (envWith fetch) (Just (DbEtag "e1")))
+                    installedSource slot `shouldReturn` original
+
+        it "never refreshes last-good publication time from a remembered rejected ETag" $
+            withSyncEnv $ \_ slot envWith -> do
+                void (syncStep (envWith (fetchServingAt (Just publishedAt) (Just "good") (`mkMinimalValidDb` "pkg-a"))) Nothing)
+                original <- installedSource slot
+                void (syncStep (envWith (fetchServing (Just "bad") mkDbWithWrongEpoch)) (Just (DbEtag "good")))
+                let newer = addUTCTime 60 publishedAt
+                    fetch = headOnlyFetch (Right (Just (FetchedObject (DbEtag "bad") (Just newer))))
+                syncStep (envWith fetch) (Just (DbEtag "bad")) >>= \case
+                    SyncUnchanged -> pass
+                    other -> expectationFailure ("expected rejected redownload suppression, got " <> show other)
+                installedSource slot `shouldReturn` original
+                probesFor slot "pkg-a" `shouldReturn` Just True
+
+        it "installs the GET identity and time when publication races HEAD" $
+            withSyncEnv $ \_ slot envWith -> do
+                let newer = addUTCTime 60 publishedAt
+                    fetch =
+                        (fetchServingAt (Just newer) (Just "get") (`mkMinimalValidDb` "pkg-a"))
+                            { fetchHead = pure (Right (Just (FetchedObject (DbEtag "head") (Just publishedAt))))
+                            }
+                syncStep (envWith fetch) Nothing >>= \case
+                    SyncSwapped etag _ -> etag `shouldBe` DbEtag "get"
+                    other -> expectationFailure ("expected GET generation swap, got " <> show other)
+                currentAdvisoryEtag slot `shouldReturn` Just (DbEtag "get")
+                asPushedAt <$> installedSource slot `shouldReturn` Just newer
+
         it "a second artifact displaces the first" $
             withSyncEnv $ \_ slot envWith -> do
                 void (syncStep (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))) Nothing)
@@ -436,7 +485,7 @@ spec = do
             withSyncEnv $ \_ _ envWith -> do
                 let fetch =
                         CveFetch
-                            { fetchHeadEtag = pure (Right (Just (DbEtag "e1")))
+                            { fetchHead = pure (Right (Just (FetchedObject (DbEtag "e1") Nothing)))
                             , fetchDownload = \dest -> do
                                 writeFileBS dest "partial bytes"
                                 pure (Left transportDown)
@@ -460,7 +509,7 @@ spec = do
                 -- invariant break. The onException guard must still discard the partial download.
                 let fetch =
                         CveFetch
-                            { fetchHeadEtag = pure (Right (Just (DbEtag "e1")))
+                            { fetchHead = pure (Right (Just (FetchedObject (DbEtag "e1") Nothing)))
                             , fetchDownload = \dest -> do
                                 writeFileBS dest "partial bytes"
                                 throwIO (TestContractEscape "connection reset mid-stream")
@@ -475,7 +524,7 @@ spec = do
                 downloads <- newIORef (0 :: Int)
                 let fetch =
                         CveFetch
-                            { fetchHeadEtag = pure (Right (Just (DbEtag "e2")))
+                            { fetchHead = pure (Right (Just (FetchedObject (DbEtag "e2") Nothing)))
                             , fetchDownload = \dest -> do
                                 modifyIORef' downloads (+ 1)
                                 mkDbWithMalformedProvenance dest
@@ -526,12 +575,12 @@ spec = do
                 (swaps, onSwap) <- newSwapCounter
                 let flaky =
                         CveFetch
-                            { fetchHeadEtag = do
+                            { fetchHead = do
                                 n <- atomicModifyIORef' calls (\n -> (n + 1, n + 1))
                                 pure $
                                     if n <= 2
                                         then Left transportDown
-                                        else Right (Just (DbEtag "e1"))
+                                        else Right (Just (FetchedObject (DbEtag "e1") Nothing))
                             , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (FetchedObject (DbEtag "e1") Nothing)
                             }
                     schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 5_000_000}
@@ -547,11 +596,11 @@ spec = do
                 (swaps, onSwap) <- newSwapCounter
                 let lateFetch =
                         CveFetch
-                            { fetchHeadEtag = atomically $ do
+                            { fetchHead = atomically $ do
                                 modifyTVar' attempted (+ 1)
                                 readTVar published <&> \case
                                     False -> Right Nothing
-                                    True -> Right (Just (DbEtag "e1"))
+                                    True -> Right (Just (FetchedObject (DbEtag "e1") Nothing))
                             , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (FetchedObject (DbEtag "e1") Nothing)
                             }
                     schedule = SyncSchedule{schedBootBackoff = [5_000, 5_000], schedPollDelay = 25_000}
@@ -570,7 +619,7 @@ spec = do
                 downloads <- newIORef (0 :: Int)
                 let fetch =
                         CveFetch
-                            { fetchHeadEtag = pure (Right (Just (DbEtag "bad")))
+                            { fetchHead = pure (Right (Just (FetchedObject (DbEtag "bad") Nothing)))
                             , fetchDownload = \dest -> do
                                 modifyIORef' downloads (+ 1)
                                 mkDbWithWrongEpoch dest
@@ -614,6 +663,25 @@ spec = do
                 let polling = SyncSchedule{schedBootBackoff = [], schedPollDelay = 20_000}
                 observed <- observeAttempts 2 polling (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
                 truncateObserved 2 observed `shouldObserve` [(Npm, AdvisorySwapped), (Npm, AdvisoryUnchanged)]
+
+        it "reports republication as unchanged and runs no replacement hook" $
+            withSyncEnv $ \_ slot envWith -> do
+                heads <- newIORef (0 :: Int)
+                (swaps, onSwap) <- newSwapCounter
+                let newer = addUTCTime 60 publishedAt
+                    fetch =
+                        (fetchServingAt (Just publishedAt) (Just "e1") (`mkMinimalValidDb` "pkg-a"))
+                            { fetchHead = do
+                                count <- atomicModifyIORef' heads (\n -> (n + 1, n))
+                                pure (Right (Just (FetchedObject (DbEtag "e1") (Just (if count == 0 then publishedAt else newer)))))
+                            }
+                    schedule = SyncSchedule{schedBootBackoff = [], schedPollDelay = 20_000}
+                (metrics, readAttempts, _) <- recordingAdvisorySyncMetricsPort
+                withAsync (runQuietKatip (runCveSync metrics passthroughAdvisorySyncTracingPort (envWith fetch) schedule (notifyOnly onSwap))) $ \_ -> do
+                    waitFor "republication observation" ((>= 2) . length <$> readAttempts)
+                    take 2 <$> readAttempts `shouldReturn` [(Npm, AdvisorySwapped), (Npm, AdvisoryUnchanged)]
+                    readTVarIO swaps `shouldReturn` 1
+                    asPushedAt <$> installedSource slot `shouldReturn` Just newer
 
         it "syncs identically over inert ports, so observation is never load-bearing" $
             withSyncEnv $ \_ slot envWith -> do

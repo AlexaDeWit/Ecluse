@@ -37,8 +37,8 @@ import Ecluse.Core.Server.Readiness (
  )
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Cve.Sync (CveSyncHandle (..), advisoryFreshnessFor, cveRuleDepsFor, cveSyncReadiness, cveSyncScheduleFor, planCveSync, reportPushAge, sweepStaleTemps, sweepStep)
-import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncSchedule (..), bootBackoffDelays)
-import Ecluse.Runtime.Test.Cve (refusingFetch)
+import Ecluse.Runtime.Cve.Sync (FetchedObject (..), SyncEnv (..), SyncOutcome (..), SyncSchedule (..), bootBackoffDelays, syncStep)
+import Ecluse.Runtime.Test.Cve (headOnlyFetch, refusingFetch)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
 import Ecluse.Test.Rules (noFaultReporter)
@@ -140,12 +140,17 @@ spec = do
         it "refuses on a serving generation the store gave no publication time for" $ do
             handle <- stubHandleAt sixDayLimit (pure alarmNow)
             swapIn (syncSlot (csEnv handle)) (DbEtag "e1") Nothing (fakeCveDb [])
+            let fetch = headOnlyFetch (Right (Just (FetchedObject (DbEtag "e1") Nothing)))
+            void (syncStep (csEnv handle){syncFetch = fetch} (Just (DbEtag "e1")))
             advisoryFreshnessFor (Map.singleton Npm handle) Npm `shouldReturn` AdvisoryUndated
 
         it "resets on a fresh push of the same artifact" $ do
             handle <- stubHandleAt sixDayLimit (pure alarmNow)
             install handle (agoDays 9)
-            install handle (agoDays 1)
+            let fetch = headOnlyFetch (Right (Just (FetchedObject (DbEtag "e1") (Just (agoDays 1)))))
+            syncStep (csEnv handle){syncFetch = fetch} (Just (DbEtag "e1")) >>= \case
+                SyncUnchanged -> pass
+                other -> expectationFailure ("expected publication observation, got " <> show other)
             advisoryFreshnessFor (Map.singleton Npm handle) Npm `shouldReturn` AdvisoryFresh
 
         it "carries that reading onto the mount's rule capabilities" $ do
