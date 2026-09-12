@@ -30,7 +30,7 @@ module Ecluse.Core.Security.Authority (
 
 import Data.Text qualified as T
 
-import Ecluse.Core.Text (afterFirst, readDecimalText, registryPath)
+import Ecluse.Core.Text (afterFirst, readDecimalText)
 
 {- | The authority an outbound fetch dials: a bare host with its effective port. The gate
 authorises the pair, so an allowlisted host at an attacker-chosen port is not authorised.
@@ -87,8 +87,11 @@ last two whole, because either can hold a signed-URL credential.
 credentialFreeUrl :: Text -> Text
 credentialFreeUrl raw = scheme <> authorityOf raw <> path
   where
-    scheme = T.take (T.length raw - T.length (afterFirst "://" raw)) raw
-    path = T.takeWhile (`notElem` ['?', '#']) (registryPath raw)
+    (written, separator) = T.breakOn "://" raw
+    (scheme, afterScheme) = case T.stripPrefix "://" separator of
+        Just rest -> (written <> "://", rest)
+        Nothing -> ("", raw)
+    path = T.takeWhile (`notElem` ['?', '#']) (T.dropWhile (/= '/') afterScheme)
 
 -- What a value carrying no dialable authority renders as. The angle brackets match the
 -- convention the resolved-configuration provenance lines use for a withheld value.
