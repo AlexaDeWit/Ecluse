@@ -15,7 +15,7 @@ import Ecluse.Composition.BootError (
     Advisory (MirrorTargetOnOwnPublicationTarget),
     BootError (QueueUrlUnrecognised),
  )
-import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (
     Severity (Advise, Ignore, Refuse),
     Vet,
@@ -23,6 +23,7 @@ import Ecluse.Composition.Vet (
     rule,
     runVet,
     vetRole,
+    withRole,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Test.Package (unsafeRegistryUrl)
@@ -105,6 +106,13 @@ inputSpec = describe "the pass's own inputs" $ do
     it "reads back the role it runs for, so a role-specific witness has a source" $
         observe vetRole `shouldBe` [([], Right MirrorWriter), ([], Right MirrorPruner)]
 
+    it "chooses a check by the role it runs for, and still runs every rule that check names" $
+        -- The role is no finding, so selecting on it hides none: the chosen side still accumulates.
+        observe (withRole (rule (const (Refuse QueueUrlUnrecognised)) Just . show))
+            `shouldBe` [ ([], Left [QueueUrlUnrecognised "MirrorWriter"])
+                       , ([], Left [QueueUrlUnrecognised "MirrorPruner"])
+                       ]
+
     it "accumulates an already-decided refusal after the rules preceding it" $
         observe (probeVetFn (Probe Refused 1) <*> decided (Left [QueueUrlUnrecognised "settled"]))
             `shouldBe` [ ([], Left [QueueUrlUnrecognised "Refused 1", QueueUrlUnrecognised "settled"])
@@ -152,6 +160,7 @@ roleSplit :: RegistryRole -> Severity Text
 roleSplit = \case
     MirrorWriter -> Advise probeAdvisory
     MirrorPruner -> Refuse QueueUrlUnrecognised
+    MirrorPreviewer -> Refuse QueueUrlUnrecognised
 
 {- The probe's advisory, carrying its label in the URL, so two advisories are distinguishable
 and an assertion on the order they accumulate in fails when they are swapped. -}
@@ -166,3 +175,4 @@ ignoredByWriter :: RegistryRole -> Severity Text
 ignoredByWriter = \case
     MirrorWriter -> Ignore
     MirrorPruner -> Refuse QueueUrlUnrecognised
+    MirrorPreviewer -> Ignore

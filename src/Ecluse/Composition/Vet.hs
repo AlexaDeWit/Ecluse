@@ -16,6 +16,7 @@ module Ecluse.Composition.Vet (
     Vet,
     runVet,
     vetRole,
+    withRole,
     decided,
 
     -- * Rules and their severity
@@ -56,6 +57,12 @@ role's pass can issue one.
 -}
 vetRole :: Vet RegistryRole
 vetRole = Vet $ \role -> ([], Success role)
+
+{- | Continue a pass with the role it runs for. The role is no finding, so selecting a check by it
+hides none: every rule the continuation names still runs and still accumulates.
+-}
+withRole :: (RegistryRole -> Vet a) -> Vet a
+withRole select = Vet $ \role -> let Vet run = select role in run role
 
 {- | Carry an outcome a producer decided for itself into the pass, so its refusals join the rest.
 'rule' cannot express one already settled, or one whose severity turns on more than 'RegistryRole'.

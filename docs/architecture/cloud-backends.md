@@ -157,9 +157,11 @@ abstraction](registry-model.md#registry-abstraction):
    `ecluse dredger`. Enumeration and deletion are store operations, not ecosystem ones, because the
    npm wire protocol has no enumeration and a hosted registry deletes through its own control
    plane. Every fact that varies by store is a value the handle supplies: the batch ceiling for a
-   destructive call, whether a deleted version can be published again, the backend's own dry run
-   where it has one, whether a delete finishes before the call answers, the characters its name
-   space partitions by, and whether it has somewhere to keep a walk cursor.
+   destructive call, whether a deleted version can be published again, whether a delete finishes
+   before the call answers, the characters its name space partitions by, and whether it has
+   somewhere to keep a walk cursor. `StoreObservation` holds the same store's observing calls on
+   their own, and each backend builds one directly, so `ecluse dredger --dry-run` reaches no write
+   at all.
 
 ### Walking a store
 

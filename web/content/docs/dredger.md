@@ -100,6 +100,8 @@ through the store backend's own handle.
 
 The Dredger never writes a consent marker. Placing one and removing it are yours alone, and the
 full walk's resumption marker is a separate tag key so a marker write cannot reach your consent.
+`ecluse dredger --dry-run` boots without consent on either backend and reports what it found
+instead ([Preview](#preview)).
 
 A store classified as able to refill from an upstream is not swept. Deleting its local copy does
 not prevent another upstream fetch from recreating it, and the current cycle halts on that
@@ -115,7 +117,7 @@ except for the explicit public-host safeguards.
 against an advisory database that denies far more than it should.
 
 Left unset, it is computed at boot as 100 per sweepable mirror store, because one cycle covers
-every store in turn. That default is deliberately small. Rehearse first: a dry run reports the
+every store in turn. That default is deliberately small. Preview first: a dry run reports the
 count a real sweep would reach, which is the number to write into `deletionCap`.
 
 Reaching it **halts the Dredger for the life of the process**, whether or not there was more it
@@ -149,19 +151,34 @@ from the beginning after every restart, and the Dredger says so at boot.
 Advisory latency during a walk is bounded by the walk's own pace, so do not leave it on
 indefinitely.
 
-## Dry run
+## Preview
 
-`ecluse dredger --dry-run` builds the Dredger with no real delete in it. The store handle it holds
-carries the backend's own rehearsal where one exists, and a call-nothing stub where none does, so
-the run cannot delete because nothing it holds can.
+`ecluse dredger --dry-run` boots a role of its own. It is built from each backend's observing calls
+alone, so it holds no delete and no walk-marker write: the run cannot delete, because nothing it
+holds can.
 
-It still requires the current consent and classification checks to pass before enumeration.
-Without consent, CodeArtifact can halt the cycle and Verdaccio can refuse boot. A consent-free,
-read-only preview is planned in [#1237](https://github.com/AlexaDeWit/Ecluse/issues/1237).
-The cap applies as logging only: passing it
-writes one line naming where a real run would have halted, and the rehearsal counts on, so its
-closing tally reports the full reach. It writes no walk marker. Its counter is `would_delete`,
-never `deleted`.
+A preview needs no deletion consent. It reads the consent marker and the store classification,
+reports each one per target, and keeps enumerating either way. Those findings print above the
+counts, because a count says what your rules reach, never that this deployment may delete.
+Everything else the deleting role needs still applies: the endpoint collision checks, the mirror
+target's own parsing, a backend this build can sweep, and the credential the store answers to.
+
+A full walk under a preview starts at the first bucket every time. It neither reads nor replaces
+the marker a real walk records, so a preview leaves a walk in progress where it was.
+
+The cap applies as logging only: passing it writes one line naming where a real run would have
+halted, and the preview counts on, so its closing tally reports the full reach. Its counter is
+`would_delete`, never `deleted`.
+
+Under `--once` the exit status follows completeness alone:
+
+| What the preview did | Exit |
+|---|---|
+| Read the whole store, and every fact the rules that decided it needed | `0`, whatever the prerequisites said |
+| Stopped on a store fault, or decided without an advisory generation or a package's own metadata | non-zero, with partial counts and every candidate it did gather |
+
+Exit `0` means complete, not authorised. A preview that exits `0` with the consent marker absent
+has told you both what a real sweep would remove and that a real sweep would refuse to start.
 
 Use it before the first real sweep of a store, and after any rule change you are unsure of.
 
@@ -169,8 +186,9 @@ Use it before the first real sweep of a store, and after any rule change you are
 
 `ecluse dredger --once` runs one cycle and exits. It exits `0` when the cycle completed and `1`
 when it halted, with the reason on the same line, so a scheduler reads the outcome from the status.
-It composes with `--dry-run`, which retains consent and classification refusals as well as store
-faults. A dry run does not prove that the credentials can perform real deletion.
+It composes with `--dry-run`, whose status follows completeness rather than permission, as the
+[preview](#preview) describes. A preview does not prove that the credentials can perform real
+deletion.
 
 A **cycling** Dredger reports nothing through its exit status. It stops when it is asked to,
 whatever its last cycle did, so a restart-on-failure supervisor does not resume dredging on its

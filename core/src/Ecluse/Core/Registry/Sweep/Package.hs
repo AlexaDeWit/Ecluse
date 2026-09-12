@@ -7,8 +7,8 @@
 The metadata comes from the store being dredged, never the public upstream: one manifest read per
 package. A version the manifest omits, or a package whose read faulted, is decided on the identity
 the listing establishes. A version is deleted only on a named decisive deny, because deletion is
-permanent and the store may hold the only surviving copy. Nothing here knows whether the run
-deletes: a dry run holds a handle whose delete is a rehearsal.
+permanent and the store may hold the only surviving copy. The mount's own execution decides what
+becomes of a condemned version, so a preview reaches no delete because it holds none.
 -}
 module Ecluse.Core.Registry.Sweep.Package (
     sweepPackage,
@@ -17,9 +17,10 @@ module Ecluse.Core.Registry.Sweep.Package (
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
+    StoreDeletion (dlDeleteVersions),
     StoreFacts (factDeleteCeiling),
     StoreFault,
-    StoreMaintenance (deleteVersions, readStoreManifest, storeFacts),
+    StoreObservation (obFacts, obReadManifest),
     StoredVersion (storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionRemoving, VersionUnreached),
     VersionPresence (VersionServed),
@@ -32,14 +33,18 @@ import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltDeletionCap),
     SweepAudit (auditError, auditInfo),
-    SweepMount (smFirstParty, smRules),
+    SweepExecution (SweepCounts, SweepRemoves),
+    SweepMount (smFirstParty, smRules, smStore),
     SweepPacing (swpDeletionCap),
     SweepPorts (sweepAudit, sweepReport),
     SweepReport (reportCapHalts, reportOpening, reportRemoval),
     SweepState (stIssued),
+    SweepStore (ssExecute, ssObserve),
     record,
+    recordGap,
     renderGeneration,
     renderStoreFault,
+    unreadManifest,
  )
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvidence, completeEvidence, identityEvidence)
@@ -55,24 +60,26 @@ sweepPackage ::
     SweepPorts ->
     SweepState ->
     SweepMount ->
-    StoreMaintenance ->
     EvalContext ->
     Maybe DbEtag ->
     PackageName ->
     [StoredVersion] ->
     IO (Maybe CycleHalt)
-sweepPackage pacing ports counters mount store ctx etag name stored
+sweepPackage pacing ports counters mount ctx etag name stored
     | smFirstParty mount name = Nothing <$ traverse_ (const (record ports counters SweepGuardSkipped)) served
     | otherwise =
-        readStoreManifest store name >>= \case
-            Left fault -> announceUnread ports name served fault *> decideAll (identityEvidence name)
+        obReadManifest (ssObserve (smStore mount)) name >>= \case
+            Left fault -> unreadable fault *> decideAll (identityEvidence name)
             Right manifest -> decideAll (evidenceIn name manifest)
   where
     served = [storedVersion s | s <- stored, storedPresence s == VersionServed]
 
+    -- The versions below are decided on less than the whole rule set, so the cycle records the gap.
+    unreadable fault = recordGap counters unreadManifest *> announceUnread ports name served fault
+
     decideAll evidence = do
         condemned <- catMaybes <$> traverse (decideVersion ports counters mount ctx evidence) served
-        disposeOf pacing ports counters store etag name condemned
+        disposeOf pacing ports counters mount etag name condemned
 
 {- The store served no metadata, so each version is decided on the identity the listing carries. The
 shared fetch discards the response status, so a package the store no longer serves arrives here too. -}
@@ -124,12 +131,12 @@ disposeOf ::
     SweepPacing ->
     SweepPorts ->
     SweepState ->
-    StoreMaintenance ->
+    SweepMount ->
     Maybe DbEtag ->
     PackageName ->
     [Condemned] ->
     IO (Maybe CycleHalt)
-disposeOf pacing ports counters store etag name condemned
+disposeOf pacing ports counters mount etag name condemned
     | null condemned = pure Nothing
     | otherwise = do
         issued <- readIORef (stIssued counters)
@@ -141,7 +148,7 @@ disposeOf pacing ports counters store etag name condemned
             traverse_ (announce ports etag name) taken
             writeIORef (stIssued counters) reached
             when (crossedCap issued reached) (announceCap ports cap reached etag)
-            outcomes <- sendDeletes store name (map cdVersion taken)
+            outcomes <- sendDeletes (smStore mount) name (map cdVersion taken)
             traverse_ (recordOutcome ports counters name) outcomes
         pure (cappedHalt pacing reached etag <$ guard (halts reached))
   where
@@ -187,13 +194,16 @@ announce ports etag name condemned =
             <> "); advisory generation "
             <> renderGeneration etag
 
-{- Send the batch through the handle's own splitter. What that handle's delete does is the root's
-choice, so a dry run reaches a rehearsal here without this knowing which run it is in. -}
-sendDeletes :: StoreMaintenance -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
-sendDeletes store name versions =
-    deleteAll (fmap Right . deleteVersions store name) (chunksOfCeiling ceiling' versions)
+{- Dispose of the batch the way this run's own execution does: through the store's delete, split
+to the backend's ceiling, or counted where the run holds no delete to reach. -}
+sendDeletes :: SweepStore -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
+sendDeletes store name versions = case ssExecute store of
+    SweepRemoves deletion ->
+        deleteAll (fmap Right . dlDeleteVersions deletion name) (chunksOfCeiling ceiling' versions)
+    -- The audit line above has already put the reach on record, so the count reads from it.
+    SweepCounts -> pure [(version, VersionRemoved) | version <- versions]
   where
-    ceiling' = factDeleteCeiling (storeFacts store)
+    ceiling' = factDeleteCeiling (obFacts (ssObserve store))
 
 {- What the backend reported for one version. A refusal or an unreached call leaves the version
 in the store, so it counts as kept and reports for an operator to follow up. -}

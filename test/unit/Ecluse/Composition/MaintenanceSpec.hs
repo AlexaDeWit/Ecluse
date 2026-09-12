@@ -36,7 +36,7 @@ import Ecluse.Composition.Support (
     withoutMirrorTargetToken,
     withoutMirrorTargetUrl,
  )
-import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     Config (configMounts),
@@ -145,6 +145,21 @@ protocolSpec = describe "vetStoreBackends -- a store swept through the ecosystem
         mounts <- mountsFor (verdaccioEnv "false")
         renderedRefusals (vetted MirrorPruner mounts)
             `shouldSatisfy` any (T.isInfixOf "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION")
+
+    it "clears the preview role a Verdaccio target carrying no deletion consent" $ do
+        -- The key is the operator's own permission to delete, which a preview never exercises, so
+        -- it reads the store and reports the verdict rather than refusing to boot on it.
+        mounts <- mountsFor (verdaccioEnv "false")
+        case vetted MirrorPreviewer mounts of
+            ([], Right cleared) -> map protocolArm (Map.elems cleared) `shouldBe` [True]
+            other -> expectationFailure ("expected one cleared protocol store, got: " <> show (refusalsOf other))
+
+    it "refuses the preview role a target this build reaches no control plane for" $ do
+        -- Everything but the consent key still stands, so a preview of a store this build cannot
+        -- sweep refuses exactly as the deleting role's own boot does.
+        mounts <- mountsFor (verdaccioEnv "true")
+        refusalsOf (runVet MirrorPreviewer (vetStoreBackends withoutMaintenance mounts))
+            `shouldBe` Just [StoreMaintenanceUnavailable Npm NoProtocolMaintenance]
 
     it "refuses the deleting role an ecosystem whose protocol spells no delete" $ do
         -- The rule must not turn on which ecosystem the mount names, so the adapter is

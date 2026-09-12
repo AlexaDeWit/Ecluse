@@ -39,7 +39,12 @@ import Ecluse.Composition.BootError (
     refuseOnThrow,
  )
 import Ecluse.Composition.Credential (CredentialProviders, noCredentialProviders, providerLabel)
-import Ecluse.Composition.Maintenance (BuildStoreMaintenance, planStoreMaintenance)
+import Ecluse.Composition.Maintenance (
+    ClearedBackend,
+    StoreBuilds (sbDeleting, sbObserving),
+    StorePorts,
+    planStoreMaintenance,
+ )
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpMaxRequestBytes, mpPublishTenant, mpQueueMemoryMaxDepth),
     PublishTenant (ptAggregateBytes),
@@ -52,7 +57,7 @@ import Ecluse.Composition.Plan (
     BootPlan (bpLimits, bpMemoryPlan, bpMirrorRuntime, bpRole, bpS3Endpoint, bpValidated),
  )
 import Ecluse.Composition.Types (
-    BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
+    BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole,
  )
 import Ecluse.Composition.Validate (
@@ -65,10 +70,10 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Registry.Adapter (ProjectName, adapterProjectName)
-import Ecluse.Core.Registry.Maintenance (StoreMaintenance)
-import Ecluse.Core.Registry.Sweep.Types (SweepMount (..))
+import Ecluse.Core.Registry.Sweep.Types (SweepMount (..), SweepStore, deletingStore, previewStore)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule)
+import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule))
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -144,6 +149,10 @@ builders are, so a spec drives this phase without minting against a cloud.
 -}
 type BuildCredentials = (StoreTag -> CredentialReporters) -> [Mount] -> IO (Either [BootError] CredentialProviders)
 
+{- How the booting role builds one store as the sweep holds it. Both Dredger roles plan through the
+one arm below and differ only in which of 'StoreBuilds' they ran. -}
+type BuildSweepStore = StorePorts -> Limits -> ClearedBackend -> IO SweepStore
+
 {- | Plan the runtime the cleared plan's role starts, or report every refusal only a live
 environment can settle. Each role has one arm here, and a refusal is spent once for all of them.
 -}
@@ -153,23 +162,29 @@ planExecutable ::
     ResolveAdapter ->
     BuildMirrorQueue ->
     BuildCredentials ->
-    BuildStoreMaintenance ->
+    StoreBuilds ->
     BootPlan ->
     IO (Either [BootError] ExecutablePlan)
-planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials buildStore bootPlan = case bpRole bootPlan of
+planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds bootPlan = case bpRole bootPlan of
     BootMirrorPipeline role ->
         fmap (executablePlan . MirrorPipelineWiring)
             <$> planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan
-    BootStorePruner ->
-        fmap (executablePlan . StorePrunerWiring)
-            <$> planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan
+    BootStorePruner -> prunerArm (deleting (sbDeleting builds))
+    BootStorePreview -> prunerArm (previewing (sbObserving builds))
     BootWithoutPipeline -> pure (executablePlan . PilotWiring <$> pilotExportPlan (bpValidated bootPlan))
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}
 
-{- The deleting role's arm: the advisory sync its rules read, the credential its stores answer to,
-and a handle per store. All three refusable steps accumulate, so one launch reports every problem. -}
-planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildStoreMaintenance -> BootPlan -> IO (Either [BootError] PrunerWiring)
+    prunerArm build =
+        fmap (executablePlan . StorePrunerWiring)
+            <$> planPrunerWiring logEnv tracing buildCredentials build bootPlan
+
+    deleting build ports limits cleared = deletingStore <$> build ports limits cleared
+    previewing build ports limits cleared = previewStore <$> build ports limits cleared
+
+{- The store roles' shared arm: the advisory sync their rules read, the credential their stores
+answer to, and one store per cleared target. All three refusable steps accumulate. -}
+planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepStore -> BootPlan -> IO (Either [BootError] PrunerWiring)
 planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics
     cveSync <- planAdvisorySync logEnv bootPlan
@@ -227,7 +242,7 @@ prunerWiringFrom ::
     DeferredMetrics ->
     Map Ecosystem SweepPolicy ->
     Map Ecosystem CveSyncHandle ->
-    Map Ecosystem StoreMaintenance ->
+    Map Ecosystem SweepStore ->
     PrunerWiring
 prunerWiringFrom deferredMetrics policies cveSync stores =
     PrunerWiring

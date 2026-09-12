@@ -9,7 +9,7 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (SplitRoleNeedsDurableQueue), renderBootError)
 import Ecluse.Composition.Types (
-    BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
+    BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
     bootInvocation,
     everyBootRole,
@@ -33,9 +33,16 @@ spec = do
                            , BootMirrorPipeline ServeOnly
                            , BootMirrorPipeline MirrorOnly
                            , BootStorePruner
+                           , BootStorePreview
                            , BootWithoutPipeline
                            ]
 
         it "names each entry as the command an operator would run" $
             map bootInvocation everyBootRole
-                `shouldBe` ["ecluse proxy", "ecluse proxy --no-worker", "ecluse mirror", "ecluse dredger", "ecluse pilot"]
+                `shouldBe` [ "ecluse proxy"
+                           , "ecluse proxy --no-worker"
+                           , "ecluse mirror"
+                           , "ecluse dredger"
+                           , "ecluse dredger --dry-run"
+                           , "ecluse pilot"
+                           ]

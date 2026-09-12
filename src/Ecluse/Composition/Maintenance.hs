@@ -7,7 +7,8 @@ half reads each mount's resolved store backend ("Ecluse.Config.Target") and its 
 as one rule in the vetting pass, so @ecluse dredger@ refuses a store this build cannot sweep and
 @ecluse check-config@ names that refusal. Only that pass issues a 'ClearedBackend', and the
 effectful half, in the pruner's arm of the planning phase ("Ecluse.Composition.Executable"),
-builds a handle from that witness alone.
+builds from that witness alone: a whole handle for the deleting role, and the observing calls on
+their own for its preview.
 -}
 module Ecluse.Composition.Maintenance (
     -- * The config-decidable half
@@ -20,7 +21,11 @@ module Ecluse.Composition.Maintenance (
     -- * The environment-dependent half
     StorePorts (..),
     BuildStoreMaintenance,
+    BuildStoreObservation,
+    StoreBuilds (..),
+    storeBuilds,
     buildStoreMaintenance,
+    buildStoreObservation,
     planStoreMaintenance,
 ) where
 
@@ -36,8 +41,8 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Credential (CredentialProviders, lookupProvider)
 import Ecluse.Composition.Sizing (newPooledManager)
-import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
-import Ecluse.Composition.Vet (Severity (Ignore, Refuse), Vet, rule, vetRole)
+import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Vet (Severity (Ignore, Refuse), Vet, rule, withRole)
 import Ecluse.Config (
     ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
     DeletionConsent (DeletionPermitted, DeletionWithheld),
@@ -74,17 +79,23 @@ import Ecluse.Core.Registry.Maintenance (
     NameAlphabet,
     StoreMaintenance,
     StoreManifestRead,
+    StoreObservation,
     noNameAlphabet,
     storeFaultOfMetadata,
  )
-import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolStore (..), newProtocolMaintenance)
+import Ecluse.Core.Registry.Maintenance.Protocol (
+    ProtocolRead (..),
+    ProtocolStore (ProtocolStore, psDelete, psRead),
+    newProtocolMaintenance,
+    newProtocolObservation,
+ )
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Telemetry.Span (TracingPort)
-import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactMaintenance)
+import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactMaintenance, newCodeArtifactObservation)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
 
 {- | A store the deleting role's pass cleared, one arm per backend kind. Only 'vetStoreBackends'
@@ -131,31 +142,45 @@ spec drives the protocol rule over an adapter that fills no maintenance slice.
 type ResolveMaintenanceAdapter = Ecosystem -> Maybe RegistryAdapter
 
 {- | The rule every declared mirror target meets: its resolved backend offers a control plane this
-build can sweep. The deleting role refuses a target that fails it, and a writing role ignores it.
+build can sweep. Both store roles refuse a target that fails it, and a writing role ignores it.
 -}
 vetStoreBackends :: ResolveMaintenanceAdapter -> MountMap -> Vet (Map Ecosystem ClearedBackend)
-vetStoreBackends resolveAdapter mounts = clearedFor <$> vetRole <* traverse_ (rule severity unmaintained) resolved
+vetStoreBackends resolveAdapter mounts = withRole $ \role ->
+    let resolved = resolvedFor role
+     in clearedFor role resolved <$ traverse_ (rule severity unmaintained) resolved
   where
-    resolved =
-        [ (eco, sweepableStore (resolveAdapter eco) eco target)
+    resolvedFor role =
+        [ (eco, sweepableStore role (resolveAdapter eco) eco target)
         | (eco, mount) <- Map.toAscList mounts
         , Just target <- [regMirrorTarget (mountRegistries mount)]
         ]
 
     severity = \case
         MirrorPruner -> Refuse (uncurry StoreMaintenanceUnavailable)
+        MirrorPreviewer -> Refuse (uncurry StoreMaintenanceUnavailable)
         MirrorWriter -> Ignore
 
     unmaintained (eco, outcome) = (eco,) <$> leftToMaybe outcome
 
     -- A refused pass yields no plan, so a target the rule refused never reaches this map.
-    clearedFor = \case
+    clearedFor role resolved = case role of
         MirrorWriter -> Map.empty
-        MirrorPruner -> Map.fromList [(eco, backend) | (eco, Right backend) <- resolved]
+        MirrorPruner -> swept resolved
+        MirrorPreviewer -> swept resolved
 
--- The store a resolved backend lets the Dredger delete from, or why this build reaches none.
-sweepableStore :: Maybe RegistryAdapter -> Ecosystem -> MirrorTarget -> Either StoreMaintenanceReason ClearedBackend
-sweepableStore mAdapter eco target = cleared <$> control
+    swept resolved = Map.fromList [(eco, backend) | (eco, Right backend) <- resolved]
+
+{- Whether this role's boot needs the operator's own deletion key in hand. A preview reads the
+store and changes nothing, so the key is a finding it reports rather than one it refuses on. -}
+refusesWithoutConsent :: RegistryRole -> Bool
+refusesWithoutConsent = \case
+    MirrorWriter -> False
+    MirrorPruner -> True
+    MirrorPreviewer -> False
+
+-- The store a resolved backend lets the Dredger reach, or why this build reaches none.
+sweepableStore :: RegistryRole -> Maybe RegistryAdapter -> Ecosystem -> MirrorTarget -> Either StoreMaintenanceReason ClearedBackend
+sweepableStore role mAdapter eco target = cleared <$> control
   where
     cleared c =
         ClearedBackend
@@ -184,7 +209,7 @@ sweepableStore mAdapter eco target = cleared <$> control
 
     protocolControl token consent = do
         -- Consent is the operator's own key, so it is reported ahead of what this build ships.
-        when (consent == DeletionWithheld) (Left (DeletionNotPermitted (sbTag backend)))
+        when (consent == DeletionWithheld && refusesWithoutConsent role) (Left (DeletionNotPermitted (sbTag backend)))
         adapter <- maybeToRight NoProtocolMaintenance mAdapter
         listing <- maybeToRight NoProtocolMaintenance (maintenanceListing (adapterMaintenance adapter))
         delete <- maybeToRight NoProtocolMaintenance (maintenanceVersionDelete (adapterMaintenance adapter))
@@ -229,17 +254,50 @@ Injected, as the queue builder is, so a spec drives the pruner's arm without an 
 -}
 type BuildStoreMaintenance = StorePorts -> Limits -> ClearedBackend -> IO StoreMaintenance
 
+{- | How a boot builds the observing calls for a cleared store, under the same bound. Nothing it
+builds can delete, write a marker, or publish.
+-}
+type BuildStoreObservation = StorePorts -> Limits -> ClearedBackend -> IO StoreObservation
+
+{- | The two builds a boot chooses between, one per authority a Dredger role holds. The role picks
+its own, so a preview's boot never runs the build that holds a delete.
+-}
+data StoreBuilds = StoreBuilds
+    { sbDeleting :: BuildStoreMaintenance
+    , sbObserving :: BuildStoreObservation
+    }
+
+-- | The shipped pair.
+storeBuilds :: StoreBuilds
+storeBuilds = StoreBuilds{sbDeleting = buildStoreMaintenance, sbObserving = buildStoreObservation}
+
 {- | The live handle for a cleared store. CodeArtifact discovers its credentials the standard AWS
 way, and both arms read and dial over one manager of the store's own.
 -}
 buildStoreMaintenance :: BuildStoreMaintenance
 buildStoreMaintenance ports limits cleared = do
-    manager <- storeManager
-    let readManifest = storeManifestRead ports limits cleared manager
+    (readManifest, manager) <- storeAccess ports limits cleared
     case cbControl cleared of
         ClearedCodeArtifact store -> newCodeArtifactMaintenance (cbAlphabet cleared) readManifest store
         ClearedProtocol store ->
             pure (newProtocolMaintenance (protocolStore limits cleared store readManifest manager))
+
+{- | The observing calls for a cleared store, built from the backend's own read capability rather
+than from a handle with its writes taken away.
+-}
+buildStoreObservation :: BuildStoreObservation
+buildStoreObservation ports limits cleared = do
+    (readManifest, manager) <- storeAccess ports limits cleared
+    case cbControl cleared of
+        ClearedCodeArtifact store -> newCodeArtifactObservation (cbAlphabet cleared) readManifest store
+        ClearedProtocol store ->
+            pure (newProtocolObservation (protocolRead limits cleared store readManifest manager))
+
+-- One manager of the store's own, and the manifest read that leads over it.
+storeAccess :: StorePorts -> Limits -> ClearedBackend -> IO (StoreManifestRead, Manager)
+storeAccess ports limits cleared = do
+    manager <- storeManager
+    pure (storeManifestRead ports limits cleared manager, manager)
 
 {- One package's metadata as the store serves it, through the ecosystem's own codec. The token is
 minted per read, because a store that mints its own hands out a short-lived one. -}
@@ -265,34 +323,40 @@ storeConnections = 4
 protocolStore :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> Manager -> ProtocolStore
 protocolStore limits cleared store readManifest manager =
     ProtocolStore
-        { psOrigin = storeOrigin limits cleared manager (Just (bareCredential (cpsToken store)))
-        , psReadManifest = readManifest
-        , psListing = cpsListing store
+        { psRead = protocolRead limits cleared store readManifest manager
         , psDelete = cpsDelete store
-        , psCodec = cpsCodec store
-        , psBackendName = storeTagName (cpsTag store)
-        , psPermitDeletion = cpsConsent store == DeletionPermitted
-        , psConsentDescriptor = consentDescriptor (cpsEcosystem store) (cpsTag store)
         }
 
-{- The key an operator sets, which the handle's own withheld verdict names. A handle this root
-built always carries consent, because the pass above refuses the store that does not. -}
+protocolRead :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> Manager -> ProtocolRead
+protocolRead limits cleared store readManifest manager =
+    ProtocolRead
+        { prOrigin = storeOrigin limits cleared manager (Just (bareCredential (cpsToken store)))
+        , prReadManifest = readManifest
+        , prListing = cpsListing store
+        , prCodec = cpsCodec store
+        , prBackendName = storeTagName (cpsTag store)
+        , prPermitDeletion = cpsConsent store == DeletionPermitted
+        , prConsentDescriptor = consentDescriptor (cpsEcosystem store) (cpsTag store)
+        }
+
+{- The key an operator sets, which the store's own withheld verdict names. The deleting role's
+pass refuses a store without it, and its preview reports the verdict instead. -}
 consentDescriptor :: Ecosystem -> StoreTag -> Text
 consentDescriptor eco tag =
     "set "
         <> mountKeyRef eco ("mirrorTarget." <> storeTagName tag <> ".permitDeletion")
         <> " to true: the Dredger deletes nothing from a store that does not carry it"
 
-{- | Build one handle per cleared store, or every refusal the live environment earns. The builds
-accumulate, so one launch reports every store whose client cannot be built.
+{- | Build the booting role's own capabilities for each cleared store, or every refusal the live
+environment earns. The builds accumulate, so one launch reports every store that cannot be built.
 -}
 planStoreMaintenance ::
-    BuildStoreMaintenance ->
+    (StorePorts -> Limits -> ClearedBackend -> IO store) ->
     TracingPort ->
     CredentialProviders ->
     Limits ->
     Map Ecosystem ClearedBackend ->
-    IO (Either [BootError] (Map Ecosystem StoreMaintenance))
+    IO (Either [BootError] (Map Ecosystem store))
 planStoreMaintenance build tracing credentials limits backends =
     validationToEither . traverse eitherToValidation <$> Map.traverseWithKey planOne backends
   where

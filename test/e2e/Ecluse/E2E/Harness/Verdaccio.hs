@@ -35,9 +35,9 @@ import UnliftIO (handleAny)
 
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (ParseError (parseErrorMessage))
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceListing, maintenanceVersionDelete))
-import Ecluse.Core.Registry.Maintenance (StoreMaintenance (listPackagesIn), collectPages, storeFaultOfMetadata)
-import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolStore (..), newProtocolMaintenance)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceListing))
+import Ecluse.Core.Registry.Maintenance (StoreObservation (obListPackagesIn), collectPages, storeFaultOfMetadata)
+import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolRead (..), newProtocolObservation)
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance, parsePackageListing)
 import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
@@ -115,11 +115,11 @@ fetchPackument e2e pkg = do
 hasTimeKey :: ByteString -> Bool
 hasTimeKey body = maybe False (KeyMap.member "time") (decodeStrict body :: Maybe Object)
 
--- | Walk a prefix through 'listPackagesIn', including the empty prefix for the whole store.
+-- | Walk a prefix through the store's own listing, including the empty prefix for the whole store.
 verdaccioNamesUnder :: E2E -> Text -> IO [Text]
 verdaccioNamesUnder e2e raw = do
-    store <- verdaccioMaintenance e2e
-    result <- withBucket raw (collectPages . listPackagesIn store)
+    store <- verdaccioObservation e2e
+    result <- withBucket raw (collectPages . obListPackagesIn store)
     names <- expectRight (first (\fault -> "Verdaccio bucket " <> raw <> ": " <> show fault) result)
     pure (sort (map renderPackageName names))
 
@@ -179,21 +179,19 @@ verdaccioSnapshot e2e = do
     names <- verdaccioListing e2e
     Map.fromList <$> traverse (\name -> (name,) <$> verdaccioVersions e2e name) names
 
-verdaccioMaintenance :: E2E -> IO StoreMaintenance
-verdaccioMaintenance e2e = do
+verdaccioObservation :: E2E -> IO StoreObservation
+verdaccioObservation e2e = do
     listing <- expectRight (maybeToRight ("npm has no listing capability" :: Text) (maintenanceListing npmMaintenance))
-    delete <- expectRight (maybeToRight ("npm has no deletion capability" :: Text) (maintenanceVersionDelete npmMaintenance))
     let origin = originClient defaultLimits (e2eManager e2e) (loopbackRegistryUrl (e2eVerdaccio e2e)) Nothing
-    pure . newProtocolMaintenance $
-        ProtocolStore
-            { psOrigin = origin
-            , psListing = listing
-            , psDelete = delete
-            , psCodec = npmPublishCodec
-            , psReadManifest = fmap (first storeFaultOfMetadata) . fetchNpmManifest passthroughTracingPort origin
-            , psBackendName = "verdaccio"
-            , psPermitDeletion = False
-            , psConsentDescriptor = "the observation handle has no deletion consent"
+    pure . newProtocolObservation $
+        ProtocolRead
+            { prOrigin = origin
+            , prListing = listing
+            , prCodec = npmPublishCodec
+            , prReadManifest = fmap (first storeFaultOfMetadata) . fetchNpmManifest passthroughTracingPort origin
+            , prBackendName = "verdaccio"
+            , prPermitDeletion = False
+            , prConsentDescriptor = "these observing calls carry no deletion consent"
             }
 
 verdaccioPackages :: E2E -> IO [PackageName]

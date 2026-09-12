@@ -2,23 +2,30 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Dredger role composition, companion tasks, halt latching, and rehearsal behaviour.
+-- | Dredger role composition, companion tasks, halt latching, and preview behaviour.
 module Ecluse.DredgerSpec (spec) where
 
 import Control.Exception qualified as Exception
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Katip (closeScribes)
 import OpenTelemetry.MeterProvider (SdkMeterEnv)
 import Test.Hspec
-import UnliftIO (throwIO)
+import UnliftIO (bracket, throwIO)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Boot (BootEnv (..))
 import Ecluse.Composition.Credential (noCredentialProviders)
-import Ecluse.Composition.Executable (ExecutablePlan (epRoleWiring), PrunerWiring (pwCveSync), RoleWiring (StorePrunerWiring), planExecutable)
+import Ecluse.Composition.Executable (
+    ExecutablePlan (epRoleWiring),
+    PrunerWiring (pwCveSync, pwMounts),
+    RoleWiring (StorePrunerWiring),
+    planExecutable,
+ )
+import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
 import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling)
 import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
-import Ecluse.Composition.Types (BootRole (BootStorePruner))
+import Ecluse.Composition.Types (BootRole (BootStorePreview, BootStorePruner))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvPort))
 import Ecluse.Core.Cve (DbEtag (DbEtag))
 import Ecluse.Core.Cve.Slot (swapIn)
@@ -26,15 +33,21 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName, renderPackageName)
 import Ecluse.Core.Queue (noMirrorQueue)
 import Ecluse.Core.Registry.Maintenance (
-    StoreCursor (writeCursor),
-    StoreMaintenance (deleteVersions, storeCursor),
+    ConsentVerdict (ConsentWithheld),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
  )
+import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt,
+    CycleOutcome (outcomeHalt, outcomePrerequisites, outcomeTally),
+    PrerequisiteStatus (PrerequisiteUnmet),
+    SweepMount (smStore),
     SweepPacing (swpDeletionCap),
     SweepReport (reportCapHalts, reportRemoval),
+    SweepTally (tallyDeleted),
+    TargetPrerequisites (tpConsent),
+    walkMarkerOf,
  )
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity))
 import Ecluse.Core.Server.Readiness (
@@ -47,15 +60,15 @@ import Ecluse.Core.Telemetry.Metrics (Label (LEcosystem), SweepResult (SweepDele
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Cve.Sync (CveSyncHandle (..))
 import Ecluse.Dredger (dredgerReady, latchedStep, runDredger, withSyncTasks)
-import Ecluse.Dredger.Plan (DredgerOptions (DredgerOptions), SweepMode (SweepRehearses), SweepRepetition (SweepOnce), rehearsedStore, sweepReportFor)
+import Ecluse.Dredger.Plan (DredgerOptions (DredgerOptions), SweepMode (SweepDeletes, SweepPreviews), SweepRepetition (SweepOnce), sweepReportFor)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
 import Ecluse.Test.Cve (fakeCveDb)
+import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (
-    FakeStore (fakeMaintenance, readFakeContents, readFakeCursor),
+    FakeStore (fakeMaintenance, fakeObservation, readFakeContents),
     FakeStoreConfig (..),
     defaultFakeStoreConfig,
     newFakeStore,
-    withBucket,
  )
 import Ecluse.Test.Package (sampleManifest)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -67,7 +80,7 @@ spec = do
     companionSpec
     latchSpec
     probeSpec
-    rehearsalSpec
+    previewSpec
     advisoryAgeSpec
 
 -- An empty sync plan must not cancel the sweep before it does any work.
@@ -132,28 +145,58 @@ probeSpec = describe "the health surface under a latch" $ do
     synced = mountReadiness (Map.singleton Npm MountReady)
     awaiting = mountReadiness (Map.singleton Npm MountAwaitingFirstSync)
 
-{- The composition root hands the loop a store that cannot delete, so a dry run is not a branch
-the loop takes but a capability it was never given. -}
-rehearsalSpec :: Spec
-rehearsalSpec = describe "rehearsedStore" $ do
-    it "deletes nothing through the handle a dry run holds" $ do
-        store <- newFakeStore seededConfig
-        seeded <- held store
-        outcomes <- deleteVersions (rehearsedStore (fakeMaintenance store)) (packageName "left-pad") [version "1.0.0"]
-        length outcomes `shouldBe` 1
-        held store `shouldReturn` seeded
-
-    it "writes no walk marker, because a rehearsal writes nothing to the store" $ do
-        store <- newFakeStore seededConfig
-        let rehearsed = rehearsedStore (fakeMaintenance store)
-        withBucket "l" $ \prefix ->
-            traverse_ (\cursor -> void (writeCursor cursor prefix)) (storeCursor rehearsed)
-        readFakeCursor store `shouldReturn` Nothing
-
+{- The composition root gives the preview role mounts whose execution counts, so a dry run is not
+a branch the loop takes but a capability it was never given. -}
+previewSpec :: Spec
+previewSpec = describe "the preview role's wiring" $ do
     it "counts a removal as would-delete, and lets the cap only log" $ do
-        let report = sweepReportFor SweepRehearses
+        let report = sweepReportFor SweepPreviews
         reportRemoval report `shouldBe` SweepWouldDelete
         reportCapHalts report `shouldBe` False
+
+    it "sweeps a store with no consent, reports it, and deletes nothing" $ do
+        store <- newFakeStore seededConfig{fakeConsent = ConsentWithheld "attach it"}
+        pruner <- plannedPruner BootStorePreview (observingOver store)
+        seeded <- readFakeContents store
+        rec' <- recordingPorts generation
+        outcome <- sweepCycle testPacing (recPorts rec') (pwMounts pruner)
+        outcomeHalt outcome `shouldBe` Nothing
+        map tpConsent (outcomePrerequisites outcome) `shouldBe` [PrerequisiteUnmet "attach it"]
+        tallyDeleted (outcomeTally outcome) `shouldBe` 0
+        readFakeContents store `shouldReturn` seeded
+
+    it "holds no walk marker on any mount it was given" $ do
+        store <- newFakeStore seededConfig
+        pruner <- plannedPruner BootStorePreview (observingOver store)
+        map (isNothing . walkMarkerOf . smStore) (pwMounts pruner) `shouldBe` [True]
+
+{- The pruner wiring one boot role settles, over a store this spec drives. Only the build the role
+names runs, so the other one reports being reached. -}
+plannedPruner :: BootRole -> StoreBuilds -> IO PrunerWiring
+plannedPruner role builds =
+    bracket newTestLogEnv (void . closeScribes) $ \logEnv -> do
+        config <- expectConfig codeArtifactEnvVars Nothing
+        bootPlan <- expectPlanFor role codeArtifactEnvVars Nothing config noCeiling
+        planned <-
+            planExecutable
+                logEnv
+                passthroughTracingPort
+                (\_ _ _ -> Nothing)
+                (\_ _ _ -> pure noMirrorQueue)
+                (\_ _ -> pure (Right noCredentialProviders))
+                builds
+                bootPlan
+        case epRoleWiring <$> planned of
+            Right (StorePrunerWiring pruner) -> pure pruner
+            _ -> fail "expected the Dredger role plan"
+
+-- The observing build alone answers, so a preview's boot running the other one fails the case.
+observingOver :: FakeStore -> StoreBuilds
+observingOver store =
+    StoreBuilds
+        { sbDeleting = \_ _ _ -> fail "a preview must not build the deleting handle"
+        , sbObserving = \_ _ _ -> pure (fakeObservation store)
+        }
 
 advisoryAgeSpec :: Spec
 advisoryAgeSpec = describe "runDredger advisory database ages" $
@@ -188,7 +231,10 @@ withDredgerAges use = withRoleTelemetry $ \logEnv telemetry meterEnv -> do
             (\_ _ _ -> Nothing)
             (\_ _ _ -> pure noMirrorQueue)
             (\_ _ -> pure (Right noCredentialProviders))
-            (\_ _ _ -> pure (fakeMaintenance store))
+            StoreBuilds
+                { sbDeleting = \_ _ _ -> pure (fakeMaintenance store)
+                , sbObserving = \_ _ _ -> pure (fakeObservation store)
+                }
             bootPlan
     case epRoleWiring <$> planned of
         Right (StorePrunerWiring pruner) -> do
@@ -196,7 +242,7 @@ withDredgerAges use = withRoleTelemetry $ \logEnv telemetry meterEnv -> do
             let app = configApp config
                 ephemeral = config{configApp = app{cfgServer = (cfgServer app){srvPort = 0}}}
                 boot = BootEnv ephemeral logEnv telemetry bootPlan
-            runDredger boot (DredgerOptions SweepRehearses SweepOnce) pruner{pwCveSync = Map.fromList handles}
+            runDredger boot (DredgerOptions SweepDeletes SweepOnce) pruner{pwCveSync = Map.fromList handles}
                 `shouldReturn` Nothing
             use meterEnv handles
         _ -> expectationFailure "expected the Dredger role plan"

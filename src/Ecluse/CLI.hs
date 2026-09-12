@@ -14,7 +14,7 @@ import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOn
 import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Dredger.Plan (
     DredgerOptions (DredgerOptions),
-    SweepMode (SweepDeletes, SweepRehearses),
+    SweepMode (SweepDeletes, SweepPreviews),
     SweepRepetition (SweepContinuously, SweepOnce),
  )
 import Ecluse.Pilot (PilotCompileOptions (..))
@@ -55,8 +55,8 @@ dredgerOptionsParser =
     DredgerOptions
         <$> flag
             SweepDeletes
-            SweepRehearses
-            (long "dry-run" <> help "Report what a cycle would delete and delete nothing; it writes no walk marker either")
+            SweepPreviews
+            (long "dry-run" <> help "Report what a cycle would delete and delete nothing; it holds no delete, writes no walk marker, and needs no deletion consent")
         <*> flag
             SweepContinuously
             SweepOnce

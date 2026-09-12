@@ -29,8 +29,7 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Registry.Maintenance (
     RefillPosture (RefillPermitted, RefillRefused),
     StoreFacts (factBackend, factRefill),
-    storeCursor,
-    storeFacts,
+    StoreObservation (obFacts),
  )
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Types (
@@ -42,8 +41,10 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepMetrics, sweepNow, sweepReport),
     SweepReport,
     SweepShape (SweepCandidates, SweepEverything),
+    SweepStore (ssObserve),
     latches,
     renderCycleHalt,
+    walkMarkerOf,
  )
 import Ecluse.Core.Server.Readiness (Readiness (Latched), allMountsReady)
 import Ecluse.Core.Supervision (secondsToMicros, superviseLoop, transientPolicy)
@@ -57,12 +58,11 @@ import Ecluse.Cve.Sync (
  )
 import Ecluse.Dredger.Plan (
     DredgerOptions (doMode, doRepetition),
-    SweepMode (SweepDeletes, SweepRehearses),
+    SweepMode (SweepDeletes, SweepPreviews),
     SweepRepetition (SweepContinuously, SweepOnce),
     advisoryPollMicros,
     advisoryWaitAttempts,
-    haltDetail,
-    rehearsedStore,
+    cycleEnding,
     sweepPacingFor,
     sweepReportFor,
     waitsForAdvisories,
@@ -80,14 +80,14 @@ import Ecluse.Runtime.Telemetry.Reporters (installMetrics)
 
 data SweepStatus = SweepStatus
     { stLatched :: IORef (Maybe CycleHalt)
-    , stFinal :: IORef (Maybe CycleHalt)
+    , stFinal :: IORef (Maybe CycleOutcome)
     }
 
 newSweepStatus :: IO SweepStatus
 newSweepStatus = SweepStatus <$> newIORef Nothing <*> newIORef Nothing
 
-{- | Run the Dredger. Under @--once@ the sweep returns and the race ends with it, carrying the halt
-that cycle raised, which is what makes the role scriptable.
+{- | Run the Dredger. Under @--once@ the sweep returns and the race ends with it, carrying what
+that cycle ended on, which is what makes the role scriptable.
 -}
 runDredger :: BootEnv -> DredgerOptions -> PrunerWiring -> IO (Maybe Text)
 runDredger bootEnv opts pruner = do
@@ -103,16 +103,14 @@ runDredger bootEnv opts pruner = do
     raceServerAgainstLoop
         (runWarp (cfg status) probeOnlyApplication)
         (withSyncTasks (syncTasks metrics) (sweepTask logEnv opts pacing (portsOver metrics) syncReady status mounts))
-    fmap haltDetail <$> readIORef (stFinal status)
+    (>>= cycleEnding (doMode opts)) <$> readIORef (stFinal status)
   where
     logEnv = beLogEnv bootEnv
     telemetry = beTelemetry bootEnv
     appConfig = configApp (beConfig bootEnv)
     (pacing, capLine) = sweepPacingFor appConfig (length (pwMounts pruner))
-    -- A dry run holds a store that cannot delete, so the loop never asks which run it is in.
-    mounts = case doMode opts of
-        SweepDeletes -> pwMounts pruner
-        SweepRehearses -> [mount{smStore = rehearsedStore (smStore mount)} | mount <- pwMounts pruner]
+    -- The boot built each mount's own execution, so the loop never asks which run it is in.
+    mounts = pwMounts pruner
     syncReady = cveSyncReadiness (pwCveSync pruner)
     cfg status = dredgerServerConfig appConfig (dredgerReady syncReady (readIORef (stLatched status)))
     syncTasks metrics = cveSyncTasks logEnv metrics telemetry (cveSyncScheduleFor appConfig) (pwCveSync pruner)
@@ -143,9 +141,9 @@ sweepTask logEnv opts pacing ports checkReady status mounts = case doRepetition 
     -- Only a one-shot run reports its cycle's halt as the process ending. A cycling Dredger stops
     -- by being asked to, whatever its last cycle did, so a supervisor does not restart it.
     onceCycle = do
-        halt <- outcomeHalt <$> sweepCycle pacing ports mounts
-        writeIORef (stFinal status) halt
-        when (any latches halt) (writeIORef (stLatched status) halt)
+        outcome <- sweepCycle pacing ports mounts
+        writeIORef (stFinal status) (Just outcome)
+        when (any latches (outcomeHalt outcome)) (writeIORef (stLatched status) (outcomeHalt outcome))
 
     step = latchedStep pacing ports mounts (stLatched status)
 
@@ -211,17 +209,17 @@ logBlastRadius logEnv opts pacing mount =
             <> disposition
             <> resumption
   where
-    facts = storeFacts (smStore mount)
+    facts = obFacts (ssObserve (smStore mount))
     refill = case factRefill facts of
         RefillPermitted -> "which accepts a re-publication of a version it deleted"
         RefillRefused -> "which refuses a re-publication, so a delete retires the version for good"
     disposition = case doMode opts of
         SweepDeletes -> "deleting what a named decisive deny condemns"
-        SweepRehearses -> "rehearsing only: this run deletes nothing"
-    resumption = case (swpShape pacing, storeCursor (smStore mount)) of
+        SweepPreviews -> "previewing only: this run holds nothing that could delete"
+    resumption = case (swpShape pacing, walkMarkerOf (smStore mount)) of
         (SweepCandidates, _) -> ""
         (SweepEverything, Just _) -> "; the full walk resumes from this store's own marker"
-        (SweepEverything, Nothing) -> "; this store keeps no marker, so the full walk restarts after a restart"
+        (SweepEverything, Nothing) -> "; this run keeps no marker, so the full walk starts at the first bucket"
 
 dredgerModule :: Text
 dredgerModule = "Ecluse.Dredger"

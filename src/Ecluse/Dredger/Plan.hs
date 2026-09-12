@@ -9,45 +9,56 @@ module Ecluse.Dredger.Plan (
     DredgerOptions (..),
     SweepMode (..),
     SweepRepetition (..),
+    dredgerBootRole,
     sweepPacingFor,
     sweepReportFor,
-    rehearsedStore,
     waitsForAdvisories,
     advisoryWaitAttempts,
     advisoryPollMicros,
+    cycleEnding,
     haltDetail,
 ) where
 
+import Data.Text qualified as T
+
 import Ecluse.Composition.Sizing (resolveSized)
+import Ecluse.Composition.Types (BootRole (BootStorePreview, BootStorePruner))
 import Ecluse.Config (
     AppConfig (cfgDredger),
     DredgerSettings (drgChunkPause, drgChunkSize, drgCyclePause, drgDeletionCap, drgFullWalk),
  )
-import Ecluse.Core.Registry.Maintenance (
-    StoreCursor (clearCursor, writeCursor),
-    StoreMaintenance (deleteVersions, rehearseDelete, storeCursor),
-    VersionOutcome (VersionRemoved),
- )
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt,
+    CycleOutcome (outcomeEvidence, outcomeHalt),
     SweepMount (smConfigured),
     SweepPacing (SweepPacing, swpChunkPause, swpChunkSize, swpCyclePause, swpDeletionCap, swpShape),
     SweepReport (SweepReport, reportCapHalts, reportOpening, reportRemoval),
     SweepShape (SweepCandidates, SweepEverything),
     deletionCapPerStore,
+    evidenceComplete,
+    outcomeComplete,
     renderCycleHalt,
+    renderEvidenceGaps,
  )
 import Ecluse.Core.Rules.Types (readsAdvisories)
 import Ecluse.Core.Supervision (secondsToMicros)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepWouldDelete))
 
--- | Whether the run deletes, or rehearses and deletes nothing.
+-- | Whether the run deletes, or previews what a run that deletes would reach.
 data SweepMode
     = -- | Versions a named decisive deny condemns are deleted.
       SweepDeletes
-    | -- | Nothing is deleted, because the store handle carries no real delete.
-      SweepRehearses
+    | -- | Nothing is deleted, because the run holds no capability that could.
+      SweepPreviews
     deriving stock (Eq, Show)
+
+{- | The role a Dredger invocation boots under, settled from its own flags before the boot's
+vetting pass runs, so the pass and the runtime agree on what the process may do to a store.
+-}
+dredgerBootRole :: SweepMode -> BootRole
+dredgerBootRole = \case
+    SweepDeletes -> BootStorePruner
+    SweepPreviews -> BootStorePreview
 
 -- | Whether the role cycles for the life of the process, or runs one cycle and exits.
 data SweepRepetition
@@ -60,7 +71,7 @@ data SweepRepetition
 -- | What @ecluse dredger@'s own flags settled, carried from the command line to the sweep.
 data DredgerOptions = DredgerOptions
     { doMode :: SweepMode
-    -- ^ Whether the sweep deletes (@--dry-run@ rehearses instead).
+    -- ^ Whether the sweep deletes (@--dry-run@ previews instead).
     , doRepetition :: SweepRepetition
     -- ^ Whether it cycles for the life of the process (@--once@ runs one cycle).
     }
@@ -95,30 +106,35 @@ the outcome from the status and the reason from the same line.
 haltDetail :: CycleHalt -> Text
 haltDetail halt = "the mirror sweep cycle halted: " <> renderCycleHalt halt
 
-{- | How a run reports what it removed. A rehearsal counts under its own arm and past the cap, so
-it reports the full reach a real run would have rather than stopping at the breaker.
+{- | How a run reports what it removed. A preview counts under its own arm and past the cap, so it
+reports the full reach a real run would have rather than stopping at the breaker.
 -}
 sweepReportFor :: SweepMode -> SweepReport
 sweepReportFor = \case
     SweepDeletes -> SweepReport{reportRemoval = SweepDeleted, reportOpening = "deleting ", reportCapHalts = True}
-    SweepRehearses ->
+    SweepPreviews ->
         SweepReport{reportRemoval = SweepWouldDelete, reportOpening = "dry run, would delete ", reportCapHalts = False}
 
-{- | A store handle with no real delete and no real marker write in it, so the loop cannot delete
-because nothing it holds can. The backend's own rehearsal answers where it has one.
+{- | What a one-shot run reports as its own ending, or 'Nothing' where it ends cleanly. A run that
+deletes ends on the halt its cycle raised, and a preview ends on completeness alone.
 -}
-rehearsedStore :: StoreMaintenance -> StoreMaintenance
-rehearsedStore store =
-    store
-        { deleteVersions = fromMaybe reportsRemoved (rehearseDelete store)
-        , storeCursor = readOnly <$> storeCursor store
-        }
-  where
-    -- A backend with no rehearsal of its own reports what it was handed, which is what the
-    -- would-delete count reads and the audit line has already put on record.
-    reportsRemoved _ versions = pure [(version, VersionRemoved) | version <- versions]
+cycleEnding :: SweepMode -> CycleOutcome -> Maybe Text
+cycleEnding = \case
+    SweepDeletes -> fmap haltDetail . outcomeHalt
+    SweepPreviews -> previewEnding
 
-    readOnly cursor = cursor{writeCursor = const (pure (Right ())), clearCursor = pure (Right ())}
+{- The preview's own ending. Its counts describe part of the store, so a scheduler reads that from
+the status rather than from the counts, which report every candidate the cycle did gather. -}
+previewEnding :: CycleOutcome -> Maybe Text
+previewEnding outcome
+    | outcomeComplete outcome = Nothing
+    | otherwise = Just ("the mirror sweep preview counted from part of the store: " <> partial)
+  where
+    gaps = outcomeEvidence outcome
+    partial =
+        T.intercalate
+            "; "
+            (catMaybes [renderCycleHalt <$> outcomeHalt outcome, renderEvidenceGaps gaps <$ guard (not (evidenceComplete gaps))])
 
 {- | Whether a first cycle waits for the first advisory sync. A rule set with no advisory rule
 never needs one, so it starts at once.

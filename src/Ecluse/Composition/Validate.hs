@@ -34,7 +34,7 @@ import Ecluse.Composition.Endpoints (
     vetEndpoints,
  )
 import Ecluse.Composition.Maintenance (ClearedBackend, vetStoreBackends)
-import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (Severity (Ignore, Refuse), Vet, rule)
 import Ecluse.Config (
     AppConfig (cfgDredger, cfgMounts, cfgServer),
@@ -112,13 +112,14 @@ vetBoot config =
 
     cleared target (firstParty, staticToken) = VettedPublication target firstParty staticToken
 
-{- The floor under the sweep's own pace. Deletion is permanent, so the deleting role refuses a
+{- The floor under the sweep's own pace. Deletion is permanent, so both store roles refuse a
 pause that would sweep faster than an operator can stop it, and every other role reads none. -}
 vetSweepPacing :: AppConfig -> Vet ()
 vetSweepPacing app = rule severity beneathFloor (drgChunkPause (cfgDredger app))
   where
     severity = \case
         MirrorPruner -> Refuse (`DredgerChunkPauseBeneathFloor` minimumChunkPause)
+        MirrorPreviewer -> Refuse (`DredgerChunkPauseBeneathFloor` minimumChunkPause)
         MirrorWriter -> Ignore
 
     beneathFloor configured = configured <$ guard (configured < minimumChunkPause)

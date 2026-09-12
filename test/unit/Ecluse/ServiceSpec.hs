@@ -12,6 +12,7 @@ import Test.Hspec
 import Ecluse.Boot (BootEnv (BootEnv))
 import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Executable (ExecutablePlan (epRoleWiring), MirrorWiring (mwCveSync), RoleWiring (MirrorPipelineWiring), planExecutable)
+import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
 import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, staticEnvVars)
 import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
@@ -28,7 +29,7 @@ import Ecluse.Core.Worker (
 import Ecluse.Core.Worker.Liveness (newWorkerHeartbeatWithClock)
 import Ecluse.Runtime.Server (MountBinding (bindingPrefix))
 import Ecluse.Service (mountBindingFor, withServiceRuntime, workerLiveness)
-import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Support (newTestClock)
@@ -102,7 +103,10 @@ advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
                         mountBindingFor
                         (\_ _ _ -> pure noMirrorQueue)
                         (\_ _ -> pure (Right noCredentialProviders))
-                        (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
+                        StoreBuilds
+                            { sbDeleting = \_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
+                            , sbObserving = \_ _ _ -> fakeObservation <$> newFakeStore defaultFakeStoreConfig
+                            }
                         bootPlan
                 case planned of
                     Right plan | MirrorPipelineWiring mirror <- epRoleWiring plan -> do

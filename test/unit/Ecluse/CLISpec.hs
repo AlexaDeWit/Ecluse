@@ -11,7 +11,7 @@ import Ecluse.CLI (AppCommand (..), commandParser)
 import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Dredger.Plan (
     DredgerOptions (DredgerOptions, doMode, doRepetition),
-    SweepMode (SweepDeletes, SweepRehearses),
+    SweepMode (SweepDeletes, SweepPreviews),
     SweepRepetition (SweepContinuously, SweepOnce),
  )
 import Ecluse.Pilot (PilotCompileOptions (..))
@@ -57,10 +57,10 @@ spec = do
                 Success cmd -> cmd `shouldBe` RunDredger DredgerOptions{doMode = SweepDeletes, doRepetition = SweepContinuously}
                 _ -> expectationFailure "expected Success RunDredger"
 
-        it "parses 'dredger --once --dry-run' as one rehearsed cycle" $ do
+        it "parses 'dredger --once --dry-run' as one preview cycle" $ do
             -- Both flags only narrow what one invocation does, so they compose.
             case parseCLI ["dredger", "--once", "--dry-run"] of
-                Success cmd -> cmd `shouldBe` RunDredger DredgerOptions{doMode = SweepRehearses, doRepetition = SweepOnce}
+                Success cmd -> cmd `shouldBe` RunDredger DredgerOptions{doMode = SweepPreviews, doRepetition = SweepOnce}
                 _ -> expectationFailure "expected Success RunDredger"
 
         it "parses 'pilot compile' with the default ecosystem and canonical source" $ do

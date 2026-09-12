@@ -65,7 +65,7 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         initial <- verdaccioSnapshot e2e
         run <- runDredgerOnce plane ["--once", "--dry-run"] (sweepEnv dredgerDryRunPkg)
         assertFullSweep "dry run, would delete " dredgerDryRunPkg initial run
-        roleOutput run `shouldSatisfy` T.isInfixOf "rehearsing only: this run deletes nothing"
+        roleOutput run `shouldSatisfy` T.isInfixOf "previewing only: this run holds nothing that could delete"
         verdaccioSnapshot e2e `shouldReturn` initial
 
     it "refuses missing consent, names the key, and leaves every version intact" $ \(plane, e2e) -> do

@@ -281,6 +281,8 @@ spec = describe "resolveBootPlan" $ do
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
                 `shouldBe` [ wouldRefuse "ecluse dredger" collapsedMirrorRefusal
                            , wouldRefuse "ecluse dredger" noMaintenanceBackend
+                           , wouldRefuse "ecluse dredger --dry-run" collapsedMirrorRefusal
+                           , wouldRefuse "ecluse dredger --dry-run" noMaintenanceBackend
                            ]
 
         it "names the Dredger on a mirror target this build has no maintenance backend for" $ do
@@ -288,7 +290,9 @@ spec = describe "resolveBootPlan" $ do
             -- operator who never runs the Dredger against it still learns that they cannot.
             config <- expectConfig staticEnvVars Nothing
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor staticEnvVars Nothing config noCeiling)
-                `shouldBe` [wouldRefuse "ecluse dredger" noMaintenanceBackend]
+                `shouldBe` [ wouldRefuse "ecluse dredger" noMaintenanceBackend
+                           , wouldRefuse "ecluse dredger --dry-run" noMaintenanceBackend
+                           ]
 
         it "omits the role the caller already reported for" $ do
             let envVars = withoutQueueUrl codeArtifactEnvVars

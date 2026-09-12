@@ -18,17 +18,18 @@ import Ecluse.Core.Registry.Maintenance (
     DeleteCeiling (AtMost),
     RefillPosture (RefillRefused),
     RetryAdvice (RetryFutile, RetryWorthwhile),
-    StoreClass (StorePreserved),
+    StoreClass (StoreDestroyable, StorePreserved),
     StoreCursor (..),
     StoreFacts (..),
     StoreFault (..),
     StoreMaintenance (..),
+    StoreObservation (..),
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoving, VersionUnreached),
     VersionPresence (VersionServed, VersionWithdrawn),
     collectPages,
     noNameAlphabet,
-    storeRefusal,
+    wholeNameSpace,
  )
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
@@ -149,18 +150,22 @@ spec = do
             store <- newFakeStore seededConfig{fakeKeepsCursor = False}
             isNothing (storeCursor (fakeMaintenance store)) `shouldBe` True
 
-    describe "the fake store's rehearsal" $ do
-        it "reports the outcomes a delete would give, and deletes nothing" $ do
+    describe "the fake store's observing calls" $ do
+        it "reads the same seeded state the handle does" $ do
             store <- newFakeStore seededConfig
-            case rehearseDelete (fakeMaintenance store) of
-                Nothing -> expectationFailure "the fake store has a native rehearsal"
-                Just rehearse -> do
-                    outcomes <- rehearse plainName (map version ["1.0.0", "9.9.9"])
-                    map snd outcomes
-                        `shouldBe` [VersionRemoving "fake-operation", refused]
-                    remaining <- readFakeContents store
-                    map (renderVersion . storedVersion) (Map.findWithDefault [] plainName remaining)
-                        `shouldBe` ["1.0.0", "1.1.0"]
+            let observed = fakeObservation store
+            collectPages (obListPackagesIn observed wholeNameSpace) `shouldReturn` Right [plainName, scopedName]
+            fmap (map storedVersion) <$> obEnumerateVersions observed plainName
+                `shouldReturn` Right (map version ["1.0.0", "1.1.0"])
+            obVerifyConsent observed `shouldReturn` Right ConsentGranted
+            obClassifyStore observed `shouldReturn` Right StoreDestroyable
+
+        it "leaves the store's contents untouched, because it holds nothing that writes" $ do
+            store <- newFakeStore seededConfig
+            before <- readFakeContents store
+            void (collectPages (obListPackagesIn (fakeObservation store) wholeNameSpace))
+            void (obEnumerateVersions (fakeObservation store) plainName)
+            readFakeContents store `shouldReturn` before
 
     describe "the fake store under a fault" $ do
         it "faults every read" $ do
@@ -187,8 +192,6 @@ spec = do
     isRefusal = \case
         VersionRefused _ -> True
         _ -> False
-
-    refused = VersionRefused (storeRefusal "NOT_FOUND" "the store holds no such version")
 
 seededConfig :: FakeStoreConfig
 seededConfig =
