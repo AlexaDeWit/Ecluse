@@ -2,45 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The @bench-load@ entry point: the load benchmarks tier of the benchmark strategy,
-throughput and latency under concurrent load against the real composed proxy.
-
-Unlike the work-per-request micro-benches (@ecluse-bench@, @tasty-bench@), this boots the
-real 'Ecluse.Server.application' on @warp@ over stub upstreams and drives it with @oha@.
-It therefore measures system behaviour (saturation, latency tails, GC pauses) rather than
-a pure function's cost. It is __inform-only__ and __never gates__. A human reads and
-trends the figures. The only red state is a literal failure: the harness cannot boot,
-@oha@ cannot run, or a scenario served nothing.
-
-== Two passes, one baseline
-
-The driver first probes the live public registry for the corpus packages and takes the
-mean round trip as the upstream baseline (measure-then-seed). It then drives __two__
-passes over every scenario, both with that round trip injected as the stub upstreams'
-latency:
-
-  * a __concurrency-1 service pass__, where no request queues, so a measured latency is
-    the upstream baseline plus Écluse's per-request overhead: the service-time
-    attribution.
-
-  * the __loaded pass__ at the configured concurrency, whose p50 above the service p50 is
-    the queuing delay: the load-saturation signal.
-
-The probe is non-gating. The configured injected latency stands in, labelled as a
-fallback, when the public registry is unreachable or @BENCH_LOAD_PROBE_RTT=0@ switches the
-probe off. Both passes still run.
-
-== Per-scenario process isolation
-
-Peak residency is a process-wide RTS high-water mark, so each scenario runs in its __own
-process__ to keep its residency its own. With no argument this binary is the __driver__.
-It re-execs itself once per scenario per pass (@bench-load <scenario>@) and collects each
-child's machine-readable report. It renders the combined tables to stdout and the GitHub
-run summary. With a scenario name it is a __child__: it runs that one scenario and prints
-its report as a single JSON line. Both read the load knobs from the environment, so a
-child inherits the driver's operating point. It also inherits the per-pass overrides the
-driver layers onto its environment: the seeded latency, and concurrency 1 for the service
-pass.
+{- | Run isolated load and concurrency-one passes for each ecosystem fixture.
+Each report keeps its own baseline, throughput, service-time, and saturation sections.
+A child prints one JSON report, while the driver writes the combined Markdown artifact.
 -}
 module Main (main) where
 
@@ -70,80 +34,75 @@ import Ecluse.BenchLoad.Harness (
  )
 import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt))
 import Ecluse.BenchLoad.Npm (npmFixture)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.BenchLoad.PyPI (pypiFixture, pypiLoadNotes)
+import Ecluse.BenchLoad.Selection (fixtureBaseline, fixtureSection, scenarioKey, selectScenario)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue)
 
--- | The fixtures driven, one per upstream ecosystem. npm is the only instance today.
 fixtures :: [UpstreamFixture]
-fixtures = [npmFixture]
+fixtures = [npmFixture, pypiFixture]
 
+-- | Run both fixture passes, or one ecosystem-qualified child scenario.
 main :: IO ()
 main =
     getArgs >>= \case
         [] -> runDriver
         [name] -> runChild (toText name)
-        _ -> benchFail "usage: bench-load [<scenario-name>]"
+        _ -> benchFail "usage: bench-load [<ecosystem>/<scenario-name>]"
 
 runDriver :: IO ()
 runDriver = do
     knobs <- loadKnobsFromEnv
-    baseline <- probePublicRtt knobs
+    npmBaseline <- probePublicRtt knobs
     self <- getExecutablePath
-    -- A command-line @+RTS -N3@ does not survive the re-exec, because the parent's runtime
-    -- consumes the argv RTS flags. Without this the children fall back to the baked bare @-N@,
-    -- claim every core, and overlap the core the harness pins oha to. The child reads GHCRTS.
+    -- The parent consumes argv RTS flags. Children need the same capability count through GHCRTS.
     capabilities <- getNumCapabilities
-    let pinChildren = ("GHCRTS", "-N" <> show capabilities)
-        injMs = baselineInjectedMs baseline
-        loadOverrides = [latencyOverride injMs, pinChildren]
-        c1Overrides = [latencyOverride injMs, ("BENCH_LOAD_CONCURRENCY", "1"), pinChildren]
-        loadPassKnobs = knobs{lkUpstreamLatencyMicros = injMs * 1_000}
     rendered <- forM fixtures $ \fixture -> do
-        let names = map scenarioName (fixtureScenarios fixture)
-            eco = fixtureEcosystem fixture
+        let eco = fixtureEcosystem fixture
+            names = map (scenarioKey eco . scenarioName) (fixtureScenarios fixture)
+            baseline = fixtureBaseline eco (lkUpstreamLatencyMicros knobs) npmBaseline
+            pinChildren = ("GHCRTS", "-N" <> show capabilities)
+            injMs = baselineInjectedMs baseline
+            loadOverrides = [latencyOverride injMs, pinChildren]
+            c1Overrides = [latencyOverride injMs, ("BENCH_LOAD_CONCURRENCY", "1"), pinChildren]
+            loadPassKnobs = knobs{lkUpstreamLatencyMicros = injMs * 1_000}
+            notes = case eco of
+                PyPI -> [pypiLoadNotes knobs]
+                _ -> []
         loadedReports <- traverse (runScenarioChild self loadOverrides) names
         c1Reports <- traverse (runScenarioChild self c1Overrides) names
         pure $
-            T.intercalate
-                "\n"
-                [ renderReports loadPassKnobs capabilities eco loadedReports
-                , renderServiceTime baseline c1Reports
-                , renderLoadSaturation c1Reports loadedReports
-                ]
+            fixtureSection eco $
+                notes
+                    <> [ renderReports loadPassKnobs capabilities eco loadedReports
+                       , renderServiceTime baseline c1Reports
+                       , renderLoadSaturation c1Reports loadedReports
+                       ]
     let output = T.intercalate "\n" rendered
     putText output
     lookupEnv "GITHUB_STEP_SUMMARY" >>= traverse_ (`appendFileText` output)
 
--- The environment override that seeds a child's injected upstream latency, in whole
--- milliseconds (the knob's unit).
 latencyOverride :: Int -> (String, String)
 latencyOverride injMs = ("BENCH_LOAD_UPSTREAM_LATENCY_MS", show injMs)
 
--- The baseline round trip in whole milliseconds, the value injected into both passes.
 baselineInjectedMs :: BaselineSource -> Int
 baselineInjectedMs = \case
     MeasuredRtt rtt _ -> round rtt
     InjectedFallback ms -> round ms
 
--- The child prints exactly one JSON line, its report, so the captured stdout decodes
--- directly.
 runScenarioChild :: FilePath -> [(String, String)] -> Text -> IO ScenarioReport
 runScenarioChild self overrides name = do
     base <- getEnvironment
     raw <- readProcessStdout_ (setEnv (overrideEnv overrides base) (proc self [toString name]))
     either (\err -> benchFail ("bench-load child " <> name <> " report did not parse: " <> toText err)) pure (eitherDecode raw)
 
--- Layer the overrides onto a base environment: keep every base entry the overrides do not
--- name, then append the overrides (which therefore win).
 overrideEnv :: [(String, String)] -> [(String, String)] -> [(String, String)]
 overrideEnv overrides base =
     [(k, v) | (k, v) <- base, k `notElem` overriddenKeys] <> overrides
   where
     overriddenKeys = map fst overrides
 
-{- A first fetch warms the keep-alive connection, which keeps the handshake out of the
-samples. Falls back to the configured injected latency when probing is off, the catalogue
-is empty, or every fetch fails, so an offline run still produces both passes. -}
+-- Warm the connection before timing registry fetches. Failed or disabled probes use the configured latency.
 probePublicRtt :: LoadKnobs -> IO BaselineSource
 probePublicRtt knobs = do
     enabled <- probeEnabled
@@ -170,24 +129,23 @@ probePublicRtt knobs = do
         t1 <- getMonotonicTime
         pure (if isJust mBody then Just ((t1 - t0) * 1_000) else Nothing)
 
-    -- The mean of the timed samples, rounded to whole milliseconds. The value injected
-    -- into the stubs and the value subtracted in attribution are then the same.
     meanMs :: [Double] -> Double
     meanMs samples = fromIntegral (round (sum samples / fromIntegral (length samples)) :: Int)
 
--- Whether the live probe is enabled, which is the default. @BENCH_LOAD_PROBE_RTT@ set to
--- a falsey value switches it off for a deterministic offline run.
 probeEnabled :: IO Bool
 probeEnabled = maybe True ((`notElem` ["0", "false", "no", "off"]) . map toLower) <$> lookupEnv "BENCH_LOAD_PROBE_RTT"
 
--- The child: run the named scenario and print its report as a single JSON line.
 runChild :: Text -> IO ()
 runChild name = do
     knobs <- loadKnobsFromEnv
     scenario <- maybe (benchFail ("unknown scenario: " <> name)) pure (findScenario name)
-    report <- runScenario knobs scenario
+    report <- runScenario knobs scenario{scenarioName = name}
     LBSC.putStrLn (encode report)
 
--- Find a scenario by name across every fixture.
 findScenario :: Text -> Maybe Scenario
-findScenario name = find ((== name) . scenarioName) (concatMap fixtureScenarios fixtures)
+findScenario name =
+    selectScenario
+        name
+        [ (fixtureEcosystem fixture, [(scenarioName scenario, scenario) | scenario <- fixtureScenarios fixture])
+        | fixture <- fixtures
+        ]

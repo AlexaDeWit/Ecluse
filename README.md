@@ -164,6 +164,8 @@ DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, a
 `Ecluse.Core.Stream` provides the byte limiter shared by EPSS ingestion and advisory downloads.
 `Ecluse.Test.EcosystemBench` supplies format-specific performance inputs and adapter operations.
 The benchmark groups share projected package metadata, while adapters own raw document handling.
+`Ecluse.BenchLoad.Fixture` shares the composed proxy wiring for npm and PyPI load scenarios.
+`Ecluse.BenchLoad.Selection` qualifies scenario identities and groups reports by ecosystem.
 
 | Path        | Purpose                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------ |

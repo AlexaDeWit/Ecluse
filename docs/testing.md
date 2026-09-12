@@ -165,7 +165,7 @@ Reports support manual comparisons only. No workflow stores a cross-run baseline
 |---|---|---|
 | [Work per request](../.github/workflows/bench.yml) | Time and allocations for the benchmark groups over committed and synthetic corpora | `bench-results.csv`, `bench-output.txt` |
 | [Performance acceptance](../.github/workflows/perf-acceptance.yml) | Full-document and selective-decode overhead on live registry documents against reviewed budgets | `perf-acceptance-report.md` |
-| [Load](../.github/workflows/bench-load.yml) | Throughput and latency under concurrent requests through the composed proxy | `bench-load-results.md` |
+| [Load](../.github/workflows/bench-load.yml) | npm and PyPI throughput and latency through the composed proxy, with separate ecosystem sections and baseline sources | `bench-load-results.md` |
 
 Read a red result according to its measurement:
 
@@ -173,6 +173,7 @@ Read a red result according to its measurement:
 - Performance acceptance fails on an overhead budget breach. An unavailable live registry produces an unavailable result, not a breach.
   Its report separates upstream time from Écluse overhead. A breach needs a human decision about a code regression or a budget revision.
 - Load benchmarks use `oha` against the composed proxy. They fail when the harness cannot boot, `oha` cannot run, or a scenario serves nothing.
+  Fixture preflights also fail on an unexpected status, index shape, or wheel body.
   Throughput and latency have no regression threshold. Shared-runner noise and the load run's cost make it unsuitable as a per-PR signal.
 
 Budget values and calibration belong in [acceptance/criteria.json](../acceptance/criteria.json).
@@ -192,7 +193,7 @@ The pending links identify work needed to bring existing ecosystems up to this b
 | At least one real-client install, gating in `ecluse-e2e` | `test/e2e/Ecluse/E2E/<Ecosystem>/InstallE2ESpec.hs`, with fixtures under `test/e2e/Ecluse/E2E/Fixtures/<Ecosystem>.hs` | npm and pip installs currently share [E2ESpec.hs](../test/e2e/Ecluse/E2ESpec.hs), using [npm](../test/e2e/Ecluse/E2E/Fixtures/Npm.hs) and [PyPI](../test/e2e/Ecluse/E2E/Fixtures/PyPI.hs) fixtures. [#1304](https://github.com/AlexaDeWit/Ecluse/issues/1304) supplies the per-ecosystem spec layout. |
 | Work-per-request instance and corpus | Register an `EcosystemBench` in [Ecluse.Test.EcosystemBench](../test/support/Ecluse/Test/EcosystemBench.hs), with frozen bytes under `bench/corpus/<ecosystem>/`, pins in `bench/corpus/pins.json`, and a synthetic byte generator | npm and PyPI run every metadata group through the shared record. [PyPI captures](../bench/corpus/pypi/) use the shipped PEP 691 Simple JSON format. Generator checks cover decoding, projection, selective reads, and artifact URL rewriting. New instances require no changes to the benchmark groups or report renderer. |
 | Performance acceptance budgets | Ecosystem budgets in `acceptance/criteria.json`, consumed by `acceptance/app/Main.hs` using the benchmark corpus | [npm budgets](../acceptance/criteria.json) and the [driver](../acceptance/app/Main.hs) exist. [#1302](https://github.com/AlexaDeWit/Ecluse/issues/1302) adds ecosystem sections and PyPI full-document and selective-decode budgets. |
-| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Main.hs` | [Npm.hs](../bench/load/Ecluse/BenchLoad/Npm.hs) supplies the existing scenarios. [#1303](https://github.com/AlexaDeWit/Ecluse/issues/1303) adds `PyPI.hs` for index, wheel, and cache scenarios. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |
+| Load fixture | `bench/load/Ecluse/BenchLoad/<Ecosystem>.hs` exporting an `UpstreamFixture`, registered in `bench/load/Main.hs` | [npm](../bench/load/Ecluse/BenchLoad/Npm.hs) and [PyPI](../bench/load/Ecluse/BenchLoad/PyPI.hs) run metadata, artifact, and cache scenarios through shared proxy wiring. PyPI checks PEP 691 indices and wheel bodies before load, and uses a labelled configured baseline. Its eviction cache stays below the actual corpus working set. PyPI worker mirroring waits for [#765](https://github.com/AlexaDeWit/Ecluse/issues/765). |
 
 The shared residency gate remains in
 [`test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs`](../test/residency/Ecluse/Core/Server/Pipeline/TarballResidencySpec.hs).
