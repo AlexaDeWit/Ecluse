@@ -228,8 +228,7 @@ data QueueMessage = QueueMessage
     -}
     , msgLease :: Maybe ReceiptLease
     {- ^ How long this delivery stays hidden, for the worker's renewal controller
-    ("Ecluse.Core.Worker.Lease"). 'Nothing' from a backend that never expires a delivery, which
-    therefore needs no renewal.
+    ("Ecluse.Core.Worker.Lease"). 'Nothing' from a backend that never expires a delivery.
     -}
     }
     deriving stock (Eq, Show)

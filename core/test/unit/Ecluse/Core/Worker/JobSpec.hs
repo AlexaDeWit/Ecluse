@@ -40,6 +40,7 @@ import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
+    RetryLeg (AfterPublish, BeforePublish),
     WorkerPolicy (wpArtifact, wpPublish),
     processJob,
  )
@@ -56,25 +57,30 @@ spec = do
         -- One table serves the artifact fetch and the mirror write, so no exchange fault can
         -- drop on one leg and retry on the other.
         it "drops an unformable URL (a redelivery re-forms the same URL from the same inputs)" $
-            outcomeOfFetchFault renderFault (FetchUrlUnformable EmptyBaseUrl)
+            outcomeOfFetchFault BeforePublish renderFault (FetchUrlUnformable EmptyBaseUrl)
                 `shouldBe` Dropped "unformable"
 
         -- An over-bound response is terminal, so the backend dead-letters it. Treating every
         -- fetch Left as a retry would redeliver a deterministically over-cap tarball forever.
         it "dead-letters an over-bound response (it can never succeed, so it rides the terminus)" $
-            outcomeOfFetchFault renderFault (FetchBoundExceeded (BodyTooLarge 1024))
+            outcomeOfFetchFault BeforePublish renderFault (FetchBoundExceeded (BodyTooLarge 1024))
                 `shouldBe` DeadLettered "over the bound"
 
         it "retries a transport fault (a redelivery may succeed)" $
-            outcomeOfFetchFault renderFault (FetchTransport (transportFault TransportUnreachable "connection reset"))
-                `shouldBe` Retried "transport failed"
+            outcomeOfFetchFault BeforePublish renderFault (FetchTransport (transportFault TransportUnreachable "connection reset"))
+                `shouldBe` Retried BeforePublish "transport failed"
+
+        it "carries the caller's leg, so only a failed publish releases the message's visibility" $
+            -- The cause is shared between the fetch and the publish; the disposition is not.
+            outcomeOfFetchFault AfterPublish renderFault (FetchTransport (transportFault TransportUnreachable "connection reset"))
+                `shouldBe` Retried AfterPublish "transport failed"
 
     describe "outcomeOfAdmission (the shared admission verdict, split on the shared transience)" $ do
         -- 'Ecluse.Core.Package.Admission.admissionTransience' is the one input to the split, and
         -- the serve gate reads it to choose a 503 over a 500. The two cannot disagree.
         it "retries an inability the evaluator expects to clear (an advisory source briefly down)" $
             case outcomeOfAdmission (jobWith unreachableUrl) (undecided (WillResolve Nothing) "no advisory database is loaded") of
-                Left (Retried reason) -> reason `shouldSatisfy` T.isInfixOf "no advisory database is loaded"
+                Left (Retried _ reason) -> reason `shouldSatisfy` T.isInfixOf "no advisory database is loaded"
                 other -> expectationFailure ("expected a retry for a clearing inability, got " <> show other)
 
         it "drops an inability no retry can clear, rather than redelivering until the budget retires it" $
@@ -188,7 +194,7 @@ spec = do
                 job <- enqueueAndReceive queue (jobWith credentialBearingUnreachableUrl)
                 outcome <- runWM runtime (processJob job)
                 case outcome of
-                    Retried reason -> do
+                    Retried _ reason -> do
                         reason `shouldSatisfy` T.isInfixOf "127.0.0.1:1"
                         reason `shouldSatisfy` (not . T.isInfixOf "hunter2")
                         reason `shouldSatisfy` (not . T.isInfixOf "sig=abc")
@@ -210,7 +216,7 @@ spec = do
                     job <- enqueueAndReceive queue (jobWith url)
                     outcome <- runWM runtime (processJob job)
                     case outcome of
-                        Retried reason -> do
+                        Retried _ reason -> do
                             reason `shouldSatisfy` T.isInfixOf "connection refused"
                             T.count "publish transport failure:" reason `shouldBe` 1
                         other -> expectationFailure ("expected a Retried transport outcome, got " <> show other)

@@ -83,13 +83,17 @@ spec =
             it "renews a received job's visibility for as long as the worker holds it (issue #1208)" $ \container -> do
                 -- The lease controller against real SQS: a job that outruns its one-second
                 -- window stays hidden, so no second consumer can take it mid-mirror.
-                queue <- freshQueue container "mirror-lease" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
+                queue <- freshQueue container "mirror-lease" defaultQueueOptions{qoVisibilityTimeout = Seconds 2}
                 unwrapQ (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
                 logEnv <- quietLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty $
-                    withLeasedBatch (queueLeaseOps queue) [message] $ \leased ->
-                        traverse_ (`whileLeased` heldJob queue) leased
+                outcomes <-
+                    runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty $
+                        withLeasedBatch (queueLeaseOps queue) [message] $ \leased ->
+                            traverse (`whileLeased` heldJob queue) leased
+                -- A dropped lease would cancel the job before its own assertion ran, so the job
+                -- having finished is half of what this case proves.
+                outcomes `shouldBe` [Just ()]
 
             it "dead-letters a terminal fault without deleting it, so it rides the redrive policy (issue #846)" $ \container -> do
                 -- deadLetter must NOT DeleteMessage, which would silently discard the terminal
@@ -150,12 +154,12 @@ deadEndpointQueue = do
             , sqsWaitSeconds = 1
             }
 
-{- | A job that runs three times its receipt's one-second window, then asserts nothing came
+{- | A job that runs three times its receipt's two-second window, then asserts nothing came
 back to a second consumer in the meantime.
 -}
 heldJob :: MirrorQueue -> KatipContextT IO ()
 heldJob queue = liftIO $ do
-    threadDelay 3_000_000
+    threadDelay 6_000_000
     -- Two polls, each past the original window: still hidden, so the renewals held.
     stillHidden1 <- unwrapQ (receive queue)
     stillHidden2 <- unwrapQ (receive queue)

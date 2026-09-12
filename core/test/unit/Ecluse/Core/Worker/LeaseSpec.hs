@@ -13,6 +13,7 @@ import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
 import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportTls, TransportUnreachable), TransportFault, transportFault)
 import Ecluse.Core.Queue (QueueMessage (..), mkReceiptHandle, unReceiptHandle)
@@ -35,6 +36,7 @@ import Ecluse.Core.Worker.Lease (
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Queue (sampleJob)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 spec :: Spec
 spec = do
@@ -70,8 +72,8 @@ spec = do
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
-                one <- leaseAt 0 leased
-                void . whileLeased one . liftIO $ do
+                held <- leaseAt 0 leased
+                void . whileLeased held . liftIO $ do
                     awaitRenewals world 5
                     readIORef (lwNow world) >>= (`shouldSatisfy` (> 30))
                     redeliverable world `shouldReturn` []
@@ -82,8 +84,8 @@ spec = do
             let batch = [delivery "a" window30 twelveHours, delivery "b" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
-                one <- leaseAt 0 leased
-                void . whileLeased one . liftIO $ do
+                held <- leaseAt 0 leased
+                void . whileLeased held . liftIO $ do
                     awaitRenewals world 8
                     readIORef (lwNow world) >>= (`shouldSatisfy` (> 30))
                     redeliverable world `shouldReturn` []
@@ -94,8 +96,8 @@ spec = do
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 25 batch
             runLeases world keepsEveryLease batch $ \leased -> do
-                one <- leaseAt 0 leased
-                void . whileLeased one . liftIO $ do
+                held <- leaseAt 0 leased
+                void . whileLeased held . liftIO $ do
                     awaitRenewals world 3
                     redeliverable world `shouldReturn` []
 
@@ -104,8 +106,8 @@ spec = do
             let batch = [unleased "m"]
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
-                one <- leaseAt 0 leased
-                void (whileLeased one (liftIO (threadDelay 20_000)))
+                held <- leaseAt 0 leased
+                void (whileLeased held (liftIO (threadDelay 20_000)))
             readIORef (lwRenewals world) `shouldReturn` []
 
         it "runs one renewal task per receipt across a full batch of ten, and none besides" $ do
@@ -113,8 +115,8 @@ spec = do
             let batch = map (\n -> delivery (show n) window30 twelveHours) [1 :: Int .. 10]
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
-                one <- leaseAt 0 leased
-                void . whileLeased one . liftIO $ do
+                held <- leaseAt 0 leased
+                void . whileLeased held . liftIO $ do
                     awaitRenewals world 30
                     redeliverable world `shouldReturn` []
             renewed <- readIORef (lwRenewals world)
@@ -125,12 +127,12 @@ spec = do
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             runLeases world (faultingFor ["a"] unreachable) batch $ \leased -> do
-                one <- leaseAt 0 leased
+                held <- leaseAt 0 leased
                 -- The job would never end on its own: only the dropped lease stops it.
-                outcome <- whileLeased one (liftIO (forever (threadDelay 1_000)))
+                outcome <- whileLeased held (liftIO (forever (threadDelay 1_000)))
                 liftIO (outcome `shouldBe` Nothing)
 
-        it "lets a sibling whose own renewals hold finish its job" $ do
+        it "lets a sibling whose own renewals hold finish its job, still leased" $ do
             -- Per-receipt continuation: one transport failure must not abandon healthy siblings.
             let batch = [delivery "a" window30 twelveHours, delivery "b" window30 twelveHours]
             world <- newLeaseWorld 0 batch
@@ -139,7 +141,11 @@ spec = do
                 second' <- leaseAt 1 leased
                 -- The faulting receipt's job never ends on its own, so only the drop stops it.
                 abandoned <- whileLeased first' (liftIO (forever (threadDelay 1_000)))
-                finished <- whileLeased second' (liftIO (threadDelay 1_000))
+                -- Hold the sibling past its own original window, then read who a second consumer
+                -- could take: only the dropped receipt, never the one still being renewed.
+                finished <- whileLeased second' . liftIO $ do
+                    awaitClock world 31
+                    redeliverable world `shouldReturn` ["a"]
                 pure (abandoned, finished)
             outcomes `shouldBe` (Nothing, Just ())
 
@@ -147,11 +153,11 @@ spec = do
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             runLeases world (faultingFor ["a"] unreachable) batch $ \leased -> do
-                one <- leaseAt 0 leased
+                held <- leaseAt 0 leased
                 -- Wait for the drop, then offer the job: it must never run.
                 liftIO (awaitRenewals world 4 >> threadDelay 20_000)
                 started <- newIORef False
-                outcome <- whileLeased one (writeIORef started True)
+                outcome <- whileLeased held (writeIORef started True)
                 liftIO (outcome `shouldBe` Nothing)
                 liftIO (readIORef started `shouldReturn` False)
 
@@ -159,8 +165,8 @@ spec = do
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             runLeases world (faultingFor ["a"] unreachable) batch $ \leased -> do
-                one <- leaseAt 0 leased
-                void (whileLeased one (liftIO (forever (threadDelay 1_000))))
+                held <- leaseAt 0 leased
+                void (whileLeased held (liftIO (forever (threadDelay 1_000))))
             -- The first attempt plus the shipped retry budget, all inside the margin.
             renewed <- readIORef (lwRenewals world)
             length renewed `shouldBe` 4
@@ -171,8 +177,8 @@ spec = do
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             runLeases world (slowFaultFor "a") batch $ \leased -> do
-                one <- leaseAt 0 leased
-                outcome <- whileLeased one (liftIO (forever (threadDelay 1_000)))
+                held <- leaseAt 0 leased
+                outcome <- whileLeased held (liftIO (forever (threadDelay 1_000)))
                 liftIO (outcome `shouldBe` Nothing)
             readIORef (lwRenewals world) `shouldReturn` ["a"]
 
@@ -181,10 +187,22 @@ spec = do
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             runLeases world (faultingFor ["a"] refused) batch $ \leased -> do
-                one <- leaseAt 0 leased
-                outcome <- whileLeased one (liftIO (forever (threadDelay 1_000)))
+                held <- leaseAt 0 leased
+                outcome <- whileLeased held (liftIO (forever (threadDelay 1_000)))
                 liftIO (outcome `shouldBe` Nothing)
             readIORef (lwRenewals world) `shouldReturn` ["a"]
+
+        it "drops the receipt when the renewal task dies outside its typed contract" $ do
+            -- The queue handle reports faults as values, so a throw anywhere in the task is an
+            -- invariant break. The task's exit marks the receipt dropped whatever killed it, so
+            -- a job can never keep running on a lease nothing is renewing.
+            let batch = [delivery "a" window30 twelveHours]
+            world <- newLeaseWorld 0 batch
+            let residue = (worldOps world keepsEveryLease){loWaitUntil = \_ -> throwIO (TestContractEscape "simulated renewal residue")}
+            runLeasesWith residue batch $ \leased -> do
+                held <- leaseAt 0 leased
+                outcome <- whileLeased held (liftIO (forever (threadDelay 1_000)))
+                liftIO (outcome `shouldBe` Nothing)
 
         it "drops the receipt once the backend's maximum time in flight is spent" $ do
             -- SQS holds one receipt for twelve hours whatever the renewals, so the controller
@@ -192,8 +210,8 @@ spec = do
             let batch = [delivery "a" window30 (Seconds 31)]
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
-                one <- leaseAt 0 leased
-                outcome <- whileLeased one (liftIO (forever (threadDelay 1_000)))
+                held <- leaseAt 0 leased
+                outcome <- whileLeased held (liftIO (forever (threadDelay 1_000)))
                 liftIO (outcome `shouldBe` Nothing)
 
     describe "disposing -- no renewal follows a completed disposition" $ do
@@ -203,9 +221,9 @@ spec = do
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
-                one <- leaseAt 0 leased
+                held <- leaseAt 0 leased
                 liftIO (awaitRenewals world 2)
-                disposing one pass
+                disposing held pass
                 settled <- readIORef (lwRenewals world)
                 liftIO (threadDelay 20_000)
                 liftIO (readIORef (lwRenewals world) `shouldReturn` settled)
@@ -216,9 +234,9 @@ spec = do
             let batch = [delivery "a" window30 twelveHours]
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
-                one <- leaseAt 0 leased
+                held <- leaseAt 0 leased
                 liftIO (awaitRenewals world 2)
-                void (disposing one (pure (Left unreachable :: Either TransportFault ())))
+                void (disposing held (pure (Left unreachable :: Either TransportFault ())))
                 settled <- readIORef (lwRenewals world)
                 liftIO (threadDelay 20_000)
                 liftIO (readIORef (lwRenewals world) `shouldReturn` settled)
@@ -231,9 +249,9 @@ spec = do
             world <- newLeaseWorld 0 batch
             disposed <- newIORef (0 :: Int)
             _ <- timeout 30_000 . runLeases world keepsEveryLease batch $ \leased -> do
-                one <- leaseAt 0 leased
-                void (whileLeased one (liftIO (forever (threadDelay 1_000))))
-                disposing one (modifyIORef' disposed (+ 1))
+                held <- leaseAt 0 leased
+                void (whileLeased held (liftIO (forever (threadDelay 1_000))))
+                disposing held (modifyIORef' disposed (+ 1))
             readIORef disposed `shouldReturn` 0
             settled <- readIORef (lwRenewals world)
             threadDelay 20_000
@@ -336,6 +354,11 @@ awaitRenewals :: LeaseWorld -> Int -> IO ()
 awaitRenewals world wanted =
     void (pollUntil 2_000 1_000 (>= wanted) (length <$> readIORef (lwRenewals world)))
 
+-- Wait, bounded, until the renewals have carried the world's clock past this instant.
+awaitClock :: LeaseWorld -> Double -> IO ()
+awaitClock world wanted =
+    void (pollUntil 2_000 1_000 (>= wanted) (readIORef (lwNow world)))
+
 -- | One delivery of the sample job, leased for a window under a ceiling from the same instant.
 delivery :: Text -> Seconds -> Seconds -> QueueMessage
 delivery receipt window maxHold =
@@ -353,9 +376,13 @@ unleased receipt =
 
 -- | Run a leased batch against one world, discarding the log lines the controller writes.
 runLeases :: LeaseWorld -> RenewalAnswer -> [QueueMessage] -> ([LeasedReceipt] -> KatipContextT IO a) -> IO a
-runLeases world answer batch body = do
+runLeases world answer = runLeasesWith (worldOps world answer)
+
+-- | 'runLeases' over caller-built ops, for a case that perturbs the clock or the waiting itself.
+runLeasesWith :: LeaseOps -> [QueueMessage] -> ([LeasedReceipt] -> KatipContextT IO a) -> IO a
+runLeasesWith ops batch body = do
     logEnv <- newTestLogEnv
-    runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (withLeasedBatch (worldOps world answer) batch body)
+    runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (withLeasedBatch ops batch body)
 
 -- A lease the batch does not hold is a broken premise, so it fails loudly.
 leaseAt :: (MonadIO m) => Int -> [LeasedReceipt] -> m LeasedReceipt

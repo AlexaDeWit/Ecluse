@@ -54,6 +54,7 @@ module Ecluse.Core.Worker (
     processBatch,
     processJob,
     JobOutcome (..),
+    RetryLeg (..),
 
     -- * Liveness
     WorkerHeartbeat,

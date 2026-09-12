@@ -302,10 +302,11 @@ during a rollout, later policy agreement cannot restore them. The
 A durable queue hands the worker a message and hides it for a visibility window. The worker
 holds every message it received, one job at a time, so a message far down a batch waits out
 several windows before its own job starts. Écluse therefore renews each received message's
-visibility continually, from the moment it arrives until the worker acknowledges it, releases it
-for retry, or backs it off as terminal. The renewal asks for the same window the queue granted,
-a third of the way into what is left of it, and never past the twelve hours SQS holds one
-receipt for.
+visibility continually, from the moment it arrives until the worker has decided it: acknowledged,
+dead-lettered, or left unacknowledged to redeliver. The renewal asks for the same window the queue
+granted, a third of the way into what is left of it, and never past the twelve hours SQS holds one
+receipt for. A publish that fails transiently is the one case Écluse resets the window to zero for,
+so that message redelivers at once instead of waiting; every other retry waits out its window.
 
 When a renewal keeps failing, Écluse gives up on that one message inside its remaining margin,
 writes a `warning` naming the transport reason, and leaves the message unacknowledged. A running

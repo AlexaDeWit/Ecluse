@@ -384,7 +384,7 @@ isDropped = \case
 
 isRetried :: JobOutcome -> Bool
 isRetried = \case
-    Retried _ -> True
+    Retried{} -> True
     _ -> False
 
 isDeadLettered :: JobOutcome -> Bool

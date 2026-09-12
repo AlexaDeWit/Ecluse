@@ -35,7 +35,7 @@ import Katip (KatipContext, Severity (WarningS), logFM, ls)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Async (waitSTM, withAsync)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (finally, tryAny)
 import UnliftIO.MVar qualified as MVar
 
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, tfCause, tfDetail, transportFault, transportRetryable)
@@ -86,8 +86,9 @@ waitUntilMonotonic target = do
     let pause = monoSecondsBetween now target
     when (pause > 0) (threadDelay (round (pause * 1_000_000)))
 
-{- | The renewal retry pacing: three further attempts inside about two seconds, which fits the
-transport margin of even the shortest window an operator configures.
+{- | The renewal retry pacing: three further attempts inside about two seconds, inside the margin
+of the thirty-second window the SQS backend receives under. A shorter window stops the retries on
+the margin check instead, so the budget never outlives the lease it is trying to hold.
 -}
 leaseRetryDelays :: [Int]
 leaseRetryDelays = [200_000, 500_000, 1_000_000]
@@ -127,9 +128,9 @@ one of them. A backend that never expires a delivery grants no lease and gets no
 withRenewals :: (MonadUnliftIO m, KatipContext m) => LeaseOps -> [LeasedReceipt] -> m a -> m a
 withRenewals ops leased inner = foldr renewing inner leased
   where
-    renewing one rest = case msgLease (lrMessage one) of
+    renewing entry rest = case msgLease (lrMessage entry) of
         Nothing -> rest
-        Just lease -> withAsync (renewalLoop ops lease one) (const rest)
+        Just lease -> withAsync (renewalLoop ops lease entry) (const rest)
 
 {- | Run this receipt's work while its lease holds, cancelling the work the moment the lease is
 dropped. 'Nothing' says the receipt was dropped, so nothing was decided for it.
@@ -160,10 +161,11 @@ data RenewalStep
     | RenewalFailed Text
     | RenewalRefused Text
 
-{- Renew one receipt until it is disposed, or until a renewal it cannot keep drops it. The loop
-is total: the queue handle reports faults as values, and residue is contained below. -}
+{- Renew one receipt until it is disposed, or until a renewal it cannot keep drops it. However
+the task ends, including on residue the contained renewal cannot reach, it marks the receipt
+dropped: a job must never keep running on a lease nothing is renewing. -}
 renewalLoop :: (MonadUnliftIO m, KatipContext m) => LeaseOps -> ReceiptLease -> LeasedReceipt -> m ()
-renewalLoop ops lease leased = go
+renewalLoop ops lease leased = go `finally` atomically (writeTVar (lrDropped leased) True)
   where
     go =
         MVar.readMVar (lrHeld leased) >>= \case
@@ -223,13 +225,13 @@ renewOrResidue ops receipt window =
   where
     residue e = transportFault TransportProtocol ("visibility renewal escaped its typed contract: " <> displayExceptionT e)
 
-{- Give up on one receipt: stop renewing it, cancel or skip its job, and leave it
-unacknowledged, so the backend redelivers it once the window lapses. -}
+{- Give up on one receipt: stop renewing it and leave it unacknowledged, so the backend
+redelivers it once the window lapses. Returning from here ends the task, and that exit is what
+cancels or skips the receipt's job. -}
 dropReceipt :: (MonadUnliftIO m, KatipContext m) => LeasedReceipt -> Text -> m ()
 dropReceipt leased detail = do
     logFM WarningS (ls ("dropping a mirror receipt whose visibility could not be renewed: " <> detail))
     MVar.modifyMVar_ (lrHeld leased) (const (pure Nothing))
-    atomically (writeTVar (lrDropped leased) True)
 
 ceilingReason :: Text
 ceilingReason = "the queue's own maximum time in flight from receipt is spent"

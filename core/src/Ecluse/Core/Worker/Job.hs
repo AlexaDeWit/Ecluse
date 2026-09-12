@@ -12,6 +12,7 @@ nothing here touches the queue. Nothing here acks either: a transient failure si
 -}
 module Ecluse.Core.Worker.Job (
     JobOutcome (..),
+    RetryLeg (..),
     mirrorLatest,
     outcomeOfAdmission,
     outcomeOfFetchFault,
@@ -84,9 +85,25 @@ data JobOutcome
       -}
       DeadLettered Text
     | {- | A __transient__ fault: a fetch failure, or a registry rejection worth
-      retrying. The message is left un-acked so it redelivers. Carries the reason.
+      retrying. The message is left un-acked so it redelivers. Carries the leg it failed on
+      and the reason.
       -}
-      Retried Text
+      Retried RetryLeg Text
+    deriving stock (Eq, Show)
+
+{- | Which leg a transient failure gave up on. The realisation half reads it to decide whether
+to reset the message's visibility, so the two legs cannot be conflated at the queue handle.
+-}
+data RetryLeg
+    = {- | The job gave up before it published: the inventory probe, the re-evaluation, or the
+      artifact fetch. The message keeps its lease and redelivers when that window lapses, so a
+      long upstream outage cannot burn the queue's redelivery budget in seconds.
+      -}
+      BeforePublish
+    | {- | The publish itself failed transiently, after the bytes were fetched and verified.
+      The message is released so its redelivery does not wait out the lease.
+      -}
+      AfterPublish
     deriving stock (Eq, Show)
 
 {- | Process one mirror job end to end and return the 'JobOutcome' that decides whether the worker
@@ -109,7 +126,7 @@ processJob job = katipAddNamespace "job" $ do
         Succeeded -> JobSpanOutcome "succeeded" Nothing
         Dropped reason -> JobSpanOutcome "dropped" (Just reason)
         DeadLettered reason -> JobSpanOutcome "dead-lettered" (Just reason)
-        Retried reason -> JobSpanOutcome "retried" (Just reason)
+        Retried _ reason -> JobSpanOutcome "retried" (Just reason)
 
 -- Order the steps cheapest first: a duplicate retires for one metadata round trip and a now-denied
 -- job drops before its bytes are downloaded. Every step past the lookup rides the ecosystem's own
@@ -156,13 +173,13 @@ probeInventory :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome [Versi
 probeInventory policy job = do
     probed <- liftIO (mpProbeMetadata (wpPublish policy) (jobPackage job))
     pure $ case probed of
-        Left fault -> Left (outcomeOfFetchFault (probeFaultReason job) fault)
+        Left fault -> Left (outcomeOfFetchFault BeforePublish (probeFaultReason job) fault)
         Right response
             | responseStatusCode response == 404 -> Right []
             | not (isSuccessStatus (responseStatusCode response)) ->
-                Left (Retried (probeStatusReason job (responseStatusCode response)))
+                Left (Retried BeforePublish (probeStatusReason job (responseStatusCode response)))
             | otherwise -> case mpParseVersionList (wpPublish policy) response of
-                Left (ParseError detail) -> Left (Retried (probeParseReason job detail))
+                Left (ParseError detail) -> Left (Retried BeforePublish (probeParseReason job detail))
                 Right versions -> Right versions
 
 probeFaultReason :: MirrorJob -> FetchFault -> Text
@@ -249,7 +266,7 @@ outcomeOfAdmission job admission = case admission of
 evaluator expects to clear redelivers: the rest drop through the terminal path. -}
 retryOrDrop :: Maybe Transience -> Text -> JobOutcome
 retryOrDrop transience reason = case transience of
-    Just (WillResolve _) -> Retried reason
+    Just (WillResolve _) -> Retried BeforePublish reason
     Just WontResolve -> Dropped reason
     Nothing -> Dropped reason
 
@@ -265,14 +282,15 @@ readmittedDescriptor filename artifact digests =
 
 {- | The worker's terminal-versus-transient split over the shared exchange-fault channel.
 The artifact fetch and the mirror write read this one table, so no fault splits between them.
+The caller names its own leg, because only the fault's cause is shared, never the disposition.
 -}
-outcomeOfFetchFault :: (FetchFault -> Text) -> FetchFault -> JobOutcome
-outcomeOfFetchFault render fault = verdict (render fault)
+outcomeOfFetchFault :: RetryLeg -> (FetchFault -> Text) -> FetchFault -> JobOutcome
+outcomeOfFetchFault leg render fault = verdict (render fault)
   where
     verdict = case fault of
         FetchUrlUnformable _ -> Dropped
         FetchBoundExceeded _ -> DeadLettered
-        FetchTransport _ -> Retried
+        FetchTransport _ -> Retried leg
 
 {- | The @latest@ one mirror write declares, over the upstream tag and the post-write inventory.
 The published version always survives, so the chosen target is always present at the store.
@@ -300,7 +318,7 @@ mirrorArtifact policy job plan admitted = do
     case fetched of
         -- 'outcomeOfFetchFault' makes the terminal-versus-transient split, and the realisation
         -- half logs the reason at the queue handle.
-        Left fault -> pure (outcomeOfFetchFault (artifactFetchReason job) fault)
+        Left fault -> pure (outcomeOfFetchFault BeforePublish (artifactFetchReason job) fault)
         Right bytes -> publishIfIntact policy job plan admitted bytes
 
 -- The client's rendered exception would print the request path, query, and headers, so a
@@ -334,8 +352,8 @@ publishVerified policy job plan admitted bytes = do
 outcomeOfPublish :: MirrorJob -> Either PublishFault () -> WorkerM JobOutcome
 outcomeOfPublish job = \case
     Right () -> Succeeded <$ logFM InfoS (ls ("mirrored artifact published: " <> renderJob job))
-    Left (PublishRejected err) -> pure (Retried ("registry rejected publish: " <> show err))
-    Left (PublishFetch fault) -> pure (outcomeOfFetchFault publishFaultReason fault)
+    Left (PublishRejected err) -> pure (Retried AfterPublish ("registry rejected publish: " <> show err))
+    Left (PublishFetch fault) -> pure (outcomeOfFetchFault AfterPublish publishFaultReason fault)
 
 -- The mirror target is operator-configured, so its rendered transport detail is diagnosable
 -- rather than attacker-supplied.
