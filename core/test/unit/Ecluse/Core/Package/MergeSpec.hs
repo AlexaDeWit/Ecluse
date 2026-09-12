@@ -5,9 +5,11 @@
 -- | Merge precedence, divergence signals, and accumulator laws.
 module Ecluse.Core.Package.MergeSpec (spec) where
 
+import Data.ByteArray.Encoding (Base (Base16, Base64), convertFromBase, convertToBase)
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
@@ -121,10 +123,11 @@ sha1Abc = validSha1Of "abc"
 sha1Dead = validSha1Of "deadbeef"
 sha256Def = validSha256Of "def"
 
--- The fingerprint triple an SRI resolves to under the merge's keying: the fixture file
--- name, the embedded algorithm, and the base64 body, as 'integrityHashes' reads them back.
 sriPair :: Text -> (Text, Maybe HashAlg, Text)
-sriPair s = ("thing.tgz", sriAlgorithm s, sriBody s)
+sriPair s = ("thing.tgz", sriAlgorithm s, hex)
+  where
+    decoded = convertFromBase Base64 (encodeUtf8 (sriBody s) :: ByteString) :: Either String ByteString
+    hex = either toText (decodeUtf8 . (convertToBase Base16 :: ByteString -> ByteString)) decoded
 
 -- The surviving version keys (the merged union), sorted.
 survivorKeys :: MergePlan -> [Text]
@@ -426,6 +429,57 @@ spec = do
                 gated = (GatedSource, packumentWith [("1.0.0", [unsafeHash SRI (validSha256SriOf "bbb")])])
                 plan = mergePackuments [trusted, gated]
             (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
+
+    describe "canonical digest sets" $ do
+        forM_
+            [ (SHA256, Package.hexSha256Of, Package.sriSha256Of)
+            , (SHA384, Package.hexSha384Of, Package.sriSha384Of)
+            , (SHA512, Package.hexSha512Of, Package.sriSha512Of)
+            ]
+            $ \(alg, hexOf, sriOf) -> do
+                let hex bytes = unsafeHash alg (hexOf bytes)
+                    upper bytes = unsafeHash alg (T.toUpper (hexOf bytes))
+                    sri bytes = unsafeHash SRI (sriOf bytes)
+                    -- Hold fetch scopes fixed while varying only hash representations.
+                    mergeHashes left right =
+                        Merge.mergePackuments
+                            [ (TrustedSource, packumentWith [("1.0.0", left)] <$ syntheticSnapshot ("trusted" :: Text))
+                            , (GatedSource, packumentWith [("1.0.0", right)] <$ syntheticSnapshot ("public" :: Text))
+                            ]
+
+                it ("agrees across hex case and SRI for " <> show alg) $
+                    forM_ [upper "A", sri "A"] $ \equivalent ->
+                        (mpDivergences <$> mergeHashes [hex "A"] [equivalent]) `shouldBe` Just Set.empty
+
+                it ("collapses equivalent encodings within a " <> show alg <> " digest set") $
+                    (mpDivergences <$> mergeHashes [hex "A"] [hex "A", upper "A", sri "A"])
+                        `shouldBe` Just Set.empty
+
+                it ("retains strict set equality for " <> show alg) $
+                    forM_ [[sri "B"], [sri "A", sri "B"]] $ \different -> do
+                        let plan = mergeHashes [hex "A", upper "A", sri "A"] different
+                        (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
+                        (map (integrityHashes . divWinning) . Set.toList . mpDivergences <$> plan)
+                            `shouldBe` Just [[("thing.tgz", Just alg, hexOf "A")]]
+
+                it ("preserves the whole merge plan across " <> show alg <> " representations") $
+                    hedgehog $ do
+                        bytesA <- forAll (Gen.bytes (Range.linear 0 200))
+                        bytesB <- forAll (Gen.bytes (Range.linear 0 200))
+                        extra <- forAll Gen.bool
+                        let left = [hex bytesA]
+                            right = hex bytesA : [hex bytesB | extra]
+                            representedLeft = [upper bytesA, sri bytesA]
+                            representedRight = sri bytesA : [sri bytesB | extra]
+                        mergeHashes left right === mergeHashes representedLeft representedRight
+
+        it "retains invalid record-update text in divergence diagnostics" $ do
+            let original = unsafeHash SRI sriX
+                invalid = original{hashValue = "sha256-invalid"}
+                trusted = (TrustedSource, packumentWith [("1.0.0", [invalid])])
+                gated = (GatedSource, packumentWith [("1.0.0", [unsafeHash SHA256 sha256Def])])
+            (map (integrityHashes . divWinning) . Set.toList . mpDivergences <$> mergePackuments [trusted, gated])
+                `shouldBe` Just [[("thing.tgz", Just SHA256, "sha256-invalid")]]
 
     describe "precedence is by provenance, not input order" $ do
         -- dist-tags and time must resolve collisions by provenance (trusted wins),

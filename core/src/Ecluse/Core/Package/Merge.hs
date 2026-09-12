@@ -32,15 +32,14 @@ import Data.Time (UTCTime)
 import Ecluse.Core.Package (
     Artifact (..),
     Hash,
-    HashAlg (SRI),
+    HashAlg,
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
-    hashAlg,
     hashValue,
-    sriBody,
  )
 import Ecluse.Core.Package.Entry (AdmittedEntry (..))
+import Ecluse.Core.Package.Hash (canonicalHashValue)
 import Ecluse.Core.Package.Integrity (assertedAlg)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
 import Ecluse.Core.Version (Version, renderVersion, selectLatest)
@@ -104,13 +103,11 @@ data MergePlan = MergePlan
     }
     deriving stock (Eq, Show)
 
--- | Sorted file, asserted algorithm, and digest triples. Only shared file/algorithm keys can contradict.
+-- | Distinct sorted file, asserted algorithm, and canonical digest triples. Only shared file/algorithm keys can contradict.
 newtype IntegrityFingerprint = IntegrityFingerprint [(Text, Maybe HashAlg, Text)]
     deriving stock (Eq, Ord, Show)
 
-{- | The sorted @(artifact filename, asserted algorithm, comparable digest body)@ triples, for an
-audit trail.
--}
+-- | Distinct sorted filename, algorithm, and lowercase hex triples. Invalid record updates retain their raw text.
 integrityHashes :: IntegrityFingerprint -> [(Text, Maybe HashAlg, Text)]
 integrityHashes (IntegrityFingerprint hs) = hs
 
@@ -185,10 +182,7 @@ data Merge = Merge
     }
     deriving stock (Eq, Show)
 
-{- | Associative with 'mempty' as identity, and intentionally __not__ commutative: @(<>)@ re-indexes
-the right operand's 'SourceId's past the left operand's inputs, so a 'SourceId' keeps naming the
-caller's list position. Precedence resolves by provenance, so the survivors do not depend on order.
--}
+-- Source IDs follow input positions, so regrouping preserves the result but permutation changes labels.
 instance Semigroup Merge where
     a <> b =
         Merge
@@ -344,19 +338,17 @@ integrityDivergences trusted public =
 fingerprint :: PackageDetails -> IntegrityFingerprint
 fingerprint =
     IntegrityFingerprint
-        . sort
+        . Set.toAscList
+        . Set.fromList
         . concatMap artHashPairs
         . toList
         . pkgArtifacts
   where
     artHashPairs art = [(artFilename art, assertedAlg h, comparableBody h) | h <- artHashes art]
 
--- Comparing bodies is sound because the encoding is uniform within a shared resolved
--- algorithm: sha1 hex on both sides, sha256/sha512 SRI base64 on both sides.
+-- Record updates can bypass 'mkHash'. Keep that text as diagnostic evidence when decoding fails.
 comparableBody :: Hash -> Text
-comparableBody h = case hashAlg h of
-    SRI -> sriBody (hashValue h)
-    _ -> hashValue h
+comparableBody h = fromMaybe (hashValue h) (canonicalHashValue h)
 
 -- An omitted file or algorithm makes no conflicting claim.
 contradicts :: IntegrityFingerprint -> IntegrityFingerprint -> Bool
