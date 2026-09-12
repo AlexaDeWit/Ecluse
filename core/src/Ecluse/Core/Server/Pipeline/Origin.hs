@@ -35,7 +35,8 @@ import UnliftIO (withRunInIO)
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Credential (ClientCredential)
-import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, renderPackageName)
+import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, renderPackageName)
+import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Package.Merge (Provenance)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewClient))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
@@ -67,9 +68,13 @@ data Contribution = Contribution
     , srcDigest :: ContentDigest
     }
 
--- | Include provenance, source digest, and surviving versions in the assembled document's validator.
-fingerprintPiece :: Contribution -> (Provenance, ContentDigest, [Text])
-fingerprintPiece s = (srcProvenance s, srcDigest s, Map.keys (infoVersions (srcInfo s)))
+-- | Scope surviving versions and exact artifact coordinates to their source digest and provenance.
+fingerprintPiece :: Contribution -> (Provenance, ContentDigest, [(Text, [EntryKey])])
+fingerprintPiece s =
+    ( srcProvenance s
+    , srcDigest s
+    , [(version, map artEntryKey (toList (pkgArtifacts details))) | (version, details) <- Map.toList (infoVersions (srcInfo s))]
+    )
 
 -- | One origin's contribution, access refusal, identity mismatch, or absence.
 data OriginResult
@@ -86,9 +91,7 @@ data OriginResult
     | -- | An unconfigured origin contributes neither metadata nor an availability failure.
       OriginAbsent
 
-{- | Why an origin yielded no document. An origin that must answer alone reads this to tell a
-settled answer from one a retry may still change.
--}
+-- | Distinguish a settled absence from an unread origin that a retry may resolve.
 data OriginMiss
     = -- | The origin holds no such package, or the mount configures no such origin.
       MissAbsent
@@ -114,7 +117,6 @@ originMiss = \case
     OriginNameMismatch -> Nothing
     OriginNotFound -> Just MissAbsent
     OriginUnresolved -> Just MissUnresolved
-    -- An unconfigured origin never answers, so it groups with an absence: a retry changes nothing.
     OriginAbsent -> Just MissAbsent
 
 originResultOf :: Either SomeException (Either MetadataError Manifest) -> OriginResult
@@ -129,8 +131,6 @@ originResultOf = \case
 -- | Resolve the private origin uncached with the caller's credential, retaining explicit access refusals.
 fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> Maybe ClientCredential -> PackageName -> Handler OriginResult
 fetchPrivateOrigin deps rt token name = case pdPrivateBaseUrl deps of
-    -- No private upstream on this mount (a serve-only pure public gate): the leg is
-    -- structurally absent, so this constructs no client and attempts no fetch.
     Nothing -> pure OriginAbsent
     Just privateBase -> do
         logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
@@ -174,7 +174,6 @@ withMetadataClient rt deps upstream caching origin k =
                 (\nm -> runInIO (logFM DebugS (ls ("fetching packument from origin for " <> renderPackageName nm))))
                 origin
   where
-    -- The log lines name the origin, and a diagnostic reads characters, not a witness.
     baseUrl = registryUrlText (ocBaseUrl origin)
 
 -- | Bypass shared caching so the private upstream authorises each caller's credential.

@@ -38,6 +38,7 @@ import Ecluse.Core.Package (
     PackageName,
     renderPackageName,
  )
+import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpDecisions, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Integrity (
     MinTrustedIntegrity,
@@ -250,9 +251,7 @@ firstPartyMissMessage name = \case
   where
     rendered = renderPackageName name
 
-{- | The verdict a first-party private miss records. An absence is the first-party rule refusing a
-public stand-in, and an origin that could not be read is an outage a retry may clear.
--}
+-- | Classify a first-party absence as a policy refusal and an unread origin as an outage.
 firstPartyMissDecision :: PackageName -> OriginMiss -> ServeDecision
 firstPartyMissDecision name miss = Reject (Rejection reason (firstPartyMissMessage name miss))
   where
@@ -260,9 +259,7 @@ firstPartyMissDecision name miss = Reject (Rejection reason (firstPartyMissMessa
         MissAbsent -> ByPolicy firstPartyRule
         MissUnresolved -> Unavailable (WillResolve Nothing)
 
-{- | The reply a first-party private miss renders: a @404@ for a settled absence, and the @503@ any
-needed upstream's outage gets. That outage suggests no delay, so it carries no @Retry-After@.
--}
+-- | Render a settled absence as @404@ and an unread origin as @503@ without @Retry-After@.
 firstPartyMissReply :: PackumentReplies response -> Maybe HelpMessage -> PackageName -> OriginMiss -> response
 firstPartyMissReply replies help name miss = case miss of
     MissAbsent -> packumentNotFound replies [] body
@@ -354,24 +351,37 @@ packumentPlan sources deniedEvidence = do
     pure plan{mpDivergences = mpDivergences plan <> integrityDivergences trustedVersions deniedEvidence}
 
 -- | A validator derived from framed inputs so unchanged requests skip assembly. Bump the salt when assembly behaviour changes.
-packumentETag :: Text -> PackageName -> [(Provenance, ContentDigest, [Text])] -> ETag
+packumentETag :: Text -> PackageName -> [(Provenance, ContentDigest, [(Text, [EntryKey])])] -> ETag
 packumentETag mountBaseUrl name sources =
     mkStrongETag (hashFinalize (hashUpdates (hashInit :: Context SHA256) pieces))
   where
     pieces :: [ByteString]
     pieces =
-        [ "ecluse:packument-etag:v1\0"
+        [ "ecluse:packument-etag:v2\0"
         , encodeUtf8 mountBaseUrl <> "\0"
         , encodeUtf8 (renderPackageName name) <> "\0"
         ]
             <> concatMap sourcePieces sources
 
-    sourcePieces :: (Provenance, ContentDigest, [Text]) -> [ByteString]
+    sourcePieces :: (Provenance, ContentDigest, [(Text, [EntryKey])]) -> [ByteString]
     sourcePieces (provenance, digest, survivors) =
         provenanceTag provenance
             : digestBytes digest
-            : map (\v -> encodeUtf8 v <> "\0") survivors
+            : concatMap versionPieces survivors
                 <> ["\1"]
+
+    versionPieces :: (Text, [EntryKey]) -> [ByteString]
+    versionPieces (version, entries) =
+        frame (encodeUtf8 version) : map entryPiece entries <> ["\2"]
+
+    entryPiece :: EntryKey -> ByteString
+    entryPiece = \case
+        ArrayEntry index -> "a" <> frame (show index)
+        ObjectEntry key -> "o" <> frame (encodeUtf8 key)
+        SingletonEntry -> "s"
+
+    frame :: ByteString -> ByteString
+    frame bytes = show (BS.length bytes) <> ":" <> bytes
 
     provenanceTag :: Provenance -> ByteString
     provenanceTag = \case
