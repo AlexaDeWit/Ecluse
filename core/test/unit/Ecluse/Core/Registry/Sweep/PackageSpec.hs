@@ -413,6 +413,21 @@ expirySpec = describe "an expired advisory push" $ do
         recResults rec' `shouldReturn` [SweepExamined, SweepGuardSkipped]
         held store `shouldReturn` [version "1.0.0"]
 
+    it "withholds rather than counting it, on a run whose execution only counts" $ do
+        -- A preview reaches no delete, so this is the arm where a stale condemnation would
+        -- otherwise be reported as a would-delete an operator sizes a real run from.
+        store <- storeWith [version "1.0.0"] (Just (sampleManifest packageName [version "1.0.0"]))
+        crossing <- newIORef [AdvisoryFresh]
+        let deps = advisoryDeps (nextReading expiredReading crossing)
+        rules <- prepare deps [atDefaultPrecedence denyCveRule]
+        rec' <- recordingPortsUnder previewingReport generation
+        let swept = (previewMount (fakeObservation store) rules []){smRuleDeps = deps, smConfigured = [denyCveRule]}
+        void (runStep rec' testPacing swept (served ["1.0.0"]))
+        recResults rec' `shouldReturn` [SweepExamined, SweepGuardSkipped]
+        errors <- recErrors rec'
+        errors `shouldSatisfy` any (T.isInfixOf "stay in the store, because the advisory push is")
+        held store `shouldReturn` [version "1.0.0"]
+
     it "lets an identity deny act, because it reads no advisory database" $ do
         store <- storeWith [version "1.0.0"] (Just (sampleManifest packageName [version "1.0.0"]))
         let deps = advisoryDeps (pure expiredReading)
