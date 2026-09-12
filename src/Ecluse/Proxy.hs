@@ -2,13 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The proxy role's front door over the shared assembly. 'runProxy' takes the
-'ServiceRuntime' "Ecluse.Service" built, derives the 'ServerConfig' from it, and runs the
-listener beside the role's background tasks.
-
-Whether the mirror worker runs here is the role's decision, not this module's: under
-@--no-worker@ the process still enqueues, and a separate "Ecluse.Mirror" fleet drains
-the queue.
+{- | The proxy listener runs beside the role's worker and advisory-sync tasks.
+"Ecluse.Service" supplies its mounts and probes.
 -}
 module Ecluse.Proxy (
     runProxy,
@@ -21,23 +16,18 @@ import Network.Wai.Handler.Warp qualified as Warp
 import UnliftIO (concurrently_, race_)
 import UnliftIO.Async (mapConcurrently_)
 
-import Ecluse.Config (
-    AppConfig (cfgServer),
-    ServerSettings (srvPort, srvShutdownDrainTimeout),
- )
+import Ecluse.Boot (applyServerSettings)
+import Ecluse.Config (AppConfig (cfgServer))
 import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Runtime.Env (Env, envLogEnv)
 import Ecluse.Runtime.Server (
-    ServerConfig (scCheckLive, scCheckReady, scDrainTimeout, scOnException, scPort),
-    ShutdownDrainTimeout (ShutdownDrainTimeout),
+    ServerConfig (scCheckLive, scCheckReady, scOnException),
     mkServerConfig,
  )
 import Ecluse.Runtime.Server qualified as Server
 import Ecluse.Service (ServiceRuntime (..), runWorker)
 
-{- | Run the proxy role: the HTTP front door, the embedded mirror worker where the role keeps
-one, the enqueue-buffer drain, and the advisory-sync tasks.
--}
+-- | Run the listener and cancel its background tasks when the HTTP drain ends.
 runProxy :: ServiceRuntime -> IO ()
 runProxy runtime =
     -- The background tasks never return, so the race cancels them at shutdown. A dropped job
@@ -57,23 +47,15 @@ runProxy runtime =
             Server.raceServerAgainstLoop (runServer serverConfig env) (runWorker (svcWorkerPolicies runtime) env)
         | otherwise = runServer serverConfig env
 
-{- The front door's config: the served mounts on the configured port, with the role's
-readiness and liveness arms and warp's exception hook over the process logger. -}
 proxyServerConfig :: ServiceRuntime -> ServerConfig
 proxyServerConfig runtime =
-    (mkServerConfig (svcBindings runtime))
-        { scPort = srvPort serverSettings
-        , scDrainTimeout = ShutdownDrainTimeout (srvShutdownDrainTimeout serverSettings)
-        , scCheckReady = svcCheckReady runtime
+    (applyServerSettings (cfgServer (svcAppConfig runtime)) (mkServerConfig (svcBindings runtime)))
+        { scCheckReady = svcCheckReady runtime
         , scCheckLive = svcCheckLive runtime
         , scOnException = warpExceptionHook (envLogEnv (svcEnv runtime))
         }
-  where
-    serverSettings = cfgServer (svcAppConfig runtime)
 
-{- | Run the proxy's HTTP front door over the composition-root 'Env' with the config-derived
-'ServerConfig'. The bindings carry each adapter's serve surface, so the web layer stays neutral.
--}
+-- | Run the proxy listener with the mounted adapters and shared process resources.
 runServer :: ServerConfig -> Env -> IO ()
 runServer cfg env = Server.runWarp cfg (`Server.tracedApplication` env)
 

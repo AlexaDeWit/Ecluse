@@ -19,16 +19,28 @@ import UnliftIO (bracket_, throwIO, timeout, try)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (ProcessOutcome (..), exitCodeFor, run, superviseProcess)
-import Ecluse.Boot (BootAborted (..), BootEnv (beLogEnv), applySecretFileIndirection, logBootInfo, orExit, readConfigDocument, withBootEnv)
+import Ecluse.Boot (BootAborted (..), BootEnv (beLogEnv), applySecretFileIndirection, applyServerSettings, logBootInfo, orExit, probeServerConfig, readConfigDocument, withBootEnv)
 import Ecluse.Composition.BootError (
     BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, MirrorTargetOnMountEndpoint, PrivateUpstreamOnPublicUpstream, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
-import Ecluse.Composition.Support (malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, withoutQueueUrl)
+import Ecluse.Composition.Support (expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, withoutQueueUrl)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Server.Readiness (Readiness (Latched), alwaysReady)
+import Ecluse.Core.Worker (Liveness (Liveness), alwaysLive)
+import Ecluse.Dredger (dredgerServerConfig)
+import Ecluse.Mirror (mirrorServerConfig)
+import Ecluse.Runtime.Server (
+    ServerConfig (scCheckLive, scCheckReady, scDrain, scDrainTimeout, scMounts, scOnException, scPort),
+    ShutdownDrainTimeout (ShutdownDrainTimeout),
+    beginDrain,
+    isDraining,
+    mkServerConfig,
+    newDrainSignal,
+ )
 import Ecluse.Test.Log (captureStderr, captureStdout)
 
 runEnv :: [(String, String)]
@@ -58,6 +70,42 @@ awsRunEnv =
 -- | Verify role boot, process outcomes, and cleanup through the application entry points.
 spec :: Spec
 spec = do
+    describe "shared listener settings" $ do
+        forM_ [("default", [], 30), ("override", [("ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "7")], 7)] $ \(label, timeoutEnv, expected) ->
+            it ("uses the " <> label <> " timeout and configured port for every listener") $ do
+                appConfig <- expectAppConfig (("ECLUSE_SERVER__PORT", "9231") : timeoutEnv) Nothing
+                let configs =
+                        [ applyServerSettings (cfgServer appConfig) (mkServerConfig [])
+                        , probeServerConfig appConfig
+                        , mirrorServerConfig appConfig (pure alwaysReady) (pure alwaysLive)
+                        , dredgerServerConfig appConfig (pure alwaysReady)
+                        ]
+                forM_ configs $ \cfg -> do
+                    scDrainTimeout cfg `shouldBe` ShutdownDrainTimeout expected
+                    scPort cfg `shouldBe` 9231
+                    null (scMounts cfg) `shouldBe` True
+
+        it "preserves the role probes, exception observer, and live drain signal" $ do
+            appConfig <- expectAppConfig [("ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "7")] Nothing
+            drain <- newDrainSignal
+            observed <- newIORef False
+            let live = Liveness False Nothing
+                cfg =
+                    applyServerSettings (cfgServer appConfig) $
+                        (mkServerConfig [])
+                            { scCheckReady = pure Latched
+                            , scCheckLive = pure live
+                            , scDrain = drain
+                            , scOnException = \_ _ -> writeIORef observed True
+                            }
+            scCheckReady cfg `shouldReturn` Latched
+            scCheckLive cfg `shouldReturn` live
+            scOnException cfg Nothing (toException (BootAborted "test observer"))
+            readIORef observed `shouldReturn` True
+            isDraining (scDrain cfg) `shouldReturn` False
+            beginDrain drain
+            isDraining (scDrain cfg) `shouldReturn` True
+
     describe "process log cleanup" $
         forM_ [("normal return", Right ()), ("exceptional exit", Left (SimulatedServiceFault "role failed"))] $ \(label, expected) ->
             it ("drains queued final audit lines on " <> label) $

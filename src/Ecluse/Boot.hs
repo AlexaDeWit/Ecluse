@@ -17,6 +17,7 @@ module Ecluse.Boot (
     logBootInfo,
     logRuleBootOrder,
     buildMirrorQueue,
+    applyServerSettings,
     probeServerConfig,
 ) where
 
@@ -50,7 +51,7 @@ import Ecluse.Config (
     Config (configApp),
     ObservabilitySettings (obsLogFormat, obsLogLevel, obsTelemetry),
     RuntimeSettings (rtCores, rtCoresCeiling, rtMaxHeapBytes),
-    ServerSettings (srvPort),
+    ServerSettings (srvPort, srvShutdownDrainTimeout),
     loadConfig,
     renderConfigError,
  )
@@ -65,7 +66,8 @@ import Ecluse.Runtime.Log (moduleLog, newLogEnv)
 import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
 import Ecluse.Runtime.Server (
     MountBinding (bindingPackumentDeps, bindingPrefix),
-    ServerConfig (scPort),
+    ServerConfig (scDrainTimeout, scPort),
+    ShutdownDrainTimeout (ShutdownDrainTimeout),
     mkServerConfig,
  )
 import Ecluse.Runtime.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
@@ -221,9 +223,17 @@ buildMirrorQueue logEnv memoryDepth plan = do
     whenJust (deadLetterTerminusWarning plan (deliveryBudget queue) (deadLetterTerminus queue)) (logBootWarning logEnv)
     pure queue
 
--- | Serve health probes on the configured port, with no package mounts.
+-- | Apply the shared listener settings without replacing role hooks or the launch's drain signal.
+applyServerSettings :: ServerSettings -> ServerConfig -> ServerConfig
+applyServerSettings settings cfg =
+    cfg
+        { scPort = srvPort settings
+        , scDrainTimeout = ShutdownDrainTimeout (srvShutdownDrainTimeout settings)
+        }
+
+-- | Serve health probes with the shared listener settings and no package mounts.
 probeServerConfig :: AppConfig -> ServerConfig
-probeServerConfig appConfig = (mkServerConfig []){scPort = srvPort (cfgServer appConfig)}
+probeServerConfig appConfig = applyServerSettings (cfgServer appConfig) (mkServerConfig [])
 
 -- | Report a boot warning under the root module's logging context.
 logBootWarning :: LogEnv -> Text -> IO ()
