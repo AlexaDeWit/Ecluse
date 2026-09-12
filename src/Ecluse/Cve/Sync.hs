@@ -47,6 +47,7 @@ import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
 import Ecluse.Core.Rules.Freshness (
     AdvisoryAge (advisoryAge, advisoryMaxAge, advisoryPushedAt),
     AdvisoryFreshness (AdvisoryFresh),
+    AdvisoryPublication (NoGeneration, PublishedAt, UndatedGeneration),
     MaxAdvisoryAge,
     ageAlarmStep,
     assessAdvisoryAge,
@@ -95,7 +96,12 @@ handle's own clock. A failed poll never swaps, so a warm process keeps the last 
 advisoryFreshnessOf :: CveSyncHandle -> IO AdvisoryFreshness
 advisoryFreshnessOf handle = do
     now <- csClock handle
-    assessAdvisoryAge (csMaxAge handle) now <$> advisoryPushTime handle
+    assessAdvisoryAge (csMaxAge handle) now . publicationOf <$> currentAdvisorySource (syncSlot (csEnv handle))
+
+{- Nothing serving, a dated push, or a generation the store gave no publication time for. The
+third is unverified evidence rather than an absent database, so it is kept distinct here. -}
+publicationOf :: Maybe AdvisorySource -> AdvisoryPublication
+publicationOf = maybe NoGeneration (maybe UndatedGeneration PublishedAt . asPushedAt)
 
 {- | Report one ecosystem's push age when it passes half its maximum, once per crossing. The latch
 re-arms when a fresh push brings the age back under, so a long outage does not repeat every poll.

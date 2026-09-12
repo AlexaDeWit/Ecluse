@@ -16,6 +16,7 @@ module Ecluse.Core.Rules.Freshness (
     advisoryAgeLead,
 
     -- * Reading one push
+    AdvisoryPublication (..),
     AdvisoryAge (..),
     AdvisoryFreshness (..),
     assessAdvisoryAge,
@@ -84,23 +85,42 @@ data AdvisoryAge = AdvisoryAge
     }
     deriving stock (Eq, Show)
 
-{- | What a push age permits. 'AdvisoryAging' is still eligible: it is the early warning, raised
-at half the maximum so an update outage surfaces while there is still time to act on it.
+{- | What a slot says about the serving artifact's publication. The undated case is separate
+because a generation whose age cannot be established is not the same as none serving at all.
+-}
+data AdvisoryPublication
+    = -- | Nothing is serving yet, so there is no artifact to age.
+      NoGeneration
+    | -- | The published object's own timestamp.
+      PublishedAt UTCTime
+    | -- | A generation is serving and the store reported no publication time for it.
+      UndatedGeneration
+    deriving stock (Eq, Show)
+
+{- | What a push permits. 'AdvisoryAging' is still eligible: it is the early warning, raised at
+half the maximum so an update outage surfaces while there is still time to act on it.
 -}
 data AdvisoryFreshness
-    = -- | Within half the maximum, or no push time to read.
+    = -- | Within half the maximum, or nothing serving to age.
       AdvisoryFresh
     | -- | Past half the maximum and still eligible.
       AdvisoryAging AdvisoryAge
     | -- | Past the maximum. CVE-based denial refuses, whatever its @onUnavailable@ says.
       AdvisoryStale AdvisoryAge
+    | {- | A serving generation whose age cannot be established, which is unverified evidence
+      and refuses on the same terms as an expired one.
+      -}
+      AdvisoryUndated
     deriving stock (Eq, Show)
 
-{- | Read one push time against a maximum: equal to it is eligible, and greater expires. A slot
-with no push time is not aged here, leaving the ordinary absent-database path to decide.
+{- | Read one publication against a maximum: equal to it is eligible, and greater expires. Nothing
+serving is not aged here, leaving the ordinary absent-database path to decide.
 -}
-assessAdvisoryAge :: MaxAdvisoryAge -> UTCTime -> Maybe UTCTime -> AdvisoryFreshness
-assessAdvisoryAge limit now = maybe AdvisoryFresh reading
+assessAdvisoryAge :: MaxAdvisoryAge -> UTCTime -> AdvisoryPublication -> AdvisoryFreshness
+assessAdvisoryAge limit now = \case
+    NoGeneration -> AdvisoryFresh
+    UndatedGeneration -> AdvisoryUndated
+    PublishedAt pushedAt -> reading pushedAt
   where
     reading pushedAt
         | age > maxAge = AdvisoryStale observed
@@ -112,12 +132,13 @@ assessAdvisoryAge limit now = maybe AdvisoryFresh reading
         maxAge = maxAdvisoryAge limit
         observed = AdvisoryAge{advisoryPushedAt = pushedAt, advisoryAge = age, advisoryMaxAge = maxAge}
 
-{- | The early warning's next latch state, and the reading to report where this one crosses. A
-latched alarm stays silent until a fresh push brings the age back under half the maximum.
+{- | The early warning's next latch state, and the reading to report where this one crosses. An
+undated generation has no age to report and raises its own alarm where the artifact lands.
 -}
 ageAlarmStep :: Bool -> AdvisoryFreshness -> (Bool, Maybe AdvisoryAge)
 ageAlarmStep latched = \case
     AdvisoryFresh -> (False, Nothing)
+    AdvisoryUndated -> (False, Nothing)
     AdvisoryAging observed -> crossing observed
     AdvisoryStale observed -> crossing observed
   where

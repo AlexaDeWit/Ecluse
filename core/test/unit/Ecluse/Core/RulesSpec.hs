@@ -161,7 +161,11 @@ sixDayLimit = maxAdvisoryAgeFor Nothing [AllowIfOlderThan (7 * nominalDay)]
 -- | Capabilities whose serving artifact was pushed the given age before 'now'.
 pushedAgo :: NominalDiffTime -> RuleDeps -> RuleDeps
 pushedAgo age deps =
-    deps{rdAdvisoryFreshness = pure (assessAdvisoryAge sixDayLimit now (Just (addUTCTime (negate age) now)))}
+    deps{rdAdvisoryFreshness = pure (assessAdvisoryAge sixDayLimit now (PublishedAt (addUTCTime (negate age) now)))}
+
+-- | Capabilities serving a generation the store gave no publication time for.
+undated :: RuleDeps -> RuleDeps
+undated deps = deps{rdAdvisoryFreshness = pure (assessAdvisoryAge sixDayLimit now UndatedGeneration)}
 
 -- | Capabilities whose serving artifact is three days past the six-day maximum.
 expired :: RuleDeps -> RuleDeps
@@ -191,6 +195,18 @@ expirySpec = describe "an expired advisory push" $ do
                 (map atDefaultPrecedence [rule, AllowIfOlderThan (7 * nominalDay)])
                 (pkg Nothing 99)
                 >>= (`shouldSatisfy` isUndecidable)
+
+    for_ [DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision)] $ \rule ->
+        it (toString (ruleName rule <> " refuses on a serving generation with no publication time")) $
+            decideWith
+                (undated (depsWith (affecting (Just 9.8) (Just 0.9))))
+                (map atDefaultPrecedence [rule, AllowIfOlderThan (7 * nominalDay)])
+                (pkg Nothing 99)
+                >>= (`shouldSatisfy` isUndecidable)
+
+    it "abstains on the remediation allow when the push carries no publication time" $
+        decideWith (undated (depsWith fixRows)) [atDefaultPrecedence AllowIfRemediatesCve] (pkg Nothing 0)
+            >>= (`shouldSatisfy` isBlockedByDefault)
 
     it "is eligible at an age equal to the maximum" $
         decideWith

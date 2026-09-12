@@ -36,7 +36,12 @@ import Ecluse.Core.Registry.Sweep.Types (
     newSweepState,
  )
 import Ecluse.Core.Rules (PreparedRule, RuleDeps (rdAdvisoryFreshness, rdWithCveLookup), prepare)
-import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh), assessAdvisoryAge, maxAdvisoryAgeFor)
+import Ecluse.Core.Rules.Freshness (
+    AdvisoryFreshness (AdvisoryFresh, AdvisoryUndated),
+    AdvisoryPublication (PublishedAt),
+    assessAdvisoryAge,
+    maxAdvisoryAgeFor,
+ )
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
     EvalContext,
@@ -398,7 +403,13 @@ expirySpec = describe "an expired advisory push" $ do
 
     it "spares a version when the push expires between the verdict and the hand-over" $ do
         crossing <- newIORef [AdvisoryFresh]
-        (rec', store) <- advisorySweep (nextReading crossing)
+        (rec', store) <- advisorySweep (nextReading expiredReading crossing)
+        recResults rec' `shouldReturn` [SweepExamined, SweepGuardSkipped]
+        held store `shouldReturn` [version "1.0.0"]
+
+    it "withholds an advisory-named condemnation on a generation with no publication time" $ do
+        crossing <- newIORef [AdvisoryFresh]
+        (rec', store) <- advisorySweep (nextReading AdvisoryUndated crossing)
         recResults rec' `shouldReturn` [SweepExamined, SweepGuardSkipped]
         held store `shouldReturn` [version "1.0.0"]
 
@@ -437,10 +448,10 @@ affectingRange = AdvisoryRange "GHSA-affect-0001" (Just 9.8) (Just "0") (FixedBe
 denyCveRule :: Rule
 denyCveRule = DenyIfCve (DenyIfCveParams 8.0 FailDeny)
 
--- Take the next queued reading, then stay expired, so a case drives one crossing and no more.
-nextReading :: IORef [AdvisoryFreshness] -> IO AdvisoryFreshness
-nextReading queued = atomicModifyIORef' queued $ \case
-    [] -> ([], expiredReading)
+-- Take the next queued reading, then hold the last, so a case drives one crossing and no more.
+nextReading :: AdvisoryFreshness -> IORef [AdvisoryFreshness] -> IO AdvisoryFreshness
+nextReading afterwards queued = atomicModifyIORef' queued $ \case
+    [] -> ([], afterwards)
     (next : rest) -> (rest, next)
 
 -- A push three days past the six-day maximum a seven-day quarantine derives.
@@ -449,4 +460,4 @@ expiredReading =
     assessAdvisoryAge
         (maxAdvisoryAgeFor Nothing [AllowIfOlderThan (7 * nominalDay)])
         epoch
-        (Just (addUTCTime (negate (9 * nominalDay)) epoch))
+        (PublishedAt (addUTCTime (negate (9 * nominalDay)) epoch))

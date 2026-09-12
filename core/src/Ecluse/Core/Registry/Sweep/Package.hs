@@ -46,8 +46,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     renderStoreFault,
     unreadManifest,
  )
-import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), evalRules, renderExpiredPush)
-import Ecluse.Core.Rules.Freshness (AdvisoryAge, AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale))
+import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), evalRules, renderIneligible)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvidence, completeEvidence, identityEvidence, readsAdvisories, ruleName)
 import Ecluse.Core.Server.Metadata (selectVersion)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept))
@@ -163,34 +162,33 @@ disposeOf pacing ports counters mount etag name decided
     -- A run that counts past the cap says once where a run that halts on it would have stopped.
     crossedCap issued reached = not capHalts && issued < cap && reached >= cap
 
-{- The push age can expire between a version's decision and this hand-over, across a long manifest
-read or a batch, and a delete is permanent. So the advisory-named condemnations are read again. -}
+{- The push can stop being eligible evidence between a version's decision and this hand-over,
+across a long manifest read or a batch, and a delete is permanent. So it is read again here. -}
 stillEligible :: SweepPorts -> SweepState -> SweepMount -> PackageName -> [Condemned] -> IO [Condemned]
 stillEligible ports counters mount name condemned =
-    rdAdvisoryFreshness (smRuleDeps mount) >>= \case
-        AdvisoryFresh -> pure condemned
-        AdvisoryAging{} -> pure condemned
-        AdvisoryStale observed -> do
+    rdAdvisoryFreshness (smRuleDeps mount) >>= \freshness -> case renderIneligible freshness of
+        Nothing -> pure condemned
+        Just why -> do
             let (withheld, keeping) = partition (advisoryNamed mount . cdRule) condemned
             unless (null withheld) $ do
                 traverse_ (const (record ports counters SweepGuardSkipped)) withheld
-                announceExpired ports name observed withheld
+                announceIneligible ports name why withheld
             pure keeping
 
 -- Whether a rule name credited to a condemnation is one of this mount's advisory-reading rules.
 advisoryNamed :: SweepMount -> Text -> Bool
 advisoryNamed mount credited = credited `elem` [ruleName r | r <- smConfigured mount, readsAdvisories r]
 
--- The versions the expired push spared, named so an operator sees what a recovered Pilot would act on.
-announceExpired :: SweepPorts -> PackageName -> AdvisoryAge -> [Condemned] -> IO ()
-announceExpired ports name observed withheld =
+-- The versions the unusable evidence spared, so an operator sees what a recovered Pilot would act on.
+announceIneligible :: SweepPorts -> PackageName -> Text -> [Condemned] -> IO ()
+announceIneligible ports name why withheld =
     auditError
         (sweepAudit ports)
         ( renderPackageName name
             <> ": "
             <> show (length withheld)
             <> " versions an advisory rule denied stay in the store, because "
-            <> renderExpiredPush observed
+            <> why
         )
 
 -- The halt the cap raises, carrying what an operator needs to judge the generation that filled it.

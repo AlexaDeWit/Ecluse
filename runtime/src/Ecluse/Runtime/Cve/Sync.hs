@@ -293,6 +293,7 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
                 logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show (metadataSummary meta)))
                 source <- liftIO (currentAdvisorySource (syncSlot env))
                 logFM InfoS (ls ("cve-sync[" <> eco <> "]: serving artifact source: " <> maybe unrecordedValue renderAdvisorySource source))
+                whenNothing_ (asPushedAt =<< source) (undatedArtifact eco etag)
                 liftIO notifyFirstSync
                 pure (AdvisorySwapped, (True, Just etag))
             SyncUnchanged -> do
@@ -306,6 +307,21 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
                 -- Remember the ETag so the same refused artifact is not re-downloaded.
                 -- A fixed re-publish carries a new one. Identical bytes cannot end differently.
                 pure (AdvisoryRefused, (True, Just etag))
+
+{- An artifact the object store gave no publication time for: its age cannot be established, so
+CVE-based denial refuses on it. One line per swap, because only a swap can install one. -}
+undatedArtifact :: (KatipContext m) => Text -> DbEtag -> m ()
+undatedArtifact eco etag =
+    logFM
+        ErrorS
+        ( ls
+            ( "cve-sync["
+                <> eco
+                <> "]: the object store reported no publication time for the artifact it served (etag="
+                <> show etag
+                <> "), so its age cannot be established and CVE-based denial refuses until a push carries one"
+            )
+        )
 
 {- Where the serving artifact came from, for the swap line. The source renders as its authority
 alone, on the same rule as 'metadataSummary' below: artifact text never reaches a log verbatim. -}

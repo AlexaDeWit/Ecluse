@@ -26,7 +26,7 @@ module Ecluse.Core.Rules (
     evalRules,
     renderDecision,
     renderDuration,
-    renderExpiredPush,
+    renderIneligible,
     cveIdsInReason,
 
     -- * The resilience harness
@@ -53,7 +53,7 @@ import Ecluse.Core.Rules.Effectful (
     newBreaker,
     runResilient,
  )
-import Ecluse.Core.Rules.Freshness (AdvisoryAge (..), AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale))
+import Ecluse.Core.Rules.Freshness (AdvisoryAge (..), AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated))
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Text (displayExceptionT, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
@@ -409,19 +409,26 @@ runEffectfulRule ctx rule ev =
             Nothing -> Decided <$> prepEval rule ctx ev
             Just res -> runResilient res (prepName rule) (prepEval rule ctx) ev
 
--- The verdict an expired push resolves a gated rule to, or nothing while its evidence is eligible.
+-- The verdict an ineligible push resolves a gated rule to, or nothing while its evidence holds.
 expiredEvidence :: PreparedRule -> IO (Maybe RuleVerdict)
 expiredEvidence rule = case prepAdvisoryGate rule of
     Nothing -> pure Nothing
-    Just gate ->
-        agFreshness gate <&> \case
-            AdvisoryStale observed -> Just (CannotVet (agAlignment gate) (prepName rule <> ": " <> renderExpiredPush observed))
-            AdvisoryAging{} -> Nothing
-            AdvisoryFresh -> Nothing
+    Just gate -> agFreshness gate <&> fmap (refuseOn gate) . renderIneligible
+  where
+    refuseOn gate why = CannotVet (agAlignment gate) (prepName rule <> ": " <> why)
 
-{- | Why an expired push refuses: its age, the maximum it passed, and when it landed, so an
-operator can tell an update outage from a maximum set too short.
+{- | Why a push is not eligible evidence, or 'Nothing' while it is. A serving generation the store
+gave no publication time for reads as unverified, because its age cannot be established.
 -}
+renderIneligible :: AdvisoryFreshness -> Maybe Text
+renderIneligible = \case
+    AdvisoryFresh -> Nothing
+    AdvisoryAging{} -> Nothing
+    AdvisoryStale observed -> Just (renderExpiredPush observed)
+    AdvisoryUndated -> Just "the object store reported no publication time for the serving advisory artifact"
+
+-- An expired push: its age, the maximum it passed, and when it landed, so an operator can
+-- tell an update outage from a maximum set too short.
 renderExpiredPush :: AdvisoryAge -> Text
 renderExpiredPush observed =
     "the advisory push is "

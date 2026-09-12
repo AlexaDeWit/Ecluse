@@ -14,7 +14,8 @@ import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryAge (advisoryAge, advisoryMaxAge, advisoryPushedAt),
     AdvisoryAgeBasis (AgeBeforeQuarantine, AgeConfigured, AgeFloor),
-    AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale),
+    AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
+    AdvisoryPublication (NoGeneration, PublishedAt, UndatedGeneration),
     MaxAdvisoryAge (maxAdvisoryAge, maxAdvisoryAgeBasis),
     ageAlarmStep,
     assessAdvisoryAge,
@@ -79,25 +80,28 @@ derivationSpec = describe "maxAdvisoryAgeFor" $ do
 readingSpec :: Spec
 readingSpec = describe "assessAdvisoryAge" $ do
     it "reads an age equal to the maximum as still eligible" $
-        assessAdvisoryAge sixDayLimit now (Just (addUTCTime (negate sixDays) now))
+        assessAdvisoryAge sixDayLimit now (PublishedAt (addUTCTime (negate sixDays) now))
             `shouldBe` AdvisoryAging AdvisoryAge{advisoryPushedAt = addUTCTime (negate sixDays) now, advisoryAge = sixDays, advisoryMaxAge = sixDays}
 
     it "reads one second past the maximum as expired" $
-        case assessAdvisoryAge sixDayLimit now (Just (addUTCTime (negate sixDays - 1) now)) of
+        case assessAdvisoryAge sixDayLimit now (PublishedAt (addUTCTime (negate sixDays - 1) now)) of
             AdvisoryStale observed -> advisoryMaxAge observed `shouldBe` sixDays
             other -> expectationFailure ("expected an expired reading, got " <> show other)
 
     it "reads a push inside half the maximum as fresh" $
-        assessAdvisoryAge sixDayLimit now (Just (addUTCTime (negate (2 * nominalDay)) now))
+        assessAdvisoryAge sixDayLimit now (PublishedAt (addUTCTime (negate (2 * nominalDay)) now))
             `shouldBe` AdvisoryFresh
 
     it "reads a push past half the maximum as aging, which is still eligible" $
-        case assessAdvisoryAge sixDayLimit now (Just (addUTCTime (negate (4 * nominalDay)) now)) of
+        case assessAdvisoryAge sixDayLimit now (PublishedAt (addUTCTime (negate (4 * nominalDay)) now)) of
             AdvisoryAging observed -> advisoryAge observed `shouldBe` 4 * nominalDay
             other -> expectationFailure ("expected an aging reading, got " <> show other)
 
-    it "reads no push time as fresh, leaving the absent-database path to decide" $
-        assessAdvisoryAge sixDayLimit now Nothing `shouldBe` AdvisoryFresh
+    it "reads nothing serving as fresh, leaving the absent-database path to decide" $
+        assessAdvisoryAge sixDayLimit now NoGeneration `shouldBe` AdvisoryFresh
+
+    it "reads a serving generation the store gave no publication time for as ineligible" $
+        assessAdvisoryAge sixDayLimit now UndatedGeneration `shouldBe` AdvisoryUndated
 
 alarmSpec :: Spec
 alarmSpec = describe "ageAlarmStep" $ do
@@ -115,8 +119,11 @@ alarmSpec = describe "ageAlarmStep" $ do
     it "re-arms on a push back inside half the maximum" $ do
         ageAlarmStep True (aged 1) `shouldBe` (False, Nothing)
         fst (ageAlarmStep False (aged 4)) `shouldBe` True
+
+    it "reports nothing for an undated generation, which has no age and raises its own alarm" $
+        ageAlarmStep False AdvisoryUndated `shouldBe` (False, Nothing)
   where
-    aged days = assessAdvisoryAge sixDayLimit now (Just (addUTCTime (negate (days * nominalDay)) now))
+    aged days = assessAdvisoryAge sixDayLimit now (PublishedAt (addUTCTime (negate (days * nominalDay)) now))
 
 sixDayLimit :: MaxAdvisoryAge
 sixDayLimit = maxAdvisoryAgeFor Nothing [AllowIfOlderThan (7 * nominalDay)]

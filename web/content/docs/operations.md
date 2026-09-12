@@ -192,6 +192,11 @@ The age is the time since Pilot last pushed the artifact, taken from the publish
 timestamp. Pilot writes that object after every successful run, so unchanged bytes still move it.
 A restart re-reads it from the object, and a failed poll leaves it where it was.
 
+An artifact the object store gives no publication time for has no age to check, so it is refused
+on the same terms as an expired one: the rules never admit evidence they cannot check. Écluse
+logs `error` naming that artifact when it swaps it in. Before the first sync nothing is serving,
+which is the ordinary absent-database case and still follows `onUnavailable`.
+
 `advisories.maxAgeSeconds` sets the maximum. Unset, each mount derives its own: a day ahead of
 that mount's earliest `AllowIfOlderThan` quarantine, and never under three days. The shipped
 seven-day quarantine gives six days, so you see the failure before the next quarantined cohort

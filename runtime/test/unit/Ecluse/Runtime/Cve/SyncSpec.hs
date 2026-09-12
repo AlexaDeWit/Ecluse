@@ -337,6 +337,18 @@ spec = do
                     `shouldSatisfy` T.isInfixOf
                         "serving artifact source: pushed_at=<unrecorded> osv_source=<unrecorded> osv_newest_modified=<unrecorded> epss_score_date=<unrecorded>"
 
+        it "reports an artifact the store gave no publication time for at Error, once for that swap" $
+            withSyncEnv $ \_ _ envWith -> do
+                logged <- captureSwapLog (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
+                T.count "reported no publication time" logged `shouldBe` 1
+                logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
+                logged `shouldSatisfy` T.isInfixOf "CVE-based denial refuses until a push carries one"
+
+        it "says nothing of the kind for an artifact the store dated" $
+            withSyncEnv $ \_ _ envWith -> do
+                logged <- captureSwapLog (envWith (fetchServingAt (Just publishedAt) (Just "e1") (`mkMinimalValidDb` "pkg-a")))
+                logged `shouldSatisfy` (not . T.isInfixOf "reported no publication time")
+
     describe "syncStep" $ do
         it "reports the object absent without attempting a download" $
             withSyncEnv $ \_ _ envWith -> do

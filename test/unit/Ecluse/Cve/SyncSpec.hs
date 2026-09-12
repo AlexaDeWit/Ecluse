@@ -26,7 +26,7 @@ import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotLookup)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness, rdWithCveLookup))
 import Ecluse.Core.Rules.Freshness (
-    AdvisoryFreshness (AdvisoryFresh, AdvisoryStale),
+    AdvisoryFreshness (AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
     MaxAdvisoryAge,
     maxAdvisoryAgeFor,
  )
@@ -136,6 +136,11 @@ spec = do
             reading <- advisoryFreshnessFor (Map.singleton Npm handle) Npm
             reading `shouldSatisfy` isStale
             advisoryFreshnessFor (Map.singleton Npm handle) Npm `shouldReturn` reading
+
+        it "refuses on a serving generation the store gave no publication time for" $ do
+            handle <- stubHandleAt sixDayLimit (pure alarmNow)
+            swapIn (syncSlot (csEnv handle)) (DbEtag "e1") Nothing (fakeCveDb [])
+            advisoryFreshnessFor (Map.singleton Npm handle) Npm `shouldReturn` AdvisoryUndated
 
         it "resets on a fresh push of the same artifact" $ do
             handle <- stubHandleAt sixDayLimit (pure alarmNow)
