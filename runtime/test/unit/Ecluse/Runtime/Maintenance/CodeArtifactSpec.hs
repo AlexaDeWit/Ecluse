@@ -42,7 +42,6 @@ import Ecluse.Runtime.Maintenance.CodeArtifact (
     ControlPlane (..),
     maintenanceFor,
     maintenanceForEnv,
-    observeVersion,
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     CodeArtifactStore (..),
@@ -51,12 +50,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     consentTagValue,
     cursorTagKey,
  )
-import Ecluse.Runtime.Maintenance.CodeArtifact.Read (
-    LocalVersionRead (VersionAbsentLocally, VersionEvidenceIncomplete, VersionObserved),
-    ReadPlane (..),
-    VersionObservation (obsRevision),
-    VersionReadFault (VersionNotHeld, VersionUnread),
- )
+import Ecluse.Runtime.Maintenance.CodeArtifact.Read (ReadPlane (..))
 import Ecluse.Test.Maintenance (withBucket)
 
 {- | The CodeArtifact handle's facts and the sequencing around its calls, driven over 'ControlPlane'
@@ -72,7 +66,6 @@ handleCases :: CodeArtifactStore -> Spec
 handleCases store = do
     factCases store
     enumerationCases store
-    versionReadCases store
     deleteCases store
     consentCases store
     classificationCases store
@@ -147,35 +140,6 @@ enumerationCases store = describe "the handle's paged enumerations" $ do
     it "reads a version page carrying no versions field as an empty page" $ do
         let plane = reading inertReader{rpListVersions = \_ -> pure (Right (CA.newListPackageVersionsResponse 200))}
         enumerateVersions (handleOver store plane) aPackage `shouldReturn` Right []
-
-versionReadCases :: CodeArtifactStore -> Spec
-versionReadCases store = describe "the handle's direct version read" $ do
-    it "asks the describe call alone, addressed at the package and version given" $ do
-        asked <- newIORef []
-        let observer =
-                inertReader
-                    { rpDescribeVersion = \request -> do
-                        record asked (request ^. CAL.describePackageVersion_packageVersion)
-                        pure (Right (describedAs "1.0.0" (Just "rev-1")))
-                    }
-        outcome <- observeVersion observer store aPackage (mkVersion Npm "1.0.0")
-        fmap obsRevision (observation outcome) `shouldBe` Just (Just "rev-1")
-        readIORef asked `shouldReturn` ["1.0.0"]
-
-    it "reports a version the store does not hold as local absence, never as a fault" $ do
-        let observer = inertReader{rpDescribeVersion = \_ -> pure (Left VersionNotHeld)}
-        observeVersion observer store aPackage (mkVersion Npm "1.0.0") `shouldReturn` VersionAbsentLocally
-
-    it "reports a read that did not land, so no refusal reads as an empty repository" $ do
-        let observer = inertReader{rpDescribeVersion = \_ -> pure (Left (VersionUnread storeUnreachable))}
-        observeVersion observer store aPackage (mkVersion Npm "1.0.0")
-            `shouldReturn` VersionEvidenceIncomplete storeUnreachable
-
-    it "refuses a description that names another version rather than trust it" $ do
-        let observer = inertReader{rpDescribeVersion = \_ -> pure (Right (describedAs "9.9.9" Nothing))}
-        outcome <- observeVersion observer store aPackage (mkVersion Npm "1.0.0")
-        fmap detailOf (incompleteness outcome)
-            `shouldBe` Just "the store described version 9.9.9, not the one asked for"
 
 deleteCases :: CodeArtifactStore -> Spec
 deleteCases store = describe "the handle's chunked delete" $ do
@@ -379,14 +343,10 @@ inertReader =
         , rpListVersions = unexpected "ListPackageVersions"
         , rpDescribeRepository = unexpected "DescribeRepository"
         , rpListTags = unexpected "ListTagsForResource"
-        , rpDescribeVersion = \_ -> pure (Left (VersionUnread (unwired "DescribePackageVersion")))
         }
 
 unexpected :: Text -> a -> IO (Either StoreFault b)
-unexpected name _ = pure (Left (unwired name))
-
-unwired :: Text -> StoreFault
-unwired name = faultSaying ("the spec wired no " <> name <> " answer")
+unexpected name _ = pure (Left (faultSaying ("the spec wired no " <> name <> " answer")))
 
 -- The inert plane with its reads replaced, which is how a case wires one read call.
 reading :: ReadPlane -> ControlPlane
@@ -414,27 +374,6 @@ versionsPage token raws =
     CA.newListPackageVersionsResponse 200
         & (CAL.listPackageVersionsResponse_nextToken .~ token)
         & (CAL.listPackageVersionsResponse_versions ?~ [CA.newPackageVersionSummary raw CA.PackageVersionStatus_Published | raw <- raws])
-
--- A description of one version, as the store answers a direct read with.
-describedAs :: Text -> Maybe Text -> CA.DescribePackageVersionResponse
-describedAs raw revision =
-    CA.newDescribePackageVersionResponse
-        200
-        ( CA.newPackageVersionDescription
-            & (CAL.packageVersionDescription_version ?~ raw)
-            & (CAL.packageVersionDescription_status ?~ CA.PackageVersionStatus_Published)
-            & (CAL.packageVersionDescription_revision .~ revision)
-        )
-
-observation :: LocalVersionRead -> Maybe VersionObservation
-observation = \case
-    VersionObserved observed -> Just observed
-    _ -> Nothing
-
-incompleteness :: LocalVersionRead -> Maybe StoreFault
-incompleteness = \case
-    VersionEvidenceIncomplete fault -> Just fault
-    _ -> Nothing
 
 allRemoved :: [Text] -> CA.DeletePackageVersionsResponse
 allRemoved raws =

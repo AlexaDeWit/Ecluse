@@ -15,7 +15,6 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     codeArtifactFormat,
     formatEcosystem,
     formatToken,
-    storePackageFormat,
 
     -- * What the backend does
     codeArtifactFacts,

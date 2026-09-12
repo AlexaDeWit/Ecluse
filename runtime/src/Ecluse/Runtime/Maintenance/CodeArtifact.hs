@@ -18,9 +18,6 @@ module Ecluse.Runtime.Maintenance.CodeArtifact (
     controlPlaneFor,
     readPlaneFor,
     maintenanceFor,
-
-    -- * Reading one version directly
-    observeVersion,
 ) where
 
 import Amazonka qualified as AWS
@@ -70,12 +67,8 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     repositoryOfResponse,
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (
-    LocalVersionRead,
     ReadPlane (..),
-    classifyVersionRead,
-    describeVersionRequest,
     identityOfStore,
-    readOfAnswer,
     versionsOfPage,
  )
 
@@ -115,9 +108,7 @@ controlPlaneFor env =
         , cpUntagResource = sendStore env
         }
 
-{- | The observing calls alone, over one env. A direct version read keeps CodeArtifact's "no such
-resource" as absence rather than folding it into the fault a sweep retries on.
--}
+-- | The observing calls alone, over one env, so a caller handed these can change nothing.
 readPlaneFor :: AWS.Env -> ReadPlane
 readPlaneFor env =
     ReadPlane
@@ -125,7 +116,6 @@ readPlaneFor env =
         , rpListVersions = sendStore env
         , rpDescribeRepository = sendStore env
         , rpListTags = sendStore env
-        , rpDescribeVersion = sendClassified classifyVersionRead env
         }
 
 {- | Build the handle over a caller-supplied 'ControlPlane' and the manifest read the root
@@ -145,14 +135,6 @@ maintenanceFor alphabet readManifest store plane =
         , classifyStore = fmap (fmap classifyRepository) (describeStore (cpRead plane) store)
         , storeCursor = Just (walkCursor alphabet plane store)
         }
-
-{- | Read one version in the store directly, which is the only call that reports its current
-revision. The answer is evidence a later decision reads, and authorises nothing on its own.
--}
-observeVersion :: ReadPlane -> CodeArtifactStore -> PackageName -> Version -> IO LocalVersionRead
-observeVersion observer store name version =
-    readOfAnswer store name version
-        <$> rpDescribeVersion observer (describeVersionRequest store name version)
 
 sendStore :: (AWS.AWSRequest a) => AWS.Env -> a -> IO (Either StoreFault (AWS.AWSResponse a))
 sendStore = sendClassified classifyStoreFault

@@ -4,20 +4,15 @@
 
 module Ecluse.Runtime.Maintenance.CodeArtifact.ReadSpec (spec) where
 
-import Lens.Micro ((.~), (?~), (^.))
-import Network.HTTP.Types (Status, status403, status404, status429)
+import Lens.Micro ((?~))
 import Test.Hspec
 
-import Amazonka qualified as AWS
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Fault (TransportCause (TransportProtocol), tfDetail, transportFault)
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Registry.Maintenance (
-    RetryAdvice (RetryFutile, RetryWorthwhile),
-    StoreFault (..),
     StoredVersion (..),
     VersionPresence (VersionServed, VersionWithdrawn),
  )
@@ -27,23 +22,17 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     codeArtifactFormat,
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (
-    LocalVersionRead (VersionAbsentLocally, VersionEvidenceIncomplete, VersionObserved),
     RepositoryIdentity (..),
     VersionObservation (..),
     VersionOrigin (..),
-    VersionReadFault (VersionNotHeld, VersionUnread),
-    classifyVersionRead,
-    describeVersionRequest,
     identityOfStore,
     observationsOfPage,
-    readOfAnswer,
     storedOfObservation,
     versionsOfPage,
  )
 
-{- | The read-only CodeArtifact layer: what one observation preserves, and what a direct version
-read establishes. A 'ReadPlane' has no deletion, cursor, publication, or tag-writing field, so
-every case here drives evidence alone. The coordinates and verdicts this builds on are covered in
+{- | The read-only CodeArtifact layer: what one observation of a listing preserves. The
+coordinates and verdicts it builds on are covered in
 "Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec".
 -}
 spec :: Spec
@@ -58,9 +47,6 @@ readCases store = do
     identitySpec store
     pageSpec store
     projectionSpec store
-    requestSpec store
-    faultSpec
-    answerSpec store
 
 identitySpec :: CodeArtifactStore -> Spec
 identitySpec store =
@@ -145,136 +131,6 @@ projectionSpec store = describe "versionsOfPage" $ do
         stored store [published "1.0.0"]
             `shouldBe` [StoredVersion{storedVersion = version "1.0.0", storedPresence = VersionServed}]
 
-requestSpec :: CodeArtifactStore -> Spec
-requestSpec store = describe "describeVersionRequest" $ do
-    it "addresses the bound domain, owner, repository, format, namespace, package, and version" $ do
-        let request = describeVersionRequest store scopedName (version "7.0.0")
-        request ^. CAL.describePackageVersion_domain `shouldBe` "acme"
-        request ^. CAL.describePackageVersion_domainOwner `shouldBe` Just "111122223333"
-        request ^. CAL.describePackageVersion_repository `shouldBe` "mirror"
-        request ^. CAL.describePackageVersion_format `shouldBe` CA.PackageFormat_Npm
-        request ^. CAL.describePackageVersion_namespace `shouldBe` Just "babel"
-        request ^. CAL.describePackageVersion_package `shouldBe` "core"
-        request ^. CAL.describePackageVersion_packageVersion `shouldBe` "7.0.0"
-
-    it "sends an unscoped package with no namespace" $
-        describeVersionRequest store plainName (version "1.0.0")
-            ^. CAL.describePackageVersion_namespace
-            `shouldBe` Nothing
-
-    it "sends the version in its published spelling" $
-        describeVersionRequest store plainName (version "1.0.0-rc.1+build")
-            ^. CAL.describePackageVersion_packageVersion
-            `shouldBe` "1.0.0-rc.1+build"
-
-faultSpec :: Spec
-faultSpec = describe "classifyVersionRead" $ do
-    it "reads CodeArtifact's own missing resource as a version the repository does not hold" $
-        classifyVersionRead (serviceError status404 "ResourceNotFoundException") `shouldBe` VersionNotHeld
-
-    it "keeps a refused permission a fault, never absence" $
-        classifyVersionRead (serviceError status403 "AccessDeniedException")
-            `shouldSatisfy` unreadAdvising RetryFutile
-
-    it "keeps a throttle a fault worth another attempt, never absence" $
-        classifyVersionRead (serviceError status429 "ThrottlingException")
-            `shouldSatisfy` unreadAdvising RetryWorthwhile
-
-answerSpec :: CodeArtifactStore -> Spec
-answerSpec store = describe "readOfAnswer" $ do
-    it "reads a version the repository does not hold as local absence" $
-        answerFor store (Left VersionNotHeld) `shouldBe` VersionAbsentLocally
-
-    it "keeps a failed read apart from absence, so no fault becomes an empty repository" $
-        answerFor store (Left (VersionUnread refusedRead)) `shouldBe` VersionEvidenceIncomplete refusedRead
-
-    it "observes a description that names the version asked for" $
-        answerFor store (Right (responseOf (revisedDescription "rev-1" (describedInternally describedVersion))))
-            `shouldBe` VersionObserved
-                VersionObservation
-                    { obsIdentity = identityOfStore store
-                    , obsPackage = scopedName
-                    , obsVersion = version "7.0.0"
-                    , obsStatus = CA.PackageVersionStatus_Published
-                    , obsPresence = VersionServed
-                    , obsRevision = Just "rev-1"
-                    , obsOrigin = Just (VersionOrigin (Just CA.PackageVersionOriginType_INTERNAL) Nothing Nothing)
-                    }
-
-    it "observes a description that supplies no identity of its own, having nothing to disagree with" $
-        answerFor store (Right (responseOf statusAlone)) `shouldSatisfy` observing
-
-    it "refuses a description naming another version" $
-        refusalFor store (describedVersion & (CAL.packageVersionDescription_version ?~ "7.0.1"))
-            `shouldBe` Just "the store described version 7.0.1, not the one asked for"
-
-    it "refuses a description naming another package" $
-        refusalFor store (describedVersion & (CAL.packageVersionDescription_packageName ?~ "runtime"))
-            `shouldBe` Just "the store described package runtime, not the one asked for"
-
-    it "refuses a description naming another namespace" $
-        refusalFor store (describedVersion & (CAL.packageVersionDescription_namespace ?~ "vue"))
-            `shouldBe` Just "the store described namespace vue, not the one asked for"
-
-    it "refuses a description naming another format" $
-        refusalFor store (describedVersion & (CAL.packageVersionDescription_format ?~ CA.PackageFormat_Pypi))
-            `shouldBe` Just "the store described format pypi, not the one asked for"
-
-    it "refuses a description carrying no status, which says nothing about what the store holds" $
-        refusalFor store (describedVersion & (CAL.packageVersionDescription_status .~ Nothing))
-            `shouldBe` Just "the store described the version without a status"
-
--- The description a store answers with for the version every case here asks about.
-describedVersion :: CA.PackageVersionDescription
-describedVersion =
-    CA.newPackageVersionDescription
-        & (CAL.packageVersionDescription_format ?~ CA.PackageFormat_Npm)
-        & (CAL.packageVersionDescription_namespace ?~ "babel")
-        & (CAL.packageVersionDescription_packageName ?~ "core")
-        & (CAL.packageVersionDescription_version ?~ "7.0.0")
-        & (CAL.packageVersionDescription_status ?~ CA.PackageVersionStatus_Published)
-
-statusAlone :: CA.PackageVersionDescription
-statusAlone =
-    CA.newPackageVersionDescription
-        & (CAL.packageVersionDescription_status ?~ CA.PackageVersionStatus_Published)
-
-revisedDescription :: Text -> CA.PackageVersionDescription -> CA.PackageVersionDescription
-revisedDescription raw = CAL.packageVersionDescription_revision ?~ raw
-
-describedInternally :: CA.PackageVersionDescription -> CA.PackageVersionDescription
-describedInternally =
-    CAL.packageVersionDescription_origin ?~ originTyped CA.PackageVersionOriginType_INTERNAL
-
-responseOf :: CA.PackageVersionDescription -> CA.DescribePackageVersionResponse
-responseOf = CA.newDescribePackageVersionResponse 200
-
-answerFor :: CodeArtifactStore -> Either VersionReadFault CA.DescribePackageVersionResponse -> LocalVersionRead
-answerFor store = readOfAnswer store scopedName (version "7.0.0")
-
--- What the read refused, so a case reads the refusal rather than only that one happened.
-refusalFor :: CodeArtifactStore -> CA.PackageVersionDescription -> Maybe Text
-refusalFor store described = case answerFor store (Right (responseOf described)) of
-    VersionEvidenceIncomplete fault -> Just (tfDetail (faultTransport fault))
-    _ -> Nothing
-
-observing :: LocalVersionRead -> Bool
-observing = \case
-    VersionObserved _ -> True
-    _ -> False
-
-unreadAdvising :: RetryAdvice -> VersionReadFault -> Bool
-unreadAdvising advice = \case
-    VersionUnread fault -> faultRetry fault == advice
-    VersionNotHeld -> False
-
-refusedRead :: StoreFault
-refusedRead =
-    StoreFault
-        { faultTransport = transportFault TransportProtocol "the store refused the read"
-        , faultRetry = RetryFutile
-        }
-
 observed :: CodeArtifactStore -> [CA.PackageVersionSummary] -> [VersionObservation]
 observed store = observationsOfPage (identityOfStore store) scopedName
 
@@ -331,15 +187,8 @@ ingested =
 scopedName :: PackageName
 scopedName = mkPackageName Npm (Just (mkScope "babel")) "core"
 
-plainName :: PackageName
-plainName = mkPackageName Npm Nothing "lodash"
-
 version :: Text -> Version
 version = mkVersion Npm
-
-serviceError :: Status -> Text -> AWS.Error
-serviceError status code =
-    AWS.ServiceError (AWS.ServiceError' "CodeArtifact" status [] (AWS.newErrorCode code) Nothing Nothing)
 
 npmStore :: Maybe CodeArtifactStore
 npmStore = coordinates <$> codeArtifactFormat Npm
