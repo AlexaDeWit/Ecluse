@@ -24,7 +24,8 @@ import Data.Time (NominalDiffTime, UTCTime (UTCTime), fromGregorian)
 import GHC.Conc (getNumCapabilities)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (Header, Status, hETag, hIfNoneMatch, status200, status304)
+import Network.HTTP.Types (Header, Status, status200, status304)
+import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
 import Network.Wai (Application)
 import Network.Wai.Handler.Warp (testWithApplication)
 
