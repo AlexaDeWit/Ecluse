@@ -15,7 +15,7 @@ module Ecluse.Runtime.Telemetry.Reporters (
 import Data.Foldable1 qualified as Foldable1
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
-import Data.Universe.Class (universe)
+import Data.Universe.Class qualified as Universe
 
 import Ecluse.Core.Breaker (BreakerReporter (..), breakerState)
 import Ecluse.Core.Credential.Refresh (RefreshReporter (..))
@@ -51,7 +51,7 @@ installMetrics deferred metrics = do
         expiries <- readIORef (dmExpiries deferred)
         pure
             [ (provider, expiry)
-            | provider <- universe
+            | provider <- Universe.universe
             , Just expiry <- [viaNonEmpty Foldable1.minimum [stamp | (label, stamp) <- Map.elems expiries, label == provider]]
             ]
     writeIORef (dmMetrics deferred) (Just metrics)
@@ -70,7 +70,7 @@ deferredBreakerReporter deferred source =
 An absent expiry is no observation. Expired credentials remain until a reported replacement.
 -}
 deferredRefreshReporter :: DeferredMetrics -> Ecosystem -> Provider -> RefreshReporter
-deferredRefreshReporter deferred identity provider =
+deferredRefreshReporter deferred credentialIdentity provider =
     RefreshReporter
         { onRefreshSucceeded = report Refreshed
         , onRefreshFailed = report RefreshFailed
@@ -80,7 +80,7 @@ deferredRefreshReporter deferred identity provider =
     report result expiry = do
         for_ expiry $ \stamp ->
             atomicModifyIORef' (dmExpiries deferred) $ \expiries ->
-                (Map.insert identity (provider, stamp) expiries, ())
+                (Map.insert credentialIdentity (provider, stamp) expiries, ())
         withDeferredMetrics deferred $ \metrics -> recordCredentialRefresh metrics provider result
 
 -- | Record one mirror enqueue failure after instrument installation.

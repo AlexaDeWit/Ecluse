@@ -42,24 +42,24 @@ spec = describe "credential expiry collection" $ do
             deferred <- newDeferredMetrics clock
             m <- newMetrics telemetry
             installMetrics deferred m
-            let first = deferredRefreshReporter deferred Npm ProviderCodeArtifact
-                second = deferredRefreshReporter deferred PyPI ProviderCodeArtifact
+            let npmReporter = deferredRefreshReporter deferred Npm ProviderCodeArtifact
+                pypiReporter = deferredRefreshReporter deferred PyPI ProviderCodeArtifact
                 points = gaugePoints "ecluse.credential.token.ttl.seconds" meterEnv
                 expected provider seconds = (metricAttributes [LProvider provider], seconds)
             points `shouldReturn` []
-            onRefreshSucceeded first (expiry 30)
-            onRefreshSucceeded second (expiry 80)
+            onRefreshSucceeded npmReporter (expiry 30)
+            onRefreshSucceeded pypiReporter (expiry 80)
             points `shouldReturn` [expected ProviderCodeArtifact 30]
             setClock (addUTCTime 40 anInstant)
             points `shouldReturn` [expected ProviderCodeArtifact 0]
-            onRefreshSucceeded second (expiry 120)
+            onRefreshSucceeded pypiReporter (expiry 120)
             points `shouldReturn` [expected ProviderCodeArtifact 0]
-            onRefreshSucceeded first (expiry 100)
+            onRefreshSucceeded npmReporter (expiry 100)
             points `shouldReturn` [expected ProviderCodeArtifact 60]
-            onRefreshFailed first (expiry 100)
+            onRefreshFailed npmReporter (expiry 100)
             setClock (addUTCTime 50 anInstant)
             points `shouldReturn` [expected ProviderCodeArtifact 50]
-            onRefreshFailed first Nothing
+            onRefreshFailed npmReporter Nothing
             points `shouldReturn` [expected ProviderCodeArtifact 50]
 
     it "observes no TTL for a static provider from startup" $
@@ -101,9 +101,9 @@ spec = describe "credential expiry collection" $ do
                         , rcMint = modifyIORef' mintCalls (+ 1) >> join (readIORef mint)
                         , rcReporters =
                             noCredentialReporters
-                                { crBreakerReporter = BreakerReporter $ \state -> do
-                                    reportBreaker state
-                                    writeIORef latestBreaker (Just state)
+                                { crBreakerReporter = BreakerReporter $ \breakerSnapshot -> do
+                                    reportBreaker breakerSnapshot
+                                    writeIORef latestBreaker (Just breakerSnapshot)
                                 , crRefreshReporter =
                                     reporter
                                         { onRefreshFailed = \stamp -> do

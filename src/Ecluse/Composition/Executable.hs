@@ -352,8 +352,8 @@ planPublishBudget memoryPlan =
 
 -- Where a store's mirror-write credential provider records its mint breaker and refresh outcomes.
 credentialReportersOver :: DeferredMetrics -> Ecosystem -> StoreTag -> CredentialReporters
-credentialReportersOver deferredMetrics identity tag =
+credentialReportersOver deferredMetrics credentialIdentity tag =
     CredentialReporters
         { crBreakerReporter = deferredBreakerReporter deferredMetrics CredentialMint
-        , crRefreshReporter = deferredRefreshReporter deferredMetrics identity (providerLabel tag)
+        , crRefreshReporter = deferredRefreshReporter deferredMetrics credentialIdentity (providerLabel tag)
         }
