@@ -3,7 +3,6 @@
 -- SPDX-License-Identifier: MIT
 
 {- | RubyGems versions-listing JSON for the test capture oracles.
-
 The live endpoint returns a top-level array. Each entry must supply its @number@,
 or decoding fails. "Ecluse.Test.RegistryCapture" uses this module for RubyGems
 version ordering checks. It models no other response fields.
