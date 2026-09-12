@@ -109,6 +109,22 @@ data MetaKey
       MetaSourceUrl
     | -- | The EPSS source's host:port identity. Older artifacts can carry a complete URL.
       MetaEpssSourceUrl
+    | {- | The advisory source's credential-free URL, which identifies the export across runs
+      where the host alone cannot.
+      -}
+      MetaOsvSource
+    | -- | The @Last-Modified@ the advisory export answered the fetch with.
+      MetaOsvLastModified
+    | -- | The newest @modified@ of the advisory records the artifact was compiled from.
+      MetaOsvNewestModified
+    | -- | The EPSS feed's credential-free URL.
+      MetaEpssSource
+    | -- | The @Last-Modified@ the EPSS feed answered the fetch with.
+      MetaEpssLastModified
+    | -- | The @score_date@ the EPSS feed declares for its scores.
+      MetaEpssScoreDate
+    | -- | The scoring model the EPSS feed declares.
+      MetaEpssModelVersion
     | -- | The number of advisory ranges the artifact holds.
       MetaRowCount
     deriving stock (Eq, Generic, Show)
@@ -125,4 +141,11 @@ renderMetaKey = \case
     MetaBuiltAt -> "built_at"
     MetaSourceUrl -> "source_url"
     MetaEpssSourceUrl -> "epss_source_url"
+    MetaOsvSource -> "osv_source"
+    MetaOsvLastModified -> "osv_last_modified"
+    MetaOsvNewestModified -> "osv_newest_modified"
+    MetaEpssSource -> "epss_source"
+    MetaEpssLastModified -> "epss_last_modified"
+    MetaEpssScoreDate -> "epss_score_date"
+    MetaEpssModelVersion -> "epss_model_version"
     MetaRowCount -> "row_count"

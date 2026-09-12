@@ -26,3 +26,22 @@ spec = do
         it "renders every meta key to a distinct stored form" $ do
             let keys = map renderMetaKey (universe :: [MetaKey])
             ordNub keys `shouldBe` keys
+
+        -- The literals pin the stored keys a consumer reads by name. A rename here breaks
+        -- every artifact already published under the epoch.
+        it "renders each key to its published spelling" $
+            map renderMetaKey (universe :: [MetaKey])
+                `shouldBe` [ "pilot_version"
+                           , "ecosystem"
+                           , "built_at"
+                           , "source_url"
+                           , "epss_source_url"
+                           , "osv_source"
+                           , "osv_last_modified"
+                           , "osv_newest_modified"
+                           , "epss_source"
+                           , "epss_last_modified"
+                           , "epss_score_date"
+                           , "epss_model_version"
+                           , "row_count"
+                           ]

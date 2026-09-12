@@ -18,6 +18,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
+import Ecluse.Core.Osv.Provenance (QuietTime (..))
 import Ecluse.Test.Osv (CorpusVersion, osvCorpusZip, runOsvTestM)
 import Ecluse.Test.Port (noopAdvisoryCompileMetricsPort)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
@@ -53,4 +54,12 @@ compileOsvZipDbTo eco zipBytes dir = do
                         { csOsvExportUrl = toString (stubBaseUrl osvStub) <> "/all.zip"
                         , csEpssFeedUrl = toString (stubBaseUrl epssStub) <> "/epss_scores-current.csv.gz"
                         }
+                    fixtureQuietTime
                 )
+
+-- A century, so a committed fixture's own dates never raise the quiet-time alarm in a suite
+-- that is about something else.
+fixtureQuietTime :: QuietTime
+fixtureQuietTime = QuietTime{qtOsv = century, qtEpss = century}
+  where
+    century = 100 * 365 * 86400

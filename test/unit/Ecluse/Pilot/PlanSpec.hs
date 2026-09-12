@@ -16,6 +16,7 @@ import Ecluse.Config.AdvisoryStore (mkAdvisoryStoreUrl)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Compile (CompileSources (..))
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
+import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
 import Ecluse.Pilot.Plan (
     ExportLoopPlan (ExportIdle, ExportTo),
     PilotCompileOptions (..),
@@ -26,6 +27,7 @@ import Ecluse.Pilot.Plan (
     exportCadenceMicros,
     exportLoopPlan,
     idleCadenceMicros,
+    quietTimeFor,
     uploadPlan,
     uploadTarget,
  )
@@ -51,6 +53,20 @@ bareOptions =
 
 spec :: Spec
 spec = do
+    describe "quietTimeFor -- the thresholds one compile is judged against" $ do
+        it "takes the shipped seven days for a mounted ecosystem and for EPSS" $ do
+            advisories <- advisoriesWith []
+            quietTimeFor advisories (Just Npm) `shouldBe` QuietTime{qtOsv = 604800, qtEpss = 604800}
+
+        it "takes an operator's threshold for the ecosystem it names" $ do
+            advisories <- advisoriesWith [("ECLUSE_ADVISORIES__QUIET_TIME__NPM", "86400")]
+            qtOsv (quietTimeFor advisories (Just Npm)) `shouldBe` 86400
+            qtOsv (quietTimeFor advisories (Just PyPI)) `shouldBe` 604800
+
+        it "falls back to the default for a one-shot compile of a name this build does not serve" $ do
+            advisories <- advisoriesWith []
+            qtOsv (quietTimeFor advisories Nothing) `shouldBe` defaultQuietTime
+
     describe "exportLoopPlan -- whether the scheduled loop exports at all, and for what" $ do
         it "idles on the shipped defaults, which configure no store" $ do
             advisories <- advisoriesWith []

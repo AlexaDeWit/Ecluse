@@ -136,6 +136,18 @@ advisories:
   # override it if the upstream moves or you mirror it, and allowlist this host for
   # Pilot's egress. The DenyIfEpss rule reads the scores it supplies.
   epssFeedUrl: "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+  # Pilot only: how long one ecosystem's advisory export may go unchanged, in seconds, before
+  # Pilot logs the quiet-time alarm at ERROR after each compile. The key is the ecosystem, as
+  # a mounts key spells it, and an unknown one fails the load. The shipped seven days comes
+  # from measured change frequency: the longest gap in npm and PyPI advisories over 60 days
+  # was four to five days. An ecosystem with no entry here takes the same seven days. Raise it
+  # for an ecosystem that really is quiet, or change osvExportBaseUrl.
+  quietTime:
+    npm: 604800
+    pypi: 604800
+  # Pilot only: the same threshold for the score date the EPSS feed declares, in seconds. One
+  # key, because one feed serves every ecosystem.
+  epssQuietTime: 604800
   # The object store the compiled advisory databases sync from, as
   # s3://<bucket>[/<prefix>]. The scheme picks the provider, the way queue.url does, and
   # a scheme this build does not know is refused at load. AWS_ENDPOINT_URL still points

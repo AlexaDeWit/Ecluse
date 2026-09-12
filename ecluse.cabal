@@ -101,6 +101,7 @@ library ecluse-core
     Ecluse.Core.Osv.Compile
     Ecluse.Core.Osv.Ecosystem
     Ecluse.Core.Osv.Epss
+    Ecluse.Core.Osv.Provenance
     Ecluse.Core.Osv.Retry
     Ecluse.Core.Osv.Schema
     Ecluse.Core.Osv.Stream
@@ -689,6 +690,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Osv.CompileSpec
     Ecluse.Core.Osv.EcosystemSpec
     Ecluse.Core.Osv.EpssSpec
+    Ecluse.Core.Osv.ProvenanceSpec
     Ecluse.Core.Osv.RetrySpec
     Ecluse.Core.Osv.SchemaSpec
     Ecluse.Core.Package.AdmissionSpec

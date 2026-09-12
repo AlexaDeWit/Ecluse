@@ -50,6 +50,7 @@ import Ecluse.Pilot.Plan (
     configuredSources,
     exportCadenceMicros,
     idleCadenceMicros,
+    quietTimeFor,
     uploadPlan,
     uploadTarget,
  )
@@ -112,6 +113,7 @@ exportEcosystem metrics eco telemetry s3Endpoint advisories store = do
             (advDataDir advisories)
             osvEco
             (configuredSources advisories osvEco)
+            (quietTimeFor advisories (Just eco))
     uploadToStore telemetry s3Endpoint store dbPath
   where
     osvEco = osvEcosystemFor eco
@@ -150,6 +152,7 @@ runPilotCompile logEnv telemetry s3Endpoint appCfg opts = do
                     (pcoOutDir opts)
                     (osvEcosystemNamed (pcoEcosystem opts))
                     (compileSources advisories opts)
+                    (quietTimeFor advisories (parseEcosystem (pcoEcosystem opts)))
             runUploadPlan telemetry s3Endpoint plan dbFile
             pure dbFile
   where

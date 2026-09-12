@@ -15,7 +15,7 @@ module Ecluse.Core.Osv.Compile (
 import Conduit
 import Control.Monad.Catch (MonadMask)
 import Data.Conduit.List qualified as CL
-import Data.Time (getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Database.SQLite.Simple
 import Katip (KatipContext, Severity (..), SimpleLogPayload, katipAddContext, logFM, ls, sl)
@@ -28,21 +28,33 @@ import UnliftIO.Exception (bracket, throwIO)
 import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory, osvWireName))
-import Ecluse.Core.Osv.Epss (fetchEpssScores, maxEpssFeedBytes)
+import Ecluse.Core.Osv.Epss (EpssFeed (efLastModified, efModelVersion, efScoreDate, efScores), fetchEpssScores, maxEpssFeedBytes)
+import Ecluse.Core.Osv.Provenance (
+    AdvisoryProvenance (..),
+    QuietTime,
+    SourceAge,
+    provenanceRows,
+    renderSourceAge,
+    sourceAges,
+    sourceQuiet,
+ )
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Core.Osv.Schema (MetaKey (..), metaTableDdl, osvDbFileName, osvSchemaEpoch, rangesTableDdl, renderMetaKey)
 import Ecluse.Core.Osv.Stream (
     IngestStats (..),
+    OsvAttempt (..),
     PilotIngestAborted (..),
     defaultIngestLimits,
     newOsvIngest,
     readIngestStats,
+    readOsvAttempt,
     resetIngestStats,
+    resetOsvAttempt,
     streamOsvUrl,
     systemicDrop,
  )
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
-import Ecluse.Core.Security.Authority (authorityLabel)
+import Ecluse.Core.Security.Authority (authorityLabel, credentialFreeUrl)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
@@ -62,11 +74,12 @@ data CompileSources = CompileSources
     }
     deriving stock (Eq, Show)
 
-{- | Compile one ecosystem into @outDir@, refusing systemic drops or zero relevant rows.
-A refused candidate leaves any previous artifact and its metadata unchanged.
+{- | Compile one ecosystem into @outDir@, refusing systemic drops, zero relevant rows, or a
+record dated ahead of the run. A refused candidate leaves any previous artifact and its
+metadata unchanged. @quietTime@ decides which recorded source age raises the alarm.
 -}
-compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> CompileSources -> m FilePath
-compileOsvToSqlite metrics mTracerProvider outDir eco sources = do
+compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> CompileSources -> QuietTime -> m FilePath
+compileOsvToSqlite metrics mTracerProvider outDir eco sources quietTime = do
     let ecosystem = osvWireName eco
         dbFile = outDir </> osvDbFileName ecosystem
     logFM InfoS (ls ("Compiling OSV data for " <> ecosystem <> " to " <> toText dbFile))
@@ -85,18 +98,23 @@ compileOsvToSqlite metrics mTracerProvider outDir eco sources = do
                     addAttribute sp "ecluse.osv.ecosystem" ecosystem
                     addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText (csOsvExportUrl sources)))
 
+                -- Every record's date is judged against this one instant, so a long pass
+                -- cannot let a later record pass a check an earlier one failed.
+                now <- liftIO getCurrentTime
+
                 -- The join needs the whole score table before the first advisory row lands, and a
                 -- feed the retry budget cannot fetch fails the pass rather than shipping without.
-                epss <- withOsvRetry defaultOsvRetryPolicy (fetchEpssScores maxEpssFeedBytes (csEpssFeedUrl sources))
-                ingest <- newOsvIngest defaultIngestLimits eco epss
+                feed <- withOsvRetry defaultOsvRetryPolicy (fetchEpssScores maxEpssFeedBytes (csEpssFeedUrl sources))
+                ingest <- newOsvIngest defaultIngestLimits eco (efScores feed) now
 
                 bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
                     liftIO $ initSchema conn
 
                     -- A failed attempt leaves committed batches. NULL bounds defeat deduplication,
-                    -- so each retry clears the table and tally.
+                    -- so each retry clears the table, the tally, and the source metadata.
                     withOsvRetry defaultOsvRetryPolicy $ do
                         resetIngestStats ingest
+                        resetOsvAttempt ingest
                         liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
                         runConduit $
                             streamOsvUrl mTracerProvider ingest (csOsvExportUrl sources)
@@ -105,7 +123,19 @@ compileOsvToSqlite metrics mTracerProvider outDir eco sources = do
                                 .| sinkSqlite conn
 
                     stats <- readIngestStats ingest
-                    concludeCompile metrics mSpan conn ecosystem sources stats
+                    attempt <- readOsvAttempt ingest
+                    concludeCompile metrics mSpan conn (conclusionOf ecosystem now feed attempt stats)
+
+    conclusionOf ecosystem now feed attempt stats =
+        CompileConclusion
+            { ccEcosystem = ecosystem
+            , ccSources = sources
+            , ccStats = stats
+            , ccFutureModified = oaFutureModified attempt
+            , ccProvenance = passProvenance sources feed attempt
+            , ccQuietTime = quietTime
+            , ccNow = now
+            }
 
 newCandidate :: FilePath -> IO FilePath
 newCandidate outDir = do
@@ -116,8 +146,34 @@ newCandidate outDir = do
 removeCandidate :: FilePath -> IO ()
 removeCandidate path = catchIOError (removeFile path) (const $ pure ())
 
-concludeCompile :: (KatipContext m) => AdvisoryCompileMetricsPort -> Maybe Span -> Connection -> Text -> CompileSources -> IngestStats -> m ()
-concludeCompile metrics mSpan conn ecosystem sources stats = do
+-- Everything the conclusion of one pass reads beside the connection: what the pass tallied,
+-- the provenance it will write, and the thresholds those recorded ages are judged by.
+data CompileConclusion = CompileConclusion
+    { ccEcosystem :: Text
+    , ccSources :: CompileSources
+    , ccStats :: IngestStats
+    , ccFutureModified :: Maybe Text
+    , ccProvenance :: AdvisoryProvenance
+    , ccQuietTime :: QuietTime
+    , ccNow :: UTCTime
+    }
+
+-- The sources one finished pass read, as they described themselves. The identities are
+-- credential-free, because the artifact travels to every consumer.
+passProvenance :: CompileSources -> EpssFeed -> OsvAttempt -> AdvisoryProvenance
+passProvenance sources feed attempt =
+    AdvisoryProvenance
+        { apOsvSource = Just (credentialFreeUrl (toText (csOsvExportUrl sources)))
+        , apOsvLastModified = oaLastModified attempt
+        , apOsvNewestModified = oaNewestModified attempt
+        , apEpssSource = Just (credentialFreeUrl (toText (csEpssFeedUrl sources)))
+        , apEpssLastModified = efLastModified feed
+        , apEpssScoreDate = efScoreDate feed
+        , apEpssModelVersion = efModelVersion feed
+        }
+
+concludeCompile :: (KatipContext m) => AdvisoryCompileMetricsPort -> Maybe Span -> Connection -> CompileConclusion -> m ()
+concludeCompile metrics mSpan conn conclusion = do
     forM_ mSpan $ \sp -> do
         addAttribute sp "ecluse.osv.accepted" (show (statAccepted stats) :: Text)
         addAttribute sp "ecluse.osv.dropped_oversize" (show (statDroppedOversize stats) :: Text)
@@ -126,22 +182,41 @@ concludeCompile metrics mSpan conn ecosystem sources stats = do
     liftIO (recordTallies metrics stats)
     counted <- liftIO (query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges" :: IO [Only Int])
     let rowCount = maybe 0 fromOnly (listToMaybe counted)
-        refusal
-            | systemicDrop stats = Just "systemic advisory drop rate"
-            | rowCount == 0 = Just "zero relevant advisory rows"
-            | otherwise = Nothing
-    forM_ refusal $ \reason -> do
+    forM_ (compileRefusal conclusion rowCount) $ \reason -> do
         forM_ mSpan $ \sp -> setStatus sp (Error (reason <> ", compile abandoned"))
         liftIO (acmpCompileRun metrics CompileAborted)
         katipAddContext (dropFields ecosystem stats) $
             logFM ErrorS (ls ("Aborting OSV compile for " <> ecosystem <> ": " <> reason <> " (" <> renderDrops stats <> ")"))
         throwIO (PilotIngestAborted stats)
 
-    liftIO $ writeMeta conn ecosystem sources rowCount
+    liftIO $ writeMeta conn conclusion rowCount
     liftIO (acmpCompileRun metrics CompileCompleted)
     forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.row_count" (show rowCount :: Text)
     katipAddContext (sl "row_count" rowCount <> dropFields ecosystem stats) $
         logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem <> " (" <> renderDrops stats <> ")"))
+    logSourceAges ecosystem (sourceAges (ccNow conclusion) (ccQuietTime conclusion) (ccProvenance conclusion))
+  where
+    ecosystem = ccEcosystem conclusion
+    stats = ccStats conclusion
+
+{- Why this pass may not publish, if anything. A record dated after the run's clock is the
+third cause: the source cannot know a change that has not happened, so the date is wrong and
+nothing may be published on the strength of it. -}
+compileRefusal :: CompileConclusion -> Int -> Maybe Text
+compileRefusal conclusion rowCount
+    | systemicDrop (ccStats conclusion) = Just "systemic advisory drop rate"
+    | rowCount == 0 = Just "zero relevant advisory rows"
+    | Just advisoryId <- ccFutureModified conclusion =
+        Just ("advisory " <> advisoryId <> " is dated after this run's clock")
+    | otherwise = Nothing
+
+-- The ages the sources declared, on every pass that published. A source past its threshold is
+-- an operator alarm: raise the threshold for a slow ecosystem, or change the source.
+logSourceAges :: (KatipContext m) => Text -> [SourceAge] -> m ()
+logSourceAges ecosystem ages = for_ ages $ \reading -> do
+    logFM InfoS (ls (ecosystem <> ": " <> renderSourceAge reading))
+    when (sourceQuiet reading) $
+        logFM ErrorS (ls (ecosystem <> ": " <> renderSourceAge reading <> ", so the source has gone quiet"))
 
 -- An abandoned pass records its tallies too, and a pass with no drops records a zero, so
 -- the drop series exists before the first drop.
@@ -182,21 +257,25 @@ initSchema conn = do
     execute_ conn (Query metaTableDdl)
     execute_ conn (fromString ("PRAGMA user_version = " <> show osvSchemaEpoch))
 
--- Written once, after the stream completes: the row count is only meaningful for a
--- complete artifact.
-writeMeta :: Connection -> Text -> CompileSources -> Int -> IO ()
-writeMeta conn ecosystem sources rowCount = do
-    now <- getCurrentTime
+-- Written once, after the stream completes and the refusals pass: the row count and the
+-- source provenance are only meaningful for a complete artifact.
+writeMeta :: Connection -> CompileConclusion -> Int -> IO ()
+writeMeta conn conclusion rowCount = do
+    builtAt <- getCurrentTime
     executeMany
         conn
         "INSERT INTO meta (key, value) VALUES (?, ?)"
-        [ (renderMetaKey MetaPilotVersion, productVersion)
-        , (renderMetaKey MetaEcosystem, ecosystem)
-        , (renderMetaKey MetaBuiltAt, toText (iso8601Show now))
-        , (renderMetaKey MetaSourceUrl, authorityLabel (toText (csOsvExportUrl sources)))
-        , (renderMetaKey MetaEpssSourceUrl, authorityLabel (toText (csEpssFeedUrl sources)))
-        , (renderMetaKey MetaRowCount, show rowCount)
-        ]
+        ( [ (renderMetaKey MetaPilotVersion, productVersion)
+          , (renderMetaKey MetaEcosystem, ccEcosystem conclusion)
+          , (renderMetaKey MetaBuiltAt, toText (iso8601Show builtAt))
+          , (renderMetaKey MetaSourceUrl, authorityLabel (toText (csOsvExportUrl sources)))
+          , (renderMetaKey MetaEpssSourceUrl, authorityLabel (toText (csEpssFeedUrl sources)))
+          , (renderMetaKey MetaRowCount, show rowCount)
+          ]
+            <> provenanceRows (ccProvenance conclusion)
+        )
+  where
+    sources = ccSources conclusion
 
 sinkSqlite :: (MonadIO m) => Connection -> ConduitT [ExtractedOsv] o m ()
 sinkSqlite conn = awaitForever $ \batch ->

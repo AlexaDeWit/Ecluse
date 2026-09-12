@@ -58,6 +58,8 @@ the exact entries that admission kept. The npm and PyPI adapters own their wire 
 `Ecluse.Core.Registry.Metadata.Projection` shares full-document validation and metadata error mapping across adapters.
 `Ecluse.Core.Server.Readiness` decides the `/readyz` verdict from each mount's advisory state, so one
 ecosystem awaiting its database leaves the healthy mounts routable.
+`Ecluse.Core.Osv.Provenance` holds what each advisory source said about itself, which Pilot writes
+into the artifact and reads against the operator's quiet-time threshold.
 
 [`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules
 engine, and the mirror queue. The threat model (OWASP Threat Dragon, STRIDE) lives in

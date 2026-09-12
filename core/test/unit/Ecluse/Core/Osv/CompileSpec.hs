@@ -9,7 +9,7 @@ and local HTTP stubs.
 module Ecluse.Core.Osv.CompileSpec (spec) where
 
 import Conduit (runResourceT)
-import Data.Aeson (decodeStrict, object, (.:), (.=))
+import Data.Aeson (decodeStrict, encode, object, (.:), (.=))
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -38,20 +38,22 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite, osvToRow)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
+import Ecluse.Core.Osv.Provenance (QuietTime (..))
 import Ecluse.Core.Osv.Schema (osvDbFileName, osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
 import Ecluse.Core.Osv.Types (UpperBound (..))
-import Ecluse.Core.Security.Authority (authorityLabel)
+import Ecluse.Core.Security.Authority (authorityLabel, credentialFreeUrl)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
  )
-import Ecluse.Test.Log (captureStdout, jsonLogEnv)
+import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvTestM, runOsvTestMWith)
 import Ecluse.Test.OsvDb (epssFixtureFile)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
-import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub)
+import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub, withStubHeaders)
 import Network.HTTP.Client (applyBasicAuth, defaultRequest, requestHeaders)
+import Network.HTTP.Types.Header (hLastModified)
 import Network.HTTP.Types.Status (status200, status404)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -62,10 +64,13 @@ spec = describe "SQLite OSV Compilation" $ do
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
         epssData <- LBS.readFile epssFixtureFile
         (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
-        (dbFile, sourceHost, epssHost) <- withStub status200 zipData $ \stub ->
-            withStub status200 epssData $ \epssStub ->
-                (,authorityLabel (stubBaseUrl stub),authorityLabel (stubBaseUrl epssStub))
-                    <$> runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/sample.zip"))
+        (dbFile, sources) <- withStub status200 zipData $ \stub ->
+            withStub status200 epssData $ \epssStub -> do
+                let sources = sourcesOf stub epssStub "/sample.zip"
+                path <- runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) sources testQuietTime)
+                pure (path, sources)
+        let sourceHost = authorityLabel (toText (csOsvExportUrl sources))
+            epssHost = authorityLabel (toText (csEpssFeedUrl sources))
 
         conn <- open dbFile
         rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity, epss_score FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Double, Maybe Double)]
@@ -88,12 +93,31 @@ spec = describe "SQLite OSV Compilation" $ do
         map fromOnly dedupIndexes `shouldBe` ["uq_ranges_segment"]
 
         let meta = Map.fromList metaRows
-        Map.keys meta `shouldBe` ["built_at", "ecosystem", "epss_source_url", "pilot_version", "row_count", "source_url"]
+        -- The stubs answer with no Last-Modified, so those two keys write no row at all
+        -- rather than an invented date.
+        Map.keys meta
+            `shouldBe` [ "built_at"
+                       , "ecosystem"
+                       , "epss_model_version"
+                       , "epss_score_date"
+                       , "epss_source"
+                       , "epss_source_url"
+                       , "osv_newest_modified"
+                       , "osv_source"
+                       , "pilot_version"
+                       , "row_count"
+                       , "source_url"
+                       ]
         Map.lookup "ecosystem" meta `shouldBe` Just "npm"
         Map.lookup "row_count" meta `shouldBe` Just "1"
         Map.lookup "pilot_version" meta `shouldBe` Just (toText (showVersion version))
         Map.lookup "source_url" meta `shouldBe` Just sourceHost
         Map.lookup "epss_source_url" meta `shouldBe` Just epssHost
+        Map.lookup "osv_source" meta `shouldBe` Just (credentialFreeUrl (toText (csOsvExportUrl sources)))
+        Map.lookup "epss_source" meta `shouldBe` Just (credentialFreeUrl (toText (csEpssFeedUrl sources)))
+        Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-03-23T17:41:30.891186Z"
+        Map.lookup "epss_score_date" meta `shouldBe` Just "2026-08-29T00:00:00Z"
+        Map.lookup "epss_model_version" meta `shouldBe` Just "v2026.08.01"
         Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)
 
         recorded <- readRecorded
@@ -106,11 +130,13 @@ spec = describe "SQLite OSV Compilation" $ do
         (dbFile, logged) <- captureStdout' $ \logEnv ->
             withCredentialSource "OSV" zipData $ \source ->
                 withCredentialSource "EPSS" epssData $ \epssSource -> do
-                    path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (CompileSources source epssSource))
+                    path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (CompileSources source epssSource) testQuietTime)
                     withConnection path $ \conn -> do
                         meta <- Map.fromList <$> (query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)])
                         Map.lookup "source_url" meta `shouldBe` Just (authorityLabel (toText source))
                         Map.lookup "epss_source_url" meta `shouldBe` Just (authorityLabel (toText epssSource))
+                        Map.lookup "osv_source" meta `shouldBe` Just (credentialFreeUrl (toText source))
+                        Map.lookup "epss_source" meta `shouldBe` Just (credentialFreeUrl (toText epssSource))
                         Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)
                         Map.lookup "row_count" meta `shouldBe` Just "1"
                     pure path
@@ -131,7 +157,7 @@ spec = describe "SQLite OSV Compilation" $ do
         let action =
                 withStub status200 zipData $ \stub ->
                     withStub status200 epssData $ \epssStub ->
-                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip"))
+                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip") testQuietTime)
         action `shouldThrow` (\(PilotIngestAborted _) -> True)
 
         recorded <- readRecorded
@@ -145,7 +171,7 @@ spec = describe "SQLite OSV Compilation" $ do
         (metrics, _) <- recordingAdvisoryCompileMetricsPort
         dbFile <- withStub status200 zipData $ \stub ->
             withStub status200 epssData $ \epssStub ->
-                runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor PyPI) (sourcesOf stub epssStub "/all.zip"))
+                runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor PyPI) (sourcesOf stub epssStub "/all.zip") testQuietTime)
 
         conn <- open dbFile
         rows <- query_ conn "SELECT package_name FROM package_vulnerability_ranges" :: IO [Only Text]
@@ -177,7 +203,7 @@ spec = describe "SQLite OSV Compilation" $ do
         (dbFile, logged) <- captureStdout' $ \logEnv ->
             withStub status200 zipData $ \stub ->
                 withStub status200 epssData $ \epssStub ->
-                    runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip"))
+                    runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip") testQuietTime)
 
         logged `shouldSatisfy` T.isInfixOf "for example pointy 2026.05.1"
         logged `shouldSatisfy` T.isInfixOf "kept 1 unorderable"
@@ -202,7 +228,7 @@ spec = describe "SQLite OSV Compilation" $ do
         let action =
                 withStub status200 zipData $ \stub ->
                     withStub status404 LBS.empty $ \epssStub ->
-                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip"))
+                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip") testQuietTime)
         action `shouldThrow` anyException
 
     for_ [("empty", osvZipOf []), ("wrong-ecosystem", LBS.readFile "test/unit/fixtures/osv/sample.zip")] $ \(label, rejectedZip) ->
@@ -217,7 +243,7 @@ spec = describe "SQLite OSV Compilation" $ do
                         previousModified = UTCTime (fromGregorian 2020 1 1) 0
                         compile logEnv zipData = withStub status200 zipData $ \stub ->
                             withStub status200 epssData $ \epssStub ->
-                                runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor PyPI) (sourcesOf stub epssStub "/all.zip"))
+                                runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor PyPI) (sourcesOf stub epssStub "/all.zip") testQuietTime)
                     previous <-
                         if hasPrevious
                             then do
@@ -259,7 +285,7 @@ spec = describe "SQLite OSV Compilation" $ do
                     tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
                     withCredentialSource "OSV" zipData $ \source ->
                         withCredentialSource "EPSS" epssData $ \epssSource -> do
-                            let compile = compileOsvToSqlite metrics (Just tracerProvider) outDir (osvEcosystemFor ecosystem) (CompileSources source epssSource)
+                            let compile = compileOsvToSqlite metrics (Just tracerProvider) outDir (osvEcosystemFor ecosystem) (CompileSources source epssSource) testQuietTime
                                 runCompile logEnv = runKatipContextT logEnv () mempty (runResourceT compile)
                             (_, logged) <- captureStdout' $ \logEnv -> case refusal of
                                 Nothing -> void (runCompile logEnv)
@@ -298,6 +324,60 @@ spec = describe "SQLite OSV Compilation" $ do
                                     ]
                                     $ \(key, expected) ->
                                         (lookupAttribute (hotAttributes compiledSpan) key >>= fromAttribute) `shouldBe` (expected :: Maybe Text)
+
+    describe "source provenance" $ do
+        it "records the export's Last-Modified from the response that carried the rows" $ do
+            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            epssData <- LBS.readFile epssFixtureFile
+            (metrics, _) <- recordingAdvisoryCompileMetricsPort
+            dbFile <- withStubHeaders status200 [(hLastModified, "Sat, 29 Aug 2026 06:30:00 GMT")] zipData $ \stub ->
+                withStub status200 epssData $ \epssStub ->
+                    runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip") testQuietTime)
+            meta <- metaOf dbFile
+            Map.lookup "osv_last_modified" meta `shouldBe` Just "2026-08-29T06:30:00Z"
+            removeFile dbFile
+
+        it "keeps the newest record date and skips a record that carries none" $ do
+            zipData <-
+                osvZipOf
+                    [ ("older.json", datedAdvisory "GHSA-older" "older-pkg" (Just "2026-01-01T00:00:00Z"))
+                    , ("newer.json", datedAdvisory "GHSA-newer" "newer-pkg" (Just "2026-02-01T09:00:00Z"))
+                    , ("undated.json", datedAdvisory "GHSA-undated" "undated-pkg" Nothing)
+                    ]
+            dbFile <- compileZip zipData testQuietTime
+            meta <- metaOf dbFile
+            Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-02-01T09:00:00Z"
+            removeFile dbFile
+
+        it "refuses a compile whose record is dated after the run's clock, without clamping it" $ do
+            -- A date the source cannot yet know makes every age reading a lie, so the pass
+            -- publishes nothing and the consumer keeps the artifact it has.
+            zipData <-
+                osvZipOf
+                    [ ("ok.json", datedAdvisory "GHSA-ok" "ok-pkg" (Just "2026-01-01T00:00:00Z"))
+                    , ("ahead.json", datedAdvisory "GHSA-ahead" "ahead-pkg" (Just "2099-01-01T00:00:00Z"))
+                    ]
+            (_, logged) <- captureStdout' $ \logEnv ->
+                compileZipWith logEnv zipData testQuietTime `shouldThrow` (\(PilotIngestAborted _) -> True)
+            logged `shouldSatisfy` T.isInfixOf "advisory GHSA-ahead is dated after this run's clock"
+            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
+
+        it "logs the quiet-time alarm at ERROR, naming the source, the age, and the threshold" $ do
+            zipData <- osvZipOf [("old.json", datedAdvisory "GHSA-old" "old-pkg" (Just "2026-01-01T00:00:00Z"))]
+            (dbFile, logged) <- captureStdout' $ \logEnv -> compileZipWith logEnv zipData tightQuietTime
+            logged `shouldSatisfy` T.isInfixOf "OSV export http://127.0.0.1:"
+            logged `shouldSatisfy` T.isInfixOf "quiet-time threshold 1s"
+            logged `shouldSatisfy` T.isInfixOf "so the source has gone quiet"
+            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
+            removeFile dbFile
+
+        it "logs the ages at INFO and raises nothing while every source is inside its threshold" $ do
+            zipData <- osvZipOf [("old.json", datedAdvisory "GHSA-old" "old-pkg" (Just "2026-01-01T00:00:00Z"))]
+            (dbFile, logged) <- captureStdout' $ \logEnv -> compileZipWith logEnv zipData testQuietTime
+            logged `shouldSatisfy` T.isInfixOf "last changed "
+            logged `shouldSatisfy` (not . T.isInfixOf "so the source has gone quiet")
+            logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
+            removeFile dbFile
 
     describe "osvToRow" $ do
         let rowFor upper = osvToRow (ExtractedOsv "pkg" "npm" "GHSA-row" (Just "1.0.0") upper (Just 5.9) (Just 0.25))
@@ -352,3 +432,41 @@ withCredentialSource tag bytes use =
                     && Wai.rawQueryString request == encodeUtf8 ("?unfamiliar=query-" <> tag)
                     && Wai.rawPathInfo request == "/feed"
         respond (Wai.responseLBS (if authorised then status200 else status404) [] (if authorised then bytes else "credentials missing"))
+
+-- A century, so a committed fixture's own date never ages into the quiet-time alarm in a test
+-- that is about something else.
+testQuietTime :: QuietTime
+testQuietTime = QuietTime{qtOsv = century, qtEpss = century}
+  where
+    century = 100 * 365 * 86400
+
+-- One second, which every fixture date is older than.
+tightQuietTime :: QuietTime
+tightQuietTime = QuietTime{qtOsv = 1, qtEpss = 1}
+
+-- One npm advisory naming one affected version, with the record date under test.
+datedAdvisory :: Text -> Text -> Maybe Text -> LByteString
+datedAdvisory advisoryId pkg mModified =
+    encode
+        ( object
+            ( [ "id" .= advisoryId
+              , "affected" .= [object ["package" .= object ["name" .= pkg, "ecosystem" .= ("npm" :: Text)], "versions" .= ["1.0.0" :: Text]]]
+              ]
+                <> maybe [] (\modified -> ["modified" .= modified]) mModified
+            )
+        )
+
+compileZip :: LByteString -> QuietTime -> IO FilePath
+compileZip zipData quietTime = newTestLogEnv >>= \logEnv -> compileZipWith logEnv zipData quietTime
+
+compileZipWith :: LogEnv -> LByteString -> QuietTime -> IO FilePath
+compileZipWith logEnv zipData quietTime = do
+    epssData <- LBS.readFile epssFixtureFile
+    (metrics, _) <- recordingAdvisoryCompileMetricsPort
+    withStub status200 zipData $ \stub ->
+        withStub status200 epssData $ \epssStub ->
+            runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip") quietTime)
+
+metaOf :: FilePath -> IO (Map Text Text)
+metaOf dbFile = withConnection dbFile $ \conn ->
+    Map.fromList <$> (query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)])

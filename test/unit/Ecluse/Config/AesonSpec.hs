@@ -324,6 +324,32 @@ spec = describe "decodeDocument" $ do
                 advDataDir (cfgAdvisories (configApp doc)) `shouldBe` "/var/lib/ecluse/advisories"
                 advUrl (cfgAdvisories (configApp doc)) `shouldBe` Nothing
 
+    describe "advisories.quietTime" $ do
+        it "ships seven days for npm and PyPI, and for the EPSS feed" $
+            case loadConfig [] Nothing of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc -> do
+                    advQuietTime (cfgAdvisories (configApp doc)) `shouldBe` Map.fromList [(Npm, 604800), (PyPI, 604800)]
+                    advEpssQuietTime (cfgAdvisories (configApp doc)) `shouldBe` 604800
+
+        it "takes an operator's threshold for one ecosystem and leaves the others shipped" $
+            case loadConfig [("ECLUSE_ADVISORIES__QUIET_TIME__NPM", "86400")] Nothing of
+                Left e -> expectationFailure ("unexpected decode error: " <> show e)
+                Right doc ->
+                    advQuietTime (cfgAdvisories (configApp doc)) `shouldBe` Map.fromList [(Npm, 86400), (PyPI, 604800)]
+
+        it "refuses a zero threshold, which would alarm on every compile" $
+            loadConfig [] (Just "{\"advisories\":{\"quietTime\":{\"npm\":0}}}")
+                `shouldSatisfy` decodeErrorMentions "advisories.quietTime.npm"
+
+        it "refuses a threshold that is not a count of seconds" $
+            loadConfig [] (Just "{\"advisories\":{\"epssQuietTime\":true}}")
+                `shouldSatisfy` decodeErrorMentions "advisories.epssQuietTime"
+
+        it "refuses an ecosystem this build does not serve, rather than configuring nothing" $
+            loadConfig [] (Just "{\"advisories\":{\"quietTime\":{\"cargo\":604800}}}")
+                `shouldSatisfy` decodeErrorMentions "Invalid ecosystem in advisories.quietTime: cargo"
+
     describe "deprecated divergence configuration" $ do
         for_ ["ECLUSE_INTEGRITY__DIVERGENCE_POLICY", "ECLUSE_MOUNTS__NPM__INTEGRITY__DIVERGENCE_POLICY"] $ \key -> do
             for_ ["warn", " WARN "] $ \value ->

@@ -2,51 +2,63 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The read side of the advisory database's atomic shadow-swap. A slot holds the
-currently-active 'CveDb' generation. A reader borrows it through a bracket, so the
-swap can tell when no read still needs a superseded generation.
+{- | The read side of the advisory database's atomic shadow-swap: one slot per ecosystem,
+holding the generation serving now. Before the first sync it hands readers 'Nothing', and the
+CVE rule abstains.
 
-One slot serves one ecosystem's artifact. A rule evaluation borrows the current
-generation's 'CveLookup' view through 'withSlotLookup', which the composition root
-installs as 'Ecluse.Core.Rules.rdWithCveLookup'. The sync task installs a
-newly-verified generation with 'swapIn', which waits for the displaced generation's
-readers to drain and then closes it. Closing is also the reclamation. The sync task
-already renamed the new artifact over the old one's only file name. The drained close
-therefore releases the old inode's last reference, and the kernel frees the storage.
-Pruning is a property the OS enforces, never a delete this code could mistime.
+A rule evaluation borrows the current generation's 'CveLookup' through 'withSlotLookup', which
+the composition root installs as 'Ecluse.Core.Rules.rdWithCveLookup'. 'swapIn' installs a
+newly-verified generation, waits for the displaced one's readers to drain, then closes it. The
+sync task has already renamed the new artifact over the old one's only file name, so that close
+releases the old inode's last reference: pruning is a property the OS enforces, never a delete
+this code could mistime.
 
-Before the first successful sync the slot is empty and hands readers 'Nothing'. The
-CVE rule abstains and the ordinary policy governs.
-
-The slot also carries __when__ the serving generation went live, on the monotonic clock.
-It is the only place that knows, because the slot outlives the sync task that fills it: a
-supervised restart builds a fresh task against the same slot. 'generationInstalledAt' hands
-that stamp out, and the advisory-database age gauge reads it at each collection.
+The slot also carries what the serving artifact records about its sources, when its object was
+published ('currentAdvisorySource'), and the monotonic time the generation went live
+('generationInstalledAt', which the advisory-database age gauge reads). It is the only place
+that knows, because it outlives the sync task that fills it: a supervised restart builds a
+fresh task against the same slot.
 -}
 module Ecluse.Core.Cve.Slot (
     CveSlot,
     newCveSlot,
     withSlotLookup,
     currentAdvisoryEtag,
+    AdvisorySource (..),
+    currentAdvisorySource,
     generationInstalledAt,
     swapIn,
 ) where
 
 import Control.Concurrent.STM (check)
+import Data.Time (UTCTime)
 import GHC.Clock (getMonotonicTime)
 import UnliftIO.Exception (bracket)
 
 import Ecluse.Core.Cve (CveDb (..), CveLookup, DbEtag)
+import Ecluse.Core.Osv.Provenance (AdvisoryProvenance)
 
-{- | One installed generation: the owning resource, its artifact ETag, its live-reader
-count, and the monotonic time it went live.
+{- | One installed generation: the owning resource, its artifact ETag, what the artifact says
+about its sources, its live-reader count, and the monotonic time it went live.
 -}
 data Generation = Generation
     { genDb :: CveDb
     , genEtag :: DbEtag
+    , genSource :: AdvisorySource
     , genReaders :: TVar Int
     , genInstalledAt :: Double
     }
+
+{- | Where the serving artifact came from: what it records about its own sources, and when the
+object carrying it was published. The publication time is the store's, not the artifact's, so a
+recompile of unchanged bytes still moves it.
+-}
+data AdvisorySource = AdvisorySource
+    { asProvenance :: AdvisoryProvenance
+    , asPushedAt :: Maybe UTCTime
+    -- ^ The published object's own timestamp, 'Nothing' when the store reported none.
+    }
+    deriving stock (Eq, Show)
 
 {- | The slot: the currently-active generation, or nothing before the first sync, beside the
 monotonic time the slot itself was created.
@@ -78,6 +90,12 @@ read does not pin the generation, so it never delays a 'swapIn'.
 currentAdvisoryEtag :: CveSlot -> IO (Maybe DbEtag)
 currentAdvisoryEtag slot = fmap genEtag <$> readTVarIO (slotCell slot)
 
+{- | What the serving artifact came from, or 'Nothing' before the first sync. A failed poll
+never reaches 'swapIn', so a warm process keeps the last value it read.
+-}
+currentAdvisorySource :: CveSlot -> IO (Maybe AdvisorySource)
+currentAdvisorySource slot = fmap genSource <$> readTVarIO (slotCell slot)
+
 {- | When the serving generation went live, on the monotonic clock, or when the slot was
 created if no swap has landed yet. Only 'swapIn' moves it, so it measures the age of what
 the slot actually serves, not the liveness of whatever fills it.
@@ -89,14 +107,16 @@ generationInstalledAt slot =
 {- | Install a newly verified generation, drain the displaced one's readers, then close it.
 The slot owns @newDb@ from entry and publishes it first, so no caller cleanup may close it.
 Cancellation during the drain propagates, leaving the displaced generation unclosed.
+@pushedAt@ is the published object's own timestamp, from the sync that fetched it.
 -}
-swapIn :: CveSlot -> DbEtag -> CveDb -> IO ()
-swapIn slot etag newDb = do
+swapIn :: CveSlot -> DbEtag -> Maybe UTCTime -> CveDb -> IO ()
+swapIn slot etag pushedAt newDb = do
     readers <- newTVarIO (0 :: Int)
     installedAt <- getMonotonicTime
+    let source = AdvisorySource{asProvenance = cveDbProvenance newDb, asPushedAt = pushedAt}
     displaced <- atomically $ do
         old <- readTVar (slotCell slot)
-        writeTVar (slotCell slot) (Just (Generation newDb etag readers installedAt))
+        writeTVar (slotCell slot) (Just (Generation newDb etag source readers installedAt))
         pure old
     for_ displaced $ \g -> do
         atomically (readTVar (genReaders g) >>= check . (== 0))

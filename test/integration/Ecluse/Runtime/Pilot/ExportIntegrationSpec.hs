@@ -14,7 +14,7 @@ import Control.Monad.Trans.Resource (runResourceT)
 import Data.Text qualified as T
 import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
+import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldNotBe)
 import TestContainers (containerAddress)
 
 import Amazonka qualified as AWS
@@ -67,3 +67,37 @@ spec = do
                     case objects of
                         [obj] -> S3Object.key obj `shouldBe` S3.ObjectKey "dummy.sqlite"
                         _ -> fail ("Expected 1 object, got " <> show (length objects))
+
+            it "uploads again when the artifact's bytes have not changed" $ \container -> do
+                -- A quiet upstream compiles the same bytes every cycle. The publisher must
+                -- still write the object, because its store timestamp is the consumer's clock.
+                withSystemTempDirectory "ecluse-osv-republish" $ \tmpDir -> do
+                    let (host, port) = containerAddress container 4566
+                        endpointUrl = "http://" <> host <> ":" <> T.pack (show port)
+                    store <- either (fail . toString) pure (mkAdvisoryStoreUrl "advisories.url" "s3://test-osv-republish-bucket")
+                    let bucket = advisoryStoreBucket store
+                    endpoint <- either (const (fail ("S3ExportSpec: unparseable endpoint for " <> toString host))) pure (parseEndpointUrl endpointUrl)
+                    base <- buildS3Env (Just endpoint)
+                    let regioned = base{AWS.region = AWS.Region' "us-east-1"}
+                    retryingIO 21 500_000 (void (runResourceT (AWS.send regioned (S3.newCreateBucket (S3.BucketName bucket)))))
+
+                    let dbPath = tmpDir <> "/unchanged.sqlite"
+                        objectKey = advisoryObjectKey store (takeFileName dbPath)
+                    liftIO $ writeFile dbPath "unchanged sqlite data"
+                    logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
+                    let export = runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket objectKey dbPath)
+                        storedEtag = do
+                            resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))
+                            pure (maybe [] (map S3Object.eTag) (S3.contents resp))
+
+                    export
+                    published <- storedEtag
+
+                    -- Overwrite the object out of band, so a publisher that wrote only on a
+                    -- change would leave these bytes in place.
+                    void $ runResourceT $ AWS.send base (S3.newPutObject (S3.BucketName bucket) (S3.ObjectKey objectKey) (AWS.toBody ("tampered" :: ByteString)))
+                    tampered <- storedEtag
+                    tampered `shouldNotBe` published
+
+                    export
+                    storedEtag >>= (`shouldBe` published)

@@ -107,10 +107,11 @@ Four of those names matter to Datadog specifically: `timestamp`, `status`, `mess
 `service` are its reserved log attributes, and its JSON preprocessing reads them unmodified.
 `env` and `version` are ordinary attributes any backend indexes.
 
-Typed bearer-token fields render as redacted placeholders. Pilot stores only each source's
-`host:port` in artifact provenance. Sync logs only parsed compilation time and row count from
-metadata, including when it reads older artifacts with complete source URLs. Malformed or
-oversized display values appear as absent without changing artifact acceptance.
+Typed bearer-token fields render as redacted placeholders. Pilot stores each source's
+`host:port` in artifact provenance, and beside it the source URL with its userinfo, query, and
+fragment removed, so neither carries a credential. Sync logs only parsed compilation time and row
+count from metadata, including when it reads older artifacts with complete source URLs. Malformed
+or oversized display values appear as absent without changing artifact acceptance.
 
 Older artifacts can still contain credentials. Rebuild those artifacts and review access to
 their stored copies and historical logs. The boot configuration echo prints configured endpoint
@@ -128,6 +129,8 @@ even when a later retry can recover. They include:
   published artifact Écluse refused.
 - A mirror job nothing else can capture, and an artifact whose bytes failed their digest.
 - A background loop that failed up and took the process with it.
+- An advisory source that has gone quiet past its threshold
+  ([Advisory quiet time](@/docs/operations.md#advisory-quiet-time)).
 
 Use the severity together with the event and its repetition:
 
@@ -151,6 +154,28 @@ A one-shot `ecluse pilot compile` using the same Prometheus port as a live Pilot
 failure and still complete its compilation. This applies only when the Prometheus exporter is selected
 ([Telemetry](@/docs/operations.md#telemetry-opt-in)). Any other failure to bind that listener wants
 a look.
+
+## Advisory quiet time
+
+Pilot reads how old its sources say their data is, and tells you when one stops changing. After
+each compile it logs the age of the ecosystem's newest advisory record and of the EPSS feed's
+declared score date, at `info`. When either age passes its threshold, the same line repeats at
+`error` and names the ecosystem, the credential-free source URL, the age in seconds, and the
+threshold in seconds.
+
+The thresholds are `advisories.quietTime.<ecosystem>` and `advisories.epssQuietTime`, both in
+seconds, and both seven days by default. That default comes from measured change frequency: over
+60 days the longest gap between npm or PyPI advisories was four to five days.
+
+A quiet source and a stalled export look the same from the bytes, so you decide which one you
+have. Two remedies:
+
+| What you found | What to do |
+|---|---|
+| The ecosystem really is this quiet. | Raise its `advisories.quietTime` entry past the gap you measured. |
+| The export has stopped updating. | Point `advisories.osvExportBaseUrl` or `advisories.epssFeedUrl` at a source that is still publishing. |
+
+The alarm never refuses a version. It reports what the artifact says about its own sources.
 
 ## Telemetry (opt-in)
 

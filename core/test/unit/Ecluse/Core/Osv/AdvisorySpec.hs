@@ -52,10 +52,16 @@ advisory entries label =
         , osvSeverity = if null entries then Nothing else Just entries
         , osvDatabaseSpecific = OsvDatabaseSpecific . Just <$> label
         , osvWithdrawn = Nothing
+        , osvModified = Nothing
         }
 
 noScores :: EpssScores
 noScores = mkEpssScores []
+
+-- The run clock every ingest here is built with. Nothing in this module reads the record
+-- dates it judges, so its only job is to be a clock.
+ingestClock :: UTCTime
+ingestClock = UTCTime (fromGregorian 2026 9 1) 0
 
 npmFeed :: OsvEcosystem
 npmFeed = osvEcosystemFor Npm
@@ -77,7 +83,7 @@ fanOutRows :: OsvEcosystem -> Int -> IO ([ExtractedOsv], IngestStats)
 fanOutRows feed n = do
     zipData <- osvZipOf [("fan.json", fanOutAdvisory feed n)]
     runOsvTestM $ do
-        ingest <- newOsvIngest defaultIngestLimits feed noScores
+        ingest <- newOsvIngest defaultIngestLimits feed noScores ingestClock
         rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
         st <- readIngestStats ingest
         pure (rs, st)
@@ -88,7 +94,7 @@ fanOutLog feed n = do
     captureStdout $ do
         logEnv <- jsonLogEnv
         runOsvTestMWith logEnv $ do
-            ingest <- newOsvIngest defaultIngestLimits feed noScores
+            ingest <- newOsvIngest defaultIngestLimits feed noScores ingestClock
             void . runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
         void (closeScribes logEnv)
 
@@ -187,7 +193,7 @@ spec = describe "Osv parsing and streaming" $ do
             it ("preserves streaming drop accounting for withdrawal " <> show withdrawn) $ do
                 archive <- withdrawalZip (Just withdrawn)
                 (rows, stats) <- runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
+                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
                     rows <- runConduit $ yieldMany (LBS.toChunks archive) .| parseOsvStream Nothing ingest .| sinkList
                     stats <- readIngestStats ingest
                     pure (rows, stats)
@@ -200,6 +206,7 @@ spec = describe "Osv parsing and streaming" $ do
                     "GHSA-aliased"
                     (Just ids)
                     (Just [OsvAffected (OsvPackage "aliased-pkg" "npm") Nothing (Just ["1.0.0"])])
+                    Nothing
                     Nothing
                     Nothing
                     Nothing
@@ -224,31 +231,31 @@ spec = describe "Osv parsing and streaming" $ do
     describe "extractFromAdvisory (package identity)" $ do
         for_ [("PyPI", "Flask_Thing", "flask-thing"), ("PyPI", "FLASK..__Thing", "flask-thing"), ("PyPI", "flask-thing", "flask-thing"), ("npm", "@Acme/Flask_Thing", "@Acme/Flask_Thing"), ("RubyGems", "Flask_Thing", "Flask_Thing"), ("other", "Flask_Thing", "Flask_Thing")] $ \(eco, raw, expected) ->
             it (toString ("keys " <> eco <> " package " <> raw <> " as " <> expected)) $ do
-                let adv = OsvAdvisory "GHSA-name" Nothing (Just [OsvAffected (OsvPackage raw eco) Nothing (Just ["1.0", "2.0"])]) Nothing Nothing Nothing
+                let adv = OsvAdvisory "GHSA-name" Nothing (Just [OsvAffected (OsvPackage raw eco) Nothing (Just ["1.0", "2.0"])]) Nothing Nothing Nothing Nothing
                 extractFromAdvisory noScores adv
                     `shouldBe` [ExtractedOsv expected eco "GHSA-name" (Just version) (LastAffected version) Nothing Nothing | version <- ["1.0", "2.0"]]
 
     describe "extractFromAdvisory (affected-set shapes)" $ do
         it "records an exact enumerated version as a point segment (no ranges)" $ do
-            let adv = OsvAdvisory "MAL-test" Nothing (Just [OsvAffected (OsvPackage "bad-pkg" "npm") Nothing (Just ["1.0.0"])]) Nothing Nothing Nothing
+            let adv = OsvAdvisory "MAL-test" Nothing (Just [OsvAffected (OsvPackage "bad-pkg" "npm") Nothing (Just ["1.0.0"])]) Nothing Nothing Nothing Nothing
             extractFromAdvisory noScores adv
                 `shouldBe` [ExtractedOsv "bad-pkg" "npm" "MAL-test" (Just "1.0.0") (LastAffected "1.0.0") Nothing Nothing]
 
         it "carries an inclusive last_affected bound distinct from a fix" $ do
             let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing Nothing (Just "3.8.8")]
-                adv = OsvAdvisory "GHSA-la" Nothing (Just [OsvAffected (OsvPackage "electerm" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing Nothing
+                adv = OsvAdvisory "GHSA-la" Nothing (Just [OsvAffected (OsvPackage "electerm" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing Nothing Nothing
             extractFromAdvisory noScores adv
                 `shouldBe` [ExtractedOsv "electerm" "npm" "GHSA-la" Nothing (LastAffected "3.8.8") Nothing Nothing]
 
         it "ignores a GIT range whose commit-SHA bounds are not versions" $ do
             -- A commit interpreted as an unorderable version bound would deny every release.
             let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0") Nothing]
-                adv = OsvAdvisory "GHSA-git" Nothing (Just [OsvAffected (OsvPackage "healthy-pkg" "npm") (Just [OsvRange "GIT" events]) Nothing]) Nothing Nothing Nothing
+                adv = OsvAdvisory "GHSA-git" Nothing (Just [OsvAffected (OsvPackage "healthy-pkg" "npm") (Just [OsvRange "GIT" events]) Nothing]) Nothing Nothing Nothing Nothing
             extractFromAdvisory noScores adv `shouldBe` []
 
         it "leaves a segment unbounded above when no event closes it" $ do
             let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent (Just "2.0.0") Nothing Nothing]
-                adv = OsvAdvisory "GHSA-open" Nothing (Just [OsvAffected (OsvPackage "open-pkg" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing Nothing
+                adv = OsvAdvisory "GHSA-open" Nothing (Just [OsvAffected (OsvPackage "open-pkg" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing Nothing Nothing
             extractFromAdvisory noScores adv
                 `shouldBe` [ ExtractedOsv "open-pkg" "npm" "GHSA-open" Nothing Unbounded Nothing Nothing
                            , ExtractedOsv "open-pkg" "npm" "GHSA-open" (Just "2.0.0") Unbounded Nothing Nothing
@@ -265,20 +272,21 @@ spec = describe "Osv parsing and streaming" $ do
                         Nothing
                         Nothing
                         Nothing
+                        Nothing
             extractFromAdvisory noScores adv
                 `shouldBe` [ExtractedOsv "mixed-pkg" "npm" "GHSA-both" Nothing (FixedBefore "2.0.0") Nothing Nothing]
 
         it "decodes OSV's \"0\" lower bound to no lower bound at all" $ do
             -- The beginning sentinel must not become an unorderable version bound.
             let events = [OsvEvent (Just "0") Nothing Nothing, OsvEvent Nothing (Just "1.2.3") Nothing]
-                adv = OsvAdvisory "MAL-zero" Nothing (Just [OsvAffected (OsvPackage "mal-pkg" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing Nothing
+                adv = OsvAdvisory "MAL-zero" Nothing (Just [OsvAffected (OsvPackage "mal-pkg" "npm") (Just [OsvRange "SEMVER" events]) Nothing]) Nothing Nothing Nothing Nothing
             extractFromAdvisory noScores adv
                 `shouldBe` [ExtractedOsv "mal-pkg" "npm" "MAL-zero" Nothing (FixedBefore "1.2.3") Nothing Nothing]
 
         it "keeps an exactly enumerated \"0\" as the version it names" $ do
             -- The sentinel reading belongs to a range's lower bound. In versions[] the same
             -- text names a version a package may really carry.
-            let adv = OsvAdvisory "MAL-v0" Nothing (Just [OsvAffected (OsvPackage "zero-pkg" "npm") Nothing (Just ["0"])]) Nothing Nothing Nothing
+            let adv = OsvAdvisory "MAL-v0" Nothing (Just [OsvAffected (OsvPackage "zero-pkg" "npm") Nothing (Just ["0"])]) Nothing Nothing Nothing Nothing
             extractFromAdvisory noScores adv
                 `shouldBe` [ExtractedOsv "zero-pkg" "npm" "MAL-v0" (Just "0") (LastAffected "0") Nothing Nothing]
 
@@ -334,7 +342,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "streams an OSV zip archive and emits ExtractedOsv elements" $ do
         results <-
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
+                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
                 runConduit $
                     sourceFile "test/unit/fixtures/osv/sample.zip"
                         .| parseOsvStream Nothing ingest
@@ -352,7 +360,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "handles an empty zip archive gracefully without emitting anything" $ do
         results <-
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
+                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
                 runConduit $
                     sourceFile "test/unit/fixtures/osv/empty.zip"
                         .| parseOsvStream Nothing ingest
@@ -362,7 +370,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "skips malformed JSON files inside a zip archive and logs a warning" $ do
         results <-
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
+                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
                 runConduit $
                     sourceFile "test/unit/fixtures/osv/malformed-json.zip"
                         .| parseOsvStream Nothing ingest
@@ -372,7 +380,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "throws an exception when streaming a non-zip file" $ do
         let action =
                 runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
+                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
                     runConduit $
                         sourceFile "test/unit/fixtures/osv/not-a-zip.zip"
                             .| parseOsvStream Nothing ingest
@@ -383,7 +391,7 @@ spec = describe "Osv parsing and streaming" $ do
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
         results <- withStub status200 zipData $ \stub -> do
             runOsvTestM $ do
-                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
+                ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
                 runConduit $
                     streamOsvUrl Nothing ingest (unpack (stubBaseUrl stub) <> "/sample.zip")
                         .| sinkList
@@ -399,7 +407,7 @@ spec = describe "Osv parsing and streaming" $ do
     it "throws an exception if the URL is invalid" $ do
         let action =
                 runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
+                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
                     runConduit $
                         streamOsvUrl Nothing ingest "not-a-valid-url"
                             .| sinkList
@@ -416,7 +424,7 @@ spec = describe "Osv parsing and streaming" $ do
             let limits = defaultIngestLimits{ilMaxAdvisoryBytes = 2000}
             (results, stats) <-
                 runOsvTestM $ do
-                    ingest <- newOsvIngest limits npmFeed noScores
+                    ingest <- newOsvIngest limits npmFeed noScores ingestClock
                     rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
                     st <- readIngestStats ingest
                     pure (rs, st)
@@ -455,7 +463,7 @@ spec = describe "Osv parsing and streaming" $ do
             logged <- captureStdout $ do
                 logEnv <- jsonLogEnv
                 runOsvTestMWith logEnv $ do
-                    ingest <- newOsvIngest limits npmFeed noScores
+                    ingest <- newOsvIngest limits npmFeed noScores ingestClock
                     void . runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
                 void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "Dropping oversized OSV entry"
@@ -470,7 +478,7 @@ spec = describe "Osv parsing and streaming" $ do
                     [("mixed.json", "{\"id\":\"GHSA-mixed\",\"affected\":[{\"package\":{\"name\":\"mixed\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\",\"2026.05.1\"]}]}")]
             (results, stats) <-
                 runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores
+                    ingest <- newOsvIngest defaultIngestLimits npmFeed noScores ingestClock
                     rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
                     st <- readIngestStats ingest
                     pure (rs, st)
@@ -485,7 +493,7 @@ spec = describe "Osv parsing and streaming" $ do
                     [("other.json", "{\"id\":\"GHSA-other\",\"affected\":[{\"package\":{\"name\":\"other\",\"ecosystem\":\"npm\"},\"versions\":[\"v1.2\"]}]}")]
             (results, stats) <-
                 runOsvTestM $ do
-                    ingest <- newOsvIngest defaultIngestLimits (osvEcosystemNamed "Go") noScores
+                    ingest <- newOsvIngest defaultIngestLimits (osvEcosystemNamed "Go") noScores ingestClock
                     rs <- runConduit $ yieldMany (LBS.toChunks zipData) .| parseOsvStream Nothing ingest .| sinkList
                     st <- readIngestStats ingest
                     pure (rs, st)
