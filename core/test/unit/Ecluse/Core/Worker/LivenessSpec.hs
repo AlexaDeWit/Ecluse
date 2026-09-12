@@ -8,7 +8,6 @@ import Data.Time (addUTCTime, getCurrentTime)
 import Test.Hspec
 import UnliftIO (timeout)
 
-import Ecluse.Core.Queue (Seconds (Seconds))
 import Ecluse.Core.Registry.Publish (MirrorPublish (mpPublishArtifact))
 import Ecluse.Core.Worker (
     Liveness (Liveness, liveHealthy, liveLastPoll),
@@ -20,8 +19,8 @@ import Ecluse.Core.Worker (
     processBatch,
     recordPoll,
     workerHeartbeatStaleAfter,
+    workerJobStepAllowance,
     workerLoop,
-    workerPublishVisibilityBudget,
     wrHeartbeat,
  )
 import Ecluse.Core.Worker.Liveness (newWorkerHeartbeatWithClock)
@@ -130,7 +129,11 @@ spec = do
         it "is live with no poll to report, so a serve-only pod is never killed for a worker" $
             alwaysLive `shouldBe` Liveness{liveHealthy = True, liveLastPoll = Nothing}
 
-    describe "workerHeartbeatStaleAfter -- the staleness budget covers one job's worst case" $
-        it "exceeds a fetch and a publish of the maximum artifact (each the publish-visibility budget)" $ do
-            let Seconds budget = workerPublishVisibilityBudget
-            workerHeartbeatStaleAfter `shouldSatisfy` (> fromIntegral (2 * budget))
+    describe "workerHeartbeatStaleAfter -- the staleness budget covers one job's worst case" $ do
+        it "exceeds a fetch and a publish of the maximum artifact (each one job-step allowance)" $
+            workerHeartbeatStaleAfter `shouldSatisfy` (> 2 * workerJobStepAllowance)
+
+        it "is the shipped eleven minutes, which renewing a receipt's visibility never extends" $
+            -- Renewal holds the queue's receipt, never the liveness budget: a worker that stops
+            -- making progress still restarts on the same allowance it always had.
+            workerHeartbeatStaleAfter `shouldBe` 660

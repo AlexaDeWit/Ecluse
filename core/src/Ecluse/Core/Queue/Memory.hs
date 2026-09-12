@@ -81,7 +81,7 @@ departures from the cloud backends' contract follow.
 of jobs at once. 'enqueue' never throws, because it runs on the serve hot path, and it
 reports drops through the injected callback at 'memoryQueueDropReportInterval'.
 * No redelivery. A 'receive' removes a job for good, so 'ack', 'extendVisibility' and
-'deadLetter' are no-ops and the backend reports its terminus as absent.
+'deadLetter' are no-ops, a delivery carries no lease to renew, and the terminus reports absent.
 
 'receive' waits up to 'memQueuePollWaitMicros' for a job, drains up to 'memoryQueueBatchSize'
 without blocking, then returns. The bound is load-bearing: an idle 'receive' that blocked
@@ -155,6 +155,6 @@ receiveBatch queue nextReceipt = do
     assignReceipt job = do
         n <- readTVar nextReceipt
         writeTVar nextReceipt (n + 1)
-        -- Every delivery is a first delivery: a received job leaves the queue for
-        -- good, so this backend never redelivers one.
-        pure QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle (show n), msgReceiveCount = 1}
+        -- Every delivery is a first delivery and none expires: a received job leaves the
+        -- queue for good, so this backend never redelivers one and grants no lease.
+        pure QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle (show n), msgReceiveCount = 1, msgLease = Nothing}

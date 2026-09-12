@@ -6,17 +6,17 @@
 publish. Every step reports its verdict as a 'JobOutcome' value, which
 "Ecluse.Core.Worker.Realise" realises at the queue handle.
 
-A received message is hidden only for the queue's visibility window, so before a publish that
-may run long the worker holds it ('Ecluse.Core.Queue.extendVisibility'). Nothing here acks: a
-transient failure simply reports 'Retried', and the un-acked message redelivers.
+The receipt is held for the whole job by the lease controller ("Ecluse.Core.Worker.Lease"), so
+nothing here touches the queue. Nothing here acks either: a transient failure simply reports
+'Retried', and the un-acked message redelivers.
 -}
 module Ecluse.Core.Worker.Job (
     JobOutcome (..),
+    RetryLeg (..),
     mirrorLatest,
     outcomeOfAdmission,
     outcomeOfFetchFault,
     processJob,
-    workerPublishVisibilityBudget,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -38,7 +38,7 @@ import Ecluse.Core.Package.Admission (
     admissionTransience,
     admitArtifact,
  )
-import Ecluse.Core.Queue (MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (extendVisibility), ReceiptHandle, Seconds (Seconds))
+import Ecluse.Core.Queue (MirrorJob (jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion))
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
@@ -84,25 +84,39 @@ data JobOutcome
       because a plain delete would silently discard it on a durable queue.
       -}
       DeadLettered Text
-    | {- | A __transient__ fault: a fetch failure, or a registry rejection worth
-      retrying. The message is left un-acked so it redelivers. Carries the reason.
+    | {- | A __transient__ fault: a fetch failure, or a registry rejection worth retrying. The
+      message is left un-acked so it redelivers, carrying the leg it gave up on.
       -}
-      Retried Text
+      Retried RetryLeg Text
+    deriving stock (Eq, Show)
+
+{- | Which leg a transient failure gave up on. The realisation half reads it to decide whether
+to reset the message's visibility, so the two legs cannot be conflated at the queue handle.
+-}
+data RetryLeg
+    = {- | The job gave up before it published: the inventory probe, the re-evaluation, or the
+      artifact fetch. The message keeps its lease and redelivers when that window lapses.
+      -}
+      BeforePublish
+    | {- | The publish itself failed transiently, after the bytes were fetched and verified.
+      The message is released so its redelivery does not wait out the lease.
+      -}
+      AfterPublish
     deriving stock (Eq, Show)
 
 {- | Process one mirror job end to end and return the 'JobOutcome' that decides whether the worker
 acks the message or lets it redeliver. The worker re-runs current policy before publishing, because
 the enqueue-to-process window is unbounded and the mirror is later served without the rules.
 -}
-processJob :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
-processJob receipt job = katipAddNamespace "job" $ do
+processJob :: MirrorJob -> WorkerM JobOutcome
+processJob job = katipAddNamespace "job" $ do
     logFM DebugS (ls ("starting mirror job for " <> renderJob job))
     tracing <- asks wrTracing
     runtime <- ask
     withRunInIO $ \runInIO ->
         wtpMirrorJobSpan tracing (jobPackage job) (jobVersion job) (jobTraceContext job) jobSpanOutcome $
             runInIO $
-                wrInjectTraceContext runtime (reevaluateThenMirror receipt job)
+                wrInjectTraceContext runtime (reevaluateThenMirror job)
   where
     -- The failure detail marks the span errored, so only a job that did not publish carries one.
     jobSpanOutcome :: JobOutcome -> JobSpanOutcome
@@ -110,13 +124,13 @@ processJob receipt job = katipAddNamespace "job" $ do
         Succeeded -> JobSpanOutcome "succeeded" Nothing
         Dropped reason -> JobSpanOutcome "dropped" (Just reason)
         DeadLettered reason -> JobSpanOutcome "dead-lettered" (Just reason)
-        Retried reason -> JobSpanOutcome "retried" (Just reason)
+        Retried _ reason -> JobSpanOutcome "retried" (Just reason)
 
 -- Order the steps cheapest first: a duplicate retires for one metadata round trip and a now-denied
 -- job drops before its bytes are downloaded. Every step past the lookup rides the ecosystem's own
 -- bundle, so no job can consult a foreign ecosystem's probe, rules, or publish.
-reevaluateThenMirror :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
-reevaluateThenMirror receipt job = do
+reevaluateThenMirror :: MirrorJob -> WorkerM JobOutcome
+reevaluateThenMirror job = do
     policies <- asks wrPolicies
     case Map.lookup (pkgEcosystem (jobPackage job)) policies of
         -- Structurally unreachable: only an activated ecosystem enqueues jobs, and activation
@@ -126,7 +140,7 @@ reevaluateThenMirror receipt job = do
             -- An operator can declare the namespace after the enqueue, so the privilege is read
             -- ahead of the mirror probe: the public leg is never entered for a name it owns.
             | wpFirstParty policy (jobPackage job) -> pure (Dropped (firstPartyReason job))
-            | otherwise -> mirrorUnlessPresent policy receipt job
+            | otherwise -> mirrorUnlessPresent policy job
 
 noPolicyReason :: MirrorJob -> Text
 noPolicyReason job =
@@ -141,15 +155,15 @@ firstPartyReason job =
         <> renderJob job
         <> "; refusing to mirror public content under a first-party name"
 
-mirrorUnlessPresent :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
-mirrorUnlessPresent policy receipt job =
+mirrorUnlessPresent :: WorkerPolicy -> MirrorJob -> WorkerM JobOutcome
+mirrorUnlessPresent policy job =
     probeInventory policy job >>= \case
         Left outcome -> pure outcome
         Right inventory
             | jobVersion job `elem` inventory -> do
                 logFM InfoS (ls ("already present at the mirror target, acking without re-publish: " <> renderJob job))
                 pure Succeeded
-            | otherwise -> reevaluatePolicy policy job >>= either pure (publishAdmitted policy receipt job inventory)
+            | otherwise -> reevaluatePolicy policy job >>= either pure (publishAdmitted policy job inventory)
 
 {- An unreadable answer is not an empty store, so it reports a fault rather than let the write
 declare a tag chosen without the inventory. A 404 is a store holding this package not at all. -}
@@ -157,13 +171,13 @@ probeInventory :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome [Versi
 probeInventory policy job = do
     probed <- liftIO (mpProbeMetadata (wpPublish policy) (jobPackage job))
     pure $ case probed of
-        Left fault -> Left (outcomeOfFetchFault (probeFaultReason job) fault)
+        Left fault -> Left (outcomeOfFetchFault BeforePublish (probeFaultReason job) fault)
         Right response
             | responseStatusCode response == 404 -> Right []
             | not (isSuccessStatus (responseStatusCode response)) ->
-                Left (Retried (probeStatusReason job (responseStatusCode response)))
+                Left (Retried BeforePublish (probeStatusReason job (responseStatusCode response)))
             | otherwise -> case mpParseVersionList (wpPublish policy) response of
-                Left (ParseError detail) -> Left (Retried (probeParseReason job detail))
+                Left (ParseError detail) -> Left (Retried BeforePublish (probeParseReason job detail))
                 Right versions -> Right versions
 
 probeFaultReason :: MirrorJob -> FetchFault -> Text
@@ -250,7 +264,7 @@ outcomeOfAdmission job admission = case admission of
 evaluator expects to clear redelivers: the rest drop through the terminal path. -}
 retryOrDrop :: Maybe Transience -> Text -> JobOutcome
 retryOrDrop transience reason = case transience of
-    Just (WillResolve _) -> Retried reason
+    Just (WillResolve _) -> Retried BeforePublish reason
     Just WontResolve -> Dropped reason
     Nothing -> Dropped reason
 
@@ -264,16 +278,16 @@ readmittedDescriptor filename artifact digests =
         , maSize = artSize artifact
         }
 
-{- | The worker's terminal-versus-transient split over the shared exchange-fault channel.
-The artifact fetch and the mirror write read this one table, so no fault splits between them.
+{- | The worker's terminal-versus-transient split over the shared exchange-fault channel. The
+artifact fetch and the mirror write read this one table, and each names its own retry leg.
 -}
-outcomeOfFetchFault :: (FetchFault -> Text) -> FetchFault -> JobOutcome
-outcomeOfFetchFault render fault = verdict (render fault)
+outcomeOfFetchFault :: RetryLeg -> (FetchFault -> Text) -> FetchFault -> JobOutcome
+outcomeOfFetchFault leg render fault = verdict (render fault)
   where
     verdict = case fault of
         FetchUrlUnformable _ -> Dropped
         FetchBoundExceeded _ -> DeadLettered
-        FetchTransport _ -> Retried
+        FetchTransport _ -> Retried leg
 
 {- | The @latest@ one mirror write declares, over the upstream tag and the post-write inventory.
 The published version always survives, so the chosen target is always present at the store.
@@ -284,9 +298,9 @@ mirrorLatest upstreamLatest inventory published =
 
 {- Fix the release tag before the write, over the post-write inventory, so no job makes its own
 version latest merely by finishing last. -}
-publishAdmitted :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> [Version] -> (MirrorArtifact, Maybe Version) -> WorkerM JobOutcome
-publishAdmitted policy receipt job inventory (admitted, upstreamLatest) =
-    mirrorArtifact policy receipt job plan admitted
+publishAdmitted :: WorkerPolicy -> MirrorJob -> [Version] -> (MirrorArtifact, Maybe Version) -> WorkerM JobOutcome
+publishAdmitted policy job inventory (admitted, upstreamLatest) =
+    mirrorArtifact policy job plan admitted
   where
     plan =
         PublishPlan
@@ -294,15 +308,15 @@ publishAdmitted policy receipt job inventory (admitted, upstreamLatest) =
             , ppLatest = mirrorLatest upstreamLatest inventory (jobVersion job)
             }
 
-mirrorArtifact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> PublishPlan -> MirrorArtifact -> WorkerM JobOutcome
-mirrorArtifact policy receipt job plan admitted = do
+mirrorArtifact :: WorkerPolicy -> MirrorJob -> PublishPlan -> MirrorArtifact -> WorkerM JobOutcome
+mirrorArtifact policy job plan admitted = do
     logFM DebugS (ls ("fetching artifact bytes from " <> jobArtifactAuthority job))
     fetched <- fetchArtifactBytes (wpArtifactLimits policy) (artifactByUrl (wpArtifact policy)) (jobArtifactUrl job)
     case fetched of
-        -- 'outcomeOfFetchFault' makes the terminal-versus-transient split, and
-        -- 'processMessage' logs the reason at the queue-realisation site.
-        Left fault -> pure (outcomeOfFetchFault (artifactFetchReason job) fault)
-        Right bytes -> publishIfIntact policy receipt job plan admitted bytes
+        -- 'outcomeOfFetchFault' makes the terminal-versus-transient split, and the realisation
+        -- half logs the reason at the queue handle.
+        Left fault -> pure (outcomeOfFetchFault BeforePublish (artifactFetchReason job) fault)
+        Right bytes -> publishIfIntact policy job plan admitted bytes
 
 -- The client's rendered exception would print the request path, query, and headers, so a
 -- transport reason names only the authority and the cause.
@@ -314,40 +328,29 @@ artifactFetchReason job = \case
 
 -- A tampered artifact must never reach the private upstream, which later serves it without the
 -- rules, so the bytes are verified against the re-admitted digests before any publish.
-publishIfIntact :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> PublishPlan -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
-publishIfIntact policy receipt job plan admitted bytes = case verifyIntegrity (maHashes admitted) bytes of
+publishIfIntact :: WorkerPolicy -> MirrorJob -> PublishPlan -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
+publishIfIntact policy job plan admitted bytes = case verifyIntegrity (maHashes admitted) bytes of
     IntegrityMismatch detail -> do
         logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
         pure (Dropped ("integrity mismatch: " <> detail))
-    IntegrityVerified -> publishVerified policy receipt job plan admitted bytes
+    IntegrityVerified -> publishVerified policy job plan admitted bytes
 
 -- Publish already-verified bytes to the mirror target. The publish document is assembled from the
 -- re-admitted descriptor, so no queue-payload text reaches the trusted-tier packument.
-publishVerified :: WorkerPolicy -> ReceiptHandle -> MirrorJob -> PublishPlan -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
-publishVerified policy receipt job plan admitted bytes = do
-    holdForLongPublish receipt
+publishVerified :: WorkerPolicy -> MirrorJob -> PublishPlan -> MirrorArtifact -> ByteString -> WorkerM JobOutcome
+publishVerified policy job plan admitted bytes = do
     metrics <- asks wrMetrics
     -- The publish is the long, network-bound step. Time it for the publish-latency
     -- histogram whichever way the registry responds.
     (result, seconds) <- timedSeconds (liftIO (mpPublishArtifact (wpPublish policy) (jobPackage job) plan admitted bytes))
     liftIO (wmpMirrorPublishDuration metrics seconds)
-    outcomeOfPublish receipt job result
+    outcomeOfPublish job result
 
--- Reset the hold only when a redelivery is actually coming. A terminal outcome is acked or
--- dead-lettered, so there is nothing to hasten and the hold can stand.
-outcomeOfPublish :: ReceiptHandle -> MirrorJob -> Either PublishFault () -> WorkerM JobOutcome
-outcomeOfPublish receipt job = \case
-    Right () -> do
-        logFM InfoS (ls ("mirrored artifact published: " <> renderJob job))
-        pure Succeeded
-    Left (PublishRejected err) -> retryAfterRelease ("registry rejected publish: " <> show err)
-    Left (PublishFetch fault) -> case outcomeOfFetchFault publishFaultReason fault of
-        Retried reason -> retryAfterRelease reason
-        outcome -> pure outcome
-  where
-    retryAfterRelease reason = do
-        releaseForRetry receipt
-        pure (Retried reason)
+outcomeOfPublish :: MirrorJob -> Either PublishFault () -> WorkerM JobOutcome
+outcomeOfPublish job = \case
+    Right () -> Succeeded <$ logFM InfoS (ls ("mirrored artifact published: " <> renderJob job))
+    Left (PublishRejected err) -> pure (Retried AfterPublish ("registry rejected publish: " <> show err))
+    Left (PublishFetch fault) -> pure (outcomeOfFetchFault AfterPublish publishFaultReason fault)
 
 -- The mirror target is operator-configured, so its rendered transport detail is diagnosable
 -- rather than attacker-supplied.
@@ -356,25 +359,6 @@ publishFaultReason = \case
     FetchUrlUnformable urlErr -> "unformable publish URL: " <> renderUrlFormationError urlErr
     FetchBoundExceeded limitErr -> "the publication target's response exceeded the response bound: " <> show limitErr
     FetchTransport fault -> "publish transport failure: " <> show fault
-
--- Hold the message past its visibility window before a publish that may run long. A mid-publish
--- redelivery only wastes a re-fetch, so a failed extend is swallowed, never failing the job.
-holdForLongPublish :: ReceiptHandle -> WorkerM ()
-holdForLongPublish receipt =
-    queueOp (\queue -> extendVisibility queue receipt workerPublishVisibilityBudget) (const pass)
-
-{- | The visibility window one publish gets before its message could redeliver mid-write, sized to
-upload the largest artifact the memory plan admits (512 MiB) over a 2 MiB-per-second link.
-@Ecluse.Core.Worker.LivenessSpec@ pins it under the liveness staleness bound so the two cannot drift.
--}
-workerPublishVisibilityBudget :: Seconds
-workerPublishVisibilityBudget = Seconds 300
-
--- Reset the message to visible, so a failed publish redelivers at once instead of waiting out
--- 'holdForLongPublish'. Best effort: a missed reset only delays the redelivery.
-releaseForRetry :: ReceiptHandle -> WorkerM ()
-releaseForRetry receipt =
-    queueOp (\queue -> extendVisibility queue receipt (Seconds 0)) (const pass)
 
 {- The job's artifact location as a log-safe authority. The queue payload's URL can carry userinfo
 or a pre-signed query, so a log line names only the host and port the worker dials. -}

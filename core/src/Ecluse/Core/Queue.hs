@@ -30,8 +30,9 @@ module Ecluse.Core.Queue (
     mkReceiptHandle,
     unReceiptHandle,
 
-    -- * Durations
+    -- * Durations and the receipt lease
     Seconds (..),
+    ReceiptLease (..),
 
     -- * Dead-letter terminus and the redelivery budget
     DeadLetterTerminus (..),
@@ -59,6 +60,7 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, tfDetail, transportFault)
 import Ecluse.Core.Package (PackageName, pkgEcosystem, pkgNamespace, unScope, unscopedName)
+import Ecluse.Core.Queue.Lease (ReceiptLease (..), Seconds (..))
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Path (Filename, mkFilename, unFilename)
 import Ecluse.Core.Supervision (BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros), backoffMicros)
@@ -224,14 +226,12 @@ data QueueMessage = QueueMessage
     A backend that cannot report a count reports @1@, so only evidence puts a delivery past the
     'deliveryBudget'.
     -}
+    , msgLease :: Maybe ReceiptLease
+    {- ^ How long this delivery stays hidden, for the worker's renewal controller
+    ("Ecluse.Core.Worker.Lease"). 'Nothing' from a backend that never expires a delivery.
+    -}
     }
     deriving stock (Eq, Show)
-
-{- | A duration in whole seconds, for 'extendVisibility'. A 'newtype', so a raw
-@Int@ of seconds cannot pass for some other count.
--}
-newtype Seconds = Seconds Int
-    deriving stock (Eq, Ord, Show)
 
 {- | How many deliveries of one message a queue grants before the worker itself
 retires it. A 'newtype', so no caller confuses a count of receives with some other
@@ -305,8 +305,8 @@ data MirrorQueue = MirrorQueue
     a 'Left' and absorbs it, since idempotent publishing makes the repeat harmless.
     -}
     , extendVisibility :: ReceiptHandle -> Seconds -> IO (Either TransportFault ())
-    {- ^ Extend a received message's visibility window to hold a long publish. An optimisation,
-    not correctness-critical, so the caller absorbs a 'Left' silently.
+    {- ^ Reset a received message's visibility window, either to renew the worker's lease on it
+    ("Ecluse.Core.Worker.Lease") or, at zero, to release it for an immediate redelivery.
     -}
     , deadLetter :: ReceiptHandle -> IO (Either TransportFault ())
     {- ^ Realise a terminal fault: a job that can never succeed, decided as a verdict at the

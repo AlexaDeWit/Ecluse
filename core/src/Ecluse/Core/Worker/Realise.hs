@@ -2,15 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Realising a job's verdict at the queue handle: ack, dead-letter, or leave it to
-redeliver.
+{- | Realising a job's verdict at the queue handle: ack, dead-letter, or release for retry.
 
 This half runs a batch and turns each 'JobOutcome' the decision half
-("Ecluse.Core.Worker.Job") reached into a queue operation. A batch is processed
-__sequentially__, so each job holds the full visibility budget rather than competing
-with its batch-mates. A delivery that already spent the queue's redelivery budget is
-retired before the job runs, so a message nothing else captures stops cycling instead
-of re-fetching its artifact on every redelivery.
+("Ecluse.Core.Worker.Job") reached into a queue operation. Every receipt in the batch is
+leased for the batch's whole run ("Ecluse.Core.Worker.Lease"), so a job never races the
+backend's visibility window and its disposition is the one thing that ends the lease. Jobs
+still run __sequentially__, one artifact task at a time. A delivery that already spent the
+queue's redelivery budget is retired before its job runs, so a message nothing else captures
+stops cycling instead of re-fetching its artifact on every redelivery.
 -}
 module Ecluse.Core.Worker.Realise (
     processBatch,
@@ -21,63 +21,93 @@ import Katip (Severity (ErrorS, WarningS), logFM, ls)
 import Ecluse.Core.Fault (tfDetail)
 import Ecluse.Core.Queue (
     DeliveryBudget,
-    MirrorQueue (ack, deadLetter, deliveryBudget),
+    MirrorQueue (ack, deadLetter, deliveryBudget, extendVisibility),
     QueueMessage (msgJob, msgReceipt, msgReceiveCount),
     ReceiptHandle,
+    Seconds (Seconds),
     deliveryBudgetSpent,
     retiringDelivery,
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..))
-import Ecluse.Core.Worker.Job (JobOutcome (DeadLettered, Dropped, Retried, Succeeded), processJob)
+import Ecluse.Core.Worker.Job (
+    JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
+    RetryLeg (AfterPublish, BeforePublish),
+    processJob,
+ )
+import Ecluse.Core.Worker.Lease (LeasedReceipt, disposing, leasedMessage, queueLeaseOps, whileLeased, withLeasedBatch)
 import Ecluse.Core.Worker.Types
 
-{- | Process one batch sequentially, so each job gets the full visibility budget. The heartbeat
-advances per job, so 'Ecluse.Core.Worker.Liveness.workerHeartbeatStaleAfter' covers one job.
+-- What the worker leaves at the queue handle once a message is decided, realised under the
+-- receipt's own lease so no renewal can follow it. 'DisposeLeave' touches the handle not at all.
+data Disposition
+    = DisposeAck
+    | DisposeDeadLetter
+    | DisposeRelease
+    | DisposeLeave
+
+{- | Process one batch sequentially under a lease on every receipt in it. The heartbeat advances
+per job, so 'Ecluse.Core.Worker.Liveness.workerHeartbeatStaleAfter' covers one job.
 -}
 processBatch :: [QueueMessage] -> WorkerM ()
-processBatch = traverse_ $ \message -> do
-    processMessage message
+processBatch messages = do
+    queue <- asks wrQueue
+    withLeasedBatch (queueLeaseOps queue) messages (traverse_ processLeased)
+
+{- Decide one leased message and realise it, then beat. A receipt whose lease was dropped is
+left unacknowledged, so the backend redelivers it once its window lapses. -}
+processLeased :: LeasedReceipt -> WorkerM ()
+processLeased leased = do
+    decided <- whileLeased leased (decideMessage message)
+    whenJust decided (disposing leased . realiseDisposition (msgReceipt message))
     recordWorkerProgress
+  where
+    message = leasedMessage leased
 
 {- Check the queue's delivery budget before running the job, so a poison message retires without
 re-fetching its artifact, even on a queue with no dead-letter terminus. -}
-processMessage :: QueueMessage -> WorkerM ()
-processMessage message = do
+decideMessage :: QueueMessage -> WorkerM Disposition
+decideMessage message = do
     budget <- asks (deliveryBudget . wrQueue)
     if deliveryBudgetSpent budget message
         then do
             metrics <- asks wrMetrics
             liftIO (wmpMirrorJobProcessed metrics Metric.Discarded)
-            retireTerminally (budgetSpentReason budget message) (msgReceipt message)
-        else processDelivery message
+            -- On a queue with no dead-letter terminus this line is the only record it leaves.
+            DisposeAck <$ logFM ErrorS (ls (budgetSpentReason budget message))
+        else decideDelivery message
 
--- Run the job and realise its outcome for a delivery still within the queue's budget.
-processDelivery :: QueueMessage -> WorkerM ()
-processDelivery message = do
+-- Run the job and read its outcome as the disposition for a delivery still within the budget.
+decideDelivery :: QueueMessage -> WorkerM Disposition
+decideDelivery message = do
     metrics <- asks wrMetrics
-    outcome <- processJob (msgReceipt message) (msgJob message)
+    outcome <- processJob (msgJob message)
     liftIO (wmpMirrorJobProcessed metrics (jobResultMetric outcome))
     case outcome of
-        Succeeded -> ackMessage (msgReceipt message)
+        Succeeded -> pure DisposeAck
         Dropped reason ->
             -- Non-retryable, and not worth a dead-letter forensic trail, so retire it instead.
-            retireTerminally ("dropping unrecoverable mirror job: " <> reason) (msgReceipt message)
-        DeadLettered reason -> do
+            DisposeAck <$ logFM ErrorS (ls ("dropping unrecoverable mirror job: " <> reason))
+        DeadLettered reason ->
             -- Alarm first: on the in-memory backend the log and metric are the only record.
-            logFM ErrorS (ls ("dead-lettering unmirrorable mirror job (rides the backend's dead-letter terminus): " <> reason))
-            deadLetterMessage (msgReceipt message)
-        Retried reason ->
-            logFM WarningS (ls ("leaving mirror job un-acked for retry (redelivered by a durable queue, re-mirrored on next demand by the in-memory one): " <> reason))
+            DisposeDeadLetter <$ logFM ErrorS (ls ("dead-lettering unmirrorable mirror job (rides the backend's dead-letter terminus): " <> reason))
+        Retried leg reason ->
+            retryDisposition leg <$ logFM WarningS (ls ("leaving mirror job un-acked for retry (redelivered by a durable queue, re-mirrored on next demand by the in-memory one): " <> reason))
 
-{- Retire a message the worker will never mirror: alarm, then ack so it stops cycling. On a
-durable queue that ack is the delete that finally kills the message. -}
-retireTerminally :: Text -> ReceiptHandle -> WorkerM ()
-retireTerminally reason receipt = do
-    logFM ErrorS (ls reason)
-    ackMessage receipt
+{- Only a failed publish resets the window. A transient failure before it keeps its lease, so an
+upstream outage cannot spend the queue's whole redelivery budget in seconds. -}
+retryDisposition :: RetryLeg -> Disposition
+retryDisposition = \case
+    AfterPublish -> DisposeRelease
+    BeforePublish -> DisposeLeave
 
--- On a queue with no dead-letter terminus this line is the only record the message ever leaves.
+realiseDisposition :: ReceiptHandle -> Disposition -> WorkerM ()
+realiseDisposition receipt = \case
+    DisposeAck -> ackMessage receipt
+    DisposeDeadLetter -> deadLetterMessage receipt
+    DisposeRelease -> releaseForRetry receipt
+    DisposeLeave -> pass
+
 budgetSpentReason :: DeliveryBudget -> QueueMessage -> Text
 budgetSpentReason budget message =
     "discarding a mirror job after "
@@ -97,7 +127,7 @@ jobResultMetric = \case
     Succeeded -> Metric.Published
     Dropped _ -> Metric.Failed
     DeadLettered _ -> Metric.Failed
-    Retried _ -> Metric.Failed
+    Retried _ _ -> Metric.Failed
 
 ackMessage :: ReceiptHandle -> WorkerM ()
 ackMessage receipt =
@@ -110,3 +140,9 @@ deadLetterMessage :: ReceiptHandle -> WorkerM ()
 deadLetterMessage receipt =
     queueOp (`deadLetter` receipt) $ \fault ->
         logFM WarningS (ls ("dead-letter realisation failed; the message redelivers and re-fails terminally (harmless): " <> tfDetail fault))
+
+-- Reset the message to visible, so a failed publish redelivers at once instead of waiting out the
+-- lease the worker held. Best effort: a missed reset only delays the redelivery.
+releaseForRetry :: ReceiptHandle -> WorkerM ()
+releaseForRetry receipt =
+    queueOp (\queue -> extendVisibility queue receipt (Seconds 0)) (const pass)

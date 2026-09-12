@@ -297,6 +297,25 @@ does not clean retained private copies automatically. If an old Dredger deletes 
 during a rollout, later policy agreement cannot restore them. The
 [threat model](@/docs/threat-model.md) records that accepted residual.
 
+## Mirror receipts and their visibility
+
+A durable queue hands the worker a message and hides it for a visibility window. The worker
+holds every message it received, one job at a time, so a message far down a batch waits out
+several windows before its own job starts. Écluse therefore renews each received message's
+visibility continually, from the moment it arrives until the worker has decided it: acknowledged,
+dead-lettered, or left unacknowledged to redeliver. The renewal asks for the same window the queue
+granted, a third of the way into what is left of it, and never past the twelve hours SQS holds one
+receipt for. A publish that fails transiently is the one case Écluse resets the window to zero for,
+so that message redelivers at once instead of waiting; every other retry waits out its window.
+
+When a renewal keeps failing, Écluse gives up on that one message inside its remaining margin,
+writes a `warning` naming the transport reason, and leaves the message unacknowledged. A running
+job for it is cancelled, and one still waiting is skipped. The queue makes that message visible
+again once its window lapses, so another worker picks it up and the delivery counts against
+`ECLUSE_QUEUE__MAX_RECEIVE_COUNT`. The other messages in the batch carry on while their own
+renewals succeed. Grant the worker `sqs:ChangeMessageVisibility`: without it every job longer
+than one window is handed to a second consumer mid-mirror.
+
 ## Poison mirror jobs
 
 Some decoded mirror jobs cannot succeed: an artifact past `ECLUSE_LIMITS__MAX_ARTIFACT_BYTES`

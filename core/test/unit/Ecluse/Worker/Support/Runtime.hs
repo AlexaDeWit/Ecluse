@@ -37,6 +37,7 @@ module Ecluse.Worker.Support.Runtime (
     throwingReceiveQueue,
     recordingAckQueue,
     recordingDeadLetterQueue,
+    recordingVisibilityQueue,
     enqueue_,
     receive_,
     enqueueAndReceive,
@@ -53,9 +54,10 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Queue (
     MirrorJob,
-    MirrorQueue (ack, deadLetter, receive),
-    QueueMessage (msgReceipt),
+    MirrorQueue (ack, deadLetter, extendVisibility, receive),
+    QueueMessage (msgJob),
     ReceiptHandle,
+    Seconds,
     enqueue,
  )
 import Ecluse.Core.Registry (
@@ -256,6 +258,16 @@ recordingAckQueue = do
     let recording = base{ack = \receipt -> atomicModifyIORef' acked (\rs -> (receipt : rs, ())) >> ack base receipt}
     pure (recording, reverse <$> readIORef acked)
 
+{- | Observe every visibility reset the worker asks for, so a spec can tell a message released
+for an immediate redelivery from one left to wait out the lease the worker held.
+-}
+recordingVisibilityQueue :: IO (MirrorQueue, IO [(ReceiptHandle, Seconds)])
+recordingVisibilityQueue = do
+    base <- newTestMemoryQueue
+    resets <- newIORef []
+    let recording = base{extendVisibility = \receipt window -> atomicModifyIORef' resets (\rs -> ((receipt, window) : rs, ())) >> extendVisibility base receipt window}
+    pure (recording, reverse <$> readIORef resets)
+
 -- | Observe dead-lettering separately from acknowledgement.
 recordingDeadLetterQueue :: IO (MirrorQueue, IO [ReceiptHandle])
 recordingDeadLetterQueue = do
@@ -279,13 +291,13 @@ receive_ queue =
         Left fault -> fail ("receive faulted on the test queue: " <> show fault)
         Right messages -> pure messages
 
--- Enqueue a job, receive it, and return its receipt handle, so a test drives the per-job
--- processing with a real handle.
-enqueueAndReceive :: MirrorQueue -> MirrorJob -> IO (ReceiptHandle, MirrorJob)
+-- Enqueue a job and take the single delivery back off the queue, so a test drives the
+-- per-job processing with the job as the queue handed it over.
+enqueueAndReceive :: MirrorQueue -> MirrorJob -> IO MirrorJob
 enqueueAndReceive queue job = do
     enqueue_ queue job
     receive_ queue >>= \case
-        [message] -> pure (msgReceipt message, job)
+        [message] -> pure (msgJob message)
         other -> fail ("expected exactly one message, got " <> show other)
 
 -- | Run a stub upstream that serves 'tarballBytes' and yields its base URL to the body.

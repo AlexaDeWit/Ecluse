@@ -139,10 +139,10 @@ unless you have a specific reason to diverge.
    Anyone who can write the queue can request a mirror write, subject to worker admission. Grant only the serve
    role `SendMessage`, and only the worker
    `ReceiveMessage`/`DeleteMessage`/`ChangeMessageVisibility`. `ChangeMessageVisibility` is
-   load-bearing, not optional: the worker uses it to hold a long publish and to back a
-   **dead-lettered** poison message off so the message rides your redrive policy to the DLQ.
-   Without the grant an over-cap artifact silently churns on the ordinary visibility cadence
-   instead.
+   load-bearing, not optional: the worker renews every received message's visibility for as long
+   as it holds it, and backs a **dead-lettered** poison message off so the message rides your
+   redrive policy to the DLQ. Without the grant a job longer than one visibility window is handed
+   to a second consumer, and an over-cap artifact silently churns on the ordinary cadence.
 4. **Let the edge own access, and leave `ECLUSE_SERVER__AUTH_TOKEN` off.** Écluse is not your
    access boundary. Front it with a gateway, mesh, or IAP, and restrict reachability **both**
    north-south and east-west (pod-to-pod), because an ingress-only allow-list that leaves the pod

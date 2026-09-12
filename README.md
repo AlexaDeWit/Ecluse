@@ -62,6 +62,8 @@ ecosystem awaiting its database leaves the healthy mounts routable.
 into the artifact and reads against the operator's quiet-time threshold.
 `Ecluse.Runtime.Maintenance.CodeArtifact.Read` holds the CodeArtifact calls that only observe, and
 the evidence one observed version keeps: its exact repository, status, revision, and origin.
+`Ecluse.Core.Worker.Lease` renews a received queue message's visibility for as long as the worker
+holds it, so a job slower than one window is not redelivered to a second consumer.
 
 [`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules
 engine, and the mirror queue. The threat model (OWASP Threat Dragon, STRIDE) lives in

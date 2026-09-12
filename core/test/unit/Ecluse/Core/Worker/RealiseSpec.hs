@@ -14,7 +14,7 @@ import Katip (closeScribes)
 import Test.Hspec
 
 import Ecluse.Core.Package (HashAlg (SRI))
-import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), MirrorQueue (deliveryBudget), QueueMessage (msgReceipt, msgReceiveCount))
+import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), MirrorQueue (deliveryBudget), QueueMessage (msgReceipt, msgReceiveCount), Seconds (Seconds))
 import Ecluse.Core.Registry (PublishError (PublishError), PublishFault (PublishRejected))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Discarded, Failed, Published))
 import Ecluse.Core.Worker (processBatch)
@@ -127,6 +127,31 @@ spec = do
                     -- ...and it acked the job: retired at the handle.
                     acked <- ackedReceipts
                     acked `shouldBe` map msgReceipt messages
+    describe "processBatch -- which leg a retry releases the message's visibility for" $ do
+        it "releases a transiently-rejected publish, so its redelivery does not wait out the lease" $
+            -- The publish already moved the bytes, so an immediate retry costs the same work
+            -- twice at most. This is the one leg that resets the window.
+            withUpstream $ \url -> do
+                (queue, visibilityResets) <- recordingVisibilityQueue
+                withRuntimeQueue queue (`recordingPublish` Left (PublishRejected (PublishError "503"))) admitPolicies noopWorkerMetricsPort $ \runtime _logRef -> do
+                    enqueue_ queue (jobWith url)
+                    messages <- receive_ queue
+                    runWM runtime (processBatch messages)
+                    resets <- visibilityResets
+                    resets `shouldBe` map ((,Seconds 0) . msgReceipt) messages
+
+        it "leaves a transient artifact fetch to wait out its lease, resetting nothing" $ do
+            -- Releasing here would spend the queue's whole redelivery budget in seconds during a
+            -- two-minute upstream outage, where the remaining window is the natural backoff.
+            (queue, visibilityResets) <- recordingVisibilityQueue
+            withRuntimeQueue queue (`recordingPublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime logRef -> do
+                enqueue_ queue (jobWith unreachableUrl)
+                messages <- receive_ queue
+                runWM runtime (processBatch messages)
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+                visibilityResets >>= (`shouldBe` [])
+
     describe "processBatch -- the redelivery budget, the terminus a queue without a DLQ has (issue #935)" $ do
         it "retires a delivery that has spent the budget, without ever running the job" $
             withUpstream $ \url -> do
