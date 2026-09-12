@@ -105,7 +105,7 @@ swapIn slot etag pushedAt newDb = mask_ $ do
     displaced <- atomically $ do
         old <- readTVar (slotCell slot)
         writeTVar (slotCell slot) (Just (Generation newDb etag source retired closed readers installedAt))
-        for old $ \g -> do
+        forM old $ \g -> do
             writeTVar (genRetired g) True
             remaining <- readTVar (genReaders g)
             pure (g, remaining == 0)
