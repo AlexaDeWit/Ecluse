@@ -2,11 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Every decision the CodeArtifact store-maintenance leaf makes, as pure functions over
-@amazonka@'s own request and response types. @amazonka@ is trusted for serialisation,
-signing, and decoding against the service model, so what stays ours is which call to
-build and how to read what comes back. Keeping those here leaves the effectful half in
-"Ecluse.Runtime.Maintenance.CodeArtifact" thin enough to hold no logic worth testing.
+{- | Every decision the CodeArtifact store-maintenance leaf makes, over @amazonka@'s own request
+and response types. @amazonka@ is trusted for serialisation, signing, and decoding against the
+service model, so what stays ours is which call to build and how to read what comes back. The
+read-only calls and the evidence they preserve live in
+"Ecluse.Runtime.Maintenance.CodeArtifact.Read".
 -}
 module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     -- * Coordinates
@@ -39,7 +39,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
 
     -- * Responses
     packagesOfPage,
-    versionsOfPage,
+    presenceOf,
     foldDeleteResponse,
     classifyRepository,
     consentOfTags,
@@ -85,7 +85,6 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (..),
     StoreFault (..),
     StoreRefusal,
-    StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoved),
     VersionPresence (VersionServed, VersionWithdrawn),
     parseNamePrefix,
@@ -93,7 +92,7 @@ import Ecluse.Core.Registry.Maintenance (
     storeRefusal,
  )
 import Ecluse.Core.Text (nonBlank, readDecimalText)
-import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 
 {- | Where one CodeArtifact repository lives. The composition root parses these from the
@@ -132,6 +131,11 @@ repository's per-format endpoint.
 formatToken :: CodeArtifactFormat -> Text
 formatToken (CodeArtifactFormat _ token) = CA.fromPackageFormat token
 
+-- The format CodeArtifact addresses a store's own ecosystem by.
+storePackageFormat :: CodeArtifactStore -> CA.PackageFormat
+storePackageFormat store = case casFormat store of
+    CodeArtifactFormat _ token -> token
+
 {- | What CodeArtifact does: it re-admits a version published again after a delete, and has applied
 it by the time it answers. The alphabet is the mount ecosystem's, whose grammar spells the names.
 -}
@@ -168,14 +172,14 @@ listPackagesRequest :: CodeArtifactStore -> NamePrefix -> Maybe Text -> CA.ListP
 listPackagesRequest store prefix token =
     CA.newListPackages (casDomain store) (casRepository store)
         & (CAL.listPackages_domainOwner ?~ casDomainOwner store)
-        & (CAL.listPackages_format ?~ formatTokenOf store)
+        & (CAL.listPackages_format ?~ storePackageFormat store)
         & (CAL.listPackages_packagePrefix .~ nonBlank (renderNamePrefix prefix))
         & (CAL.listPackages_nextToken .~ token)
 
 -- | List one page of a package's versions, continuing from a page token when there is one.
 listVersionsRequest :: CodeArtifactStore -> PackageName -> Maybe Text -> CA.ListPackageVersions
 listVersionsRequest store name token =
-    CA.newListPackageVersions (casDomain store) (casRepository store) (formatTokenOf store) package
+    CA.newListPackageVersions (casDomain store) (casRepository store) (storePackageFormat store) package
         & (CAL.listPackageVersions_domainOwner ?~ casDomainOwner store)
         & (CAL.listPackageVersions_namespace .~ namespace)
         & (CAL.listPackageVersions_nextToken .~ token)
@@ -187,7 +191,7 @@ listVersionsRequest store name token =
 -}
 deleteRequest :: CodeArtifactStore -> PackageName -> [Version] -> CA.DeletePackageVersions
 deleteRequest store name versions =
-    CA.newDeletePackageVersions (casDomain store) (casRepository store) (formatTokenOf store) package
+    CA.newDeletePackageVersions (casDomain store) (casRepository store) (storePackageFormat store) package
         & (CAL.deletePackageVersions_domainOwner ?~ casDomainOwner store)
         & (CAL.deletePackageVersions_namespace .~ namespace)
         & (CAL.deletePackageVersions_versions .~ map renderVersion versions)
@@ -267,17 +271,9 @@ packagesOfPage eco = mapMaybe named
         packageNameFrom eco (summary ^. CAL.packageSummary_namespace)
             <$> (nonBlank =<< summary ^. CAL.packageSummary_package)
 
--- | The versions in one listing page, each with what the store still does with it.
-versionsOfPage :: Ecosystem -> [CA.PackageVersionSummary] -> [StoredVersion]
-versionsOfPage eco = map stored
-  where
-    stored summary =
-        StoredVersion
-            { storedVersion = mkVersion eco (summary ^. CAL.packageVersionSummary_version)
-            , storedPresence = presenceOf (summary ^. CAL.packageVersionSummary_status)
-            }
-
--- @Published@ and @Unlisted@ are the two statuses CodeArtifact still serves an install from.
+{- | Whether the store still serves an install of a version in this status. @Published@ and
+@Unlisted@ are the two statuses it does, and every other status is a record it keeps.
+-}
 presenceOf :: CA.PackageVersionStatus -> VersionPresence
 presenceOf status
     | status == CA.PackageVersionStatus_Published = VersionServed
@@ -410,8 +406,3 @@ retryAfterSeconds :: [Header] -> Maybe RetryAfter
 retryAfterSeconds headers = do
     raw <- decodeUtf8 . snd <$> find ((== hRetryAfter) . fst) headers
     RetryAfter <$> readDecimalText raw
-
--- The format token for a store's own ecosystem.
-formatTokenOf :: CodeArtifactStore -> CA.PackageFormat
-formatTokenOf store = case casFormat store of
-    CodeArtifactFormat _ token -> token
