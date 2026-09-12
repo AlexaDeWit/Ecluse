@@ -54,10 +54,12 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
 - `ecluse.registry.merge.divergence` is the cross-upstream integrity alarm. It increments per
   contradicting version, and the package and version go on the paired `WARNING` line, never on a
   label. See the [threat model](https://ecluse-proxy.com/docs/threat-model/).
-- `ecluse.credential.token.ttl.seconds` alarms a stuck refresh. `ecluse.credential.refresh` carries
-  (result, provider). `provider` is the store the mount declared its mirror target under, one of
-  `registry`, `codeArtifact`, or `verdaccio`, spelled as the configuration spells the tag, so one
-  word filters a dashboard and names the key an operator would edit.
+- `ecluse.credential.token.ttl.seconds` measures remaining lifetime at collection, including while
+  the mint breaker refuses new attempts. The minimum per provider exposes the earliest expiry
+  among its configured credentials. Refresh is demand-driven, so idle expiry alone does not
+  establish a provider fault. See the [operator policy](https://ecluse-proxy.com/docs/operations/#credential-expiry).
+  `ecluse.credential.refresh` counts completed attempts by result and provider. The bounded
+  provider labels match the configured store tags: `registry`, `codeArtifact`, and `verdaccio`.
 - `ecluse.mirror.jobs.processed` carries (result), one of `published`, `failed`, or `discarded`.
   `discarded` is worth an alarm on its own. It means the worker retired a mirror job that the
   queue redelivered past its budget. That happens only when no dead-letter queue captured the job

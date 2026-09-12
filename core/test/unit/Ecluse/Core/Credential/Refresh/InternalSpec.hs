@@ -21,7 +21,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO (async, cancel, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwIO, throwString, try)
+import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..), initialBreaker)
 import Ecluse.Core.Credential
@@ -94,9 +94,9 @@ breakerCfg :: RefreshConfig
 breakerCfg = defaultRefreshConfig{rcBreakerThreshold = 3, rcBreakerCooldown = 30}
 
 {- | A refresh outcome captured by a test 'RefreshReporter': the result and the
-remaining-lifetime seconds it carried.
+absolute expiry it carried.
 -}
-data RefreshEvent = ReportedSuccess (Maybe Int) | ReportedFailure (Maybe Int)
+data RefreshEvent = ReportedSuccess (Maybe UTCTime) | ReportedFailure (Maybe UTCTime)
     deriving stock (Eq, Show)
 
 {- | A pair of capturing reporters appending to their own logs, oldest first. A test can then
@@ -129,7 +129,7 @@ scriptedMint :: IORef [IO AuthToken] -> IO AuthToken
 scriptedMint ref = join (atomicModifyIORef' ref next)
   where
     next (a : rest) = (rest, a)
-    next [] = ([], throwString "scriptedMint: exhausted")
+    next [] = ([], throwIO MintBoom)
 
 spec :: Spec
 spec = do
@@ -196,9 +196,7 @@ spec = do
                 `shouldReturn` True
 
         it "releases the single-flight flag when a mint is cancelled mid-flight (no wedge)" $ do
-            -- Regression: an async exception (cancellation or timeout) can land between
-            -- claiming the single-flight flag and folding the mint result. It must still
-            -- release the flag, or every later expired caller wedges on the STM retry.
+            -- Cancellation after the claim must release the flag to unblock expired callers.
             (clock, setClock) <- newTestClock t0
             started <- newEmptyTMVarIO
             gate <- newEmptyTMVarIO
@@ -224,10 +222,7 @@ spec = do
             (unSecret . authSecret <$> result) `shouldBe` Just "recovered"
 
         it "releases the single-flight flag when the serving thread is cancelled at the claim handoff (no wedge)" $ do
-            -- Regression for the parent-side gap: the serve transaction claims the flag, but
-            -- nothing releases it until the mint runner installs its handler. A cancel in that
-            -- handoff must still release the flag, or every later expired caller wedges on the STM
-            -- retry.
+            -- Cancellation before the mint runner installs its handler must still release the flag.
             (clock, setClock) <- newTestClock t0
             reached <- newEmptyTMVarIO
             release <- newEmptyTMVarIO
@@ -259,7 +254,7 @@ spec = do
             failRef <- newIORef False
             let mint = do
                     bad <- readIORef failRef
-                    if bad then throwString "mint boom" else pure (tokenExpiringIn "tok-1" 1000)
+                    if bad then throwIO MintBoom else pure (tokenExpiringIn "tok-1" 1000)
             provider <- refreshingProvider (testConfig clock mint)
             -- From now on every mint fails.
             writeIORef failRef True
@@ -275,7 +270,7 @@ spec = do
             failRef <- newIORef False
             let mint = do
                     bad <- readIORef failRef
-                    if bad then throwString "mint boom" else pure (tokenExpiringIn "tok-1" 1000)
+                    if bad then throwIO MintBoom else pure (tokenExpiringIn "tok-1" 1000)
             provider <- refreshingProvider (testConfig clock mint)
             writeIORef failRef True
             -- Past expiry: no valid token left to serve, and mint fails.
@@ -297,7 +292,7 @@ spec = do
                     n <- atomicModifyIORef' mintCount (\c -> (c + 1, c + 1))
                     bad <- readIORef failRef
                     if bad
-                        then throwString "mint boom"
+                        then throwIO MintBoom
                         else
                             if n == 1
                                 then pure (tokenExpiringIn "tok-2" 1000)
@@ -331,7 +326,7 @@ spec = do
             let mint = do
                     _ <- atomicModifyIORef' mintCount (\n -> (n + 1, ()))
                     bad <- readIORef failRef
-                    if bad then throwString "mint boom" else pure (tokenExpiringIn "tok-1" 1000)
+                    if bad then throwIO MintBoom else pure (tokenExpiringIn "tok-1" 1000)
             provider <- refreshingProvider (testConfig clock mint)
             writeIORef failRef True
             setClock (addUTCTime 2000 t0)
@@ -349,9 +344,7 @@ spec = do
             (clock, setClock) <- newTestClock t0
             gate <- newEmptyTMVarIO
             mintCount <- newIORef (0 :: Int)
-            -- The refresh mint (call #2) blocks on the gate and the token expires while it is in
-            -- flight. A concurrent caller on the expired path must wait for that mint rather than
-            -- start its own.
+            -- An expired caller must wait for the in-flight refresh blocked on the gate.
             let mint = do
                     n <- atomicModifyIORef' mintCount (\c -> (c + 1, c + 1))
                     if n >= 2
@@ -378,9 +371,7 @@ spec = do
 
         it "stops hammering the mint once repeated background refreshes trip the breaker" $ do
             (clock, setClock) <- newTestClock t0
-            -- The token stays valid throughout but sits past its refresh threshold, so every
-            -- request wants to refresh. The breaker must cap the failing background mints rather
-            -- than retry one per request.
+            -- Requests past the refresh threshold must respect the breaker after repeated mint failures.
             seeded <- newIORef True
             mintCount <- newIORef (0 :: Int)
             let mint = do
@@ -388,7 +379,7 @@ spec = do
                     firstTime <- readIORef seeded
                     if firstTime
                         then writeIORef seeded False >> pure (tokenExpiringIn "tok-1" 10000)
-                        else throwString "mint boom"
+                        else throwIO MintBoom
             provider <- refreshingProvider (testConfig clock mint)
             -- Past the refresh threshold (0.8 * 10000 = 8000), token still valid.
             setClock (addUTCTime 8500 t0)
@@ -449,7 +440,7 @@ spec = do
                     firstTime <- readIORef seeded
                     if firstTime
                         then writeIORef seeded False >> pure (tokenExpiringIn "tok-1" 1000)
-                        else throwString "mint boom"
+                        else throwIO MintBoom
                 cfg = defaultRefreshConfig{rcClock = clock, rcMint = mint}
             provider <- refreshingProvider cfg
             -- Expire the token so each call mints synchronously and fails.
@@ -541,7 +532,7 @@ spec = do
             script <-
                 newIORef
                     [ pure (tokenExpiringIn "eager" 10) -- the eager construction mint
-                    , throwString "mint down" -- the next mint fails, tripping the breaker
+                    , throwIO MintBoom -- the next mint fails, tripping the breaker
                     , pure (tokenExpiringIn "recovered" 200) -- the probe mint recovers it
                     ]
             let cfg =
@@ -554,24 +545,23 @@ spec = do
             readIORef breakerLog `shouldReturn` []
             readIORef refreshLog `shouldReturn` []
             -- The eager token (expires t0+10) is expired at t0+20, so the serve mints synchronously
-            -- and fails. That trips the breaker and reports the failed refresh with the cached
-            -- token's (now zero) remaining lifetime.
+            -- and fails. The failure reports the cached expiry.
             setClock (addUTCTime 20 t0)
             currentToken provider `shouldThrow` anyException
             readIORef breakerLog `shouldReturn` [Open (addUTCTime 50 t0)]
-            readIORef refreshLog `shouldReturn` [ReportedFailure (Just 0)]
+            readIORef refreshLog `shouldReturn` [ReportedFailure (Just (addUTCTime 10 t0))]
             -- The 30s cooldown elapses by t0+51, so the breaker admits a half-open probe. It
-            -- succeeds, resetting the breaker and recording the fresh token's ttl.
+            -- succeeds, resetting the breaker and recording the fresh token's expiry.
             setClock (addUTCTime 51 t0)
             recovered <- currentToken provider
             unSecret (authSecret recovered) `shouldBe` "recovered"
             readIORef breakerLog `shouldReturn` [Open (addUTCTime 50 t0), HalfOpen, Closed 0]
             readIORef refreshLog
-                `shouldReturn` [ReportedFailure (Just 0), ReportedSuccess (Just 149)]
+                `shouldReturn` [ReportedFailure (Just (addUTCTime 10 t0)), ReportedSuccess (Just (addUTCTime 200 t0))]
 
         it "is silent and never throws on that account when wired with the default no-op reporters" $ do
             (clock, setClock) <- newTestClock t0
-            script <- newIORef [pure (tokenExpiringIn "eager" 10), throwString "mint down"]
+            script <- newIORef [pure (tokenExpiringIn "eager" 10), throwIO MintBoom]
             -- 'defaultRefreshConfig' (via 'testConfig') wires 'noCredentialReporters':
             -- a refresh that trips the breaker records nothing.
             provider <- refreshingProvider (testConfig clock (scriptedMint script)){rcBreakerThreshold = 1}
@@ -825,7 +815,7 @@ harnessProvider h =
         bad <- readIORef (hFail h)
         let leave = atomicModifyIORef' (hInFlight h) (\n -> (n - 1, ()))
         if bad
-            then leave >> throwString "model mint boom"
+            then leave >> throwIO MintBoom
             else do
                 idx <- atomicModifyIORef' (hNextToken h) (\n -> (n + 1, n))
                 leave

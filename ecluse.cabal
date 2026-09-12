@@ -662,11 +662,14 @@ library ecluse-runtime-test-support
   exposed-modules:
     Ecluse.Runtime.Test.Cve
     Ecluse.Runtime.Test.Support
+    Ecluse.Runtime.Test.Telemetry
 
   build-depends:
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
     , ecluse:ecluse-test-support
+    , hs-opentelemetry-api  ^>=1.0
+    , hs-opentelemetry-sdk  ^>=1.0
     , http-client       ^>=0.7
     , katip             ^>=0.8.8
     , unliftio          ^>=0.2.25

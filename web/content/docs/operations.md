@@ -276,6 +276,26 @@ The W3C baggage limits cap `OTEL_RESOURCE_ATTRIBUTES` at 8192 bytes in total, 40
 attribute, and 180 attributes. Écluse admits its own identity first, then your attributes in key
 order, and warns once at boot naming every key that did not fit.
 
+### Credential expiry
+
+`ecluse.credential.token.ttl.seconds` reports the shortest remaining lifetime among observed
+expiring credentials with the same `provider` label. Écluse measures whole seconds at each
+collection and clamps expired credentials to zero. A successful refresh replaces the observed
+expiry. A completed failed refresh reports the cached token's expiry.
+
+Five consecutive mint failures open the breaker for 60 seconds. Requests during that cooldown
+cannot mint, and refusals do not count as completed refresh attempts. Collection still measures
+the cached token's lifetime, including when it expires during the cooldown.
+
+Refresh is demand-driven. An idle credential can expire without a provider fault, so zero TTL
+alone is not an outage signal. `ecluse.credential.refresh` counts completed attempts by `provider`
+and `result`. Read those outcomes alongside credential demand and failures of mirror writes.
+
+The bounded `provider` label remains `registry`, `codeArtifact`, or `verdaccio`. Shared
+CodeArtifact credentials contribute once, even when several ecosystems use them. Static providers
+emit no TTL observations. The eager construction mint emits neither a refresh event nor an
+expiry observation.
+
 ## Memory plan and runtime sizing
 
 Every byte-valued bound is a named tenant of the effective heap ceiling, not an independent

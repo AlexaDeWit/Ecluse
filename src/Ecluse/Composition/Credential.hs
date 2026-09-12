@@ -26,6 +26,7 @@ module Ecluse.Composition.Credential (
     codeArtifactIdentityGroups,
 ) where
 
+import Data.Foldable1 qualified as Foldable1
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition.BootError (BootError (..), refuseOnThrow)
@@ -68,7 +69,7 @@ providerLabel = \case
 {- | Build the global credential providers from the cleared mounts, or every boot error that
 blocks one. Each provider mints eagerly, so a bad identity fails here as 'CodeArtifactMintFailed'.
 -}
-initCredentialProviders :: (StoreTag -> CredentialReporters) -> [Mount] -> IO (Either [BootError] CredentialProviders)
+initCredentialProviders :: (Ecosystem -> StoreTag -> CredentialReporters) -> [Mount] -> IO (Either [BootError] CredentialProviders)
 initCredentialProviders reportersFor mounts = do
     let creds = [(eco, sbTag backend, sbMint backend) | (eco, backend) <- mirrorBackends mounts]
     -- The static leaf is stateless, so it stays per mount, unlike a CodeArtifact provider.
@@ -90,14 +91,14 @@ mirrorBackends mounts =
     , Just target <- [regMirrorTarget (mountRegistries mount)]
     ]
 
--- One provider per distinct identity, fanned out to every ecosystem in the group, so
--- a shared domain carries one refresh schedule and one breaker rather than one per mount.
+-- Disjoint groups use their smallest ecosystem as a bounded identity for expiry replacement.
+-- Each group shares one provider, refresh schedule and breaker.
 initSharedCodeArtifact ::
-    (StoreTag -> CredentialReporters) ->
+    (Ecosystem -> StoreTag -> CredentialReporters) ->
     (CodeArtifactConfig, (StoreTag, NonEmpty Ecosystem)) ->
     IO (Either [BootError] [(Ecosystem, CredentialProvider)])
 initSharedCodeArtifact reportersFor (caConfig, (tag, ecosystems)) =
-    fmap fannedOut <$> refuseOnThrow CodeArtifactMintFailed (newCodeArtifactProvider (reportersFor tag) caConfig)
+    fmap fannedOut <$> refuseOnThrow CodeArtifactMintFailed (newCodeArtifactProvider (reportersFor (Foldable1.minimum ecosystems) tag) caConfig)
   where
     fannedOut provider = [(eco, provider) | eco <- toList ecosystems]
 

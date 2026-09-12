@@ -147,7 +147,7 @@ type BuildMirrorQueue = LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 {- | How a boot builds the mirror-write credential providers. Injected, as the queue and store
 builders are, so a spec drives this phase without minting against a cloud.
 -}
-type BuildCredentials = (StoreTag -> CredentialReporters) -> [Mount] -> IO (Either [BootError] CredentialProviders)
+type BuildCredentials = (Ecosystem -> StoreTag -> CredentialReporters) -> [Mount] -> IO (Either [BootError] CredentialProviders)
 
 {- How the booting role builds one store as the sweep holds it. Both Dredger roles plan through the
 one arm below and differ only in which of 'StoreBuilds' they ran. -}
@@ -186,7 +186,7 @@ planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds 
 answer to, and one store per cleared target. All three refusable steps accumulate. -}
 planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepStore -> BootPlan -> IO (Either [BootError] PrunerWiring)
 planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
-    deferredMetrics <- newDeferredMetrics
+    deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     credentials <- buildCredentials (credentialReportersOver deferredMetrics) prunerMounts
     stores <-
@@ -277,7 +277,7 @@ planMirrorWiring :: LogEnv -> ResolveAdapter -> BuildMirrorQueue -> MirrorRole -
 planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan = do
     -- The metric instruments do not exist until the assembly builds the telemetry substrate. The
     -- credential providers minted below record through reporters 'installMetrics' makes live.
-    deferredMetrics <- newDeferredMetrics
+    deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     publishBudget <- planPublishBudget memoryPlan
     queue <- planMirrorQueue buildQueue logEnv (mpQueueMemoryMaxDepth memoryPlan) (bpMirrorRuntime bootPlan)
@@ -351,9 +351,9 @@ planPublishBudget memoryPlan =
         pure PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = mpMaxRequestBytes memoryPlan}
 
 -- Where a store's mirror-write credential provider records its mint breaker and refresh outcomes.
-credentialReportersOver :: DeferredMetrics -> StoreTag -> CredentialReporters
-credentialReportersOver deferredMetrics tag =
+credentialReportersOver :: DeferredMetrics -> Ecosystem -> StoreTag -> CredentialReporters
+credentialReportersOver deferredMetrics credentialIdentity tag =
     CredentialReporters
         { crBreakerReporter = deferredBreakerReporter deferredMetrics CredentialMint
-        , crRefreshReporter = deferredRefreshReporter deferredMetrics (providerLabel tag)
+        , crRefreshReporter = deferredRefreshReporter deferredMetrics credentialIdentity (providerLabel tag)
         }
