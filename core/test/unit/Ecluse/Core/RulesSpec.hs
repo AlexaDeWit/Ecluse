@@ -656,6 +656,7 @@ spec = do
                         , rdCurrentAdvisoryEtag = pure Nothing
                         , rdBreakerReporter = noBreakerReporter
                         , rdFaultReporter = noFaultReporter
+                        , rdAdvisoryFreshness = pure AdvisoryFresh
                         }
                 policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
             -- An old enough version still rides the ordinary allow.

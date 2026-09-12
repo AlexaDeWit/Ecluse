@@ -12,7 +12,7 @@ import Test.Hspec
 
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Rules.Freshness (
-    AdvisoryAge (advisoryAge, advisoryMaxAge, advisoryPushedAt),
+    AdvisoryAge (AdvisoryAge, advisoryAge, advisoryMaxAge, advisoryPushedAt),
     AdvisoryAgeBasis (AgeBeforeQuarantine, AgeConfigured, AgeFloor),
     AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
     AdvisoryPublication (NoGeneration, PublishedAt, UndatedGeneration),
