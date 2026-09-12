@@ -378,9 +378,10 @@ spec = do
                         output <- captureStdout $ do
                             outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
                             outcome `shouldBe` Left ExitSuccess
-                        let mountLines = filter (T.isPrefixOf "mount \"npm\":") (lines output)
-                        length mountLines `shouldBe` (if hasControlPlane then 2 else 1)
-                        drop 1 mountLines `shouldBe` [notice | hasControlPlane]
+                        -- The mount prefix carries the posture and the push-age limit too, so
+                        -- this reads the notice itself rather than counting every mount line.
+                        let notices = filter (T.isInfixOf "the store maintenance client") (lines output)
+                        notices `shouldBe` [notice | hasControlPlane]
 
         it "prints the mirror-collapse advisory a writing role boots on" $
             -- The typed advisory reaches an operator as this line or as nothing at all, so this

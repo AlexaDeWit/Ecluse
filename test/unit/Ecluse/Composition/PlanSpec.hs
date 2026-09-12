@@ -51,7 +51,7 @@ import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeOnly),
  )
-import Ecluse.Config (mountPostureLines, resolvedKeyProvenance)
+import Ecluse.Config (advisoryAgeLines, mountPostureLines, resolvedKeyProvenance)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, RubyGems))
 import Ecluse.Rts (
@@ -87,6 +87,7 @@ spec = describe "resolveBootPlan" $ do
                        , "mirror queue: sqs, https://sqs.us-east-1.amazonaws.com/123456789012/mirror (region us-east-1)"
                        ]
                 <> mountPostureLines config
+                <> advisoryAgeLines config
         bpWarnings plan `shouldBe` []
 
     it "returns the preamble on the refusing path as well as the succeeding one" $ do
