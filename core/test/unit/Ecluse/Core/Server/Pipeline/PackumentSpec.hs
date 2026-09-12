@@ -12,7 +12,7 @@ import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource))
 import Ecluse.Core.Registry.Metadata (ContentDigest, digestOf)
-import Ecluse.Core.Server.Conditional (ETag)
+import Ecluse.Core.Server.Conditional (ETag, renderETag)
 import Ecluse.Core.Server.Pipeline.Internal (denialLabels, packumentServeDecision)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
 import Ecluse.Core.Server.Pipeline.Packument (
@@ -38,6 +38,14 @@ packumentETagSpec :: Spec
 packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
     it "is bit-stable across identical inputs" $
         tagWith base `shouldBe` tagWith base
+
+    it "preserves the v2 byte framing for every entry constructor" $ do
+        let sources =
+                [ (TrustedSource, privateDigest base, [("1\0é", [ArrayEntry 0, ArrayEntry 10, ArrayEntry (-1), ObjectEntry "é\0x", SingletonEntry])])
+                , (GatedSource, publicDigest base, [])
+                ]
+        renderETag (packumentETag mountBase thing sources)
+            `shouldBe` "\"93f747ebd65d300c3cd90719d0394ddd77c87140342be84e3df6560d8f7fed26\""
 
     it "changes when an origin body changes (same survivors)" $
         tagWith base{publicDigest = digestOf "public-bytes-v2"} `shouldNotBe` tagWith base

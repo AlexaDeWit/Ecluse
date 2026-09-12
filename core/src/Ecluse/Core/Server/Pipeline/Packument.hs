@@ -21,6 +21,7 @@ module Ecluse.Core.Server.Pipeline.Packument (
 
 import Crypto.Hash (Context, SHA256, hashFinalize, hashInit, hashUpdates)
 import Data.ByteString qualified as BS
+import Data.ByteString.Builder (Builder, byteString, intDec, toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -356,34 +357,38 @@ packumentETag mountBaseUrl name sources =
     mkStrongETag (hashFinalize (hashUpdates (hashInit :: Context SHA256) pieces))
   where
     pieces :: [ByteString]
-    pieces =
-        [ "ecluse:packument-etag:v2\0"
-        , encodeUtf8 mountBaseUrl <> "\0"
-        , encodeUtf8 (renderPackageName name) <> "\0"
-        ]
-            <> concatMap sourcePieces sources
+    pieces = LBS.toChunks (toLazyByteString fingerprint)
 
-    sourcePieces :: (Provenance, ContentDigest, [(Text, [EntryKey])]) -> [ByteString]
+    fingerprint :: Builder
+    fingerprint =
+        "ecluse:packument-etag:v2\0"
+            <> byteString (encodeUtf8 mountBaseUrl)
+            <> "\0"
+            <> byteString (encodeUtf8 (renderPackageName name))
+            <> "\0"
+            <> foldMap sourcePieces sources
+
+    sourcePieces :: (Provenance, ContentDigest, [(Text, [EntryKey])]) -> Builder
     sourcePieces (provenance, digest, survivors) =
         provenanceTag provenance
-            : digestBytes digest
-            : concatMap versionPieces survivors
-                <> ["\1"]
+            <> byteString (digestBytes digest)
+            <> foldMap versionPieces survivors
+            <> "\1"
 
-    versionPieces :: (Text, [EntryKey]) -> [ByteString]
+    versionPieces :: (Text, [EntryKey]) -> Builder
     versionPieces (version, entries) =
-        frame (encodeUtf8 version) : map entryPiece entries <> ["\2"]
+        frame (encodeUtf8 version) <> foldMap entryPiece entries <> "\2"
 
-    entryPiece :: EntryKey -> ByteString
+    entryPiece :: EntryKey -> Builder
     entryPiece = \case
         ArrayEntry index -> "a" <> frame (show index)
         ObjectEntry key -> "o" <> frame (encodeUtf8 key)
         SingletonEntry -> "s"
 
-    frame :: ByteString -> ByteString
-    frame bytes = show (BS.length bytes) <> ":" <> bytes
+    frame :: ByteString -> Builder
+    frame bytes = intDec (BS.length bytes) <> ":" <> byteString bytes
 
-    provenanceTag :: Provenance -> ByteString
+    provenanceTag :: Provenance -> Builder
     provenanceTag = \case
         TrustedSource -> "t\0"
         GatedSource -> "g\0"
