@@ -200,8 +200,6 @@ authorityLabelSpec = describe "authorityLabel" $ do
         authorityLabel "https://registry.npmjs.org:0/x" `shouldBe` "<unresolved>"
         authorityLabel "https://registry.npmjs.org:https/x" `shouldBe` "<unresolved>"
 
-{- Every operator-configured URL passes this rule at load. Boot echoes each resolved key, so a
-value that survives the refusal is one the echo can print as written. -}
 credentialFreeUrlSpec :: Spec
 credentialFreeUrlSpec = describe "credentialFreeUrl" $ do
     it "drops userinfo and keeps the path the source is identified by" $
@@ -218,6 +216,8 @@ credentialFreeUrlSpec = describe "credentialFreeUrl" $ do
         credentialFreeUrl "https://deploy:hunter2@[2606:4700::1111]:8443/npm/all.zip"
             `shouldBe` "https://[2606:4700::1111]:8443/npm/all.zip"
 
+{- Every operator-configured URL passes this rule at load. Boot echoes each resolved key, so a
+value that survives the refusal is one the echo can print as written. -}
 refuseCredentialMaterialSpec :: Spec
 refuseCredentialMaterialSpec = describe "refuseCredentialMaterial" $ do
     it "accepts an ordinary configured URL" $

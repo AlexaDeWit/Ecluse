@@ -14,7 +14,7 @@ import Control.Monad.Trans.Resource (runResourceT)
 import Data.Text qualified as T
 import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
+import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
 import TestContainers (containerAddress)
 
 import Amazonka qualified as AWS
@@ -92,6 +92,8 @@ spec = do
 
                     export
                     published <- storedObject
+                    -- Without this the comparison below would pass on an absent first listing.
+                    published `shouldSatisfy` isJust
 
                     -- The store stamps whole seconds, so the export repeats until the stamp has
                     -- to have moved. A publisher that wrote only on a change never moves it.

@@ -94,9 +94,8 @@ generationInstalledAt :: CveSlot -> IO Double
 generationInstalledAt slot =
     maybe (slotCreatedAt slot) genInstalledAt <$> readTVarIO (slotCell slot)
 
-{- | Install a newly verified generation, drain the displaced one's readers, then close it. The
-slot owns @newDb@ from entry, so no caller cleanup may close it, and cancellation during the
-drain leaves the displaced generation unclosed.
+{- | Install a newly verified generation, drain the displaced one's readers, then close it.
+The slot owns @newDb@ from entry, so no caller cleanup may close it.
 -}
 swapIn :: CveSlot -> DbEtag -> Maybe UTCTime -> CveDb -> IO ()
 swapIn slot etag pushedAt newDb = do

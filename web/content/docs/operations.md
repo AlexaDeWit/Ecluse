@@ -140,7 +140,7 @@ Use the severity together with the event and its repetition:
 | Status | What it means | What to do with it |
 |---|---|---|
 | `error` | A failed operation, exhausted budget, or halted role needs attention. Some conditions can recover on retry. | Page and check the affected role. |
-| `warn` | Écluse absorbed it and carried on degraded. An upstream it could not reach, a mirror job left to redeliver, a store call it is retrying, a malformed advisory entry it dropped, a background loop backing off. | Chart it, and alert on a sustained rate rather than on a line. |
+| `warn` | Écluse absorbed it and carried on degraded. An upstream it could not reach, a mirror job left to redeliver, a store call it is retrying, a malformed advisory entry it dropped, an advisory date it had to ignore, a background loop backing off. | Chart it, and alert on a sustained rate rather than on a line. |
 | `info` | What the run did: a completed sweep cycle, a version deleted, a mirrored artifact, a served package. | Index it, and read it back during an incident. |
 | `debug` | Per-request and per-entry detail. Verbose under load, and off by default. | Turn it on while you investigate. |
 
