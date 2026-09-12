@@ -49,7 +49,7 @@ import Amazonka.S3.Lens qualified as S3L
 import Lens.Micro ((^.))
 
 import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, DbEtag (..), openCveDb)
-import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisorySource, swapIn)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisorySource, observeAdvisoryPublication, swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apEpssScoreDate, apOsvNewestModified, apOsvSource))
@@ -69,9 +69,9 @@ import Ecluse.Runtime.Aws.S3 (buildS3Env)
 
 -- | The advisory transport supplied to 'syncStep' by 'newS3CveSource'.
 data CveFetch = CveFetch
-    { fetchHeadEtag :: IO (Either OsvDbFetchFault (Maybe DbEtag))
-    {- ^ The remote artifact's current ETag. @Right Nothing@ when the object does not exist (not yet
-    published). Every fetch failure, a transport fault included, is the 'Left' value.
+    { fetchHead :: IO (Either OsvDbFetchFault (Maybe FetchedObject))
+    {- ^ The object's ETag and publication time. @Right Nothing@ means it does not exist.
+    Fetch failures use 'Left'.
     -}
     , fetchDownload :: FilePath -> IO (Either OsvDbFetchFault FetchedObject)
     {- ^ Download the artifact to the given path, byte-bounded. The ETag is the download's own, so a
@@ -79,8 +79,8 @@ data CveFetch = CveFetch
     -}
     }
 
-{- | What one download learned about the object it fetched. The publication time is the store's
-own, so it advances on every Pilot push, including a push of unchanged bytes.
+{- | Metadata from one HEAD or GET response. A download carries its own metadata,
+so a publication racing HEAD cannot mislabel the downloaded bytes.
 -}
 data FetchedObject = FetchedObject
     { foEtag :: DbEtag
@@ -127,7 +127,7 @@ scheduling.
 data SyncOutcome
     = -- | Verification accepted a new artifact and it is now live (its ETag and provenance carried).
       SyncSwapped DbEtag [(Text, Text)]
-    | -- | The remote ETag matches the last seen one, so there is nothing to do.
+    | -- | No database replacement, though an accepted republication can advance publication time.
       SyncUnchanged
     | -- | The object does not exist in the bucket (not yet published).
       SyncAbsent
@@ -146,11 +146,13 @@ over verification: a failed fetch and a refused artifact are outcomes, not excep
 -}
 syncStep :: SyncEnv -> Maybe DbEtag -> IO SyncOutcome
 syncStep env lastSeen =
-    fetchHeadEtag (syncFetch env) >>= \case
+    fetchHead (syncFetch env) >>= \case
         Left fault -> pure (SyncFetchFaulted fault)
         Right Nothing -> pure SyncAbsent
         Right (Just remote)
-            | Just remote == lastSeen -> pure SyncUnchanged
+            | Just (foEtag remote) == lastSeen -> do
+                observeAdvisoryPublication (syncSlot env) (foEtag remote) (foPushedAt remote)
+                pure SyncUnchanged
             | otherwise -> syncNewArtifact env
 
 -- Nothing unverified is renamed onto the name the read path opens. The 'onException' guards
@@ -161,8 +163,7 @@ syncNewArtifact env = do
     downloaded <- fetchDownload (syncFetch env) temp `onException` discardTemp temp
     case downloaded of
         Left fault -> do
-            -- A failed download may have written partial bytes to the temp path
-            -- (the byte cap trips mid-stream). Discard them.
+            -- A byte-cap failure can leave a partial file.
             discardTemp temp
             pure (SyncFetchFaulted fault)
         Right fetched -> do
@@ -378,14 +379,16 @@ newS3CveSource mEndpoint = do
 s3CveFetch :: AWS.Env -> Text -> Text -> Int -> CveFetch
 s3CveFetch awsEnv bucket key maxBytes =
     CveFetch
-        { fetchHeadEtag = s3HeadEtag awsEnv bucket key
+        { fetchHead = s3Head awsEnv bucket key
         , fetchDownload = s3Download awsEnv bucket key maxBytes
         }
 
-s3HeadEtag :: AWS.Env -> Text -> Text -> IO (Either OsvDbFetchFault (Maybe DbEtag))
-s3HeadEtag awsEnv bucket key =
+s3Head :: AWS.Env -> Text -> Text -> IO (Either OsvDbFetchFault (Maybe FetchedObject))
+s3Head awsEnv bucket key =
     runResourceT (AWS.sendEither awsEnv (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key))) <&> \case
-        Right resp -> Right (dbEtag <$> resp ^. S3L.headObjectResponse_eTag)
+        Right resp ->
+            let observed etag = FetchedObject (dbEtag etag) (resp ^. S3L.headObjectResponse_lastModified)
+             in maybe (Left OsvDbNoEtag) (Right . Just . observed) (resp ^. S3L.headObjectResponse_eTag)
         Left err
             | isNotFound err -> Right Nothing
             | otherwise -> Left (OsvDbTransport (classifyAwsTransport err))

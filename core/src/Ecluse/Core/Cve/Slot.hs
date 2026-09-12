@@ -12,6 +12,7 @@ module Ecluse.Core.Cve.Slot (
     currentAdvisoryEtag,
     AdvisorySource (..),
     currentAdvisorySource,
+    observeAdvisoryPublication,
     generationInstalledAt,
     swapIn,
 ) where
@@ -34,7 +35,7 @@ data Generation = Generation
     }
 
 {- | Where the serving artifact came from. The publication time is the store's, not the
-artifact's, so a recompile of unchanged bytes still moves it.
+artifact's, so republishing the same bytes can advance it.
 -}
 data AdvisorySource = AdvisorySource
     { asProvenance :: AdvisoryProvenance
@@ -84,6 +85,14 @@ never reaches 'swapIn', so a warm process keeps the last value it read.
 -}
 currentAdvisorySource :: CveSlot -> IO (Maybe AdvisorySource)
 currentAdvisorySource slot = fmap genSource <$> readTVarIO (slotCell slot)
+
+-- | Advance publication time only for the installed ETag, without replacing or retiring its database.
+observeAdvisoryPublication :: CveSlot -> DbEtag -> Maybe UTCTime -> IO ()
+observeAdvisoryPublication slot etag pushedAt = atomically $ do
+    current <- readTVar (slotCell slot)
+    for_ current $ \g ->
+        when (genEtag g == etag && pushedAt > asPushedAt (genSource g)) $
+            writeTVar (slotCell slot) (Just g{genSource = (genSource g){asPushedAt = pushedAt}})
 
 {- | When the serving generation went live, or when the slot was created if no swap has landed.
 Only 'swapIn' moves it, so it measures what the slot serves, not the liveness of what fills it.

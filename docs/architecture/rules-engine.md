@@ -247,7 +247,7 @@ This selection fix keeps epoch 4 because the meaning of each emitted row remains
 
 The proxy runs one supervised sync task per configured mount ecosystem
 ([`Ecluse.Runtime.Cve.Sync`](../../runtime/src/Ecluse/Runtime/Cve/Sync.hs)). Each task polls the
-store's stable per-ecosystem key for ETag changes at `advisories.pollInterval`. That interval
+store's stable per-ecosystem key for ETag and publication-time changes at `advisories.pollInterval`. That interval
 is deliberately shorter than Pilot's compile interval, since matching them would nearly double
 the worst-case advisory age. The tasks are independent, so one ecosystem's missing artifact
 never holds back another's.

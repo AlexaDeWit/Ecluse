@@ -190,7 +190,10 @@ so the quarantine governs rather than the fast lane.
 
 The age is the time since Pilot last pushed the artifact, taken from the published object's own
 timestamp. Pilot writes that object after every successful run, so unchanged bytes still move it.
-A restart re-reads it from the object, and a failed poll leaves it where it was.
+A running consumer observes a newer timestamp for the accepted artifact even when its ETag stays
+unchanged. This updates publication age without resetting installation age. A restart re-reads the
+timestamp from the object, and a failed poll leaves it where it was. A rejected artifact cannot
+refresh the last accepted artifact's publication age.
 
 An artifact the object store gives no publication time for has no age to check, so it is refused
 on the same terms as an expired one: the rules never admit evidence they cannot check. Écluse

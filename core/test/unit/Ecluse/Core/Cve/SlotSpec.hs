@@ -2,9 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Generation ownership and publication observations in the advisory slot.
 module Ecluse.Core.Cve.SlotSpec (spec) where
 
 import Control.Concurrent.STM (check)
+import Data.Time (UTCTime (UTCTime), fromGregorian)
 import GHC.Clock (getMonotonicTime)
 import GHC.Conc (BlockReason (BlockedOnException), ThreadStatus (ThreadBlocked), threadStatus)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
@@ -14,7 +16,7 @@ import UnliftIO.Exception (mask_)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveLookup (..), DbEtag (..))
-import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, generationInstalledAt, newCveSlot, swapIn, withSlotLookup)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, observeAdvisoryPublication, swapIn, withSlotLookup)
 import Ecluse.Core.Osv.Provenance (noProvenance)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Test.Cve (fakeCveLookup)
@@ -44,6 +46,24 @@ spec = describe "CveSlot" $ do
         withSlotLookup slot (traverse (\l -> cveRemediationProbe l "gen-a" "1.0.0"))
             `shouldReturn` Just True
         readIORef closeLog `shouldReturn` []
+
+    it "observes publication only for an installed ETag and retains retirement ownership" $ do
+        closeLog <- newIORef []
+        slot <- newCveSlot
+        let stamp = Just (UTCTime (fromGregorian 2026 9 1) 0)
+        observeAdvisoryPublication slot (DbEtag "gen-a") stamp
+        currentAdvisorySource slot `shouldReturn` Nothing
+        swapIn slot (DbEtag "gen-a") Nothing (fakeDb "gen-a" closeLog)
+        installed <- generationInstalledAt slot
+        observeAdvisoryPublication slot (DbEtag "other") stamp
+        (asPushedAt =<<) <$> currentAdvisorySource slot `shouldReturn` Nothing
+        withSlotLookup slot $ \_ -> do
+            observeAdvisoryPublication slot (DbEtag "gen-a") stamp
+            (asPushedAt =<<) <$> currentAdvisorySource slot `shouldReturn` stamp
+            generationInstalledAt slot `shouldReturn` installed
+            readIORef closeLog `shouldReturn` []
+        swapIn slot (DbEtag "gen-b") Nothing (fakeDb "gen-b" closeLog)
+        readIORef closeLog `shouldReturn` ["gen-a"]
 
     it "a swap closes the displaced generation once its readers drain, and not before" $ do
         closeLog <- newIORef []
