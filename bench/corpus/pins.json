@@ -1,5 +1,5 @@
 {
-  "_note": "Shared registry catalogue — the ONE curated source read by both the Node corpus-capture script (scripts/gen-bench-corpus.sh) and the Haskell Ecluse.Test.RegistryCapture. NOT an npm project, NOT installed, and NOT Renovate-managed (Renovate ignores bench/corpus/**). `pins`: frozen benchmark-corpus capture pins — each entry pins a package@version that `make gen-bench-corpus` captures into bench/corpus/npm/<pkg>.full.json; the captures are committed, frozen data, refreshed only by a deliberate, manual re-capture (rerun the script and review the diff), never an automatic bump. The set is substantial, many-version packages spanning medium->heavy (trivial few-version packages stress nothing, so they are excluded). `smokeNames`: curated gnarly-version package names per ecosystem for the non-gating version-oracle smoke differential — only the names are pinned here, their version lists are fetched live (prereleases kept, since ordering is the point). Tier semantics live in the consuming workflow headers: .github/workflows/bench.yml and bench-load.yml.",
+  "_note": "Frozen benchmark catalogue. The pins key selects npm stable releases through each pinned version. pypiPins selects PEP 691 Simple JSON files uploaded by the pinned release's last upload timestamp, fetched from /pypi/{name}/{version}/json. PyPI capture sidecars record the source, media type, cutoff, and file count. task gen-bench-corpus refreshes captures deliberately. Upstream yanks, metadata edits, and deletions can change a recapture, so committed bytes are the measurement authority. npm omits prereleases and unused operational fields. PyPI preserves retained file entries and filters the versions listing, dropping the changing _last-serial. Simple HTML and legacy project JSON are not benchmark inputs. smokeNames supplies live version-oracle names. This is not a package-manager project and Renovate does not update it.",
   "pins": {
     "lodash": "4.18.1",
     "request": "2.88.2",
@@ -11,8 +11,36 @@
     "@types/node": "26.0.1"
   },
   "smokeNames": {
-    "npm": ["typescript", "eslint", "@types/node", "react", "webpack", "next", "rxjs", "lodash"],
-    "pypi": ["numpy", "requests", "django", "boto3", "urllib3", "setuptools", "pip"],
-    "rubygems": ["rails", "bundler", "nokogiri", "rspec", "activesupport"]
+    "npm": [
+      "typescript",
+      "eslint",
+      "@types/node",
+      "react",
+      "webpack",
+      "next",
+      "rxjs",
+      "lodash"
+    ],
+    "pypi": [
+      "numpy",
+      "requests",
+      "django",
+      "boto3",
+      "urllib3",
+      "setuptools",
+      "pip"
+    ],
+    "rubygems": [
+      "rails",
+      "bundler",
+      "nokogiri",
+      "rspec",
+      "activesupport"
+    ]
+  },
+  "pypiPins": {
+    "requests": "2.32.3",
+    "numpy": "2.1.0",
+    "boto3": "1.35.0"
   }
 }

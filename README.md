@@ -162,6 +162,8 @@ DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, a
 ## Project structure
 
 `Ecluse.Core.Stream` provides the byte limiter shared by EPSS ingestion and advisory downloads.
+`Ecluse.Test.EcosystemBench` supplies format-specific performance inputs and adapter operations.
+The benchmark groups share projected package metadata, while adapters own raw document handling.
 
 | Path        | Purpose                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------ |

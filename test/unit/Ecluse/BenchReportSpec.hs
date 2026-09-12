@@ -2,6 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
+{- | CSV parsing and report contracts.
+Ecosystem sections preserve their names and measured rows.
+-}
 module Ecluse.BenchReportSpec (spec) where
 
 import Data.Text qualified as T
@@ -111,6 +114,13 @@ spec = do
             ("### rules.evalRules" `T.isInfixOf` report) `shouldBe` True
             ("| react | 3.21 ms | 240 us | 8.39 MiB | 11.7 KiB | 150 MiB |" `T.isInfixOf` report)
                 `shouldBe` True
+        it "separates ecosystems without a fixed registry list" $ do
+            let rows = [mkRow "ecosystem: npm.wire" "decode", mkRow "ecosystem: pypi.wire" "decode", mkRow "ecosystem: future.wire" "decode"]
+                rendered = renderReport (ReportInput (Right rows) Nothing)
+            filter (T.isPrefixOf "### ") (T.lines rendered)
+                `shouldBe` ["### At a glance", "### npm", "### pypi", "### future", "### Reading the numbers"]
+            for_ rows $ \row ->
+                (rowBench row `T.isInfixOf` rendered) `shouldBe` True
         it "carries the ANSI-stripped console output in a collapsed section" $ do
             ("<details>" `T.isInfixOf` report) `shouldBe` True
             ("All 3 tests passed" `T.isInfixOf` report) `shouldBe` True
@@ -132,7 +142,6 @@ spec = do
 gcHeader :: Text
 gcHeader = "Name,Mean (ps),2*Stdev (ps),Allocated,Copied,Peak Memory"
 
--- Two groups and three benches, with webpack the slowest of its group.
 sampleCsv :: Text
 sampleCsv =
     T.unlines
