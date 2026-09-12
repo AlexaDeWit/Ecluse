@@ -198,7 +198,7 @@ spec = describe "Osv parsing and streaming" $ do
                     stats <- readIngestStats ingest
                     pure (rows, stats)
                 sort (map extCveId rows) `shouldBe` ["GHSA-corpus-0001", "GHSA-independent"]
-                stats `shouldBe` IngestStats (3 - malformed) 0 malformed 0
+                stats `shouldBe` IngestStats (3 - malformed) 0 malformed 0 0
 
     describe "extractFromAdvisory (the EPSS join)" $ do
         let aliased ids =
@@ -524,12 +524,12 @@ spec = describe "Osv parsing and streaming" $ do
 
     describe "systemicDrop" $ do
         it "does not trip on a healthy feed with a few bad entries" $
-            systemicDrop (IngestStats 40000 3 2 0) `shouldBe` False
+            systemicDrop (IngestStats 40000 3 2 0 0) `shouldBe` False
         it "does not trip below the absolute floor even at a high fraction" $
-            systemicDrop (IngestStats 10 5 5 0) `shouldBe` False
+            systemicDrop (IngestStats 10 5 5 0 0) `shouldBe` False
         it "trips when drops are both non-trivial and a large fraction of entries" $
-            systemicDrop (IngestStats 50 30 20 0) `shouldBe` True
+            systemicDrop (IngestStats 50 30 20 0 0) `shouldBe` True
         it "does not trip when non-trivial drops are only a small fraction" $
-            systemicDrop (IngestStats 10000 30 20 0) `shouldBe` False
+            systemicDrop (IngestStats 10000 30 20 0 0) `shouldBe` False
         it "ignores the unorderable tally, which counts rows rather than entries" $
-            systemicDrop (IngestStats 40000 3 2 30000) `shouldBe` False
+            systemicDrop (IngestStats 40000 3 2 30000 0) `shouldBe` False

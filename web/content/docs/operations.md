@@ -110,8 +110,11 @@ Four of those names matter to Datadog specifically: `timestamp`, `status`, `mess
 Typed bearer-token fields render as redacted placeholders. Pilot stores each source's
 `host:port` in artifact provenance, and beside it the source URL with its userinfo, query, and
 fragment removed, so neither carries a credential. Sync logs only parsed compilation time and row
-count from metadata, including when it reads older artifacts with complete source URLs. Malformed
-or oversized display values appear as absent without changing artifact acceptance.
+count from metadata, including when it reads older artifacts with complete source URLs. On each
+swap it adds one `info` line naming where the serving artifact came from: the object's publication
+time, the OSV source as `host:port`, its newest advisory date, and the EPSS score date. A value the
+artifact never recorded reads as `<unrecorded>`. Malformed or oversized display values appear as
+absent without changing artifact acceptance.
 
 Older artifacts can still contain credentials. Rebuild those artifacts and review access to
 their stored copies and historical logs. The boot configuration echo prints configured endpoint

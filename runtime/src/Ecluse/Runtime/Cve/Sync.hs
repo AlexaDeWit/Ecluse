@@ -48,10 +48,12 @@ import Amazonka.S3.Lens qualified as S3L
 import Lens.Micro ((^.))
 
 import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, DbEtag (..), openCveDb)
-import Ecluse.Core.Cve.Slot (CveSlot, swapIn)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisorySource, swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
+import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apEpssScoreDate, apOsvNewestModified, apOsvSource))
 import Ecluse.Core.Osv.Schema (MetaKey (MetaBuiltAt, MetaRowCount), renderMetaKey)
+import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Stream (boundBytes)
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Telemetry.Metrics (
@@ -59,7 +61,7 @@ import Ecluse.Core.Telemetry.Metrics (
  )
 import Ecluse.Core.Telemetry.Record (AdvisorySyncMetricsPort (asmpSyncAttempt, asmpSyncDuration), timedSeconds)
 import Ecluse.Core.Telemetry.Span (AdvisorySyncTracingPort (astpSyncAttemptSpan))
-import Ecluse.Core.Text (readDecimalText)
+import Ecluse.Core.Text (readDecimalText, renderIso8601Utc)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.Fault (classifyAwsTransport)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
@@ -275,6 +277,8 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
                 pure (AdvisoryFetchFailed, (False, lastSeen))
             SyncSwapped etag meta -> do
                 logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show (metadataSummary meta)))
+                source <- liftIO (currentAdvisorySource (syncSlot env))
+                logFM InfoS (ls ("cve-sync[" <> eco <> "]: serving artifact source: " <> maybe unrecordedValue renderAdvisorySource source))
                 liftIO notifyFirstSync
                 pure (AdvisorySwapped, (True, Just etag))
             SyncUnchanged -> do
@@ -288,6 +292,26 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
                 -- Remember the ETag so the same refused artifact is not re-downloaded.
                 -- A fixed re-publish carries a new one. Identical bytes cannot end differently.
                 pure (AdvisoryRefused, (True, Just etag))
+
+{- Where the serving artifact came from, for the swap line. The source renders as its authority
+alone, on the same rule as 'metadataSummary' below: artifact text never reaches a log verbatim. -}
+renderAdvisorySource :: AdvisorySource -> Text
+renderAdvisorySource source =
+    "pushed_at="
+        <> stamp (asPushedAt source)
+        <> " osv_source="
+        <> maybe unrecordedValue authorityLabel (apOsvSource prov)
+        <> " osv_newest_modified="
+        <> stamp (apOsvNewestModified prov)
+        <> " epss_score_date="
+        <> stamp (apEpssScoreDate prov)
+  where
+    prov = asProvenance source
+    stamp = maybe unrecordedValue renderIso8601Utc
+
+-- What a value the artifact never recorded reads as, so absence is not read as a zero.
+unrecordedValue :: Text
+unrecordedValue = "<unrecorded>"
 
 -- Legacy artifacts contain arbitrary text. Only parsed, bounded values reach the log.
 metadataSummary :: [(Text, Text)] -> (Maybe UTCTime, Maybe Word64)

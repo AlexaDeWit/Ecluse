@@ -74,9 +74,9 @@ data CompileSources = CompileSources
     }
     deriving stock (Eq, Show)
 
-{- | Compile one ecosystem into @outDir@, refusing systemic drops, zero relevant rows, or a
-record dated ahead of the run. A refused candidate leaves any previous artifact and its
-metadata unchanged. @quietTime@ decides which recorded source age raises the alarm.
+{- | Compile one ecosystem into @outDir@, refusing systemic drops or zero relevant rows. A
+refused candidate leaves any previous artifact and its metadata unchanged. @quietTime@ decides
+which recorded source age raises the alarm.
 -}
 compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> CompileSources -> QuietTime -> m FilePath
 compileOsvToSqlite metrics mTracerProvider outDir eco sources quietTime = do
@@ -131,7 +131,6 @@ compileOsvToSqlite metrics mTracerProvider outDir eco sources quietTime = do
             { ccEcosystem = ecosystem
             , ccSources = sources
             , ccStats = stats
-            , ccFutureModified = oaFutureModified attempt
             , ccProvenance = passProvenance sources feed attempt
             , ccQuietTime = quietTime
             , ccNow = now
@@ -152,7 +151,6 @@ data CompileConclusion = CompileConclusion
     { ccEcosystem :: Text
     , ccSources :: CompileSources
     , ccStats :: IngestStats
-    , ccFutureModified :: Maybe Text
     , ccProvenance :: AdvisoryProvenance
     , ccQuietTime :: QuietTime
     , ccNow :: UTCTime
@@ -182,7 +180,7 @@ concludeCompile metrics mSpan conn conclusion = do
     liftIO (recordTallies metrics stats)
     counted <- liftIO (query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges" :: IO [Only Int])
     let rowCount = maybe 0 fromOnly (listToMaybe counted)
-    forM_ (compileRefusal conclusion rowCount) $ \reason -> do
+    forM_ (compileRefusal stats rowCount) $ \reason -> do
         forM_ mSpan $ \sp -> setStatus sp (Error (reason <> ", compile abandoned"))
         liftIO (acmpCompileRun metrics CompileAborted)
         katipAddContext (dropFields ecosystem stats) $
@@ -194,21 +192,27 @@ concludeCompile metrics mSpan conn conclusion = do
     forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.row_count" (show rowCount :: Text)
     katipAddContext (sl "row_count" rowCount <> dropFields ecosystem stats) $
         logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem <> " (" <> renderDrops stats <> ")"))
+    warnOnFutureDates ecosystem stats
     logSourceAges ecosystem (sourceAges (ccNow conclusion) (ccQuietTime conclusion) (ccProvenance conclusion))
   where
     ecosystem = ccEcosystem conclusion
     stats = ccStats conclusion
 
-{- Why this pass may not publish, if anything. A record dated after the run's clock is the
-third cause: the source cannot know a change that has not happened, so the date is wrong and
-nothing may be published on the strength of it. -}
-compileRefusal :: CompileConclusion -> Int -> Maybe Text
-compileRefusal conclusion rowCount
-    | systemicDrop (ccStats conclusion) = Just "systemic advisory drop rate"
+-- Why this pass may not publish, if anything.
+compileRefusal :: IngestStats -> Int -> Maybe Text
+compileRefusal stats rowCount
+    | systemicDrop stats = Just "systemic advisory drop rate"
     | rowCount == 0 = Just "zero relevant advisory rows"
-    | Just advisoryId <- ccFutureModified conclusion =
-        Just ("advisory " <> advisoryId <> " is dated after this run's clock")
     | otherwise = Nothing
+
+-- One line per pass, not per record: a source clock that has run ahead names every record it
+-- touched, and the rows are kept regardless.
+warnOnFutureDates :: (KatipContext m) => Text -> IngestStats -> m ()
+warnOnFutureDates ecosystem stats =
+    when (futureDated > 0) $
+        logFM WarningS (ls ("Ignoring the modified date of " <> show futureDated <> " " <> ecosystem <> " advisory record(s) dated after this run's clock; their ranges are kept"))
+  where
+    futureDated = statFutureModified stats
 
 -- The ages the sources declared, on every pass that published. A source past its threshold is
 -- an operator alarm: raise the threshold for a slow ecosystem, or change the source.

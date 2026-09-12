@@ -81,11 +81,15 @@ data IngestStats = IngestStats
     {- ^ Rows kept with a bound the grammar cannot parse ('orderableBounds'). Counted in
     rows, so it stays out of 'systemicDrop'.
     -}
+    , statFutureModified :: !Int
+    {- ^ Records whose @modified@ is dated after the run's clock. Their rows are kept and
+    only their date is ignored, so this counts records and stays out of 'systemicDrop'.
+    -}
     }
     deriving stock (Eq, Show)
 
 emptyIngestStats :: IngestStats
-emptyIngestStats = IngestStats 0 0 0 0
+emptyIngestStats = IngestStats 0 0 0 0 0
 
 {- | What one ingest attempt learned about its source beside the rows. A retry replaces it
 whole, so it always describes the attempt that produced the tally beside it.
@@ -95,15 +99,11 @@ data OsvAttempt = OsvAttempt
     -- ^ The @Last-Modified@ the export answered this attempt with.
     , oaNewestModified :: Maybe UTCTime
     -- ^ The newest @modified@ across the records this attempt read.
-    , oaFutureModified :: Maybe Text
-    {- ^ The first record (by id) dated after the run's clock. A source cannot know a change
-    that has not happened, so the pass refuses rather than trusting or clamping the value.
-    -}
     }
     deriving stock (Eq, Show)
 
 emptyOsvAttempt :: OsvAttempt
-emptyOsvAttempt = OsvAttempt Nothing Nothing Nothing
+emptyOsvAttempt = OsvAttempt Nothing Nothing
 
 -- The mutable drop tally for one ingest pass. Opaque: read it with 'readIngestStats'.
 newtype IngestCounter = IngestCounter {counterRef :: IORef IngestStats}
@@ -269,14 +269,14 @@ recordResponseDate ingest headers =
     modifyIORef' (ingestAttempt ingest) $ \attempt ->
         attempt{oaLastModified = parseHttpDate . decodeUtf8 =<< listToMaybe headers}
 
--- A record dated ahead of the run's clock is kept as a fault for the conclusion to refuse on,
--- never folded into the newest date. A record carrying no date is skipped.
+-- A source cannot know a change that has not happened, so a record dated ahead of the run's
+-- clock is counted and its date dropped, never clamped. Its rows are kept either way.
 recordModified :: (MonadIO m) => OsvIngest -> OsvAdvisory -> m ()
 recordModified ingest adv = for_ (osvModified adv) $ \stamp ->
-    modifyIORef' (ingestAttempt ingest) $ \attempt ->
-        if stamp > ingestNow ingest
-            then attempt{oaFutureModified = oaFutureModified attempt <|> Just (osvId adv)}
-            else attempt{oaNewestModified = max (Just stamp) (oaNewestModified attempt)}
+    if stamp > ingestNow ingest
+        then bumpFutureModified (ingestCounter ingest)
+        else modifyIORef' (ingestAttempt ingest) $ \attempt ->
+            attempt{oaNewestModified = max (Just stamp) (oaNewestModified attempt)}
 
 bumpAccepted :: (MonadIO m) => IngestCounter -> m ()
 bumpAccepted (IngestCounter ref) = modifyIORef' ref (\s -> s{statAccepted = statAccepted s + 1})
@@ -289,6 +289,9 @@ bumpMalformed (IngestCounter ref) = modifyIORef' ref (\s -> s{statDroppedMalform
 
 bumpUnorderable :: (MonadIO m) => IngestCounter -> Int -> m ()
 bumpUnorderable (IngestCounter ref) n = modifyIORef' ref (\s -> s{statUnorderable = statUnorderable s + n})
+
+bumpFutureModified :: (MonadIO m) => IngestCounter -> m ()
+bumpFutureModified (IngestCounter ref) = modifyIORef' ref (\s -> s{statFutureModified = statFutureModified s + 1})
 
 zipEntryNameText :: ZipEntry -> Text
 zipEntryNameText entry = case zipEntryName entry of

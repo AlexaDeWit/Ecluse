@@ -105,6 +105,16 @@ transportDown = OsvDbTransport (transportFault TransportUnreachable "transport d
 publishedAt :: UTCTime
 publishedAt = UTCTime (fromGregorian 2026 9 1) 0
 
+-- Run one boot attempt against a capturing scribe and hand back everything it logged.
+captureSwapLog :: SyncEnv -> IO Text
+captureSwapLog env = do
+    (swaps, notify) <- newSwapCounter
+    captureStdout $ do
+        logEnv <- jsonLogEnv
+        withAsync (runKatipContextT logEnv () mempty (runUnobserved env oneAttempt notify)) $ \_ ->
+            awaitCount "provenance swap" swaps 1
+        void (closeScribes logEnv)
+
 installedSource :: CveSlot -> IO AdvisorySource
 installedSource slot =
     currentAdvisorySource slot >>= maybe (throwIO (TestContractEscape "no generation installed")) pure
@@ -186,7 +196,7 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                     other -> expectationFailure ("expected active generation swap, got " <> show other)
                 accepted <- readFileBS path
                 compileOsvZipDbTo Npm withdrawn (takeDirectory path)
-                    `shouldThrow` (\(PilotIngestAborted stats) -> stats == IngestStats 1 0 0 0)
+                    `shouldThrow` (\(PilotIngestAborted stats) -> stats == IngestStats 1 0 0 0 0)
                 readFileBS path `shouldReturn` accepted
                 syncStep env (Just (DbEtag "active")) >>= \case
                     SyncUnchanged -> pass
@@ -297,6 +307,28 @@ spec = do
                     logged `shouldSatisfy` (not . T.isInfixOf "SECRET")
                     T.length logged `shouldSatisfy` (< 2048)
                     probesFor slot "pkg-a" `shouldReturn` Just True
+
+        it "names where the serving artifact came from on every swap" $
+            withSyncEnv $ \_ _ envWith -> do
+                let meta =
+                        [ ("osv_source", "https://osv.example.test/npm/all.zip")
+                        , ("osv_newest_modified", "2026-08-30T00:00:00Z")
+                        , ("epss_score_date", "2026-08-29T00:00:00Z")
+                        ]
+                    env = envWith (fetchServingAt (Just publishedAt) (Just "e1") (\path -> mkMinimalValidDbWithMeta path "pkg-a" meta))
+                logged <- captureSwapLog env
+                -- The recorded URL renders as its authority, so artifact text never reaches the log.
+                logged `shouldSatisfy` T.isInfixOf "serving artifact source: pushed_at=2026-09-01T00:00:00Z"
+                logged `shouldSatisfy` T.isInfixOf "osv_source=osv.example.test:443"
+                logged `shouldSatisfy` T.isInfixOf "osv_newest_modified=2026-08-30T00:00:00Z"
+                logged `shouldSatisfy` T.isInfixOf "epss_score_date=2026-08-29T00:00:00Z"
+
+        it "reads a value an older artifact never recorded as absent, not as a zero" $
+            withSyncEnv $ \_ _ envWith -> do
+                logged <- captureSwapLog (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
+                logged
+                    `shouldSatisfy` T.isInfixOf
+                        "serving artifact source: pushed_at=<unrecorded> osv_source=<unrecorded> osv_newest_modified=<unrecorded> epss_score_date=<unrecorded>"
 
     describe "syncStep" $ do
         it "reports the object absent without attempting a download" $

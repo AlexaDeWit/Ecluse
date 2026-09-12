@@ -349,18 +349,21 @@ spec = describe "SQLite OSV Compilation" $ do
             Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-02-01T09:00:00Z"
             removeFile dbFile
 
-        it "refuses a compile whose record is dated after the run's clock, without clamping it" $ do
-            -- A date the source cannot yet know makes every age reading a lie, so the pass
-            -- publishes nothing and the consumer keeps the artifact it has.
+        it "keeps a record dated after the run's clock and ignores only its date" $ do
+            -- A date the source cannot yet know is not evidence about the ranges beside it,
+            -- so the rows stay and the age reading takes the newest date the run can trust.
             zipData <-
                 osvZipOf
                     [ ("ok.json", datedAdvisory "GHSA-ok" "ok-pkg" (Just "2026-01-01T00:00:00Z"))
                     , ("ahead.json", datedAdvisory "GHSA-ahead" "ahead-pkg" (Just "2099-01-01T00:00:00Z"))
                     ]
-            (_, logged) <- captureStdout' $ \logEnv ->
-                compileZipWith logEnv zipData testQuietTime `shouldThrow` (\(PilotIngestAborted _) -> True)
-            logged `shouldSatisfy` T.isInfixOf "advisory GHSA-ahead is dated after this run's clock"
-            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
+            (dbFile, logged) <- captureStdout' $ \logEnv -> compileZipWith logEnv zipData testQuietTime
+            meta <- metaOf dbFile
+            Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-01-01T00:00:00Z"
+            packagesOf dbFile `shouldReturn` ["ahead-pkg", "ok-pkg"]
+            logged `shouldSatisfy` T.isInfixOf "Ignoring the modified date of 1 npm advisory record(s)"
+            logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
+            removeFile dbFile
 
         it "logs the quiet-time alarm at ERROR, naming the source, the age, and the threshold" $ do
             zipData <- osvZipOf [("old.json", datedAdvisory "GHSA-old" "old-pkg" (Just "2026-01-01T00:00:00Z"))]
@@ -470,3 +473,7 @@ compileZipWith logEnv zipData quietTime = do
 metaOf :: FilePath -> IO (Map Text Text)
 metaOf dbFile = withConnection dbFile $ \conn ->
     Map.fromList <$> (query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)])
+
+packagesOf :: FilePath -> IO [Text]
+packagesOf dbFile = withConnection dbFile $ \conn ->
+    map fromOnly <$> (query_ conn "SELECT package_name FROM package_vulnerability_ranges ORDER BY package_name" :: IO [Only Text])
