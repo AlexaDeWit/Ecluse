@@ -2,9 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Differential checks for full and selective npm metadata reads.
 module Ecluse.Core.Registry.Npm.MetadataSpec (spec) where
 
-import Data.Aeson (Value (Object, String), encode, object, (.=))
+import Data.Aeson (Value (Bool, Null, Object, String), encode, object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
@@ -31,10 +32,7 @@ import Ecluse.Core.Security (
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 
-{- | Pure-projection tests for the npm full-manifest read, pinning the 'MetadataError' each
-failure maps to. 'Ecluse.Core.Registry.Npm.Metadata.fetchNpmManifest' enforces the body-size
-bound over the HTTP body, so the data-plane tests cover that instead.
--}
+-- | Metadata projection outcomes, including duplicate-key and optional-container parity.
 spec :: Spec
 spec = do
     projectNpmManifestSpec
@@ -72,10 +70,6 @@ projectNpmManifestSpec = describe "projectNpmManifest" $ do
         projectNpmManifest (defaultLimits{maxNestingDepth = 2}) (unscopedNpm "is-odd") (manifestBytes "is-odd" ["1.0.0"])
             `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 2))
 
-{- | Parity tests for the selective single-version decode. 'projectNpmVersion' must yield the
-identical 'PackageDetails' that 'projectNpmManifest' plus a version lookup yields, for every
-version of a rich packument, and must pin the same 'MetadataError' taxonomy.
--}
 projectNpmVersionSpec :: Spec
 projectNpmVersionSpec = describe "projectNpmVersion" $ do
     it "matches the full projection over a real multi-version packument (express, 288 versions)" $ do
@@ -164,12 +158,44 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
         fmap vrUpstreamLatest (projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") body)
             `shouldBe` Right Nothing
 
+    optionalContainerParity
     duplicateKeyParity
 
-{- | A hostile upstream can repeat a top-level key. The @aeson@ whole-document decode keeps the
-first occurrence, so 'projectNpmVersion' must too: a last-wins walk would serve a later
-duplicate's manifest, revive an absent version, or shadow the validated @name@.
--}
+optionalContainerParity :: Spec
+optionalContainerParity = describe "optional containers match the full projection" $
+    forM_ containers $ \(key, populated) -> describe (toString key) $ do
+        forM_ [("absent", []), ("null", [Null]), ("empty", [object []]), ("array", [toJSON ([] :: [Value])]), ("string", [String "bad"]), ("boolean", [Bool True]), ("number", [toJSON (7 :: Int)])] $ \(label, values) ->
+            it label $ parity defaultLimits (bodyFor key values)
+        forM_ [("null then object", [Null, populated]), ("object then null", [populated, Null]), ("null then invalid", [Null, Bool True]), ("invalid then null", [Bool True, Null])] $ \(label, values) ->
+            it ("keeps the first duplicate: " <> label) $ parity defaultLimits (bodyFor key values)
+        it "rejects a malformed duplicate after null" $ do
+            let body = "{\"name\":\"is-odd\"," <> BL.toStrict (encode key) <> ":null," <> BL.toStrict (encode key) <> ":{broken} }"
+            parity defaultLimits body
+            selectedDetails defaultLimits name version body `shouldBe` Left MetadataUndecodable
+        it "bounds a duplicate after null" $ do
+            let limits = defaultLimits{maxNestingDepth = 5}
+                deep = foldr (\_ value -> object ["nested" .= value]) Null [1 :: Int .. 6]
+                body = bodyFor key [Null, deep]
+            selectedDetails limits name version body `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 5))
+  where
+    name :: PackageName
+    name = unscopedNpm "is-odd"
+    version :: Version
+    version = mkVersion Npm "1.0.0"
+    containers :: [(Text, Value)]
+    containers =
+        [ ("versions", object ["1.0.0" .= versionObject "is-odd" "1.0.0"])
+        , ("time", object ["1.0.0" .= ("2020-01-01T00:00:00Z" :: Text)])
+        , ("dist-tags", object ["latest" .= ("1.0.0" :: Text)])
+        ]
+    bodyFor :: Text -> [Value] -> ByteString
+    bodyFor key values = rawObject (("name", String "is-odd") : filter ((/= key) . fst) containers <> map (key,) values)
+    parity :: Limits -> ByteString -> Expectation
+    parity limits body = do
+        selectedDetails limits name version body `shouldBe` fullVersionOutcome limits name "1.0.0" body
+        fmap vrUpstreamLatest (projectNpmVersion limits name version body)
+            `shouldBe` fmap (Map.lookup "latest" . infoDistTags . fst) (projectNpmManifest limits name body)
+
 duplicateKeyParity :: Spec
 duplicateKeyParity = describe "duplicate top-level keys resolve first-occurrence-wins, matching the whole-document decode" $ do
     it "counts only the first versions object, not the sum across duplicate versions keys" $ do
@@ -215,9 +241,6 @@ duplicateKeyParity = describe "duplicate top-level keys resolve first-occurrence
         selectedDetails defaultLimits (unscopedNpm "evil") (mkVersion Npm "1.0.0") body
             `shouldBe` fullVersionOutcome defaultLimits (unscopedNpm "evil") "1.0.0" body
 
-{- | A minimal packument body self-reporting @name@ and carrying each given version
-with a @dist.tarball@ (the field a version must have to project).
--}
 manifestBytes :: Text -> [Text] -> ByteString
 manifestBytes name versions =
     BL.toStrict . encode $
@@ -227,13 +250,11 @@ manifestBytes name versions =
             , "versions" .= object [Key.fromText v .= versionObject name v | v <- versions]
             ]
 
--- | The @latest@ dist-tag value: the first listed version, or a placeholder when none.
 latestOf :: [Text] -> Text
 latestOf = \case
     (v : _) -> v
     [] -> "0.0.0"
 
--- | A minimal version manifest carrying the @dist.tarball@ required to project.
 versionObject :: Text -> Text -> Value
 versionObject name v =
     object
@@ -251,9 +272,6 @@ isObject = \case
 selectedDetails :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
 selectedDetails limits name version body = vrDetails <$> projectNpmVersion limits name version body
 
-{- | A rich multi-field packument, so the parity test exercises every 'PackageDetails' field.
-The @time@ map carries a distinct stamp per version, which populates 'pkgPublishedAt'.
--}
 richPackumentBytes :: Text -> [Text] -> ByteString
 richPackumentBytes nm versions =
     BL.toStrict . encode $
@@ -272,7 +290,6 @@ richPackumentBytes nm versions =
     stampFor :: Int -> Text
     stampFor i = "20" <> show (10 + i) <> "-03-14T15:09:26.000Z"
 
--- | A version manifest carrying every rule-\/serve-decisive field, for the parity test.
 richVersionObject :: Text -> Text -> Value
 richVersionObject nm v =
     object
@@ -292,9 +309,6 @@ richVersionObject nm v =
         , "_npmUser" .= object ["name" .= ("bob" :: Text)]
         ]
 
-{- | A minimal version manifest with an explicit @dist.tarball@, so two manifests for the
-same version can be told apart.
--}
 distTarballObject :: Text -> Text -> Text -> Value
 distTarballObject name v tarball =
     object
@@ -303,16 +317,11 @@ distTarballObject name v tarball =
         , "dist" .= object ["tarball" .= tarball]
         ]
 
-{- | The outcome the whole-document path reaches for one version. 'projectNpmVersion' must match
-it, duplicate-key documents included.
--}
 fullVersionOutcome :: Limits -> PackageName -> Text -> ByteString -> Either MetadataError (Maybe PackageDetails)
 fullVersionOutcome limits name v body =
     (\(info, _raw) -> Map.lookup v (infoVersions info)) <$> projectNpmManifest limits name body
 
-{- | Serialise raw packument bytes from top-level members in order, preserving duplicate keys.
-The @aeson@ 'encode' cannot emit a repeated key, because its @KeyMap@ de-duplicates.
--}
+-- encode alone cannot preserve duplicate object keys.
 rawObject :: [(Text, Value)] -> ByteString
 rawObject members =
     "{" <> BS.intercalate "," [BL.toStrict (encode k) <> ":" <> BL.toStrict (encode v) | (k, v) <- members] <> "}"
