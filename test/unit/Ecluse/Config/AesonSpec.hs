@@ -37,6 +37,8 @@ import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix)
 import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
 
+import Ecluse.Test.Registry.PyPI (pypiEntryVerdicts)
+
 spec :: Spec
 spec = describe "decodeDocument" $ do
     it "decodes a document with one mount and a rule patch" $
@@ -273,9 +275,8 @@ spec = describe "decodeDocument" $ do
             `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
 
     it "rejects a huge-exponent cache.ttl without realising the integer (no boot hang or OOM)" $
-        -- The env overlay JSON-decodes this to a Scientific verbatim, reaching
-        -- parseSeconds' Number branch. A raw truncate would try to materialise an
-        -- astronomically large Integer at boot. The bounded parse fails instantly.
+        -- A raw truncate would materialise an astronomically large Integer at boot.
+        -- The env overlay passes the Scientific value to the bounded parser.
         loadConfig [("ECLUSE_CACHE__TTL", "1e999999999999")] Nothing
             `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
 
@@ -504,10 +505,8 @@ spec = describe "decodeDocument" $ do
             loadConfig [] (Just (mountDocWithMirrorTarget "https://mirror.example.test:port/npm"))
                 `shouldSatisfy` decodeErrorMentions "decimal port in 1..65535"
 
-        -- Boot echoes a successful load key by key, warns on colliding endpoints, and
-        -- prints a posture line per mount. Each line renders a configured registry URL
-        -- as given. Refusing these shapes at load is what keeps a credential off those
-        -- lines, so the refusal names the key and never the value.
+        -- Boot prints configured registry URLs after a successful load.
+        -- Reject credentials before that output, naming only the key.
         it "rejects an upstream URL carrying userinfo, naming the key and not the credential" $ do
             let outcome = loadConfig [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://deploy:hunter2@repo.internal.example.test/npm")] Nothing
             outcome `shouldSatisfy` decodeErrorMentions "privateUpstream.registry.url: registry URL must not carry userinfo"
@@ -575,9 +574,8 @@ spec = describe "decodeDocument" $ do
                     unUrl (advOsvExportBaseUrl (cfgAdvisories (configApp doc)))
                         `shouldBe` "http://localhost:8080/osv"
 
-        -- queue.url goes to a cloud SDK, so no scheme or authority check in the parser
-        -- quotes it. The unrecognised-shape boot error and the check-config queue line
-        -- print it whole, and both run after a successful load.
+        -- The cloud SDK receives queue.url without a parser scheme or authority check.
+        -- Boot errors and check-config print it whole after a successful load.
         it "rejects queue.url carrying userinfo, naming the key and not the credential" $ do
             let outcome = loadConfig [("ECLUSE_QUEUE__URL", "https://deploy:hunter2@sqs.us-east-1.amazonaws.com/123456789012/mirror")] Nothing
             outcome `shouldSatisfy` decodeErrorMentions "queue.url must not carry userinfo"
@@ -743,26 +741,6 @@ scopeEntryVerdicts =
     , ("sc/ope", False)
     , ("sc@ope", False)
     , ("..", False)
-    ]
-
-{- Each PyPI firstParty entry the loader must refuse or accept. A prefix is a separator then @*@,
-and anything outside PEP 503's name alphabet, or that canonicalises to nothing, is refused. -}
-pypiEntryVerdicts :: [(Text, Bool)]
-pypiEntryVerdicts =
-    [ ("acme", True)
-    , ("Acme_Tools", True)
-    , ("acme-*", True)
-    , ("acme_*", True)
-    , ("acme.*", True)
-    , ("acme*", False)
-    , ("-*", False)
-    , ("*acme", False)
-    , ("*", False)
-    , ("@acme", False)
-    , ("acme/tools", False)
-    , ("acme tools", False)
-    , (",", False)
-    , (".", False)
     ]
 
 -- Load a config whose pypi mount declares exactly the given firstParty value.
