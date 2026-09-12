@@ -2,21 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The core-owned transport-fault vocabulary: why a network operation could not
-deliver a response, reported as a value.
-
-A client library reports a transport failure as its own exception type
-(@http-client@'s @HttpException@, @amazonka@'s error sum). Carrying those types
-through the agnostic tiers would couple every consumer to every client library. The
-adapter edge is the one place a library's exception type is already in scope, so it
-classifies the failure into this closed vocabulary. Everything above reasons over the
-value. The classification is coarse on purpose. It distinguishes only the causes a
-consumer or an operator reads differently: a timeout, an unreachable peer, a TLS
-refusal, or any other protocol-level fault. Everything finer rides in 'tfDetail',
-rendered for a log line and never parsed.
-
-This is a leaf module by design. The registry read path, the mirror queue, and the
-advisory sync all speak it, so it must sit below each of them.
+{- | Core transport-fault vocabulary shared by client-library adapters.
+Adapters classify exceptions at their edge, so the consumer layers use this closed value.
+'tfDetail' gives diagnostic text for logs and is never parsed.
 -}
 module Ecluse.Core.Fault (
     -- * Transport faults
@@ -101,7 +89,7 @@ transportFault cause detail = TransportFault cause (boundedDetail detail)
 carries diagnostic text bounds it identically.
 -}
 boundedDetail :: Text -> Text
-boundedDetail = T.take maxDetailChars
+boundedDetail = T.copy . T.take maxDetailChars
 
 -- The rendered-detail budget: generous enough for any realistic client-library
 -- message, small enough that a held fault value stays log-line sized.

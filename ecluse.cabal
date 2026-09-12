@@ -687,6 +687,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Cve.SlotSpec
     Ecluse.Core.CveSpec
     Ecluse.Core.EcosystemSpec
+    Ecluse.Core.FaultSpec
     Ecluse.Core.InFlightSpec
     Ecluse.Core.Json.LenientSpec
     Ecluse.Core.Json.SelectiveSpec
