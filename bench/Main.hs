@@ -45,8 +45,8 @@ ecosystemGroup :: EcosystemBench -> TestTree
 ecosystemGroup ecosystem =
     bgroup
         ("ecosystem: " <> toString (ecosystemName (ebEcosystem ecosystem)))
-        [ group ecosystem
-        | group <-
+        [ benchmarkGroup ecosystem
+        | benchmarkGroup <-
             [ RouteBench.benchmarks
             , WireBench.benchmarks
             , SelectiveBench.benchmarks

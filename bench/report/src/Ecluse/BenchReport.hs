@@ -164,7 +164,7 @@ ecosystemSections groups = concatMap section (ordNub (map (ecosystemSection . fs
                 (filter ((== ecosystem) . ecosystemSection . fst) groups)
 
 ecosystemSection :: Text -> Maybe Text
-ecosystemSection group = fst . T.breakOn "." <$> T.stripPrefix "ecosystem: " group
+ecosystemSection groupName = fst . T.breakOn "." <$> T.stripPrefix "ecosystem: " groupName
 
 preamble :: [Text]
 preamble =

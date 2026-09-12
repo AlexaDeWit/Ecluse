@@ -109,20 +109,34 @@ async function capture(name, pin) {
   console.log(`${name.padEnd(22)} @ ${pin.padEnd(10)} -> ${path.basename(file).padEnd(28)} ${String(Object.keys(kept).length).padStart(5)} versions  ${String(kb).padStart(6)} KiB`);
 }
 
+function parseTimestamp(value, label) {
+  const match = typeof value === "string" && /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z$/.exec(value);
+  const milliseconds = match ? Date.parse(match[1] + "Z") : NaN;
+  if (!Number.isFinite(milliseconds) || new Date(milliseconds).toISOString().slice(0, 19) !== match[1]) {
+    throw new Error("missing or invalid UTC upload time for " + label);
+  }
+  return { source: value, milliseconds, fraction: match[2] || "" };
+}
+
+function compareTimestamps(left, right) {
+  if (left.milliseconds !== right.milliseconds) return left.milliseconds < right.milliseconds ? -1 : 1;
+  const precision = Math.max(left.fraction.length, right.fraction.length);
+  const leftFraction = left.fraction.padEnd(precision, "0");
+  const rightFraction = right.fraction.padEnd(precision, "0");
+  return leftFraction < rightFraction ? -1 : leftFraction > rightFraction ? 1 : 0;
+}
+
 async function capturePyPI(name, pin) {
   const pinPath = "/pypi/" + encodeURIComponent(name) + "/" + encodeURIComponent(pin) + "/json";
   const release = await fetchDocument("pypi.org", pinPath, "application/json");
   if (!Array.isArray(release.urls) || release.urls.length === 0) throw new Error(name + ": pin has no files");
-  const timestamp = (value, label) => {
-    const time = typeof value === "string" ? Date.parse(value) : NaN;
-    if (!Number.isFinite(time)) throw new Error(name + ": missing or invalid upload time for " + label);
-    return time;
-  };
-  const cutoff = Math.max(...release.urls.map(file => timestamp(file.upload_time_iso_8601, file.filename)));
+  const timestamp = (value, filename) => parseTimestamp(value, name + "/" + filename);
+  const cutoff = release.urls.map(file => timestamp(file.upload_time_iso_8601, file.filename))
+    .reduce((latest, candidate) => compareTimestamps(candidate, latest) > 0 ? candidate : latest);
   const indexPath = "/simple/" + encodeURIComponent(name) + "/";
   const index = await fetchDocument("pypi.org", indexPath, "application/vnd.pypi.simple.v1+json");
   if (!Array.isArray(index.files)) throw new Error(name + ": Simple index has no files");
-  const files = index.files.filter(file => timestamp(file["upload-time"], file.filename) <= cutoff);
+  const files = index.files.filter(file => compareTimestamps(timestamp(file["upload-time"], file.filename), cutoff) <= 0);
   if (files.length === 0) throw new Error(name + ": capture has no files");
   const versions = new Set(files.map(file => {
     const filename = file.filename;
@@ -142,10 +156,10 @@ async function capturePyPI(name, pin) {
     source: "https://pypi.org" + indexPath,
     mediaType: "application/vnd.pypi.simple.v1+json",
     pinSource: "https://pypi.org" + pinPath,
-    uploadCutoff: new Date(cutoff).toISOString(),
+    uploadCutoff: cutoff.source,
     files: files.length
   }));
-  console.log(name + " @ " + pin + ": " + files.length + " Simple files through " + new Date(cutoff).toISOString());
+  console.log(name + " @ " + pin + ": " + files.length + " Simple files through " + cutoff.source);
 }
 
 (async () => {

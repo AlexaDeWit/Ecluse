@@ -2,7 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | CSV parsing and report contracts, including ecosystem section boundaries.
+{- | CSV parsing and report contracts.
+Ecosystem sections preserve their names and measured rows.
+-}
 module Ecluse.BenchReportSpec (spec) where
 
 import Data.Text qualified as T
