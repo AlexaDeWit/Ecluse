@@ -82,9 +82,7 @@ tasks:
       ECLTEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
-      # Sweep this worktree's strays from a prior killed run first, then reap again on
-      # exit. Both reaps carry the scope, so neither touches a sibling worktree's
-      # live containers.
+      # Sweep this worktree before running and on exit, without touching sibling containers.
       - bash scripts/test-containers.sh reap
       - defer: bash scripts/test-containers.sh reap
       - cabal test ecluse-integration --test-show-details=direct
@@ -104,9 +102,7 @@ tasks:
       ECLTEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
-      # Sweep this worktree's strays from a prior killed run first, then reap again on
-      # exit. Both reaps carry the scope, so neither touches a sibling worktree's
-      # live containers.
+      # Sweep this worktree before running and on exit, without touching sibling containers.
       - bash scripts/test-containers.sh reap
       - defer: bash scripts/test-containers.sh reap
       - |
@@ -181,11 +177,7 @@ tasks:
         vars: { SUITE: ecluse-unit }
       - task: coverage-unit
         vars: { SUITE: ecluse-runtime-unit }
-      # The integration tier drives ministack containers, so it runs in its own task
-      # that pins the reaping scope and reaps around itself. That gives the integration
-      # suite the same Docker lifecycle on the `task check` path (which runs coverage)
-      # that `test-integration` gives it. The unit tiers start no containers, so the
-      # scope stays off the shared `coverage-unit`.
+      # Only integration needs the scoped Docker lifecycle. Unit coverage starts no containers.
       - task: coverage-integration
       - |
         core_unit_tix="$(bash scripts/coverage-tix.sh ecluse-core-unit)"
@@ -215,16 +207,11 @@ tasks:
   coverage-integration:
     desc: Integration-tier coverage (drives ministack, scoped and reaped like test-integration)
     env:
-      # Pin this worktree's reaping scope. The harness stamps every ministack container
-      # this tier starts with it (see Ecluse.Test.Containers), and the reaps below then
-      # target only this worktree's. Unset, the Haskell writer defaults to an
-      # unreapable "local".
+      # Stamp containers with this worktree scope so cleanup can identify them.
       ECLTEST_SCOPE:
         sh: bash scripts/test-containers.sh scope
     cmds:
-      # Sweep this worktree's strays from a prior killed run first, then reap again on
-      # exit, so a hard-killed coverage run leaves no scoped ministack orphans. Both
-      # reaps carry the scope, so neither touches a sibling worktree's live containers.
+      # Sweep before running and on exit to remove this worktree's abandoned containers.
       - bash scripts/test-containers.sh reap
       - defer: bash scripts/test-containers.sh reap
       - bash scripts/coverage.sh ecluse-integration {{.COVERAGE_FLAGS}}
@@ -255,39 +242,37 @@ tasks:
   format:
     desc: Reformat Haskell sources in place
     cmds:
-      - find . -name '*.hs' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*' -exec fourmolu --mode inplace {} +
+      - bash scripts/source-inventory.sh run hs fourmolu --mode inplace
   format-check:
     desc: Check formatting without writing
+    vars:
+      SOURCE_MANIFEST:
+        sh: bash scripts/source-inventory.sh manifest hs
     sources:
-      - '**/*.hs'
+      - '{{.SOURCE_MANIFEST}}'
+      - 'scripts/source-inventory.sh'
+      - 'Taskfile.yml'
       - 'fourmolu.yaml'
       - 'flake.lock'
       - 'ecluse.cabal'
       - 'cabal.project.freeze'
-      - exclude: 'dist-*/**'
-      - exclude: '.git/**'
-      - exclude: '.agents/**'
-      - exclude: 'coverage/**'
-      - exclude: '_site/**'
-      - exclude: 'scratchpad/**'
     cmds:
-      - find . -name '*.hs' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*' -exec fourmolu --mode check {} +
+      - bash scripts/source-inventory.sh run hs fourmolu --mode check
   lint:
     desc: Run hlint
+    vars:
+      SOURCE_MANIFEST:
+        sh: bash scripts/source-inventory.sh manifest hs
     sources:
-      - '**/*.hs'
+      - '{{.SOURCE_MANIFEST}}'
+      - 'scripts/source-inventory.sh'
+      - 'Taskfile.yml'
       - '.hlint.yaml'
       - 'flake.lock'
       - 'ecluse.cabal'
       - 'cabal.project.freeze'
-      - exclude: 'dist-*/**'
-      - exclude: '.git/**'
-      - exclude: '.agents/**'
-      - exclude: 'coverage/**'
-      - exclude: '_site/**'
-      - exclude: 'scratchpad/**'
     cmds:
-      - find . -name '*.hs' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*' -exec hlint {} +
+      - bash scripts/source-inventory.sh run hs hlint
   sast:
     desc: Static analysis (Semgrep)
     sources:
@@ -307,12 +292,8 @@ tasks:
       - exclude: 'sbom/**'
       - exclude: '*.json'
     cmds:
-      # The repo owner excluded missing-integrity. SRI applies to fetched
-      # subresources, and this site hosts none externally. The only absolute-URL
-      # <link> tags are rel="canonical", which is pure metadata and fetches nothing.
-      # The site templates load no external script or stylesheet. Excluding the rule
-      # here, rather than through per-tag nosemgrep comments, also keeps the findings
-      # out of the SARIF upload, so code scanning stays quiet too.
+      # The owner excluded missing-integrity because the site fetches no external subresources.
+      # Keep the exclusion here so the SARIF upload also omits that rule.
       - semgrep scan --config auto --severity ERROR --severity WARNING --exclude-rule html.security.audit.missing-integrity.missing-integrity --sarif-output=semgrep.sarif --error .
   cabal-check:
     desc: Validate the .cabal package metadata
@@ -333,11 +314,16 @@ tasks:
       - zizmor .github/workflows/
   lint-scripts:
     desc: Lint shell scripts
+    vars:
+      SOURCE_MANIFEST:
+        sh: bash scripts/source-inventory.sh manifest sh
     sources:
-      - 'scripts/**/*.sh'
+      - '{{.SOURCE_MANIFEST}}'
+      - 'scripts/source-inventory.sh'
+      - 'Taskfile.yml'
       - 'flake.lock'
     cmds:
-      - find . -name '*.sh' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*' -exec shellcheck --severity=warning {} +
+      - bash scripts/source-inventory.sh run sh shellcheck --severity=warning
   lint-spdx:
     desc: Check SPDX licence headers on tracked Haskell sources
     sources:
@@ -357,13 +343,8 @@ tasks:
   spdx-fix:
     desc: Insert missing SPDX licence headers into tracked Haskell sources
     cmds:
-      # Select, then stamp: only tracked files missing the tag reach reuse, so a
-      # rerun never touches a stamped file. That matters beyond speed. `fourmolu`
-      # glues the header to a directly following comment block, dropping the blank
-      # separator in a pragma prologue. Re-annotating a glued block then makes reuse
-      # rewrite it as "the header" and discard the original comment. `git grep -L`
-      # lists tracked files without the tag and exits 1 when every file carries it,
-      # hence the guard.
+      # Annotate only tracked files without the tag. Re-annotation can discard a comment
+      # that fourmolu joined to the header. git grep exits 1 when all files carry the tag.
       - '{ git grep -z -L "SPDX-License-Identifier: MIT" -- "*.hs" || true; } | xargs -0 -r reuse annotate --license MIT --copyright "Alexandra de Wit" --year 2026'
   test-scripts:
     desc: Run the shell-script unit tests
@@ -376,19 +357,11 @@ tasks:
       - bash scripts/docs-open.test.sh
       - bash scripts/release-assets.test.sh
       - bash scripts/release-version.test.sh
+      - bash scripts/source-inventory.test.sh
   analysis-build:
     desc: Build exe:ecluse with .hie output for weeder and stan
-    # weeder and stan want the same artefact: exe:ecluse built with -fwrite-ide-info.
-    # One build serves both. A build per tool would instead have each cabal build
-    # clone the amazonka source-repository-package into its own builddir at the same
-    # moment. Two concurrent clones of one repo get the connection reset, git exits
-    # 128, and the whole of `check` reddens on a clean tree.
-    #
-    # `run: once` is load-bearing. Both weeder and stan depend on this task and run
-    # concurrently, and go-task's default (`always`) honours both calls. That is two
-    # builds again, now racing into ONE builddir. With `once`, go-task dedupes on the
-    # task name, and the second caller blocks until the first execution finishes. So
-    # stan waits for the build instead of reading a half-written dist-analysis.
+    # Share one build and run it once. Concurrent Cabal clones can fail with exit 128,
+    # and readers must wait for the completed .hie files.
     run: once
     cmds:
       - cabal build exe:ecluse --builddir=dist-analysis --ghc-options=-fwrite-ide-info
@@ -437,13 +410,8 @@ tasks:
       - site-stub
   analysis-checks:
     desc: Dead-code (weeder) and Haskell static analysis (stan)
-    # Both tools share one -fwrite-ide-info build (analysis-build), then read its .hie
-    # output. Reading takes no lock, so the two still run concurrently. go-task
-    # serialises only the build, and the build is where the contention sat. The tier
-    # runs AFTER the cabal and static tiers (see `check`), never piled onto the
-    # coverage build's Docker ministack. Both tools fail on findings, weeder natively
-    # and stan through its own exit, so this tier reddens `check` until the tree is
-    # clean of both.
+    # Both tools read the completed shared build concurrently. The check task runs this
+    # tier after coverage to avoid competing with its build and Docker containers.
     deps:
       - weeder
       - stan
@@ -524,9 +492,8 @@ tasks:
       - printf 'The threat register is generated by `task site`.\n' > web/generated/threat-register.md
       - printf 'The OpenAPI reference is generated by `task site`.\n' > web/generated/openapi.md
       - cp config/default.yaml web/generated/default.yaml
-  # Renders web/diagrams/*.d2 for the diagram shortcode to inline. theme.d2 holds
-  # only the shared classes the diagrams import, so it is not itself rendered.
-  # Sketch mode is deliberate: the hand-drawn line suits the parchment artwork.
+  # Do not render theme.d2, which only defines imported classes.
+  # Sketch mode matches the site artwork.
   site:diagrams:
     internal: true
     cmds:
