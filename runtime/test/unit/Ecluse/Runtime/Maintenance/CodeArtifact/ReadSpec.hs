@@ -31,9 +31,8 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Read (
     versionsOfPage,
  )
 
-{- | The read-only CodeArtifact layer: what one observation of a listing preserves. The
-coordinates and verdicts it builds on are covered in
-"Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec".
+{- | The read-only CodeArtifact layer: what one observation of a listing preserves. The coordinates
+and verdicts it builds on are covered in "Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec".
 -}
 spec :: Spec
 spec = maybe noNpmFormat readCases npmStore

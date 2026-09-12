@@ -131,7 +131,7 @@ repository's per-format endpoint.
 formatToken :: CodeArtifactFormat -> Text
 formatToken (CodeArtifactFormat _ token) = CA.fromPackageFormat token
 
--- | The format CodeArtifact addresses a store's own ecosystem by.
+-- The format CodeArtifact addresses a store's own ecosystem by.
 storePackageFormat :: CodeArtifactStore -> CA.PackageFormat
 storePackageFormat store = case casFormat store of
     CodeArtifactFormat _ token -> token

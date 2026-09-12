@@ -82,9 +82,8 @@ data ControlPlane = ControlPlane
     , cpUntagResource :: CA.UntagResource -> IO (Either StoreFault CA.UntagResourceResponse)
     }
 
-{- | Build the maintenance handle for one CodeArtifact repository, with AWS credentials
-discovered the standard way (environment, credentials file, web identity, container role,
-instance role).
+{- | Build the maintenance handle for one CodeArtifact repository, over an environment whose AWS
+credentials are discovered the standard way.
 -}
 newCodeArtifactMaintenance :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
 newCodeArtifactMaintenance alphabet readManifest store =
