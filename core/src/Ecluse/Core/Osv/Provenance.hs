@@ -91,13 +91,12 @@ provenanceRows prov =
   where
     row key = fmap (renderMetaKey key,)
 
-{- | Read the provenance an artifact's @meta@ rows carry. An absent key, an over-long value, and
-an unreadable timestamp all decode as absence, so a hostile or older artifact yields a value
-rather than a fault.
+{- | Read the provenance an artifact's @meta@ rows carry. An absent key, an over-long value,
+and an unreadable timestamp all read as absence, never as a fault.
 -}
 decodeProvenance :: [(Text, Text)] -> AdvisoryProvenance
 decodeProvenance rows =
-    AdvisoryProvenance
+    noProvenance
         { apOsvSource = text maxSourceLength MetaOsvSource
         , apOsvLastModified = stamp MetaOsvLastModified
         , apOsvNewestModified = stamp MetaOsvNewestModified

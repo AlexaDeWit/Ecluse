@@ -50,7 +50,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv, OsvAdvisory, extPackage, extractFromAdvisory, orderableBounds, osvId, osvModified, unorderableBounds)
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvEcosystemTag, osvMaxAdvisoryFanOut))
 import Ecluse.Core.Osv.Epss (EpssScores)
-import Ecluse.Core.Osv.Provenance (parseHttpDate)
+import Ecluse.Core.Osv.Provenance (parseHttpDate, parseSourceTime)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Telemetry.Span (closeOptionalSpan, openOptionalSpan)
 
@@ -81,9 +81,9 @@ data IngestStats = IngestStats
     {- ^ Rows kept with a bound the grammar cannot parse ('orderableBounds'). Counted in
     rows, so it stays out of 'systemicDrop'.
     -}
-    , statFutureModified :: !Int
-    {- ^ Records whose @modified@ is dated after the run's clock. Their rows are kept and
-    only their date is ignored, so this counts records and stays out of 'systemicDrop'.
+    , statUnusableModified :: !Int
+    {- ^ Records whose @modified@ no grammar reads, or which date it after the run's clock.
+    Their rows are kept and only the date is ignored, so this counts records, not drops.
     -}
     }
     deriving stock (Eq, Show)
@@ -269,14 +269,22 @@ recordResponseDate ingest headers =
     modifyIORef' (ingestAttempt ingest) $ \attempt ->
         attempt{oaLastModified = parseHttpDate . decodeUtf8 =<< listToMaybe headers}
 
--- A source cannot know a change that has not happened, so a record dated ahead of the run's
--- clock is counted and its date dropped, never clamped. Its rows are kept either way.
+-- A date no grammar reads, and a date the source cannot know yet, are both counted and both
+-- dropped from the reading, never clamped. The record's rows are kept either way.
 recordModified :: (MonadIO m) => OsvIngest -> OsvAdvisory -> m ()
-recordModified ingest adv = for_ (osvModified adv) $ \stamp ->
-    if stamp > ingestNow ingest
-        then bumpFutureModified (ingestCounter ingest)
-        else modifyIORef' (ingestAttempt ingest) $ \attempt ->
-            attempt{oaNewestModified = max (Just stamp) (oaNewestModified attempt)}
+recordModified ingest adv = for_ (osvModified adv) $ \written ->
+    case usableStamp (ingestNow ingest) written of
+        Nothing -> bumpUnusableModified (ingestCounter ingest)
+        Just stamp ->
+            modifyIORef' (ingestAttempt ingest) $ \attempt ->
+                attempt{oaNewestModified = max (Just stamp) (oaNewestModified attempt)}
+
+-- The instant a record's written date names, when the run can use it at all.
+usableStamp :: UTCTime -> Text -> Maybe UTCTime
+usableStamp now written = do
+    stamp <- parseSourceTime written
+    guard (stamp <= now)
+    pure stamp
 
 bumpAccepted :: (MonadIO m) => IngestCounter -> m ()
 bumpAccepted (IngestCounter ref) = modifyIORef' ref (\s -> s{statAccepted = statAccepted s + 1})
@@ -290,8 +298,8 @@ bumpMalformed (IngestCounter ref) = modifyIORef' ref (\s -> s{statDroppedMalform
 bumpUnorderable :: (MonadIO m) => IngestCounter -> Int -> m ()
 bumpUnorderable (IngestCounter ref) n = modifyIORef' ref (\s -> s{statUnorderable = statUnorderable s + n})
 
-bumpFutureModified :: (MonadIO m) => IngestCounter -> m ()
-bumpFutureModified (IngestCounter ref) = modifyIORef' ref (\s -> s{statFutureModified = statFutureModified s + 1})
+bumpUnusableModified :: (MonadIO m) => IngestCounter -> m ()
+bumpUnusableModified (IngestCounter ref) = modifyIORef' ref (\s -> s{statUnusableModified = statUnusableModified s + 1})
 
 zipEntryNameText :: ZipEntry -> Text
 zipEntryNameText entry = case zipEntryName entry of

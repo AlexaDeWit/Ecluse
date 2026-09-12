@@ -75,8 +75,7 @@ data CompileSources = CompileSources
     deriving stock (Eq, Show)
 
 {- | Compile one ecosystem into @outDir@, refusing systemic drops or zero relevant rows. A
-refused candidate leaves any previous artifact and its metadata unchanged. @quietTime@ decides
-which recorded source age raises the alarm.
+refused candidate leaves any previous artifact, its metadata, and its recorded ages unchanged.
 -}
 compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> CompileSources -> QuietTime -> m FilePath
 compileOsvToSqlite metrics mTracerProvider outDir eco sources quietTime = do
@@ -192,7 +191,7 @@ concludeCompile metrics mSpan conn conclusion = do
     forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.row_count" (show rowCount :: Text)
     katipAddContext (sl "row_count" rowCount <> dropFields ecosystem stats) $
         logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem <> " (" <> renderDrops stats <> ")"))
-    warnOnFutureDates ecosystem stats
+    warnOnUnusableDates ecosystem stats
     logSourceAges ecosystem (sourceAges (ccNow conclusion) (ccQuietTime conclusion) (ccProvenance conclusion))
   where
     ecosystem = ccEcosystem conclusion
@@ -205,14 +204,14 @@ compileRefusal stats rowCount
     | rowCount == 0 = Just "zero relevant advisory rows"
     | otherwise = Nothing
 
--- One line per pass, not per record: a source clock that has run ahead names every record it
--- touched, and the rows are kept regardless.
-warnOnFutureDates :: (KatipContext m) => Text -> IngestStats -> m ()
-warnOnFutureDates ecosystem stats =
-    when (futureDated > 0) $
-        logFM WarningS (ls ("Ignoring the modified date of " <> show futureDated <> " " <> ecosystem <> " advisory record(s) dated after this run's clock; their ranges are kept"))
+-- One line per pass, not per record: a source whose dates have gone wrong writes many, and
+-- the rows are kept regardless.
+warnOnUnusableDates :: (KatipContext m) => Text -> IngestStats -> m ()
+warnOnUnusableDates ecosystem stats =
+    when (unusable > 0) $
+        logFM WarningS (ls ("Ignoring the modified date of " <> show unusable <> " " <> ecosystem <> " advisory record(s), unreadable or dated after this run's clock; their ranges are kept"))
   where
-    futureDated = statFutureModified stats
+    unusable = statUnusableModified stats
 
 -- The ages the sources declared, on every pass that published. A source past its threshold is
 -- an operator alarm: raise the threshold for a slow ecosystem, or change the source.

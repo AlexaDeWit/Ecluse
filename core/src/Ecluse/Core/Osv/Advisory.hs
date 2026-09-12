@@ -54,9 +54,9 @@ data OsvAdvisory = OsvAdvisory
     , osvDatabaseSpecific :: Maybe OsvDatabaseSpecific
     , osvWithdrawn :: Maybe UTCTime
     -- ^ A withdrawn record supplies no active evidence, even when it retains affected ranges.
-    , osvModified :: Maybe UTCTime
-    {- ^ When the source database last changed this record. A record that carries none is
-    skipped by the pass's newest-modified reading, and an unreadable one fails the decode.
+    , osvModified :: Maybe Text
+    {- ^ When the source database last changed this record, as written. It is read where the
+    pass judges it, so a value no grammar accepts costs the date and not the record.
     -}
     }
     deriving stock (Show, Eq)

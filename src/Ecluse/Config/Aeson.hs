@@ -286,8 +286,7 @@ parseSeconds field = \case
         Just n -> boundedSeconds field n
         Nothing -> secondsFailure field (show t)
     -- 'toBoundedInteger' refuses a fractional or out-of-'Int64' value, and its exponent guard
-    -- rejects a pathological 1e999999999999 without ever realising the integer. A hostile config
-    -- value then fails the load instead of hanging or exhausting memory at boot.
+    -- rejects a pathological 1e999999999999 without ever realising the integer.
     Number n -> case toBoundedInteger n :: Maybe Int64 of
         Just val -> boundedSeconds field (toInteger val)
         Nothing -> secondsFailure field (show n)

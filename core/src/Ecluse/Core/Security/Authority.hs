@@ -78,9 +78,8 @@ attacker-influenced or credential-bearing URL must never reach a log line or a s
 authorityLabel :: Text -> Text
 authorityLabel = maybe unresolvedAuthority renderHostPort . hostPortAddress
 
-{- | A fetched URL with every credential carrier removed: the scheme, the authority without its
-userinfo, and the path. The query and fragment go whole, because either can hold a signed-URL
-credential. It identifies a source across runs, where 'authorityLabel' identifies only the host.
+{- | A fetched URL with every credential carrier removed: userinfo, query, and fragment, the
+last two whole, because either can hold a signed-URL credential.
 
 >>> credentialFreeUrl "https://deploy:hunter2@osv.example.test/npm/all.zip?sig=abc#frag"
 "https://osv.example.test/npm/all.zip"

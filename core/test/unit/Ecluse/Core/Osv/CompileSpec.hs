@@ -42,7 +42,7 @@ import Ecluse.Core.Osv.Provenance (QuietTime (..))
 import Ecluse.Core.Osv.Schema (osvDbFileName, osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
 import Ecluse.Core.Osv.Types (UpperBound (..))
-import Ecluse.Core.Security.Authority (authorityLabel, credentialFreeUrl)
+import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
@@ -113,8 +113,9 @@ spec = describe "SQLite OSV Compilation" $ do
         Map.lookup "pilot_version" meta `shouldBe` Just (toText (showVersion version))
         Map.lookup "source_url" meta `shouldBe` Just sourceHost
         Map.lookup "epss_source_url" meta `shouldBe` Just epssHost
-        Map.lookup "osv_source" meta `shouldBe` Just (credentialFreeUrl (toText (csOsvExportUrl sources)))
-        Map.lookup "epss_source" meta `shouldBe` Just (credentialFreeUrl (toText (csEpssFeedUrl sources)))
+        -- These stub URLs carry no credential, so the recorded identity is the URL as written.
+        Map.lookup "osv_source" meta `shouldBe` Just (toText (csOsvExportUrl sources))
+        Map.lookup "epss_source" meta `shouldBe` Just (toText (csEpssFeedUrl sources))
         Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-03-23T17:41:30.891186Z"
         Map.lookup "epss_score_date" meta `shouldBe` Just "2026-08-29T00:00:00Z"
         Map.lookup "epss_model_version" meta `shouldBe` Just "v2026.08.01"
@@ -135,8 +136,13 @@ spec = describe "SQLite OSV Compilation" $ do
                         meta <- Map.fromList <$> (query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)])
                         Map.lookup "source_url" meta `shouldBe` Just (authorityLabel (toText source))
                         Map.lookup "epss_source_url" meta `shouldBe` Just (authorityLabel (toText epssSource))
-                        Map.lookup "osv_source" meta `shouldBe` Just (credentialFreeUrl (toText source))
-                        Map.lookup "epss_source" meta `shouldBe` Just (credentialFreeUrl (toText epssSource))
+                        -- The recorded identity keeps the path that names the source, and none
+                        -- of the credential material the fetch had to send.
+                        for_ [("osv_source", "OSV"), ("epss_source", "EPSS")] $ \(key, tag) -> do
+                            let stored = fromMaybe "" (Map.lookup key meta)
+                            stored `shouldSatisfy` T.isSuffixOf "/feed"
+                            for_ ["user-", "password-", "query-", "fragment-"] $ \prefix ->
+                                stored `shouldSatisfy` (not . T.isInfixOf (prefix <> tag))
                         Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)
                         Map.lookup "row_count" meta `shouldBe` Just "1"
                     pure path
@@ -361,7 +367,21 @@ spec = describe "SQLite OSV Compilation" $ do
             meta <- metaOf dbFile
             Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-01-01T00:00:00Z"
             packagesOf dbFile `shouldReturn` ["ahead-pkg", "ok-pkg"]
-            logged `shouldSatisfy` T.isInfixOf "Ignoring the modified date of 1 npm advisory record(s)"
+            logged `shouldSatisfy` T.isInfixOf "Ignoring the modified date of 1 npm advisory record(s), unreadable or dated after this run's clock"
+            logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
+            removeFile dbFile
+
+        it "keeps a record whose modified date no grammar reads, and ignores only that date" $ do
+            zipData <-
+                osvZipOf
+                    [ ("ok.json", datedAdvisory "GHSA-ok" "ok-pkg" (Just "2026-01-01T00:00:00Z"))
+                    , ("unreadable.json", datedAdvisory "GHSA-unreadable" "unreadable-pkg" (Just "the day before yesterday"))
+                    ]
+            (dbFile, logged) <- captureStdout' $ \logEnv -> compileZipWith logEnv zipData testQuietTime
+            meta <- metaOf dbFile
+            Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-01-01T00:00:00Z"
+            packagesOf dbFile `shouldReturn` ["ok-pkg", "unreadable-pkg"]
+            logged `shouldSatisfy` T.isInfixOf "Ignoring the modified date of 1 npm advisory record(s), unreadable or dated after this run's clock"
             logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
             removeFile dbFile
 

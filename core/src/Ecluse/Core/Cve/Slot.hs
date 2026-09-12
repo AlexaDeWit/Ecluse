@@ -3,21 +3,13 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The read side of the advisory database's atomic shadow-swap: one slot per ecosystem,
-holding the generation serving now. Before the first sync it hands readers 'Nothing', and the
-CVE rule abstains.
-
-A rule evaluation borrows the current generation's 'CveLookup' through 'withSlotLookup', which
-the composition root installs as 'Ecluse.Core.Rules.rdWithCveLookup'. 'swapIn' installs a
-newly-verified generation, waits for the displaced one's readers to drain, then closes it. The
-sync task has already renamed the new artifact over the old one's only file name, so that close
-releases the old inode's last reference: pruning is a property the OS enforces, never a delete
-this code could mistime.
-
-The slot also carries what the serving artifact records about its sources, when its object was
-published ('currentAdvisorySource'), and the monotonic time the generation went live
-('generationInstalledAt', which the advisory-database age gauge reads). It is the only place
-that knows, because it outlives the sync task that fills it: a supervised restart builds a
-fresh task against the same slot.
+holding the generation serving now, or 'Nothing' before the first sync. Readers borrow it
+through 'withSlotLookup'. 'swapIn' installs a newly-verified generation, waits for the displaced
+one's readers to drain, then closes it. The sync task has already renamed the new artifact over
+the old one's only file name, so that close releases the old inode's last reference: pruning is
+a property the OS enforces, never a delete this code could mistime. The slot outlives the sync
+task that fills it, so it alone carries what the serving artifact records about its sources,
+when its object was published, and when the generation went live.
 -}
 module Ecluse.Core.Cve.Slot (
     CveSlot,
@@ -49,9 +41,8 @@ data Generation = Generation
     , genInstalledAt :: Double
     }
 
-{- | Where the serving artifact came from: what it records about its own sources, and when the
-object carrying it was published. The publication time is the store's, not the artifact's, so a
-recompile of unchanged bytes still moves it.
+{- | Where the serving artifact came from. The publication time is the store's, not the
+artifact's, so a recompile of unchanged bytes still moves it.
 -}
 data AdvisorySource = AdvisorySource
     { asProvenance :: AdvisoryProvenance
@@ -96,18 +87,16 @@ never reaches 'swapIn', so a warm process keeps the last value it read.
 currentAdvisorySource :: CveSlot -> IO (Maybe AdvisorySource)
 currentAdvisorySource slot = fmap genSource <$> readTVarIO (slotCell slot)
 
-{- | When the serving generation went live, on the monotonic clock, or when the slot was
-created if no swap has landed yet. Only 'swapIn' moves it, so it measures the age of what
-the slot actually serves, not the liveness of whatever fills it.
+{- | When the serving generation went live, or when the slot was created if no swap has landed.
+Only 'swapIn' moves it, so it measures what the slot serves, not the liveness of what fills it.
 -}
 generationInstalledAt :: CveSlot -> IO Double
 generationInstalledAt slot =
     maybe (slotCreatedAt slot) genInstalledAt <$> readTVarIO (slotCell slot)
 
-{- | Install a newly verified generation, drain the displaced one's readers, then close it.
-The slot owns @newDb@ from entry and publishes it first, so no caller cleanup may close it.
-Cancellation during the drain propagates, leaving the displaced generation unclosed.
-@pushedAt@ is the published object's own timestamp, from the sync that fetched it.
+{- | Install a newly verified generation, drain the displaced one's readers, then close it. The
+slot owns @newDb@ from entry, so no caller cleanup may close it, and cancellation during the
+drain leaves the displaced generation unclosed.
 -}
 swapIn :: CveSlot -> DbEtag -> Maybe UTCTime -> CveDb -> IO ()
 swapIn slot etag pushedAt newDb = do

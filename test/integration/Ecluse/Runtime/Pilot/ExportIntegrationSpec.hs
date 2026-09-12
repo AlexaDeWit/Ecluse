@@ -14,7 +14,7 @@ import Control.Monad.Trans.Resource (runResourceT)
 import Data.Text qualified as T
 import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldNotBe)
+import Test.Hspec (Spec, aroundAll, describe, it, shouldBe)
 import TestContainers (containerAddress)
 
 import Amazonka qualified as AWS
@@ -26,7 +26,7 @@ import Ecluse.Config.Ambient (parseEndpointUrl)
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
-import Ecluse.Test.Poll (retryingIO)
+import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
 
 spec :: Spec
@@ -86,18 +86,19 @@ spec = do
                     liftIO $ writeFile dbPath "unchanged sqlite data"
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
                     let export = runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket objectKey dbPath)
-                        storedEtag = do
+                        storedObject = do
                             resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))
-                            pure (maybe [] (map S3Object.eTag) (S3.contents resp))
+                            pure (listToMaybe (fromMaybe [] (S3.contents resp)))
 
                     export
-                    published <- storedEtag
+                    published <- storedObject
 
-                    -- Overwrite the object out of band, so a publisher that wrote only on a
-                    -- change would leave these bytes in place.
-                    void $ runResourceT $ AWS.send base (S3.newPutObject (S3.BucketName bucket) (S3.ObjectKey objectKey) (AWS.toBody ("tampered" :: ByteString)))
-                    tampered <- storedEtag
-                    tampered `shouldNotBe` published
+                    -- The store stamps whole seconds, so the export repeats until the stamp has
+                    -- to have moved. A publisher that wrote only on a change never moves it.
+                    let advancedPast before object = fmap S3Object.lastModified object > fmap S3Object.lastModified before
+                    pollUntil 21 500_000 id (export >> (advancedPast published <$> storedObject))
+                        >>= (`shouldBe` True)
 
-                    export
-                    storedEtag >>= (`shouldBe` published)
+                    -- The bytes never changed, so the object is the same one, re-published.
+                    republished <- storedObject
+                    fmap S3Object.eTag republished `shouldBe` fmap S3Object.eTag published
