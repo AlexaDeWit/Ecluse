@@ -107,7 +107,12 @@ data PortSource
 declaredPort :: [(String, String)] -> PortSource
 declaredPort environment = case declared portVar environment of
     Nothing -> PortAbsent
-    Just raw -> maybe (PortUnusable raw) PortDeclared (readMaybe (toString raw))
+    Just raw -> case readMaybe (toString raw) of
+        Just port | isScrapeListenerPort port -> PortDeclared port
+        _ -> PortUnusable raw
+
+isScrapeListenerPort :: Int -> Bool
+isScrapeListenerPort port = port == 0 || (port >= 1 && port <= 65535)
 
 -- A present but blank value counts as unset, as it does across the telemetry resolution.
 declared :: String -> [(String, String)] -> Maybe Text
