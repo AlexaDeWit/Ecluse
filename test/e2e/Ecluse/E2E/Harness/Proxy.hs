@@ -12,6 +12,8 @@ module Ecluse.E2E.Harness.Proxy (
     -- * Logs
     proxyContainerLogs,
     mirrorContainerLogs,
+    logTail,
+    logTailLines,
     awaitProxyLog,
     awaitCollectorLog,
     hasPopulatedTraceId,
@@ -73,10 +75,6 @@ proxyPut e2e path = do
     resp <- httpLbs base{method = "PUT"} (e2eManager e2e)
     pure (statusCode (responseStatus resp))
 
-{- | The proxy container's combined stdout and stderr: the JSONL stream it writes under
-@ECLUSE_OBSERVABILITY__LOG_FORMAT=json@.
--}
-
 {- | 'shouldSucceed' with the proxy's and the mirror store's own log tails, because a refusal
 reaches a client as a bare status whose reason exists only in those logs.
 -}
@@ -102,16 +100,19 @@ clientRefusal res proxyLog mirrorLog =
 
 tailSection :: Text -> Text -> Text
 tailSection label logs =
-    "\nLast "
-        <> show logTailLines
-        <> " "
-        <> label
-        <> " log lines:\n"
-        <> T.intercalate "\n" (reverse (take logTailLines (reverse (lines logs))))
+    "\nLast " <> show logTailLines <> " " <> label <> " log lines:\n" <> logTail logTailLines logs
 
+-- | The last @n@ lines of a container's log, for a failure whose reason lives only there.
+logTail :: Int -> Text -> Text
+logTail n = T.intercalate "\n" . reverse . take n . reverse . lines
+
+-- | How many log lines a failure carries: enough for the deciding request, short enough to read.
 logTailLines :: Int
 logTailLines = 50
 
+{- | The proxy container's combined stdout and stderr: the JSONL stream it writes under
+@ECLUSE_OBSERVABILITY__LOG_FORMAT=json@.
+-}
 proxyContainerLogs :: E2E -> IO Text
 proxyContainerLogs = containerLogs . e2eProxyContainer
 

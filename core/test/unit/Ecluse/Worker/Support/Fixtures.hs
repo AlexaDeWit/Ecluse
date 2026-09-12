@@ -68,6 +68,7 @@ module Ecluse.Worker.Support.Fixtures (
     mismatchDetail,
     isDropped,
     isRetried,
+    isDeadLettered,
 ) where
 
 import Data.Aeson (Key, Value (Object, String))
@@ -103,7 +104,7 @@ import Ecluse.Core.Supervision (
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
-    JobOutcome (Dropped, Retried),
+    JobOutcome (DeadLettered, Dropped, Retried),
     WorkerPolicies,
     WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpFirstParty, wpPublish),
  )
@@ -384,4 +385,9 @@ isDropped = \case
 isRetried :: JobOutcome -> Bool
 isRetried = \case
     Retried _ -> True
+    _ -> False
+
+isDeadLettered :: JobOutcome -> Bool
+isDeadLettered = \case
+    DeadLettered _ -> True
     _ -> False

@@ -13,6 +13,8 @@ module Ecluse.Worker.Support.Runtime (
     mirrorListingPublish,
     probeUnreachablePublish,
     probeUnreadablePublish,
+    probeRefusingPublish,
+    probeOverboundPublish,
 
     -- * Building a worker runtime over doubles
     withRuntimeRegistry,
@@ -57,7 +59,7 @@ import Ecluse.Core.Queue (
     enqueue,
  )
 import Ecluse.Core.Registry (
-    FetchFault (FetchTransport),
+    FetchFault (FetchBoundExceeded, FetchTransport),
     MirrorArtifact,
     ParseError (ParseError),
     PublishFault,
@@ -69,6 +71,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead,
  )
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), PublishPlan)
+import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker (
@@ -132,6 +135,20 @@ probeUnreadablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPu
 probeUnreadablePublish logRef outcome =
     (recordingPublish logRef outcome)
         { mpProbeMetadata = const (pure (Right (RegistryResponse 200 "not a packument")))
+        }
+
+-- | 'recordingPublish' whose inventory probe answers a status that is neither success nor an absence.
+probeRefusingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
+probeRefusingPublish logRef outcome =
+    (recordingPublish logRef outcome)
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 503 "")))
+        }
+
+-- | 'recordingPublish' whose inventory probe overruns the response bound, the probe leg's terminal fault.
+probeOverboundPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
+probeOverboundPublish logRef outcome =
+    (recordingPublish logRef outcome)
+        { mpProbeMetadata = const (pure (Left (FetchBoundExceeded (BodyTooLarge 1))))
         }
 
 -- | Expose the worker's queue and captured publications to the test callback.

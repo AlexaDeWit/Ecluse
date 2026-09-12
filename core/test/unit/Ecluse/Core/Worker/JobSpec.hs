@@ -463,6 +463,30 @@ spec = do
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
 
+        it "retries without publishing when the mirror refuses the inventory probe" $
+            -- A readable status that is neither success nor an absence leaves the inventory
+            -- unknown, so the tag cannot be chosen and the job waits for a redelivery.
+            withUpstream $ \url ->
+                withRuntimeRegistry (`probeRefusingPublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldSatisfy` isRetried
+                    recorded <- readIORef logRef
+                    plDocuments recorded `shouldBe` []
+                    plPlans recorded `shouldBe` []
+
+        it "dead-letters without publishing when the inventory probe overruns the bound" $
+            -- The probe reads the shared terminal-versus-transient table, so an over-bound
+            -- answer rides the dead-letter terminus rather than redelivering for ever.
+            withUpstream $ \url ->
+                withRuntimeRegistry (`probeOverboundPublish` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldSatisfy` isDeadLettered
+                    recorded <- readIORef logRef
+                    plDocuments recorded `shouldBe` []
+                    plPlans recorded `shouldBe` []
+
         it "falls through when the mirror lists other versions but not this one" $
             -- The worker judges presence per version: a package already partially
             -- mirrored must still mirror its missing versions.

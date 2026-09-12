@@ -119,7 +119,7 @@ scenarios = do
                     verdaccioVersions e2e name `shouldReturn` ["1.0.0", "2.0.0"]
                 withNpmProject e2e $ \proj -> do
                     -- The mirror's own tag is asserted on the store above, because one stub fronts
-                    -- all three registry names and cannot be paused for the public leg alone.
+                    -- every registry name and cannot be paused for the public leg alone.
                     void $ npmInstallIn proj name >>= shouldSucceedThroughProxy e2e
                     installedVersion proj name `shouldReturn` Just "2.0.0"
         describe "first-party publish -- opt-in posture" $
