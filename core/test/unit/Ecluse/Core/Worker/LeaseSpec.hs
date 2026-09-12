@@ -129,7 +129,7 @@ spec = do
             runLeases world (faultingFor ["a"] unreachable) batch $ \leased -> do
                 held <- leaseAt 0 leased
                 -- The job would never end on its own: only the dropped lease stops it.
-                outcome <- whileLeased held (liftIO (forever (threadDelay 1_000)))
+                outcome <- whileLeased held (liftIO neverEnds)
                 liftIO (outcome `shouldBe` Nothing)
 
         it "lets a sibling whose own renewals hold finish its job, still leased" $ do
@@ -140,7 +140,7 @@ spec = do
                 first' <- leaseAt 0 leased
                 second' <- leaseAt 1 leased
                 -- The faulting receipt's job never ends on its own, so only the drop stops it.
-                abandoned <- whileLeased first' (liftIO (forever (threadDelay 1_000)))
+                abandoned <- whileLeased first' (liftIO neverEnds)
                 -- Hold the sibling past its own original window, then read who a second consumer
                 -- could take: only the dropped receipt, never the one still being renewed.
                 finished <- whileLeased second' . liftIO $ do
@@ -166,7 +166,7 @@ spec = do
             world <- newLeaseWorld 0 batch
             runLeases world (faultingFor ["a"] unreachable) batch $ \leased -> do
                 held <- leaseAt 0 leased
-                void (whileLeased held (liftIO (forever (threadDelay 1_000))))
+                void (whileLeased held (liftIO neverEnds))
             -- The first attempt plus the shipped retry budget, all inside the margin.
             renewed <- readIORef (lwRenewals world)
             length renewed `shouldBe` 4
@@ -178,7 +178,7 @@ spec = do
             world <- newLeaseWorld 0 batch
             runLeases world (slowFaultFor "a") batch $ \leased -> do
                 held <- leaseAt 0 leased
-                outcome <- whileLeased held (liftIO (forever (threadDelay 1_000)))
+                outcome <- whileLeased held (liftIO neverEnds)
                 liftIO (outcome `shouldBe` Nothing)
             readIORef (lwRenewals world) `shouldReturn` ["a"]
 
@@ -188,7 +188,7 @@ spec = do
             world <- newLeaseWorld 0 batch
             runLeases world (faultingFor ["a"] refused) batch $ \leased -> do
                 held <- leaseAt 0 leased
-                outcome <- whileLeased held (liftIO (forever (threadDelay 1_000)))
+                outcome <- whileLeased held (liftIO neverEnds)
                 liftIO (outcome `shouldBe` Nothing)
             readIORef (lwRenewals world) `shouldReturn` ["a"]
 
@@ -200,7 +200,7 @@ spec = do
             let residue = (worldOps world keepsEveryLease){loWaitUntil = \_ -> throwIO (TestContractEscape "simulated renewal residue")}
             runLeasesWith residue batch $ \leased -> do
                 held <- leaseAt 0 leased
-                outcome <- whileLeased held (liftIO (forever (threadDelay 1_000)))
+                outcome <- whileLeased held (liftIO neverEnds)
                 liftIO (outcome `shouldBe` Nothing)
 
         it "drops the receipt once the backend's maximum time in flight is spent" $ do
@@ -210,7 +210,7 @@ spec = do
             world <- newLeaseWorld 0 batch
             runLeases world keepsEveryLease batch $ \leased -> do
                 held <- leaseAt 0 leased
-                outcome <- whileLeased held (liftIO (forever (threadDelay 1_000)))
+                outcome <- whileLeased held (liftIO neverEnds)
                 liftIO (outcome `shouldBe` Nothing)
 
     describe "disposing -- no renewal follows a completed disposition" $ do
@@ -249,12 +249,18 @@ spec = do
             disposed <- newIORef (0 :: Int)
             _ <- timeout 30_000 . runLeases world keepsEveryLease batch $ \leased -> do
                 held <- leaseAt 0 leased
-                void (whileLeased held (liftIO (forever (threadDelay 1_000))))
+                void (whileLeased held (liftIO neverEnds))
                 disposing held (modifyIORef' disposed (+ 1))
             readIORef disposed `shouldReturn` 0
             settled <- readIORef (lwRenewals world)
             threadDelay 20_000
             readIORef (lwRenewals world) `shouldReturn` settled
+
+{- | A job that never ends on its own, so only a dropped lease stops it. Its result type is
+fixed, which is what lets a case assert on the 'Maybe' that 'whileLeased' hands back.
+-}
+neverEnds :: IO ()
+neverEnds = forever (threadDelay 1_000)
 
 -- | SQS's own ceiling on one receipt, the value the production backend stamps.
 twelveHours :: Seconds

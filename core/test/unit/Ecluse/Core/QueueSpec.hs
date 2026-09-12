@@ -15,7 +15,7 @@ import Ecluse.Core.Queue (
     DeliveryBudget (DeliveryBudget),
     MirrorJob,
     MirrorQueue (..),
-    QueueMessage (QueueMessage, msgJob, msgReceipt, msgReceiveCount),
+    QueueMessage (QueueMessage, msgJob, msgLease, msgReceipt, msgReceiveCount),
     defaultDeliveryBudget,
     deliveryBudgetSpent,
     effectiveDeliveryBudget,
