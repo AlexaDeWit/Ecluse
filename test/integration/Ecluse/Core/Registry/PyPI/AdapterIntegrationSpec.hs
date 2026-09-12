@@ -22,6 +22,8 @@ import Network.Wai.Test (SResponse (simpleBody, simpleHeaders, simpleStatus))
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
+import Ecluse.Core.Package (HashAlg (SHA512))
+import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Security.Egress (RegistryUrl)
@@ -41,6 +43,7 @@ import Ecluse.Test.Wai (localhost, lookupAuth, selfBaseUrl)
 spec :: Spec
 spec = do
     indexSpec
+    conditionalFloorSpec
     artifactSpec
     negotiationSpec
     refusalBodySpec
@@ -89,6 +92,55 @@ indexSpec = describe "the served Simple index" $ do
             resp <- getPath "/pypi/simple/Requests" app
             simpleStatus resp `shouldBe` status404
             simpleBody resp `shouldBe` ""
+
+conditionalFloorSpec :: Spec
+conditionalFloorSpec = describe "listing validators across configured integrity floors" $
+    for_ [("public", publicPypiDeps), ("trusted", privatePypiDeps)] $ \(origin, depsFor) ->
+        it ("returns the changed " <> origin <> " listing before accepting its new validator") $ do
+            publicFloor <- either (fail . toString) pure (mkMinIntegrity SHA512)
+            trustedFloor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA512)
+            withPyPIProxyOver mixedIntegrityIndex depsFor $ \proxy -> do
+                let strictApp = proxyWithDeps proxy (\deps -> deps{pdMinIntegrity = publicFloor, pdMinTrustedIntegrity = trustedFloor})
+                    request headers = getPathWith (clientCredential : headers) "/pypi/simple/requests"
+                    validator resp = maybe (fail "no ETag on the listing response") pure (lookup "ETag" (simpleHeaders resp))
+                initial <- request [] (proxyApp proxy)
+                statusOf initial `shouldBe` 200
+                servedVersions initial `shouldBe` ["2.34.2"]
+                mapMaybe (entryText "marker") (servedFiles initial) `shouldBe` ["weak", "strong", "strong", "last"]
+                oldTag <- validator initial
+                unchanged <- request [("If-None-Match", oldTag)] (proxyApp proxy)
+                statusOf unchanged `shouldBe` 304
+                changed <- request [("If-None-Match", oldTag)] strictApp
+                statusOf changed `shouldBe` 200
+                servedVersions changed `shouldBe` servedVersions initial
+                mapMaybe (entryText "marker") (servedFiles changed) `shouldBe` ["strong", "strong", "last"]
+                simpleBody changed `shouldNotBe` simpleBody initial
+                newTag <- validator changed
+                newTag `shouldNotBe` oldTag
+                stable <- request [] strictApp
+                simpleBody stable `shouldBe` simpleBody changed
+                validator stable `shouldReturn` newTag
+                matched <- request [("If-None-Match", newTag)] strictApp
+                statusOf matched `shouldBe` 304
+                simpleBody matched `shouldBe` ""
+                hits <- privateHits proxy
+                map snd hits `shouldSatisfy` all (== if origin == "trusted" then Just basicCredential else Nothing)
+                when (origin == "trusted") (length hits `shouldBe` 5)
+
+mixedIntegrityIndex :: Text -> Value
+mixedIntegrityIndex authority =
+    object
+        [ "name" .= ("requests" :: Text)
+        , "meta" .= object ["api-version" .= ("1.4" :: Text)]
+        , "files" .= [entry "weak" False, entry "strong" True, entry "strong" True, entry "last" True]
+        ]
+  where
+    entry :: Text -> Bool -> Value
+    entry marker strong = case fileOn authority "requests-2.34.2.tar.gz" of
+        Object fields -> Object (KeyMap.insert "marker" (String marker) (KeyMap.insert "hashes" hashes fields))
+          where
+            hashes = if strong then object ["sha512" .= T.replicate 128 "a"] else object ["sha256" .= sha256Digest]
+        value -> value
 
 artifactSpec :: Spec
 artifactSpec = describe "the served distribution file" $ do
@@ -218,6 +270,8 @@ withPrivatePyPIProxy indexFor = withPyPIProxyOver indexFor privatePypiDeps
 data PyPIProxy = PyPIProxy
     { proxyApp :: Application
     -- ^ The proxy under test.
+    , proxyWithDeps :: (PackumentDeps -> PackumentDeps) -> Application
+    -- ^ A separately configured application sharing the upstream and runtime.
     , privateHits :: IO [(ByteString, Maybe ByteString)]
     -- ^ Each upstream request as its mount-relative path and its @Authorization@ value.
     }
@@ -233,7 +287,8 @@ withPyPIProxyResponding transform indexFor depsFor k = do
     testWithApplication (pure (transform (upstreamApp indexFor (record recorded)))) $ \upstreamPort -> do
         env <- newTestEnvWithQueue queue manager
         deps <- depsFor upstreamPort
-        k (PyPIProxy (application (mkServerConfig (maybeToList (mountBindingFor PyPI deps Nothing))) env) (readIORef recorded))
+        let configured change = application (mkServerConfig (maybeToList (mountBindingFor PyPI (change deps) Nothing))) env
+        k (PyPIProxy (configured id) configured (readIORef recorded))
   where
     record ref request =
         atomicModifyIORef' ref (\hits -> (hits <> [(mountPathOf request, lookupAuth (Wai.requestHeaders request))], ()))

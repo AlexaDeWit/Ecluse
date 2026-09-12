@@ -2,23 +2,17 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The derived packument validator ('packumentETag') and the answer a first-party
-name's private miss renders.
-
-A validator must never call a changed document unchanged, so these cases pin that the
-tag moves whenever an input of the served document moves, and that it is bit-stable
-when nothing moves. The framing cases guard the hash-input encoding: adjacent
-variable-length fields must not collapse into a colliding split.
--}
+-- | Validator identity, framing, and first-party private misses.
 module Ecluse.Core.Server.Pipeline.PackumentSpec (spec) where
 
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource))
 import Ecluse.Core.Registry.Metadata (ContentDigest, digestOf)
-import Ecluse.Core.Server.Conditional (ETag)
+import Ecluse.Core.Server.Conditional (ETag, renderETag)
 import Ecluse.Core.Server.Pipeline.Internal (denialLabels, packumentServeDecision)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
 import Ecluse.Core.Server.Pipeline.Packument (
@@ -44,6 +38,14 @@ packumentETagSpec :: Spec
 packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
     it "is bit-stable across identical inputs" $
         tagWith base `shouldBe` tagWith base
+
+    it "preserves the v2 byte framing for every entry constructor" $ do
+        let sources =
+                [ (TrustedSource, privateDigest base, [("1\0é", [ArrayEntry 0, ArrayEntry 10, ArrayEntry (-1), ObjectEntry "é\0x", SingletonEntry])])
+                , (GatedSource, publicDigest base, [])
+                ]
+        renderETag (packumentETag mountBase thing sources)
+            `shouldBe` "\"93f747ebd65d300c3cd90719d0394ddd77c87140342be84e3df6560d8f7fed26\""
 
     it "changes when an origin body changes (same survivors)" $
         tagWith base{publicDigest = digestOf "public-bytes-v2"} `shouldNotBe` tagWith base
@@ -85,6 +87,18 @@ packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
 
     it "changes when a whole source appears or disappears" $
         packumentETag mountBase thing [publicPiece base] `shouldNotBe` tagWith base
+
+    for_ [TrustedSource, GatedSource] $ \provenance -> do
+        let tag entries = packumentETag mountBase thing [(provenance, publicDigest base, [("1.0.0", entries)])]
+        it ("tracks exact admitted coordinates for " <> show provenance) $
+            tag [ArrayEntry 0, ArrayEntry 1] `shouldNotBe` tag [ArrayEntry 1]
+        it ("keeps identical selections stable for " <> show provenance) $
+            tag [ArrayEntry 1, ArrayEntry 2] `shouldBe` tag [ArrayEntry 1, ArrayEntry 2]
+        it ("distinguishes entry constructors for " <> show provenance) $ do
+            tag [ArrayEntry 0] `shouldNotBe` tag [ObjectEntry "0"]
+            tag [SingletonEntry] `shouldNotBe` tag [ObjectEntry "s"]
+        it ("frames arbitrary object keys for " <> show provenance) $
+            tag [ObjectEntry "a", ObjectEntry "b"] `shouldNotBe` tag [ObjectEntry "a\0b"]
 
 firstPartyMissSpec :: Spec
 firstPartyMissSpec = describe "a first-party name whose private origin yielded nothing" $ do
@@ -143,11 +157,11 @@ base =
         , publicSurvivors = ["1.0.0", "2.0.0"]
         }
 
-piecesOf :: Fixture -> [(Provenance, ContentDigest, [Text])]
-piecesOf f = [(privateProvenance f, privateDigest f, privateSurvivors f), publicPiece f]
+piecesOf :: Fixture -> [(Provenance, ContentDigest, [(Text, [EntryKey])])]
+piecesOf f = [(privateProvenance f, privateDigest f, map (,[SingletonEntry]) (privateSurvivors f)), publicPiece f]
 
-publicPiece :: Fixture -> (Provenance, ContentDigest, [Text])
-publicPiece f = (GatedSource, publicDigest f, publicSurvivors f)
+publicPiece :: Fixture -> (Provenance, ContentDigest, [(Text, [EntryKey])])
+publicPiece f = (GatedSource, publicDigest f, map (,[SingletonEntry]) (publicSurvivors f))
 
 tagWith :: Fixture -> ETag
 tagWith f = packumentETag mountBase thing (piecesOf f)

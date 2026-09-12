@@ -143,7 +143,9 @@ holds it freely.
 
 The assembled-representation store beside it memoises the encoded merged document under a content
 fingerprint of every input. That fingerprint includes the digest of the private document this
-request's own authorised fetch returned. No request shares or skips the private fetch and its authorisation.
+request's own authorised fetch returned, plus each source's surviving versions and exact admitted artifact coordinates.
+A changed integrity floor after restart therefore changes the validator when it removes a file but keeps its release.
+No request shares or skips the private fetch and its authorisation.
 
 ## Serve admission and upstream pools
 
