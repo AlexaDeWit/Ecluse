@@ -8,7 +8,7 @@ Every definition under test is engine glue an ecosystem's table calls rather tha
 this module builds a three-route table out of nothing but the engine and asserts on that. It
 imports no registry module: if one were needed, the glue would not be shared.
 -}
-module Ecluse.Core.Server.RouteEngineSpec (spec) where
+module Ecluse.Core.Server.RouteSpec (spec) where
 
 import Network.HTTP.Types (status404)
 import Network.HTTP.Types.Method (
@@ -45,7 +45,7 @@ import Ecluse.Core.Server.Route (
     matchRoute,
     safeSegment,
  )
-import Ecluse.Core.Server.RouteSpec (
+import Ecluse.Core.Server.RouteDescription (
     ParamSpec (ParamSpec),
     PathSeg (Param),
     RouteSpec (rsMethod, rsName, rsOutcomes, rsPattern),

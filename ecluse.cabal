@@ -197,7 +197,7 @@ library ecluse-core
     Ecluse.Core.Server.Readiness
     Ecluse.Core.Server.Response
     Ecluse.Core.Server.Route
-    Ecluse.Core.Server.RouteSpec
+    Ecluse.Core.Server.RouteDescription
     Ecluse.Core.Server.Stream
     Ecluse.Core.Server.Upstream
     Ecluse.Core.Stream
@@ -775,7 +775,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.PipelineSpec
     Ecluse.Core.Server.ReadinessSpec
     Ecluse.Core.Server.ResponseSpec
-    Ecluse.Core.Server.RouteEngineSpec
+    Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.StreamSpec
     Ecluse.Core.Server.UpstreamSpec
     Ecluse.Core.StreamSpec

@@ -131,7 +131,7 @@ import Ecluse.Core.Server.Contract (
     ResponseStatus (DefaultResponse, ExactResponse),
  )
 import Ecluse.Core.Server.Route (RouteName, unRouteName)
-import Ecluse.Core.Server.RouteSpec (
+import Ecluse.Core.Server.RouteDescription (
     ParamSpec (psDescription, psName),
     PathSeg (Lit, Param),
     RouteSpec (rsDescription, rsMethod, rsName, rsOutcomes, rsPattern, rsRequest, rsSummary),

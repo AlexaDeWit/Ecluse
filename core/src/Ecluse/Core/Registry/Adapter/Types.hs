@@ -35,7 +35,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
  )
 import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Server.Context (MountRouter)
-import Ecluse.Core.Server.RouteSpec (RouteSpec)
+import Ecluse.Core.Server.RouteDescription (RouteSpec)
 
 {- | One ecosystem's complete capability record, which the composition root wires every
 consuming pipeline from. 'Ecluse.Core.Registry.Adapter.adapterFor' resolves it (npm's is

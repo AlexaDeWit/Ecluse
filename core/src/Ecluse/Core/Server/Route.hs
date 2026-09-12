@@ -3,30 +3,10 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ExistentialQuantification #-}
 
-{- | A route: one record saying everything there is to say about one URL the proxy
-serves.
-
-A 'Route' carries its method condition, its path template, what to /do/ when it matches,
-and its documentation. The template is literal segments and named captures that parse
-themselves. An ecosystem's routing table is then __a list of these values__
-("Ecluse.Core.Registry.Npm.Route" is npm's). 'routerOf' folds that list into the mount's
-router: first match wins, and no match is the deny-by-default @404@.
-
-There is no route /sum/. A classified-route type must be matched again to decide what to
-do about it, and again to document it. Each of those matches is a place the three can
-fall out of step. Here the pattern, the action, and the documentation are the same value,
-so they cannot disagree. The manifest renders 'Ecluse.Core.Server.RouteSpec' projections
-of the same records the router runs.
-
-== What stays a named function
-
-The engine owns the __structure__: literal matching, capture arity, ordering, exact
-consumption. It does not infer an ecosystem's __semantics__. A 'Capture' carries its own
-segment parser and a 'Route' its own builder. The security-critical leaf logic therefore
-stays in named, reviewed, separately-tested functions that the record references, rather
-than being regenerated from a generic template. That leaf logic is the component-safety
-gate, an ecosystem's scoped-name decoding, a version parse, and the cross-capture
-path-confusion check.
+{- | A route is one record for a URL the proxy serves.
+It holds the method, template, action, and documentation. A route table folds into a mount
+router where the first match wins and all other requests receive a @404@. The manifest renders
+'Ecluse.Core.Server.RouteDescription' projections of the records the router runs.
 -}
 module Ecluse.Core.Server.Route (
     -- * A route
@@ -71,27 +51,16 @@ not shared across ecosystems.
 -}
 data Route v = forall response. Route
     { routeName :: RouteName
-    {- ^ This route's name, unique within its ecosystem (@"packument"@). The manifest qualifies
-    it by ecosystem to form OpenAPI's @operationId@, which must be unique across the document.
-    -}
+    -- ^ Unique within its ecosystem. The manifest qualifies it for OpenAPI's global operation ID.
     , routeMethod :: MethodMatch
     -- ^ The method condition a request must satisfy to match.
     , routeAccepts :: MediaNegotiation response
-    {- ^ The media types this route serves, and what it answers a request that admits none of
-    them. A route that serves whatever its upstream sends negotiates nothing.
-    -}
+    -- ^ Served media types and the response when a request admits none.
     , routeSegs :: [PatternSeg v]
     -- ^ The mount-relative path template: literal segments and named captures, in order.
     , routeBuild :: Method -> [v] -> Maybe (ResponseAction response)
-    {- ^ What serving this route amounts to, given the request method and the captured values
-    (one per 'SegCap', in template order).
-
-    'Nothing' denies: matching falls through to the next route, and to the @404@ when every
-    route declines. A cross-capture check lives here. An artifact file name, for example, must
-    parse for the package captured earlier.
-
-    The builder receives the 'Method' because a @HEAD@ is a bodiless variation of its @GET@,
-    not a distinct route.
+    {- ^ Builds an action from captured values in template order. 'Nothing' falls through to the
+    next route. A @HEAD@ uses the @GET@ builder because its response has no body.
     -}
     , routeSummary :: Text
     -- ^ A one-line summary (the OpenAPI operation summary).
@@ -100,9 +69,7 @@ data Route v = forall response. Route
     , routeRequest :: Maybe RequestSpec
     -- ^ The request body a write route accepts. 'Nothing' for a read.
     , routeContract :: ResponseContract response
-    {- ^ The response contract the builder's action produces a value for. Runtime dispatch and
-    the manifest both read it, so the served responses and the documented ones cannot drift.
-    -}
+    -- ^ Runtime dispatch and the manifest share this response contract.
     }
 
 {- | A route's name within its ecosystem (@"packument"@, @"tarball"@). The manifest adds the

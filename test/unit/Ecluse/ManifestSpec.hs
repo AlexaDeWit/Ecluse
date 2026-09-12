@@ -38,7 +38,7 @@ import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryA
 import Ecluse.Core.Registry.Npm.Route (npmRoutes)
 import Ecluse.Core.Server.Contract (ResponseDoc (responseStatus))
 import Ecluse.Core.Server.Route (matchRoute)
-import Ecluse.Core.Server.RouteSpec (RouteSpec (rsMethod, rsOutcomes))
+import Ecluse.Core.Server.RouteDescription (RouteSpec (rsMethod, rsOutcomes))
 import Ecluse.Manifest (
     ManifestSource (manifestEcosystems),
     buildOpenApi,
