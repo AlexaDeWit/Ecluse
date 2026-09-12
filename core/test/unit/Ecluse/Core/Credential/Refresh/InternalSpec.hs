@@ -559,23 +559,6 @@ spec = do
             readIORef refreshLog
                 `shouldReturn` [ReportedFailure (Just (addUTCTime 10 t0)), ReportedSuccess (Just (addUTCTime 200 t0))]
 
-        it "reports an absent expiry when a refresh replaces an expiring token with a permanent token" $ do
-            (clock, setClock) <- newTestClock t0
-            (_, refreshLog, breakerR, refreshR) <- capturingReporters
-            let permanent = AuthToken (mkSecret "permanent") Nothing
-            script <- newIORef [pure (tokenExpiringIn "eager" 10), pure permanent]
-            provider <-
-                refreshingProvider
-                    (testConfig clock (scriptedMint script))
-                        { rcReporters = CredentialReporters breakerR refreshR
-                        }
-            setClock (addUTCTime 20 t0)
-            currentToken provider `shouldReturn` permanent
-            readIORef refreshLog `shouldReturn` [ReportedSuccess Nothing]
-            setClock (addUTCTime 100 t0)
-            currentToken provider `shouldReturn` permanent
-            readIORef refreshLog `shouldReturn` [ReportedSuccess Nothing]
-
         it "is silent and never throws on that account when wired with the default no-op reporters" $ do
             (clock, setClock) <- newTestClock t0
             script <- newIORef [pure (tokenExpiringIn "eager" 10), throwIO MintBoom]

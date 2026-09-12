@@ -67,7 +67,7 @@ deferredBreakerReporter deferred source =
             recordBreakerState metrics source (breakerState breaker)
 
 {- | Use the shared credential's canonical ecosystem as its bounded internal identity, never a label.
-A non-expiring replacement removes that identity. Expired credentials remain until replacement.
+An absent expiry is no observation. Expired credentials remain until a reported replacement.
 -}
 deferredRefreshReporter :: DeferredMetrics -> Ecosystem -> Provider -> RefreshReporter
 deferredRefreshReporter deferred identity provider =
@@ -78,8 +78,9 @@ deferredRefreshReporter deferred identity provider =
   where
     report :: CredentialResult -> Maybe UTCTime -> IO ()
     report result expiry = do
-        atomicModifyIORef' (dmExpiries deferred) $ \expiries ->
-            (maybe (Map.delete identity expiries) (\stamp -> Map.insert identity (provider, stamp) expiries) expiry, ())
+        for_ expiry $ \stamp ->
+            atomicModifyIORef' (dmExpiries deferred) $ \expiries ->
+                (Map.insert identity (provider, stamp) expiries, ())
         withDeferredMetrics deferred $ \metrics -> recordCredentialRefresh metrics provider result
 
 -- | Record one mirror enqueue failure after instrument installation.

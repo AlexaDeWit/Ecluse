@@ -277,15 +277,21 @@ order, and warns once at boot naming every key that did not fit.
 
 `ecluse.credential.token.ttl.seconds` reports the shortest remaining lifetime among observed
 expiring credentials with the same `provider` label. Écluse measures whole seconds at each
-collection and keeps an expired active credential at zero until replacement. A successful
-refresh replaces that credential's expiry. A failed refresh keeps the cached token's expiry.
-Non-expiring credentials do not contribute. A provider with no observed expiring credentials
-emits no TTL series.
+collection and clamps expired credentials to zero. A successful refresh replaces the observed
+expiry. A completed failed refresh reports the cached token's expiry.
 
-The `provider` label remains `registry`, `codeArtifact`, or `verdaccio`. Shared CodeArtifact
-credentials contribute once, even when several ecosystems use them. Credentials live for the
-process lifetime. The eager construction mint does not emit a refresh event or expiry observation.
-`ecluse.credential.refresh` counts completed refresh attempts by `provider` and `result`.
+Five consecutive mint failures open the breaker for 60 seconds. Requests during that cooldown
+cannot mint, and refusals do not count as completed refresh attempts. Collection still measures
+the cached token's lifetime, including when it expires during the cooldown.
+
+Refresh is demand-driven. An idle credential can expire without a provider fault, so zero TTL
+alone is not an outage signal. `ecluse.credential.refresh` counts completed attempts by `provider`
+and `result`. Read those outcomes alongside credential demand and failures of mirror writes.
+
+The bounded `provider` label remains `registry`, `codeArtifact`, or `verdaccio`. Shared
+CodeArtifact credentials contribute once, even when several ecosystems use them. Static providers
+emit no TTL observations. The eager construction mint emits neither a refresh event nor an
+expiry observation.
 
 ## Memory plan and runtime sizing
 
