@@ -3,13 +3,11 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Worker-test fixtures: the shared npm re-evaluation bundle, and a ready-made
-admit-everything policy over it.
-
-The mirror worker re-runs current policy against a job's version before mirroring it (see
-"Ecluse.Core.Worker"), so any end-to-end worker test must supply per-ecosystem policies.
-'npmPolicyWith' is the one 'WorkerPolicy' wiring those tests share: npm's real by-URL
-request formation, the SHA-256 admission floor, and an open tarball-host gate, with the
-clock, byte cap, publish capability, resolver, and rules left to the caller.
+admit-everything policy over it. The worker re-runs current policy against a job's version
+before mirroring it, so any end-to-end worker test must supply per-ecosystem policies.
+'npmPolicyWith' is the one 'WorkerPolicy' wiring they share: npm's real by-URL request
+formation, the SHA-256 admission floor, and an open tarball-host gate, with the clock, byte
+cap, publish capability, resolver, and rules left to the caller.
 -}
 module Ecluse.Test.Worker (
     npmPolicyWith,
@@ -78,7 +76,7 @@ admitAllPoliciesCapped artifactMaxBytes publish currentDigests =
         Npm
         (npmPolicyWith getCurrentTime artifactMaxBytes publish resolve [allowAll])
   where
-    resolve name version = pure (VersionPresent (mirrorableDetails name version))
+    resolve name version = pure (VersionPresent (mirrorableDetails name version) Nothing)
 
     allowAll :: PreparedRule
     allowAll = constRule "test-allow-all" (Allow "admitted for test")

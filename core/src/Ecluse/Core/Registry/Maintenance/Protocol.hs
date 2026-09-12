@@ -25,6 +25,7 @@ import Ecluse.Core.Registry (
     ParseError (parseErrorMessage),
     RegistryResponse (RegistryResponse),
     UrlFormationError,
+    isSuccessStatus,
  )
 import Ecluse.Core.Registry.Adapter.Capability (
     StoreListing (listingParse, listingRequest),
@@ -164,7 +165,7 @@ listVersions store name =
         Left fault -> Left fault
         Right (status, body)
             | status == 404 -> Right []
-            | isApplied status -> first (parseFault "version list") (served status body)
+            | isSuccessStatus status -> first (parseFault "version list") (served status body)
             | otherwise -> Left (readFault "version list" status)
   where
     served status body = map stored <$> pcParseVersionList (psCodec store) (RegistryResponse status body)
@@ -183,7 +184,7 @@ deleteChunk store name = \case
             Left fault -> pure (Left fault)
             Right (status, body)
                 | status == 404 -> pure (refused version absentDocument)
-                | not (isApplied status) -> pure (Left (readFault "document" status))
+                | not (isSuccessStatus status) -> pure (Left (readFault "document" status))
                 | otherwise -> applyDelete store name version status body
     -- 'deleteCeiling' splits to one, so a wider chunk refuses whole rather than losing its tail.
     chunk -> pure (Right [(version, VersionRefused oversizedChunk) | version <- chunk])
@@ -212,7 +213,7 @@ sendSequence store = go (1 :: Int)
         send store request >>= \case
             Left fault -> pure (Left fault)
             Right (status, _)
-                | isApplied status -> go (position + 1) rest
+                | isSuccessStatus status -> go (position + 1) rest
                 | otherwise -> pure (Right (Just (refusedAt position status)))
 
     refusedAt position status =
@@ -238,9 +239,6 @@ originBase = registryUrlText . ocBaseUrl . psOrigin
 
 originToken :: ProtocolStore -> Maybe Secret
 originToken = fmap credSecret . ocToken . psOrigin
-
-isApplied :: Int -> Bool
-isApplied status = status >= 200 && status < 300
 
 parseFault :: Text -> ParseError -> StoreFault
 parseFault subject err =

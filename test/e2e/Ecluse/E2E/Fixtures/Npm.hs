@@ -13,6 +13,7 @@ module Ecluse.E2E.Fixtures.Npm (
     allowPkg,
     denyPkg,
     mirrorPkg,
+    latestPkg,
     dredgerPkg,
     dredgerKeepPkg,
     dredgerDryRunPkg,
@@ -72,6 +73,12 @@ denyPkg = (defaultPkgSpec "e2e-deny"){psInstallScript = True}
 mirrorPkg :: PkgSpec
 mirrorPkg = defaultPkgSpec "e2e-mirror"
 
+{- | A two-version package whose upstream @latest@ is @2.0.0@. Mirroring @1.0.0@ after @2.0.0@
+must not retag the store.
+-}
+latestPkg :: PkgSpec
+latestPkg = (defaultPkgSpec "e2e-latest"){psVersion = "2.0.0", psOlderVersions = ["1.0.0"]}
+
 -- | A package with tampered artifact bytes: the worker must refuse to mirror it.
 tamperPkg :: PkgSpec
 tamperPkg = (defaultPkgSpec "e2e-tamper"){psTamper = True}
@@ -112,6 +119,7 @@ fixturePackages =
     [ allowPkg
     , denyPkg
     , mirrorPkg
+    , latestPkg
     , tamperPkg
     , headPkg
     , dredgerPkg

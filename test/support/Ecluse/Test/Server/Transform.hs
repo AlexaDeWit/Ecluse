@@ -20,6 +20,7 @@ import Data.Map.Strict qualified as Map
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName, artHashes, pkgArtifacts)
 import Ecluse.Core.Package.Filter (fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
+import Ecluse.Core.Registry.Metadata (VersionRead (vrDetails))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmVersion)
 import Ecluse.Core.Rules.Types (EvalContext)
@@ -59,7 +60,7 @@ selectiveDepth :: PackageName -> (ByteString, Version) -> SelectedDepth
 selectiveDepth pkg (raw, version) =
     case projectNpmVersion defaultLimits pkg version raw of
         Left _ -> DecodeFailed
-        Right details -> detailsDepth details
+        Right versionRead -> detailsDepth (vrDetails versionRead)
 
 -- | Force a selected snapshot through a deep field, its artifact digests.
 detailsDepth :: Maybe PackageDetails -> SelectedDepth

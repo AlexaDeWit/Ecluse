@@ -17,6 +17,7 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status200, status404, status409, status500)
 import Test.Hspec (Expectation, Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportFault (tfDetail))
 import Ecluse.Core.Package (HashAlg (SHA1, SRI), mkHash, mkSriHashes)
 import Ecluse.Core.Registry (
@@ -29,10 +30,12 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpPublishArtifact),
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
+    PublishPlan (PublishPlan, ppLatest, ppVersion),
     newMirrorPublish,
  )
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (hexSha1Of, sriSha256Of, sriSha512Of, unsafeHash, v1_0_0, validSha1)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd)
@@ -60,38 +63,46 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
     it "PUTs the publish document to the package path" $
         withStub status200 "{}" $ \stub -> do
             publish <- stubPublish stub
-            _ <- mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes
+            _ <- mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes
             cap <- lastCaptured stub
             capMethod cap `shouldBe` "PUT"
             capPath cap `shouldBe` "/is-odd"
             capBody cap `shouldBe` publishDoc
             headerValue "content-type" cap `shouldBe` Just "application/json"
 
+    it "declares the plan's latest, not the version it publishes" $ do
+        let plan = PublishPlan{ppVersion = v1_0_0, ppLatest = mkVersion Npm "2.0.0"}
+        document <- decodeJsonOrFail (npmPublishDocument isOdd plan "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes) :: IO Object
+        tags <- expectRight (parseEither (.: "dist-tags") document)
+        versions <- expectRight (parseEither (.: "versions") document) :: IO Object
+        KeyMap.lookup "latest" tags `shouldBe` Just (String "2.0.0")
+        KeyMap.keys versions `shouldBe` ["1.0.0"]
+
     it "treats a 2xx as success" $
         withStub status200 "{}" $ \stub -> do
             publish <- stubPublish stub
-            mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
+            mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
 
     it "treats a 409 Conflict as idempotent success (the immutable version is already present)" $
         withStub status409 "{\"error\":\"version already exists\"}" $ \stub -> do
             publish <- stubPublish stub
-            mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
+            mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes `shouldReturn` Right ()
 
     it "reports a 404 as a publish error naming the status (so the mirror job is retried)" $
         withStub status404 "{\"error\":\"Not found\"}" $ \stub -> do
             publish <- stubPublish stub
-            outcome <- mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes
+            outcome <- mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes
             leftMessage outcome `shouldSatisfy` maybe False (T.isInfixOf "404")
 
     it "reports a 500 as a publish error" $
         withStub status500 "boom" $ \stub -> do
             publish <- stubPublish stub
-            outcome <- mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes
+            outcome <- mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes
             outcome `shouldSatisfy` isLeft
 
     it "reports a transport failure as a PublishFetch value, never thrown" $ do
         publish <- publishAt "http://127.0.0.1:1"
-        outcome <- mpPublishArtifact publish isOdd v1_0_0 sizedArtifact dummyTarballBytes
+        outcome <- mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes
         outcome `shouldSatisfy` isTransport
 
 integritySpec :: Spec
@@ -117,7 +128,7 @@ assertPublishedIntegrity tokens expectedIntegrity =
             artifact = sizedArtifact{maHashes = hashes}
         verifyIntegrity hashes dummyTarballBytes `shouldBe` IntegrityVerified
         publish <- stubPublish stub
-        mpPublishArtifact publish isOdd v1_0_0 artifact dummyTarballBytes `shouldReturn` Right ()
+        mpPublishArtifact publish isOdd planV1 artifact dummyTarballBytes `shouldReturn` Right ()
         cap <- lastCaptured stub
         document <- decodeJsonOrFail (capBody cap) :: IO Object
         manifest <- expectRight (parseEither (\o -> o .: "versions" >>= (.: "1.0.0")) document)
@@ -162,8 +173,12 @@ sizedArtifact = dummyArtifact{maSize = Just 1234}
 dummyTarballBytes :: ByteString
 dummyTarballBytes = "tarball-bytes"
 
+-- A write of @1.0.0@ that also declares it latest, the shape most cases here do not vary.
+planV1 :: PublishPlan
+planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0}
+
 publishDoc :: ByteString
-publishDoc = npmPublishDocument isOdd v1_0_0 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes
+publishDoc = npmPublishDocument isOdd planV1 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes
 
 leftMessage :: Either PublishFault a -> Maybe Text
 leftMessage outcome = case outcome of

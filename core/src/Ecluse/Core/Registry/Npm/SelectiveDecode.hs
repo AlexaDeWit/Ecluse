@@ -2,58 +2,36 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | A __selective__ decode of an npm packument: pull __one version's__ pieces out of
-the document bytes without materialising the other versions.
+{- | A __selective__ decode of an npm packument: pull __one version's__ pieces out of the
+document bytes without materialising the other versions.
 
-The whole-packument decode (@aeson@'s @eitherDecodeStrict@) builds a 'Value' for /every/
-version. On a heavy packument (thousands of versions, multiple megabytes) that decode
-dominates the serve-path cost. The tarball gate consults a __single__ version. It needs
-that version's manifest object, its @time[version]@ publish stamp, and the document's
-self-reported @name@, nothing of the other versions. This module walks the registry's own
-JSON token stream (@aeson@'s @Data.Aeson.Decoding@, no new dependency). It materialises a
-'Value' only for those few pieces, __skipping every other version's tokens without
-allocating them__. The win is on the /parse/, not the fetch. The proxy still reads the
-full bytes, because npm carries @time@ only in the full document. It parses them
-selectively: O(1 version) work and residency rather than O(N).
-
-The generic bounded token-walk engine this decode drives lives in
-"Ecluse.Core.Json.Selective". This module adds npm's packument key selection on top.
+The whole-packument decode builds a 'Value' for every version, which dominates the serve-path
+cost on a packument of thousands of versions. The tarball gate consults a single version. This
+module walks the registry's own JSON token stream (@aeson@'s @Data.Aeson.Decoding@) and skips
+every other version's tokens without allocating them. The generic bounded
+token-walk engine is "Ecluse.Core.Json.Selective". The win is on the parse, not the fetch: the
+proxy still reads the full bytes, because npm carries @time@ only in the full document.
 
 == Faithful to the whole-document decode
 
-The skip is not a shortcut past validation. The walk consumes the __entire__ token
-stream, so:
+The walk consumes the __entire__ token stream, so malformed JSON anywhere, and trailing
+non-whitespace after the top-level object, surface as 'SelectiveUndecodable' exactly as
+@eitherDecodeStrict@ fails them. Every value is depth-bounded at the
+'Ecluse.Core.Security.checkNestingDepth' budget that would apply to it.
 
-  * Malformed JSON __anywhere__ surfaces as 'SelectiveUndecodable'. The lexer reaches
-    the offending bytes whether or not they sit in the requested version, matching
-    @eitherDecodeStrict@ failing the whole body.
-  * The walk rejects trailing non-whitespace after the top-level object likewise, by
-    the same end-of-input check @eitherDecodeStrict@ applies.
-  * Every value is depth-bounded at the same budget
-    'Ecluse.Core.Security.checkNestingDepth' would apply to it, so a deeply-nested
-    sub-tree __anywhere__ is a 'SelectiveTooDeeplyNested' breach, not a serve.
-
-It does build two pieces: the requested version object and the document @name@. The same
-@aeson@ 'Value' decoder the whole-document path uses produces them, so projecting them
-yields a byte-for-byte identical 'Ecluse.Core.Package.PackageDetails'. That projection is
-"Ecluse.Core.Registry.Npm.Project.projectVersionEntry", run over the same 'Value'.
+It materialises only the requested version's object, its @time@ stamp, the document @name@, and
+the @dist-tags.latest@ target. The same @aeson@ 'Value' decoder the whole-document path uses
+produces them, so projecting them yields an identical 'Ecluse.Core.Package.PackageDetails'.
 
 == What it deliberately does not re-validate
 
-The selective walk reaches only the requested version's @time@ entry. A structurally
-malformed-JSON entry anywhere is still 'SelectiveUndecodable', because the lexer reaches
-it. The walk __skips a schema-invalid sibling unallocated__ and never inspects it: a
-non-ISO @time@ string for /another/ version, a non-string @dist-tags@ value. The
-whole-document decode degrades the same way: it drops a malformed @time@\/@dist-tags@
-entry per-entry rather than failing the document. Neither path refuses a sound version
-over an unrelated sibling malformation. The two paths agree on __what is served__ (the
-one sound version, identically projected) and differ only in __tracking__. The
-whole-document projection records each dropped sibling as an
-'Ecluse.Core.Package.InvalidEntry' for the serve-path log. This walk skips the siblings
-unallocated, so it cannot report them: the degenerate tracking a single-version read
-inherently has. The requested version's /own/ schema-invalid stamp folds to a version
-with no known publish time on both paths, never to a document failure. That is the
-projecting caller's lenient parse.
+The walk __skips a schema-invalid sibling unallocated__ and never inspects it: a non-ISO @time@
+string for another version, a non-string @dist-tags@ value other than @latest@. The
+whole-document decode drops such an entry per-entry rather than failing the document. The two
+paths agree on __what is served__ and differ only in __tracking__: the whole-document projection
+records each dropped sibling as an 'Ecluse.Core.Package.InvalidEntry', and this walk cannot,
+having never allocated them. The requested version's own malformed stamp folds to a version with
+no known publish time on both paths, never to a document failure.
 -}
 module Ecluse.Core.Registry.Npm.SelectiveDecode (
     -- * The selective decode
@@ -92,6 +70,8 @@ data SelectedVersion = SelectedVersion
     -- ^ The requested version's object from @versions@, if that key was present.
     , svTime :: Maybe Value
     -- ^ The requested version's @time[version]@ value, if that key was present.
+    , svDistTagLatest :: Maybe Value
+    -- ^ The @dist-tags.latest@ value, if both keys were present.
     , svVersionCount :: Int
     -- ^ The number of entries in the @versions@ object (@0@ when @versions@ is absent).
     }
@@ -118,21 +98,21 @@ selectVersionFromPackument maxDepth version body
 
 -- The starting accumulator: nothing found, no versions counted.
 emptySelection :: SelectedVersion
-emptySelection = SelectedVersion Nothing Nothing Nothing 0
+emptySelection = SelectedVersion Nothing Nothing Nothing Nothing 0
 
-{- The walk's threaded state. The flags mark a captured @name@, @versions@ or @time@ so a
-later duplicate never overwrites the first, as @aeson@ resolves it. The selection alone
-cannot carry that: a captured key whose target was absent leaves 'Nothing', and so does
-"not yet seen". -}
+{- A flag marks each captured top-level key so a later duplicate never overwrites the first, as
+@aeson@ resolves it. The selection cannot carry that: an absent target and "not yet seen" both
+leave 'Nothing'. -}
 data WalkState = WalkState
     { wsSelection :: SelectedVersion
     , wsSeenName :: Bool
     , wsSeenVersions :: Bool
     , wsSeenTime :: Bool
+    , wsSeenDistTags :: Bool
     }
 
 initialWalk :: WalkState
-initialWalk = WalkState emptySelection False False False
+initialWalk = WalkState emptySelection False False False False
 
 {- Walk the top-level packument record to its end, threading the walk state. Each top-level
 value sits at @childBudget@, one level below the document object's own budget. -}
@@ -148,6 +128,7 @@ walkTop childBudget target = fmap wsSelection . go initialWalk
             "versions" -> adoptFirst wsSeenVersions captureVersions st valueToks
             "time" -> adoptFirst wsSeenTime captureTime st valueToks
             "name" -> adoptFirst wsSeenName captureName st valueToks
+            "dist-tags" -> adoptFirst wsSeenDistTags captureDistTags st valueToks
             _ -> skipValue childBudget valueToks >>= go st
 
     {- Adopt a captured top-level key at its first occurrence, or skip a later duplicate, since
@@ -170,6 +151,13 @@ walkTop childBudget target = fmap wsSelection . go initialWalk
         withRecord childBudget valueToks $ \timeRec -> do
             (found, _count, cont) <- findInRecord (childBudget - 1) target timeRec
             pure (st{wsSelection = (wsSelection st){svTime = found}, wsSeenTime = True}, cont)
+
+    -- Capture the first @dist-tags@ object's @latest@ target (first-wins), then mark
+    -- @dist-tags@ seen. A non-string target projects to no known latest, never a failure.
+    captureDistTags st valueToks =
+        withRecord childBudget valueToks $ \tagsRec -> do
+            (found, _count, cont) <- findInRecord (childBudget - 1) "latest" tagsRec
+            pure (st{wsSelection = (wsSelection st){svDistTagLatest = found}, wsSeenDistTags = True}, cont)
 
     -- Capture the first top-level @name@ value, then mark @name@ seen.
     captureName st valueToks = do

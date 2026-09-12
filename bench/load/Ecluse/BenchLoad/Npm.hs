@@ -414,15 +414,15 @@ mirrorJob url =
         , jobTraceContext = Nothing
         }
 
--- Records each publish and reports success. The mirror-presence probe must answer absent,
--- or every job after the first short-circuits: an unparseable body is that absent posture.
+-- Records each publish and reports success. The inventory probe must answer a known-empty
+-- store, or every job after the first short-circuits: @404@ is that posture.
 succeedingPublishClient :: IORef Int -> MirrorPublish
 succeedingPublishClient counter =
     MirrorPublish
         { mpPublishArtifact = \_ _ _ _ -> do
             atomicModifyIORef' counter (\n -> (n + 1, ()))
             pure (Right ())
-        , mpProbeMetadata = const (pure (Right (RegistryResponse 200 "")))
+        , mpProbeMetadata = const (pure (Right (RegistryResponse 404 "")))
         , mpParseVersionList = const (Left (ParseError "bench mirror: nothing mirrored yet"))
         }
 

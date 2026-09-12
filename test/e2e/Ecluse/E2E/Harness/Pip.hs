@@ -18,13 +18,12 @@ module Ecluse.E2E.Harness.Pip (
 import Data.Aeson (Value (Array, Object, String))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Text qualified as T
 import System.Directory (doesDirectoryExist)
 import System.FilePath ((</>))
 import UnliftIO.Environment (getEnvironment)
 
 import Ecluse.E2E.Harness.Client (runClient, withClientDir)
-import Ecluse.E2E.Harness.Proxy (proxyContainerLogs, proxyGet)
+import Ecluse.E2E.Harness.Proxy (logTail, logTailLines, proxyContainerLogs, proxyGet)
 import Ecluse.E2E.Harness.Types
 
 {- | Isolate a consumer's pip state, pinning @project==version@ to @digest@, and remove the
@@ -97,12 +96,6 @@ indexRefusal project status logs =
         <> show logTailLines
         <> " proxy log lines:\n"
         <> logTail logTailLines logs
-
-logTail :: Int -> Text -> Text
-logTail n = T.intercalate "\n" . reverse . take n . reverse . lines
-
-logTailLines :: Int
-logTailLines = 50
 
 -- The served PEP 691 document's file entries, keeping only those carrying a sha256.
 digestedFiles :: LByteString -> [(Text, Text)]

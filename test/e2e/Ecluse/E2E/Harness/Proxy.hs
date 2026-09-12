@@ -7,9 +7,13 @@ module Ecluse.E2E.Harness.Proxy (
     proxyGet,
     proxyHead,
     proxyPut,
+    shouldSucceedThroughProxy,
 
     -- * Logs
     proxyContainerLogs,
+    mirrorContainerLogs,
+    logTail,
+    logTailLines,
     awaitProxyLog,
     awaitCollectorLog,
     hasPopulatedTraceId,
@@ -30,6 +34,8 @@ import Network.HTTP.Client (
     withResponse,
  )
 import Network.HTTP.Types (hContentLength, statusCode)
+import System.Exit (ExitCode (ExitSuccess))
+import Test.Hspec (expectationFailure)
 
 import Ecluse.E2E.Harness.Docker (awaitContainerLog, containerLogs)
 import Ecluse.E2E.Harness.Types
@@ -69,11 +75,50 @@ proxyPut e2e path = do
     resp <- httpLbs base{method = "PUT"} (e2eManager e2e)
     pure (statusCode (responseStatus resp))
 
+{- | 'shouldSucceed' with the proxy's and the mirror store's own log tails, because a refusal
+reaches a client as a bare status whose reason exists only in those logs.
+-}
+shouldSucceedThroughProxy :: E2E -> ClientResult -> IO ClientResult
+shouldSucceedThroughProxy e2e res = case crExit res of
+    ExitSuccess -> pure res
+    _ -> do
+        proxyLog <- proxyContainerLogs e2e
+        mirrorLog <- mirrorContainerLogs e2e
+        expectationFailure (toString (clientRefusal res proxyLog mirrorLog))
+        pure res
+
+-- The client's own output, then the two logs that decided the status it saw.
+clientRefusal :: ClientResult -> Text -> Text -> Text
+clientRefusal res proxyLog mirrorLog =
+    crCommand res
+        <> " failed!\nSTDOUT:\n"
+        <> crStdout res
+        <> "\nSTDERR:\n"
+        <> crStderr res
+        <> tailSection "proxy" proxyLog
+        <> tailSection "mirror store" mirrorLog
+
+tailSection :: Text -> Text -> Text
+tailSection label logs =
+    "\nLast " <> show logTailLines <> " " <> label <> " log lines:\n" <> logTail logTailLines logs
+
+-- | The last @n@ lines of a container's log, for a failure whose reason lives only there.
+logTail :: Int -> Text -> Text
+logTail n = T.intercalate "\n" . reverse . take n . reverse . lines
+
+-- | How many log lines a failure carries: enough for the deciding request, short enough to read.
+logTailLines :: Int
+logTailLines = 50
+
 {- | The proxy container's combined stdout and stderr: the JSONL stream it writes under
 @ECLUSE_OBSERVABILITY__LOG_FORMAT=json@.
 -}
 proxyContainerLogs :: E2E -> IO Text
 proxyContainerLogs = containerLogs . e2eProxyContainer
+
+-- | The mirror store's own stdout, which carries a publish or render error the proxy cannot see.
+mirrorContainerLogs :: E2E -> IO Text
+mirrorContainerLogs = containerLogs . e2eMirrorContainer
 
 {- | Poll the proxy's own log stream until the predicate holds, or the attempts lapse. Use it for an
 assertion that must await an asynchronous line.

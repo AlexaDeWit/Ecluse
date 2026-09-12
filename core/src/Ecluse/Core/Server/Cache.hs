@@ -46,7 +46,7 @@ import Ecluse.Core.Package (
     renderScope,
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, weighCachedDoc)
-import Ecluse.Core.Registry.Metadata (ContentDigest, MetadataError)
+import Ecluse.Core.Registry.Metadata (ContentDigest, MetadataError, VersionRead)
 import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
     SingleFlight,
@@ -149,7 +149,7 @@ versionKey source name version = VersionKey (keyText source name <> "\x1f" <> re
 data MetadataCache = MetadataCache
     { mcFull :: SingleFlight MetadataError CacheKey CacheEntry
     -- ^ The full-packument store, keyed by @(source, package)@.
-    , mcVersion :: SingleFlight MetadataError VersionKey (Maybe PackageDetails)
+    , mcVersion :: SingleFlight MetadataError VersionKey VersionRead
     , mcAssembled :: SingleFlight Void Text ByteString
     }
 
@@ -181,10 +181,10 @@ resolveMetadataWith afterClaim metrics cache source name =
         (cacheKey source name)
 
 -- | Cache a selectively decoded release or its absence. Oversized releases remain uncached.
-resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails)) -> IO (Either MetadataError (Maybe PackageDetails))
+resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (Either MetadataError VersionRead)
 resolveVersion = resolveVersionWith (pure ())
 
-resolveVersionWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails)) -> IO (Either MetadataError (Maybe PackageDetails))
+resolveVersionWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (Either MetadataError VersionRead)
 resolveVersionWith afterClaim metrics cache source name version =
     resolveSingleFlight
         afterClaim
@@ -209,6 +209,6 @@ resolveAssembled metrics cache key render =
 cachedMetadata :: MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
 cachedMetadata cache source name = lookupStore (mcFull cache) (cacheKey source name)
 
--- | Read and refresh recency. 'Just' 'Nothing' is a cached absence.
-cachedVersion :: MetadataCache -> Source -> PackageName -> Version -> IO (Maybe (Maybe PackageDetails))
+-- | Read and refresh recency. A read whose 'vrDetails' is 'Nothing' is a cached absence.
+cachedVersion :: MetadataCache -> Source -> PackageName -> Version -> IO (Maybe VersionRead)
 cachedVersion cache source name version = lookupStoreTouching (mcVersion cache) (versionKey source name version)

@@ -15,6 +15,7 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (..))
+import Ecluse.Core.Registry.Metadata (VersionRead (VersionRead, vrDetails, vrUpstreamLatest))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Version (mkVersion, versionKey)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName, unsafeHash, v1_0_0, validSha256)
@@ -22,8 +23,12 @@ import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName, unsafeHash
 spec :: Spec
 spec = describe "selected-release accounting" $ do
     it "keeps a cached absence smaller than a present release" $ do
-        weighVersion Nothing `shouldBe` 1024
-        weighVersion (Just baseline) `shouldSatisfy` (> weighVersion Nothing)
+        weighVersion (untagged Nothing) `shouldBe` 1024
+        weighVersion (untagged (Just baseline)) `shouldSatisfy` (> weighVersion (untagged Nothing))
+
+    it "charges the retained upstream release tag on top of the release" $ do
+        let tagged = (untagged (Just baseline)){vrUpstreamLatest = Just (mkVersion Npm "1.0.0")}
+        weighVersion tagged `shouldSatisfy` (> weighVersion (untagged (Just baseline)))
 
     it "charges each artifact even when its fields share allocations" $ do
         let singleWeight = weight baseline{pkgArtifacts = oneArtifact :| []}
@@ -67,7 +72,10 @@ spec = describe "selected-release accounting" $ do
             expandedWeight - compactWeight - payloadGrowth `shouldSatisfy` (>= minimumParsedGrowth)
 
 weight :: PackageDetails -> Int
-weight = weighVersion . Just
+weight = weighVersion . untagged . Just
+
+untagged :: Maybe PackageDetails -> VersionRead
+untagged details = VersionRead{vrDetails = details, vrUpstreamLatest = Nothing}
 
 oneArtifact :: Artifact
 oneArtifact = sampleArtifact{artHashes = [], artInterpreter = Nothing, artProvenance = Nothing}

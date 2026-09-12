@@ -8,9 +8,13 @@ Queue receipts, publications, and typed failures expose the worker's decisions.
 module Ecluse.Worker.Support.Runtime (
     -- * A recording publish capability
     PublishLog (..),
+    emptyPublishLog,
     recordingPublish,
     mirrorListingPublish,
     probeUnreachablePublish,
+    probeUnreadablePublish,
+    probeRefusingPublish,
+    probeOverboundPublish,
 
     -- * Building a worker runtime over doubles
     withRuntimeRegistry,
@@ -47,7 +51,6 @@ import Network.HTTP.Types (status200)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
-import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Queue (
     MirrorJob,
     MirrorQueue (ack, deadLetter, receive),
@@ -56,7 +59,7 @@ import Ecluse.Core.Queue (
     enqueue,
  )
 import Ecluse.Core.Registry (
-    FetchFault (FetchTransport),
+    FetchFault (FetchBoundExceeded, FetchTransport),
     MirrorArtifact,
     ParseError (ParseError),
     PublishFault,
@@ -65,8 +68,10 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
     MetadataError,
+    VersionRead,
  )
-import Ecluse.Core.Registry.Publish (MirrorPublish (..))
+import Ecluse.Core.Registry.Publish (MirrorPublish (..), PublishPlan)
+import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker (
@@ -84,35 +89,66 @@ import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Worker.Support.Fixtures (admitPolicies, tarballBytes, withPublish)
 
--- | Capture verified bytes and the descriptor passed to publication.
+-- | Capture what publication was handed: the verified bytes, the descriptor, and the plan.
 data PublishLog = PublishLog
     { plDocuments :: [ByteString]
+    -- ^ The verified tarball bytes, not the assembled publish document the codec renders.
     , plArtifacts :: [MirrorArtifact]
+    , plPlans :: [PublishPlan]
+    -- ^ The version and release tag each write declared.
     }
 
--- | Record publications with a fixed outcome, always reporting the mirror version absent.
+-- | A log that has recorded nothing, so a new field never has to be spelled at every call site.
+emptyPublishLog :: PublishLog
+emptyPublishLog = PublishLog{plDocuments = [], plArtifacts = [], plPlans = []}
+
+{- | Record publications with a fixed outcome. The inventory probe answers @404@, which the
+worker reads as a known-empty store without consulting the version list.
+-}
 recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 recordingPublish logRef outcome =
     MirrorPublish
-        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 "")))
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 404 "")))
         , mpParseVersionList = const (Left (ParseError "absent: nothing mirrored yet"))
-        , mpPublishArtifact = \_ _ artifact document -> do
-            atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l}, ()))
+        , mpPublishArtifact = \_ plan artifact document -> do
+            atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l, plPlans = plan : plPlans l}, ()))
             pure outcome
         }
 
--- | 'recordingPublish' whose mirror-presence probe __confirms__ the given versions present at the mirror target, for the dedup short-circuit tests.
+-- | 'recordingPublish' whose inventory probe __reports__ the given versions present at the mirror target, for the dedup and release-tag cases.
 mirrorListingPublish :: IORef PublishLog -> Either PublishFault () -> [Version] -> MirrorPublish
 mirrorListingPublish logRef outcome versions =
     (recordingPublish logRef outcome)
-        { mpParseVersionList = const (Right versions)
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 "")))
+        , mpParseVersionList = const (Right versions)
         }
 
--- | 'recordingPublish' whose mirror-presence probe reports a mirror outage as the typed 'FetchTransport' value, for the probe-cannot-tell fall-through tests.
+-- | 'recordingPublish' whose inventory probe reports a mirror outage as the typed 'FetchTransport' value, for the unreadable-inventory cases.
 probeUnreachablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeUnreachablePublish logRef outcome =
     (recordingPublish logRef outcome)
         { mpProbeMetadata = const (pure (Left (FetchTransport (transportFault TransportUnreachable "simulated mirror outage"))))
+        }
+
+-- | 'recordingPublish' whose inventory probe answers a readable status with a body the version projection refuses.
+probeUnreadablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
+probeUnreadablePublish logRef outcome =
+    (recordingPublish logRef outcome)
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 "not a packument")))
+        }
+
+-- | 'recordingPublish' whose inventory probe answers a status that is neither success nor an absence.
+probeRefusingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
+probeRefusingPublish logRef outcome =
+    (recordingPublish logRef outcome)
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 503 "")))
+        }
+
+-- | 'recordingPublish' whose inventory probe overruns the response bound, the probe leg's terminal fault.
+probeOverboundPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
+probeOverboundPublish logRef outcome =
+    (recordingPublish logRef outcome)
+        { mpProbeMetadata = const (pure (Left (FetchBoundExceeded (BodyTooLarge 1))))
         }
 
 -- | Expose the worker's queue and captured publications to the test callback.
@@ -124,7 +160,7 @@ withRuntimeRegistry mkPublish policies metricsPort body = do
 -- | Use a supplied queue to observe or perturb the worker's queue decisions.
 withRuntimeQueue :: MirrorQueue -> (IORef PublishLog -> MirrorPublish) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> IORef PublishLog -> IO a) -> IO a
 withRuntimeQueue queue mkPublish policies metricsPort body = do
-    logRef <- newIORef (PublishLog [] [])
+    logRef <- newIORef emptyPublishLog
     withWiredRuntime queue (withPublish (mkPublish logRef) policies) metricsPort (`body` logRef)
 
 -- | Run the supplied worker policies without replacing their publish capabilities.
@@ -175,7 +211,7 @@ runWMWith :: LogEnv -> WorkerRuntime -> WorkerM a -> IO a
 runWMWith logEnv = runWorkerM logEnv mempty
 
 -- | A 'MetadataClient' double whose single-version op returns a fixed result (the full-manifest op is unused here and refuses loudly).
-versionClient :: Either MetadataError (Maybe PackageDetails) -> MetadataClient
+versionClient :: Either MetadataError VersionRead -> MetadataClient
 versionClient result =
     MetadataClient
         { fetchFullManifest = const (throwIO (TestContractEscape "versionClient: fetchFullManifest is unused"))

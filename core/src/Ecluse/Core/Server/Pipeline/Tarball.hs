@@ -66,6 +66,7 @@ import Ecluse.Core.Registry.Metadata (
         MetadataUndecodable
     ),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
+    VersionRead (vrDetails),
     fetchVersionDetails,
     versionTransience,
  )
@@ -302,7 +303,7 @@ privateArtifactRequest rt deps token name version file = case pdPrivateBaseUrl d
         pure $ case resolved of
             Left _ -> PrivateMissing MissUnresolved
             Right (Left err) -> maybe PrivateRefused PrivateMissing (privateMetadataMiss err)
-            Right (Right details) -> maybe (PrivateMissing MissAbsent) PrivateRequest (details >>= requestForDetails)
+            Right (Right versionRead) -> maybe (PrivateMissing MissAbsent) PrivateRequest (vrDetails versionRead >>= requestForDetails)
       where
         requestForDetails details = do
             artifact <- find ((== unFilename file) . artFilename) (pkgArtifacts details)
@@ -374,7 +375,7 @@ gatePublicVersion rt deps name version file advisoryEtag = do
     case eval of
         VersionMetadataUnavailable -> pure (Refused upstreamUnavailable)
         VersionMissing -> pure (Refused versionAbsent)
-        VersionPresent details ->
+        VersionPresent details _ ->
             liftIO $
                 spanRuleEval (srTracing rt) name version $ do
                     (gate, seconds) <- timedSeconds (gateVersion evalCtx deps file details)

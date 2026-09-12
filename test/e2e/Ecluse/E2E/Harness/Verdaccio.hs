@@ -12,10 +12,11 @@ module Ecluse.E2E.Harness.Verdaccio (
     verdaccioVersions,
     verdaccioAwaitVersions,
     verdaccioArtifact,
+    verdaccioLatest,
     verdaccioSnapshot,
 ) where
 
-import Data.Aeson (Object, decodeStrict, eitherDecodeStrict, (.:))
+import Data.Aeson (Object, Value (String), decodeStrict, eitherDecodeStrict, (.:))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
@@ -151,6 +152,26 @@ verdaccioArtifact e2e name version = do
     req <- parseRequest (toString (e2eVerdaccio e2e <> "/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz"))
     resp <- httpLbs req (e2eManager e2e)
     pure (statusCode (responseStatus resp), LBS.length (responseBody resp))
+
+{- | The store's own @dist-tags.latest@ target. 'Nothing' for an absent package or an absent tag,
+and a failure for an unreadable packument.
+-}
+verdaccioLatest :: E2E -> Text -> IO (Maybe Text)
+verdaccioLatest e2e name = do
+    resp <- fetchPackument e2e name
+    let status = statusCode (responseStatus resp)
+        body = LBS.toStrict (responseBody resp)
+        tags = eitherDecodeStrict body >>= parseEither (.: "dist-tags") :: Either String Object
+    case status of
+        404 -> pure Nothing
+        200 -> do
+            decoded <- expectRight (first (\err -> name <> ": " <> toText err) tags)
+            pure (KeyMap.lookup "latest" decoded >>= textOf)
+        _ -> expectRight (Left (name <> ": packument returned HTTP " <> show status) :: Either Text (Maybe Text))
+  where
+    textOf = \case
+        String raw -> Just raw
+        _ -> Nothing
 
 -- | Snapshot every listed package and its versions, failing if a packument cannot be read.
 verdaccioSnapshot :: E2E -> IO (Map Text [Text])

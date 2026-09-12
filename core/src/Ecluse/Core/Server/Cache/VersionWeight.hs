@@ -16,11 +16,16 @@ import GHC.Exts (Int (I#), sizeofByteArray#)
 
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (..))
+import Ecluse.Core.Registry.Metadata (VersionRead (vrDetails, vrUpstreamLatest))
 import Ecluse.Core.Version (renderVersion)
 
 -- | Estimate retained release bytes. 'maxBound' marks an uncacheable saturated estimate.
-weighVersion :: Maybe PackageDetails -> Int
-weighVersion = maybe 1024 (fromInteger . min (toInteger (maxBound :: Int)) . detailsWeight)
+weighVersion :: VersionRead -> Int
+weighVersion versionRead =
+    fromInteger (min (toInteger (maxBound :: Int)) (detailsPart + latestPart))
+  where
+    detailsPart = maybe 1024 detailsWeight (vrDetails versionRead)
+    latestPart = maybe 0 (textWeight . renderVersion) (vrUpstreamLatest versionRead)
 
 detailsWeight :: PackageDetails -> Integer
 detailsWeight details =

@@ -18,6 +18,9 @@ module Ecluse.Core.Registry.Metadata (
     -- * The fetch-then-project step
     fetchThenProject,
 
+    -- * One version's read
+    VersionRead (..),
+
     -- * Errors
     MetadataError (..),
 
@@ -28,7 +31,7 @@ module Ecluse.Core.Registry.Metadata (
 ) where
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
-import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, responseStatusCode), isAuthorisationFailure)
+import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, responseStatusCode), isAuthorisationFailure, isSuccessStatus)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError)
@@ -50,9 +53,22 @@ data Manifest = Manifest
 data MetadataClient = MetadataClient
     { fetchFullManifest :: PackageName -> IO (Either MetadataError Manifest)
     -- ^ Return the full manifest or a typed failure, including explicit access refusal.
-    , fetchVersionMetadata :: PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
-    -- ^ 'Nothing' means the package resolved without this version. Errors retain the upstream failure.
+    , fetchVersionMetadata :: PackageName -> Version -> IO (Either MetadataError VersionRead)
+    -- ^ One version's projection with the document's own @latest@. Errors retain the upstream failure.
     }
+
+{- | The requested version and the @latest@ tag the same document declared. Both come from one
+bounded read, so a caller needing the tag adds no second fetch.
+-}
+data VersionRead = VersionRead
+    { vrDetails :: Maybe PackageDetails
+    -- ^ 'Nothing' means the package resolved without this version.
+    , vrUpstreamLatest :: Maybe Version
+    {- ^ The document's @latest@ target, whether or not it is the requested version. 'Nothing'
+    when the document declares none, or the ecosystem has no such tag.
+    -}
+    }
+    deriving stock (Eq, Show)
 
 -- | Project successful responses only, preserving HTTP refusals before decoding.
 fetchThenProject ::
@@ -68,7 +84,7 @@ fetchThenProject tracing fetch name project =
             404 -> pure (Left MetadataAbsent)
             code
                 | isAuthorisationFailure code -> pure (Left (MetadataAuthorisationFailure code))
-                | code >= 200 && code < 300 -> spanMetadataDecode tracing name (pure (project (responseBody response)))
+                | isSuccessStatus code -> spanMetadataDecode tracing name (pure (project (responseBody response)))
                 | otherwise -> pure (Left (MetadataHttpFailure code))
 
 -- | Why a metadata fetch could not yield a usable result.
@@ -91,8 +107,10 @@ data MetadataError
 
 -- | A version lookup result shared by public admission and mirror workers.
 data VersionEvaluation
-    = -- | The version resolved and projected. Its 'PackageDetails' is ready for the rules engine.
-      VersionPresent PackageDetails
+    = {- | The version resolved and projected, ready for the rules engine. The second field is
+      the same document's 'vrUpstreamLatest'.
+      -}
+      VersionPresent PackageDetails (Maybe Version)
     | -- | The package exists but does not supply the requested version.
       VersionMissing
     | -- | Metadata was unavailable. Public admission and workers retain their retry policy.
@@ -104,8 +122,9 @@ fetchVersionDetails :: MetadataClient -> PackageName -> Version -> IO VersionEva
 fetchVersionDetails client name version =
     fetchVersionMetadata client name version <&> \case
         Left _ -> VersionMetadataUnavailable
-        Right Nothing -> VersionMissing
-        Right (Just details) -> VersionPresent details
+        Right versionRead -> case vrDetails versionRead of
+            Nothing -> VersionMissing
+            Just details -> VersionPresent details (vrUpstreamLatest versionRead)
 
 -- | Classify unsuccessful lookups for retry. A resolved version has no transience.
 versionTransience :: VersionEvaluation -> Maybe Transience

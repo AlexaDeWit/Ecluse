@@ -90,6 +90,22 @@ The current npm mirror writer omits dependency and executable fields from its pu
 [#1205](https://github.com/AlexaDeWit/Ecluse/issues/1205) tracks that defect. Until corrected,
 do not assume a fresh install from the mirror reproduces the public package's dependency metadata.
 
+Each mirror write sets `dist-tags.latest` on the mirror target. Écluse reads the public
+registry's own `latest` and the versions the mirror holds after the write, then names the public
+target when the mirror holds it. Otherwise it names the highest stable version present, or the
+highest prerelease when no stable version is present. Mirroring one version never makes that
+version `latest` by itself, so back-filling an old version does not change what an unqualified
+install resolves. Écluse owns `latest` on every public package it mirrors and overwrites a value
+it did not set, so keep a deliberate release tag on your private registry, which the merged
+listing prefers. First-party names never reach the mirror worker, and their release tags are
+untouched.
+
+A mirror job whose target metadata cannot be read is not published, because the tag cannot be
+chosen without the current inventory. It follows the worker's usual fault handling instead, which
+retries a transport failure and retires a fault no redelivery can clear. Two workers mirroring the
+same package at the same instant still race: an npm publish carries no compare-and-set, so the last
+write wins. The next job that publishes a new version of that package corrects the tag.
+
 Before publication, the mirror worker verifies fetched bytes against the current admitted
 metadata. For npm `dist.integrity`, any matching SRI alternative at the strongest algorithm
 permits publication, regardless of token order. A matching weaker digest cannot rescue a
