@@ -16,13 +16,12 @@ import Data.Conduit (fuseUpstream)
 import Data.Conduit.List qualified as CL
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Core.Fault (tfCause, tfDetail, transportFault)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
     NameAlphabet,
     NamePrefix,
-    StoreFacts (factBackend, factNameAlphabet),
-    StoreFault (faultTransport),
+    StoreFacts (factNameAlphabet),
+    StoreFault,
     StoreObservation (obFacts, obListPackagesIn),
     StoredVersion (storedVersion),
     noNameAlphabet,
@@ -40,7 +39,7 @@ groupAlphabet mirror cache
     alphabet = factNameAlphabet . obFacts
 
 -- | Join actual package presence under the shared bucket budget, retaining each location.
-collectGroupBucket :: NameAlphabet -> NamePrefix -> StoreObservation -> StoreObservation -> IO (BucketNames (PackageName, [StoreObservation]))
+collectGroupBucket :: NameAlphabet -> NamePrefix -> StoreObservation -> StoreObservation -> IO (BucketNames (StoreObservation, StoreFault) (PackageName, [StoreObservation]))
 collectGroupBucket alphabet prefix mirror cache =
     fmap (second Map.elems) <$> collectBucketWith alphabet prefix Map.union source
   where
@@ -48,18 +47,10 @@ collectGroupBucket alphabet prefix mirror cache =
         fault <- locatedPages False mirror
         maybe (locatedPages True cache) (pure . Just) fault
     locatedPages slot store =
-        fmap (locatedFault store)
+        fmap (store,)
             <$> fuseUpstream
                 (obListPackagesIn store prefix)
                 (CL.map (map (,Map.singleton slot store)))
-
-locatedFault :: StoreObservation -> StoreFault -> StoreFault
-locatedFault store fault =
-    fault
-        { faultTransport = transportFault (tfCause transport) (factBackend (obFacts store) <> ": " <> tfDetail transport)
-        }
-  where
-    transport = faultTransport fault
 
 -- | Reject an oversized combined version inventory and deduplicate identities within each location.
 boundedVersions :: Int -> [(StoreObservation, [StoredVersion])] -> Either StoreFault [(StoreObservation, [StoredVersion])]

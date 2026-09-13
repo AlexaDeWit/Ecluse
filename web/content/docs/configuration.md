@@ -153,7 +153,7 @@ because one fact with two spellings is one fact too many.
 | Tag | The store | Where it applies |
 | --- | --- | --- |
 | `registry` | Any host that speaks the ecosystem's protocol, such as Artifactory, Nexus, or a public registry | Every endpoint. The only tag `publicUpstream` admits |
-| `codeArtifact` | An AWS CodeArtifact repository endpoint. Écluse mints its write token from the host | Every endpoint but `publicUpstream` |
+| `codeArtifact` | An AWS CodeArtifact repository endpoint. Écluse derives its mint identity from the host | Every endpoint but `publicUpstream` |
 | `verdaccio` | A Verdaccio development store, on a static token | Every endpoint but `publicUpstream` |
 
 The keys each tag admits depend on the endpoint, because the endpoints hold different credentials.
@@ -165,10 +165,15 @@ The keys each tag admits depend on the endpoint, because the endpoints hold diff
 | `mirrorTarget` | `url`, `token` | `url`, optional `tokenDuration` | `url`, `token`, optional `permitDeletion` |
 | `publicationTarget` | `url`, optional `token` | `url`, optional `token` | `url`, optional `token` |
 
-Three rules explain the table. A read forwards the caller's own credential, so no read target
-carries one. The mirror write is Écluse's one standing credential, so `codeArtifact` mints it and
-admits no `token`, while the two non-minting tags require one. The publication token is a fallback
-forwarded only when the publishing client sends none, which every tag admits.
+Proxy reads forward the caller's own credential to the private upstream, while public reads
+remain anonymous. The mirror write uses Écluse's credential: `codeArtifact` mints it and admits
+no `token`, while the two non-minting tags require one. Every publication tag admits a fallback
+token, forwarded only when the publishing client sends none.
+
+Dredger preview also mints a CodeArtifact credential for private-cache observations from that
+target's own host identity. It never borrows a caller or publication token. Matching mirror and
+private mint identities share one provider. This maintenance credential does not change proxy
+caller passthrough. See [Dredger preview](@/docs/dredger.md#preview).
 
 `permitDeletion: true` is your consent for `ecluse dredger` to delete from a Verdaccio store, and
 it exists on no other tag. Without it the Dredger refuses that store, and every other role ignores

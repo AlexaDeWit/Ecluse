@@ -31,6 +31,7 @@ module Ecluse.Core.Registry.Sweep.Types (
     renderGeneration,
     renderTally,
     renderStoreFault,
+    storeSubject,
 
     -- * What a preview found standing in a real sweep's way
     TargetPrerequisites (..),
@@ -413,8 +414,9 @@ renderCycleHalt = \case
 renderGeneration :: Maybe DbEtag -> Text
 renderGeneration = maybe "none" (\(DbEtag etag) -> etag)
 
+-- | Name a store without assuming whether it is the mirror or private target.
 storeSubject :: Ecosystem -> Text -> Text
-storeSubject eco backend = "the " <> ecosystemName eco <> " mirror store on " <> backend
+storeSubject eco backend = "the " <> ecosystemName eco <> " store on " <> backend
 
 -- | One cycle's counts, as its closing line reports them.
 renderTally :: SweepTally -> Text

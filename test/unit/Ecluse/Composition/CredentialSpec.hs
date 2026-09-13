@@ -6,11 +6,14 @@ module Ecluse.Composition.CredentialSpec (spec) where
 
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Test.Hspec
 
+import Ecluse.Composition.BootError (BootError (CodeArtifactMintFailed), renderBootError)
 import Ecluse.Composition.Credential (
     CredentialTarget (..),
     codeArtifactIdentityGroups,
+    codeArtifactMintFailure,
     initTargetCredentialProviders,
     initializedEcosystems,
     lookupProvider,
@@ -35,6 +38,7 @@ spec = do
     credentialProvidersSpec
     providerLabelSpec
     identityGroupsSpec
+    mintFailureSpec
 
 credentialProvidersSpec :: Spec
 credentialProvidersSpec = describe "initCredentialProviders" $ do
@@ -65,6 +69,28 @@ credentialProvidersSpec = describe "initCredentialProviders" $ do
                 case lookupTargetProvider target Npm providers of
                     Nothing -> expectationFailure "expected the target's provider"
                     Just provider -> (unSecret . authSecret <$> currentToken provider) `shouldReturn` expected
+
+mintFailureSpec :: Spec
+mintFailureSpec = describe "CodeArtifact mint failure attribution" $ do
+    for_ [(MirrorCredential, "MIRROR_TARGET"), (PrivateCacheCredential, "PRIVATE_UPSTREAM")] $ \(target, key) ->
+        it ("names the configured " <> show target <> " when its mint fails") $ do
+            let targetKey = "ECLUSE_MOUNTS__NPM__" <> key
+                failure = codeArtifactMintFailure ((Npm, target) :| []) "AccessDenied"
+            failure `shouldBe` CodeArtifactMintFailed (targetKey :| []) "AccessDenied"
+            renderBootError failure `shouldSatisfy` T.isPrefixOf ("credential provider codeartifact for " <> targetKey <> " failed")
+            renderBootError failure `shouldNotSatisfy` T.isInfixOf "mirror-target credential"
+
+    it "names every private and mirror consumer of a failed shared mint" $ do
+        let shared = caConfig "shared-domain" Nothing
+            consumers = [(Npm, MirrorCredential), (Npm, PrivateCacheCredential), (PyPI, PrivateCacheCredential)]
+            groups = codeArtifactIdentityGroups [(key, TagCodeArtifact, shared) | key <- consumers]
+        case groups of
+            [(_, (_, targets))] -> do
+                let rendered = renderBootError (codeArtifactMintFailure targets "AccessDenied")
+                for_ ["ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM", "AccessDenied"] $ \expected ->
+                    rendered `shouldSatisfy` T.isInfixOf expected
+                rendered `shouldNotSatisfy` T.isInfixOf "mirror-target credential"
+            _ -> expectationFailure "expected one shared mint group"
 
 {- | The label every credential signal carries. It derives from the mount's own declared tag, so a
 second minting store cannot report under the first one's name.

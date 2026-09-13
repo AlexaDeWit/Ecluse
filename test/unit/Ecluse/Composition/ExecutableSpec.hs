@@ -196,14 +196,14 @@ spec = describe "planExecutable" $ do
         outcome <- planUnder codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingCredentials inertStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
-            Left errs -> errs `shouldBe` [CodeArtifactMintFailed "no identity answered"]
+            Left errs -> errs `shouldBe` [CodeArtifactMintFailed ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET" :| []) "no identity answered"]
 
     it "reports a refused mint and a store client it cannot build together" $ do
         -- All three refusable steps accumulate, so one launch names every problem.
         outcome <- planUnder codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingCredentials refusingStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
-            Left [CodeArtifactMintFailed _, StoreMaintenanceUnavailable Npm (ClientBuildFailed _)] -> pass
+            Left [CodeArtifactMintFailed _ _, StoreMaintenanceUnavailable Npm (ClientBuildFailed _)] -> pass
             Left errs -> expectationFailure ("expected the mint and the handle refusal, got: " <> show errs)
 
     it "plans the pilot through the same phase, on its own arm" $ do
@@ -276,7 +276,7 @@ inertCredentials _ _ = pure (Right noCredentialProviders)
 
 -- | A credential build that refuses, as a mint against an identity that cannot answer does.
 refusingCredentials :: BuildCredentials
-refusingCredentials _ _ = pure (Left [CodeArtifactMintFailed "no identity answered"])
+refusingCredentials _ _ = pure (Left [CodeArtifactMintFailed ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET" :| []) "no identity answered"])
 
 -- | The typed stand-in for amazonka's credential-discovery failure.
 data NoCredentials = NoCredentials

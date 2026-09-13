@@ -59,9 +59,10 @@ the public upstream itself.
 
 ### Outbound registry credentials
 
-A **mirrored** mount holds a credential to write its mirror target. That write is Écluse's only
-standing credential. It runs on the async worker under Écluse's own identity, and reads carry none
-of it. A serve-only mount, or a deployment with no mirrored mounts, mints nothing.
+A **mirrored** mount holds a credential to write its mirror target. The async worker uses
+Écluse's own identity. Proxy private reads forward the caller's credential and never use that
+write credential. Dredger preview holds a separate target-bound credential for private-cache
+observations, because no caller supplies one to an autonomous maintenance process.
 
 A credential is always its own key, never part of an endpoint. Écluse refuses a registry URL
 carrying userinfo, a query string, or a fragment at load, and the error names the key. That refusal
@@ -72,16 +73,16 @@ The tag is the declaration: it names the store behind an endpoint, and the load 
 against it, so Écluse can never pair a credential with an endpoint it was not scoped for. The
 `codeArtifact` tag requires a host of the shape
 `{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`, which encodes the whole mint identity, so
-the worker mints a short-lived token scoped to that domain and the tag admits no static one. The
-two non-minting tags each require a `token` under a mirror target.
+the worker and Dredger preview mint short-lived tokens scoped to each target's domain. The tag
+admits no static token for either mirror writes or private observations. The two non-minting
+tags each require a `token` under a mirror target.
 
-A tag never moves the credential posture. Reads stay per-caller passthrough under every tag, the
-public upstream stays anonymous, the mirror write stays Écluse's one standing credential, and a
-`publicationTarget` token stays the fallback Écluse forwards only when the publishing client sends
-none.
+A tag never moves the proxy's credential posture. Private reads stay per-caller passthrough,
+public reads stay anonymous, and a `publicationTarget` token stays the fallback forwarded only
+when the publishing client sends none. Dredger uses its private credential only for observations.
 
-The CodeArtifact mint is per
-domain, so mounts whose resolved identities coincide share one
+The CodeArtifact mint is per domain. Mirror and private observation consumers whose resolved
+mint identities coincide share one
 [`CredentialProvider`](cloud-backends.md#the-credential-mint): one mint, one refresh, one breaker.
 
 ### Outbound egress safety
