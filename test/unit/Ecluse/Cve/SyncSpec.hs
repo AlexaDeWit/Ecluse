@@ -20,7 +20,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO.Async (withAsync)
 import UnliftIO.Exception (bracket, throwIO)
-import UnliftIO.STM (check)
+import UnliftIO.STM (checkSTM)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Composition.Support (expectAppConfig)
@@ -236,7 +236,7 @@ spec = do
                 let run handle env = runQuietKatip $ runCveSync noopAdvisorySyncMetricsPort tracing env schedule (SyncHooks (landed handle) (atomically (modifyTVar' done (+ 1))))
                 withAsync (run npmHandle npmEnv) $ \_ ->
                     withAsync (run pypiHandle pypiEnv) $ \_ -> do
-                        timeout 5_000_000 (atomically (readTVar done >>= check . (>= 2))) `shouldReturn` Just ()
+                        timeout 5_000_000 (atomically (readTVar done >>= checkSTM . (>= 2))) `shouldReturn` Just ()
                         cveSyncReadiness plan `shouldReturn` Routable (Map.fromList [(Npm, MountAwaitingFirstSync), (PyPI, MountReady)])
                         withSlotGeneration (syncSlot npmEnv) (pure . isJust) `shouldReturn` False
                         withSlotGeneration (syncSlot pypiEnv) (pure . isJust) `shouldReturn` True
