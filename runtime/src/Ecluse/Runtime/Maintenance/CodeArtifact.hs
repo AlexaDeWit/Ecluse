@@ -130,8 +130,8 @@ newCodeArtifactCacheMaintenance limit alphabet readManifest store = do
 newCodeArtifactCacheObservation :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
 newCodeArtifactCacheObservation limit alphabet readManifest store = do
     env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
-    let reader = readPlaneFor env
-    pure (boundedObservationFor limit alphabet readManifest store reader){obClassifyStore = cacheClassification reader store}
+    let readCalls = readPlaneFor env
+    pure (boundedObservationFor limit alphabet readManifest store readCalls){obClassifyStore = cacheClassification readCalls store}
 
 -- | Build the configured cache capability over injected calls without relaxing the mirror constructor.
 cacheMaintenanceFor :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
@@ -145,7 +145,7 @@ boundedMaintenance limit alphabet readManifest store plane =
         }
 
 cacheClassification :: ReadPlane -> CodeArtifactStore -> IO (Either StoreFault StoreClass)
-cacheClassification reader store = fmap (const StoreDestroyable) <$> describeStore reader store
+cacheClassification readCalls store = fmap (const StoreDestroyable) <$> describeStore readCalls store
 
 -- | Every call sent over one env, with the AWS error folded into a 'StoreFault'.
 controlPlaneFor :: AWS.Env -> IO ControlPlane
