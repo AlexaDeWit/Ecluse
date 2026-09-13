@@ -304,6 +304,7 @@ spec = describe "grouped preview" $ do
         mount <- grouped mirror cache
         attempts <- newIORef (0 :: Int)
         let fault = StoreFault (transportFault TransportTimeout "no answer") RetryWorthwhile
+            prerequisite = "the npm store on privateUpstream: deletion consent is not met: cache consent absent, and store classification is met. This preview deleted nothing, so it proves no authority to delete"
             original = smStore mount
             private =
                 (fakeObservation cache)
@@ -317,8 +318,8 @@ spec = describe "grouped preview" $ do
         outcomeComplete outcome `shouldBe` True
         readIORef attempts `shouldReturn` 2
         map renderPrerequisites (outcomePrerequisites outcome)
-            `shouldContain` ["the npm store on privateUpstream: deletion consent is not met: cache consent absent, and store classification is met. This preview deleted nothing, so it proves no authority to delete"]
-        recWarnings recorded `shouldReturn` ["retrying a call against the npm store on privateUpstream after " <> renderStoreFault fault]
+            `shouldContain` [prerequisite]
+        recWarnings recorded `shouldReturn` ["retrying a call against the npm store on privateUpstream after " <> renderStoreFault fault, prerequisite]
 
     it "uses the same grouped inventory for a full walk" $ do
         mirror <- seeded "mirrorTarget" []
