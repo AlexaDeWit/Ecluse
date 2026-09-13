@@ -50,8 +50,8 @@ import Ecluse.Runtime.Maintenance.CodeArtifact (
     ControlPlane (..),
     boundedObservationFor,
     cacheMaintenanceFor,
+    controlPlaneFor,
     maintenanceFor,
-    maintenanceForEnv,
     observationFor,
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
@@ -566,7 +566,7 @@ listBucket store plane raw =
 handleFor :: CodeArtifactStore -> IO StoreMaintenance
 handleFor store =
     AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))
-        >>= maintenanceForEnv testAlphabet unwiredRead store
+        >>= fmap (handleOver store) . controlPlaneFor
 
 npmStore :: Maybe CodeArtifactStore
 npmStore = coordinates <$> codeArtifactFormat Npm
