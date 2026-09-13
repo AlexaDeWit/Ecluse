@@ -61,10 +61,8 @@ data BootError
       endpoint URL. Refused rather than dropped, so a typo never silently dials real AWS.
       -}
       AwsEndpointMalformed Secret
-    | {- | The eager boot-time CodeArtifact mint threw. Carries the rendered exception, which
-      tells a transient AWS error from a permanent one to fix.
-      -}
-      CodeArtifactMintFailed Text
+    | -- | The eager mint threw, carrying every configured consumer key and the rendered exception.
+      CodeArtifactMintFailed (NonEmpty Text) Text
     | {- | A mount declares a mirror target, but this build writes nothing for its ecosystem.
       The mirror could never publish, so the mount is refused rather than booted half-wired.
       -}
@@ -203,8 +201,10 @@ renderBootError = \case
         "the SQS endpoint override (AWS_ENDPOINT_URL_SQS) is not a valid endpoint URL"
     AwsEndpointMalformed{} ->
         "the AWS endpoint override (AWS_ENDPOINT_URL) is not a valid endpoint URL"
-    CodeArtifactMintFailed detail ->
-        "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
+    CodeArtifactMintFailed targets detail ->
+        "credential provider codeartifact for "
+            <> T.intercalate ", " (toList targets)
+            <> " failed to mint an initial token at boot: "
             <> detail
             <> " (a transient AWS error may clear on retry. A permanent one, such as a bad domain or region or a missing permission, must be fixed)"
     MirrorTargetWithoutPublish eco ->

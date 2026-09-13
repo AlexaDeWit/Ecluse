@@ -12,10 +12,13 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentWithheld),
+    RetryAdvice (RetryWorthwhile),
     StoreFacts (factBackend, factNameAlphabet),
+    StoreFault (..),
     StoreObservation (..),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
@@ -27,7 +30,7 @@ import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Group (boundedVersions)
 import Ecluse.Core.Registry.Sweep.Types (
-    CycleHalt (HaltStoreFault),
+    CycleHalt (HaltBucketUnsplittable, HaltStoreFault),
     CycleOutcome (..),
     EvidenceGaps (gapManifests),
     PrerequisiteStatus (PrerequisiteUnmet),
@@ -38,6 +41,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepTally (..),
     TargetPrerequisites (tpConsent),
     outcomeComplete,
+    renderPrerequisites,
     renderStoreFault,
  )
 import Ecluse.Core.Registry.Sweep.Walk (bucketNameBudget)
@@ -148,7 +152,8 @@ spec = describe "grouped preview" $ do
         cache <- seeded "privateUpstream" [(packageName, ["2.0.0"])]
         mount <- grouped mirror cache
         let original = smStore mount
-        (_, outcome) <- runPreview mount{smStore = original{ssVersionLimit = 1}}
+        (_, outcome) <- runPreview mount{smStore = original{ssVersionLimit = 1, ssObserve = forbidMetadata (ssObserve original), ssPrivate = forbidMetadata <$> ssPrivate original}}
+        outcomeHalt outcome `shouldBe` Just (HaltStoreFault Npm "mirrorTarget and privateUpstream (combined inventory)" (renderStoreFault (protocolFault "the combined inventory crossed limits.maxVersionCount")))
         outcomeComplete outcome `shouldBe` False
         tallyExamined (outcomeTally outcome) `shouldBe` 0
 
@@ -159,6 +164,7 @@ spec = describe "grouped preview" $ do
         cache <- seeded "privateUpstream" rightNames
         mount <- grouped mirror cache
         (_, outcome) <- runPreview mount
+        outcomeHalt outcome `shouldBe` Just (HaltBucketUnsplittable Npm "mirrorTarget and privateUpstream (combined inventory)" "")
         outcomeComplete outcome `shouldBe` False
         tallyExamined (outcomeTally outcome) `shouldBe` 0
 
@@ -201,7 +207,8 @@ spec = describe "grouped preview" $ do
         (recorded, outcome) <- runPreview mount{smStore = original{ssObserve = (ssObserve original){obListPackagesIn = \_ -> pure (Just (protocolFault "mirror listing failed"))}, ssPrivate = Just unread}}
         outcomeComplete outcome `shouldBe` False
         errors <- recErrors recorded
-        errors `shouldSatisfy` any (T.isInfixOf "mirrorTarget: mirror listing failed")
+        outcomeHalt outcome `shouldBe` Just (HaltStoreFault Npm "mirrorTarget" (renderStoreFault (protocolFault "mirror listing failed")))
+        errors `shouldSatisfy` any (T.isInfixOf "the npm store on mirrorTarget produced no answer")
 
     it "accepts a full version union while deduplicating each target's observations" $ do
         mirror <- seeded "mirrorTarget" []
@@ -281,11 +288,38 @@ spec = describe "grouped preview" $ do
 
     it "reports a private listing fault without treating that target as empty" $ do
         mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
-        cache <- newFakeStore defaultFakeStoreConfig{fakeFault = Just (protocolFault "inventory unavailable")}
+        cache <- seeded "privateUpstream" []
         mount <- grouped mirror cache
-        (_, outcome) <- runPreview mount
+        let fault = protocolFault "inventory unavailable"
+            original = smStore mount
+            private = (fakeObservation cache){obListPackagesIn = \_ -> yield [packageName] $> Just fault}
+        (_, outcome) <- runPreview mount{smStore = original{ssObserve = forbidMetadata (ssObserve original), ssPrivate = Just (forbidMetadata private)}}
         outcomeComplete outcome `shouldBe` False
-        tallyDeleted (outcomeTally outcome) `shouldBe` 0
+        outcomeTally outcome `shouldBe` mempty
+        outcomeHalt outcome `shouldBe` Just (HaltStoreFault Npm "privateUpstream" (renderStoreFault fault))
+
+    it "names the private target in prerequisite and retry output" $ do
+        mirror <- seeded "mirrorTarget" []
+        cache <- seeded "privateUpstream" [(packageName, ["1.0.0"])]
+        mount <- grouped mirror cache
+        attempts <- newIORef (0 :: Int)
+        let fault = StoreFault (transportFault TransportTimeout "no answer") RetryWorthwhile
+            prerequisite = "the npm store on privateUpstream: deletion consent is not met: cache consent absent, and store classification is met. This preview deleted nothing, so it proves no authority to delete"
+            original = smStore mount
+            private =
+                (fakeObservation cache)
+                    { obVerifyConsent = pure (Right (ConsentWithheld "cache consent absent"))
+                    , obEnumerateVersions = \name -> do
+                        attempt <- readIORef attempts
+                        modifyIORef' attempts (+ 1)
+                        if attempt == 0 then pure (Left fault) else obEnumerateVersions (fakeObservation cache) name
+                    }
+        (recorded, outcome) <- runPreview mount{smStore = original{ssPrivate = Just private}}
+        outcomeComplete outcome `shouldBe` True
+        readIORef attempts `shouldReturn` 2
+        map renderPrerequisites (outcomePrerequisites outcome)
+            `shouldContain` [prerequisite]
+        recWarnings recorded `shouldReturn` ["retrying a call against the npm store on privateUpstream after " <> renderStoreFault fault, prerequisite]
 
     it "uses the same grouped inventory for a full walk" $ do
         mirror <- seeded "mirrorTarget" []

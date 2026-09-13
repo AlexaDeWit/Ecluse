@@ -74,7 +74,7 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldNotSatisfy` infixed "tok"
         renderBootError (AwsEndpointMalformed (mkSecret "http://u:tok@h"))
             `shouldNotSatisfy` infixed "AWS_ENDPOINT_URL_SQS"
-        renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
+        renderBootError (CodeArtifactMintFailed ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET" :| []) "AccessDenied") `shouldSatisfy` infixed "transient"
         renderBootError (FirstPartyMissing Npm) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__FIRST_PARTY"
         renderBootError (PublishStaticCredentialNeedsEdge Npm TagVerdaccio) `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__VERDACCIO__TOKEN"
         renderBootError (PublicationTargetOnPublicUpstream Npm PyPI "https://store.example.test")

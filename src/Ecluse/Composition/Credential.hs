@@ -22,6 +22,7 @@ module Ecluse.Composition.Credential (
     -- * Internals exported for testing
     mirrorBackends,
     codeArtifactIdentityGroups,
+    codeArtifactMintFailure,
 ) where
 
 import Data.Foldable1 qualified as Foldable1
@@ -38,6 +39,7 @@ import Ecluse.Config (
     sbMint,
     sbTag,
  )
+import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -90,7 +92,7 @@ initTargetCredentialProviders reportersFor backends = do
         else pure (Right (CredentialProviders (Map.fromList (statics <> concat shared))))
 
 {- | Each mirroring mount's ecosystem and the store its mirror write authenticates to. A mount
-declaring no mirror target holds no standing credential, so it contributes none.
+declaring no mirror target contributes no mirror provider.
 -}
 mirrorBackends :: [Mount] -> [(Ecosystem, StoreBackend)]
 mirrorBackends mounts =
@@ -102,14 +104,21 @@ mirrorBackends mounts =
 -- Disjoint groups use their smallest ecosystem as a bounded identity for expiry replacement.
 -- Each group shares one provider, refresh schedule and breaker.
 initSharedCodeArtifact ::
-    (Ord key) =>
-    (key -> StoreTag -> CredentialReporters) ->
-    (CodeArtifactConfig, (StoreTag, NonEmpty key)) ->
-    IO (Either [BootError] [(key, CredentialProvider)])
+    ((Ecosystem, CredentialTarget) -> StoreTag -> CredentialReporters) ->
+    (CodeArtifactConfig, (StoreTag, NonEmpty (Ecosystem, CredentialTarget))) ->
+    IO (Either [BootError] [((Ecosystem, CredentialTarget), CredentialProvider)])
 initSharedCodeArtifact reportersFor (caConfig, (tag, ecosystems)) =
-    fmap fannedOut <$> refuseOnThrow CodeArtifactMintFailed (newCodeArtifactProvider (reportersFor (Foldable1.minimum ecosystems) tag) caConfig)
+    fmap fannedOut <$> refuseOnThrow (codeArtifactMintFailure ecosystems) (newCodeArtifactProvider (reportersFor (Foldable1.minimum ecosystems) tag) caConfig)
   where
     fannedOut provider = [(eco, provider) | eco <- toList ecosystems]
+
+-- | Attribute a failed shared mint to every configured credential consumer.
+codeArtifactMintFailure :: NonEmpty (Ecosystem, CredentialTarget) -> Text -> BootError
+codeArtifactMintFailure targets = CodeArtifactMintFailed (fmap targetKey targets)
+  where
+    targetKey (eco, target) = mountKeyRef eco $ case target of
+        MirrorCredential -> "mirrorTarget"
+        PrivateCacheCredential -> "privateUpstream"
 
 {- | Group the mounts' resolved CodeArtifact identities by distinct 'CodeArtifactConfig'. One
 domain shares a provider, its reporters, and its breaker, and a differing duration keeps its own.
@@ -121,7 +130,6 @@ codeArtifactIdentityGroups plans =
     -- One identity resolves under one tag, so every member agrees and either labels the group.
     merge (tag, ecosystems) (_, more) = (tag, ecosystems <> more)
 
--- A static mirror-target write provider from an operator-supplied token.
 staticProviderFor :: Secret -> CredentialProvider
 staticProviderFor token = staticProvider AuthToken{authSecret = token, authExpiresAt = Nothing}
 

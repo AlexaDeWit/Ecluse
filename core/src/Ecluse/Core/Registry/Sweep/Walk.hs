@@ -3,13 +3,8 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE DeriveFunctor #-}
 
-{- | Walking a store's whole name space, bucket by bucket, and remembering where the walk got to.
-
-No store this build reaches documents a listing order, and none offers a start-after cursor, so a
-walk cannot resume at a name. What every store does offer is a name-prefix filter, so the walk
-partitions the name space into prefix buckets and resumes at a bucket boundary. A bucket whose
-listing outgrows the memory budget is replaced by the narrower buckets that cover it, down to a
-depth bound past which narrowing has stopped helping.
+{- | Bounded name-prefix walks with resumable bucket cursors.
+Listings have no stable order. Oversized buckets split until the depth bound.
 -}
 module Ecluse.Core.Registry.Sweep.Walk (
     bucketNameBudget,
@@ -69,7 +64,7 @@ properlyCovers bucket done = raw /= renderNamePrefix done && raw `T.isPrefixOf` 
     raw = renderNamePrefix bucket
 
 -- | What reading one bucket's listing produced.
-data BucketNames a
+data BucketNames fault a
     = -- | The bucket was read whole, its names sorted.
       BucketRead [a]
     | -- | The bucket outgrew the budget, so these narrower ones cover it instead.
@@ -77,7 +72,7 @@ data BucketNames a
     | -- | The bucket outgrew the budget and nothing narrows it further.
       BucketUnsplittable
     | -- | The listing stopped on a fault, and nothing was read.
-      BucketFaulted StoreFault
+      BucketFaulted fault
     deriving stock (Functor)
 
 {- | Read one bucket's names, sorted, or report that it must be split. The stream is abandoned as
@@ -87,7 +82,7 @@ collectBucket ::
     NameAlphabet ->
     NamePrefix ->
     ConduitT () [PackageName] IO (Maybe StoreFault) ->
-    IO (BucketNames PackageName)
+    IO (BucketNames StoreFault PackageName)
 collectBucket alphabet prefix source =
     fmap fst <$> collectBucketWith alphabet prefix const (fuseUpstream source (CL.map (map (,()))))
 
@@ -96,8 +91,8 @@ collectBucketWith ::
     NameAlphabet ->
     NamePrefix ->
     (a -> a -> a) ->
-    ConduitT () [(PackageName, a)] IO (Maybe StoreFault) ->
-    IO (BucketNames (PackageName, a))
+    ConduitT () [(PackageName, a)] IO (Maybe fault) ->
+    IO (BucketNames fault (PackageName, a))
 collectBucketWith alphabet prefix merge source = outcome <$> runConduit (fuseBothMaybe source (takeToBudget merge))
   where
     outcome = \case

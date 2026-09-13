@@ -59,6 +59,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     stEvidence,
     stPrerequisites,
     stTally,
+    storeSubject,
     unloadedGeneration,
     walkMarkerOf,
  )
@@ -187,11 +188,12 @@ walkPreviewGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> Sto
 walkPreviewGroup pacing ports counters mount cache = go (walkBuckets alphabet)
   where
     alphabet = groupAlphabet (observed mount) cache
+    combined = backendOf mount <> " and " <> factBackend (obFacts cache) <> " (combined inventory)"
     go [] = pure Nothing
     go (prefix : rest) =
         collectGroupBucket alphabet prefix (observed mount) cache >>= \case
-            BucketFaulted fault -> pure (Just (storeHalt mount fault))
-            BucketUnsplittable -> pure (Just (unsplittableHalt mount prefix))
+            BucketFaulted (store, fault) -> pure (Just (storeHalt (locatedMount mount store) fault))
+            BucketUnsplittable -> pure (Just (HaltBucketUnsplittable (smEcosystem mount) combined (renderNamePrefix prefix)))
             BucketOverflowed narrower -> go (toList narrower <> rest)
             BucketRead names ->
                 withCandidates
@@ -208,7 +210,7 @@ walkPreviewGroup pacing ports counters mount cache = go (walkBuckets alphabet)
         case sequence readLocations of
             Left halt -> pure (Just halt)
             Right versions -> case boundedVersions (ssVersionLimit (smStore mount)) versions of
-                Left fault -> pure (Just (storeHalt mount fault))
+                Left fault -> pure (Just (HaltStoreFault (smEcosystem mount) combined (renderStoreFault fault)))
                 Right bounded -> previewPackageGroup pacing ports counters mount ctx name bounded
 
 locatedMount :: SweepMount -> StoreObservation -> SweepMount
@@ -391,10 +393,8 @@ withStoreRetry pacing ports mount call =
     again delay fault = do
         auditWarn
             (sweepAudit ports)
-            ( "retrying a call against the "
-                <> ecosystemName (smEcosystem mount)
-                <> " mirror store on "
-                <> backendOf mount
+            ( "retrying a call against "
+                <> storeSubject (smEcosystem mount) (backendOf mount)
                 <> " after "
                 <> renderStoreFault fault
             )
