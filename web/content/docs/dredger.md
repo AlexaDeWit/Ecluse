@@ -220,8 +220,9 @@ Under `--once` the exit status follows completeness alone:
 | Stopped on a store fault, or decided without an advisory generation or a package's own metadata | non-zero, with partial counts and every candidate it did gather |
 
 Exit `0` means complete, not authorised. A preview that exits `0` with the consent marker absent
-reports its selections and the missing permission. The deleting command still acts on the
-mirror only, so preview selections in the private cache are diagnostic.
+reports its selections and the missing permission. The deleting command acts on both configured
+stores, with independent consent and fresh evidence for each target. Full client recovery, late-refill
+coverage and separately authorised live CodeArtifact validation remain in #1227.
 
 Use it before the first real sweep of a store, and after any rule change you are unsure of.
 

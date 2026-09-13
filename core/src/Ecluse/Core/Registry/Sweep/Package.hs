@@ -9,8 +9,8 @@ module Ecluse.Core.Registry.Sweep.Package (
     sweepPackageGroup,
 ) where
 
+import Data.Containers.ListUtils (nubOrdOn)
 import Data.List (partition)
-import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Cve (DbEtag)
@@ -114,7 +114,7 @@ previewPackageGroup pacing ports counters mount ctx name locations = do
             )
             kept
         pure selected
-    let logical = Map.elems (Map.fromList [(renderVersion (cdVersion selected), selected) | selected <- concat selections])
+    let logical = nubOrdOn (renderVersion . cdVersion) (concat selections)
     issued <- readIORef (stIssued counters)
     let reached = issued + length logical
         cap = swpDeletionCap pacing

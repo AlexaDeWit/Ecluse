@@ -558,10 +558,7 @@ labelValue = \case
         RelayOddShape -> "odd_shape"
         RelayNonSuccess -> "non_success"
 
-{- | Materialise a label list into the OpenTelemetry 'Attributes' an instrument records
-with. Every label value is bounded, so an instrument's attribute set stays a small fixed
-product of the label domains.
--}
+-- | Materialise bounded labels into the attributes recorded by an OpenTelemetry instrument.
 metricAttributes :: [Label] -> Attributes
 metricAttributes labels =
     addAttributesFromBuilder

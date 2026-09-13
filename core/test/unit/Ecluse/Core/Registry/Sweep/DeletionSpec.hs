@@ -79,6 +79,46 @@ spec = describe "grouped deletion" $ do
         _ <- sweepCycle testPacing (recPorts restarted) [mount]
         held cache `shouldReturn` []
 
+    it "keeps a refused source and its cache copy while continuing unrelated versions" $ do
+        mirror <- seeded "mirror" ["1.0.0", "2.0.0"]
+        cache <- seeded "cache" ["1.0.0", "2.0.0", "3.0.0"]
+        mount <- grouped mirror cache
+        let original = fakeMaintenance mirror
+            withheld = version "1.0.0"
+            refusal = storeRefusal "REFUSED" "this version is retained"
+            source =
+                mapDeletion
+                    ( \_ checks name versions ->
+                        deleteAll
+                            checks
+                            ( \batch -> do
+                                removed <- deleteVersions original testDeleteGuard name (filter (/= withheld) batch)
+                                pure (Right ([(item, VersionRefused refusal) | item <- batch, item == withheld] <> removed))
+                            )
+                            (chunksOfCeiling (factDeleteCeiling (storeFacts original)) versions)
+                    )
+                    (smStore mount)
+        recorded <- recordingPorts Nothing
+        outcome <- sweepCycle testPacing (recPorts recorded) [mount{smStore = source}]
+        outcomeHalt outcome `shouldBe` Nothing
+        held mirror `shouldReturn` [withheld]
+        held cache `shouldReturn` [withheld]
+        errors <- recErrors recorded
+        errors `shouldSatisfy` any (T.isInfixOf "REFUSED")
+        errors `shouldSatisfy` (not . any (T.isInfixOf "cleanup remains incomplete"))
+
+    it "halts when a reported successful deletion leaves the denied version present" $ do
+        mirror <- seeded "mirror" ["1.0.0"]
+        cache <- seeded "cache" ["1.0.0"]
+        mount <- grouped mirror cache
+        let source = mapDeletion (\_ checks _ versions -> deleteAll checks (\batch -> pure (Right [(item, VersionRemoved) | item <- batch])) [versions]) (smStore mount)
+        recorded <- recordingPorts Nothing
+        outcome <- sweepCycle testPacing (recPorts recorded) [mount{smStore = source}]
+        outcomeHalt outcome `shouldSatisfy` isJust
+        recErrors recorded >>= (`shouldSatisfy` any (T.isInfixOf "cleanup remains incomplete"))
+        held mirror `shouldReturn` [version "1.0.0"]
+        held cache `shouldReturn` [version "1.0.0"]
+
     it "rechecks lost responses without blindly replaying a version now absent" $ do
         mirror <- seeded "mirror" ["1.0.0"]
         cache <- seeded "cache" ["1.0.0"]
