@@ -23,6 +23,7 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Sweep (sweepCycle)
+import Ecluse.Core.Registry.Sweep.Group (boundedVersions)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleOutcome (..),
     EvidenceGaps (gapManifests),
@@ -76,7 +77,7 @@ spec = describe "grouped preview" $ do
         mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0", "1.0.0"])]
         cache <- seeded "privateUpstream" [(packageName, ["1.0.0", "1.0.0"])]
         mount <- grouped mirror cache
-        let duplicated store = store{obListPackagesIn = \_ -> yield [packageName, packageName] $> Nothing}
+        let duplicated store = store{obListPackagesIn = \_ -> yield [packageName, packageName] >> yield [packageName] $> Nothing}
             original = smStore mount
         (_, outcome) <- runPreview mount{smStore = original{ssObserve = duplicated (ssObserve original), ssPrivate = duplicated <$> ssPrivate original}}
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
@@ -157,6 +158,55 @@ spec = describe "grouped preview" $ do
         (_, outcome) <- runPreview mount
         outcomeComplete outcome `shouldBe` False
         tallyExamined (outcomeTally outcome) `shouldBe` 0
+
+    it "stops private pagination when individually bounded inventories exceed the shared name budget" $ do
+        let mirrorNames = [mkPackageName Npm Nothing ("a" <> show n) | n <- [1 .. bucketNameBudget - 1]]
+            lastAllowed = mkPackageName Npm Nothing "b1"
+            overflowing = mkPackageName Npm Nothing "b2"
+        mirror <- seeded "mirrorTarget" []
+        cache <- seeded "privateUpstream" []
+        mount <- grouped mirror cache
+        pages <- newIORef (0 :: Int)
+        let mirrorListing _ = yield mirrorNames $> Nothing
+            cacheListing _ = do
+                liftIO (modifyIORef' pages (+ 1))
+                yield [lastAllowed]
+                liftIO (modifyIORef' pages (+ 1))
+                yield [overflowing]
+                liftIO (expectationFailure "a page after the combined overflow must not be demanded")
+                pure Nothing
+            original = smStore mount
+        (_, outcome) <-
+            runPreview
+                mount
+                    { smStore =
+                        original
+                            { ssObserve = (ssObserve original){obListPackagesIn = mirrorListing}
+                            , ssPrivate = Just ((fakeObservation cache){obListPackagesIn = cacheListing})
+                            }
+                    }
+        readIORef pages `shouldReturn` 2
+        outcomeComplete outcome `shouldBe` False
+        tallyExamined (outcomeTally outcome) `shouldBe` 0
+
+    it "does not request the private inventory after a mirror listing fault" $ do
+        mirror <- seeded "mirrorTarget" []
+        cache <- seeded "privateUpstream" []
+        mount <- grouped mirror cache
+        let original = smStore mount
+            unread = (fakeObservation cache){obListPackagesIn = \_ -> fail "a prior listing fault must stop the next source"}
+        (recorded, outcome) <- runPreview mount{smStore = original{ssObserve = (ssObserve original){obListPackagesIn = \_ -> pure (Just (protocolFault "mirror listing failed"))}, ssPrivate = Just unread}}
+        outcomeComplete outcome `shouldBe` False
+        errors <- recErrors recorded
+        errors `shouldSatisfy` any (T.isInfixOf "mirrorTarget: mirror listing failed")
+
+    it "accepts a full version union while deduplicating each target's observations" $ do
+        mirror <- seeded "mirrorTarget" []
+        cache <- seeded "privateUpstream" []
+        let version = StoredVersion (mkVersion Npm "1.0.0") VersionServed
+            locations = [(fakeObservation mirror, [version, version]), (fakeObservation cache, [version, version])]
+        fmap (map (length . snd)) (boundedVersions 1 locations) `shouldBe` Right [1, 1]
+        fmap (map (length . snd)) (boundedVersions 0 locations) `shouldSatisfy` isLeft
 
     it "reports a private listing fault without treating that target as empty" $ do
         mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]

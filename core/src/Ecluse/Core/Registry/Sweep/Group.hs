@@ -11,7 +11,9 @@ module Ecluse.Core.Registry.Sweep.Group (
     boundedVersions,
 ) where
 
-import Data.Conduit (yield)
+import Control.Monad (foldM)
+import Data.Conduit (fuseUpstream)
+import Data.Conduit.List qualified as CL
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Fault (tfCause, tfDetail, transportFault)
@@ -26,7 +28,7 @@ import Ecluse.Core.Registry.Maintenance (
     noNameAlphabet,
     protocolFault,
  )
-import Ecluse.Core.Registry.Sweep.Walk (BucketNames (..), collectBucket)
+import Ecluse.Core.Registry.Sweep.Walk (BucketNames, collectBucketWith, insertInventory)
 import Ecluse.Core.Version (renderVersion)
 
 -- | Use a common partition only when both backends declare the same alphabet.
@@ -39,31 +41,17 @@ groupAlphabet mirror cache
 
 -- | Join actual package presence under the shared bucket budget, retaining each location.
 collectGroupBucket :: NameAlphabet -> NamePrefix -> StoreObservation -> StoreObservation -> IO (BucketNames (PackageName, [StoreObservation]))
-collectGroupBucket alphabet prefix mirror cache = do
-    left <- collectBucket alphabet prefix (obListPackagesIn mirror prefix)
-    right <- collectBucket alphabet prefix (obListPackagesIn cache prefix)
-    case (left, right) of
-        (BucketRead leftNames, BucketRead rightNames) -> do
-            combined <- collectBucket alphabet prefix (yield leftNames >> yield rightNames $> Nothing)
-            pure (locate leftNames rightNames combined)
-        (BucketFaulted fault, _) -> pure (BucketFaulted (locatedFault mirror fault))
-        (_, BucketFaulted fault) -> pure (BucketFaulted (locatedFault cache fault))
-        (BucketUnsplittable, _) -> pure BucketUnsplittable
-        (_, BucketUnsplittable) -> pure BucketUnsplittable
-        (BucketOverflowed narrower, _) -> pure (BucketOverflowed narrower)
-        (_, BucketOverflowed narrower) -> pure (BucketOverflowed narrower)
+collectGroupBucket alphabet prefix mirror cache =
+    fmap (second Map.elems) <$> collectBucketWith alphabet prefix Map.union source
   where
-    locate leftNames rightNames = \case
-        BucketRead _ ->
-            let locations =
-                    Map.unionWith
-                        (<>)
-                        (Map.fromList [(name, [mirror]) | name <- leftNames])
-                        (Map.fromList [(name, [cache]) | name <- rightNames])
-             in BucketRead (Map.toAscList locations)
-        BucketFaulted fault -> BucketFaulted fault
-        BucketUnsplittable -> BucketUnsplittable
-        BucketOverflowed narrower -> BucketOverflowed narrower
+    source = do
+        fault <- locatedPages False mirror
+        maybe (locatedPages True cache) (pure . Just) fault
+    locatedPages slot store =
+        fmap (locatedFault store)
+            <$> fuseUpstream
+                (obListPackagesIn store prefix)
+                (CL.map (map (,Map.singleton slot store)))
 
 locatedFault :: StoreObservation -> StoreFault -> StoreFault
 locatedFault store fault =
@@ -75,9 +63,12 @@ locatedFault store fault =
 
 -- | Reject an oversized combined version inventory and deduplicate identities within each location.
 boundedVersions :: Int -> [(StoreObservation, [StoredVersion])] -> Either StoreFault [(StoreObservation, [StoredVersion])]
-boundedVersions limit locations
-    | length identities > max 0 limit = Left (protocolFault "the combined inventory crossed limits.maxVersionCount")
-    | otherwise = Right [(store, deduplicate versions) | (store, versions) <- locations]
+boundedVersions limit locations = do
+    combined <- maybeToRight overflow (foldM addLocation Map.empty indexed)
+    pure [(store, Map.elems (Map.mapMaybe (Map.lookup index) combined)) | (index, (store, _)) <- indexed]
   where
-    identities = ordNub [renderVersion (storedVersion version) | (_, versions) <- locations, version <- versions]
-    deduplicate = Map.elems . Map.fromList . map (\version -> (renderVersion (storedVersion version), version))
+    indexed = zip [0 :: Int ..] locations
+    addLocation held (index, (_, versions)) = foldM (addVersion index) held versions
+    addVersion index held version =
+        insertInventory limit Map.union held (renderVersion (storedVersion version), Map.singleton index version)
+    overflow = protocolFault "the combined inventory crossed limits.maxVersionCount"
