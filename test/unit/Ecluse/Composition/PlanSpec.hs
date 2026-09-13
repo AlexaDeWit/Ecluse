@@ -16,8 +16,10 @@ import Ecluse.Composition.BootError (
         MirrorTargetOnMountEndpoint,
         MissingAdapter,
         QueueUrlUnrecognised,
-        SplitRoleNeedsDurableQueue
+        SplitRoleNeedsDurableQueue,
+        StoreMaintenanceUnavailable
     ),
+    StoreMaintenanceReason (PrivateCacheUnavailable),
     renderBootError,
  )
 import Ecluse.Composition.MemoryPlan (MemoryPlan (mpOverrideViolations, mpQueueMemoryMaxDepth))
@@ -44,6 +46,7 @@ import Ecluse.Composition.Support (
     noMaintenanceBackend,
     overrideEnv,
     staticEnvVars,
+    withObservablePrivate,
     withoutMirrorTargetUrl,
     withoutQueueUrl,
  )
@@ -265,7 +268,7 @@ spec = describe "resolveBootPlan" $ do
 
     describe "roleRefusalWarnings -- what a checker with no subcommand still reports" $ do
         it "names both split roles the in-memory queue strands, which its own pass boots" $ do
-            let envVars = withoutQueueUrl codeArtifactEnvVars
+            let envVars = withoutQueueUrl (withObservablePrivate codeArtifactEnvVars)
             config <- expectConfig envVars Nothing
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling)
                 `shouldBe` [ wouldRefuse "ecluse proxy --no-worker" (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")
@@ -277,33 +280,41 @@ spec = describe "resolveBootPlan" $ do
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor serveOnlyEnvVars Nothing config noCeiling)
                 `shouldBe` [wouldRefuse "ecluse mirror" MirrorRoleWithoutMirroring]
 
-        it "names the Dredger on a collapse the writing roles only warn about" $ do
+        it "reports all Dredger refusals on a collapsed unsupported topology" $ do
             config <- expectConfig collapsedMirrorEnv Nothing
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
                 `shouldBe` [ wouldRefuse "ecluse dredger" collapsedMirrorRefusal
                            , wouldRefuse "ecluse dredger" noMaintenanceBackend
                            , wouldRefuse "ecluse dredger --dry-run" collapsedMirrorRefusal
                            , wouldRefuse "ecluse dredger --dry-run" noMaintenanceBackend
+                           , wouldRefuse "ecluse dredger --dry-run" privateInventoryRefusal
                            ]
 
         it "names the Dredger on a mirror target this build has no maintenance backend for" $ do
             -- The writing roles boot on such a target and log nothing, so this line is where an
             -- operator who never runs the Dredger against it still learns that they cannot.
-            config <- expectConfig staticEnvVars Nothing
-            roleRefusalWarnings BootWithoutPipeline (bootInputsFor staticEnvVars Nothing config noCeiling)
+            let envVars = withObservablePrivate staticEnvVars
+            config <- expectConfig envVars Nothing
+            roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling)
                 `shouldBe` [ wouldRefuse "ecluse dredger" noMaintenanceBackend
                            , wouldRefuse "ecluse dredger --dry-run" noMaintenanceBackend
                            ]
 
         it "omits the role the caller already reported for" $ do
-            let envVars = withoutQueueUrl codeArtifactEnvVars
+            let envVars = withoutQueueUrl (withObservablePrivate codeArtifactEnvVars)
             config <- expectConfig envVars Nothing
             roleRefusalWarnings (BootMirrorPipeline MirrorOnly) (bootInputsFor envVars Nothing config noCeiling)
                 `shouldBe` [wouldRefuse "ecluse proxy --no-worker" (SplitRoleNeedsDurableQueue "ecluse proxy --no-worker")]
 
         it "reports nothing where every role boots the configuration" $ do
+            let envVars = withObservablePrivate codeArtifactEnvVars
+            config <- expectConfig envVars Nothing
+            roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling) `shouldBe` []
+
+        it "names preview alone when the private registry has no inventory backend" $ do
             config <- expectConfig codeArtifactEnvVars Nothing
-            roleRefusalWarnings BootWithoutPipeline (bootInputsFor codeArtifactEnvVars Nothing config noCeiling) `shouldBe` []
+            roleRefusalWarnings BootWithoutPipeline (bootInputsFor codeArtifactEnvVars Nothing config noCeiling)
+                `shouldBe` [wouldRefuse "ecluse dredger --dry-run" privateInventoryRefusal]
 
 -- | One warning line as a checker prints it: the command that refuses, and the refusal itself.
 wouldRefuse :: Text -> BootError -> Text
@@ -370,3 +381,6 @@ fallbackClause = " (built-in default; no heap-ceiling datapoint)"
 
 mib :: Int
 mib = 1024 * 1024
+
+privateInventoryRefusal :: BootError
+privateInventoryRefusal = StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "registry has no inventory control plane")

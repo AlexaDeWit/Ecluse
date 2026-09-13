@@ -171,13 +171,14 @@ publishAuthToken :: Text
 publishAuthToken = "e2e-publisher-token"
 
 -- npm refuses to publish a package marked private.
+-- The allowlist excludes npm's project-local cache and logs from the fixture artifact.
 publishPackageJson :: Text -> Text -> Text
 publishPackageJson name version =
-    "{\"name\":\"" <> name <> "\",\"version\":\"" <> version <> "\"}\n"
+    "{\"name\":\"" <> name <> "\",\"version\":\"" <> version <> "\",\"files\":[\"package.json\"]}\n"
 
--- npm keys authentication by the registry's host and path, without its scheme.
+-- npm requires a trailing slash on the host/path authentication key, including a registry root.
 npmAuthLine :: Text -> Text -> Text
 npmAuthLine registry token =
-    "//" <> withoutScheme registry <> ":_authToken=" <> token <> "\n"
+    "//" <> T.dropWhileEnd (== '/') (withoutScheme registry) <> "/:_authToken=" <> token <> "\n"
   where
     withoutScheme u = fromMaybe u (T.stripPrefix "http://" u <|> T.stripPrefix "https://" u)
