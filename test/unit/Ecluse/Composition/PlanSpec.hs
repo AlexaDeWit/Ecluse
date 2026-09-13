@@ -46,6 +46,7 @@ import Ecluse.Composition.Support (
     noMaintenanceBackend,
     overrideEnv,
     staticEnvVars,
+    withDredgeablePrivate,
     withObservablePrivate,
     withoutMirrorTargetUrl,
     withoutPrivateUpstreamUrl,
@@ -245,11 +246,10 @@ spec = describe "resolveBootPlan" $ do
             brAdvisories report `shouldBe` [mirrorCollapseAdvisory]
 
         it "gives the deleting role the refusal alone, never the writing roles' advisory too" $ do
-            -- One rule turns the detected collapse into exactly one outcome per role, and the
-            -- collapsed target is also one no backend here sweeps, so the pass reports both.
+            -- The collision and each unsupported target contribute their own refusal.
             config <- expectConfig collapsedMirrorEnv Nothing
             let report = resolveBootPlan BootStorePruner (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
-            refusalsOf report `shouldBe` Left [collapsedMirrorRefusal, noMaintenanceBackend]
+            refusalsOf report `shouldBe` Left [collapsedMirrorRefusal, noMaintenanceBackend, privateInventoryRefusal]
             brAdvisories report `shouldBe` []
 
     describe "the runtime posture each entry point sizes against" $
@@ -286,6 +286,7 @@ spec = describe "resolveBootPlan" $ do
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
                 `shouldBe` [ wouldRefuse "ecluse dredger" collapsedMirrorRefusal
                            , wouldRefuse "ecluse dredger" noMaintenanceBackend
+                           , wouldRefuse "ecluse dredger" privateInventoryRefusal
                            , wouldRefuse "ecluse dredger --dry-run" collapsedMirrorRefusal
                            , wouldRefuse "ecluse dredger --dry-run" noMaintenanceBackend
                            , wouldRefuse "ecluse dredger --dry-run" privateInventoryRefusal
@@ -294,7 +295,7 @@ spec = describe "resolveBootPlan" $ do
         it "names the Dredger on a mirror target this build has no maintenance backend for" $ do
             -- The writing roles boot on such a target and log nothing, so this line is where an
             -- operator who never runs the Dredger against it still learns that they cannot.
-            let envVars = withObservablePrivate staticEnvVars
+            let envVars = withDredgeablePrivate staticEnvVars
             config <- expectConfig envVars Nothing
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling)
                 `shouldBe` [ wouldRefuse "ecluse dredger" noMaintenanceBackend
