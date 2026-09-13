@@ -47,8 +47,16 @@ npm mount routable, and the body names PyPI as the mount still waiting. A latche
 `halted` instead, and a draining instance reports `draining`. Readiness does not itself block direct
 requests: a request that needs advisory data its mount does not have is refused by that mount's own
 `onUnavailable` policy, and a rule that admits without reading the database still admits. A
-successful first sync also does not prove the data is still fresh later: source-age refusal is
-tracked in [#1221](https://github.com/AlexaDeWit/Ecluse/issues/1221).
+successful first sync does not prove that data remains fresh. [Advisory push age](#advisory-push-age)
+governs retained evidence.
+
+An EPSS-dependent ecosystem rejects artifacts without the exact `epss_status=available` marker.
+Without an accepted qualified generation, its slot stays empty and its readiness remains awaiting startup readiness.
+Other ecosystems can accept marker-free artifacts and become routable independently.
+A running consumer keeps its accepted qualified generation after a rejected replacement.
+Restarting creates empty slots, even when canonical files remain on disk.
+Publish marked artifacts before upgrading dependent consumers, following
+[the onboarding order](@/docs/configuration.md#onboarding-the-advisory-denies).
 
 The npm liveness probe `GET /npm/-/ping` answers locally with `200 {}`. `GET /npm/-/v1/search`
 returns `501` by design, because search is a discovery convenience, not an install path.
@@ -193,7 +201,8 @@ timestamp. Pilot writes that object after every successful run, so unchanged byt
 A running consumer observes a newer timestamp for the accepted artifact even when its ETag stays
 unchanged. This updates publication age without resetting installation age. A restart re-reads the
 timestamp from the object, and a failed poll leaves it where it was. A rejected artifact cannot
-refresh the last accepted artifact's publication age.
+refresh the last accepted artifact's publication age, including repeated HEAD responses for its rejected ETag.
+EPSS qualification rejection therefore grants no extra freshness interval.
 
 An artifact the object store gives no publication time for has no age to check, so it is refused
 on the same terms as an expired one: the rules never admit evidence they cannot check. Écluse

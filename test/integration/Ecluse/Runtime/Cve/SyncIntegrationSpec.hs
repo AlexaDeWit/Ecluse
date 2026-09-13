@@ -28,6 +28,7 @@ import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Rules (RuleDeps (..), prepare)
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve))
@@ -91,6 +92,7 @@ spec =
                                     SyncEnv
                                         { syncFetch = s3CveFetchFor cveSource bucket "npm-osv-schema4.db" (512 * 1024 * 1024)
                                         , syncEcosystem = Npm
+                                        , syncEpssRequirement = EpssOptional
                                         , syncDbPath = dataDir <> "/npm-osv-schema4.db"
                                         , syncSlot = slot
                                         }

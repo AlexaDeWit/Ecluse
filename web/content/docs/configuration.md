@@ -373,5 +373,23 @@ tracked in [#1230](https://github.com/AlexaDeWit/Ecluse/issues/1230).
 than that maximum, both advisory denies refuse, and `AllowIfRemediatesCve` abstains. See
 [Advisory push age](@/docs/operations.md#advisory-push-age) for the maximum, its default
 derivation, and the alarm that precedes it. Individual missing scores differ from whole-feed
-failure. Pilot still requires a successful EPSS feed. Optional enrichment failure and consumer
-qualification remain planned in [#1224](https://github.com/AlexaDeWit/Ecluse/issues/1224).
+failure. Pilot still requires a successful EPSS feed. Optional enrichment failure remains planned
+in [#1224](https://github.com/AlexaDeWit/Ecluse/issues/1224).
+
+Each ecosystem with an active `DenyIfEpss` requires `epss_status=available` in its artifact metadata.
+The requirement follows that ecosystem's resolved policy, including inherited rules and mount additions.
+Removed rules create no requirement. `onUnavailable: skip` and a threshold of 1 still require the marker.
+The consumer rejects missing, unavailable, or unrecognised markers before installation.
+A successful marker establishes whole-feed enrichment, not an individual score or a new timestamp.
+Optional feed dates and individual scores can remain absent.
+
+Upgrade in this order:
+
+1. Deploy a producer that writes the success marker and publish marked artifacts for every EPSS-dependent ecosystem.
+2. Upgrade consumers, including proxy, worker, and Dredger roles, to enforce qualification.
+3. Keep optional producer failure disabled until all advisory-reading consumers enforce qualification.
+
+Older epoch 4 artifacts can contain scores without the marker. Only consumers without EPSS-dependent rules accept those artifacts.
+A running consumer retains its accepted qualified generation after rejection, subject to its existing maximum age.
+A restarted consumer starts with an empty slot and does not recover the local canonical file.
+Publish marked artifacts before upgrading dependent consumers. Epoch 4 remains unchanged.

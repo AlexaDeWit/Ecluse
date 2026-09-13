@@ -23,11 +23,13 @@ import Ecluse.Config (
     advisoryAgeLines,
     defaultPolicy,
     loadConfig,
+    mountEpssRequirement,
     mountPostureLines,
     renderConfigError,
     resolvedKeyProvenance,
  )
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 
@@ -150,6 +152,19 @@ spec = do
         it "reports nothing for a mount whose rules read no advisory database" $ do
             cfg <- expectConfig (pubUrlEnv <> [("ECLUSE_RULES", "{\"remediation-fast-track\":{\"enabled\":false}}")]) (Just privateMountDoc)
             advisoryAgeLines cfg `shouldBe` []
+
+    describe "mountEpssRequirement" $ do
+        it "requires inherited EPSS rules only where the mount keeps them" $ do
+            cfg <- configFor "{\"rules\":{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false}}}}}"
+            Map.map mountEpssRequirement (configMounts cfg) `shouldBe` Map.fromList [(Npm, EpssRequired), (PyPI, EpssOptional)]
+
+        it "requires mount additions regardless of name, skip alignment, or maximum threshold" $ do
+            cfg <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true,\"rules\":{\"renamed-risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":1,\"onUnavailable\":\"skip\"}}},\"pypi\":{\"enabled\":true}}}"
+            Map.map mountEpssRequirement (configMounts cfg) `shouldBe` Map.fromList [(Npm, EpssRequired), (PyPI, EpssOptional)]
+
+        it "does not require EPSS for the shipped policy" $ do
+            cfg <- configFor privateMountDoc
+            Map.map mountEpssRequirement (configMounts cfg) `shouldBe` Map.singleton Npm EpssOptional
 
     describe "resolvedKeyProvenance" $ do
         it "labels each resolved key with the layer that supplied it" $ do

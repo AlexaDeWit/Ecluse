@@ -53,7 +53,7 @@ import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisorySource
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apEpssScoreDate, apOsvNewestModified, apOsvSource))
-import Ecluse.Core.Osv.Schema (MetaKey (MetaBuiltAt, MetaRowCount), renderMetaKey)
+import Ecluse.Core.Osv.Schema (EpssRequirement, MetaKey (MetaBuiltAt, MetaRowCount), renderMetaKey)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Stream (boundBytes)
 import Ecluse.Core.Supervision (delayListPolicy)
@@ -115,6 +115,8 @@ data SyncEnv = SyncEnv
     -- ^ The transport for this ecosystem's object key.
     , syncEcosystem :: Ecosystem
     -- ^ The ecosystem the artifact must verify as.
+    , syncEpssRequirement :: EpssRequirement
+    -- ^ Whether this ecosystem requires successful EPSS enrichment.
     , syncDbPath :: FilePath
     -- ^ The canonical on-disk artifact path (the stable per-ecosystem name).
     , syncSlot :: CveSlot
@@ -167,7 +169,7 @@ syncNewArtifact env = do
             discardTemp temp
             pure (SyncFetchFaulted fault)
         Right fetched -> do
-            opened <- openCveDb (syncEcosystem env) temp `onException` discardTemp temp
+            opened <- openCveDb (syncEcosystem env) (syncEpssRequirement env) temp `onException` discardTemp temp
             case opened of
                 Left rejection -> do
                     discardTemp temp

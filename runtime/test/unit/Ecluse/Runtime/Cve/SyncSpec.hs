@@ -26,12 +26,12 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 import UnliftIO.Timeout (timeout)
 
-import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
+import Ecluse.Core.Cve (AdvisoryRange (arCveId), CveDb (..), CveDbRejected (CveDbEpssNotEstablished, CveDbIntegrityFailed, CveDbWrongEpoch), CveLookup (..))
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, swapIn, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apOsvNewestModified, apOsvSource), noProvenance)
-import Ecluse.Core.Osv.Schema (osvDbFileName, osvSchemaEpoch)
+import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (IngestStats (IngestStats), PilotIngestAborted (PilotIngestAborted))
 import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
 import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
@@ -56,7 +56,7 @@ import Ecluse.Runtime.Cve.Sync (
     runCveSync,
     syncStep,
  )
-import Ecluse.Runtime.Test.Cve (headOnlyFetch)
+import Ecluse.Runtime.Test.Cve (fetchServing, fetchServingAt, headOnlyFetch)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, runQuietKatip)
 import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
@@ -82,23 +82,11 @@ withSyncEnv use =
                 SyncEnv
                     { syncFetch = fetch
                     , syncEcosystem = Npm
+                    , syncEpssRequirement = EpssOptional
                     , syncDbPath = dir </> osvDbFileName "npm"
                     , syncSlot = slot
                     }
         use dir slot envWith
-
-fetchServing :: Maybe Text -> (FilePath -> IO ()) -> CveFetch
-fetchServing = fetchServingAt Nothing
-
--- 'fetchServing' with the publication time the store reports for the object.
-fetchServingAt :: Maybe UTCTime -> Maybe Text -> (FilePath -> IO ()) -> CveFetch
-fetchServingAt pushedAt mEtag write =
-    CveFetch
-        { fetchHead = pure (Right ((\etag -> FetchedObject (DbEtag etag) pushedAt) <$> mEtag))
-        , fetchDownload = \dest -> case mEtag of
-            Nothing -> throwIO (TestContractEscape "download called with no object present")
-            Just etag -> write dest $> Right (FetchedObject (DbEtag etag) pushedAt)
-        }
 
 transportDown :: OsvDbFetchFault
 transportDown = OsvDbTransport (transportFault TransportUnreachable "transport down")
@@ -567,6 +555,81 @@ spec = do
                 -- The cancellation interrupted the drain wait, never the
                 -- published generation: the slot must still answer.
                 probesFor slot "pkg-b" `shouldReturn` Just True
+
+    describe "EPSS artifact qualification" $ do
+        it "rejects an unqualified cold artifact before installation and records refusal" $
+            withSyncEnv $ \_ slot envWith -> do
+                let env = (envWith (fetchServing (Just "missing") (`mkMinimalValidDb` "pkg-a"))){syncEpssRequirement = EpssRequired}
+                observed <- observeAttempts 1 oneAttempt env
+                shouldObserve observed [(Npm, AdvisoryRefused)]
+                probesFor slot "pkg-a" `shouldReturn` Nothing
+                currentAdvisoryEtag slot `shouldReturn` Nothing
+                doesFileExist (syncDbPath env) `shouldReturn` False
+                doesFileExist (syncDbPath env <> ".tmp") `shouldReturn` False
+
+        it "retains the qualified generation across rejection and rejected republication" $
+            withSyncEnv $ \_ slot envWith -> do
+                let required fetch = (envWith fetch){syncEpssRequirement = EpssRequired}
+                    writeGood dest = mkMinimalValidDbWithMeta dest "pkg-a" [("epss_status", "available"), ("osv_source", "https://osv.example.test/npm/all.zip")]
+                    good = required (fetchServingAt (Just publishedAt) (Just "good") writeGood)
+                syncStep good Nothing >>= \case
+                    SyncSwapped etag _ -> etag `shouldBe` DbEtag "good"
+                    other -> expectationFailure ("expected qualified swap, got " <> show other)
+                bytes <- readFileBS (syncDbPath good)
+                source <- installedSource slot
+                installed <- generationInstalledAt slot
+                let bad = required (fetchServingAt (Just (addUTCTime 60 publishedAt)) (Just "bad") (`mkMinimalValidDb` "pkg-b"))
+                syncStep bad (Just (DbEtag "good")) >>= \case
+                    SyncRejected etag rejection -> do
+                        etag `shouldBe` DbEtag "bad"
+                        rejection `shouldBe` CveDbEpssNotEstablished
+                    other -> expectationFailure ("expected EPSS rejection, got " <> show other)
+                let repeated = required (headOnlyFetch (Right (Just (FetchedObject (DbEtag "bad") (Just (addUTCTime 120 publishedAt))))))
+                replicateM_ 2 $
+                    syncStep repeated (Just (DbEtag "bad")) >>= \case
+                        SyncUnchanged -> pass
+                        other -> expectationFailure ("expected rejected download suppression, got " <> show other)
+                readFileBS (syncDbPath good) `shouldReturn` bytes
+                installedSource slot `shouldReturn` source
+                generationInstalledAt slot `shouldReturn` installed
+                currentAdvisoryEtag slot `shouldReturn` Just (DbEtag "good")
+                probesFor slot "pkg-a" `shouldReturn` Just True
+                probesFor slot "pkg-b" `shouldReturn` Just False
+                doesFileExist (syncDbPath bad <> ".tmp") `shouldReturn` False
+
+        it "notifies first sync only after a later qualified generation arrives" $
+            withSyncEnv $ \_ slot envWith -> do
+                (swaps, onSwap) <- newSwapCounter
+                (metrics, readAttempts, _) <- recordingAdvisorySyncMetricsPort
+                (tracing, readSpans) <- recordingAdvisorySyncTracingPort
+                let missing = fetchServing (Just "missing") (`mkMinimalValidDb` "pkg-a")
+                    good = fetchServing (Just "good") (\dest -> mkMinimalValidDbWithMeta dest "pkg-a" [("epss_status", "available")])
+                current <- newIORef missing
+                let fetch =
+                        CveFetch
+                            { fetchHead = readIORef current >>= fetchHead
+                            , fetchDownload = \dest -> readIORef current >>= (`fetchDownload` dest)
+                            }
+                    env = (envWith fetch){syncEpssRequirement = EpssRequired}
+                    schedule = SyncSchedule [] 20_000
+                withAsync (runQuietKatip (runCveSync metrics tracing env schedule (notifyOnly onSwap))) $ \_ -> do
+                    waitFor "the rejected attempt to finish" (not . null <$> readSpans)
+                    take 1 <$> readAttempts `shouldReturn` [(Npm, AdvisoryRefused)]
+                    readTVarIO swaps `shouldReturn` 0
+                    writeIORef current good
+                    awaitCount "qualified first sync" swaps 1
+                    probesFor slot "pkg-a" `shouldReturn` Just True
+
+        it "keeps advisory and remediation evidence in optional marker-free artifacts" $
+            withSyncEnv $ \_ slot envWith -> do
+                syncStep (envWith (fetchServing (Just "legacy") (`mkMinimalValidDb` "pkg-a"))) Nothing >>= \case
+                    SyncSwapped _ meta -> lookup "epss_status" meta `shouldBe` Nothing
+                    other -> expectationFailure ("expected optional swap, got " <> show other)
+                withSlotGeneration slot $ \case
+                    Nothing -> expectationFailure "optional artifact was not installed"
+                    Just (_, lookup') -> do
+                        cveRemediationProbe lookup' "pkg-a" "1.0.0" `shouldReturn` True
+                        cveAdvisoriesFor lookup' "pkg-a" >>= (`shouldSatisfy` not . null)
 
     describe "runCveSync" $ do
         it "the boot burst retries through typed fetch faults until the artifact lands" $

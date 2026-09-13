@@ -66,7 +66,7 @@ import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPreviewCaches, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
  )
-import Ecluse.Config (AppConfig (cfgAdvisories), Mount (mountPolicy), MountConfig (mntFirstParty), StoreBackend, StoreTag, mountAdvisoryAge)
+import Ecluse.Config (AppConfig (cfgAdvisories), Mount (mountPolicy), MountConfig (mntFirstParty), StoreBackend, StoreTag, mountAdvisoryAge, mountEpssRequirement)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
@@ -351,15 +351,14 @@ environment that can do neither refuses here rather than at first sync. -}
 planAdvisorySync :: LogEnv -> BootPlan -> IO (Either [BootError] (Map Ecosystem CveSyncHandle))
 planAdvisorySync logEnv bootPlan =
     refuseOnThrow AdvisorySyncUnavailable $
-        planCveSync logEnv (bpS3Endpoint bootPlan) settings ageLimits
+        planCveSync logEnv (bpS3Endpoint bootPlan) settings requirements
   where
     validated = bpValidated bootPlan
     settings = vpSettings validated
-    -- Each mount's maximum push age is derived from that mount's own rules, so one ecosystem's
-    -- quarantine never sets another's limit.
-    ageLimits =
-        [ (vmEcosystem vetted, mountAdvisoryAge (cfgAdvisories settings) (vmMount vetted))
+    requirements =
+        [ (vmEcosystem vetted, mountAdvisoryAge (cfgAdvisories settings) mount, mountEpssRequirement mount)
         | vetted <- vpMounts validated
+        , let mount = vmMount vetted
         ]
 
 {- Build the selected queue backend. It dials the provider to read the queue's redrive policy, so

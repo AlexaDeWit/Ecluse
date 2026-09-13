@@ -68,6 +68,7 @@ module Ecluse.Config (
     sameRegistry,
     mountPostureLines,
     mountAdvisoryAge,
+    mountEpssRequirement,
     advisoryAgeLines,
     resolvedKeyProvenance,
 ) where
@@ -90,13 +91,14 @@ import Ecluse.Config.Rule
 import Ecluse.Config.Target (resolveStoreBackend, vetTargetTag)
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
+import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
 import Ecluse.Core.Rules (renderDuration)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryAgeBasis (AgeBeforeQuarantine, AgeConfigured, AgeFloor),
     MaxAdvisoryAge (maxAdvisoryAge, maxAdvisoryAgeBasis),
     maxAdvisoryAgeFor,
  )
-import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule, readsAdvisories)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule (DenyIfEpss), readsAdvisories)
 import Ecluse.Core.Security (HostPort, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (registryPath, stripTrailingSlash)
@@ -316,6 +318,13 @@ explicit @advisories.maxAgeSeconds@ overrides the derivation on every mount.
 -}
 mountAdvisoryAge :: AdvisoriesSettings -> Mount -> MaxAdvisoryAge
 mountAdvisoryAge advisories = maxAdvisoryAgeFor (advMaxAgeSeconds advisories) . mountRulesOf
+
+-- | Require enrichment when this mount's resolved policy contains an EPSS rule.
+mountEpssRequirement :: Mount -> EpssRequirement
+mountEpssRequirement = bool EpssOptional EpssRequired . any requiresEpss . mountRulesOf
+  where
+    requiresEpss DenyIfEpss{} = True
+    requiresEpss _ = False
 
 mountRulesOf :: Mount -> [Rule]
 mountRulesOf = map prRule . mountPolicy
