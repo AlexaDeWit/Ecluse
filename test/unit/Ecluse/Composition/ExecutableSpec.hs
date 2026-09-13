@@ -23,7 +23,7 @@ import Ecluse.Composition.BootError (
         PilotWithoutEcosystem,
         StoreMaintenanceUnavailable
     ),
-    StoreMaintenanceReason (ClientBuildFailed),
+    StoreMaintenanceReason (ClientBuildFailed, PrivateCacheUnavailable),
  )
 import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Executable (
@@ -170,6 +170,21 @@ spec = describe "planExecutable" $ do
             Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed detail)] ->
                 detail `shouldSatisfy` T.isInfixOf "NoCredentials"
             Left errs -> expectationFailure ("expected the handle refusal, got: " <> show errs)
+
+    for_ [False, True] $ \mirrorFails ->
+        it ("classifies private observation construction failure and accumulates mirror failure: " <> show mirrorFails) $ do
+            let builds =
+                    observingOnly
+                        { sbObserving = \ports limits backend ->
+                            if mirrorFails || registryUrlText (cbUrl backend) == "https://private.example.test"
+                                then sbObserving refusingStore ports limits backend
+                                else sbObserving observingOnly ports limits backend
+                        }
+                expected =
+                    [StoreMaintenanceUnavailable Npm (ClientBuildFailed "NoCredentials") | mirrorFails]
+                        <> [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "client build failed: NoCredentials")]
+            outcome <- planWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ -> Nothing) refusingQueue builds
+            void outcome `shouldBe` Left expected
 
     it "reports a mirror-write mint the live environment refuses" $ do
         -- The Dredger reads and deletes through the mirror write's own credential, so it mints

@@ -15,16 +15,19 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentWithheld),
-    StoreFacts (factBackend),
+    StoreFacts (factBackend, factNameAlphabet),
     StoreObservation (..),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
+    mkNameAlphabet,
     protocolFault,
+    renderNamePrefix,
  )
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Group (boundedVersions)
 import Ecluse.Core.Registry.Sweep.Types (
+    CycleHalt (HaltStoreFault),
     CycleOutcome (..),
     EvidenceGaps (gapManifests),
     PrerequisiteStatus (PrerequisiteUnmet),
@@ -35,6 +38,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepTally (..),
     TargetPrerequisites (tpConsent),
     outcomeComplete,
+    renderStoreFault,
  )
 import Ecluse.Core.Registry.Sweep.Walk (bucketNameBudget)
 import Ecluse.Core.Rules (prepare)
@@ -95,8 +99,7 @@ spec = describe "grouped preview" $ do
         mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
         cache <- seeded "privateUpstream" [(packageName, ["1.0.0"])]
         mount <- grouped mirror cache
-        let forbidMetadata store = store{obReadManifest = \_ -> fail "first-party metadata must not be read"}
-            original = smStore mount
+        let original = smStore mount
         (_, outcome) <- runPreview mount{smFirstParty = const True, smStore = original{ssObserve = forbidMetadata (ssObserve original), ssPrivate = forbidMetadata <$> ssPrivate original}}
         tallyDeleted (outcomeTally outcome) `shouldBe` 0
         tallyGuardSkipped (outcomeTally outcome) `shouldBe` 2
@@ -208,6 +211,74 @@ spec = describe "grouped preview" $ do
         fmap (map (length . snd)) (boundedVersions 1 locations) `shouldBe` Right [1, 1]
         fmap (map (length . snd)) (boundedVersions 0 locations) `shouldSatisfy` isLeft
 
+    it "splits a grouped parent bucket and preserves each copy through the completed narrower buckets" $ do
+        let mirrorOnly = mkPackageName Npm Nothing "aa-mirror"
+            cacheOnly = mkPackageName Npm Nothing "ab-cache"
+            shared = mkPackageName Npm Nothing "aa-shared"
+            fillers prefix = [(mkPackageName Npm Nothing (prefix <> show n), []) | n <- [1 .. bucketNameBudget `div` 2]]
+            configured = map DenyByIdentity ["aa-mirror", "ab-cache", "aa-shared"]
+        mirror <- seeded "mirrorTarget" ([(mirrorOnly, ["1.0.0"]), (shared, ["1.0.0"])] <> fillers "aa")
+        cache <- seeded "privateUpstream" ([(cacheOnly, ["1.0.0"]), (shared, ["1.0.0"])] <> fillers "ab")
+        mount <- grouped mirror cache
+        rules <- prepare inertRuleDeps (map atDefaultPrecedence configured)
+        listedBuckets <- newIORef ([] :: [(Text, Text)])
+        let partitioned label store =
+                store
+                    { obFacts = (obFacts store){factNameAlphabet = mkNameAlphabet "ab"}
+                    , obListPackagesIn = \prefix -> do
+                        liftIO (modifyIORef' listedBuckets (<> [(label, renderNamePrefix prefix)]))
+                        obListPackagesIn store prefix
+                    }
+            original = smStore mount
+            splitMount =
+                mount
+                    { smRules = rules
+                    , smConfigured = configured
+                    , smStore =
+                        original
+                            { ssObserve = partitioned "mirrorTarget" (ssObserve original)
+                            , ssPrivate = Just (partitioned "privateUpstream" (fakeObservation cache))
+                            }
+                    }
+        recorded <- recordingPortsUnder previewingReport Nothing
+        outcome <- sweepCycle testPacing{swpShape = SweepEverything} (recPorts recorded) [splitMount]
+        outcomeComplete outcome `shouldBe` True
+        tallyDeleted (outcomeTally outcome) `shouldBe` 3
+        tallyExamined (outcomeTally outcome) `shouldBe` 4
+        readIORef listedBuckets `shouldReturn` [(label, prefix) | prefix <- ["a", "aa", "ab", "b"], label <- ["mirrorTarget", "privateUpstream"]]
+        selected <- filter (T.isInfixOf "would delete") <$> recInfo recorded
+        length selected `shouldBe` 4
+        for_ [("mirrorTarget", "aa-mirror"), ("mirrorTarget", "aa-shared"), ("privateUpstream", "ab-cache"), ("privateUpstream", "aa-shared")] $ \(label, name) ->
+            length (filter (T.isPrefixOf (label <> ": dry run, would delete " <> name <> "@1.0.0:")) selected) `shouldBe` 1
+
+    it "halts on a private version inventory fault before either location reads metadata or decides" $ do
+        mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
+        cache <- seeded "privateUpstream" [(packageName, ["1.0.0"])]
+        mount <- grouped mirror cache
+        versionsRead <- newIORef ([] :: [Text])
+        let fault = protocolFault "private version inventory unavailable"
+            recordVersions label store =
+                (forbidMetadata store)
+                    { obEnumerateVersions = \name -> do
+                        modifyIORef' versionsRead (<> [label])
+                        obEnumerateVersions store name
+                    }
+            original = smStore mount
+            private = (fakeObservation cache){obEnumerateVersions = \_ -> pure (Left fault)}
+        (_, outcome) <-
+            runPreview
+                mount
+                    { smStore =
+                        original
+                            { ssObserve = recordVersions "mirrorTarget" (ssObserve original)
+                            , ssPrivate = Just (recordVersions "privateUpstream" private)
+                            }
+                    }
+        readIORef versionsRead `shouldReturn` ["mirrorTarget", "privateUpstream"]
+        outcomeComplete outcome `shouldBe` False
+        outcomeTally outcome `shouldBe` mempty
+        outcomeHalt outcome `shouldBe` Just (HaltStoreFault Npm "privateUpstream" (renderStoreFault fault))
+
     it "reports a private listing fault without treating that target as empty" $ do
         mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
         cache <- newFakeStore defaultFakeStoreConfig{fakeFault = Just (protocolFault "inventory unavailable")}
@@ -259,3 +330,6 @@ dateManifest manifest = manifest{manifestInfo = info{infoVersions = Map.map date
   where
     info = manifestInfo manifest
     dateDetails details = details{pkgPublishedAt = Just (UTCTime (fromGregorian 2020 1 1) 0)}
+
+forbidMetadata :: StoreObservation -> StoreObservation
+forbidMetadata store = store{obReadManifest = \_ -> fail "this preview must stop before reading metadata"}
