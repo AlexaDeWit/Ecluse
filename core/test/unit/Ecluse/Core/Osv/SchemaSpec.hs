@@ -43,5 +43,6 @@ spec = do
                            , "epss_last_modified"
                            , "epss_score_date"
                            , "epss_model_version"
+                           , "epss_status"
                            , "row_count"
                            ]

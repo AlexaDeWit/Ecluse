@@ -125,12 +125,12 @@ data MetaKey
       MetaEpssScoreDate
     | -- | The scoring model the EPSS feed declares.
       MetaEpssModelVersion
+    | -- | Successful feed enrichment, stored as @available@ even without matching advisory scores.
+      MetaEpssStatus
     | -- | The number of advisory ranges the artifact holds.
       MetaRowCount
     deriving stock (Eq, Generic, Show)
 
--- Enumerate every MetaKey from the type itself, so a new key needs no hand-maintained
--- list. Derived from Generic, not a partial Enum/Bounded pair.
 instance Universe MetaKey where universe = universeGeneric
 
 -- | The key's stored form in the @meta@ table.
@@ -148,4 +148,5 @@ renderMetaKey = \case
     MetaEpssLastModified -> "epss_last_modified"
     MetaEpssScoreDate -> "epss_score_date"
     MetaEpssModelVersion -> "epss_model_version"
+    MetaEpssStatus -> "epss_status"
     MetaRowCount -> "row_count"

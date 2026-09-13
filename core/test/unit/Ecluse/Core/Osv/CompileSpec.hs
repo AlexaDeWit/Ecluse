@@ -8,6 +8,7 @@ and local HTTP stubs.
 -}
 module Ecluse.Core.Osv.CompileSpec (spec) where
 
+import Codec.Compression.GZip qualified as GZip
 import Conduit (runResourceT)
 import Data.Aeson (decodeStrict, encode, object, (.:), (.=))
 import Data.Aeson.Types (parseMaybe)
@@ -102,6 +103,7 @@ spec = describe "SQLite OSV Compilation" $ do
                        , "epss_score_date"
                        , "epss_source"
                        , "epss_source_url"
+                       , "epss_status"
                        , "osv_newest_modified"
                        , "osv_source"
                        , "pilot_version"
@@ -119,10 +121,33 @@ spec = describe "SQLite OSV Compilation" $ do
         Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-03-23T17:41:30.891186Z"
         Map.lookup "epss_score_date" meta `shouldBe` Just "2026-08-29T00:00:00Z"
         Map.lookup "epss_model_version" meta `shouldBe` Just "v2026.08.01"
+        Map.lookup "epss_status" meta `shouldBe` Just "available"
         Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)
 
         recorded <- readRecorded
         recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 0)] [CompileCompleted]
+
+    for_ [("matching", "CVE-2024-48913", Just 0.75), ("unmatched", "CVE-2026-10001", Nothing)] $ \(label, cveId, expectedScore) ->
+        it ("records available enrichment without feed dates for " <> label <> " scores") $
+            withSystemTempDirectory "epss-status" $ \outDir -> do
+                zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+                let epssData = GZip.compress ("cve,epss,percentile\n" <> cveId <> ",0.75,0.9\n")
+                (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                dbFile <- withStub status200 zipData $ \stub ->
+                    withStub status200 epssData $ \epssStub ->
+                        runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) (sourcesOf stub epssStub "/sample.zip") testQuietTime)
+                meta <- metaOf dbFile
+                Map.lookup "epss_status" meta `shouldBe` Just "available"
+                for_ ["epss_last_modified", "epss_score_date", "epss_model_version"] $ \key ->
+                    Map.lookup key meta `shouldBe` Nothing
+                withConnection dbFile $ \conn -> do
+                    scores <- query_ conn "SELECT epss_score FROM package_vulnerability_ranges" :: IO [Only (Maybe Double)]
+                    map fromOnly scores `shouldBe` [expectedScore]
+                openCveDb Npm dbFile >>= \case
+                    Left rejection -> fail ("EPSS-stamped artifact rejected: " <> show rejection)
+                    Right db ->
+                        flip finally (cveDbClose db) $
+                            cveCoveredNames (cveDbLookup db) `shouldReturn` ["hono"]
 
     it "fetches both credential-bearing overrides without persisting or logging their credentials" $ do
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
@@ -187,6 +212,7 @@ spec = describe "SQLite OSV Compilation" $ do
         map fromOnly rows `shouldBe` ["flask-thing"]
         takeFileName dbFile `shouldBe` "pypi-osv-schema4.db"
         Map.lookup "ecosystem" (Map.fromList metaRows) `shouldBe` Just "pypi"
+        Map.lookup "epss_status" (Map.fromList metaRows) `shouldBe` Just "available"
         openCveDb PyPI dbFile >>= \case
             Left rejection -> fail ("rebuilt PyPI artifact rejected: " <> show rejection)
             Right db -> flip finally (cveDbClose db) $ do
@@ -463,11 +489,9 @@ testQuietTime = QuietTime{qtOsv = century, qtEpss = century}
   where
     century = 100 * 365 * 86400
 
--- One second, which every fixture date is older than.
 tightQuietTime :: QuietTime
 tightQuietTime = QuietTime{qtOsv = 1, qtEpss = 1}
 
--- One npm advisory naming one affected version, with the record date under test.
 datedAdvisory :: Text -> Text -> Maybe Text -> LByteString
 datedAdvisory advisoryId pkg mModified =
     encode
