@@ -25,6 +25,7 @@ import Ecluse.Config.AdvisoryStore (advisoryObjectKey, advisoryStoreBucket, mkAd
 import Ecluse.Config.Ambient (parseEndpointUrl)
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisorySource, generationInstalledAt, newCveSlot)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncOutcome (..), newS3CveSource, s3CveFetchFor, syncStep)
@@ -97,7 +98,7 @@ spec = do
                     published ^. S3L.headObjectResponse_lastModified `shouldSatisfy` isJust
                     source <- newS3CveSource (Just endpoint)
                     slot <- newCveSlot
-                    let env = SyncEnv (s3CveFetchFor source bucket objectKey (512 * 1024 * 1024)) Npm (tmpDir <> "/consumer.sqlite") slot
+                    let env = SyncEnv (s3CveFetchFor source bucket objectKey (512 * 1024 * 1024)) Npm EpssRequired (tmpDir <> "/consumer.sqlite") slot
                     initialSync <- syncStep env Nothing
                     acceptedEtag <- case initialSync of
                         SyncSwapped etag _ -> pure etag

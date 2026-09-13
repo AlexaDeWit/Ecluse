@@ -6,6 +6,8 @@ module Ecluse.Composition.ExecutableSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import System.Environment (setEnv)
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
@@ -31,7 +33,7 @@ import Ecluse.Composition.Executable (
     BuildMirrorQueue,
     ExecutablePlan (epBootPlan, epRoleWiring),
     MirrorWiring (mwBootWiring, mwCveSync, mwRole),
-    PrunerWiring (pwMounts),
+    PrunerWiring (pwCveSync, pwMounts),
     RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
     planExecutable,
  )
@@ -43,6 +45,7 @@ import Ecluse.Composition.Types (
     MirrorRole (ServeAndMirror),
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Queue (noMirrorQueue)
 import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
 import Ecluse.Core.Registry.Sweep (sweepCycle)
@@ -50,7 +53,9 @@ import Ecluse.Core.Registry.Sweep.Types (CycleOutcome (outcomePrerequisites, out
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
 import Ecluse.Core.Version (mkVersion)
+import Ecluse.Cve.Sync (CveSyncHandle (csEnv))
 import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo))
+import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEpssRequirement))
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeContents, fakeManifests), defaultFakeStoreConfig, newFakeStore)
@@ -71,6 +76,21 @@ spec = describe "planExecutable" $ do
         map ptEcosystem (bwPublishTargets (mwBootWiring mirror)) `shouldBe` [Npm]
         -- No advisory store is configured, so the map is empty and readiness is ungated.
         null (mwCveSync mirror) `shouldBe` True
+
+    it "qualifies advisory consumers in both the mirror and Dredger plans" $
+        withSystemTempDirectory "epss-role-plan" $ \dir -> do
+            for_ [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test"), ("AWS_REGION", "us-east-1")] $ uncurry setEnv
+            let envVars =
+                    overrideEnv "ECLUSE_ADVISORIES__DATA_DIR" dir $
+                        overrideEnv "ECLUSE_ADVISORIES__URL" advisoryStoreUrl $
+                            overrideEnv "ECLUSE_RULES" "{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}" codeArtifactEnvVars
+            for_ [BootMirrorPipeline ServeAndMirror, BootStorePruner] $ \role -> do
+                plan <- expectExecutableWith envVars role mountBindingFor inertQueue inertStore
+                handles <- case epRoleWiring plan of
+                    MirrorPipelineWiring mirror -> pure (mwCveSync mirror)
+                    StorePrunerWiring pruner -> pure (pwCveSync pruner)
+                    other -> fail ("expected an advisory consumer, got " <> toString (plannedArm other))
+                Map.map (syncEpssRequirement . csEnv) handles `shouldBe` Map.singleton Npm EpssRequired
 
     it "refuses, and yields no plan, where a cleared mount resolves to no binding" $ do
         -- The refusal this phase raises without a cloud. The injected resolver stands in for a

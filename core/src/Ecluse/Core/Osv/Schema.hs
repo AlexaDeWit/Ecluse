@@ -21,6 +21,9 @@ module Ecluse.Core.Osv.Schema (
     -- * The @meta@ table
     MetaKey (..),
     renderMetaKey,
+    EpssRequirement (..),
+    EpssEvidence (..),
+    decodeEpssEvidence,
 ) where
 
 import Data.Universe.Class (Universe (..))
@@ -150,3 +153,16 @@ renderMetaKey = \case
     MetaEpssModelVersion -> "epss_model_version"
     MetaEpssStatus -> "epss_status"
     MetaRowCount -> "row_count"
+
+-- | The resolved ecosystem policy's requirement for artifact acceptance.
+data EpssRequirement = EpssOptional | EpssRequired
+    deriving stock (Eq, Show)
+
+-- | Whether metadata establishes successful feed enrichment, independent of individual scores.
+data EpssEvidence = EpssAvailable | EpssNotEstablished
+    deriving stock (Eq, Show)
+
+-- | Only the exact published success marker establishes available enrichment.
+decodeEpssEvidence :: Maybe Text -> EpssEvidence
+decodeEpssEvidence (Just "available") = EpssAvailable
+decodeEpssEvidence _ = EpssNotEstablished

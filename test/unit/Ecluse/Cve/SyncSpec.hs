@@ -11,19 +11,24 @@ import Control.Retry (simulatePolicy)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, getCurrentTime, nominalDay)
+import Database.SQLite.Simple (close, execute_, open)
 import Katip (closeScribes)
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
 import System.Environment (setEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Async (withAsync)
+import UnliftIO.Exception (bracket, throwIO)
+import UnliftIO.STM (check)
+import UnliftIO.Timeout (timeout)
 
 import Ecluse.Composition.Support (expectAppConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
-import Ecluse.Core.Cve (DbEtag (..))
+import Ecluse.Core.Cve (CveDbRejected (CveDbEpssNotEstablished), DbEtag (..))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness, rdWithCveLookup))
 import Ecluse.Core.Rules.Freshness (
     AdvisoryFreshness (AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
@@ -37,10 +42,12 @@ import Ecluse.Core.Server.Readiness (
  )
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Cve.Sync (CveSyncHandle (..), advisoryFreshnessFor, cveRuleDepsFor, cveSyncReadiness, cveSyncScheduleFor, planCveSync, reportPushAge, sweepStaleTemps, sweepStep)
-import Ecluse.Runtime.Cve.Sync (FetchedObject (..), SyncEnv (..), SyncOutcome (..), SyncSchedule (..), bootBackoffDelays, syncStep)
-import Ecluse.Runtime.Test.Cve (headOnlyFetch, refusingFetch)
+import Ecluse.Runtime.Cve.Sync (FetchedObject (..), SyncEnv (..), SyncHooks (..), SyncOutcome (..), SyncSchedule (..), bootBackoffDelays, runCveSync, syncStep)
+import Ecluse.Runtime.Test.Cve (fetchServingAt, headOnlyFetch, refusingFetch)
 import Ecluse.Test.Cve (fakeCveDb)
-import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
+import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv, runQuietKatip)
+import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
+import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, recordingAdvisorySyncTracingPort)
 import Ecluse.Test.Rules (noFaultReporter)
 
 spec :: Spec
@@ -68,8 +75,9 @@ spec = do
                         ]
                         (Just mountedNpmDoc)
                 logEnv <- newTestLogEnv
-                plan <- planCveSync logEnv Nothing cfg [(Npm, sixDayLimit)]
-                Map.keys plan `shouldBe` [Npm]
+                plan <- planCveSync logEnv Nothing cfg [(Npm, sixDayLimit, EpssRequired), (PyPI, sixDayLimit, EpssOptional)]
+                Map.keys plan `shouldBe` [Npm, PyPI]
+                Map.map (syncEpssRequirement . csEnv) plan `shouldBe` Map.fromList [(Npm, EpssRequired), (PyPI, EpssOptional)]
                 for_ (Map.lookup Npm plan) $ \handle -> do
                     syncEcosystem (csEnv handle) `shouldBe` Npm
                     syncDbPath (csEnv handle) `shouldBe` dataDir </> "npm-osv-schema4.db"
@@ -153,6 +161,24 @@ spec = do
                 other -> expectationFailure ("expected publication observation, got " <> show other)
             advisoryFreshnessFor (Map.singleton Npm handle) Npm `shouldReturn` AdvisoryFresh
 
+        it "expires retained qualified evidence after a rejected replacement and republication" $
+            withSystemTempDirectory "epss-retained-age" $ \dir -> do
+                clock <- newIORef alarmNow
+                handle <- stubHandleAt sixDayLimit (readIORef clock)
+                let env = (csEnv handle){syncDbPath = dir </> "npm.db", syncEpssRequirement = EpssRequired}
+                    plan = Map.singleton Npm handle
+                    good = fetchServingAt (Just (agoDays 5)) (Just "good") (\dest -> mkMinimalValidDbWithMeta dest "pkg" [("epss_status", "available")])
+                    bad = fetchServingAt (Just alarmNow) (Just "bad") (\dest -> mkMinimalValidDbWithMeta dest "pkg" [])
+                void (syncStep env{syncFetch = good} Nothing)
+                advisoryFreshnessFor plan Npm `shouldReturn` AdvisoryFresh
+                syncStep env{syncFetch = bad} (Just (DbEtag "good")) >>= \case
+                    SyncRejected _ rejection -> rejection `shouldBe` CveDbEpssNotEstablished
+                    other -> expectationFailure ("expected qualification rejection, got " <> show other)
+                writeIORef clock (addUTCTime (2 * nominalDay) alarmNow)
+                let repeated = headOnlyFetch (Right (Just (FetchedObject (DbEtag "bad") (Just (addUTCTime (2 * nominalDay) alarmNow)))))
+                void (syncStep env{syncFetch = repeated} (Just (DbEtag "bad")))
+                advisoryFreshnessFor plan Npm >>= (`shouldSatisfy` isStale)
+
         it "carries that reading onto the mount's rule capabilities" $ do
             handle <- stubHandleAt sixDayLimit (pure alarmNow)
             install handle (agoDays 9)
@@ -196,6 +222,25 @@ spec = do
             landed pypiHandle
             cveSyncReadiness plan `shouldReturn` Routable (bothAt MountReady)
 
+        it "keeps an optional ecosystem ready when the required ecosystem rejects its artifact" $
+            withSystemTempDirectory "epss-readiness" $ \dir -> do
+                (plan, (npmHandle, pypiHandle)) <- twoMountPlan
+                let npmEnv = (csEnv npmHandle){syncDbPath = dir </> "npm.db", syncEpssRequirement = EpssRequired, syncFetch = markerFree Npm}
+                    pypiEnv = (csEnv pypiHandle){syncDbPath = dir </> "pypi.db", syncEcosystem = PyPI, syncFetch = markerFree PyPI}
+                    markerFree eco = fetchServingAt (Just alarmNow) (Just "legacy") $ \dest -> do
+                        mkMinimalValidDbWithMeta dest "pkg" []
+                        when (eco == PyPI) $ bracket (open dest) close $ \conn -> execute_ conn "UPDATE meta SET value = 'pypi' WHERE key = 'ecosystem'"
+                    schedule = SyncSchedule [] 600_000_000
+                done <- newTVarIO (0 :: Int)
+                (tracing, _) <- recordingAdvisorySyncTracingPort
+                let run handle env = runQuietKatip $ runCveSync noopAdvisorySyncMetricsPort tracing env schedule (SyncHooks (landed handle) (atomically (modifyTVar' done (+ 1))))
+                withAsync (run npmHandle npmEnv) $ \_ ->
+                    withAsync (run pypiHandle pypiEnv) $ \_ -> do
+                        timeout 5_000_000 (atomically (readTVar done >>= check . (>= 2))) `shouldReturn` Just ()
+                        cveSyncReadiness plan `shouldReturn` Routable (Map.fromList [(Npm, MountAwaitingFirstSync), (PyPI, MountReady)])
+                        withSlotGeneration (syncSlot npmEnv) (pure . isJust) `shouldReturn` False
+                        withSlotGeneration (syncSlot pypiEnv) (pure . isJust) `shouldReturn` True
+
         it "keeps PyPI routable while the npm artifact is missing" $ do
             (plan, (_, pypiHandle)) <- twoMountPlan
             landed pypiHandle
@@ -230,8 +275,7 @@ bothAt readiness = Map.fromList [(Npm, readiness), (PyPI, readiness)]
 landed :: CveSyncHandle -> IO ()
 landed handle = atomically (writeTVar (csReady handle) True)
 
--- A handle as 'planCveSync' would build it, minus the transport (the tests
--- above never fetch): a fresh empty slot and a readiness flag at False.
+-- A fresh plan handle whose transport refuses unless the test replaces it.
 stubSyncHandle :: IO CveSyncHandle
 stubSyncHandle = stubHandleAt sixDayLimit getCurrentTime
 
@@ -248,6 +292,7 @@ stubHandleAt maxAge clock = do
                 SyncEnv
                     { syncFetch = refusingFetch
                     , syncEcosystem = Npm
+                    , syncEpssRequirement = EpssOptional
                     , syncDbPath = "unused.db"
                     , syncSlot = slot
                     }

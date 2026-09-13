@@ -42,7 +42,7 @@ import Ecluse.Config (
 import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Osv.Schema (osvDbFileName)
+import Ecluse.Core.Osv.Schema (EpssRequirement, osvDbFileName)
 import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
 import Ecluse.Core.Rules.Freshness (
     AdvisoryAge (advisoryAge, advisoryMaxAge, advisoryPushedAt),
@@ -218,7 +218,7 @@ data CveSyncHandle = CveSyncHandle
 {- | Build the advisory-sync plan, one 'CveSyncHandle' per vetted mount ecosystem, or nothing with
 no store. A mount the build does not ship awaits an artifact that never comes, so it stays unready.
 -}
-planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> [(Ecosystem, MaxAdvisoryAge)] -> IO (Map.Map Ecosystem CveSyncHandle)
+planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> [(Ecosystem, MaxAdvisoryAge, EpssRequirement)] -> IO (Map.Map Ecosystem CveSyncHandle)
 planCveSync logEnv s3Endpoint appCfg limits = case advUrl (cfgAdvisories appCfg) of
     Nothing -> pure Map.empty
     Just store -> do
@@ -230,8 +230,8 @@ planCveSync logEnv s3Endpoint appCfg limits = case advUrl (cfgAdvisories appCfg)
 
 -- 'cveSource' captures the S3 environment once, so every ecosystem's transport shares one
 -- credential discovery. The store addresses the remote object, the local copy its bare file name.
-cveSyncHandleFor :: AppConfig -> S3CveSource -> AdvisoryStoreUrl -> (Ecosystem, MaxAdvisoryAge) -> IO (Ecosystem, CveSyncHandle)
-cveSyncHandleFor appCfg cveSource store (eco, maxAge) = do
+cveSyncHandleFor :: AppConfig -> S3CveSource -> AdvisoryStoreUrl -> (Ecosystem, MaxAdvisoryAge, EpssRequirement) -> IO (Ecosystem, CveSyncHandle)
+cveSyncHandleFor appCfg cveSource store (eco, maxAge, epssRequirement) = do
     slot <- newCveSlot
     ready <- newTVarIO False
     alarmed <- newTVarIO False
@@ -246,6 +246,7 @@ cveSyncHandleFor appCfg cveSource store (eco, maxAge) = do
                         (advisoryObjectKey store fileName)
                         maxBytes
                 , syncEcosystem = eco
+                , syncEpssRequirement = epssRequirement
                 , syncDbPath = advDataDir (cfgAdvisories appCfg) </> fileName
                 , syncSlot = slot
                 }
