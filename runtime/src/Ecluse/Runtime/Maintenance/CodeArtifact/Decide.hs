@@ -191,7 +191,7 @@ listVersionsRequest store name token =
 listVersionsResult :: Either AWS.Error CA.ListPackageVersionsResponse -> Either StoreFault CA.ListPackageVersionsResponse
 listVersionsResult = \case
     Left (AWS.ServiceError service)
-        | service ^. AWS.serviceError_code == AWS.ErrorCode "ResourceNotFoundException" ->
+        | service ^. AWS.serviceError_code == AWS.newErrorCode "ResourceNotFoundException" ->
             Right (CA.newListPackageVersionsResponse 200)
     result -> first classifyStoreFault result
 

@@ -246,6 +246,7 @@ faultSpec = describe "classifyStoreFault" $ do
     it "reads a missing package as an empty local inventory and preserves access failures" $ do
         fmap (^. CAL.listPackageVersionsResponse_versions) (listVersionsResult (Left (serviceError status404 "ResourceNotFoundException" []))) `shouldBe` Right Nothing
         listVersionsResult (Left (serviceError status403 "AccessDeniedException" [])) `shouldSatisfy` isLeft
+        listVersionsResult (Left (serviceError status404 "OtherException" [])) `shouldSatisfy` isLeft
 
     it "reads a throttle as worth another attempt" $
         adviceFor (serviceError status429 "ThrottlingException" []) `shouldBe` RetryWorthwhile
