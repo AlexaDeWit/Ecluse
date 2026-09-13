@@ -16,10 +16,8 @@ import Ecluse.Composition.BootError (
         MirrorTargetOnMountEndpoint,
         MissingAdapter,
         QueueUrlUnrecognised,
-        SplitRoleNeedsDurableQueue,
-        StoreMaintenanceUnavailable
+        SplitRoleNeedsDurableQueue
     ),
-    StoreMaintenanceReason (PrivateCacheUnavailable),
     renderBootError,
  )
 import Ecluse.Composition.MemoryPlan (MemoryPlan (mpOverrideViolations, mpQueueMemoryMaxDepth))
@@ -45,6 +43,7 @@ import Ecluse.Composition.Support (
     noCeiling,
     noMaintenanceBackend,
     overrideEnv,
+    privateInventoryRefusal,
     staticEnvVars,
     withDredgeablePrivate,
     withObservablePrivate,
@@ -384,6 +383,3 @@ fallbackClause = " (built-in default; no heap-ceiling datapoint)"
 
 mib :: Int
 mib = 1024 * 1024
-
-privateInventoryRefusal :: BootError
-privateInventoryRefusal = StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "registry has no inventory control plane")

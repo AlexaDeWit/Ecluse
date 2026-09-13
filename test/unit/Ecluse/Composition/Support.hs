@@ -17,6 +17,7 @@ module Ecluse.Composition.Support (
     withObservablePrivate,
     withDredgeablePrivate,
     noMaintenanceBackend,
+    privateInventoryRefusal,
     clearedRepository,
     malformedAwsEndpoint,
     withoutMirrorTargetUrl,
@@ -36,7 +37,7 @@ module Ecluse.Composition.Support (
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
-import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane))
+import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
 import Ecluse.Composition.Maintenance (
     ClearedBackend (cbControl),
@@ -143,6 +144,10 @@ withDredgeablePrivate env =
 -- | The deleting role's refusal of 'staticEnvVars', whose mirror target no backend here sweeps.
 noMaintenanceBackend :: BootError
 noMaintenanceBackend = StoreMaintenanceUnavailable Npm (NoControlPlane TagRegistry)
+
+-- | A generic private registry has no backend that can enumerate its stored versions.
+privateInventoryRefusal :: BootError
+privateInventoryRefusal = StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "registry has no inventory control plane")
 
 -- | The repository a cleared CodeArtifact store addresses, 'Nothing' for any other arm.
 clearedRepository :: ClearedBackend -> Maybe Text

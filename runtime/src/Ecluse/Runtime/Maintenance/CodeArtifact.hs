@@ -15,7 +15,6 @@ module Ecluse.Runtime.Maintenance.CodeArtifact (
     newCodeArtifactCacheMaintenance,
     newCodeArtifactCacheObservation,
     cacheMaintenanceFor,
-    maintenanceForEnv,
 
     -- * The calls the handle makes
     ControlPlane (..),
@@ -111,13 +110,6 @@ newCodeArtifactObservation :: Int -> NameAlphabet -> StoreManifestRead -> CodeAr
 newCodeArtifactObservation limit alphabet readManifest store =
     boundedObservationFor limit alphabet readManifest store . readPlaneFor
         <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
-
-{- | Build the handle over a caller-supplied @amazonka@ 'AWS.Env'. Exposed so a test can hold the
-handle, and the facts it supplies, without discovering an ambient AWS identity.
--}
-maintenanceForEnv :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> AWS.Env -> IO StoreMaintenance
-maintenanceForEnv alphabet readManifest store env =
-    maintenanceFor alphabet readManifest store <$> controlPlaneFor env
 
 -- | Build cache deletion with target-local reads and consent, allowing its declared refill role.
 newCodeArtifactCacheMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance

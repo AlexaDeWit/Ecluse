@@ -24,7 +24,7 @@ import Ecluse.Composition.BootError (
     BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, MirrorTargetOnMountEndpoint, PrivateUpstreamOnPublicUpstream, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
-import Ecluse.Composition.Support (expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, withoutQueueUrl)
+import Ecluse.Composition.Support (expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, withoutQueueUrl)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
@@ -219,7 +219,7 @@ spec = do
 
         it "refuses ecluse dredger where the mirror target is also the private upstream" $
             bootRefusal ["dredger"] collapsedMirrorEnv
-                `shouldReturn` (Left (ExitFailure 2), map renderBootError [collapsedMirrorRefusal, noMaintenanceBackend])
+                `shouldReturn` (Left (ExitFailure 2), map renderBootError [collapsedMirrorRefusal, noMaintenanceBackend, privateInventoryRefusal])
 
         it "aborts fast at boot when the SQS endpoint override is set with no AWS_REGION" $ do
             -- The override forces the SQS interpretation, and an emulator or VPC
@@ -328,7 +328,7 @@ spec = do
             let env = overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL" "https://registry.npmjs.org:443/" runEnv
                 refusal = renderBootError (PrivateUpstreamOnPublicUpstream Npm "https://registry.npmjs.org:443/")
                 expected = case args of
-                    ["dredger"] -> [refusal, renderBootError noMaintenanceBackend]
+                    ["dredger"] -> [refusal, renderBootError noMaintenanceBackend, renderBootError privateInventoryRefusal]
                     ["check-config"] -> [refusal, "configuration: refused"]
                     _ -> [refusal]
             bootRefusal args env `shouldReturn` (Left (ExitFailure 2), expected)
