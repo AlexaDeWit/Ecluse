@@ -14,6 +14,10 @@ durable memory: load detailed guidance only when the task needs it. See
   describe what has shipped. Reconcile the two. Neither is interchangeable with the other.
 - **Escalate, don't guess**. Stop on an ambiguous, missing, or contradictory requirement instead of
   inventing a way through it.
+- **Find rulings before you escalate**. Make a bounded search of the active issue and comments,
+  linked parent or predecessor decisions, and applicable authoritative docs. Distinguish missing
+  implementation from missing design. Reuse settled decisions. Escalate only a still-unresolved
+  question with the retrieved evidence.
 - **Review the plan before you build**. For any non-trivial change, put the approach (strategy,
   files, notable trade-offs) to the repo owner and get agreement before you write code. A trivial or
   already-scoped change is exempt. When you are unsure, surface the plan and wait.
