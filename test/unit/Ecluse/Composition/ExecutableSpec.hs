@@ -80,11 +80,11 @@ spec = describe "planExecutable" $ do
     it "qualifies advisory consumers in both the mirror and Dredger plans" $
         withSystemTempDirectory "epss-role-plan" $ \dir -> do
             for_ [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test"), ("AWS_REGION", "us-east-1")] $ uncurry setEnv
-            let envVars =
-                    overrideEnv "ECLUSE_ADVISORIES__DATA_DIR" dir $
-                        overrideEnv "ECLUSE_ADVISORIES__URL" advisoryStoreUrl $
-                            overrideEnv "ECLUSE_RULES" "{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}" codeArtifactEnvVars
-            for_ [BootMirrorPipeline ServeAndMirror, BootStorePruner] $ \role -> do
+            for_ [(BootMirrorPipeline ServeAndMirror, staticEnvVars), (BootStorePruner, codeArtifactEnvVars)] $ \(role, mountEnv) -> do
+                let envVars =
+                        overrideEnv "ECLUSE_ADVISORIES__DATA_DIR" dir $
+                            overrideEnv "ECLUSE_ADVISORIES__URL" advisoryStoreUrl $
+                                overrideEnv "ECLUSE_RULES" "{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}" mountEnv
                 plan <- expectExecutableWith envVars role mountBindingFor inertQueue inertStore
                 handles <- case epRoleWiring plan of
                     MirrorPipelineWiring mirror -> pure (mwCveSync mirror)

@@ -31,7 +31,8 @@ import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness, rdWithCveLookup))
 import Ecluse.Core.Rules.Freshness (
-    AdvisoryFreshness (AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
+    AdvisoryAge (AdvisoryAge),
+    AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
     MaxAdvisoryAge,
     maxAdvisoryAgeFor,
  )
@@ -170,7 +171,7 @@ spec = do
                     good = fetchServingAt (Just (agoDays 5)) (Just "good") (\dest -> mkMinimalValidDbWithMeta dest "pkg" [("epss_status", "available")])
                     bad = fetchServingAt (Just alarmNow) (Just "bad") (\dest -> mkMinimalValidDbWithMeta dest "pkg" [])
                 void (syncStep env{syncFetch = good} Nothing)
-                advisoryFreshnessFor plan Npm `shouldReturn` AdvisoryFresh
+                advisoryFreshnessFor plan Npm `shouldReturn` AdvisoryAging (AdvisoryAge (agoDays 5) (5 * nominalDay) (6 * nominalDay))
                 syncStep env{syncFetch = bad} (Just (DbEtag "good")) >>= \case
                     SyncRejected _ rejection -> rejection `shouldBe` CveDbEpssNotEstablished
                     other -> expectationFailure ("expected qualification rejection, got " <> show other)
