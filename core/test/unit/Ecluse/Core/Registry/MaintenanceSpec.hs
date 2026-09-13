@@ -17,7 +17,7 @@ import Ecluse.Core.Registry.Maintenance (
     DeleteCeiling (AtMost, NoCeiling),
     RetryAdvice (RetryFutile, RetryWorthwhile),
     StoreFault (..),
-    VersionOutcome (VersionRemoved, VersionUnreached),
+    VersionOutcome (VersionRemoved, VersionUncertain, VersionUnreached),
     chunksOfCeiling,
     collectPages,
     collectPagesBounded,
@@ -44,7 +44,7 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Security (LimitError (TooManyVersions))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
-import Ecluse.Test.Maintenance (withBucket)
+import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
 
 spec :: Spec
 spec = do
@@ -300,30 +300,30 @@ deleteDriveSpec :: Spec
 deleteDriveSpec = describe "deleteAll" $ do
     it "sends every chunk and collects the outcomes in order" $ do
         sent <- newIORef []
-        outcomes <- deleteAll (recordingSender sent Nothing) chunks
+        outcomes <- deleteAll testDeleteGuard (recordingSender sent Nothing) chunks
         map (renderVersion . fst) outcomes `shouldBe` ["1.0.0", "1.1.0", "1.2.0"]
         map (map renderVersion) <$> readIORef sent `shouldReturn` [["1.0.0", "1.1.0"], ["1.2.0"]]
 
     it "stops sending once a chunk faults, because the fault carries the backend's advice" $ do
         sent <- newIORef []
-        _ <- deleteAll (recordingSender sent (Just (version "1.0.0"))) chunks
+        _ <- deleteAll testDeleteGuard (recordingSender sent (Just (version "1.0.0"))) chunks
         map (map renderVersion) <$> readIORef sent `shouldReturn` [["1.0.0", "1.1.0"]]
 
-    it "marks the faulted chunk and every chunk it never sent unreached" $ do
+    it "distinguishes the uncertain faulted chunk from later unsent chunks" $ do
         sent <- newIORef []
-        outcomes <- deleteAll (recordingSender sent (Just (version "1.0.0"))) chunks
+        outcomes <- deleteAll testDeleteGuard (recordingSender sent (Just (version "1.0.0"))) chunks
         map (renderVersion . fst) outcomes `shouldBe` ["1.0.0", "1.1.0", "1.2.0"]
-        map snd outcomes `shouldBe` replicate 3 (VersionUnreached aFault)
+        map snd outcomes `shouldBe` [VersionUncertain aFault, VersionUncertain aFault, VersionUnreached aFault]
 
     it "keeps the outcomes of the chunks that landed before the fault" $ do
         sent <- newIORef []
-        outcomes <- deleteAll (recordingSender sent (Just (version "1.2.0"))) chunks
+        outcomes <- deleteAll testDeleteGuard (recordingSender sent (Just (version "1.2.0"))) chunks
         map snd outcomes
-            `shouldBe` [VersionRemoved, VersionRemoved, VersionUnreached aFault]
+            `shouldBe` [VersionRemoved, VersionRemoved, VersionUncertain aFault]
 
     it "reports nothing when there is no chunk to send" $ do
         sent <- newIORef []
-        deleteAll (recordingSender sent Nothing) [] `shouldReturn` []
+        deleteAll testDeleteGuard (recordingSender sent Nothing) [] `shouldReturn` []
   where
     chunks = [[version "1.0.0", version "1.1.0"], [version "1.2.0"]]
 

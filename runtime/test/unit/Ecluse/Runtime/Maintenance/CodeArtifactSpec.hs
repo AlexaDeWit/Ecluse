@@ -33,7 +33,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreManifestRead,
     StoreObservation (obEnumerateVersions, obListPackagesIn),
     StoredVersion (..),
-    VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
+    VersionOutcome (VersionRefused, VersionRemoved, VersionUncertain, VersionUnreached),
     VersionPresence (VersionServed),
     chunksOfCeiling,
     collectPages,
@@ -49,6 +49,7 @@ import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact (
     ControlPlane (..),
     boundedObservationFor,
+    cacheMaintenanceFor,
     maintenanceFor,
     maintenanceForEnv,
     observationFor,
@@ -61,7 +62,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     cursorTagKey,
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (ReadPlane (..))
-import Ecluse.Test.Maintenance (withBucket)
+import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
 import Ecluse.Test.Package (sampleManifest)
 import Ecluse.Test.Rules (denyRule)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recResults), recordingPorts, testMount, testPacing)
@@ -192,8 +193,8 @@ deleteCases store = describe "the handle's chunked delete" $ do
                             ctx <- mkEvalContext getCurrentTime (pure Nothing)
                             let tracked =
                                     handle
-                                        { deleteVersions = \name selected -> do
-                                            result <- deleteVersions handle name selected
+                                        { deleteVersions = \checks name selected -> do
+                                            result <- deleteVersions handle checks name selected
                                             writeIORef recorded result
                                             pure result
                                         }
@@ -205,15 +206,15 @@ deleteCases store = describe "the handle's chunked delete" $ do
                                 (testMount tracked [denyRule] [])
                                 ctx
                                 aPackage
-                                [StoredVersion v VersionServed | v <- versions]
+                                [StoredVersion v VersionServed Nothing | v <- versions]
                                 `shouldReturn` Just (HaltDeletionCap count count Nothing)
                             readIORef (stIssued counters) `shouldReturn` count
                             recResults rec'
                                 `shouldReturn` (replicate count SweepExamined <> replicate successful SweepDeleted <> replicate (count - successful) SweepKept)
                             readIORef recorded
-                        else deleteVersions handle aPackage versions
+                        else deleteVersions handle testDeleteGuard aPackage versions
                 readIORef requests `shouldReturn` map (map renderVersion) (take faultAt (chunksOfCeiling (AtMost 100) versions))
-                outcomes `shouldBe` zip versions (replicate successful VersionRemoved <> replicate (count - successful) (VersionUnreached storeUnreachable))
+                outcomes `shouldBe` zip versions (replicate successful VersionRemoved <> replicate (min 100 (count - successful)) (VersionUncertain storeUnreachable) <> replicate (max 0 (count - successful - 100)) (VersionUnreached storeUnreachable))
 
     it "continues the sweep after per-version refusals in an earlier chunk" $ do
         requests <- newIORef []
@@ -236,7 +237,7 @@ deleteCases store = describe "the handle's chunked delete" $ do
             (testMount handle [denyRule] [])
             ctx
             aPackage
-            [StoredVersion v VersionServed | v <- versions]
+            [StoredVersion v VersionServed Nothing | v <- versions]
             `shouldReturn` Just (HaltDeletionCap 101 101 Nothing)
         map length <$> readIORef requests `shouldReturn` [100, 1]
         recResults rec' `shouldReturn` (replicate 101 SweepExamined <> replicate 100 SweepKept <> [SweepDeleted])
@@ -250,21 +251,21 @@ deleteCases store = describe "the handle's chunked delete" $ do
                         record sizes (length submitted)
                         pure (Right (allRemoved submitted))
                     }
-        outcomes <- deleteVersions (handleOver store plane) aPackage (versionRun 101)
+        outcomes <- deleteVersions (handleOver store plane) testDeleteGuard aPackage (versionRun 101)
         readIORef sizes `shouldReturn` [100, 1]
         map snd outcomes `shouldBe` replicate 101 VersionRemoved
 
     it "refuses a version the store answered for neither way, never reports it removed" $ do
         let plane = inertPlane{cpDeleteVersions = \_ -> pure (Right (CA.newDeletePackageVersionsResponse 200))}
-        outcomes <- deleteVersions (handleOver store plane) aPackage (versionRun 2)
+        outcomes <- deleteVersions (handleOver store plane) testDeleteGuard aPackage (versionRun 2)
         map (refusalCodeOf . snd) outcomes `shouldBe` replicate 2 (Just "UNREPORTED")
 
     it "stops at the first faulted chunk and marks every submitted version unreached" $ do
         calls <- newIORef (0 :: Int)
         let plane = inertPlane{cpDeleteVersions = \_ -> modifyIORef' calls (+ 1) >> pure (Left storeUnreachable)}
-        outcomes <- deleteVersions (handleOver store plane) aPackage (versionRun 101)
+        outcomes <- deleteVersions (handleOver store plane) testDeleteGuard aPackage (versionRun 101)
         readIORef calls `shouldReturn` 1
-        map snd outcomes `shouldBe` replicate 101 (VersionUnreached storeUnreachable)
+        map snd outcomes `shouldBe` replicate 100 (VersionUncertain storeUnreachable) <> [VersionUnreached storeUnreachable]
 
 consentCases :: CodeArtifactStore -> Spec
 consentCases store = describe "the handle's consent read" $ do
@@ -293,6 +294,12 @@ consentCases store = describe "the handle's consent read" $ do
 
 classificationCases :: CodeArtifactStore -> Spec
 classificationCases store = describe "the handle's store classification" $ do
+    it "permits refill only through the separate cache capability" $ do
+        let plane = reading inertReader{rpDescribeRepository = \_ -> pure (Right (describing routedDescription))}
+            cache = cacheMaintenanceFor 100 testAlphabet unwiredRead store plane
+        classifyStore cache `shouldReturn` Right StoreDestroyable
+        classifyStore (handleOver store plane) >>= (`shouldSatisfy` either (const False) (preservedNaming "shared"))
+
     it "classifies a repository holding only what was published to it as destroyable" $
         classifyUnder store (Right describedWithArn) `shouldReturn` Right StoreDestroyable
 
@@ -510,7 +517,7 @@ refusalCodeOf = \case
     _ -> Nothing
 
 served :: Text -> StoredVersion
-served raw = StoredVersion{storedVersion = mkVersion Npm raw, storedPresence = VersionServed}
+served raw = StoredVersion{storedVersion = mkVersion Npm raw, storedPresence = VersionServed, storedRevision = Nothing}
 
 withheld :: ConsentVerdict -> Bool
 withheld = \case
@@ -558,8 +565,8 @@ listBucket store plane raw =
 -- Dummy static credentials: the handle is held and read, never sent anywhere.
 handleFor :: CodeArtifactStore -> IO StoreMaintenance
 handleFor store =
-    maintenanceForEnv testAlphabet unwiredRead store
-        <$> AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))
+    AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))
+        >>= maintenanceForEnv testAlphabet unwiredRead store
 
 npmStore :: Maybe CodeArtifactStore
 npmStore = coordinates <$> codeArtifactFormat Npm

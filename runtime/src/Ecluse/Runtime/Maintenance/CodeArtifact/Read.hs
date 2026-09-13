@@ -132,6 +132,7 @@ storedOfObservation observation =
     StoredVersion
         { storedVersion = obsVersion observation
         , storedPresence = obsPresence observation
+        , storedRevision = obsRevision observation
         }
 
 -- A blank entry point names nothing, so it reads as absent rather than as an empty name.

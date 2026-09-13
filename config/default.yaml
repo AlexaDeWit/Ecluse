@@ -263,11 +263,19 @@ mounts:
     # Optional on a serve-only mount, where it still merges with the gated public set.
     # Must name a different repository from this mount's publicUpstream. Boot refuses
     # equal repository identities, including equivalent URL spellings.
-    # Every tag carries the url alone. Proxy reads forward the caller's credential.
-    # Dredger preview mints a CodeArtifact observation token from this target's host.
+    # Proxy reads forward the caller's credential. Dredger uses this target's own authority.
+    # CodeArtifact mints a maintenance token and checks the repository's consent tag.
+    # Verdaccio accepts an optional token and permitDeletion (default false) for maintenance.
+    # Deletion requires both. Preview permits anonymous reads and needs no deletion consent.
+    # permitDeletion also declares the Verdaccio store standalone. Boot cannot inspect uplinks.
     # privateUpstream:
     #   codeArtifact:
     #     url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
+    # privateUpstream:
+    #   verdaccio:
+    #     url: https://private-cache.internal/
+    #     token: # Set ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN separately.
+    #     permitDeletion: false
     # Declaring it makes the mount mirrored. The mirror write uses Écluse's credential,
     # so `codeArtifact` mints its own token and admits no `token` key, while
     # `registry` and `verdaccio` require one. The boot refuses a target on any mount's

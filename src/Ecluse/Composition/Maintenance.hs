@@ -12,7 +12,7 @@ module Ecluse.Composition.Maintenance (
     ClearedProtocolStore (..),
     ResolveMaintenanceAdapter,
     vetStoreBackends,
-    vetPreviewCaches,
+    vetPrivateCaches,
 
     -- * The environment-dependent half
     StorePorts (..),
@@ -47,7 +47,8 @@ import Ecluse.Config (
     Mount (mountRegistries),
     MountConfig (mntPrivateUpstream),
     MountMap,
-    StoreBackend,
+    PrivateEndpoint (..),
+    StoreBackend (BackendVerdaccio),
     StoreTag (TagCodeArtifact, TagRegistry, TagVerdaccio),
     Target (tgtTag, tgtUrl),
     regMirrorTarget,
@@ -75,6 +76,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     StoreListing,
     VersionDelete,
  )
+import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Ecluse.Core.Registry.Maintenance (
     NameAlphabet,
     StoreMaintenance,
@@ -85,7 +87,7 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Registry.Maintenance.Protocol (
     ProtocolRead (..),
-    ProtocolStore (ProtocolStore, psDelete, psRead),
+    ProtocolStore (ProtocolStore, psDelete, psDeleteOrigin, psRead),
     newProtocolMaintenance,
     newProtocolObservation,
  )
@@ -95,7 +97,7 @@ import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Security (Limits (maxVersionCount))
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Telemetry.Span (TracingPort)
-import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactMaintenance, newCodeArtifactObservation)
+import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactCacheMaintenance, newCodeArtifactCacheObservation, newCodeArtifactMaintenance, newCodeArtifactObservation)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
 
 {- | A store the deleting role's pass cleared, one arm per backend kind. Only 'vetStoreBackends'
@@ -118,6 +120,8 @@ data ClearedBackend = ClearedBackend
 data ClearedControl
     = -- | A CodeArtifact repository, deleted through the vendor's own control plane.
       ClearedCodeArtifact CodeArtifactStore
+    | -- | The configured cache permits refill without weakening ordinary mirror classification.
+      ClearedCodeArtifactCache CodeArtifactStore
     | -- | A store with no vendor control plane, deleted through the ecosystem protocol.
       ClearedProtocol ClearedProtocolStore
 
@@ -168,38 +172,41 @@ vetStoreBackends resolveAdapter mounts = withRole $ \role ->
 
     swept resolved = Map.fromList [(eco, backend) | (eco, Right backend) <- resolved]
 
--- | Vet declared private caches only for preview, using the existing backend capability checks.
-vetPreviewCaches :: ResolveMaintenanceAdapter -> Map Ecosystem MountConfig -> MountMap -> Vet (Map Ecosystem (Maybe StoreBackend, ClearedBackend))
-vetPreviewCaches resolveAdapter configured mounts = withRole $ \case
+-- | Vet each private cache under its own backend declaration and maintenance authority.
+vetPrivateCaches :: ResolveMaintenanceAdapter -> Map Ecosystem MountConfig -> MountMap -> Vet (Map Ecosystem (Maybe StoreBackend, ClearedBackend))
+vetPrivateCaches resolveAdapter configured mounts = withRole $ \role -> case role of
     MirrorWriter -> pure Map.empty
-    MirrorPruner -> pure Map.empty
-    MirrorPreviewer ->
-        Map.fromList [(eco, backend) | (eco, Right backend) <- resolved]
-            <$ traverse_ (rule (const (Refuse (uncurry StoreMaintenanceUnavailable))) unmaintained) resolved
+    _ ->
+        let resolved = resolvedFor role
+         in Map.fromList [(eco, backend) | (eco, Right backend) <- resolved]
+                <$ traverse_ (rule (const (Refuse (uncurry StoreMaintenanceUnavailable))) unmaintained) resolved
   where
-    resolved =
-        [ (eco, resolve eco target)
+    resolvedFor role =
+        [ (eco, resolve role eco endpoint)
         | (eco, mount) <- Map.toAscList mounts
         , isJust (regMirrorTarget (mountRegistries mount))
         , Just config <- [Map.lookup eco configured]
-        , Just target <- [mntPrivateUpstream config]
+        , Just endpoint <- [mntPrivateUpstream config]
         ]
     unmaintained (eco, outcome) = (eco,) <$> leftToMaybe outcome
-    resolve eco target = case tgtTag target of
+    resolve role eco endpoint = case tgtTag target of
         TagCodeArtifact -> do
             backend <- first (PrivateCacheUnavailable . show) (resolvePrivateBackend eco target)
-            cleared <- sweepableStore MirrorPreviewer (resolveAdapter eco) eco (MirrorTarget (tgtUrl target) backend)
-            pure (Just backend, cleared)
+            case sbControl backend of
+                ControlCodeArtifact store -> pure (Just backend, clearedBackend (tgtUrl target) adapter (ClearedCodeArtifactCache store))
+                _ -> Left (PrivateCacheUnavailable "the declared cache has no CodeArtifact control plane")
         TagRegistry -> Left (PrivateCacheUnavailable "registry has no inventory control plane")
         TagVerdaccio -> do
-            store <-
-                protocolStoreFor
-                    (resolveAdapter eco)
-                    TagVerdaccio
-                    Nothing
-                    DeletionWithheld
-                    "privateUpstream.verdaccio declares no deletion consent. This preview reads anonymously"
-            pure (Nothing, clearedBackend (tgtUrl target) (resolveAdapter eco) (ClearedProtocol store))
+            when (refusesWithoutConsent role && preConsent endpoint == DeletionWithheld) $
+                Left (PrivateCacheUnavailable (descriptor <> " is not set"))
+            when (role == MirrorPruner && isNothing (preToken endpoint)) $
+                Left (PrivateCacheUnavailable (mountKeyRef eco "privateUpstream.verdaccio.token" <> " is not set"))
+            store <- protocolStoreFor adapter TagVerdaccio (preToken endpoint) (preConsent endpoint) descriptor
+            pure (fmap (`BackendVerdaccio` preConsent endpoint) (preToken endpoint), clearedBackend (tgtUrl target) adapter (ClearedProtocol store))
+      where
+        target = preTarget endpoint
+        adapter = resolveAdapter eco
+        descriptor = mountKeyRef eco "privateUpstream.verdaccio.permitDeletion"
 
 {- Whether this role's boot needs the operator's own deletion key in hand. A preview reads the
 store and changes nothing, so the key is a finding it reports rather than one it refuses on. -}
@@ -292,9 +299,11 @@ buildStoreMaintenance :: BuildStoreMaintenance
 buildStoreMaintenance ports limits cleared = do
     (readManifest, manager) <- storeAccess ports limits cleared
     case cbControl cleared of
-        ClearedCodeArtifact store -> newCodeArtifactMaintenance (cbAlphabet cleared) readManifest store
-        ClearedProtocol store ->
-            pure (newProtocolMaintenance (protocolStore limits cleared store readManifest manager))
+        ClearedCodeArtifact store -> newCodeArtifactMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
+        ClearedCodeArtifactCache store -> newCodeArtifactCacheMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
+        ClearedProtocol store -> do
+            deletionManager <- newPooledManager storeConnections (singleAttemptSettings tlsManagerSettings)
+            pure (newProtocolMaintenance (protocolStore limits cleared store readManifest manager deletionManager))
 
 {- | The observing calls for a cleared store, built from the backend's own read capability rather
 than from a handle with its writes taken away.
@@ -304,6 +313,7 @@ buildStoreObservation ports limits cleared = do
     (readManifest, manager) <- storeAccess ports limits cleared
     case cbControl cleared of
         ClearedCodeArtifact store -> newCodeArtifactObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest store
+        ClearedCodeArtifactCache store -> newCodeArtifactCacheObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest store
         ClearedProtocol store ->
             pure (newProtocolObservation (protocolRead limits cleared store readManifest manager))
 
@@ -334,10 +344,11 @@ storeManager = newPooledManager storeConnections tlsManagerSettings
 storeConnections :: Int
 storeConnections = 4
 
-protocolStore :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> Manager -> ProtocolStore
-protocolStore limits cleared store readManifest manager =
+protocolStore :: Limits -> ClearedBackend -> ClearedProtocolStore -> StoreManifestRead -> Manager -> Manager -> ProtocolStore
+protocolStore limits cleared store readManifest manager deletionManager =
     ProtocolStore
         { psRead = protocolRead limits cleared store readManifest manager
+        , psDeleteOrigin = storeOrigin limits cleared deletionManager (bareCredential <$> cpsToken store)
         , psDelete = cpsDelete store
         }
 

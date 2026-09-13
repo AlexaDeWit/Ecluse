@@ -13,6 +13,8 @@ module Ecluse.Core.Registry.Maintenance (
     -- * Its two halves, held apart
     StoreObservation (..),
     StoreDeletion (..),
+    DeleteGuard (..),
+    DeletePhase (..),
     observationOf,
     deletionOf,
 
@@ -110,7 +112,7 @@ data StoreMaintenance = StoreMaintenance
     -- ^ Every version the store holds for one package, paged to exhaustion.
     , readStoreManifest :: StoreManifestRead
     -- ^ Read through the store's credential and ecosystem codec, including every stored version.
-    , deleteVersions :: PackageName -> [Version] -> IO [(Version, VersionOutcome)]
+    , deleteVersions :: DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
     -- ^ Accept any batch size and return exactly one outcome per supplied version.
     , verifyConsent :: IO (Either StoreFault ConsentVerdict)
     -- ^ Whether the operator has marked this store for deletion.
@@ -140,10 +142,24 @@ data StoreObservation = StoreObservation
 
 -- | The calls that change a store, which only a role authorised to delete from it holds.
 data StoreDeletion = StoreDeletion
-    { dlDeleteVersions :: PackageName -> [Version] -> IO [(Version, VersionOutcome)]
+    { dlDeleteVersions :: DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
     -- ^ Accept any batch size and return exactly one outcome per supplied version.
     , dlCursor :: Maybe StoreCursor
     -- ^ Optional persisted progress. Without it, every walk starts at the first bucket.
+    }
+
+-- | Observation after uncertainty must not reserve or announce another destructive attempt.
+data DeletePhase
+    = -- | Recheck and reserve immediately before a destructive attempt.
+      BeforeDelete
+    | -- | Inspect an uncertain result without reserving or announcing another attempt.
+      AfterUncertain
+    deriving stock (Eq, Show)
+
+-- | The sweep rechecks authority inside backend-owned batches and bounds each uncertain retry.
+data DeleteGuard = DeleteGuard
+    { dgCheck :: DeletePhase -> [Version] -> IO (Either StoreFault [Version])
+    , dgRetry :: StoreFault -> IO Bool
     }
 
 -- | The observing half of a whole handle.
@@ -205,6 +221,8 @@ data CompletionNotion
 data StoredVersion = StoredVersion
     { storedVersion :: Version
     , storedPresence :: VersionPresence
+    , storedRevision :: Maybe Text
+    -- ^ Opaque backend revision, absent where the backend supplies none.
     }
     deriving stock (Eq, Show)
 
@@ -280,6 +298,8 @@ data VersionOutcome
       VersionRefused StoreRefusal
     | -- | The call carrying this version did not reach the backend.
       VersionUnreached StoreFault
+    | -- | A destructive call faulted after issue, so its effects need a fresh observation.
+      VersionUncertain StoreFault
     deriving stock (Eq, Show)
 
 -- | A backend's refusal of one version. Build it with 'storeRefusal' so the detail stays bounded.
@@ -436,16 +456,40 @@ chunksOfCeiling ceiling' items = case ceiling' of
     go _ [] = []
     go size batch = let (chunk, rest) = splitAt size batch in chunk : go size rest
 
--- | Stop at the first fault, otherwise return each version's deletion outcome.
+-- | The backend owns chunks. A request fault stops later chunks, including after a guarded retry.
 deleteAll ::
-    (Monad m) =>
-    ([Version] -> m (Either StoreFault [(Version, VersionOutcome)])) ->
+    DeleteGuard ->
+    ([Version] -> IO (Either StoreFault [(Version, VersionOutcome)])) ->
     [[Version]] ->
-    m [(Version, VersionOutcome)]
-deleteAll send = go []
+    IO [(Version, VersionOutcome)]
+deleteAll checks send = go []
   where
     go sent [] = pure (concat (reverse sent))
     go sent (chunk : rest) =
-        send chunk >>= \case
+        dgCheck checks BeforeDelete chunk >>= \case
             Left fault -> pure (concat (reverse sent) <> concatMap (unreachedBatch fault) (chunk : rest))
-            Right outcomes -> go (outcomes : sent) rest
+            Right current -> do
+                let permitted = filter (`elem` current) chunk
+                    withheld = skipped (filter (`notElem` current) chunk)
+                answer <- if null permitted then pure (Right []) else send permitted
+                case answer of
+                    Right outcomes -> go ((withheld <> outcomes) : sent) rest
+                    Left fault -> do
+                        void (dgCheck checks AfterUncertain permitted)
+                        retry <- dgRetry checks fault
+                        fresh <- if retry then dgCheck checks BeforeDelete permitted else pure (Right [])
+                        outcomes <- retryBatch retry fault permitted fresh
+                        pure (concat (reverse sent) <> withheld <> outcomes <> concatMap (unreachedBatch fault) rest)
+    retryBatch retry fault issued fresh = case fresh of
+        Right current | retry && not (null current) -> do
+            let permitted = filter (`elem` current) issued
+                unchanged = uncertain fault (filter (`notElem` current) issued)
+            answer <- if null permitted then pure (Right []) else send permitted
+            case answer of
+                Right outcomes -> pure (unchanged <> outcomes)
+                Left again -> do
+                    void (dgCheck checks AfterUncertain permitted)
+                    pure (unchanged <> uncertain again permitted)
+        _ -> pure (uncertain fault issued)
+    skipped = map (,VersionRefused (storeRefusal "REASSESSED" "current evidence does not authorise this delete"))
+    uncertain fault = map (,VersionUncertain fault)

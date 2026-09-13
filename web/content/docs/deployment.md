@@ -27,6 +27,11 @@ The fast lane, the advisory denies, and Dredger read the advisory database that 
 [Running Pilot](#running-pilot) cover those roles, and [Running the Dredger](@/docs/dredger.md)
 covers Dredger.
 
+Dredger reads and cleans both the mirror target and the configured private cache with independent
+maintenance authority. `privateUpstream` supplies cache reads, `mirrorTarget` receives mirrors, and
+`publicationTarget` receives user publications. Preview constructs observations only and requires no
+deletion consent. Each deleting target needs its own backend-specific consent and credential.
+
 Dredger refuses some endpoint pairs that the proxy and the mirror worker accept, because its
 deletions could reach first-party packages that exist only in the publication target. It refuses a
 mount whose `mirrorTarget` equals any mount's `privateUpstream` or its own `publicationTarget`, and a

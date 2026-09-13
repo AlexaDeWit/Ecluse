@@ -63,6 +63,7 @@ import Ecluse.Core.Telemetry.Metrics (
     RequestFaultCause,
     StatusClass,
     SweepResult,
+    SweepTarget,
     Tier,
     Upstream,
  )
@@ -161,7 +162,7 @@ data WorkerMetricsPort = WorkerMetricsPort
 package and version a disposition concerns ride the sweep's own audit line, never a label.
 -}
 newtype DredgerMetricsPort = DredgerMetricsPort
-    { dmpSweptVersion :: SweepResult -> IO ()
+    { dmpSweptVersion :: SweepTarget -> SweepResult -> IO ()
     {- ^ Record one disposition of one examined version (@ecluse.dredger.versions@). A version
     counts once as examined and once more under what the sweep did with it.
     -}

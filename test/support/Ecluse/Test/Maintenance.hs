@@ -15,6 +15,7 @@ module Ecluse.Test.Maintenance (
     defaultFakeStoreConfig,
     newFakeStore,
     withBucket,
+    testDeleteGuard,
 ) where
 
 import Data.Conduit (ConduitT, (.|))
@@ -26,6 +27,7 @@ import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesLater),
     ConsentVerdict (ConsentGranted),
     DeleteCeiling (AtMost),
+    DeleteGuard (..),
     NamePrefix,
     RefillPosture (RefillRefused),
     StoreClass (StoreDestroyable),
@@ -36,13 +38,14 @@ import Ecluse.Core.Registry.Maintenance (
     StoreObservation (..),
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoving),
+    chunksOfCeiling,
+    deleteAll,
     inBucket,
     mkNameAlphabet,
     noNameAlphabet,
     parseNamePrefix,
     storeFaultOfMetadata,
     storeRefusal,
-    unreachedBatch,
  )
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError (MetadataUndecodable))
 import Ecluse.Core.Version (Version)
@@ -93,6 +96,7 @@ data FakeStore = FakeStore
     , fakeObservation :: StoreObservation
     -- ^ The observing calls over the same state, built without a delete rather than beside one.
     , readFakeContents :: IO (Map PackageName [StoredVersion])
+    , writeFakeContents :: Map PackageName [StoredVersion] -> IO ()
     , readFakeCursor :: IO (Maybe NamePrefix)
     }
 
@@ -110,15 +114,21 @@ newFakeStore config = do
                     , listPackagesIn = obListPackagesIn observed
                     , enumerateVersions = obEnumerateVersions observed
                     , readStoreManifest = obReadManifest observed
-                    , deleteVersions = \name versions -> case fakeFault config of
-                        Just fault -> pure (unreachedBatch fault versions)
-                        Nothing -> atomicModifyIORef' contents (removeVersions name versions)
+                    , deleteVersions = \checks name versions ->
+                        deleteAll
+                            checks
+                            ( \batch -> case fakeFault config of
+                                Just fault -> pure (Left fault)
+                                Nothing -> Right <$> atomicModifyIORef' contents (removeVersions name batch)
+                            )
+                            (chunksOfCeiling (factDeleteCeiling (fakeFacts config)) versions)
                     , verifyConsent = obVerifyConsent observed
                     , classifyStore = obClassifyStore observed
                     , storeCursor = fakeStoreCursor config cursor
                     }
             , fakeObservation = observed
             , readFakeContents = readIORef contents
+            , writeFakeContents = writeIORef contents
             , readFakeCursor = readIORef cursor
             }
 
@@ -200,3 +210,7 @@ removeVersions name versions contents =
         | version `elem` held = (version, VersionRemoving "fake-operation")
         | otherwise =
             (version, VersionRefused (storeRefusal "NOT_FOUND" "the store holds no such version"))
+
+-- | Direct backend tests supply no policy changes or retries unless a case overrides these checks.
+testDeleteGuard :: DeleteGuard
+testDeleteGuard = DeleteGuard (const (pure . Right)) (const (pure False))

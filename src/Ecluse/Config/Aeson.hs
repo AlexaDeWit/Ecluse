@@ -52,10 +52,11 @@ mountDecoder eco =
 parsePublicUpstream :: String -> Value -> Parser RegistryUrl
 parsePublicUpstream = taggedTarget [TagCase (tagKey TagRegistry) targetUrl]
 
-parseReadTarget :: String -> Value -> Parser Target
-parseReadTarget = taggedTarget (map readCase [TagRegistry, TagCodeArtifact, TagVerdaccio])
+parseReadTarget :: String -> Value -> Parser PrivateEndpoint
+parseReadTarget = taggedTarget [readCase TagRegistry, readCase TagCodeArtifact, verdaccio]
   where
-    readCase tag = TagCase (tagKey tag) (Target tag <$> targetUrl)
+    readCase tag = TagCase (tagKey tag) (PrivateEndpoint . Target tag <$> targetUrl <*> pure Nothing <*> pure DeletionWithheld)
+    verdaccio = TagCase (tagKey TagVerdaccio) (PrivateEndpoint . Target TagVerdaccio <$> targetUrl <*> optionalKey "token" parseSecret <*> deletionConsent)
 
 parseMirrorTarget :: String -> Value -> Parser MirrorEndpoint
 parseMirrorTarget =
