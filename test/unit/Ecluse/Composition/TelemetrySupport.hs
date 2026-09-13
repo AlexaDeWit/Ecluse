@@ -18,6 +18,7 @@ import Data.Time (getCurrentTime)
 
 import Ecluse.Core.Cve.Slot (newCveSlot)
 import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Rules.Freshness (MaxAdvisoryAge, maxAdvisoryAgeFor)
 import Ecluse.Cve.Sync (CveSyncHandle (..))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (SyncEnv))
@@ -39,7 +40,7 @@ newAdvisoryHandles ecosystems = forM ecosystems $ \eco -> do
     slot <- newCveSlot
     ready <- newTVarIO True
     alarmed <- newTVarIO False
-    let env = SyncEnv (headOnlyFetch (Right Nothing)) eco "unused.db" slot
+    let env = SyncEnv (headOnlyFetch (Right Nothing)) eco EpssOptional "unused.db" slot
     pure (eco, CveSyncHandle ready env derivedMaxAge getCurrentTime alarmed)
 
 -- | The maximum push age a mount with no quarantine rule derives: the shipped floor.

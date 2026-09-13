@@ -226,8 +226,16 @@ the served stream and again on its gzip expansion, so neither an endless stream 
 bomb can hang or exhaust the pass. A feed past either bound is refused whole rather than truncated,
 because a short table is indistinguishable from a complete one downstream. A pass that cannot fetch
 the feed, or that decodes no scores from it at all, fails without publication.
-Configuration-dependent optional failure and consumer qualification remain separate work in
+Configuration-dependent optional failure remains separate work in
 [#1224](https://github.com/AlexaDeWit/Ecluse/issues/1224).
+
+Each ecosystem's resolved policy decides whether its consumers require EPSS enrichment.
+An active `DenyIfEpss` requires the exact `epss_status=available` metadata marker, including with
+`onUnavailable: skip` or a threshold of 1. A removed rule creates no requirement.
+Missing, unavailable, or unrecognised markers do not establish enrichment, even when score rows exist.
+A valid success marker needs neither optional feed dates nor a score for every advisory.
+Consumers without EPSS-dependent rules accept otherwise valid artifacts regardless of this marker.
+This qualification preserves individual-score abstention and each rule's unavailable behaviour.
 
 ### Local polling, decoupled ingestion
 
@@ -255,12 +263,14 @@ never holds back another's.
 The proxy downloads a newly detected `osv.db` to a temp file, byte-bounded by
 `limits.maxAdvisoryDatabaseBytes`. It treats the file as untrusted even behind the store's access
 controls. It accepts the file only after a cheapest-first verification: epoch stamp, integrity
-scan, the required tables' strict-schema conformance, ecosystem. It then renames the accepted
+scan, the required tables' strict-schema conformance, ecosystem, and required EPSS evidence. It then renames the accepted
 file atomically and shadow-swaps it into the read path
 ([`Ecluse.Core.Cve.Slot`](../../core/src/Ecluse/Core/Cve/Slot.hs)). The swap waits for the
 displaced generation's readers to drain. The last reader closes a retired generation even
 if the sync task is cancelled, so pruning remains the kernel's reclamation. The proxy discards a refused artifact and remembers its ETag. The last-good
-generation keeps serving. [Readiness](web-layer.md#meta-routes-ping-health-and-search) waits
+generation keeps serving within its existing maximum push age. Rejection and repeated polls for the
+rejected ETag cannot refresh that age. A cold process creates empty slots and does not recover the
+canonical file from disk. [Readiness](web-layer.md#meta-routes-ping-health-and-search) waits
 for each ecosystem's first sync while the listener serves throughout. An absent database only
 abstains into deny-by-default.
 
@@ -288,8 +298,9 @@ conformance (`CveDbSchemaNonConformant`) and the last-good database keeps servin
 Successful compilation records `epss_status=available` in the `meta` table, including when the
 valid feed omits optional dates or has no scores matching this artifact's advisories. This marker
 records whole-feed enrichment. An individual `epss_score` can still be absent. The added key
-preserves epoch 4 and does not activate consumer qualification or optional-failure publication.
-Older epoch 4 artifacts can lack the marker.
+preserves epoch 4. Consumers enforce their resolved policy's requirement before accepting an artifact.
+Older epoch 4 artifacts can lack the marker and remain acceptable only without EPSS-dependent rules.
+Optional-failure publication remains disabled.
 
 Epoch 4 stores canonical package names: PEP 503 for PyPI, verbatim for npm and RubyGems.
 Rules query the same canonical key for denial and remediation. Dredger parses the stored keys

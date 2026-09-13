@@ -36,6 +36,7 @@ import UnliftIO.Exception (catch, catchAny, onException, throwIO)
 import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, coveredNamesQuery, openHardenedConnection, probeQuery, provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance, decodeProvenance)
+import Ecluse.Core.Osv.Schema (EpssRequirement)
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Version (compareVersions, mkVersion, parseVersionKey)
 
@@ -97,9 +98,9 @@ data CveDb = CveDb
     }
 
 -- | Reject incompatible artifacts as values. Opening faults leave no connection behind.
-openCveDb :: Ecosystem -> FilePath -> IO (Either CveDbRejected CveDb)
-openCveDb eco dbFile =
-    openHardenedConnection eco dbFile >>= \case
+openCveDb :: Ecosystem -> EpssRequirement -> FilePath -> IO (Either CveDbRejected CveDb)
+openCveDb eco epssRequirement dbFile =
+    openHardenedConnection eco epssRequirement dbFile >>= \case
         Left rejection -> pure (Left rejection)
         Right conn -> do
             -- No-leak backstop for a fault below the artifact contract. Acceptance already made the

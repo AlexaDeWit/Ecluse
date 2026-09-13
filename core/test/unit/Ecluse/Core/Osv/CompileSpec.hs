@@ -40,7 +40,7 @@ import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite, osvToRow)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
 import Ecluse.Core.Osv.Provenance (QuietTime (..))
-import Ecluse.Core.Osv.Schema (osvDbFileName, osvSchemaEpoch)
+import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Security.Authority (authorityLabel)
@@ -143,7 +143,7 @@ spec = describe "SQLite OSV Compilation" $ do
                 withConnection dbFile $ \conn -> do
                     scores <- query_ conn "SELECT epss_score FROM package_vulnerability_ranges" :: IO [Only (Maybe Double)]
                     map fromOnly scores `shouldBe` [expectedScore]
-                openCveDb Npm dbFile >>= \case
+                openCveDb Npm EpssRequired dbFile >>= \case
                     Left rejection -> fail ("EPSS-stamped artifact rejected: " <> show rejection)
                     Right db ->
                         flip finally (cveDbClose db) $
@@ -213,7 +213,7 @@ spec = describe "SQLite OSV Compilation" $ do
         takeFileName dbFile `shouldBe` "pypi-osv-schema4.db"
         Map.lookup "ecosystem" (Map.fromList metaRows) `shouldBe` Just "pypi"
         Map.lookup "epss_status" (Map.fromList metaRows) `shouldBe` Just "available"
-        openCveDb PyPI dbFile >>= \case
+        openCveDb PyPI EpssRequired dbFile >>= \case
             Left rejection -> fail ("rebuilt PyPI artifact rejected: " <> show rejection)
             Right db -> flip finally (cveDbClose db) $ do
                 let cve = cveDbLookup db

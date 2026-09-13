@@ -24,13 +24,11 @@ import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute_,
 import UnliftIO.Exception (onException, try)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Osv.Schema (ColumnSpec (..), MetaKey (MetaEcosystem), TableSpec (..), osvSchemaEpoch, osvTableSpecs, renderMetaKey)
+import Ecluse.Core.Osv.Schema (ColumnSpec (..), EpssEvidence (EpssAvailable, EpssNotEstablished), EpssRequirement (EpssOptional, EpssRequired), MetaKey (MetaEcosystem, MetaEpssStatus), TableSpec (..), decodeEpssEvidence, osvSchemaEpoch, osvTableSpecs, renderMetaKey)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, LastAffected, Unbounded))
 
-{- | One advisory segment recorded against a package. 'arSeverity' is the CVSS base score
-from 0 to 10 and 'arEpss' the EPSS probability from 0 to 1, each 'Nothing' when the artifact
-carries no such score. The bounds are verbatim version text: 'arIntroduced' is inclusive and
-'Nothing' means from the beginning, and 'arUpperBound' closes the segment.
+{- | An advisory segment with nullable CVSS and EPSS scores and verbatim version bounds.
+The introduced bound is inclusive. Absence means the segment starts at the beginning.
 -}
 data AdvisoryRange = AdvisoryRange
     { arCveId :: Text
@@ -45,51 +43,23 @@ data AdvisoryRange = AdvisoryRange
 rejection is a value, not a fault, so the caller can keep the last known-good database.
 -}
 data CveDbRejected
-    = {- | The artifact's @user_version@ stamp (carried) does not match this
-      binary's 'osvSchemaEpoch'.
-      -}
+    = -- | The artifact's @user_version@ differs from 'osvSchemaEpoch'.
       CveDbWrongEpoch Int
-    | {- | The artifact is not a usable SQLite database. Either it is not a
-      database at all (absent or wrong header magic, which SQLite reports as
-      @SQLITE_NOTADB@ on the first header read), or @PRAGMA quick_check@ found it
-      structurally corrupt (a malformed, truncated, or crafted b-tree). The
-      carried lines are the thrown error or the integrity report, which SQLite
-      caps at 100 problems.
-      -}
+    | -- | SQLite refused the file or reported integrity faults, carrying its error or report.
       CveDbIntegrityFailed [Text]
-    | {- | A required relation (carried) does not conform to the epoch's schema
-      contract: absent, not a real @STRICT@ table, or missing a required column
-      with its declared type. A view here is attacker-authored SQL wearing the
-      table's name. A lax (non-@STRICT@) table would leave the reader's decodes
-      exposed to type-confused values.
-      -}
+    | -- | A required relation is absent, non-strict, or lacks a column with its required type.
       CveDbSchemaNonConformant Text
-    | {- | The artifact's @meta@ table names a different ecosystem (carried) than
-      the one this handle was asked to serve, or carries no ecosystem row at all
-      so nothing can confirm the ecosystem ('Nothing'). Conformance catches an
-      absent @meta@ table earlier, as 'CveDbSchemaNonConformant'.
-      -}
+    | -- | The ecosystem marker differs from the requested ecosystem or is absent.
       CveDbEcosystemMismatch (Maybe Text)
+    | -- | Required feed enrichment lacks the exact success marker.
+      CveDbEpssNotEstablished
     deriving stock (Eq, Show)
 
-{- | Open an artifact read-only-in-effect and accept or reject it. Every pragma runs
-before the first query.
-
-* @trusted_schema = OFF@ distrusts schema-defined functions, views feeding triggers, and
-virtual tables in the file.
-* @query_only = ON@ refuses every write, so no trigger can fire through the connection.
-* @cell_size_check = ON@ turns a crafted oversized b-tree cell into a clean error, not an
-out-of-bounds access.
-* @mmap_size = 0@ keeps reads on the bounds-checked pager instead of mapping hostile file
-pages into the address space.
-
-Acceptance then runs cheapest and least trusting first: the 'osvSchemaEpoch' stamp, the
-@PRAGMA quick_check@ integrity walk, the required tables against the epoch's schema
-contract, and last the @meta@ ecosystem. sqlite-simple cannot pass @SQLITE_OPEN_READONLY@
-at open, so @query_only@ carries the read-only guarantee for every statement.
+{- | Harden the connection before acceptance. SQLite's query-only pragma refuses writes.
+Rejection and opening faults close the connection before returning.
 -}
-openHardenedConnection :: Ecosystem -> FilePath -> IO (Either CveDbRejected Connection)
-openHardenedConnection eco dbFile = do
+openHardenedConnection :: Ecosystem -> EpssRequirement -> FilePath -> IO (Either CveDbRejected Connection)
+openHardenedConnection eco epssRequirement dbFile = do
     conn <- open dbFile
     -- The 'onException' guard closes the connection when a statement throws instead, for
     -- example a non-SQLite file whose first file-touching pragma raises.
@@ -98,7 +68,7 @@ openHardenedConnection eco dbFile = do
             execute_ conn "PRAGMA query_only = ON"
             execute_ conn "PRAGMA cell_size_check = ON"
             execute_ conn "PRAGMA mmap_size = 0"
-            acceptArtifact eco conn
+            acceptArtifact eco epssRequirement conn
     accepted <- hardenAndAccept `onException` close conn
     case accepted of
         Left rejection -> do
@@ -106,18 +76,17 @@ openHardenedConnection eco dbFile = do
             pure (Left rejection)
         Right () -> pure (Right conn)
 
-acceptArtifact :: Ecosystem -> Connection -> IO (Either CveDbRejected ())
-acceptArtifact eco conn = runExceptT $ do
+acceptArtifact :: Ecosystem -> EpssRequirement -> Connection -> IO (Either CveDbRejected ())
+acceptArtifact eco epssRequirement conn = runExceptT $ do
     ExceptT (checkEpochStamp conn)
     ExceptT (checkIntegrity conn)
     traverse_ (ExceptT . checkTableConformance conn) osvTableSpecs
     ExceptT (checkMetaEcosystem eco conn)
+    ExceptT (checkEpssRequirement epssRequirement conn)
 
 checkEpochStamp :: Connection -> IO (Either CveDbRejected ())
 checkEpochStamp conn = do
-    -- @PRAGMA user_version@ is the first statement to read the file's header, so a non-SQLite
-    -- artifact raises @SQLITE_NOTADB@ here rather than returning a stamp. Folding it into a
-    -- rejection value lets the sync task remember the refusal, so no later poll re-downloads it.
+    -- The first header read can throw SQLITE_NOTADB. A typed rejection suppresses repeated downloads.
     stamped <- try (query_ conn "PRAGMA user_version") :: IO (Either SQLError [Only Int])
     pure $ case stamped of
         Left err -> Left (CveDbIntegrityFailed ["not a valid SQLite database: " <> show err])
@@ -127,11 +96,7 @@ checkEpochStamp conn = do
                 | otherwise -> Left (CveDbWrongEpoch epoch)
             _ -> Left (CveDbWrongEpoch 0)
 
-{- | Walk the database structure and refuse an artifact SQLite reports as corrupt.
-@quick_check@ skips the index-vs-table cross-validation this code does not rely on.
-A badly mangled b-tree aborts the walk with @SQLITE_CORRUPT@ instead of reporting
-problem rows, and that throw folds into the same rejection.
--}
+-- SQLite can report corrupt pages as rows or throw during the integrity walk.
 checkIntegrity :: Connection -> IO (Either CveDbRejected ())
 checkIntegrity conn = do
     result <- try (query_ conn "PRAGMA quick_check") :: IO (Either SQLError [Only Text])
@@ -141,11 +106,7 @@ checkIntegrity conn = do
             ["ok"] -> Right ()
             problems -> Left (CveDbIntegrityFailed problems)
 
-{- | Does the artifact carry this relation as the schema contract demands: a real
-@STRICT@ table with every required column under its declared type? A column beyond the
-spec is tolerated, which keeps an additive schema change epoch-neutral. Nothing an
-artifact carries may make this throw, which is why the pragma rows decode through 'Maybe'.
--}
+-- Require real strict tables and their decoded columns. Compatible extra columns remain acceptable.
 checkTableConformance :: Connection -> TableSpec -> IO (Either CveDbRejected ())
 checkTableConformance conn spec = do
     listed <- try (query conn "SELECT type, strict FROM pragma_table_list WHERE name = ?" (Only (tableName spec))) :: IO (Either SQLError [(Maybe Text, Maybe Int)])
@@ -167,16 +128,25 @@ hasConformingColumn cols spec = any conforms cols
 
 checkMetaEcosystem :: Ecosystem -> Connection -> IO (Either CveDbRejected ())
 checkMetaEcosystem eco conn = do
-    -- Acceptance already confirmed @meta@ is a real @STRICT@ table of @NOT NULL TEXT@ whose
-    -- values the integrity walk verified, so this row decode is total.
-    named <- try (query conn "SELECT value FROM meta WHERE key = ?" (Only (renderMetaKey MetaEcosystem))) :: IO (Either SQLError [Only Text])
-    pure $ case named of
-        Left _ -> Left (CveDbEcosystemMismatch Nothing)
-        Right rows ->
-            let found = fromOnly <$> listToMaybe rows
-             in if found == Just (ecosystemName eco)
-                    then Right ()
-                    else Left (CveDbEcosystemMismatch found)
+    found <- readMetaValue conn MetaEcosystem
+    pure $
+        if found == Just (ecosystemName eco)
+            then Right ()
+            else Left (CveDbEcosystemMismatch found)
+
+checkEpssRequirement :: EpssRequirement -> Connection -> IO (Either CveDbRejected ())
+checkEpssRequirement EpssOptional _ = pure (Right ())
+checkEpssRequirement EpssRequired conn = do
+    evidence <- decodeEpssEvidence <$> readMetaValue conn MetaEpssStatus
+    pure $ case evidence of
+        EpssAvailable -> Right ()
+        EpssNotEstablished -> Left CveDbEpssNotEstablished
+
+-- Table conformance and integrity precede this decode. Query faults establish no metadata evidence.
+readMetaValue :: Connection -> MetaKey -> IO (Maybe Text)
+readMetaValue conn key = do
+    result <- try (query conn "SELECT value FROM meta WHERE key = ?" (Only (renderMetaKey key))) :: IO (Either SQLError [Only Text])
+    pure (either (const Nothing) (fmap fromOnly . listToMaybe) result)
 
 {- | Does any advisory for this package name carry this exact version string as a fixed
 bound? Deliberately string equality, under the artifact contract's canonical-semver expectation.

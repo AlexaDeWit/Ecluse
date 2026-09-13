@@ -25,11 +25,12 @@ import Ecluse.Config.AdvisoryStore (advisoryObjectKey, advisoryStoreBucket, mkAd
 import Ecluse.Config.Ambient (parseEndpointUrl)
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisorySource, generationInstalledAt, newCveSlot)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncOutcome (..), newS3CveSource, s3CveFetchFor, syncStep)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
-import Ecluse.Test.Osv (mkMinimalValidDb)
+import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
 import Lens.Micro ((^.))
@@ -87,7 +88,7 @@ spec = do
 
                     let dbPath = tmpDir <> "/unchanged.sqlite"
                         objectKey = advisoryObjectKey store (takeFileName dbPath)
-                    mkMinimalValidDb dbPath "pkg-a"
+                    mkMinimalValidDbWithMeta dbPath "pkg-a" [("source_url", "pkg-a"), ("epss_status", "available")]
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
                     let export = runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket objectKey dbPath)
                         storedObject = runResourceT $ AWS.send base (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey objectKey))
@@ -97,7 +98,7 @@ spec = do
                     published ^. S3L.headObjectResponse_lastModified `shouldSatisfy` isJust
                     source <- newS3CveSource (Just endpoint)
                     slot <- newCveSlot
-                    let env = SyncEnv (s3CveFetchFor source bucket objectKey (512 * 1024 * 1024)) Npm (tmpDir <> "/consumer.sqlite") slot
+                    let env = SyncEnv (s3CveFetchFor source bucket objectKey (512 * 1024 * 1024)) Npm EpssRequired (tmpDir <> "/consumer.sqlite") slot
                     initialSync <- syncStep env Nothing
                     acceptedEtag <- case initialSync of
                         SyncSwapped etag _ -> pure etag

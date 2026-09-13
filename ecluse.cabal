@@ -673,6 +673,7 @@ library ecluse-runtime-test-support
     , hs-opentelemetry-sdk  ^>=1.0
     , http-client       ^>=0.7
     , katip             ^>=0.8.8
+    , time              ^>=1.12
     , unliftio          ^>=0.2.25
 
 -- Core unit tests: cover every Ecluse.Core.* module. Pure, fast, deterministic. Gating.

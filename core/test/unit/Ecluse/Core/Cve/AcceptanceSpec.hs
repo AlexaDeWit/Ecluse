@@ -8,7 +8,7 @@ Hostile files must fail before any policy query.
 module Ecluse.Core.Cve.AcceptanceSpec (spec) where
 
 import Data.List (isSuffixOf)
-import Database.SQLite.Simple (Only, Query (Query), SQLError, close, execute_, fromOnly, open, query_)
+import Database.SQLite.Simple (Only (..), Query (Query), SQLError, close, execute, execute_, open, query_)
 import System.Directory (getSymbolicLinkTarget, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -18,7 +18,7 @@ import UnliftIO.Exception (bracket, catchAny, finally, try)
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), CveQueryFault (cqfQuery), openCveDb)
 import Ecluse.Core.Cve.Internal (openHardenedConnection, toRange)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Osv.Schema (metaTableDdl, osvSchemaEpoch, rangesTableDdl)
+import Ecluse.Core.Osv.Schema (EpssRequirement (..), metaTableDdl, osvSchemaEpoch, rangesTableDdl)
 import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithCorruptPage, mkDbWithLaxSchema, mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch, mkDbWithoutEpssColumn)
@@ -88,14 +88,14 @@ withFakeLookup use = use (fakeCveLookup corpusRows)
 withAcceptedDb :: (FilePath -> CveDb -> IO ()) -> IO ()
 withAcceptedDb body =
     withFixtureOsvDb CorpusV1 $ \dbFile ->
-        openCveDb Npm dbFile >>= \case
+        openCveDb Npm EpssOptional dbFile >>= \case
             Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
             Right db -> body dbFile db
 
 withRealLookup :: (CveLookup -> IO ()) -> IO ()
 withRealLookup use =
     withFixtureOsvDb CorpusV1 $
-        openCveDb Npm >=> \case
+        openCveDb Npm EpssOptional >=> \case
             Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
             Right db -> use (cveDbLookup db) `finally` cveDbClose db
 
@@ -106,22 +106,52 @@ spec = do
         describe "SQLite handle over the compiled corpus" (lookupContract withRealLookup)
 
     describe "openCveDb acceptance" $ do
+        for_ [EpssRequired, EpssOptional] $ \requirement ->
+            for_ [Nothing, Just "available", Just "unavailable", Just "unknown"] $ \marker ->
+                it ("qualifies " <> show marker <> " under " <> show requirement) $
+                    withFixtureOsvDb CorpusV1 $ \path -> do
+                        bracket (open path) close $ \conn -> do
+                            execute_ conn "DELETE FROM meta WHERE key = 'epss_status'"
+                            for_ marker $ \value -> execute conn "INSERT INTO meta (key, value) VALUES ('epss_status', ?)" (Only (value :: Text))
+                        result <- openCveDb Npm requirement path
+                        if requirement == EpssRequired && marker /= Just "available"
+                            then do
+                                rejectionShouldBe CveDbEpssNotEstablished result
+                                held <- openFdTargets
+                                held `shouldSatisfy` not . any (path `isSuffixOf`)
+                            else case result of
+                                Left rejection -> fail ("unexpected qualification rejection: " <> show rejection)
+                                Right db -> cveDbClose db
+
+        it "accepts established enrichment without dates or individual scores" $
+            withFixtureOsvDb CorpusV1 $ \path -> do
+                bracket (open path) close $ \conn -> do
+                    execute_ conn "INSERT OR REPLACE INTO meta (key, value) VALUES ('epss_status', 'available')"
+                    execute_ conn "DELETE FROM meta WHERE key IN ('epss_score_date', 'epss_last_modified', 'epss_model_version')"
+                    execute_ conn "UPDATE package_vulnerability_ranges SET epss_score = NULL"
+                openCveDb Npm EpssRequired path >>= \case
+                    Left rejection -> fail ("unscored artifact rejected: " <> show rejection)
+                    Right db -> flip finally (cveDbClose db) $ do
+                        ranges <- cveAdvisoriesFor (cveDbLookup db) "corpus-vuln"
+                        map arEpss ranges `shouldBe` [Nothing, Nothing]
+                        cveRemediationProbe (cveDbLookup db) "corpus-vuln" "1.2.0" `shouldReturn` True
+
         it "rejects epoch 3 even when its tables conform to the current shape" $
             withFixtureOsvDb CorpusV1 $ \path -> do
                 bracket (open path) close $ \conn -> execute_ conn "PRAGMA user_version = 3"
-                openCveDb Npm path >>= rejectionShouldBe (CveDbWrongEpoch 3)
+                openCveDb Npm EpssOptional path >>= rejectionShouldBe (CveDbWrongEpoch 3)
 
         it "rejects an artifact stamped with the wrong schema epoch" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "wrong-epoch.db"
                 mkDbWithWrongEpoch path
-                openCveDb Npm path >>= rejectionShouldBe (CveDbWrongEpoch (osvSchemaEpoch + 1))
+                openCveDb Npm EpssOptional path >>= rejectionShouldBe (CveDbWrongEpoch (osvSchemaEpoch + 1))
 
         it "rejects an artifact whose ranges relation is a view" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "view-shadow.db"
                 mkDbWithViewShadowingRanges path
-                openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
+                openCveDb Npm EpssOptional path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
 
         it "rejects an artifact whose tables are not STRICT" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
@@ -129,18 +159,17 @@ spec = do
                 -- The reader cannot trust decodes under affinity-hinted (non-STRICT) declarations,
                 -- so schema conformance must refuse the artifact as a value.
                 mkDbWithLaxSchema path
-                openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
+                openCveDb Npm EpssOptional path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
 
         it "rejects an artifact whose ranges table lacks a column the reader decodes" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "no-epss-column.db"
-                -- Reading a pre-column artifact would present every advisory as unscored, which
-                -- an EPSS deny rule reads as a denial. Conformance refuses it instead.
+                -- Missing columns violate the artifact shape regardless of the configured rules.
                 mkDbWithoutEpssColumn path
-                openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
+                openCveDb Npm EpssOptional path >>= rejectionShouldBe (CveDbSchemaNonConformant "package_vulnerability_ranges")
 
         it "rejects an artifact compiled for a different ecosystem" $
-            withFixtureOsvDb CorpusV1 (openCveDb PyPI >=> rejectionShouldBe (CveDbEcosystemMismatch (Just "npm")))
+            withFixtureOsvDb CorpusV1 (openCveDb PyPI EpssOptional >=> rejectionShouldBe (CveDbEcosystemMismatch (Just "npm")))
 
         it "rejects an artifact with no meta table as a value, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
@@ -149,7 +178,7 @@ spec = do
                 bracket (open path) close $ \conn -> do
                     execute_ conn ("PRAGMA user_version = " <> show osvSchemaEpoch)
                     execute_ conn (Query rangesTableDdl)
-                openCveDb Npm path >>= rejectionShouldBe (CveDbSchemaNonConformant "meta")
+                openCveDb Npm EpssOptional path >>= rejectionShouldBe (CveDbSchemaNonConformant "meta")
                 -- The rejected artifact's connection must not leak.
                 held <- openFdTargets
                 held `shouldSatisfy` not . any (path `isSuffixOf`)
@@ -163,7 +192,7 @@ spec = do
                     execute_ conn ("PRAGMA user_version = " <> show osvSchemaEpoch)
                     execute_ conn (Query rangesTableDdl)
                     execute_ conn (Query metaTableDdl)
-                openCveDb Npm path >>= rejectionShouldBe (CveDbEcosystemMismatch Nothing)
+                openCveDb Npm EpssOptional path >>= rejectionShouldBe (CveDbEcosystemMismatch Nothing)
 
         it "rejects an artifact whose stored meta values violate the strict declaration, without leaking the connection" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
@@ -171,7 +200,7 @@ spec = do
                 -- A BLOB smuggled under a forged STRICT declaration. Refusal must be a rejection
                 -- value, never a thrown decode error, so the sync task remembers its ETag.
                 mkDbWithMalformedProvenance path
-                openCveDb Npm path >>= \case
+                openCveDb Npm EpssOptional path >>= \case
                     Left (CveDbIntegrityFailed problems) -> problems `shouldSatisfy` not . null
                     Left other -> fail ("expected CveDbIntegrityFailed, got " <> show other)
                     Right db -> do
@@ -186,7 +215,7 @@ spec = do
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "trigger.db"
                 mkDbWithMaliciousTrigger path
-                openCveDb Npm path >>= \case
+                openCveDb Npm EpssOptional path >>= \case
                     Left rejection -> fail ("trigger artifact unexpectedly rejected: " <> show rejection)
                     Right db ->
                         (cveRemediationProbe (cveDbLookup db) "trigger-pkg" "1.0.0" `shouldReturn` True)
@@ -196,7 +225,7 @@ spec = do
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "corrupt.db"
                 mkDbWithCorruptPage path
-                openCveDb Npm path >>= \case
+                openCveDb Npm EpssOptional path >>= \case
                     Left (CveDbIntegrityFailed problems) -> problems `shouldSatisfy` not . null
                     Left other -> fail ("expected CveDbIntegrityFailed, got " <> show other)
                     Right db -> do
@@ -208,7 +237,7 @@ spec = do
                 let path = dir </> "not-a-database.db"
                 -- SQLITE_NOTADB must become a rejection value without leaking a connection.
                 writeFileBS path "this is not an SQLite database, not even close"
-                openCveDb Npm path >>= \case
+                openCveDb Npm EpssOptional path >>= \case
                     Left (CveDbIntegrityFailed problems) -> problems `shouldSatisfy` not . null
                     Left other -> fail ("expected CveDbIntegrityFailed, got " <> show other)
                     Right db -> do
@@ -242,7 +271,7 @@ spec = do
     describe "the hardened connection" $ do
         it "refuses writes outright, so no trigger can ever fire through it" $
             withFixtureOsvDb CorpusV1 $ \dbFile -> do
-                opened <- openHardenedConnection Npm dbFile
+                opened <- openHardenedConnection Npm EpssOptional dbFile
                 case opened of
                     Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
                     Right conn -> do
@@ -252,7 +281,7 @@ spec = do
 
         it "validates cell sizes and reads through the pager, not a memory map" $
             withFixtureOsvDb CorpusV1 $ \dbFile -> do
-                opened <- openHardenedConnection Npm dbFile
+                opened <- openHardenedConnection Npm EpssOptional dbFile
                 case opened of
                     Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
                     Right conn -> do
