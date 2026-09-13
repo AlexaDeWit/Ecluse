@@ -69,9 +69,9 @@ spec = describe "grouped deletion" $ do
         calls <- newIORef ([] :: [Text])
         let failed = protocolFault "cache unavailable"
             cacheStore = (deletingStore (fakeMaintenance cache)){ssExecute = SweepRemoves (StoreDeletion (\checks _ versions -> deleteAll checks (\_ -> modifyIORef' calls (<> ["cache"]) $> Left failed) [versions]) Nothing)}
-            first = mapDeletion (\send checks name versions -> modifyIORef' calls (<> ["mirror"]) >> send checks name versions) (smStore mount)
+            sourceStore = mapDeletion (\send checks name versions -> modifyIORef' calls (<> ["mirror"]) >> send checks name versions) (smStore mount)
         recorded <- recordingPorts Nothing
-        _ <- sweepCycle testPacing (recPorts recorded) [mount{smStore = first{ssPrivate = Just cacheStore}}]
+        _ <- sweepCycle testPacing (recPorts recorded) [mount{smStore = sourceStore{ssPrivate = Just cacheStore}}]
         readIORef calls `shouldReturn` ["mirror", "cache"]
         held mirror `shouldReturn` []
         held cache `shouldReturn` [version "1.0.0"]
@@ -216,12 +216,12 @@ spec = describe "grouped deletion" $ do
         mirror <- seeded "mirror" ["1.0.0"]
         cache <- seeded "cache" []
         mount <- grouped mirror cache
-        reads <- newIORef (0 :: Int)
+        inventoryReads <- newIORef (0 :: Int)
         let original = smStore mount
             observation =
                 (ssObserve original)
                     { obEnumerateVersions = \name -> do
-                        count <- atomicModifyIORef' reads (\n -> (n + 1, n + 1))
+                        count <- atomicModifyIORef' inventoryReads (\n -> (n + 1, n + 1))
                         fmap (map (\item -> item{storedRevision = Just (if count < 3 then "old" else "new")})) <$> obEnumerateVersions (ssObserve original) name
                     }
         recorded <- recordingPorts Nothing
@@ -232,7 +232,7 @@ spec = describe "grouped deletion" $ do
         mirror <- seeded "mirror" ["1.0.0"]
         cache <- seeded "cache" ["1.0.0"]
         mount <- grouped mirror cache
-        let protect store = store{ssObserve = (ssObserve store){obReadManifest = \_ -> fail "first-party metadata must not be read"}}
+        let protect target = target{ssObserve = (ssObserve target){obReadManifest = \_ -> fail "first-party metadata must not be read"}}
             store = smStore mount
         recorded <- recordingPorts Nothing
         outcome <- sweepCycle testPacing (recPorts recorded) [mount{smFirstParty = const True, smStore = (protect store){ssPrivate = protect <$> ssPrivate store}}]
