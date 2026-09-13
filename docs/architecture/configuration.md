@@ -73,15 +73,15 @@ The tag is the declaration: it names the store behind an endpoint, and the load 
 against it, so Écluse can never pair a credential with an endpoint it was not scoped for. The
 `codeArtifact` tag requires a host of the shape
 `{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`, which encodes the whole mint identity, so
-the worker and Dredger preview mint short-lived tokens scoped to each target's domain. The tag
+the worker and Dredger mint short-lived tokens scoped to each target's domain. The tag
 admits no static token for either mirror writes or private observations. The two non-minting
 tags each require a `token` under a mirror target.
 
 A tag never moves the proxy's credential posture. Private reads stay per-caller passthrough,
 public reads stay anonymous, and a `publicationTarget` token stays the fallback forwarded only
-when the publishing client sends none. Dredger uses its private credential only for observations.
+when the publishing client sends none. Dredger uses its private credential for maintenance only, including cache cleanup.
 
-The CodeArtifact mint is per domain. Mirror and private observation consumers whose resolved
+The CodeArtifact mint is per domain. Mirror and private maintenance consumers whose resolved
 mint identities coincide share one
 [`CredentialProvider`](cloud-backends.md#the-credential-mint): one mint, one refresh, one breaker.
 
@@ -213,7 +213,7 @@ error, not a silent skip:
   mount's `publicUpstream` host. Each role also refuses a private upstream equal to its own mount's
   public repository: the private leg forwards caller credentials and bypasses the public rules.
   Distinct repositories on one host remain valid for this private/public comparison.
-  `ecluse dredger` deletes from each mount's `mirrorTarget`, so it
+  `ecluse dredger` deletes from each mount's separately authorised mirror and private cache, so it
   also refuses a `mirrorTarget` equal to any mount's `privateUpstream` or to its own mount's
   `publicationTarget`. `ecluse proxy` and `ecluse mirror` boot on those mirror collisions and warn once per
   collapsed pair, and the operator prunes that mirror by hand. Dredger, including preview, also
@@ -227,7 +227,7 @@ error, not a silent skip:
   so neither a capital letter nor an explicit `:443` defeats a refusal. Applying the default port
   keeps the port in the key rather than dropping it, so `:8443` stays a separate store. The path is
   compared exactly, which is what keeps those per-format endpoints apart.
-- Every mount's `mirrorTarget` needs a store maintenance backend. `ecluse dredger` reads the tag,
+- Every mount's `mirrorTarget` and private cache need store maintenance backends. `ecluse dredger` reads the tag,
   so it refuses a target whose tag names a store this build carries no control plane for. The
   refusal names the mount key and the reason. Only the Dredger deletes, so only the Dredger refuses:
   the other roles boot on such a target and log nothing, and `ecluse check-config` names the

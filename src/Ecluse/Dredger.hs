@@ -26,7 +26,7 @@ import Ecluse.Core.Cve.Slot (currentAdvisoryEtag)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Registry.Maintenance (
     RefillPosture (RefillPermitted, RefillRefused),
-    StoreFacts (factBackend, factRefill),
+    StoreFacts (factBackend, factNameAlphabet, factRefill),
     StoreObservation (obFacts),
  )
 import Ecluse.Core.Registry.Sweep (sweepCycle)
@@ -36,16 +36,17 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepAudit (SweepAudit, auditError, auditInfo, auditWarn),
     SweepMount (smEcosystem, smStore),
     SweepPacing (swpCyclePause, swpShape),
-    SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepMetrics, sweepNow, sweepReport),
+    SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepMetrics, sweepNow, sweepReport, sweepTarget),
     SweepReport,
     SweepShape (SweepCandidates, SweepEverything),
-    SweepStore (ssObserve),
+    SweepStore (ssObserve, ssPrivate),
     latches,
     renderCycleHalt,
     walkMarkerOf,
  )
 import Ecluse.Core.Server.Readiness (Readiness (Latched), allMountsReady)
 import Ecluse.Core.Supervision (secondsToMicros, superviseLoop, transientPolicy)
+import Ecluse.Core.Telemetry.Metrics (SweepTarget (SweepMirror))
 import Ecluse.Cve.Sync (
     CveSyncHandle (csEnv),
     backgroundLoopBackoff,
@@ -97,8 +98,8 @@ runDredger bootEnv opts pruner = do
     status <- newSweepStatus
     moduleLog logEnv dredgerModule InfoS capLine
     when (doMode opts == SweepDeletes) $
-        moduleLog logEnv dredgerModule InfoS "this command deletes only mirrorTarget versions. privateUpstream inventory is available through --dry-run"
-    traverse_ (logBlastRadius logEnv opts pacing) mounts
+        moduleLog logEnv dredgerModule InfoS "this command deletes permitted mirrorTarget and privateUpstream versions under independent target consent"
+    traverse_ (\mount -> traverse_ (logBlastRadius logEnv opts pacing) (mount : [mount{smStore = store} | store <- maybeToList (ssPrivate (smStore mount))])) mounts
     moduleLog logEnv dredgerModule InfoS ("Dredger starting up, health probes on port " <> show (scPort (cfg status)))
     raceServerAgainstLoop
         (runWarp (cfg status) probeOnlyApplication)
@@ -184,6 +185,7 @@ sweepPortsFor logEnv metrics report cveSync =
         , sweepAdvisoryEtag = \eco ->
             maybe (pure Nothing) (currentAdvisoryEtag . syncSlot . csEnv) (Map.lookup eco cveSync)
         , sweepDelay = threadDelay . secondsToMicros
+        , sweepTarget = SweepMirror
         , sweepMetrics = dredgerMetricsPortOf metrics
         , sweepAudit =
             SweepAudit
@@ -216,7 +218,11 @@ logBlastRadius logEnv opts pacing mount =
     disposition = case doMode opts of
         SweepDeletes -> "deleting what a named decisive deny condemns"
         SweepPreviews -> "previewing only: this run holds nothing that could delete"
-    resumption = case (swpShape pacing, walkMarkerOf (smStore mount)) of
+    compatibleCursor = do
+        let mirror = smStore mount
+        guard (maybe True (\cache -> factNameAlphabet (obFacts (ssObserve cache)) == factNameAlphabet facts) (ssPrivate mirror))
+        walkMarkerOf mirror
+    resumption = case (swpShape pacing, compatibleCursor) of
         (SweepCandidates, _) -> ""
         (SweepEverything, Just _) -> "; the full walk resumes from this store's own marker"
         (SweepEverything, Nothing) -> "; this run keeps no marker, so the full walk starts at the first bucket"

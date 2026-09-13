@@ -522,13 +522,7 @@ runRoleOnce gdp env args = do
 -}
 runDredgerOnce :: GlobalDataPlane -> [Text] -> [(Text, Text)] -> IO RoleRun
 runDredgerOnce gdp flags extraEnv =
-    runRoleOnce gdp (environment <> extraEnv) ("dredger" : map toString flags)
-  where
-    environment
-        | "--dry-run" `elem` flags =
-            filter ((/= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL") . fst) dredgerEnv
-                <> [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://private-cache/")]
-        | otherwise = dredgerEnv
+    runRoleOnce gdp (dredgerEnv <> extraEnv) ("dredger" : map toString flags)
 
 {- | The Dredger's own environment, carrying the operator consent its mirror target's tag admits.
 Its private upstream is a registry of its own: a deleting role refuses a shared one.
@@ -538,7 +532,9 @@ dredgerEnv =
     [ ("ECLUSE_SERVER__PORT", "4873")
     , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
     , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private-upstream/")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://private-cache/")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN", "e2e-private-maintenance-token")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION", "true")
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://mirror/")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "e2e-publish-token")

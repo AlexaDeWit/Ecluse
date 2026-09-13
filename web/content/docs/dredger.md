@@ -9,12 +9,11 @@ versions the mount's own rules now deny. Run it when your mirror must not keep s
 new advisory condemns, and read this page before you point it at a store, because deletion is
 permanent.
 
-The deleting command targets the mirror repository only. `--dry-run` observes both the mirror
-and its declared private cache. It reports each location and counts a selected package version
-once across both. Private-cache deletion remains part of
-[#1227](https://github.com/AlexaDeWit/Ecluse/issues/1227).
-A private cache can retain a copy after mirror deletion. Follow
-[the revocation procedure](@/docs/operations.md#revoking-a-mirrored-version-internal-yank) for those copies.
+Dredger reads actual inventories from each mount's mirror target and private cache independently.
+It removes eligible mirror versions before their eligible cache copies, under separate consent.
+It preserves a source that policy keeps, even when that source can refill the cache.
+Restarted and later cycles rediscover cache-only residuals without a pending-work ledger.
+`--dry-run` evaluates both inventories but constructs no deletion or cursor-write capability.
 
 Dredger refuses to boot when a mount's `privateUpstream` and `publicationTarget` name the same
 registry. Preview applies the same refusal. The private read cache must remain separate from
@@ -101,7 +100,7 @@ through the store backend's own handle.
 | Store tag | How you attach consent | How you withdraw it |
 |---|---|---|
 | `codeArtifact` | a repository resource tag, key `ecluse-dredger-consent`, value `true` | remove the tag, and the next cycle halts with no restart |
-| `verdaccio` | `permitDeletion: true` under the mirror target's tag | unset the key and restart, because the boot reads it |
+| `verdaccio` | `permitDeletion: true` under each target's tag | unset the key and restart, because the boot reads it |
 | `registry` | no consent form and no control plane, so the Dredger refuses the store at boot and names the tag | |
 
 The Dredger never writes a consent marker. Placing one and removing it are yours alone, and the
@@ -109,9 +108,19 @@ full walk's resumption marker is a separate tag key so a marker write cannot rea
 `ecluse dredger --dry-run` boots without consent on either backend and reports what it found
 instead ([Preview](#preview)).
 
-A store classified as able to refill from an upstream is not swept. Deleting its local copy does
-not prevent another upstream fetch from recreating it, and the current cycle halts on that
-classification. The halt line names the backend.
+An ordinary mirror with upstream refill remains ineligible. The separately vetted CodeArtifact
+cache capability permits refill and removes retained local versions under its own consent.
+Verdaccio's `permitDeletion` retains the operator-declared standalone classification used by the
+development backend. Its maintenance token belongs to that target. Boot cannot inspect its uplinks.
+Our real Verdaccio coverage uses `uplinks: {}`. Metadata from an uplink-enabled Verdaccio does not
+establish a complete local version inventory.
+
+Before each backend batch, Dredger rechecks policy, consent, classification and both inventories.
+CodeArtifact requests require `Published` status. Revision changes during evidence collection defer
+the version. The API has no revision precondition, so this does not make deletion atomic.
+An uncertain call triggers fresh observation before at most one retry, with bounded backoff.
+The backend stops later batches after that fault. Confirmed results, uncertain outcomes and unsent
+versions remain distinct. Residual local versions make the cycle incomplete and remain eligible for later scans.
 
 The Dredger also applies the [endpoint collision checks](@/docs/configuration.md#endpoint-collisions).
 Their comparison scope differs by endpoint role. A shared host alone is not a registry collision,
@@ -119,7 +128,10 @@ except for the explicit public-host safeguards.
 
 ## The deletion cap
 
-`deletionCap` bounds how many versions one cycle may hand over for deletion. It is the breaker
+`deletionCap` counts logical package versions within each associated mirror/cache group.
+A version consumes one unit before its first destructive attempt. A second target and retries consume no extra unit.
+Failed and uncertain attempts still count. Associated work finishes before the cap stops new selections.
+The counter resets each cycle, while the cap halt remains latched until restart. It is the breaker
 against an advisory database that denies far more than it should.
 
 Left unset, it is computed at boot as 100 per sweepable mirror store, because one cycle covers
@@ -173,9 +185,9 @@ consent marker. Ordinary metadata reads can cause a cache to retain upstream con
 reads do not prove local presence. Only the actual inventory determines which versions participate.
 
 CodeArtifact resolves each repository from its own declared URL and authenticates through its
-own domain identity. Matching mint identities share a credential provider. Anonymous Verdaccio
-reads are supported, with missing deletion consent reported separately. A generic `registry`
-private target has no inventory backend and refuses preview. An inventory read that cannot
+own domain identity. Matching mint identities share a credential provider. Verdaccio preview uses
+its own optional maintenance token. It supports anonymous reads and reports missing consent separately. A generic `registry`
+private target has no inventory backend and refuses both Dredger modes. An inventory read that cannot
 authenticate makes the preview incomplete. No mirror, publication, or caller token is borrowed
 for a private target.
 
@@ -188,7 +200,7 @@ target's own parsing, a backend this build can sweep, and the credential the sto
 Combined names remain within the existing 10000-name bucket budget. Oversized buckets split
 within the existing depth bound of 4. An unsplittable overflow reports incomplete evidence.
 The combined versions of one package remain within `limits.maxVersionCount`. CodeArtifact
-preview enforces that limit while reading version pages. No overflow becomes a complete truncated scan.
+enforces that limit while reading version pages. No overflow becomes a complete truncated scan.
 
 A full walk under a preview starts at the first bucket every time. It neither reads nor replaces
 the marker a real walk records, so a preview leaves a walk in progress where it was.
@@ -242,25 +254,26 @@ the sweep resumes on its own when the store answers.
 A delete the backend refuses, or one that never reached it, leaves the version in the store. It
 counts as kept and writes an error line carrying the backend's own code and message.
 
-The `ecluse.dredger.versions` counter carries one label, `result`, one of `examined`, `deleted`,
+The `ecluse.dredger.versions` counter carries `target` (`mirrorTarget` or `privateUpstream`)
+and `result`, one of `examined`, `deleted`,
 `would_delete`, `kept`, or `guard_skipped`. Every version a cycle examines counts once as
 `examined` and once more under what the cycle did with it. **Alert on a jump in `deleted`.**
 
 ## Permissions
 
-Scope the Dredger to its configured mirror. Token minting does not grant repository access by
+Scope the Dredger independently to its configured mirror and private cache. Token minting does not grant repository access by
 itself. The CodeArtifact role needs these permissions for a default candidate cycle:
 
 | Action | Resource scope | Purpose |
 |---|---|---|
 | `codeartifact:GetAuthorizationToken` | Domain ARN | Mint the repository token |
 | `sts:GetServiceBearerToken` | `*` in the role's identity policy, restricted by `sts:AWSServiceName = codeartifact.amazonaws.com` | Permit token minting |
-| `codeartifact:ListPackages` | Mirror repository ARN | Enumerate package names |
-| `codeartifact:ListPackageVersions` | Package ARNs within the mirror | Enumerate versions |
-| `codeartifact:DescribeRepository` | Mirror repository ARN | Read store classification |
-| `codeartifact:ListTagsForResource` | Mirror repository ARN | Read consent and cursor tags |
-| `codeartifact:ReadFromRepository` | Mirror repository ARN | Read package metadata for rule evaluation |
-| `codeartifact:DeletePackageVersions` | Package ARNs within the mirror | Delete selected versions |
+| `codeartifact:ListPackages` | Each approved repository ARN | Enumerate package names |
+| `codeartifact:ListPackageVersions` | Package ARNs within each approved target | Enumerate versions |
+| `codeartifact:DescribeRepository` | Each approved repository ARN | Read store classification |
+| `codeartifact:ListTagsForResource` | Each approved repository ARN | Read consent and cursor tags |
+| `codeartifact:ReadFromRepository` | Each approved repository ARN | Read package metadata for rule evaluation |
+| `codeartifact:DeletePackageVersions` | Package ARNs within each approved target | Delete selected versions |
 
 The mirror worker needs the same token-mint permissions, repository reads for its presence probe, and
 `codeartifact:PublishPackageVersion` on package ARNs. It does not need Dredger's deletion grant.
@@ -272,7 +285,7 @@ Preview needs the listed token-mint and observation permissions independently fo
 repositories. Apply the read resource scopes to each repository and its packages. Preview needs
 neither `DeletePackageVersions` nor tag-write permissions on either target.
 
-The full walk also needs cursor-write permissions:
+The full walk also needs cursor-write permissions when both targets share the mirror's bucket alphabet:
 
 - `codeartifact:TagResource` and `codeartifact:UntagResource` on the mirror repository ARN,
   conditioned on the key family the Dredger writes:

@@ -8,6 +8,7 @@ Read exchanges retain explicit access refusals before reading an error body.
 module Ecluse.Core.Registry.Exchange (
     -- * The bounded exchange
     boundedExchange,
+    singleAttemptSettings,
     boundedFetch,
     boundedRelay,
 
@@ -19,6 +20,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (
     BodyReader,
     Manager,
+    ManagerSettings (managerRetryableException),
     Request,
     Response (responseStatus),
     brRead,
@@ -37,6 +39,10 @@ import Ecluse.Core.Registry (
     isAuthorisationFailure,
  )
 import Ecluse.Core.Security (LimitError, Limits, boundedRead)
+
+-- | Destructive clients must return uncertain transport failures for reassessment before retry.
+singleAttemptSettings :: ManagerSettings -> ManagerSettings
+singleAttemptSettings settings = settings{managerRetryableException = const False}
 
 -- | Project a bounded response. Connection failures during the body read remain typed transport faults.
 boundedExchange :: (Int -> ByteString -> a) -> Manager -> Limits -> Request -> IO (Either FetchFault a)

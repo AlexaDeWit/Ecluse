@@ -18,13 +18,13 @@ import Ecluse.Composition.BootError (
 import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Maintenance (
     ClearedBackend (cbAlphabet, cbControl, cbFetchManifest),
-    ClearedControl (ClearedCodeArtifact, ClearedProtocol),
+    ClearedControl (ClearedCodeArtifact, ClearedCodeArtifactCache, ClearedProtocol),
     ClearedProtocolStore (cpsConsent, cpsToken),
     ResolveMaintenanceAdapter,
     StorePorts (..),
     buildStoreMaintenance,
     planStoreMaintenance,
-    vetPreviewCaches,
+    vetPrivateCaches,
     vetStoreBackends,
  )
 import Ecluse.Composition.Support (
@@ -226,6 +226,7 @@ protocolHandleFor edit = do
     edited backend = case cbControl backend of
         ClearedProtocol store -> backend{cbControl = ClearedProtocol (edit store)}
         ClearedCodeArtifact{} -> backend
+        ClearedCodeArtifactCache{} -> backend
 
 {- The ports a handle is built over when no live process supplies them: a passthrough tracing
 port, and no credential, which the store's origin then presents none of. -}
@@ -323,6 +324,7 @@ protocolArm :: ClearedBackend -> Bool
 protocolArm cleared = case cbControl cleared of
     ClearedProtocol{} -> True
     ClearedCodeArtifact{} -> False
+    ClearedCodeArtifactCache{} -> False
 
 -- A pass that logged nothing and cleared no store: what every writing role's pass looks like.
 clearsNothing :: ([Advisory], Either [BootError] (Map Ecosystem ClearedBackend)) -> Bool
@@ -368,10 +370,10 @@ pypiInternalEndpoint :: (IsString s) => s
 pypiInternalEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/pypi/internal/"
 
 previewCachesSpec :: Spec
-previewCachesSpec = describe "vetPreviewCaches" $ do
+previewCachesSpec = describe "vetPrivateCaches" $ do
     it "clears anonymous protocol observation before private deletion consent exists" $ do
-        config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
-        case snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config))) of
+        config <- expectConfig (withObservablePrivate (withoutPrivateAuthority codeArtifactEnvVars)) Nothing
+        case snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config))) of
             Right caches -> case map (cbControl . snd) (Map.elems caches) of
                 [ClearedProtocol store] -> do
                     cpsToken store `shouldBe` Nothing
@@ -380,8 +382,8 @@ previewCachesSpec = describe "vetPreviewCaches" $ do
             Left errors -> expectationFailure (show errors)
 
     it "refuses a generic registry without an inventory backend" $ do
-        config <- expectConfig codeArtifactEnvVars Nothing
-        let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        config <- expectConfig staticEnvVars Nothing
+        let result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
         void result `shouldBe` Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "registry has no inventory control plane")]
 
     it "accumulates private inventory refusals across mounts" $ do
@@ -389,25 +391,36 @@ previewCachesSpec = describe "vetPreviewCaches" $ do
                 [ ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
                 , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL", "https://test-111122223333.d.codeartifact.us-east-1.amazonaws.com/pypi/mirror/")
                 ]
-                    <> codeArtifactEnvVars
+                    <> [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")]
+                    <> withoutPrivateUpstreamUrl codeArtifactEnvVars
         config <- expectConfig env Nothing
-        let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        let result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
             expected = [StoreMaintenanceUnavailable eco (PrivateCacheUnavailable "registry has no inventory control plane") | eco <- [Npm, PyPI]]
         void result `shouldBe` Left expected
 
     it "refuses a private protocol backend with no listing capability" $ do
-        config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
-        let result = snd (runVet MirrorPreviewer (vetPreviewCaches withoutMaintenance (cfgMounts (configApp config)) (configMounts config)))
+        config <- expectConfig (withObservablePrivate (withoutPrivateAuthority codeArtifactEnvVars)) Nothing
+        let result = snd (runVet MirrorPreviewer (vetPrivateCaches withoutMaintenance (cfgMounts (configApp config)) (configMounts config)))
         void result `shouldBe` Left [StoreMaintenanceUnavailable Npm NoProtocolMaintenance]
 
-    it "preserves the deleting role's mirror-only construction" $ do
+    it "clears the deleting role an independently consenting private store" $ do
         config <- expectConfig codeArtifactEnvVars Nothing
-        let result = snd (runVet MirrorPruner (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
-        fmap Map.null result `shouldBe` Right True
+        let result = snd (runVet MirrorPruner (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        fmap Map.null result `shouldBe` Right False
+
+    for_ ["TOKEN", "PERMIT_DELETION"] $ \missing ->
+        it ("refuses private deletion without its own " <> missing) $ do
+            let key = "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__" <> missing
+                env = filter ((/= key) . fst) codeArtifactEnvVars
+            config <- expectConfig env Nothing
+            let result = snd (runVet MirrorPruner (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+            case result of
+                Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable detail)] -> detail `shouldSatisfy` T.isInfixOf (toText key)
+                other -> expectationFailure ("expected the private authority refusal, got " <> show (void other))
 
     it "adds no private observation when the mount has no mirror target" $ do
         config <- expectConfig (withoutMirrorTargetUrl (withoutMirrorTargetToken staticEnvVars)) Nothing
-        let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        let result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
         fmap Map.null result `shouldBe` Right True
 
     it "resolves the private CodeArtifact repository from its own endpoint" $ do
@@ -415,7 +428,7 @@ previewCachesSpec = describe "vetPreviewCaches" $ do
                 ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", "https://cache-999900001111.d.codeartifact.us-west-2.amazonaws.com/npm/retained/")
                     : withoutPrivateUpstreamUrl codeArtifactEnvVars
         config <- expectConfig env Nothing
-        let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        let result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
         fmap (map (clearedRepository . snd) . Map.elems) result `shouldBe` Right [Just "retained"]
 
     it "refuses a private CodeArtifact endpoint for a different package format" $ do
@@ -423,5 +436,8 @@ previewCachesSpec = describe "vetPreviewCaches" $ do
                 ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", "https://cache-999900001111.d.codeartifact.us-west-2.amazonaws.com/pypi/retained/")
                     : withoutPrivateUpstreamUrl codeArtifactEnvVars
         config <- expectConfig env Nothing
-        let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        let result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
         void result `shouldSatisfy` isLeft
+
+withoutPrivateAuthority :: [(String, String)] -> [(String, String)]
+withoutPrivateAuthority = filter (\(key, _) -> key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN" && key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION")

@@ -42,9 +42,9 @@ spec = do
             aroundAll withGlobalDataPlane (aroundAllWith withSeededStore identityScenarios)
             aroundAll withGlobalDataPlane revocationScenario
 
-identityScenarios :: SpecWith (GlobalDataPlane, E2E)
+identityScenarios :: SpecWith (GlobalDataPlane, E2E, E2E)
 identityScenarios = describe "identity denies with no advisory database" $ do
-    it "walks the seeded store through listPackagesIn, including scoped base-name buckets" $ \(_, e2e) -> do
+    it "walks the seeded store through listPackagesIn, including scoped base-name buckets" $ \(_, e2e, _) -> do
         verdaccioSnapshot e2e `shouldReturn` seededVersions
         names <- verdaccioListing e2e
         names `shouldMatchList` Map.keys seededVersions
@@ -52,56 +52,70 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         verdaccioNamesUnder e2e "e" `shouldReturn` sort names
         verdaccioNamesUnder e2e "z" `shouldReturn` []
 
-    it "deletes every denied version and preserves all other versions, including first-party versions" $ \(plane, e2e) -> do
+    it "deletes every denied version and preserves all other versions, including first-party versions" $ \(plane, e2e, cache) -> do
         initial <- verdaccioSnapshot e2e
+        privateInitial <- verdaccioSnapshot cache
         run <- runDredgerOnce plane ["--once"] (sweepEnv dredgerPkg)
         assertFullSweep "deleting " dredgerPkg initial run
         verdaccioVersions e2e (psName dredgerPkg) `shouldReturn` []
         finalStore <- verdaccioSnapshot e2e
         finalStore `shouldBe` Map.delete (psName dredgerPkg) initial
         verdaccioNamesUnder e2e "" `shouldReturn` Map.keys finalStore
+        verdaccioSnapshot cache `shouldReturn` privateInitial
 
-    it "previews distinct real inventories without writes and preserves first-party versions" $ \(plane, e2e) ->
-        withDredgerPrivateCache plane e2e $ \cache -> do
-            for_ [psVersion dredgerDryRunPkg, "2.0.0"] $ \version ->
-                void $ withPublishProject cache (psName dredgerDryRunPkg) version npmPublishIn >>= shouldSucceed
-            void $ withPublishProject cache publishDredgerName publishVersion npmPublishIn >>= shouldSucceed
-            awaitListed cache [psName dredgerDryRunPkg, publishDredgerName]
-            initial <- verdaccioSnapshot e2e
-            privateInitial <- verdaccioSnapshot cache
-            run <- runDredgerOnce plane ["--once", "--dry-run"] (sweepEnv dredgerDryRunPkg)
-            roleExit run `shouldSatisfy` (/= ExitSuccess)
-            let output = roleOutput run
-            output `shouldSatisfy` T.isInfixOf "mirrorTarget https://mirror/"
-            output `shouldSatisfy` T.isInfixOf "privateUpstream https://private-cache/"
-            output `shouldSatisfy` T.isInfixOf ("dry run, would delete " <> psName dredgerDryRunPkg <> "@2.0.0")
-            output `shouldSatisfy` T.isInfixOf "deleted 2"
-            output `shouldSatisfy` T.isInfixOf "counted from partial evidence"
-            output `shouldSatisfy` T.isInfixOf "previewing only: this run holds nothing that could delete"
-            output `shouldSatisfy` T.isInfixOf "This preview deleted nothing, so it proves no authority to delete"
-            output `shouldSatisfy` (not . T.isInfixOf ("would delete " <> publishDredgerName))
-            verdaccioSnapshot e2e `shouldReturn` initial
-            verdaccioSnapshot cache `shouldReturn` privateInitial
-
-    it "refuses missing consent, names the key, and leaves every version intact" $ \(plane, e2e) -> do
+    it "previews distinct real inventories without writes and preserves first-party versions" $ \(plane, e2e, cache) -> do
+        for_ [psVersion dredgerDryRunPkg, "2.0.0"] $ \version ->
+            void $ withPublishProject cache (psName dredgerDryRunPkg) version npmPublishIn >>= shouldSucceed
+        void $ withPublishProject cache publishDredgerName publishVersion npmPublishIn >>= shouldSucceed
+        awaitListed cache [psName dredgerDryRunPkg, publishDredgerName]
         initial <- verdaccioSnapshot e2e
+        privateInitial <- verdaccioSnapshot cache
+        run <- runDredgerOnce plane ["--once", "--dry-run"] (sweepEnv dredgerDryRunPkg)
+        roleExit run `shouldSatisfy` (/= ExitSuccess)
+        let output = roleOutput run
+        output `shouldSatisfy` T.isInfixOf "mirrorTarget https://mirror/"
+        output `shouldSatisfy` T.isInfixOf "privateUpstream https://private-cache/"
+        output `shouldSatisfy` T.isInfixOf ("dry run, would delete " <> psName dredgerDryRunPkg <> "@2.0.0")
+        output `shouldSatisfy` T.isInfixOf "deleted 2"
+        output `shouldSatisfy` T.isInfixOf "counted from partial evidence"
+        output `shouldSatisfy` T.isInfixOf "previewing only: this run holds nothing that could delete"
+        output `shouldSatisfy` T.isInfixOf "This preview deleted nothing, so it proves no authority to delete"
+        output `shouldSatisfy` (not . T.isInfixOf ("would delete " <> publishDredgerName))
+        verdaccioSnapshot e2e `shouldReturn` initial
+        verdaccioSnapshot cache `shouldReturn` privateInitial
+
+    it "refuses missing consent, names the key, and leaves every version intact" $ \(plane, e2e, cache) -> do
+        initial <- verdaccioSnapshot e2e
+        privateInitial <- verdaccioSnapshot cache
         run <- runDredgerOnce plane ["--once"] (sweepEnv dredgerPkg <> [(consentKey, "false")])
         (roleExit run, roleOutput run) `shouldSatisfy` ((/= ExitSuccess) . fst)
         roleOutput run `shouldSatisfy` T.isInfixOf (consentKey <> " is not set")
         sweepMessages run `shouldBe` []
+        verdaccioSnapshot cache `shouldReturn` privateInitial
         verdaccioSnapshot e2e `shouldReturn` initial
 
-    it "protects every first-party version even when an identity deny names one" $ \(plane, e2e) -> do
+    it "protects every first-party version even when an identity deny names one" $ \(plane, e2e, cache) -> do
         initial <- verdaccioSnapshot e2e
+        privateInitial <- verdaccioSnapshot cache
         let rules = identityRule (publishDredgerName <> "@" <> publishVersion)
-            guardCount = length (Map.findWithDefault [] publishDredgerName initial)
+            guardCount = length (Map.findWithDefault [] publishDredgerName initial) + length (Map.findWithDefault [] publishDredgerName privateInitial)
         run <- runDredgerOnce plane ["--once"] [("ECLUSE_RULES", rules), ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", publishScope)]
         (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
         sweepMessages run `shouldBe` [cycleLine ["examined 0", "deleted 0", "kept 0", "guard-skipped " <> show guardCount]]
         verdaccioVersions e2e publishDredgerName `shouldReturn` firstPartyVersions
         verdaccioSnapshot e2e `shouldReturn` initial
 
-withSeededStore :: ((GlobalDataPlane, E2E) -> IO ()) -> GlobalDataPlane -> IO ()
+    it "deletes shared and cache-only versions while preserving each store's other contents" $ \(plane, mirror, cache) -> do
+        mirrorBefore <- verdaccioSnapshot mirror
+        cacheBefore <- verdaccioSnapshot cache
+        run <- runDredgerOnce plane ["--once"] (sweepEnv dredgerDryRunPkg)
+        roleExit run `shouldBe` ExitSuccess
+        verdaccioSnapshot mirror `shouldReturn` Map.delete (psName dredgerDryRunPkg) mirrorBefore
+        verdaccioSnapshot cache `shouldReturn` Map.delete (psName dredgerDryRunPkg) cacheBefore
+        verdaccioVersions mirror (psName dredgerDryRunPkg) `shouldReturn` []
+        verdaccioVersions cache (psName dredgerDryRunPkg) `shouldReturn` []
+
+withSeededStore :: ((GlobalDataPlane, E2E, E2E) -> IO ()) -> GlobalDataPlane -> IO ()
 withSeededStore action plane =
     withE2EWith defaultE2EConfig{ecExtraEnv = publishTargetEnv} seed plane
   where
@@ -114,7 +128,7 @@ withSeededStore action plane =
             void $ withPublishProject e2e publishDredgerName version npmPublishIn >>= shouldSucceed
             verdaccioHasVersion e2e publishDredgerName version `shouldReturn` True
         awaitListed e2e (Map.keys seededVersions)
-        action (plane, e2e)
+        withDredgerPrivateCache plane e2e $ \cache -> action (plane, e2e, cache)
 
 mirroredPackages :: [PkgSpec]
 mirroredPackages = [dredgerPkg, dredgerKeepPkg, dredgerDryRunPkg]
@@ -193,7 +207,7 @@ withAdvisoryStore :: ((GlobalDataPlane, E2E) -> IO ()) -> GlobalDataPlane -> IO 
 withAdvisoryStore action plane = do
     createAdvisoryBucket plane
     compileGeneration plane CorpusV1
-    withE2EWith defaultE2EConfig{ecExtraEnv = revocationProxyEnv} (\e2e -> action (plane, e2e)) plane
+    withE2EWith defaultE2EConfig{ecExtraEnv = revocationProxyEnv} (\e2e -> withDredgerPrivateCache plane e2e (\_ -> action (plane, e2e))) plane
 
 {- The proxy reads the advisory store the Pilot wrote, under the same policy the Dredger sweeps by.
 Its packument cache turns over in a second, so a swapped-in generation reaches the next install. -}
@@ -331,7 +345,12 @@ renderRules :: [Pair] -> Text
 renderRules = decodeUtf8 . toStrict . encode . object
 
 sweepMessages :: RoleRun -> [Text]
-sweepMessages run = filter isSweepMessage (mapMaybe lineMessage (T.lines (roleOutput run)))
+sweepMessages run = filter isSweepMessage (map withoutTarget (mapMaybe lineMessage (T.lines (roleOutput run))))
 
 isSweepMessage :: Text -> Bool
 isSweepMessage message = any (`T.isPrefixOf` message) ["deleting ", "dry run, would delete ", "mirror sweep cycle "]
+
+withoutTarget :: Text -> Text
+withoutTarget message
+    | any (`T.isPrefixOf` message) ["mirrorTarget ", "privateUpstream "] = T.drop 2 (snd (T.breakOn ": " message))
+    | otherwise = message

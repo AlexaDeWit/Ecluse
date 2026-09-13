@@ -20,6 +20,7 @@ module Ecluse.Config.Types (
     StoreTag (..),
     storeTagName,
     Target (..),
+    PrivateEndpoint (..),
     DeletionConsent (..),
     MirrorWrite (..),
     MirrorEndpoint (..),
@@ -185,6 +186,14 @@ data MirrorEndpoint = MirrorEndpoint
     }
     deriving stock (Eq, Show)
 
+-- | A private read endpoint with maintenance authority used only by Dredger.
+data PrivateEndpoint = PrivateEndpoint
+    { preTarget :: Target
+    , preToken :: Maybe Secret
+    , preConsent :: DeletionConsent
+    }
+    deriving stock (Eq, Show)
+
 -- | The mirror endpoint as the collision rules read it. The tag comes from 'meWrite'.
 meTarget :: MirrorEndpoint -> Target
 meTarget endpoint = Target (writeTag (meWrite endpoint)) (meUrl endpoint)
@@ -282,7 +291,7 @@ data MountConfig = MountConfig
     {- ^ The mount's on\/off switch. Any operator-declared key already activates the mount, so
     @true@ serves the public gate that declares no other key and @false@ switches one off in place.
     -}
-    , mntPrivateUpstream :: Maybe Target
+    , mntPrivateUpstream :: Maybe PrivateEndpoint
     , mntPublicUpstream :: RegistryUrl
     -- ^ Only the @registry@ tag is admitted here, so the URL is the whole declaration.
     , mntMirrorTarget :: Maybe MirrorEndpoint

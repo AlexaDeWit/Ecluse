@@ -31,7 +31,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepAudit (SweepAudit, auditError, auditInfo, auditWarn),
     SweepMount (..),
     SweepPacing (SweepPacing, swpChunkPause, swpChunkSize, swpCyclePause, swpDeletionCap, swpShape),
-    SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepMetrics, sweepNow, sweepReport),
+    SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepMetrics, sweepNow, sweepReport, sweepTarget),
     SweepReport (SweepReport, reportCapHalts, reportOpening, reportRemoval),
     SweepShape (SweepCandidates),
     SweepStore,
@@ -40,7 +40,7 @@ import Ecluse.Core.Registry.Sweep.Types (
  )
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Rules.Types (Rule)
-import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepWouldDelete))
+import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepWouldDelete), SweepTarget (..))
 import Ecluse.Core.Telemetry.Record (DredgerMetricsPort (DredgerMetricsPort, dmpSweptVersion))
 import Ecluse.Test.Rules (inertRuleDeps)
 
@@ -53,6 +53,7 @@ data RecordedSweep = RecordedSweep
     -- ^ The lines an operator must act on, oldest first.
     , recResults :: IO [SweepResult]
     -- ^ Every disposition the sweep counted, in the order it counted them.
+    , recTargetResults :: IO [(SweepTarget, SweepResult)]
     , recWarnings :: IO [Text]
     -- ^ The lines that may clear on their own, oldest first.
     , recDelays :: IO Int
@@ -72,6 +73,7 @@ recordingPortsUnder report etag = do
     warnings <- newIORef []
     errors <- newIORef []
     results <- newIORef []
+    targetResults <- newIORef []
     delays <- newIORef (0 :: Int)
     let push ref line = modifyIORef' ref (line :)
     pure
@@ -81,12 +83,14 @@ recordingPortsUnder report etag = do
                     { sweepNow = pure epoch
                     , sweepAdvisoryEtag = const (pure etag)
                     , sweepDelay = const (modifyIORef' delays (+ 1))
-                    , sweepMetrics = DredgerMetricsPort{dmpSweptVersion = push results}
+                    , sweepTarget = SweepMirror
+                    , sweepMetrics = DredgerMetricsPort{dmpSweptVersion = \target result -> push results result >> push targetResults (target, result)}
                     , sweepAudit =
                         SweepAudit{auditInfo = push info, auditWarn = push warnings, auditError = push errors}
                     , sweepReport = report
                     }
             , recInfo = reverse <$> readIORef info
+            , recTargetResults = reverse <$> readIORef targetResults
             , recWarnings = reverse <$> readIORef warnings
             , recErrors = reverse <$> readIORef errors
             , recResults = reverse <$> readIORef results

@@ -48,6 +48,7 @@ import Ecluse.Composition.Support (
     staticEnvVars,
     withObservablePrivate,
     withoutMirrorTargetUrl,
+    withoutPrivateUpstreamUrl,
     withoutQueueUrl,
  )
 import Ecluse.Composition.Types (
@@ -311,10 +312,11 @@ spec = describe "resolveBootPlan" $ do
             config <- expectConfig envVars Nothing
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling) `shouldBe` []
 
-        it "names preview alone when the private registry has no inventory backend" $ do
-            config <- expectConfig codeArtifactEnvVars Nothing
-            roleRefusalWarnings BootWithoutPipeline (bootInputsFor codeArtifactEnvVars Nothing config noCeiling)
-                `shouldBe` [wouldRefuse "ecluse dredger --dry-run" privateInventoryRefusal]
+        it "names both Dredger modes when the private registry has no inventory backend" $ do
+            let envVars = [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")] <> withoutPrivateUpstreamUrl codeArtifactEnvVars
+            config <- expectConfig envVars Nothing
+            roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling)
+                `shouldMatchList` [wouldRefuse "ecluse dredger" privateInventoryRefusal, wouldRefuse "ecluse dredger --dry-run" privateInventoryRefusal]
 
 -- | One warning line as a checker prints it: the command that refuses, and the refusal itself.
 wouldRefuse :: Text -> BootError -> Text

@@ -36,7 +36,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreManifestRead,
     StoreObservation (obClassifyStore, obListPackagesIn, obVerifyConsent),
     StoredVersion (StoredVersion, storedPresence, storedVersion),
-    VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
+    VersionOutcome (VersionRefused, VersionRemoved, VersionUncertain, VersionUnreached),
     VersionPresence (VersionServed),
     collectPages,
     noNameAlphabet,
@@ -46,7 +46,7 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Registry.Maintenance.Protocol (
     ProtocolRead (..),
-    ProtocolStore (ProtocolStore, psDelete, psRead),
+    ProtocolStore (ProtocolStore, psDelete, psDeleteOrigin, psRead),
     newProtocolMaintenance,
     newProtocolObservation,
  )
@@ -62,7 +62,7 @@ import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepExamined, SweepKept))
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Maintenance (withBucket)
+import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
 import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Rules (denyRule)
@@ -243,8 +243,8 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
                                 ctx <- mkEvalContext getCurrentTime (pure Nothing)
                                 let tracked =
                                         handle
-                                            { deleteVersions = \name selected -> do
-                                                result <- deleteVersions handle name selected
+                                            { deleteVersions = \checks name selected -> do
+                                                result <- deleteVersions handle checks name selected
                                                 writeIORef recorded result
                                                 pure result
                                             }
@@ -255,13 +255,13 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
                                     (testMount tracked [denyRule] [])
                                     ctx
                                     leftpad
-                                    [StoredVersion v VersionServed | v <- versions]
+                                    [StoredVersion v VersionServed Nothing | v <- versions]
                                     `shouldReturn` Nothing
                                 readIORef (stIssued counters) `shouldReturn` length versions
                                 recResults rec'
                                     `shouldReturn` (replicate (length versions) SweepExamined <> replicate (faultAt - 1) SweepDeleted <> replicate 2 SweepKept)
                                 readIORef recorded
-                            else deleteVersions handle leftpad versions
+                            else deleteVersions handle testDeleteGuard leftpad versions
                     map fst outcomes `shouldBe` versions
                     map snd (take (faultAt - 1) outcomes) `shouldBe` replicate (faultAt - 1) VersionRemoved
                     map (unreachedRetry . snd) (drop (faultAt - 1) outcomes) `shouldBe` replicate 2 (Just RetryFutile)
@@ -288,7 +288,7 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
                 (testMount handle [denyRule] [])
                 ctx
                 leftpad
-                [StoredVersion (version raw) VersionServed | raw <- ["1.0.0", "2.0.0"]]
+                [StoredVersion (version raw) VersionServed Nothing | raw <- ["1.0.0", "2.0.0"]]
                 `shouldReturn` Nothing
             recResults rec' `shouldReturn` [SweepExamined, SweepExamined, SweepKept, SweepKept]
             calls stub
@@ -296,25 +296,25 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
 
     it "removes the final version with one package DELETE after the document read" $
         withStore True (answerSingleVersion status201 "{\"ok\":true}") $ \handle stub -> do
-            deleteVersions handle leftpad [version "1.0.0"]
+            deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
                 `shouldReturn` [(version "1.0.0", VersionRemoved)]
             calls stub `shouldReturn` [("GET", "/leftpad"), ("DELETE", "/leftpad/-rev/3-abc")]
 
     it "reports a refused whole-package DELETE without reporting the version removed" $
         withStore True (answerSingleVersion status500 "{}") $ \handle stub -> do
-            outcomes <- deleteVersions handle leftpad [version "1.0.0"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
             map (refusedAs . snd) outcomes `shouldBe` [Just "HTTP 500"]
             calls stub `shouldReturn` [("GET", "/leftpad"), ("DELETE", "/leftpad/-rev/3-abc")]
 
     it "reports an oversized whole-package DELETE response as an unknown outcome" $
         withBoundedStore midSequenceBound (answerSingleVersion status201 (LBS.replicate 20000 0x61)) $ \handle stub -> do
-            outcomes <- deleteVersions handle leftpad [version "1.0.0"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
             map (unreachedRetry . snd) outcomes `shouldBe` [Just RetryFutile]
             calls stub `shouldReturn` [("GET", "/leftpad"), ("DELETE", "/leftpad/-rev/3-abc")]
 
     it "reads the document, edits it, then deletes the tarball, in that order" $
         withStore True answerStore $ \handle stub -> do
-            deleteVersions handle leftpad [version "1.0.0"]
+            deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
                 `shouldReturn` [(version "1.0.0", VersionRemoved)]
             calls stub
                 `shouldReturn` [ ("GET", "/leftpad")
@@ -324,37 +324,37 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
 
     it "carries the store's write credential on every call of the sequence" $
         withStore True answerStore $ \handle stub -> do
-            _ <- deleteVersions handle leftpad [version "1.0.0"]
+            _ <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
             sent <- allCaptured stub
             map (headerValue "Authorization") sent `shouldBe` replicate 3 (Just "Bearer write-token")
 
     it "sends a packument edit with the deleted version gone and the rest intact" $
         withStore True answerStore $ \handle stub -> do
-            _ <- deleteVersions handle leftpad [version "1.0.0"]
+            _ <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
             edited <- editedPackument stub
             keysUnder "versions" edited `shouldBe` ["2.0.0"]
             keysUnder "time" edited `shouldBe` ["2.0.0"]
 
     it "re-reads the document for every version, because the edit addresses its revision" $
         withStore True answerStore $ \handle stub -> do
-            _ <- deleteVersions handle leftpad [version "1.0.0", version "2.0.0"]
+            _ <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0", version "2.0.0"]
             documentReads <- filter ((== "GET") . capMethod) <$> allCaptured stub
             length documentReads `shouldBe` 2
 
     it "refuses the version, and sends no tarball delete, when the store refuses the edit" $
         withStore True answerRefusingEdit $ \handle stub -> do
-            outcomes <- deleteVersions handle leftpad [version "1.0.0"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
             map (refusedAs . snd) outcomes `shouldBe` [Just "HTTP 500"]
             calls stub `shouldReturn` [("GET", "/leftpad"), ("PUT", "/leftpad/-rev/3-abc")]
 
     it "refuses the version when the store holds no document for the package" $
         withStore True answerNothing $ \handle _ -> do
-            outcomes <- deleteVersions handle leftpad [version "1.0.0"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
             map (refusedAs . snd) outcomes `shouldBe` [Just "NOT_FOUND"]
 
     it "carries the verb's own refusal out, sending neither write" $
         withStore True answerStore $ \handle stub -> do
-            outcomes <- deleteVersions handle leftpad [version "9.9.9"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "9.9.9"]
             map (refusedAs . snd) outcomes `shouldBe` [Just "VERSION_ABSENT"]
             calls stub `shouldReturn` [("GET", "/leftpad")]
 
@@ -362,7 +362,7 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
         -- The bound admits the document and the edit and refuses the answer to the tarball
         -- delete, which is the one fault a caller must not read as a completed removal.
         withBoundedStore midSequenceBound answerOversizedDelete $ \handle stub -> do
-            outcomes <- deleteVersions handle leftpad [version "1.0.0"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
             map (unreachedRetry . snd) outcomes `shouldBe` [Just RetryFutile]
             map fst <$> calls stub `shouldReturn` ["GET", "PUT", "DELETE"]
 
@@ -428,6 +428,7 @@ protocolStore permitted origin = do
                     , prPermitDeletion = permitted
                     , prConsentDescriptor = consentKey
                     }
+            , psDeleteOrigin = origin
             , psDelete = delete
             }
   where
@@ -568,4 +569,5 @@ refusedAs = \case
 unreachedRetry :: VersionOutcome -> Maybe RetryAdvice
 unreachedRetry = \case
     VersionUnreached fault -> Just (faultRetry fault)
+    VersionUncertain fault -> Just (faultRetry fault)
     _ -> Nothing

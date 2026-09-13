@@ -12,7 +12,7 @@ import Network.HTTP.Client (
     HttpExceptionContent (ConnectionTimeout),
     defaultRequest,
  )
-import Network.HTTP.Types (Header, Status, status403, status429, status503)
+import Network.HTTP.Types (Header, Status, status403, status404, status429, status503)
 import Network.HTTP.Types.Header (hRetryAfter)
 import Test.Hspec
 
@@ -59,6 +59,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     listPackagesRequest,
     listTagsRequest,
     listVersionsRequest,
+    listVersionsResult,
     packageCoordinates,
     packageNameFrom,
     packagesOfPage,
@@ -190,6 +191,9 @@ requestCases store = do
         request ^. CAL.deletePackageVersions_versions `shouldBe` ["7.0.0", "7.1.0"]
         request ^. CAL.deletePackageVersions_package `shouldBe` "core"
         request ^. CAL.deletePackageVersions_namespace `shouldBe` Just "babel"
+        request ^. CAL.deletePackageVersions_expectedStatus `shouldBe` Just CA.PackageVersionStatus_Published
+        request ^. CAL.deletePackageVersions_repository `shouldBe` casRepository store
+        request ^. CAL.deletePackageVersions_domainOwner `shouldBe` Just (casDomainOwner store)
 
     it "describes and tags the repository the coordinates name" $ do
         describeRepositoryRequest store ^. CAL.describeRepository_repository `shouldBe` "mirror"
@@ -239,6 +243,10 @@ deleteFoldSpec = describe "foldDeleteResponse" $ do
 
 faultSpec :: Spec
 faultSpec = describe "classifyStoreFault" $ do
+    it "reads a missing package as an empty local inventory and preserves access failures" $ do
+        fmap (^. CAL.listPackageVersionsResponse_versions) (listVersionsResult (Left (serviceError status404 "ResourceNotFoundException" []))) `shouldBe` Right Nothing
+        listVersionsResult (Left (serviceError status403 "AccessDeniedException" [])) `shouldSatisfy` isLeft
+
     it "reads a throttle as worth another attempt" $
         adviceFor (serviceError status429 "ThrottlingException" []) `shouldBe` RetryWorthwhile
 
