@@ -76,7 +76,7 @@ privatePublicationSpec = describe "vetBoot private upstream and publication targ
             fmap (Map.keys . vpMirrorStores) outcome `shouldBe` Left [collision]
 
         it "accumulates the collision and the unavailable maintenance backend" $
-            refusalsFor role (withObservablePrivate (publishingAtTag "VERDACCIO" "https://private.example.test" staticEnvVars))
+            refusalsFor role (withDredgeablePrivate (publishingAtTag "VERDACCIO" "https://private.example.test" staticEnvVars))
                 `shouldReturn` [collision, noMaintenanceBackend]
 
         it "clears a usable store when publication is separate" $ do
