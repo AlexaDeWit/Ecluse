@@ -40,7 +40,6 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Credential (CredentialProviders, CredentialTarget (..), mirrorBackends, noCredentialProviders, providerLabel)
 import Ecluse.Composition.Maintenance (
-    BuildStoreObservation,
     ClearedBackend (cbUrl),
     StoreBuilds (sbDeleting, sbObserving),
     StorePorts,
@@ -63,7 +62,7 @@ import Ecluse.Composition.Types (
     MirrorRole,
  )
 import Ecluse.Composition.Validate (
-    ValidatedPlan (vpMirrorStores, vpMounts, vpPreviewCaches, vpSettings),
+    ValidatedPlan (vpMirrorStores, vpMounts, vpPrivateCaches, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
  )
 import Ecluse.Config (AppConfig (cfgAdvisories), Mount (mountPolicy), MountConfig (mntFirstParty), StoreBackend, StoreTag, mountAdvisoryAge, mountEpssRequirement)
@@ -179,15 +178,15 @@ planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds 
 
     prunerArm build =
         fmap (executablePlan . StorePrunerWiring)
-            <$> planPrunerWiring logEnv tracing buildCredentials build (sbObserving builds) bootPlan
+            <$> planPrunerWiring logEnv tracing buildCredentials build bootPlan
 
     deleting build ports limits cleared = deletingStore <$> build ports limits cleared
     previewing build ports limits cleared = previewStore <$> build ports limits cleared
 
 {- The store roles' shared arm: the advisory sync their rules read, the credential their stores
 answer to, and one store per cleared target. All three refusable steps accumulate. -}
-planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepStore -> BuildStoreObservation -> BootPlan -> IO (Either [BootError] PrunerWiring)
-planPrunerWiring logEnv tracing buildCredentials buildStore buildObservation bootPlan = do
+planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepStore -> BootPlan -> IO (Either [BootError] PrunerWiring)
+planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     credentials <- buildCredentials (credentialReportersOver deferredMetrics) credentialBackends
@@ -201,11 +200,11 @@ planPrunerWiring logEnv tracing buildCredentials buildStore buildObservation boo
     caches <-
         planStoreMaintenanceFor
             PrivateCacheCredential
-            buildObservation
+            buildStore
             tracing
             (fromRight noCredentialProviders credentials)
             (bpLimits bootPlan)
-            (Map.map snd (vpPreviewCaches validated))
+            (Map.map snd (vpPrivateCaches validated))
     -- A refused sync leaves the rules abstaining, so the policies below still prepare and still
     -- report. The accumulation then discards them along with the sync.
     let ruleDepsFor =
@@ -225,12 +224,12 @@ planPrunerWiring logEnv tracing buildCredentials buildStore buildObservation boo
     prunerMounts = map vmMount (vpMounts validated)
     credentialBackends =
         [((eco, MirrorCredential), backend) | (eco, backend) <- mirrorBackends prunerMounts]
-            <> [((eco, PrivateCacheCredential), backend) | (eco, (Just backend, _)) <- Map.toAscList (vpPreviewCaches validated)]
-    attachCache caches eco store = case (Map.lookup eco caches, Map.lookup eco (vpPreviewCaches validated), Map.lookup eco (vpMirrorStores validated)) of
+            <> [((eco, PrivateCacheCredential), backend) | (eco, (Just backend, _)) <- Map.toAscList (vpPrivateCaches validated)]
+    attachCache caches eco store = case (Map.lookup eco caches, Map.lookup eco (vpPrivateCaches validated), Map.lookup eco (vpMirrorStores validated)) of
         (Just cache, Just (_, clearedCache), Just clearedMirror) ->
             store
                 { ssObserve = labelObservation "mirrorTarget" clearedMirror (ssObserve store)
-                , ssPrivate = Just (labelObservation "privateUpstream" clearedCache cache)
+                , ssPrivate = Just cache{ssObserve = labelObservation "privateUpstream" clearedCache (ssObserve cache)}
                 , ssVersionLimit = maxVersionCount (bpLimits bootPlan)
                 }
         _ -> store{ssVersionLimit = maxVersionCount (bpLimits bootPlan)}

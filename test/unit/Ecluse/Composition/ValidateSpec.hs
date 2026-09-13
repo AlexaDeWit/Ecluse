@@ -31,6 +31,7 @@ import Ecluse.Composition.Support (
     noMaintenanceBackend,
     overrideEnv,
     staticEnvVars,
+    withDredgeablePrivate,
     withObservablePrivate,
     withoutPrivateUpstreamUrl,
  )
@@ -75,7 +76,7 @@ privatePublicationSpec = describe "vetBoot private upstream and publication targ
             fmap (Map.keys . vpMirrorStores) outcome `shouldBe` Left [collision]
 
         it "accumulates the collision and the unavailable maintenance backend" $
-            refusalsFor role (withObservablePrivate (publishingAtTag "VERDACCIO" "https://private.example.test" staticEnvVars))
+            refusalsFor role (withDredgeablePrivate (publishingAtTag "VERDACCIO" "https://private.example.test" staticEnvVars))
                 `shouldReturn` [collision, noMaintenanceBackend]
 
         it "clears a usable store when publication is separate" $ do
@@ -191,7 +192,7 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
             `shouldReturn` [PublishStaticCredentialNeedsEdge Npm TagRegistry]
 
     it "refuses the deleting role a mirror target this build has no maintenance backend for" $
-        refusalsFor MirrorPruner staticEnvVars `shouldReturn` [noMaintenanceBackend]
+        refusalsFor MirrorPruner (withDredgeablePrivate staticEnvVars) `shouldReturn` [noMaintenanceBackend]
 
     it "refuses the deleting role a collision on a target it has a backend for" $
         refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL" codeArtifactMirrorUrl (withoutPrivateUpstreamUrl codeArtifactEnvVars))
@@ -205,7 +206,7 @@ refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do
         refusalsFor MirrorWriter (beneathThePauseFloor codeArtifactEnvVars) `shouldReturn` []
 
     it "reports the mount refusal beside the maintenance refusal from one deleting-role run" $
-        refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" staticEnvVars)
+        refusalsFor MirrorPruner (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" (withDredgeablePrivate staticEnvVars))
             `shouldReturn` [MissingAdapter RubyGems, noMaintenanceBackend]
 
     it "reports a refusal from each of the writing groups in one run" $ do

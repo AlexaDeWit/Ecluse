@@ -12,6 +12,7 @@ module Ecluse.Core.Registry.Sweep (
 ) where
 
 import Data.Conduit (ConduitT, await, fuseBothMaybe, runConduit)
+import Data.List (lookup)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))
@@ -30,7 +31,7 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Registry.Sweep.Candidates (CandidateSet, candidateSet, inCandidates)
 import Ecluse.Core.Registry.Sweep.Group (boundedVersions, collectGroupBucket, groupAlphabet)
-import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackage)
+import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackage, sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltBucketUnsplittable, HaltConsentWithheld, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (CycleOutcome, outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
@@ -124,10 +125,10 @@ firstHalt = stepUntilHalt id
 start, because an operator revokes either and a store can be recreated as a different kind. -}
 sweepMount :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> IO (Maybe CycleHalt)
 sweepMount pacing ports counters mount = case ssExecute (smStore mount) of
-    SweepRemoves _ -> firstHalt [clearedToDelete pacing ports mount, walk]
+    SweepRemoves _ -> firstHalt ([clearedToDelete pacing ports mount] <> map (clearedToDelete pacing ports . (\store -> mount{smStore = store})) (maybeToList (ssPrivate (smStore mount))) <> [walk])
     SweepCounts -> do
         notePrerequisites pacing ports counters mount
-        traverse_ (notePrerequisites pacing ports counters . locatedMount mount) (ssPrivate (smStore mount))
+        traverse_ (notePrerequisites pacing ports counters . locatedMount mount . ssObserve) (ssPrivate (smStore mount))
         walk
   where
     walk = walkStore pacing ports counters mount
@@ -179,22 +180,28 @@ walkStore :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> IO (Maybe 
 walkStore pacing ports counters mount = do
     reportAdvisoryHalf ports counters mount
     case ssPrivate (smStore mount) of
-        Just cache -> walkPreviewGroup pacing ports counters mount cache
+        Just cache -> walkGroup pacing ports counters mount cache
         Nothing -> case swpShape pacing of
             SweepCandidates -> candidateCycle pacing ports counters mount
             SweepEverything -> fullWalk pacing ports counters mount
 
-walkPreviewGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> StoreObservation -> IO (Maybe CycleHalt)
-walkPreviewGroup pacing ports counters mount cache = go (walkBuckets alphabet)
+walkGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> SweepStore -> IO (Maybe CycleHalt)
+walkGroup pacing ports counters mount cache = do
+    resume <- if resumable then readWalkCursor pacing ports mount else pure (Right Nothing)
+    case resume of
+        Left halt -> pure (Just halt)
+        Right cursor -> go cursor (resumeAfter cursor (walkBuckets alphabet))
   where
-    alphabet = groupAlphabet (observed mount) cache
-    combined = backendOf mount <> " and " <> factBackend (obFacts cache) <> " (combined inventory)"
-    go [] = pure Nothing
-    go (prefix : rest) =
-        collectGroupBucket alphabet prefix (observed mount) cache >>= \case
+    alphabet = groupAlphabet (observed mount) (ssObserve cache)
+    combined = backendOf mount <> " and " <> factBackend (obFacts (ssObserve cache)) <> " (combined inventory)"
+    resumable = swpShape pacing == SweepEverything && alphabet == alphabetOf mount
+    marker action = if resumable then onCursor pacing ports mount action else pure Nothing
+    go _ [] = marker clearCursor
+    go resume (prefix : rest) =
+        collectGroupBucket alphabet prefix (observed mount) (ssObserve cache) >>= \case
             BucketFaulted (store, fault) -> pure (Just (storeHalt (locatedMount mount store) fault))
             BucketUnsplittable -> pure (Just (HaltBucketUnsplittable (smEcosystem mount) combined (renderNamePrefix prefix)))
-            BucketOverflowed narrower -> go (toList narrower <> rest)
+            BucketOverflowed narrower -> go resume (resumeAfter resume (toList narrower) <> rest)
             BucketRead names ->
                 withCandidates
                     ports
@@ -202,16 +209,21 @@ walkPreviewGroup pacing ports counters mount cache = go (walkBuckets alphabet)
                     ( \candidates ctx ->
                         stepUntilHalt (previewOne ctx) (filter (wanted candidates . fst) names)
                     )
-                    >>= maybe (go rest) (pure . Just)
+                    >>= maybe (marker (`writeCursor` prefix) >>= maybe (go resume rest) (pure . Just)) (pure . Just)
     wanted candidates name = swpShape pacing == SweepEverything || inCandidates candidates name
-    previewOne ctx (name, locations) = do
+    previewOne ctx (name, slots) = do
+        let locations = map (\slot -> if slot then cache else (smStore mount){ssPrivate = Nothing}) slots
         paceName pacing ports counters
-        readLocations <- traverse (\store -> fmap (store,) <$> withStoreRetry pacing ports (locatedMount mount store) (obEnumerateVersions store name)) locations
+        readLocations <- traverse (\store -> fmap (store,) <$> withStoreRetry pacing ports (locatedMount mount (ssObserve store)) (obEnumerateVersions (ssObserve store) name)) locations
         case sequence readLocations of
             Left halt -> pure (Just halt)
             Right versions -> case boundedVersions (ssVersionLimit (smStore mount)) versions of
                 Left fault -> pure (Just (HaltStoreFault (smEcosystem mount) combined (renderStoreFault fault)))
-                Right bounded -> previewPackageGroup pacing ports counters mount ctx name bounded
+                Right bounded -> case ssExecute (smStore mount) of
+                    SweepCounts -> previewPackageGroup pacing ports counters mount ctx name (map (first ssObserve) bounded)
+                    SweepRemoves _ ->
+                        let present store = fromMaybe [] (lookup (factBackend (obFacts (ssObserve store))) [(factBackend (obFacts (ssObserve located)), versions') | (located, versions') <- bounded])
+                         in sweepPackageGroup pacing ports counters mount name [(smStore mount, present (smStore mount)), (cache, present cache)]
 
 locatedMount :: SweepMount -> StoreObservation -> SweepMount
 locatedMount mount store = mount{smStore = previewStore store}

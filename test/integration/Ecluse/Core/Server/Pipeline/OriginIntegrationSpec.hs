@@ -198,7 +198,7 @@ privateAuthoritySpec = describe "private origin is the per-client authority (not
 namespaceTransitionSpec :: Spec
 namespaceTransitionSpec = describe "declaring a namespace after public ingestion" $
     it "keeps the public copy and genuine private release served and protected under an identity deny" $ do
-        let retained = [StoredVersion (mkVersion Npm v) VersionServed | v <- ["1.0.0", "9.0.0"]]
+        let retained = [StoredVersion (mkVersion Npm v) VersionServed Nothing | v <- ["1.0.0", "9.0.0"]]
             inventory = Map.singleton transitionName retained
         store <-
             newFakeStore

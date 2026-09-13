@@ -39,7 +39,7 @@ groupAlphabet mirror cache
     alphabet = factNameAlphabet . obFacts
 
 -- | Join actual package presence under the shared bucket budget, retaining each location.
-collectGroupBucket :: NameAlphabet -> NamePrefix -> StoreObservation -> StoreObservation -> IO (BucketNames (StoreObservation, StoreFault) (PackageName, [StoreObservation]))
+collectGroupBucket :: NameAlphabet -> NamePrefix -> StoreObservation -> StoreObservation -> IO (BucketNames (StoreObservation, StoreFault) (PackageName, [Bool]))
 collectGroupBucket alphabet prefix mirror cache =
     fmap (second Map.elems) <$> collectBucketWith alphabet prefix Map.union source
   where
@@ -50,10 +50,10 @@ collectGroupBucket alphabet prefix mirror cache =
         fmap (store,)
             <$> fuseUpstream
                 (obListPackagesIn store prefix)
-                (CL.map (map (,Map.singleton slot store)))
+                (CL.map (map (,Map.singleton slot slot)))
 
 -- | Reject an oversized combined version inventory and deduplicate identities within each location.
-boundedVersions :: Int -> [(StoreObservation, [StoredVersion])] -> Either StoreFault [(StoreObservation, [StoredVersion])]
+boundedVersions :: Int -> [(a, [StoredVersion])] -> Either StoreFault [(a, [StoredVersion])]
 boundedVersions limit locations = do
     combined <- maybeToRight overflow (foldM addLocation Map.empty indexed)
     pure [(store, Map.elems (Map.mapMaybe (Map.lookup index) combined)) | (index, (store, _)) <- indexed]

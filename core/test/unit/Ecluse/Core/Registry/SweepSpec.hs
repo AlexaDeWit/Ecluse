@@ -624,7 +624,7 @@ seededConfig = storeConfigFor [packageName "left-pad", packageName "lodash"]
 storeConfigFor :: [PackageName] -> FakeStoreConfig
 storeConfigFor names =
     defaultFakeStoreConfig
-        { fakeContents = Map.fromList [(name, [StoredVersion (version "1.0.0") VersionServed]) | name <- names]
+        { fakeContents = Map.fromList [(name, [StoredVersion (version "1.0.0") VersionServed Nothing]) | name <- names]
         , fakeManifests = Map.fromList [(name, sampleManifest name [version "1.0.0"]) | name <- names]
         }
 

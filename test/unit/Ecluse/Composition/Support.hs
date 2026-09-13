@@ -15,7 +15,9 @@ module Ecluse.Composition.Support (
     codeArtifactMirrorUrl,
     codeArtifactEnvVars,
     withObservablePrivate,
+    withDredgeablePrivate,
     noMaintenanceBackend,
+    privateInventoryRefusal,
     clearedRepository,
     malformedAwsEndpoint,
     withoutMirrorTargetUrl,
@@ -35,11 +37,11 @@ module Ecluse.Composition.Support (
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
-import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane))
+import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
 import Ecluse.Composition.Maintenance (
     ClearedBackend (cbControl),
-    ClearedControl (ClearedCodeArtifact, ClearedProtocol),
+    ClearedControl (ClearedCodeArtifact, ClearedCodeArtifactCache, ClearedProtocol),
  )
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
@@ -119,8 +121,9 @@ write token, so the static one goes with the registry target it belonged to.
 -}
 codeArtifactEnvVars :: [(String, String)]
 codeArtifactEnvVars =
-    overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactMirrorUrl $
-        withoutMirrorTargetToken (withoutMirrorTargetUrl staticEnvVars)
+    withDredgeablePrivate $
+        overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactMirrorUrl $
+            withoutMirrorTargetToken (withoutMirrorTargetUrl staticEnvVars)
 
 -- | Declare the existing anonymous private fixture under its observable protocol backend.
 withObservablePrivate :: [(String, String)] -> [(String, String)]
@@ -130,14 +133,27 @@ withObservablePrivate =
             (if key == "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL" then "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL" else key, value)
         )
 
+-- | The protocol cache has its own maintenance token and explicit deletion consent.
+withDredgeablePrivate :: [(String, String)] -> [(String, String)]
+withDredgeablePrivate env =
+    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN", "private-maintenance-token")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION", "true")
+    ]
+        <> withObservablePrivate env
+
 -- | The deleting role's refusal of 'staticEnvVars', whose mirror target no backend here sweeps.
 noMaintenanceBackend :: BootError
 noMaintenanceBackend = StoreMaintenanceUnavailable Npm (NoControlPlane TagRegistry)
+
+-- | A generic private registry has no backend that can enumerate its stored versions.
+privateInventoryRefusal :: BootError
+privateInventoryRefusal = StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "registry has no inventory control plane")
 
 -- | The repository a cleared CodeArtifact store addresses, 'Nothing' for any other arm.
 clearedRepository :: ClearedBackend -> Maybe Text
 clearedRepository cleared = case cbControl cleared of
     ClearedCodeArtifact store -> Just (casRepository store)
+    ClearedCodeArtifactCache store -> Just (casRepository store)
     ClearedProtocol{} -> Nothing
 
 -- | Drop the registry mirror-target URL, so a test can declare its own target under any tag.
@@ -150,7 +166,7 @@ withoutMirrorTargetToken = filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGIS
 
 -- | Drop the registry private upstream, so a test can declare its own under any tag.
 withoutPrivateUpstreamUrl :: [(String, String)] -> [(String, String)]
-withoutPrivateUpstreamUrl = filter ((/= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL") . fst)
+withoutPrivateUpstreamUrl = filter (not . ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__" `isPrefixOf`) . fst)
 
 {- | Drop the ECLUSE_QUEUE__URL entry, so a test can exercise the absent-URL rollover
 to the bounded in-memory queue.

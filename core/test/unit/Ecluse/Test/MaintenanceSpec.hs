@@ -25,7 +25,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreMaintenance (..),
     StoreObservation (..),
     StoredVersion (..),
-    VersionOutcome (VersionRefused, VersionRemoving, VersionUnreached),
+    VersionOutcome (VersionRefused, VersionRemoving, VersionUncertain),
     VersionPresence (VersionServed, VersionWithdrawn),
     collectPages,
     noNameAlphabet,
@@ -38,6 +38,7 @@ import Ecluse.Test.Maintenance (
     FakeStoreConfig (..),
     defaultFakeStoreConfig,
     newFakeStore,
+    testDeleteGuard,
     withBucket,
  )
 import Ecluse.Test.Package (sampleManifest)
@@ -91,7 +92,7 @@ spec = do
     describe "the fake store's deletion" $ do
         it "removes a held version and reports the operation still running" $ do
             store <- newFakeStore seededConfig
-            outcomes <- deleteVersions (fakeMaintenance store) plainName [version "1.0.0"]
+            outcomes <- deleteVersions (fakeMaintenance store) testDeleteGuard plainName [version "1.0.0"]
             map snd outcomes `shouldBe` [VersionRemoving "fake-operation"]
             remaining <- readFakeContents store
             map (renderVersion . storedVersion) (Map.findWithDefault [] plainName remaining)
@@ -99,12 +100,12 @@ spec = do
 
         it "refuses a version it does not hold rather than report it gone" $ do
             handle <- seeded
-            outcomes <- deleteVersions handle plainName [version "9.9.9"]
+            outcomes <- deleteVersions handle testDeleteGuard plainName [version "9.9.9"]
             map (isRefusal . snd) outcomes `shouldBe` [True]
 
         it "reports one outcome per version whatever the batch size" $ do
             handle <- seeded
-            outcomes <- deleteVersions handle plainName (map version ["1.0.0", "1.1.0", "9.9.9"])
+            outcomes <- deleteVersions handle testDeleteGuard plainName (map version ["1.0.0", "1.1.0", "9.9.9"])
             map (renderVersion . fst) outcomes `shouldBe` ["1.0.0", "1.1.0", "9.9.9"]
 
     describe "the fake store's verdicts" $ do
@@ -177,8 +178,8 @@ spec = do
 
         it "marks every version of a faulted delete unreached, and deletes nothing" $ do
             store <- newFakeStore seededConfig{fakeFault = Just aFault}
-            outcomes <- deleteVersions (fakeMaintenance store) plainName (map version ["1.0.0", "1.1.0"])
-            map snd outcomes `shouldBe` replicate 2 (VersionUnreached aFault)
+            outcomes <- deleteVersions (fakeMaintenance store) testDeleteGuard plainName (map version ["1.0.0", "1.1.0"])
+            map snd outcomes `shouldBe` replicate 2 (VersionUncertain aFault)
             remaining <- readFakeContents store
             map (renderVersion . storedVersion) (Map.findWithDefault [] plainName remaining)
                 `shouldBe` ["1.0.0", "1.1.0"]
@@ -205,8 +206,8 @@ seededConfig =
           fakeManifests = Map.singleton plainName (sampleManifest plainName (map version ["1.0.0", "1.1.0"]))
         }
   where
-    served raw = StoredVersion (version raw) VersionServed
-    withdrawn raw = StoredVersion (version raw) VersionWithdrawn
+    served raw = StoredVersion (version raw) VersionServed Nothing
+    withdrawn raw = StoredVersion (version raw) VersionWithdrawn Nothing
 
 -- The one bucket a store with no alphabet offers, which covers everything it holds.
 listWholeStore :: StoreMaintenance -> IO (Either StoreFault [PackageName])

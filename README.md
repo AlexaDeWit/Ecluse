@@ -48,7 +48,7 @@ a static token you supply. Écluse hosts no packages itself.
 A mirror keeps what it was given, so a version your rules later deny stays until something removes
 it. `ecluse dredger` is that role: it walks each mirror store, re-evaluates the versions a new
 advisory or an operator deny can have changed, and deletes only what a named rule condemns. It is
-the only role that deletes, and it does so only from a store carrying the operator's own consent
+the only role that deletes, and it does so only from each mirror or private cache carrying its own consent
 marker, under a per-cycle cap.
 
 The [operator manual](https://ecluse-proxy.com/docs/) covers running Écluse.
@@ -62,8 +62,8 @@ ecosystem awaiting its database leaves the healthy mounts routable.
 into the artifact and reads against the operator's quiet-time threshold.
 `Ecluse.Runtime.Maintenance.CodeArtifact.Read` holds the CodeArtifact calls that only observe, and
 the evidence one observed version keeps: its exact repository, status, revision, and origin.
-`Ecluse.Core.Registry.Sweep.Group` joins bounded mirror and private-cache inventories for Dredger preview.
-The dry run evaluates both locations. The deleting command still removes only mirror-target versions.
+`Ecluse.Core.Registry.Sweep.Group` joins bounded mirror and private-cache inventories.
+`Ecluse.Core.Registry.Sweep.Deletion` rechecks both targets before backend-owned batches and shares one logical deletion cap.
 `Ecluse.Core.Worker.Lease` renews a received queue message's visibility for as long as the worker
 holds it, so a job slower than one window is not redelivered to a second consumer.
 `Ecluse.Core.Rules.Freshness` derives how old an advisory push may be before CVE-based denial

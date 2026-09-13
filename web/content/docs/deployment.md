@@ -31,11 +31,11 @@ selects the role:
   endpoint pair or on a `mirrorTarget` it has no maintenance backend for) prints here as a warning
   naming that command. Run it in CI or before a rollout.
 
-Dredger preview reads both the mirror target and the configured private cache with independent
-observation capabilities. `privateUpstream` supplies cache reads, `mirrorTarget` receives mirrors,
-and `publicationTarget` receives user publications. The deleting command still targets the mirror
-only. Preview refuses a declared private backend without inventory support and reports missing
-consent separately. See [the preview contract](@/docs/dredger.md#preview).
+Dredger reads and cleans both the mirror target and configured private cache with independent
+maintenance authority. `privateUpstream` supplies cache reads, `mirrorTarget` receives mirrors,
+and `publicationTarget` receives user publications. Preview constructs observations only and
+requires no deletion consent. Each deleting target needs its own backend-specific consent and
+credential. See [the Dredger contract](@/docs/dredger.md).
 
 All roles share one configuration. The proxy and the mirror worker scale. Run Pilot as a singleton,
 because multiple instances race and duplicate API calls.

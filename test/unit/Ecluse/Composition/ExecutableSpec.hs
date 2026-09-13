@@ -187,7 +187,7 @@ spec = describe "planExecutable" $ do
         outcome <- planWith codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
-            Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed detail)] ->
+            Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed detail), StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable _)] ->
                 detail `shouldSatisfy` T.isInfixOf "NoCredentials"
             Left errs -> expectationFailure ("expected the handle refusal, got: " <> show errs)
 
@@ -223,7 +223,7 @@ spec = describe "planExecutable" $ do
         outcome <- planUnder codeArtifactEnvVars BootStorePruner (\_ _ _ -> Nothing) refusingQueue refusingCredentials refusingStore
         case outcome of
             Right _ -> expectationFailure "expected the planning phase to refuse"
-            Left [CodeArtifactMintFailed _ _, StoreMaintenanceUnavailable Npm (ClientBuildFailed _)] -> pass
+            Left [CodeArtifactMintFailed _ _, StoreMaintenanceUnavailable Npm (ClientBuildFailed _), StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable _)] -> pass
             Left errs -> expectationFailure ("expected the mint and the handle refusal, got: " <> show errs)
 
     it "plans the pilot through the same phase, on its own arm" $ do
@@ -378,7 +378,7 @@ previewFixture :: [Text] -> IO FakeStore
 previewFixture rawVersions =
     newFakeStore
         defaultFakeStoreConfig
-            { fakeContents = Map.singleton name [StoredVersion version VersionServed | version <- versions]
+            { fakeContents = Map.singleton name [StoredVersion version VersionServed Nothing | version <- versions]
             , fakeManifests = Map.singleton name (sampleManifest name versions)
             }
   where

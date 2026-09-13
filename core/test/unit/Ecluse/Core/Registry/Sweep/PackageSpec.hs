@@ -121,7 +121,7 @@ verdictSpec = describe "the delete verdict" $ do
         -- destructive call for it every cycle.
         store <- storeWith [] (Just (sampleManifest packageName [version "1.0.0"]))
         rec' <- recordingPorts generation
-        halt <- runStep rec' testPacing (mount store [denyRule]) [StoredVersion (version "1.0.0") VersionWithdrawn]
+        halt <- runStep rec' testPacing (mount store [denyRule]) [StoredVersion (version "1.0.0") VersionWithdrawn Nothing]
         halt `shouldBe` Nothing
         recResults rec' `shouldReturn` []
 
@@ -267,7 +267,7 @@ capSpec = describe "the per-cycle deletion cap" $ do
                 handle =
                     original
                         { storeFacts = (storeFacts original){factDeleteCeiling = AtMost 1}
-                        , deleteVersions = \_ selected -> do
+                        , deleteVersions = \_ _ selected -> do
                             modifyIORef' calls (<> [selected])
                             pure (zip selected (replicate successful VersionRemoved <> repeat (VersionUnreached fault)))
                         }
@@ -391,7 +391,7 @@ storeWith :: [Version] -> Maybe Manifest -> IO FakeStore
 storeWith stored manifest =
     newFakeStore
         defaultFakeStoreConfig
-            { fakeContents = Map.singleton packageName [StoredVersion v VersionServed | v <- stored]
+            { fakeContents = Map.singleton packageName [StoredVersion v VersionServed Nothing | v <- stored]
             , fakeManifests = maybe Map.empty (Map.singleton packageName) manifest
             }
 
@@ -405,7 +405,7 @@ refusingStore' :: Maybe Manifest -> VersionOutcome -> IO FakeStore
 refusingStore' manifest outcome = do
     store <- storeWith [version "1.0.0"] manifest
     let handle = fakeMaintenance store
-    pure store{fakeMaintenance = handle{deleteVersions = \_ versions -> pure [(v, outcome) | v <- versions]}}
+    pure store{fakeMaintenance = handle{deleteVersions = \_ _ versions -> pure [(v, outcome) | v <- versions]}}
 
 mount :: FakeStore -> [PreparedRule] -> SweepMount
 mount store rules = testMount (fakeMaintenance store) rules []
@@ -414,7 +414,7 @@ held :: FakeStore -> IO [Version]
 held store = maybe [] (map storedVersion) . Map.lookup packageName <$> readFakeContents store
 
 served :: [Text] -> [StoredVersion]
-served = map (\raw -> StoredVersion (version raw) VersionServed)
+served = map (\raw -> StoredVersion (version raw) VersionServed Nothing)
 
 evalContext :: IO EvalContext
 evalContext = mkEvalContext (pure epoch) (pure generation)

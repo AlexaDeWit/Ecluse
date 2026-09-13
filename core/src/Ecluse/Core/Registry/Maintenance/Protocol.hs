@@ -38,6 +38,7 @@ import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
+    DeleteGuard,
     NamePrefix,
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryFutile, RetryWorthwhile),
@@ -48,7 +49,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreManifestRead,
     StoreObservation (..),
     StoreRefusal,
-    StoredVersion (StoredVersion, storedPresence, storedVersion),
+    StoredVersion (StoredVersion, storedPresence, storedRevision, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved),
     VersionPresence (VersionServed),
     chunksOfCeiling,
@@ -88,6 +89,7 @@ data ProtocolRead = ProtocolRead
 -- | One protocol-only store a caller may delete from: its reads, beside the verb that removes a version.
 data ProtocolStore = ProtocolStore
     { psRead :: ProtocolRead
+    , psDeleteOrigin :: OriginClient
     , psDelete :: VersionDelete
     }
 
@@ -190,11 +192,11 @@ listVersions store name =
             | otherwise -> Left (readFault "version list" status)
   where
     served status body = map stored <$> pcParseVersionList (prCodec store) (RegistryResponse status body)
-    stored version = StoredVersion{storedVersion = version, storedPresence = VersionServed}
+    stored version = StoredVersion{storedVersion = version, storedPresence = VersionServed, storedRevision = Nothing}
 
-deleteStoredVersions :: ProtocolStore -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
-deleteStoredVersions store name versions =
-    deleteAll (deleteChunk store name) (chunksOfCeiling deleteCeiling versions)
+deleteStoredVersions :: ProtocolStore -> DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
+deleteStoredVersions store checks name versions =
+    deleteAll checks (deleteChunk store name) (chunksOfCeiling deleteCeiling versions)
 
 {- One version at a time: re-read the document, form the protocol's request sequence over it,
 and send each in turn. A refusal is this version's alone, and a fault ends the whole run. -}
@@ -218,7 +220,7 @@ applyDelete store name version status body =
     case deleteRequests (psDelete store) (prOrigin (psRead store)) name version (RegistryResponse status body) of
         Left refusal -> pure (refused version refusal)
         Right requests ->
-            sendSequence (psRead store) (toList requests) <&> fmap outcomeOf
+            sendSequence (psRead store){prOrigin = psDeleteOrigin store} (toList requests) <&> fmap outcomeOf
   where
     outcomeOf = \case
         Nothing -> [(version, VersionRemoved)]

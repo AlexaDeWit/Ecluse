@@ -49,7 +49,10 @@ module Ecluse.Core.Registry.Sweep.Types (
     -- * The cycle's running state
     SweepState (..),
     newSweepState,
+    labelAudit,
     record,
+    recordMetric,
+    recordTally,
     recordGap,
     recordPrerequisites,
 ) where
@@ -74,7 +77,7 @@ import Ecluse.Core.Registry.Maintenance (
 import Ecluse.Core.Rules (PreparedRule, RuleDeps)
 import Ecluse.Core.Rules.Types (Rule)
 import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
-import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
+import Ecluse.Core.Telemetry.Metrics (SweepResult (..), SweepTarget)
 import Ecluse.Core.Telemetry.Record (DredgerMetricsPort (dmpSweptVersion))
 
 -- | One mount's sweepable store, and everything that decides for it.
@@ -107,8 +110,8 @@ executes against a condemned version. Only the two builders below pair the halve
 data SweepStore = SweepStore
     { ssObserve :: StoreObservation
     , ssExecute :: SweepExecution
-    , ssPrivate :: Maybe StoreObservation
-    -- ^ The associated private cache, held only by previews.
+    , ssPrivate :: Maybe SweepStore
+    -- ^ The associated private cache holds the same role authority and no further group.
     , ssVersionLimit :: Int
     -- ^ Maximum distinct versions held for one package across both observations.
     }
@@ -214,6 +217,7 @@ data SweepPorts = SweepPorts
     -- ^ The active advisory generation for one ecosystem, for the audit line alone.
     , sweepDelay :: NominalDiffTime -> IO ()
     -- ^ The pause, injected so a spec observes pacing without waiting for it.
+    , sweepTarget :: SweepTarget
     , sweepMetrics :: DredgerMetricsPort
     -- ^ Where each version's disposition is counted.
     , sweepAudit :: SweepAudit
@@ -469,8 +473,16 @@ recordPrerequisites counters target = modifyIORef' (stPrerequisites counters) (t
 -- | Count one version's disposition, in the cycle tally and at the metrics port together.
 record :: SweepPorts -> SweepState -> SweepResult -> IO ()
 record ports counters result = do
-    dmpSweptVersion (sweepMetrics ports) result
-    modifyIORef' (stTally counters) (<> tallyOf result)
+    recordMetric ports result
+    recordTally counters result
+
+-- | Count a target operation separately from a deduplicated logical preview tally.
+recordMetric :: SweepPorts -> SweepResult -> IO ()
+recordMetric ports = dmpSweptVersion (sweepMetrics ports) (sweepTarget ports)
+
+-- | Update the cycle tally without recording a second target operation.
+recordTally :: SweepState -> SweepResult -> IO ()
+recordTally counters result = modifyIORef' (stTally counters) (<> tallyOf result)
 
 {- A previewed deletion counts under its own metric arm and in the cycle's deleted column, so
 one dry run reports the reach a real run would have. -}
@@ -481,3 +493,11 @@ tallyOf = \case
     SweepWouldDelete -> mempty{tallyDeleted = 1}
     SweepKept -> mempty{tallyKept = 1}
     SweepGuardSkipped -> mempty{tallyGuardSkipped = 1}
+
+-- | Keep per-target audit messages distinct when one cycle sweeps associated stores.
+labelAudit :: Text -> SweepAudit -> SweepAudit
+labelAudit target audit =
+    audit
+        { auditInfo = auditInfo audit . ((target <> ": ") <>)
+        , auditError = auditError audit . ((target <> ": ") <>)
+        }

@@ -29,6 +29,7 @@ module Ecluse.Core.Telemetry.Metrics (
     CacheResult (..),
     MirrorResult (..),
     SweepResult (..),
+    SweepTarget (..),
     CredentialResult (..),
     AdvisorySyncResult (..),
     advisorySyncResultName,
@@ -202,6 +203,7 @@ data LabelKey
     | KeyUpstream
     | KeyStatusClass
     | KeyResult
+    | KeyTarget
     | KeyProvider
     | KeyCause
     | KeyBreakerSource
@@ -221,6 +223,7 @@ labelKeyName = \case
     KeyUpstream -> "upstream"
     KeyStatusClass -> "status_class"
     KeyResult -> "result"
+    KeyTarget -> "target"
     KeyProvider -> "provider"
     KeyCause -> "cause"
     KeyBreakerSource -> "source"
@@ -316,9 +319,17 @@ data MirrorResult
 
 instance Universe MirrorResult where universe = universeGeneric
 
-{- | What the mirror sweep did with one version it examined. Every version counts once as
-'SweepExamined' and once more under its disposition, so deletions read as a fraction of what was seen.
--}
+-- | The bounded registry role of a sweep observation or operation.
+data SweepTarget
+    = -- | The source that receives mirrored packages.
+      SweepMirror
+    | -- | The associated cache used for private reads.
+      SweepPrivate
+    deriving stock (Eq, Generic, Ord, Show)
+
+instance Universe SweepTarget where universe = universeGeneric
+
+-- | The disposition of one observed version or logical preview selection.
 data SweepResult
     = -- | The sweep evaluated the version.
       SweepExamined
@@ -433,6 +444,7 @@ data Label
     | LCacheResult CacheResult
     | LMirrorResult MirrorResult
     | LSweepResult SweepResult
+    | LSweepTarget SweepTarget
     | LCredentialResult CredentialResult
     | LAdvisorySyncResult AdvisorySyncResult
     | LAdvisoryCompileResult AdvisoryCompileResult
@@ -458,6 +470,7 @@ labelKey = \case
     LCacheResult{} -> KeyResult
     LMirrorResult{} -> KeyResult
     LSweepResult{} -> KeyResult
+    LSweepTarget{} -> KeyTarget
     LCredentialResult{} -> KeyResult
     LAdvisorySyncResult{} -> KeyResult
     LAdvisoryCompileResult{} -> KeyResult
@@ -503,6 +516,9 @@ labelValue = \case
         Published -> "published"
         Failed -> "failed"
         Discarded -> "discarded"
+    LSweepTarget target -> case target of
+        SweepMirror -> "mirrorTarget"
+        SweepPrivate -> "privateUpstream"
     LSweepResult r -> case r of
         SweepExamined -> "examined"
         SweepDeleted -> "deleted"
@@ -542,10 +558,7 @@ labelValue = \case
         RelayOddShape -> "odd_shape"
         RelayNonSuccess -> "non_success"
 
-{- | Materialise a label list into the OpenTelemetry 'Attributes' an instrument records
-with. Every label value is bounded, so an instrument's attribute set stays a small fixed
-product of the label domains.
--}
+-- | Materialise bounded labels into the attributes recorded by an OpenTelemetry instrument.
 metricAttributes :: [Label] -> Attributes
 metricAttributes labels =
     addAttributesFromBuilder

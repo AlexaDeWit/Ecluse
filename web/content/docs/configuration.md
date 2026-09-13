@@ -161,7 +161,7 @@ The keys each tag admits depend on the endpoint, because the endpoints hold diff
 | Endpoint | `registry` | `codeArtifact` | `verdaccio` |
 | --- | --- | --- | --- |
 | `publicUpstream` | `url` | not admitted | not admitted |
-| `privateUpstream` | `url` | `url` | `url` |
+| `privateUpstream` | `url` | `url` | `url`, optional maintenance `token` and `permitDeletion` |
 | `mirrorTarget` | `url`, `token` | `url`, optional `tokenDuration` | `url`, `token`, optional `permitDeletion` |
 | `publicationTarget` | `url`, optional `token` | `url`, optional `token` | `url`, optional `token` |
 
@@ -170,10 +170,11 @@ remain anonymous. The mirror write uses Écluse's credential: `codeArtifact` min
 no `token`, while the two non-minting tags require one. Every publication tag admits a fallback
 token, forwarded only when the publishing client sends none.
 
-Dredger preview also mints a CodeArtifact credential for private-cache observations from that
+Dredger also mints a CodeArtifact credential for private-cache maintenance from that
 target's own host identity. It never borrows a caller or publication token. Matching mirror and
 private mint identities share one provider. This maintenance credential does not change proxy
-caller passthrough. See [Dredger preview](@/docs/dredger.md#preview).
+caller passthrough. Verdaccio uses the private target's own optional maintenance token and deletion consent.
+The deleting role requires both. Preview requires no deletion consent. See [Dredger](@/docs/dredger.md).
 
 `permitDeletion: true` is your consent for `ecluse dredger` to delete from a Verdaccio store, and
 it exists on no other tag. Without it the Dredger refuses that store, and every other role ignores

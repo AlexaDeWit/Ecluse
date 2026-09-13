@@ -259,7 +259,7 @@ sweepWithdrawal :: RuleDeps -> EvalContext -> Rule -> Bool -> Text -> IO Bool
 sweepWithdrawal deps ctx rule firstParty rawName = do
     let name = unscopedNpm rawName
         version = mkVersion Npm "1.0.0"
-        stored = [StoredVersion version VersionServed]
+        stored = [StoredVersion version VersionServed Nothing]
     store <-
         newFakeStore
             defaultFakeStoreConfig

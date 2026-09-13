@@ -104,6 +104,7 @@ labelKeySpec = describe "label keys (the cardinality guard)" $ do
                               , "upstream"
                               , "status_class"
                               , "result"
+                              , "target"
                               , "provider"
                               , "cause"
                               , "source"
@@ -192,6 +193,7 @@ allBoundedLabels =
         , LStatusClass <$> universe
         , LCacheResult <$> universe
         , LMirrorResult <$> universe
+        , LSweepTarget <$> universe
         , LCredentialResult <$> universe
         , LAdvisorySyncResult <$> universe
         , LAdvisoryCompileResult <$> universe

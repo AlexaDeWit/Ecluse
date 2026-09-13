@@ -11,6 +11,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
+import Ecluse.Core.Cve (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), PackageName, mkPackageName)
@@ -41,16 +42,17 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepTally (..),
     TargetPrerequisites (tpConsent),
     outcomeComplete,
+    previewStore,
     renderPrerequisites,
     renderStoreFault,
  )
 import Ecluse.Core.Registry.Sweep.Walk (bucketNameBudget)
-import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyByIdentity))
+import Ecluse.Core.Rules (PreparedRule (prepEval), prepare)
+import Ecluse.Core.Rules.Types (PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyByIdentity), RuleVerdict (Deny))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Package (sampleManifest)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPortsUnder, testPacing)
 
 spec :: Spec
@@ -87,7 +89,7 @@ spec = describe "grouped preview" $ do
         mount <- grouped mirror cache
         let duplicated store = store{obListPackagesIn = \_ -> yield [packageName, packageName] >> yield [packageName] $> Nothing}
             original = smStore mount
-        (_, outcome) <- runPreview mount{smStore = original{ssObserve = duplicated (ssObserve original), ssPrivate = duplicated <$> ssPrivate original}}
+        (_, outcome) <- runPreview mount{smStore = original{ssObserve = duplicated (ssObserve original), ssPrivate = mapObservation duplicated <$> ssPrivate original}}
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
         tallyExamined (outcomeTally outcome) `shouldBe` 2
 
@@ -104,7 +106,7 @@ spec = describe "grouped preview" $ do
         cache <- seeded "privateUpstream" [(packageName, ["1.0.0"])]
         mount <- grouped mirror cache
         let original = smStore mount
-        (_, outcome) <- runPreview mount{smFirstParty = const True, smStore = original{ssObserve = forbidMetadata (ssObserve original), ssPrivate = forbidMetadata <$> ssPrivate original}}
+        (_, outcome) <- runPreview mount{smFirstParty = const True, smStore = original{ssObserve = forbidMetadata (ssObserve original), ssPrivate = mapObservation forbidMetadata <$> ssPrivate original}}
         tallyDeleted (outcomeTally outcome) `shouldBe` 0
         tallyGuardSkipped (outcomeTally outcome) `shouldBe` 2
 
@@ -147,12 +149,29 @@ spec = describe "grouped preview" $ do
         lines' <- recInfo recorded
         length (filter (T.isInfixOf "reached the deletion cap") lines') `shouldBe` 1
 
+    for_ [False, True] $ \shared ->
+        it ("credits the first mirror selection at the cap, shared version: " <> show shared) $ do
+            mirror <- seeded "mirrorTarget" [(packageName, ["2.0.0"])]
+            cache <- seeded "privateUpstream" [(packageName, [if shared then "2.0.0" else "1.0.0"])]
+            mount <- grouped mirror cache
+            generation <- newIORef (DbEtag "initial")
+            let mark etag store = store{obReadManifest = \name -> writeIORef generation (DbEtag etag) >> obReadManifest store name}
+                original = smStore mount
+                policy = denyRule{prepEval = \_ _ -> (\etag -> Deny (Just etag) "location evidence") <$> readIORef generation}
+                located = original{ssObserve = mark "mirror-denial" (ssObserve original), ssPrivate = mapObservation (mark "cache-denial") <$> ssPrivate original}
+            recorded <- recordingPortsUnder previewingReport Nothing
+            outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount{smRules = [policy], smStore = located}]
+            tallyDeleted (outcomeTally outcome) `shouldBe` if shared then 1 else 2
+            capLines <- filter (T.isInfixOf "reached the deletion cap") <$> recInfo recorded
+            length capLines `shouldBe` 1
+            capLines `shouldSatisfy` all (T.isInfixOf "mirror-denial")
+
     it "fails an oversized combined version union before reading metadata" $ do
         mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
         cache <- seeded "privateUpstream" [(packageName, ["2.0.0"])]
         mount <- grouped mirror cache
         let original = smStore mount
-        (_, outcome) <- runPreview mount{smStore = original{ssVersionLimit = 1, ssObserve = forbidMetadata (ssObserve original), ssPrivate = forbidMetadata <$> ssPrivate original}}
+        (_, outcome) <- runPreview mount{smStore = original{ssVersionLimit = 1, ssObserve = forbidMetadata (ssObserve original), ssPrivate = mapObservation forbidMetadata <$> ssPrivate original}}
         outcomeHalt outcome `shouldBe` Just (HaltStoreFault Npm "mirrorTarget and privateUpstream (combined inventory)" (renderStoreFault (protocolFault "the combined inventory crossed limits.maxVersionCount")))
         outcomeComplete outcome `shouldBe` False
         tallyExamined (outcomeTally outcome) `shouldBe` 0
@@ -191,7 +210,7 @@ spec = describe "grouped preview" $ do
                     { smStore =
                         original
                             { ssObserve = (ssObserve original){obListPackagesIn = mirrorListing}
-                            , ssPrivate = Just ((fakeObservation cache){obListPackagesIn = cacheListing})
+                            , ssPrivate = Just (previewStore ((fakeObservation cache){obListPackagesIn = cacheListing}))
                             }
                     }
         readIORef pages `shouldReturn` 2
@@ -204,7 +223,7 @@ spec = describe "grouped preview" $ do
         mount <- grouped mirror cache
         let original = smStore mount
             unread = (fakeObservation cache){obListPackagesIn = \_ -> fail "a prior listing fault must stop the next source"}
-        (recorded, outcome) <- runPreview mount{smStore = original{ssObserve = (ssObserve original){obListPackagesIn = \_ -> pure (Just (protocolFault "mirror listing failed"))}, ssPrivate = Just unread}}
+        (recorded, outcome) <- runPreview mount{smStore = original{ssObserve = (ssObserve original){obListPackagesIn = \_ -> pure (Just (protocolFault "mirror listing failed"))}, ssPrivate = Just (previewStore unread)}}
         outcomeComplete outcome `shouldBe` False
         errors <- recErrors recorded
         outcomeHalt outcome `shouldBe` Just (HaltStoreFault Npm "mirrorTarget" (renderStoreFault (protocolFault "mirror listing failed")))
@@ -213,7 +232,7 @@ spec = describe "grouped preview" $ do
     it "accepts a full version union while deduplicating each target's observations" $ do
         mirror <- seeded "mirrorTarget" []
         cache <- seeded "privateUpstream" []
-        let version = StoredVersion (mkVersion Npm "1.0.0") VersionServed
+        let version = StoredVersion (mkVersion Npm "1.0.0") VersionServed Nothing
             locations = [(fakeObservation mirror, [version, version]), (fakeObservation cache, [version, version])]
         fmap (map (length . snd)) (boundedVersions 1 locations) `shouldBe` Right [1, 1]
         fmap (map (length . snd)) (boundedVersions 0 locations) `shouldSatisfy` isLeft
@@ -244,7 +263,7 @@ spec = describe "grouped preview" $ do
                     , smStore =
                         original
                             { ssObserve = partitioned "mirrorTarget" (ssObserve original)
-                            , ssPrivate = Just (partitioned "privateUpstream" (fakeObservation cache))
+                            , ssPrivate = Just (previewStore (partitioned "privateUpstream" (fakeObservation cache)))
                             }
                     }
         recorded <- recordingPortsUnder previewingReport Nothing
@@ -278,7 +297,7 @@ spec = describe "grouped preview" $ do
                     { smStore =
                         original
                             { ssObserve = recordVersions "mirrorTarget" (ssObserve original)
-                            , ssPrivate = Just (recordVersions "privateUpstream" private)
+                            , ssPrivate = Just (previewStore (recordVersions "privateUpstream" private))
                             }
                     }
         readIORef versionsRead `shouldReturn` ["mirrorTarget", "privateUpstream"]
@@ -293,7 +312,7 @@ spec = describe "grouped preview" $ do
         let fault = protocolFault "inventory unavailable"
             original = smStore mount
             private = (fakeObservation cache){obListPackagesIn = \_ -> yield [packageName] $> Just fault}
-        (_, outcome) <- runPreview mount{smStore = original{ssObserve = forbidMetadata (ssObserve original), ssPrivate = Just (forbidMetadata private)}}
+        (_, outcome) <- runPreview mount{smStore = original{ssObserve = forbidMetadata (ssObserve original), ssPrivate = Just (previewStore (forbidMetadata private))}}
         outcomeComplete outcome `shouldBe` False
         outcomeTally outcome `shouldBe` mempty
         outcomeHalt outcome `shouldBe` Just (HaltStoreFault Npm "privateUpstream" (renderStoreFault fault))
@@ -314,7 +333,7 @@ spec = describe "grouped preview" $ do
                         modifyIORef' attempts (+ 1)
                         if attempt == 0 then pure (Left fault) else obEnumerateVersions (fakeObservation cache) name
                     }
-        (recorded, outcome) <- runPreview mount{smStore = original{ssPrivate = Just private}}
+        (recorded, outcome) <- runPreview mount{smStore = original{ssPrivate = Just (previewStore private)}}
         outcomeComplete outcome `shouldBe` True
         readIORef attempts `shouldReturn` 2
         map renderPrerequisites (outcomePrerequisites outcome)
@@ -334,7 +353,7 @@ packageName :: PackageName
 packageName = mkPackageName Npm Nothing "left-pad"
 
 contents :: [(PackageName, [Text])] -> Map PackageName [StoredVersion]
-contents = Map.fromList . map (second (map (\raw -> StoredVersion (mkVersion Npm raw) VersionServed)))
+contents = Map.fromList . map (second (map (\raw -> StoredVersion (mkVersion Npm raw) VersionServed Nothing)))
 
 seeded :: Text -> [(PackageName, [Text])] -> IO FakeStore
 seeded label packages =
@@ -351,7 +370,7 @@ grouped mirror cache = do
     rules <- prepare inertRuleDeps (map atDefaultPrecedence configured)
     let mount = previewMount (fakeObservation mirror) rules configured
         store = smStore mount
-    pure mount{smStore = store{ssPrivate = Just (fakeObservation cache)}}
+    pure mount{smStore = store{ssPrivate = Just (previewStore (fakeObservation cache))}}
 
 runPreview :: SweepMount -> IO (RecordedSweep, CycleOutcome)
 runPreview mount = do
@@ -367,3 +386,6 @@ dateManifest manifest = manifest{manifestInfo = info{infoVersions = Map.map date
 
 forbidMetadata :: StoreObservation -> StoreObservation
 forbidMetadata store = store{obReadManifest = \_ -> fail "this preview must stop before reading metadata"}
+
+mapObservation :: (StoreObservation -> StoreObservation) -> SweepStore -> SweepStore
+mapObservation f store = store{ssObserve = f (ssObserve store)}

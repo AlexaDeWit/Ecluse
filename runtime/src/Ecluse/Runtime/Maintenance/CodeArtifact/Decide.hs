@@ -27,6 +27,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     -- * Requests
     listPackagesRequest,
     listVersionsRequest,
+    listVersionsResult,
     deleteRequest,
     describeRepositoryRequest,
     listTagsRequest,
@@ -186,6 +187,14 @@ listVersionsRequest store name token =
   where
     (namespace, package) = packageCoordinates name
 
+-- | A missing package has an empty local inventory. Other service faults retain their retry advice.
+listVersionsResult :: Either AWS.Error CA.ListPackageVersionsResponse -> Either StoreFault CA.ListPackageVersionsResponse
+listVersionsResult = \case
+    Left (AWS.ServiceError service)
+        | service ^. AWS.serviceError_code == AWS.newErrorCode "ResourceNotFoundException" ->
+            Right (CA.newListPackageVersionsResponse 200)
+    result -> first classifyStoreFault result
+
 {- | Delete one chunk of a package's versions. The caller has already split the batch to
 'deleteCeiling', because CodeArtifact refuses a larger one outright.
 -}
@@ -195,6 +204,7 @@ deleteRequest store name versions =
         & (CAL.deletePackageVersions_domainOwner ?~ casDomainOwner store)
         & (CAL.deletePackageVersions_namespace .~ namespace)
         & (CAL.deletePackageVersions_versions .~ map renderVersion versions)
+        & (CAL.deletePackageVersions_expectedStatus ?~ CA.PackageVersionStatus_Published)
   where
     (namespace, package) = packageCoordinates name
 

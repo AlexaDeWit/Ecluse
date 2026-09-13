@@ -2,30 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The metric-recording ports: the abstract interfaces the core serve path and
-mirror worker record through, decoupled from any telemetry backend.
-
-"Ecluse.Core.Telemetry.Metrics" defines /what/ the @ecluse.*@ catalogue is: the names
-and the closed set of bounded labels. This module defines the recording interfaces over
-that catalogue as records of @IO@ functions (the Handle pattern, as
-"Ecluse.Core.Registry" and "Ecluse.Core.Queue" use it). There is one field per signal a
-consumer emits, each taking only the bounded label values its metric carries. A consumer
-records through its port and never names an OpenTelemetry instrument. The application
-supplies the OTel-backed implementations behind them (see
-@Ecluse.Runtime.Telemetry.Instruments@), and a test supplies an inert or recording
-double.
-
-There are five ports. 'MetricsPort' serves the serve path: serve decisions, the rule
-gate, the data-plane upstream fetch, the metadata cache, and mirror enqueue.
-'WorkerMetricsPort' serves the mirror worker: jobs processed, publish latency.
-'DredgerMetricsPort' serves the mirror sweep: what each cycle did with the versions it
-examined. 'AdvisorySyncMetricsPort' serves the advisory sync task: attempts and their
-latency. 'AdvisoryCompileMetricsPort' serves the Pilot compile: the entries one pass
-accepted or dropped, and how the pass concluded. The credential signals stay in the
-application instrument set. Each port carries exactly the signals its consumer emits.
-
-The advisory database's age is not here. It reads from the slot at each collection
-(@Ecluse.Runtime.Telemetry.Instruments@), so no consumer has to push it.
+{- | Backend-neutral recording ports for the serve path, mirror worker, Dredger and advisory tasks.
+Each port accepts the bounded labels defined in "Ecluse.Core.Telemetry.Metrics".
+The application supplies telemetry implementations. Polled gauges remain outside these ports.
 -}
 module Ecluse.Core.Telemetry.Record (
     -- * The serve-path recording port
@@ -63,6 +42,7 @@ import Ecluse.Core.Telemetry.Metrics (
     RequestFaultCause,
     StatusClass,
     SweepResult,
+    SweepTarget,
     Tier,
     Upstream,
  )
@@ -161,7 +141,7 @@ data WorkerMetricsPort = WorkerMetricsPort
 package and version a disposition concerns ride the sweep's own audit line, never a label.
 -}
 newtype DredgerMetricsPort = DredgerMetricsPort
-    { dmpSweptVersion :: SweepResult -> IO ()
+    { dmpSweptVersion :: SweepTarget -> SweepResult -> IO ()
     {- ^ Record one disposition of one examined version (@ecluse.dredger.versions@). A version
     counts once as examined and once more under what the sweep did with it.
     -}

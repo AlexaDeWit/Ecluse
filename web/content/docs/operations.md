@@ -338,14 +338,11 @@ version and stores before acting.
 1. Add the identity denial to the intended policy and roll it to the proxy, mirror worker, and
    Dredger. Verify that it wins over any deliberate allow. Older workers and in-flight transfers
    can still publish during the rollout.
-2. Remove the mirrored version from the mirror repository. Current
-   [Dredger](@/docs/dredger.md) can do this for eligible named denials, subject to its guards.
-3. Identify and remove retained mirror-derived copies from private read repositories. CodeArtifact
-   retains them independently of the mirror, so deleting the mirror alone is insufficient.
-   Use `DeletePackageVersions`, not disposal, for the reviewed CodeArtifact copies. Automated
-   B+C deletion remains planned in [#1227](https://github.com/AlexaDeWit/Ecluse/issues/1227).
-   `ecluse dredger --once --dry-run` previews both configured inventories and their rule decisions.
-   It does not remove private-cache copies.
+2. Run [Dredger](@/docs/dredger.md) with independent consent for the mirror and private cache.
+   It removes eligible mirror versions before their eligible cache copies under the shared policy.
+3. Inspect per-target results. A source success does not prove cache completion. A restart or
+   later cycle rediscovers residual cache copies. Use `DeletePackageVersions` for CodeArtifact
+   cleanup, never disposal. `--dry-run` previews both inventories without deleting anything.
 4. Verify both store inventories and authorised metadata/artifact reads after earlier writes
    settle. Do not treat a permission error as proof of absence. Use fresh client state so an
    already-cached artifact does not stand in for a registry read.
@@ -366,8 +363,7 @@ Use the same intended configuration across roles. When tightening policy, update
 writer roles before Dredger. When relaxing a deny, update Dredger before writers can rely on the
 new permission. These are ordering recommendations, not an atomic cutover requirement.
 
-Dredger reconciles eligible late copies through later sweeps. The current mirror-only sweep
-does not clean retained private copies automatically. If an old Dredger deletes the only bytes
+Dredger reconciles eligible late copies in both configured stores through later sweeps. If an old Dredger deletes the only bytes
 during a rollout, later policy agreement cannot restore them. The
 [threat model](@/docs/threat-model.md) records that accepted residual.
 

@@ -6,47 +6,53 @@
 module Ecluse.Core.Registry.Sweep.Package (
     sweepPackage,
     previewPackageGroup,
+    sweepPackageGroup,
 ) where
 
+import Data.Containers.ListUtils (nubOrdOn)
 import Data.List (partition)
-import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
+    DeleteGuard (..),
     StoreDeletion (dlDeleteVersions),
     StoreFacts (factBackend),
     StoreFault,
     StoreObservation (obFacts, obReadManifest),
     StoredVersion (storedPresence, storedVersion),
-    VersionOutcome (VersionRefused, VersionRemoved, VersionRemoving, VersionUnreached),
+    VersionOutcome (VersionRefused, VersionRemoved, VersionRemoving, VersionUncertain, VersionUnreached),
     VersionPresence (VersionServed),
     refusalCode,
     refusalDetail,
  )
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
+import Ecluse.Core.Registry.Sweep.Deletion (Selection (Selection), deleteGroup)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltDeletionCap),
     SweepAudit (auditError, auditInfo),
     SweepExecution (SweepCounts, SweepRemoves),
-    SweepMount (smConfigured, smFirstParty, smRuleDeps, smRules, smStore),
+    SweepMount (smConfigured, smEcosystem, smFirstParty, smRuleDeps, smRules, smStore),
     SweepPacing (swpDeletionCap),
-    SweepPorts (sweepAudit, sweepReport),
+    SweepPorts (sweepAdvisoryEtag, sweepAudit, sweepNow, sweepReport, sweepTarget),
     SweepReport (reportCapHalts, reportOpening, reportRemoval),
     SweepState (stIssued),
     SweepStore (ssExecute, ssObserve),
+    labelAudit,
     previewStore,
     record,
     recordGap,
+    recordMetric,
+    recordTally,
     renderGeneration,
     renderStoreFault,
     unreadManifest,
  )
 import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), evalRules, renderIneligible)
-import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvidence, completeEvidence, identityEvidence, readsAdvisories, ruleName)
+import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvidence, completeEvidence, identityEvidence, mkEvalContext, readsAdvisories, ruleName)
 import Ecluse.Core.Server.Metadata (selectVersion)
-import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept))
+import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept), SweepTarget (..))
 import Ecluse.Core.Version (Version, renderVersion)
 
 {- | Decide one package's stored versions and hand the condemned ones over, yielding the halt the
@@ -65,8 +71,12 @@ sweepPackage pacing ports counters mount ctx name stored =
     selectPackage ports counters mount ctx name stored >>= deleteSelected pacing ports counters mount name
 
 selectPackage :: SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [StoredVersion] -> IO [Condemned]
-selectPackage ports counters mount ctx name stored
-    | smFirstParty mount name = [] <$ traverse_ (const (record ports counters SweepGuardSkipped)) served
+selectPackage = selectPackageWith True
+
+selectPackageWith :: Bool -> SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [StoredVersion] -> IO [Condemned]
+selectPackageWith counting ports counters mount ctx name stored
+    | smFirstParty mount name = [] <$ when counting (traverse_ (const (record ports counters SweepGuardSkipped)) served)
+    | null served = pure []
     | otherwise =
         obReadManifest (ssObserve (smStore mount)) name >>= \case
             Left fault -> do
@@ -76,18 +86,19 @@ selectPackage ports counters mount ctx name stored
             Right manifest -> decideAll (evidenceIn name manifest)
   where
     served = [storedVersion s | s <- stored, storedPresence s == VersionServed]
-    decideAll evidence = catMaybes <$> traverse (decideVersion ports counters mount ctx evidence) served
+    decideAll evidence = catMaybes <$> traverse (decideVersion counting ports counters mount ctx evidence) served
 
 -- | Evaluate each copy with its own evidence and count each selected version once for the mount.
 previewPackageGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [(StoreObservation, [StoredVersion])] -> IO (Maybe CycleHalt)
 previewPackageGroup pacing ports counters mount ctx name locations = do
     selections <- forM locations $ \(store, versions) -> do
         let locatedMount = mount{smStore = previewStore store}
-            locatedPorts = ports{sweepAudit = labelAudit (factBackend (obFacts store)) (sweepAudit ports)}
+            locatedPorts = ports{sweepAudit = labelAudit (factBackend (obFacts store)) (sweepAudit ports), sweepTarget = targetOf mount store}
         selected <-
             selectPackage locatedPorts counters locatedMount ctx name versions
                 >>= stillEligible locatedPorts counters locatedMount name
         traverse_ (announce locatedPorts name) selected
+        traverse_ (const (recordMetric locatedPorts (reportRemoval (sweepReport ports)))) selected
         let selectedKeys = Set.fromList (map (renderVersion . cdVersion) selected)
             kept =
                 [ storedVersion version
@@ -103,22 +114,32 @@ previewPackageGroup pacing ports counters mount ctx name locations = do
             )
             kept
         pure selected
-    let logical = Map.elems (Map.fromList [(renderVersion (cdVersion selected), selected) | selected <- concat selections])
+    let logical = nubOrdOn (renderVersion . cdVersion) (concat selections)
     issued <- readIORef (stIssued counters)
     let reached = issued + length logical
         cap = swpDeletionCap pacing
         etag = cdAdvisoryEtag =<< listToMaybe (drop (cap - issued - 1) logical)
     writeIORef (stIssued counters) reached
     when (issued < cap && reached >= cap) (announceCap ports cap reached etag)
-    traverse_ (const (record ports counters (reportRemoval (sweepReport ports)))) logical
+    traverse_ (const (recordTally counters (reportRemoval (sweepReport ports)))) logical
     pure Nothing
 
-labelAudit :: Text -> SweepAudit -> SweepAudit
-labelAudit target audit =
-    audit
-        { auditInfo = auditInfo audit . ((target <> ": ") <>)
-        , auditError = auditError audit . ((target <> ": ") <>)
-        }
+-- | The grouped executor reuses the complete evaluator with fresh context for every backend batch.
+sweepPackageGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> PackageName -> [(SweepStore, [StoredVersion])] -> IO (Maybe CycleHalt)
+sweepPackageGroup pacing ports counters mount name =
+    deleteGroup pacing ports counters mount name select (\located -> recordOutcome located counters name)
+  where
+    select counting located stored = do
+        ctx <- mkEvalContext (sweepNow ports) (sweepAdvisoryEtag ports (smEcosystem mount))
+        let store = ssObserve (smStore located)
+            targetPorts = ports{sweepTarget = targetOf mount store, sweepAudit = labelAudit (factBackend (obFacts store)) (sweepAudit ports)}
+        selected <- selectPackageWith counting targetPorts counters located ctx name stored >>= stillEligible targetPorts counters located name
+        pure [Selection (cdVersion item) (condemnationMessage ports name item) (cdAdvisoryEtag item) | item <- selected]
+
+targetOf :: SweepMount -> StoreObservation -> SweepTarget
+targetOf mount store
+    | factBackend (obFacts store) == factBackend (obFacts (ssObserve (smStore mount))) = SweepMirror
+    | otherwise = SweepPrivate
 
 {- The store served no metadata, so each version is decided on the identity the listing carries. The
 shared fetch discards the response status, so a package the store no longer serves arrives here too. -}
@@ -152,6 +173,7 @@ data Condemned = Condemned
 {- Decide one version from whatever evidence it has and count it. Only a named decisive deny
 condemns, so this runs 'evalRules' rather than the wrapper that folds in deny-by-default. -}
 decideVersion ::
+    Bool ->
     SweepPorts ->
     SweepState ->
     SweepMount ->
@@ -159,11 +181,11 @@ decideVersion ::
     (Version -> RuleEvidence) ->
     Version ->
     IO (Maybe Condemned)
-decideVersion ports counters mount ctx evidence version = do
-    record ports counters SweepExamined
+decideVersion counting ports counters mount ctx evidence version = do
+    when counting (record ports counters SweepExamined)
     evalRules ctx (smRules mount) (evidence version) >>= \case
         Blocked rule etag reason -> pure (Just Condemned{cdVersion = version, cdRule = rule, cdAdvisoryEtag = etag, cdReason = reason})
-        _ -> record ports counters SweepKept $> Nothing
+        _ -> when counting (record ports counters SweepKept) $> Nothing
 
 {- Hand the condemned versions over, up to what the cycle's cap still allows. The cap counts
 what was handed over rather than what came back, because the cap bounds destructive calls. -}
@@ -251,23 +273,25 @@ announceCap ports cap reached etag =
 {- Every deletion's audit line: the package, the version, the rule that denied it, and the
 advisory generation pinned when it was decided. -}
 announce :: SweepPorts -> PackageName -> Condemned -> IO ()
-announce ports name condemned =
-    auditInfo (sweepAudit ports) $
-        reportOpening (sweepReport ports)
-            <> renderPackageName name
-            <> "@"
-            <> renderVersion (cdVersion condemned)
-            <> ": blocked by "
-            <> cdRule condemned
-            <> " ("
-            <> cdReason condemned
-            <> "); advisory generation "
-            <> renderGeneration (cdAdvisoryEtag condemned)
+announce ports name condemned = auditInfo (sweepAudit ports) (condemnationMessage ports name condemned)
+
+condemnationMessage :: SweepPorts -> PackageName -> Condemned -> Text
+condemnationMessage ports name condemned =
+    reportOpening (sweepReport ports)
+        <> renderPackageName name
+        <> "@"
+        <> renderVersion (cdVersion condemned)
+        <> ": blocked by "
+        <> cdRule condemned
+        <> " ("
+        <> cdReason condemned
+        <> "); advisory generation "
+        <> renderGeneration (cdAdvisoryEtag condemned)
 
 -- The backend owns chunk limits and stops later requests after a fault.
 sendDeletes :: SweepStore -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
 sendDeletes store name versions = case ssExecute store of
-    SweepRemoves deletion -> dlDeleteVersions deletion name versions
+    SweepRemoves deletion -> dlDeleteVersions deletion (DeleteGuard (const (pure . Right)) (const (pure False))) name versions
     -- The audit line above has already put the reach on record, so the count reads from it.
     SweepCounts -> pure [(version, VersionRemoved) | version <- versions]
 
@@ -285,6 +309,9 @@ recordOutcome ports counters name (version, outcome) = case outcome of
         auditError
             (sweepAudit ports)
             (subject <> ": the backend refused the delete, " <> refusalCode refusal <> ": " <> refusalDetail refusal)
+        record ports counters SweepKept
+    VersionUncertain fault -> do
+        auditError (sweepAudit ports) (subject <> ": deletion outcome is uncertain: " <> renderStoreFault fault)
         record ports counters SweepKept
     VersionUnreached fault -> do
         auditError (sweepAudit ports) (subject <> ": the delete did not reach the backend: " <> renderStoreFault fault)
