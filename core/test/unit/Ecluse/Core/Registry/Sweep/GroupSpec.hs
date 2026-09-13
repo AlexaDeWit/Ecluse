@@ -11,6 +11,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
+import Ecluse.Core.Cve (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), PackageName, mkPackageName)
@@ -46,12 +47,12 @@ import Ecluse.Core.Registry.Sweep.Types (
     renderStoreFault,
  )
 import Ecluse.Core.Registry.Sweep.Walk (bucketNameBudget)
-import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyByIdentity))
+import Ecluse.Core.Rules (PreparedRule (prepEval), prepare)
+import Ecluse.Core.Rules.Types (PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyByIdentity), RuleVerdict (Deny))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Package (sampleManifest)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
+import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPortsUnder, testPacing)
 
 spec :: Spec
@@ -147,6 +148,23 @@ spec = describe "grouped preview" $ do
         outcomeHalt outcome `shouldBe` Nothing
         lines' <- recInfo recorded
         length (filter (T.isInfixOf "reached the deletion cap") lines') `shouldBe` 1
+
+    for_ [False, True] $ \shared ->
+        it ("credits the first mirror selection at the cap, shared version: " <> show shared) $ do
+            mirror <- seeded "mirrorTarget" [(packageName, ["2.0.0"])]
+            cache <- seeded "privateUpstream" [(packageName, [if shared then "2.0.0" else "1.0.0"])]
+            mount <- grouped mirror cache
+            generation <- newIORef (DbEtag "initial")
+            let mark etag store = store{obReadManifest = \name -> writeIORef generation (DbEtag etag) >> obReadManifest store name}
+                original = smStore mount
+                policy = denyRule{prepEval = \_ _ -> (\etag -> Deny (Just etag) "location evidence") <$> readIORef generation}
+                located = original{ssObserve = mark "mirror-denial" (ssObserve original), ssPrivate = mapObservation (mark "cache-denial") <$> ssPrivate original}
+            recorded <- recordingPortsUnder previewingReport Nothing
+            outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount{smRules = [policy], smStore = located}]
+            tallyDeleted (outcomeTally outcome) `shouldBe` if shared then 1 else 2
+            capLines <- filter (T.isInfixOf "reached the deletion cap") <$> recInfo recorded
+            length capLines `shouldBe` 1
+            capLines `shouldSatisfy` all (T.isInfixOf "mirror-denial")
 
     it "fails an oversized combined version union before reading metadata" $ do
         mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]

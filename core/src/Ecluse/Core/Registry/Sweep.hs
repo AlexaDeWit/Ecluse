@@ -12,6 +12,7 @@ module Ecluse.Core.Registry.Sweep (
 ) where
 
 import Data.Conduit (ConduitT, await, fuseBothMaybe, runConduit)
+import Data.List (lookup)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))

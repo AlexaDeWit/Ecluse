@@ -61,7 +61,15 @@ deleteLocation run report (store, initial) = case ssExecute store of
         offered <- withinAllowance run store (map selVersion selected)
         outcomes <- dlDeleteVersions deletion checks (runName run) offered
         traverse_ (report (labelled run store)) outcomes
-        confirm run store (map fst outcomes)
+        confirm run store (mapMaybe confirmationVersion outcomes)
+
+confirmationVersion :: (Version, VersionOutcome) -> Maybe Version
+confirmationVersion (version, outcome) = case outcome of
+    VersionRemoved -> Just version
+    VersionUncertain _ -> Just version
+    VersionRemoving _ -> Nothing
+    VersionRefused _ -> Nothing
+    VersionUnreached _ -> Nothing
 
 withinAllowance :: DeletionRun -> SweepStore -> [Version] -> IO [Version]
 withinAllowance run store selected = do
