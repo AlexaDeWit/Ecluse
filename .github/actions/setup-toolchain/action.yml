@@ -106,6 +106,21 @@ runs:
           download-attempts = 5
           auto-optimise-store = false
 
+    # cache-nix-action checkpoints the Nix database with no busy timeout. A daemon
+    # that still holds the lock after install fails it with "database is locked (5)".
+    - name: Wait for the Nix database lock
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        for _ in $(seq 30); do
+          busy="$(sudo sqlite3 -cmd '.timeout 1000' /nix/var/nix/db/db.sqlite \
+            'PRAGMA wal_checkpoint(TRUNCATE);' 2>/dev/null | cut -d'|' -f1)" || true
+          [ "$busy" = "0" ] && exit 0
+          sleep 1
+        done
+        echo "setup-toolchain: the Nix database stayed locked for 60 s" >&2
+        exit 1
+
     # Keyed on the flake. Two conditions gate the save, main and the save-nix-store
     # input, so exactly one job writes each prefix and no two race for one entry.
     - name: Cache Nix store
