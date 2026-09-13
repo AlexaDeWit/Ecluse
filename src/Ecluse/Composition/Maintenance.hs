@@ -43,7 +43,7 @@ import Ecluse.Composition.Vet (Severity (Ignore, Refuse), Vet, rule, withRole)
 import Ecluse.Config (
     ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
     DeletionConsent (DeletionPermitted, DeletionWithheld),
-    MirrorTarget (MirrorTarget, mtBackend, mtUrl),
+    MirrorTarget (mtBackend, mtUrl),
     Mount (mountRegistries),
     MountConfig (mntPrivateUpstream),
     MountMap,
