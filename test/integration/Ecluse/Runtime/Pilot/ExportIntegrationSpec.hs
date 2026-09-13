@@ -30,7 +30,7 @@ import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
 import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncOutcome (..), newS3CveSource, s3CveFetchFor, syncStep)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
-import Ecluse.Test.Osv (mkMinimalValidDb)
+import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
 import Katip (Environment (..), initLogEnv, runKatipContextT)
 import Lens.Micro ((^.))
@@ -88,7 +88,7 @@ spec = do
 
                     let dbPath = tmpDir <> "/unchanged.sqlite"
                         objectKey = advisoryObjectKey store (takeFileName dbPath)
-                    mkMinimalValidDb dbPath "pkg-a"
+                    mkMinimalValidDbWithMeta dbPath "pkg-a" [("source_url", "pkg-a"), ("epss_status", "available")]
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
                     let export = runKatipContextT logEnv () mempty (runResourceT $ exportToS3 Nothing (Just endpoint) bucket objectKey dbPath)
                         storedObject = runResourceT $ AWS.send base (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey objectKey))
