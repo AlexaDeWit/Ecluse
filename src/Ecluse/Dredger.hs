@@ -2,10 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The Dredger role's front door: the supervised mirror sweep, the advisory-sync tasks its
-rules read, and the health probes an orchestrator judges the pod by. Every decision the sweep
-acts on lives in "Ecluse.Core.Registry.Sweep", so what is left here is the effect behind each
-of its ports, the latch a halted cycle sets, and the invocation the command line carried.
+{- | Run the supervised Dredger cycle, advisory synchronisation, and health probes.
+"Ecluse.Core.Registry.Sweep" owns the selection and execution decisions.
 -}
 module Ecluse.Dredger (
     runDredger,
@@ -98,6 +96,8 @@ runDredger bootEnv opts pruner = do
     registerAdvisoryAges metrics (pwCveSync pruner)
     status <- newSweepStatus
     moduleLog logEnv dredgerModule InfoS capLine
+    when (doMode opts == SweepDeletes) $
+        moduleLog logEnv dredgerModule InfoS "this command deletes only mirrorTarget versions. privateUpstream inventory is available through --dry-run"
     traverse_ (logBlastRadius logEnv opts pacing) mounts
     moduleLog logEnv dredgerModule InfoS ("Dredger starting up, health probes on port " <> show (scPort (cfg status)))
     raceServerAgainstLoop

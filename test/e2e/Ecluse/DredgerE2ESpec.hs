@@ -61,16 +61,27 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         finalStore `shouldBe` Map.delete (psName dredgerPkg) initial
         verdaccioNamesUnder e2e "" `shouldReturn` Map.keys finalStore
 
-    it "reports a preview as partial without an advisory generation, and preserves the store snapshot" $ \(plane, e2e) -> do
-        initial <- verdaccioSnapshot e2e
-        run <- runDredgerOnce plane ["--once", "--dry-run"] (sweepEnv dredgerDryRunPkg)
-        -- The shipped rule set reads advisories and no generation is loaded here, so the preview
-        -- counted from part of the store. Its status says so, and its counts still report the reach.
-        roleExit run `shouldSatisfy` (/= ExitSuccess)
-        assertSweepLines "dry run, would delete " dredgerDryRunPkg initial run
-        roleOutput run `shouldSatisfy` T.isInfixOf "previewing only: this run holds nothing that could delete"
-        roleOutput run `shouldSatisfy` T.isInfixOf "This preview deleted nothing, so it proves no authority to delete"
-        verdaccioSnapshot e2e `shouldReturn` initial
+    it "previews distinct real inventories without writes and preserves first-party versions" $ \(plane, e2e) ->
+        withDredgerPrivateCache plane e2e $ \cache -> do
+            for_ [psVersion dredgerDryRunPkg, "2.0.0"] $ \version ->
+                void $ withPublishProject cache (psName dredgerDryRunPkg) version npmPublishIn >>= shouldSucceed
+            void $ withPublishProject cache publishDredgerName publishVersion npmPublishIn >>= shouldSucceed
+            awaitListed cache [psName dredgerDryRunPkg, publishDredgerName]
+            initial <- verdaccioSnapshot e2e
+            privateInitial <- verdaccioSnapshot cache
+            run <- runDredgerOnce plane ["--once", "--dry-run"] (sweepEnv dredgerDryRunPkg)
+            roleExit run `shouldSatisfy` (/= ExitSuccess)
+            let output = roleOutput run
+            output `shouldSatisfy` T.isInfixOf "mirrorTarget https://mirror/"
+            output `shouldSatisfy` T.isInfixOf "privateUpstream https://private-cache/"
+            output `shouldSatisfy` T.isInfixOf ("dry run, would delete " <> psName dredgerDryRunPkg <> "@2.0.0")
+            output `shouldSatisfy` T.isInfixOf "deleted 2"
+            output `shouldSatisfy` T.isInfixOf "counted from partial evidence"
+            output `shouldSatisfy` T.isInfixOf "previewing only: this run holds nothing that could delete"
+            output `shouldSatisfy` T.isInfixOf "This preview deleted nothing, so it proves no authority to delete"
+            output `shouldSatisfy` (not . T.isInfixOf ("would delete " <> publishDredgerName))
+            verdaccioSnapshot e2e `shouldReturn` initial
+            verdaccioSnapshot cache `shouldReturn` privateInitial
 
     it "refuses missing consent, names the key, and leaves every version intact" $ \(plane, e2e) -> do
         initial <- verdaccioSnapshot e2e

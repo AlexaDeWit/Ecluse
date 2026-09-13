@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE DeriveFunctor #-}
 
 {- | Walking a store's whole name space, bucket by bucket, and remembering where the walk got to.
 
@@ -17,10 +18,14 @@ module Ecluse.Core.Registry.Sweep.Walk (
     resumeAfter,
     BucketNames (..),
     collectBucket,
+    collectBucketWith,
+    insertInventory,
 ) where
 
-import Data.Conduit (ConduitT, await, fuseBothMaybe, runConduit)
+import Control.Monad (foldM)
+import Data.Conduit (ConduitT, await, fuseBothMaybe, fuseUpstream, runConduit)
 import Data.Conduit.List qualified as CL
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Ecluse.Core.Package (PackageName)
@@ -33,9 +38,7 @@ import Ecluse.Core.Registry.Maintenance (
     renderNamePrefix,
  )
 
-{- | How many names one bucket may hold before it is split. A held name costs about 96 bytes, so
-this is roughly a megabyte.
--}
+-- | Maximum distinct package names held in one bucket across its target inventories.
 bucketNameBudget :: Int
 bucketNameBudget = 10000
 
@@ -66,15 +69,16 @@ properlyCovers bucket done = raw /= renderNamePrefix done && raw `T.isPrefixOf` 
     raw = renderNamePrefix bucket
 
 -- | What reading one bucket's listing produced.
-data BucketNames
+data BucketNames a
     = -- | The bucket was read whole, its names sorted.
-      BucketRead [PackageName]
+      BucketRead [a]
     | -- | The bucket outgrew the budget, so these narrower ones cover it instead.
       BucketOverflowed (NonEmpty NamePrefix)
     | -- | The bucket outgrew the budget and nothing narrows it further.
       BucketUnsplittable
     | -- | The listing stopped on a fault, and nothing was read.
       BucketFaulted StoreFault
+    deriving stock (Functor)
 
 {- | Read one bucket's names, sorted, or report that it must be split. The stream is abandoned as
 soon as the budget is crossed, so an oversized bucket costs a partial listing and never the whole.
@@ -83,25 +87,29 @@ collectBucket ::
     NameAlphabet ->
     NamePrefix ->
     ConduitT () [PackageName] IO (Maybe StoreFault) ->
-    IO BucketNames
-collectBucket alphabet prefix source = case narrowerBuckets alphabet prefix of
-    -- A store whose listing carries no filter to partition by, and a bucket already at the depth
-    -- bound, both have no split to fall back on, so neither takes the budget.
-    Nothing -> unbudgeted <$> runConduit (fuseBothMaybe source CL.consume)
-    Just narrower -> outcome narrower <$> runConduit (fuseBothMaybe source takeToBudget)
+    IO (BucketNames PackageName)
+collectBucket alphabet prefix source =
+    fmap fst <$> collectBucketWith alphabet prefix const (fuseUpstream source (CL.map (map (,()))))
+
+-- | Merge package inventory pages under one distinct-name bound, preserving caller-supplied location evidence.
+collectBucketWith ::
+    NameAlphabet ->
+    NamePrefix ->
+    (a -> a -> a) ->
+    ConduitT () [(PackageName, a)] IO (Maybe StoreFault) ->
+    IO (BucketNames (PackageName, a))
+collectBucketWith alphabet prefix merge source = outcome <$> runConduit (fuseBothMaybe source (takeToBudget merge))
   where
-    unbudgeted = \case
+    outcome = \case
+        (_, Nothing) -> maybe BucketUnsplittable BucketOverflowed (nonEmpty =<< narrowerBuckets alphabet prefix)
         (Just (Just fault), _) -> BucketFaulted fault
-        (_, pages) -> BucketRead (sort (concat pages))
+        (_, Just names) -> BucketRead names
 
-    -- The budget is read first: it is the arm that abandons the stream, so the listing has no
-    -- result of its own to report when it fires.
-    outcome narrower = \case
-        (_, Nothing) -> overflowed narrower
-        (Just (Just fault), _) -> BucketFaulted fault
-        (_, Just names) -> BucketRead (sort names)
-
-    overflowed = maybe BucketUnsplittable BucketOverflowed . nonEmpty
+-- | Refuse a new inventory identity before insertion would cross the bound. Existing identities merge in place.
+insertInventory :: (Ord key) => Int -> (value -> value -> value) -> Map key value -> (key, value) -> Maybe (Map key value)
+insertInventory limit merge held (key, value)
+    | Map.notMember key held && Map.size held >= max 0 limit = Nothing
+    | otherwise = Just (Map.insertWith merge key value held)
 
 {- The buckets covering this one, or nothing where none can. An alphabet with no characters can
 narrow nothing, and past the depth bound a further character has stopped dividing the names. -}
@@ -115,12 +123,10 @@ narrowerBuckets alphabet prefix
 
 {- Fold the pages until the bucket is read or the budget is crossed. 'Nothing' means the budget
 went first, which abandons the stream where it stands. -}
-takeToBudget :: ConduitT [PackageName] o IO (Maybe [PackageName])
-takeToBudget = go 0 []
+takeToBudget :: (a -> a -> a) -> ConduitT [(PackageName, a)] o IO (Maybe [(PackageName, a)])
+takeToBudget merge = go Map.empty
   where
-    go held pages =
+    go held =
         await >>= \case
-            Nothing -> pure (Just (concat (reverse pages)))
-            Just page
-                | held + length page > bucketNameBudget -> pure Nothing
-                | otherwise -> go (held + length page) (page : pages)
+            Nothing -> pure (Just (Map.toAscList held))
+            Just page -> maybe (pure Nothing) go (foldM (insertInventory bucketNameBudget merge) held page)

@@ -334,7 +334,9 @@ version and stores before acting.
 3. Identify and remove retained mirror-derived copies from private read repositories. CodeArtifact
    retains them independently of the mirror, so deleting the mirror alone is insufficient.
    Use `DeletePackageVersions`, not disposal, for the reviewed CodeArtifact copies. Automated
-   B+C cleanup is planned in [#1227](https://github.com/AlexaDeWit/Ecluse/issues/1227).
+   B+C deletion remains planned in [#1227](https://github.com/AlexaDeWit/Ecluse/issues/1227).
+   `ecluse dredger --once --dry-run` previews both configured inventories and their rule decisions.
+   It does not remove private-cache copies.
 4. Verify both store inventories and authorised metadata/artifact reads after earlier writes
    settle. Do not treat a permission error as proof of absence. Use fresh client state so an
    already-cached artifact does not stand in for a registry read.

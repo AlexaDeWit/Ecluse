@@ -23,6 +23,7 @@ module Ecluse.Config.Target (
 
     -- * Resolution
     resolveStoreBackend,
+    resolvePrivateBackend,
     vetTargetTag,
     parseCodeArtifactHost,
     isAccountId,
@@ -67,6 +68,13 @@ resolveStoreBackend eco endpoint = case meWrite endpoint of
         (domain, owner, region) <- codeArtifactHost eco "mirrorTarget" (meUrl endpoint)
         store <- codeArtifactStore eco (registryUrlText (meUrl endpoint)) domain owner region
         Right (BackendCodeArtifact (mintIdentity domain owner region mDuration) store)
+
+-- | Resolve a private target already classified as CodeArtifact, using the default token lifetime.
+resolvePrivateBackend :: Ecosystem -> Target -> Either ConfigError StoreBackend
+resolvePrivateBackend eco target = do
+    (domain, owner, region) <- codeArtifactHost eco "privateUpstream" (tgtUrl target)
+    store <- codeArtifactStore eco (registryUrlText (tgtUrl target)) domain owner region
+    pure (BackendCodeArtifact (mintIdentity domain owner region Nothing) store)
 
 {- | Vet a read or publish endpoint's URL against its declared tag. Only @codeArtifact@ constrains
 the host, and only a mirror target constrains the path, so this is total over the other tags.

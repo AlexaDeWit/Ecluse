@@ -7,7 +7,7 @@ The composition root builds only from 'ValidatedPlan'. Unvetted settings remain 
 -}
 module Ecluse.Composition.Validate (
     -- * The validate phase
-    ValidatedPlan (vpMounts, vpPublications, vpMirrorStores, vpSettings),
+    ValidatedPlan (vpMounts, vpPublications, vpMirrorStores, vpPreviewCaches, vpSettings),
     vetBoot,
 
     -- * What it clears
@@ -33,7 +33,7 @@ import Ecluse.Composition.Endpoints (
     VettedEndpoints (vePublicationTargets),
     vetEndpoints,
  )
-import Ecluse.Composition.Maintenance (ClearedBackend, vetStoreBackends)
+import Ecluse.Composition.Maintenance (ClearedBackend, vetPreviewCaches, vetStoreBackends)
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (Severity (Ignore, Refuse), Vet, rule)
 import Ecluse.Config (
@@ -45,6 +45,7 @@ import Ecluse.Config (
     MountConfig (mntFirstParty, mntPrivateUpstream, mntPublicationTarget),
     PublicationEndpoint (peTarget, peToken),
     ServerSettings (srvAuthToken),
+    StoreBackend,
     StoreTag,
     Target (tgtTag),
     mountRegistries,
@@ -67,6 +68,8 @@ data ValidatedPlan = ValidatedPlan
     {- ^ The backend for each store a sweep may delete from. Only @ecluse dredger@'s pass
     clears one.
     -}
+    , vpPreviewCaches :: Map Ecosystem (Maybe StoreBackend, ClearedBackend)
+    -- ^ Private caches cleared for observation only.
     , vpSettings :: AppConfig
     {- ^ The settings no rule vets. The mounts it still carries are the raw declarations, and
     'vpMounts' holds the vetted ones the runtime reads.
@@ -98,15 +101,17 @@ vetBoot config =
         <*> vetPublishPolicy app
         <*> vetEndpoints (cfgMounts app)
         <*> vetStoreBackends adapterFor (configMounts config)
+        <*> vetPreviewCaches adapterFor (cfgMounts app) (configMounts config)
         <* vetSweepPacing app
   where
     app = configApp config
 
-    assemble mounts policies endpoints backends =
+    assemble mounts policies endpoints backends caches =
         ValidatedPlan
             { vpMounts = mounts
             , vpPublications = Map.intersectionWith cleared (vePublicationTargets endpoints) policies
             , vpMirrorStores = backends
+            , vpPreviewCaches = caches
             , vpSettings = app
             }
 

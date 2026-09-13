@@ -14,6 +14,7 @@ module Ecluse.Composition.Support (
     scopedName,
     codeArtifactMirrorUrl,
     codeArtifactEnvVars,
+    withObservablePrivate,
     noMaintenanceBackend,
     clearedRepository,
     malformedAwsEndpoint,
@@ -120,6 +121,14 @@ codeArtifactEnvVars :: [(String, String)]
 codeArtifactEnvVars =
     overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactMirrorUrl $
         withoutMirrorTargetToken (withoutMirrorTargetUrl staticEnvVars)
+
+-- | Declare the existing anonymous private fixture under its observable protocol backend.
+withObservablePrivate :: [(String, String)] -> [(String, String)]
+withObservablePrivate =
+    map
+        ( \(key, value) ->
+            (if key == "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL" then "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL" else key, value)
+        )
 
 -- | The deleting role's refusal of 'staticEnvVars', whose mirror target no backend here sweeps.
 noMaintenanceBackend :: BootError

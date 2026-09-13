@@ -2,19 +2,17 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition root's credential build: each active mount's resolved 'StoreBackend' becomes a
-live, process-global 'CredentialProvider', keyed by ecosystem and labelled by its store tag.
-
-'MintStatic' becomes a stateless provider. 'MintCodeArtifact' becomes the refresh wrapper around
-'newCodeArtifactProvider', which mints once eagerly, so a bad identity fails loudly here as a
-'CodeArtifactMintFailed'. AWS credentials come from the ambient container role, never an Écluse
-key, and AWS mints per domain, so identities that coincide share one provider and one breaker.
+{- | Target-bound credential providers built at the composition root.
+CodeArtifact consumers with the same mint identity share one refresh provider and breaker.
 -}
 module Ecluse.Composition.Credential (
     -- * Global credential providers
     CredentialProviders,
     noCredentialProviders,
     initCredentialProviders,
+    initTargetCredentialProviders,
+    CredentialTarget (..),
+    lookupTargetProvider,
     initializedEcosystems,
     lookupProvider,
 
@@ -46,10 +44,12 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Telemetry.Metrics (Provider (ProviderCodeArtifact, ProviderRegistry, ProviderVerdaccio))
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig, newCodeArtifactProvider)
 
-{- | The process-global credential providers, keyed by the ecosystem they serve. A mount naming
-an ecosystem absent from the keyset has an unresolved credential reference.
--}
-newtype CredentialProviders = CredentialProviders (Map Ecosystem CredentialProvider)
+-- | A credential consumer within one mount. Private-cache reads never use the mirror slot.
+data CredentialTarget = MirrorCredential | PrivateCacheCredential
+    deriving stock (Eq, Ord, Show)
+
+-- | Providers keyed by the mount and the target that declared their authentication identity.
+newtype CredentialProviders = CredentialProviders (Map (Ecosystem, CredentialTarget) CredentialProvider)
 
 {- | No initialised providers: what a boot half that refused before it built any carries onward,
 so the halves after it still plan and still report what they refuse.
@@ -70,12 +70,20 @@ providerLabel = \case
 blocks one. Each provider mints eagerly, so a bad identity fails here as 'CodeArtifactMintFailed'.
 -}
 initCredentialProviders :: (Ecosystem -> StoreTag -> CredentialReporters) -> [Mount] -> IO (Either [BootError] CredentialProviders)
-initCredentialProviders reportersFor mounts = do
-    let creds = [(eco, sbTag backend, sbMint backend) | (eco, backend) <- mirrorBackends mounts]
+initCredentialProviders reportersFor mounts =
+    initTargetCredentialProviders reportersFor [((eco, MirrorCredential), backend) | (eco, backend) <- mirrorBackends mounts]
+
+-- | Build target-bound providers, sharing only matching CodeArtifact mint identities.
+initTargetCredentialProviders ::
+    (Ecosystem -> StoreTag -> CredentialReporters) ->
+    [((Ecosystem, CredentialTarget), StoreBackend)] ->
+    IO (Either [BootError] CredentialProviders)
+initTargetCredentialProviders reportersFor backends = do
+    let creds = [(key, sbTag backend, sbMint backend) | (key, backend) <- backends]
     -- The static leaf is stateless, so it stays per mount, unlike a CodeArtifact provider.
     let statics = [(eco, staticProviderFor token) | (eco, _, MintStatic token) <- creds]
     let caPlans = [(eco, tag, ca) | (eco, tag, MintCodeArtifact ca) <- creds]
-    results <- traverse (initSharedCodeArtifact reportersFor) (codeArtifactIdentityGroups caPlans)
+    results <- traverse (initSharedCodeArtifact (reportersFor . fst)) (codeArtifactIdentityGroups caPlans)
     let (initErrs, shared) = partitionEithers results
     if not (null initErrs)
         then pure (Left (concat initErrs))
@@ -94,9 +102,10 @@ mirrorBackends mounts =
 -- Disjoint groups use their smallest ecosystem as a bounded identity for expiry replacement.
 -- Each group shares one provider, refresh schedule and breaker.
 initSharedCodeArtifact ::
-    (Ecosystem -> StoreTag -> CredentialReporters) ->
-    (CodeArtifactConfig, (StoreTag, NonEmpty Ecosystem)) ->
-    IO (Either [BootError] [(Ecosystem, CredentialProvider)])
+    (Ord key) =>
+    (key -> StoreTag -> CredentialReporters) ->
+    (CodeArtifactConfig, (StoreTag, NonEmpty key)) ->
+    IO (Either [BootError] [(key, CredentialProvider)])
 initSharedCodeArtifact reportersFor (caConfig, (tag, ecosystems)) =
     fmap fannedOut <$> refuseOnThrow CodeArtifactMintFailed (newCodeArtifactProvider (reportersFor (Foldable1.minimum ecosystems) tag) caConfig)
   where
@@ -105,7 +114,7 @@ initSharedCodeArtifact reportersFor (caConfig, (tag, ecosystems)) =
 {- | Group the mounts' resolved CodeArtifact identities by distinct 'CodeArtifactConfig'. One
 domain shares a provider, its reporters, and its breaker, and a differing duration keeps its own.
 -}
-codeArtifactIdentityGroups :: [(Ecosystem, StoreTag, CodeArtifactConfig)] -> [(CodeArtifactConfig, (StoreTag, NonEmpty Ecosystem))]
+codeArtifactIdentityGroups :: [(key, StoreTag, CodeArtifactConfig)] -> [(CodeArtifactConfig, (StoreTag, NonEmpty key))]
 codeArtifactIdentityGroups plans =
     Map.toAscList (Map.fromListWith merge [(ca, (tag, eco :| [])) | (eco, tag, ca) <- plans])
   where
@@ -120,10 +129,14 @@ staticProviderFor token = staticProvider AuthToken{authSecret = token, authExpir
 surface the boot-time credential-reference check reasons over.
 -}
 initializedEcosystems :: CredentialProviders -> Set Ecosystem
-initializedEcosystems (CredentialProviders ps) = Map.keysSet ps
+initializedEcosystems (CredentialProviders ps) = fromList [eco | (eco, MirrorCredential) <- Map.keys ps]
 
 {- | Look up the initialised provider for an ecosystem, 'Nothing' when none is
 initialised (the unresolved-reference case the boot check rejects).
 -}
 lookupProvider :: Ecosystem -> CredentialProviders -> Maybe CredentialProvider
-lookupProvider eco (CredentialProviders ps) = Map.lookup eco ps
+lookupProvider = lookupTargetProvider MirrorCredential
+
+-- | Look up only the declared target's credential.
+lookupTargetProvider :: CredentialTarget -> Ecosystem -> CredentialProviders -> Maybe CredentialProvider
+lookupTargetProvider target eco (CredentialProviders ps) = Map.lookup (eco, target) ps

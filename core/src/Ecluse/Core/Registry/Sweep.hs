@@ -29,7 +29,8 @@ import Ecluse.Core.Registry.Maintenance (
     renderNamePrefix,
  )
 import Ecluse.Core.Registry.Sweep.Candidates (CandidateSet, candidateSet, inCandidates)
-import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
+import Ecluse.Core.Registry.Sweep.Group (boundedVersions, collectGroupBucket, groupAlphabet)
+import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackage)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltBucketUnsplittable, HaltConsentWithheld, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (CycleOutcome, outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
@@ -41,11 +42,12 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepPorts (sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepNow),
     SweepShape (SweepCandidates, SweepEverything),
     SweepState,
-    SweepStore (ssExecute, ssObserve),
+    SweepStore (ssExecute, ssObserve, ssPrivate, ssVersionLimit),
     TargetPrerequisites (TargetPrerequisites, tpBackend, tpClassification, tpConsent, tpEcosystem),
     evidenceComplete,
     newSweepState,
     prerequisitesMet,
+    previewStore,
     recordGap,
     recordPrerequisites,
     renderCycleHalt,
@@ -122,7 +124,10 @@ start, because an operator revokes either and a store can be recreated as a diff
 sweepMount :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> IO (Maybe CycleHalt)
 sweepMount pacing ports counters mount = case ssExecute (smStore mount) of
     SweepRemoves _ -> firstHalt [clearedToDelete pacing ports mount, walk]
-    SweepCounts -> notePrerequisites pacing ports counters mount >> walk
+    SweepCounts -> do
+        notePrerequisites pacing ports counters mount
+        traverse_ (notePrerequisites pacing ports counters . locatedMount mount) (ssPrivate (smStore mount))
+        walk
   where
     walk = walkStore pacing ports counters mount
 
@@ -172,9 +177,42 @@ a candidate cycle, so nothing runs beside it. -}
 walkStore :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> IO (Maybe CycleHalt)
 walkStore pacing ports counters mount = do
     reportAdvisoryHalf ports counters mount
-    case swpShape pacing of
-        SweepCandidates -> candidateCycle pacing ports counters mount
-        SweepEverything -> fullWalk pacing ports counters mount
+    case ssPrivate (smStore mount) of
+        Just cache -> walkPreviewGroup pacing ports counters mount cache
+        Nothing -> case swpShape pacing of
+            SweepCandidates -> candidateCycle pacing ports counters mount
+            SweepEverything -> fullWalk pacing ports counters mount
+
+walkPreviewGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> StoreObservation -> IO (Maybe CycleHalt)
+walkPreviewGroup pacing ports counters mount cache = go (walkBuckets alphabet)
+  where
+    alphabet = groupAlphabet (observed mount) cache
+    go [] = pure Nothing
+    go (prefix : rest) =
+        collectGroupBucket alphabet prefix (observed mount) cache >>= \case
+            BucketFaulted fault -> pure (Just (storeHalt mount fault))
+            BucketUnsplittable -> pure (Just (unsplittableHalt mount prefix))
+            BucketOverflowed narrower -> go (toList narrower <> rest)
+            BucketRead names ->
+                withCandidates
+                    ports
+                    mount
+                    ( \candidates ctx ->
+                        stepUntilHalt (previewOne ctx) (filter (wanted candidates . fst) names)
+                    )
+                    >>= maybe (go rest) (pure . Just)
+    wanted candidates name = swpShape pacing == SweepEverything || inCandidates candidates name
+    previewOne ctx (name, locations) = do
+        paceName pacing ports counters
+        readLocations <- traverse (\store -> fmap (store,) <$> withStoreRetry pacing ports (locatedMount mount store) (obEnumerateVersions store name)) locations
+        case sequence readLocations of
+            Left halt -> pure (Just halt)
+            Right versions -> case boundedVersions (ssVersionLimit (smStore mount)) versions of
+                Left fault -> pure (Just (storeHalt mount fault))
+                Right bounded -> previewPackageGroup pacing ports counters mount ctx name bounded
+
+locatedMount :: SweepMount -> StoreObservation -> SweepMount
+locatedMount mount store = mount{smStore = previewStore store}
 
 {- The default shape: every bucket, carrying only the names the advisory database covers or an
 identity deny pins. The listing is consumed a page at a time and never held whole. -}
@@ -280,12 +318,16 @@ sweepChunks ::
 sweepChunks pacing ports counters mount ctx = stepUntilHalt paced
   where
     paced name = do
-        progress <- readIORef (stChunkProgress counters)
-        when (progress >= max 1 (swpChunkSize pacing)) $ do
-            sweepDelay ports (swpChunkPause pacing)
-            writeIORef (stChunkProgress counters) 0
-        modifyIORef' (stChunkProgress counters) (+ 1)
+        paceName pacing ports counters
         sweepOne pacing ports counters mount ctx name
+
+paceName :: SweepPacing -> SweepPorts -> SweepState -> IO ()
+paceName pacing ports counters = do
+    progress <- readIORef (stChunkProgress counters)
+    when (progress >= max 1 (swpChunkSize pacing)) $ do
+        sweepDelay ports (swpChunkPause pacing)
+        writeIORef (stChunkProgress counters) 0
+    modifyIORef' (stChunkProgress counters) (+ 1)
 
 -- One package: what the store serves for it, then the shared decision step over those versions.
 sweepOne ::

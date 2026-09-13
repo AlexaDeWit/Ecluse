@@ -23,12 +23,19 @@ selects the role:
   `mirrorTarget` that is also any mount's `privateUpstream` or its own mount's `publicationTarget`,
   and one whose tag names a store this build carries no control plane for. The other roles start
   and warn on the collapsed pairs instead. See [Running the Dredger](@/docs/dredger.md).
+
 - **`ecluse check-config`**: validates the shared configuration and prints the resolved posture
   without starting anything (exit `0` valid, `2` refused). It checks every role, so a refusal only
   one command earns (`ecluse proxy --no-worker` or `ecluse mirror` without a durable queue,
   `ecluse mirror` where no mount declares a `mirrorTarget`, `ecluse dredger` on a collapsed
   endpoint pair or on a `mirrorTarget` it has no maintenance backend for) prints here as a warning
   naming that command. Run it in CI or before a rollout.
+
+Dredger preview reads both the mirror target and the configured private cache with independent
+observation capabilities. `privateUpstream` supplies cache reads, `mirrorTarget` receives mirrors,
+and `publicationTarget` receives user publications. The deleting command still targets the mirror
+only. Preview refuses a declared private backend without inventory support and reports missing
+consent separately. See [the preview contract](@/docs/dredger.md#preview).
 
 All roles share one configuration. The proxy and the mirror worker scale. Run Pilot as a singleton,
 because multiple instances race and duplicate API calls.

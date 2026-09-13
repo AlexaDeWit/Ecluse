@@ -12,18 +12,19 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Composition.BootError (
     Advisory,
     BootError (StoreMaintenanceUnavailable),
-    StoreMaintenanceReason (ClientBuildFailed, DeletionNotPermitted, NoProtocolMaintenance),
+    StoreMaintenanceReason (ClientBuildFailed, DeletionNotPermitted, NoProtocolMaintenance, PrivateCacheUnavailable),
     renderBootError,
  )
 import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Maintenance (
     ClearedBackend (cbAlphabet, cbControl, cbFetchManifest),
     ClearedControl (ClearedCodeArtifact, ClearedProtocol),
-    ClearedProtocolStore (cpsConsent),
+    ClearedProtocolStore (cpsConsent, cpsToken),
     ResolveMaintenanceAdapter,
     StorePorts (..),
     buildStoreMaintenance,
     planStoreMaintenance,
+    vetPreviewCaches,
     vetStoreBackends,
  )
 import Ecluse.Composition.Support (
@@ -33,13 +34,16 @@ import Ecluse.Composition.Support (
     noMaintenanceBackend,
     overrideEnv,
     staticEnvVars,
+    withObservablePrivate,
     withoutMirrorTargetToken,
     withoutMirrorTargetUrl,
+    withoutPrivateUpstreamUrl,
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
-    Config (configMounts),
+    AppConfig (cfgMounts),
+    Config (configApp, configMounts),
     DeletionConsent (DeletionWithheld),
     MountMap,
     StoreTag (TagVerdaccio),
@@ -78,6 +82,7 @@ spec = do
     protocolSpec
     buildSpec
     planSpec
+    previewCachesSpec
 
 {- The rule as the boot applies it: over the loaded mounts, under each role. The deleting role
 is the one that refuses, and the checker's warning for it is what a writing role leaves behind. -}
@@ -361,3 +366,62 @@ pypiEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com
 
 pypiInternalEndpoint :: (IsString s) => s
 pypiInternalEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/pypi/internal/"
+
+previewCachesSpec :: Spec
+previewCachesSpec = describe "vetPreviewCaches" $ do
+    it "clears anonymous protocol observation before private deletion consent exists" $ do
+        config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
+        case snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config))) of
+            Right caches -> case map (cbControl . snd) (Map.elems caches) of
+                [ClearedProtocol store] -> do
+                    cpsToken store `shouldBe` Nothing
+                    cpsConsent store `shouldBe` DeletionWithheld
+                _ -> expectationFailure "expected one anonymous private protocol observation"
+            Left errors -> expectationFailure (show errors)
+
+    it "refuses a generic registry without an inventory backend" $ do
+        config <- expectConfig codeArtifactEnvVars Nothing
+        let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        void result `shouldBe` Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "registry has no inventory control plane")]
+
+    it "accumulates private inventory refusals across mounts" $ do
+        let env =
+                [ ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
+                , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL", "https://test-111122223333.d.codeartifact.us-east-1.amazonaws.com/pypi/mirror/")
+                ]
+                    <> codeArtifactEnvVars
+        config <- expectConfig env Nothing
+        let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+            expected = [StoreMaintenanceUnavailable eco (PrivateCacheUnavailable "registry has no inventory control plane") | eco <- [Npm, PyPI]]
+        void result `shouldBe` Left expected
+
+    it "refuses a private protocol backend with no listing capability" $ do
+        config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
+        let result = snd (runVet MirrorPreviewer (vetPreviewCaches withoutMaintenance (cfgMounts (configApp config)) (configMounts config)))
+        void result `shouldBe` Left [StoreMaintenanceUnavailable Npm NoProtocolMaintenance]
+
+    it "preserves the deleting role's mirror-only construction" $ do
+        config <- expectConfig codeArtifactEnvVars Nothing
+        let result = snd (runVet MirrorPruner (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        fmap Map.null result `shouldBe` Right True
+
+    it "adds no private observation when the mount has no mirror target" $ do
+        config <- expectConfig (withoutMirrorTargetUrl (withoutMirrorTargetToken staticEnvVars)) Nothing
+        let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        fmap Map.null result `shouldBe` Right True
+
+    it "resolves the private CodeArtifact repository from its own endpoint" $ do
+        let env =
+                ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", "https://cache-999900001111.d.codeartifact.us-west-2.amazonaws.com/npm/retained/")
+                    : withoutPrivateUpstreamUrl codeArtifactEnvVars
+        config <- expectConfig env Nothing
+        let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        fmap (map (clearedRepository . snd) . Map.elems) result `shouldBe` Right [Just "retained"]
+
+    it "refuses a private CodeArtifact endpoint for a different package format" $ do
+        let env =
+                ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", "https://cache-999900001111.d.codeartifact.us-west-2.amazonaws.com/pypi/retained/")
+                    : withoutPrivateUpstreamUrl codeArtifactEnvVars
+        config <- expectConfig env Nothing
+        let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        void result `shouldSatisfy` isLeft

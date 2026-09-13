@@ -72,6 +72,7 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Rules (PreparedRule, RuleDeps)
 import Ecluse.Core.Rules.Types (Rule)
+import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
 import Ecluse.Core.Telemetry.Record (DredgerMetricsPort (dmpSweptVersion))
 
@@ -105,6 +106,10 @@ executes against a condemned version. Only the two builders below pair the halve
 data SweepStore = SweepStore
     { ssObserve :: StoreObservation
     , ssExecute :: SweepExecution
+    , ssPrivate :: Maybe StoreObservation
+    -- ^ The associated private cache, held only by previews.
+    , ssVersionLimit :: Int
+    -- ^ Maximum distinct versions held for one package across both observations.
     }
 
 -- | What a run does with a condemned version. Only one arm carries a write.
@@ -117,11 +122,11 @@ data SweepExecution
 -- | The whole handle as a deleting run holds it: its reads, and its writes as the execution.
 deletingStore :: StoreMaintenance -> SweepStore
 deletingStore handle =
-    SweepStore{ssObserve = observationOf handle, ssExecute = SweepRemoves (deletionOf handle)}
+    SweepStore{ssObserve = observationOf handle, ssExecute = SweepRemoves (deletionOf handle), ssPrivate = Nothing, ssVersionLimit = maxVersionCount defaultLimits}
 
 -- | The observing calls alone, as a preview holds them.
 previewStore :: StoreObservation -> SweepStore
-previewStore observation = SweepStore{ssObserve = observation, ssExecute = SweepCounts}
+previewStore observation = SweepStore{ssObserve = observation, ssExecute = SweepCounts, ssPrivate = Nothing, ssVersionLimit = maxVersionCount defaultLimits}
 
 {- | The marker a full walk resumes from. A preview holds none, so its walk starts at the first
 bucket and the recorded marker is neither read nor replaced.

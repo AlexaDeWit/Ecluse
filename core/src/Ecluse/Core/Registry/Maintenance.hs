@@ -59,6 +59,7 @@ module Ecluse.Core.Registry.Maintenance (
     -- * Backend-neutral drives
     pageSource,
     collectPages,
+    collectPagesBounded,
     pageAll,
     chunksOfCeiling,
     deleteAll,
@@ -72,7 +73,7 @@ module Ecluse.Core.Registry.Maintenance (
     RetryAdvice (..),
 ) where
 
-import Data.Conduit (ConduitT, fuseBoth, runConduit, yield)
+import Data.Conduit (ConduitT, await, fuseBoth, fuseBothMaybe, runConduit, yield)
 import Data.Conduit.List qualified as CL
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -354,6 +355,21 @@ collectPages :: (Monad m) => ConduitT () [a] m (Maybe StoreFault) -> m (Either S
 collectPages source = outcome <$> runConduit (fuseBoth source CL.consume)
   where
     outcome (mFault, pages) = maybe (Right (concat pages)) Left mFault
+
+-- | Stop consuming pages at the item bound and return no partial inventory.
+collectPagesBounded :: (Monad m) => Int -> ConduitT () [a] m (Maybe StoreFault) -> m (Either StoreFault [a])
+collectPagesBounded limit source = outcome <$> runConduit (fuseBothMaybe source (consume 0 []))
+  where
+    consume held pages =
+        await >>= \case
+            Nothing -> pure (Just (concat (reverse pages)))
+            Just page
+                | length page > max 0 limit - held -> pure Nothing
+                | otherwise -> consume (held + length page) (page : pages)
+    outcome = \case
+        (_, Nothing) -> Left (protocolFault "the store inventory crossed limits.maxVersionCount")
+        (Just (Just fault), _) -> Left fault
+        (_, Just values) -> Right values
 
 -- | Collect one package's versions. Return a fault without partial results.
 pageAll ::

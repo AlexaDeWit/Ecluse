@@ -20,6 +20,7 @@ import Ecluse.Core.Registry.Maintenance (
     VersionOutcome (VersionRemoved, VersionUnreached),
     chunksOfCeiling,
     collectPages,
+    collectPagesBounded,
     deleteAll,
     extendBucket,
     inBucket,
@@ -255,6 +256,27 @@ pageAllSpec = describe "pageAll" $ do
                 [(Just "p2", ["a"]), (Just "p3", ["b"]), (Just "p4", ["c"]), (Just "p3", ["d"])]
         outcome <- pageAll fetch
         outcome `shouldSatisfy` isLeft
+
+    it "collects a preview inventory exactly at its configured bound" $ do
+        fetch <- pagesFrom [(Just "p2", ["a"]), (Nothing, ["b"])]
+        collectPagesBounded 2 (pageSource fetch) `shouldReturn` Right ["a", "b"]
+
+    it "discards a bounded inventory when its last page faults" $ do
+        fetch <- pagesFrom [(Just "p2", ["a"])]
+        let source = pageSource (\token -> if isJust token then pure (Left aFault) else fetch token)
+        collectPagesBounded 2 source `shouldReturn` Left aFault
+
+    it "reports bounded overflow without a partial inventory or later page read" $ do
+        seen <- newIORef []
+        fetch <- pagesFrom [(Just "p2", ["a"]), (Just "p3", ["b"]), (Nothing, ["c"])]
+        let source = pageSource (\token -> modifyIORef' seen (<> [token]) >> fetch token)
+        result <- collectPagesBounded 1 source
+        result `shouldSatisfy` isLeft
+        readIORef seen `shouldReturn` [Nothing, Just "p2"]
+
+    it "permits an empty inventory at a zero bound" $ do
+        fetch <- pagesFrom [(Nothing, [])]
+        collectPagesBounded 0 (pageSource fetch) `shouldReturn` Right []
 
 chunkingSpec :: Spec
 chunkingSpec = describe "chunksOfCeiling" $ do

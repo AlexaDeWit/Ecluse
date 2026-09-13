@@ -4,6 +4,7 @@
 
 module Ecluse.Composition.ExecutableSpec (spec) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
@@ -22,7 +23,7 @@ import Ecluse.Composition.BootError (
         PilotWithoutEcosystem,
         StoreMaintenanceUnavailable
     ),
-    StoreMaintenanceReason (ClientBuildFailed),
+    StoreMaintenanceReason (ClientBuildFailed, PrivateCacheUnavailable),
  )
 import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Executable (
@@ -34,22 +35,28 @@ import Ecluse.Composition.Executable (
     RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
     planExecutable,
  )
-import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
+import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl), StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, staticEnvVars)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, staticEnvVars, withObservablePrivate)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (ServeAndMirror),
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Queue (noMirrorQueue)
-import Ecluse.Core.Registry.Sweep.Types (SweepMount (smEcosystem))
+import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
+import Ecluse.Core.Registry.Sweep (sweepCycle)
+import Ecluse.Core.Registry.Sweep.Types (CycleOutcome (outcomePrerequisites, outcomeTally), SweepMount (smEcosystem), SweepTally (tallyDeleted))
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo))
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeContents, fakeManifests), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Package (sampleManifest, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Sweep (RecordedSweep (recPorts), previewingReport, recordingPortsUnder, testPacing)
 
 {- | Tests the boot's effectful planning phase. Every role plans through it, and every refusal a
 live environment can settle is spent there, so a yielded plan is one nothing downstream rejects.
@@ -121,10 +128,38 @@ spec = describe "planExecutable" $ do
     it "plans the preview role through the observing build alone" $ do
         -- The role picks its own build, so a preview's boot never runs the one holding a delete.
         preview <-
-            expectExecutableWith codeArtifactEnvVars BootStorePreview (\_ _ _ -> Nothing) refusingQueue observingOnly
+            expectExecutableWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ -> Nothing) refusingQueue observingOnly
         case epRoleWiring preview of
             StorePrunerWiring wiring -> map smEcosystem (pwMounts wiring) `shouldBe` [Npm]
             other -> expectationFailure ("expected the store pruner arm, got the " <> toString (plannedArm other) <> " arm")
+
+    it "builds both observing targets and drives their real grouped preview without a deleting builder" $ do
+        mirror <- previewFixture ["1.0.0", "3.0.0"]
+        cache <- previewFixture ["2.0.0", "3.0.0"]
+        builds <- newIORef []
+        let env = overrideEnv "ECLUSE_RULES" "{\"revoke-preview\":{\"type\":\"DenyByIdentity\",\"identity\":\"left-pad\"}}" (withObservablePrivate codeArtifactEnvVars)
+            onlyReads =
+                observingOnly
+                    { sbObserving = \_ _ backend -> do
+                        let url = registryUrlText (cbUrl backend)
+                        modifyIORef' builds (url :)
+                        pure (fakeObservation (if url == "https://private.example.test" then cache else mirror))
+                    }
+        executable <- expectExecutableWith env BootStorePreview (\_ _ _ -> Nothing) refusingQueue onlyReads
+        beforeMirror <- readFakeContents mirror
+        beforeCache <- readFakeContents cache
+        recorded <- recordingPortsUnder previewingReport Nothing
+        case epRoleWiring executable of
+            StorePrunerWiring wiring -> do
+                outcome <- sweepCycle testPacing (recPorts recorded) (pwMounts wiring)
+                tallyDeleted (outcomeTally outcome) `shouldBe` 3
+                length (outcomePrerequisites outcome) `shouldBe` 2
+            _ -> expectationFailure "expected the preview role"
+        built <- readIORef builds
+        length built `shouldBe` 2
+        length (ordNub built) `shouldBe` 2
+        readFakeContents mirror `shouldReturn` beforeMirror
+        readFakeContents cache `shouldReturn` beforeCache
 
     it "reports a store maintenance client the live environment cannot build" $ do
         -- The client discovers an AWS identity when it is built, so an environment with none
@@ -135,6 +170,25 @@ spec = describe "planExecutable" $ do
             Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed detail)] ->
                 detail `shouldSatisfy` T.isInfixOf "NoCredentials"
             Left errs -> expectationFailure ("expected the handle refusal, got: " <> show errs)
+
+    for_ [False, True] $ \mirrorFails ->
+        it ("classifies private observation construction failure and accumulates mirror failure: " <> show mirrorFails) $ do
+            let builds =
+                    observingOnly
+                        { sbObserving = \ports limits backend ->
+                            if mirrorFails || registryUrlText (cbUrl backend) == "https://private.example.test"
+                                then sbObserving refusingStore ports limits backend
+                                else sbObserving observingOnly ports limits backend
+                        }
+            outcome <- planWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ -> Nothing) refusingQueue builds
+            case (mirrorFails, outcome) of
+                (False, Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable detail)]) ->
+                    detail `shouldSatisfy` T.isPrefixOf "client build failed: NoCredentials"
+                (True, Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed mirrorDetail), StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable privateDetail)]) -> do
+                    mirrorDetail `shouldSatisfy` T.isPrefixOf "NoCredentials"
+                    privateDetail `shouldSatisfy` T.isPrefixOf "client build failed: NoCredentials"
+                (_, Right _) -> expectationFailure "expected observation construction to refuse"
+                (_, Left errors) -> expectationFailure ("expected the exact target refusals in order, got: " <> show errors)
 
     it "reports a mirror-write mint the live environment refuses" $ do
         -- The Dredger reads and deletes through the mirror write's own credential, so it mints
@@ -299,3 +353,14 @@ expectMirrorWiring :: ExecutablePlan -> IO MirrorWiring
 expectMirrorWiring plan = case epRoleWiring plan of
     MirrorPipelineWiring mirror -> pure mirror
     other -> fail ("expected the mirror-pipeline arm, got the " <> toString (plannedArm other) <> " arm")
+
+previewFixture :: [Text] -> IO FakeStore
+previewFixture rawVersions =
+    newFakeStore
+        defaultFakeStoreConfig
+            { fakeContents = Map.singleton name [StoredVersion version VersionServed | version <- versions]
+            , fakeManifests = Map.singleton name (sampleManifest name versions)
+            }
+  where
+    name = unscopedNpm "left-pad"
+    versions = map (mkVersion Npm) rawVersions

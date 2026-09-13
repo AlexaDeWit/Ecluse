@@ -110,7 +110,7 @@ import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
 import Ecluse.Composition.BootError (renderBootErrors)
-import Ecluse.Composition.Credential (initCredentialProviders)
+import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.Executable (
     PrunerWiring,
     RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
@@ -171,7 +171,7 @@ startPlannedRole dredgerOptions bootEnv = do
             (tracingPortOf (beTelemetry bootEnv))
             mountBindingFor
             buildMirrorQueue
-            initCredentialProviders
+            initTargetCredentialProviders
             storeBuilds
             (beBootPlan bootEnv)
             >>= orExit renderBootErrors

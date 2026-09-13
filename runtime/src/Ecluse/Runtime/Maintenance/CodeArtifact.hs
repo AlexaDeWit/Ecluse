@@ -20,6 +20,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact (
     readPlaneFor,
     maintenanceFor,
     observationFor,
+    boundedObservationFor,
 ) where
 
 import Amazonka qualified as AWS
@@ -41,6 +42,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoredVersion,
     VersionOutcome,
     chunksOfCeiling,
+    collectPagesBounded,
     deleteAll,
     pageAll,
     pageSource,
@@ -96,9 +98,9 @@ newCodeArtifactMaintenance alphabet readManifest store =
 {- | Build the observing calls alone for one repository, over an environment discovered the same
 way. No deletion, no tag write, and no publication is built, so the caller holds none.
 -}
-newCodeArtifactObservation :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
-newCodeArtifactObservation alphabet readManifest store =
-    observationFor alphabet readManifest store . readPlaneFor
+newCodeArtifactObservation :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
+newCodeArtifactObservation limit alphabet readManifest store =
+    boundedObservationFor limit alphabet readManifest store . readPlaneFor
         <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
 
 {- | Build the handle over a caller-supplied @amazonka@ 'AWS.Env'. Exposed so a test can hold the
@@ -156,6 +158,13 @@ observationFor alphabet readManifest store observer =
         , obReadManifest = readManifest
         , obVerifyConsent = readConsent observer store
         , obClassifyStore = fmap (fmap classifyRepository) (describeStore observer store)
+        }
+
+-- | Build observation with version pagination bounded before another page is requested.
+boundedObservationFor :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ReadPlane -> StoreObservation
+boundedObservationFor limit alphabet readManifest store observer =
+    (observationFor alphabet readManifest store observer)
+        { obEnumerateVersions = collectPagesBounded limit . pageSource . versionPage observer store
         }
 
 sendStore :: (AWS.AWSRequest a) => AWS.Env -> a -> IO (Either StoreFault (AWS.AWSResponse a))

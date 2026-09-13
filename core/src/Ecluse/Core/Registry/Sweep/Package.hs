@@ -5,16 +5,20 @@
 -- | Decide stored versions from the store's evidence and hand named denials to its execution.
 module Ecluse.Core.Registry.Sweep.Package (
     sweepPackage,
+    previewPackageGroup,
 ) where
 
 import Data.List (partition)
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     StoreDeletion (dlDeleteVersions),
+    StoreFacts (factBackend),
     StoreFault,
-    StoreObservation (obReadManifest),
+    StoreObservation (obFacts, obReadManifest),
     StoredVersion (storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionRemoving, VersionUnreached),
     VersionPresence (VersionServed),
@@ -32,6 +36,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepReport (reportCapHalts, reportOpening, reportRemoval),
     SweepState (stIssued),
     SweepStore (ssExecute, ssObserve),
+    previewStore,
     record,
     recordGap,
     renderGeneration,
@@ -56,21 +61,64 @@ sweepPackage ::
     PackageName ->
     [StoredVersion] ->
     IO (Maybe CycleHalt)
-sweepPackage pacing ports counters mount ctx name stored
-    | smFirstParty mount name = Nothing <$ traverse_ (const (record ports counters SweepGuardSkipped)) served
+sweepPackage pacing ports counters mount ctx name stored =
+    selectPackage ports counters mount ctx name stored >>= deleteSelected pacing ports counters mount name
+
+selectPackage :: SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [StoredVersion] -> IO [Condemned]
+selectPackage ports counters mount ctx name stored
+    | smFirstParty mount name = [] <$ traverse_ (const (record ports counters SweepGuardSkipped)) served
     | otherwise =
         obReadManifest (ssObserve (smStore mount)) name >>= \case
-            Left fault -> unreadable fault *> decideAll (identityEvidence name)
+            Left fault -> do
+                recordGap counters unreadManifest
+                announceUnread ports name served fault
+                decideAll (identityEvidence name)
             Right manifest -> decideAll (evidenceIn name manifest)
   where
     served = [storedVersion s | s <- stored, storedPresence s == VersionServed]
+    decideAll evidence = catMaybes <$> traverse (decideVersion ports counters mount ctx evidence) served
 
-    -- The versions below are decided on less than the whole rule set, so the cycle records the gap.
-    unreadable fault = recordGap counters unreadManifest *> announceUnread ports name served fault
+-- | Evaluate each copy with its own evidence and count each selected version once for the mount.
+previewPackageGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [(StoreObservation, [StoredVersion])] -> IO (Maybe CycleHalt)
+previewPackageGroup pacing ports counters mount ctx name locations = do
+    selections <- forM locations $ \(store, versions) -> do
+        let locatedMount = mount{smStore = previewStore store}
+            locatedPorts = ports{sweepAudit = labelAudit (factBackend (obFacts store)) (sweepAudit ports)}
+        selected <-
+            selectPackage locatedPorts counters locatedMount ctx name versions
+                >>= stillEligible locatedPorts counters locatedMount name
+        traverse_ (announce locatedPorts name) selected
+        let selectedKeys = Set.fromList (map (renderVersion . cdVersion) selected)
+            kept =
+                [ storedVersion version
+                | version <- versions
+                , storedPresence version == VersionServed
+                , Set.notMember (renderVersion (storedVersion version)) selectedKeys
+                ]
+        traverse_
+            ( \version ->
+                auditInfo
+                    (sweepAudit locatedPorts)
+                    ("dry run, keeping " <> renderPackageName name <> "@" <> renderVersion version)
+            )
+            kept
+        pure selected
+    let logical = Map.elems (Map.fromList [(renderVersion (cdVersion selected), selected) | selected <- concat selections])
+    issued <- readIORef (stIssued counters)
+    let reached = issued + length logical
+        cap = swpDeletionCap pacing
+        etag = cdAdvisoryEtag =<< listToMaybe (drop (cap - issued - 1) logical)
+    writeIORef (stIssued counters) reached
+    when (issued < cap && reached >= cap) (announceCap ports cap reached etag)
+    traverse_ (const (record ports counters (reportRemoval (sweepReport ports)))) logical
+    pure Nothing
 
-    decideAll evidence = do
-        condemned <- catMaybes <$> traverse (decideVersion ports counters mount ctx evidence) served
-        disposeOf pacing ports counters mount name condemned
+labelAudit :: Text -> SweepAudit -> SweepAudit
+labelAudit target audit =
+    audit
+        { auditInfo = auditInfo audit . ((target <> ": ") <>)
+        , auditError = auditError audit . ((target <> ": ") <>)
+        }
 
 {- The store served no metadata, so each version is decided on the identity the listing carries. The
 shared fetch discards the response status, so a package the store no longer serves arrives here too. -}
@@ -119,7 +167,7 @@ decideVersion ports counters mount ctx evidence version = do
 
 {- Hand the condemned versions over, up to what the cycle's cap still allows. The cap counts
 what was handed over rather than what came back, because the cap bounds destructive calls. -}
-disposeOf ::
+deleteSelected ::
     SweepPacing ->
     SweepPorts ->
     SweepState ->
@@ -127,7 +175,7 @@ disposeOf ::
     PackageName ->
     [Condemned] ->
     IO (Maybe CycleHalt)
-disposeOf pacing ports counters mount name decided
+deleteSelected pacing ports counters mount name decided
     | null decided = pure Nothing
     | otherwise = do
         condemned <- stillEligible ports counters mount name decided
