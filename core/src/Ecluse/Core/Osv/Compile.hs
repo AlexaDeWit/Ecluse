@@ -144,8 +144,6 @@ newCandidate outDir = do
 removeCandidate :: FilePath -> IO ()
 removeCandidate path = catchIOError (removeFile path) (const $ pure ())
 
--- Everything the conclusion of one pass reads beside the connection: what the pass tallied,
--- the provenance it will write, and the thresholds those recorded ages are judged by.
 data CompileConclusion = CompileConclusion
     { ccEcosystem :: Text
     , ccSources :: CompileSources
@@ -197,7 +195,6 @@ concludeCompile metrics mSpan conn conclusion = do
     ecosystem = ccEcosystem conclusion
     stats = ccStats conclusion
 
--- Why this pass may not publish, if anything.
 compileRefusal :: IngestStats -> Int -> Maybe Text
 compileRefusal stats rowCount
     | systemicDrop stats = Just "systemic advisory drop rate"
@@ -273,6 +270,7 @@ writeMeta conn conclusion rowCount = do
           , (renderMetaKey MetaBuiltAt, toText (iso8601Show builtAt))
           , (renderMetaKey MetaSourceUrl, authorityLabel (toText (csOsvExportUrl sources)))
           , (renderMetaKey MetaEpssSourceUrl, authorityLabel (toText (csEpssFeedUrl sources)))
+          , (renderMetaKey MetaEpssStatus, "available")
           , (renderMetaKey MetaRowCount, show rowCount)
           ]
             <> provenanceRows (ccProvenance conclusion)

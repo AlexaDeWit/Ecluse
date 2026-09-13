@@ -285,6 +285,12 @@ the reader requires `severity` and `epss_score` on `package_vulnerability_ranges
 missing a required column, or carrying it under a different declared type, fails schema
 conformance (`CveDbSchemaNonConformant`) and the last-good database keeps serving.
 
+Successful compilation records `epss_status=available` in the `meta` table, including when the
+valid feed omits optional dates or has no scores matching this artifact's advisories. This marker
+records whole-feed enrichment. An individual `epss_score` can still be absent. The added key
+preserves epoch 4 and does not activate consumer qualification or optional-failure publication.
+Older epoch 4 artifacts can lack the marker.
+
 Epoch 4 stores canonical package names: PEP 503 for PyPI, verbatim for npm and RubyGems.
 Rules query the same canonical key for denial and remediation. Dredger parses the stored keys
 and store names into the same package identity before evaluating the shared rules.
