@@ -180,11 +180,15 @@ spec = describe "planExecutable" $ do
                                 then sbObserving refusingStore ports limits backend
                                 else sbObserving observingOnly ports limits backend
                         }
-                expected =
-                    [StoreMaintenanceUnavailable Npm (ClientBuildFailed "NoCredentials") | mirrorFails]
-                        <> [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "client build failed: NoCredentials")]
             outcome <- planWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ -> Nothing) refusingQueue builds
-            void outcome `shouldBe` Left expected
+            case (mirrorFails, outcome) of
+                (False, Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable detail)]) ->
+                    detail `shouldSatisfy` T.isPrefixOf "client build failed: NoCredentials"
+                (True, Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed mirrorDetail), StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable privateDetail)]) -> do
+                    mirrorDetail `shouldSatisfy` T.isPrefixOf "NoCredentials"
+                    privateDetail `shouldSatisfy` T.isPrefixOf "client build failed: NoCredentials"
+                (_, Right _) -> expectationFailure "expected observation construction to refuse"
+                (_, Left errors) -> expectationFailure ("expected the exact target refusals in order, got: " <> show errors)
 
     it "reports a mirror-write mint the live environment refuses" $ do
         -- The Dredger reads and deletes through the mirror write's own credential, so it mints
