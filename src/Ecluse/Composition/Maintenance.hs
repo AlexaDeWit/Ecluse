@@ -173,9 +173,9 @@ vetPreviewCaches :: ResolveMaintenanceAdapter -> Map Ecosystem MountConfig -> Mo
 vetPreviewCaches resolveAdapter configured mounts = withRole $ \case
     MirrorWriter -> pure Map.empty
     MirrorPruner -> pure Map.empty
-    MirrorPreviewer -> do
-        traverse_ (rule (const (Refuse (uncurry StoreMaintenanceUnavailable))) unmaintained) resolved
-        pure (Map.fromList [(eco, backend) | (eco, Right backend) <- resolved])
+    MirrorPreviewer ->
+        Map.fromList [(eco, backend) | (eco, Right backend) <- resolved]
+            <$ traverse_ (rule (const (Refuse (uncurry StoreMaintenanceUnavailable))) unmaintained) resolved
   where
     resolved =
         [ (eco, resolve eco target)

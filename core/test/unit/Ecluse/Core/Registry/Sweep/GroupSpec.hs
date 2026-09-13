@@ -95,9 +95,9 @@ spec = describe "grouped preview" $ do
         mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
         cache <- seeded "privateUpstream" [(packageName, ["1.0.0"])]
         mount <- grouped mirror cache
-        let guarded store = store{obReadManifest = \_ -> fail "first-party metadata must not be read"}
+        let forbidMetadata store = store{obReadManifest = \_ -> fail "first-party metadata must not be read"}
             original = smStore mount
-        (_, outcome) <- runPreview mount{smFirstParty = const True, smStore = original{ssObserve = guarded (ssObserve original), ssPrivate = guarded <$> ssPrivate original}}
+        (_, outcome) <- runPreview mount{smFirstParty = const True, smStore = original{ssObserve = forbidMetadata (ssObserve original), ssPrivate = forbidMetadata <$> ssPrivate original}}
         tallyDeleted (outcomeTally outcome) `shouldBe` 0
         tallyGuardSkipped (outcomeTally outcome) `shouldBe` 2
 

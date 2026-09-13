@@ -159,8 +159,8 @@ enumerationCases store = describe "the handle's paged enumerations" $ do
     it "stops preview pagination at the version bound without requesting a later page" $ do
         tokens <- newIORef []
         answer <- answersFrom [versionsPage (Just "v2") ["1.0.0"], versionsPage (Just "v3") ["1.1.0"], versionsPage Nothing ["1.2.0"]]
-        let reader = inertReader{rpListVersions = \request -> record tokens (request ^. CAL.listPackageVersions_nextToken) >> answer}
-            observation = boundedObservationFor 1 (mkNameAlphabet "abc") (\_ -> fail "inventory does not read metadata") store reader
+        let versionReader = inertReader{rpListVersions = \request -> record tokens (request ^. CAL.listPackageVersions_nextToken) >> answer}
+            observation = boundedObservationFor 1 (mkNameAlphabet "abc") (\_ -> fail "inventory does not read metadata") store versionReader
         result <- obEnumerateVersions observation aPackage
         result `shouldSatisfy` isLeft
         readIORef tokens `shouldReturn` [Nothing, Just "v2"]

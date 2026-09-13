@@ -384,6 +384,17 @@ previewCachesSpec = describe "vetPreviewCaches" $ do
         let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
         void result `shouldBe` Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "registry has no inventory control plane")]
 
+    it "accumulates private inventory refusals across mounts" $ do
+        let env =
+                [ ("ECLUSE_MOUNTS__PYPI__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/pypi/")
+                , ("ECLUSE_MOUNTS__PYPI__MIRROR_TARGET__CODE_ARTIFACT__URL", "https://test-111122223333.d.codeartifact.us-east-1.amazonaws.com/pypi/mirror/")
+                ]
+                    <> codeArtifactEnvVars
+        config <- expectConfig env Nothing
+        let result = snd (runVet MirrorPreviewer (vetPreviewCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+            expected = [StoreMaintenanceUnavailable eco (PrivateCacheUnavailable "registry has no inventory control plane") | eco <- [Npm, PyPI]]
+        void result `shouldBe` Left expected
+
     it "refuses a private protocol backend with no listing capability" $ do
         config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
         let result = snd (runVet MirrorPreviewer (vetPreviewCaches withoutMaintenance (cfgMounts (configApp config)) (configMounts config)))
