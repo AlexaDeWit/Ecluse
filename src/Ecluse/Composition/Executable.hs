@@ -38,12 +38,14 @@ import Ecluse.Composition.BootError (
     BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, PilotWithoutEcosystem),
     refuseOnThrow,
  )
-import Ecluse.Composition.Credential (CredentialProviders, noCredentialProviders, providerLabel)
+import Ecluse.Composition.Credential (CredentialProviders, CredentialTarget (..), mirrorBackends, noCredentialProviders, providerLabel)
 import Ecluse.Composition.Maintenance (
-    ClearedBackend,
+    BuildStoreObservation,
+    ClearedBackend (cbUrl),
     StoreBuilds (sbDeleting, sbObserving),
     StorePorts,
     planStoreMaintenance,
+    planStoreMaintenanceFor,
  )
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpMaxRequestBytes, mpPublishTenant, mpQueueMemoryMaxDepth),
@@ -61,19 +63,21 @@ import Ecluse.Composition.Types (
     MirrorRole,
  )
 import Ecluse.Composition.Validate (
-    ValidatedPlan (vpMirrorStores, vpMounts, vpSettings),
+    ValidatedPlan (vpMirrorStores, vpMounts, vpPreviewCaches, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
  )
-import Ecluse.Config (AppConfig (cfgAdvisories), Mount (mountPolicy), MountConfig (mntFirstParty), StoreTag, mountAdvisoryAge)
+import Ecluse.Config (AppConfig (cfgAdvisories), Mount (mountPolicy), MountConfig (mntFirstParty), StoreBackend, StoreTag, mountAdvisoryAge)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Registry.Adapter (ProjectName, adapterProjectName)
-import Ecluse.Core.Registry.Sweep.Types (SweepMount (..), SweepStore, deletingStore, previewStore)
+import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend), StoreObservation (obFacts))
+import Ecluse.Core.Registry.Sweep.Types (SweepMount (..), SweepStore (..), deletingStore, previewStore)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule)
-import Ecluse.Core.Security (Limits)
+import Ecluse.Core.Security (Limits (maxVersionCount))
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule))
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -144,10 +148,8 @@ so a spec can drive this phase's refusals without reaching a cloud.
 -}
 type BuildMirrorQueue = LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 
-{- | How a boot builds the mirror-write credential providers. Injected, as the queue and store
-builders are, so a spec drives this phase without minting against a cloud.
--}
-type BuildCredentials = (Ecosystem -> StoreTag -> CredentialReporters) -> [Mount] -> IO (Either [BootError] CredentialProviders)
+-- | Build only credentials for the targets cleared by this boot role.
+type BuildCredentials = (Ecosystem -> StoreTag -> CredentialReporters) -> [((Ecosystem, CredentialTarget), StoreBackend)] -> IO (Either [BootError] CredentialProviders)
 
 {- How the booting role builds one store as the sweep holds it. Both Dredger roles plan through the
 one arm below and differ only in which of 'StoreBuilds' they ran. -}
@@ -177,18 +179,18 @@ planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds 
 
     prunerArm build =
         fmap (executablePlan . StorePrunerWiring)
-            <$> planPrunerWiring logEnv tracing buildCredentials build bootPlan
+            <$> planPrunerWiring logEnv tracing buildCredentials build (sbObserving builds) bootPlan
 
     deleting build ports limits cleared = deletingStore <$> build ports limits cleared
     previewing build ports limits cleared = previewStore <$> build ports limits cleared
 
 {- The store roles' shared arm: the advisory sync their rules read, the credential their stores
 answer to, and one store per cleared target. All three refusable steps accumulate. -}
-planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepStore -> BootPlan -> IO (Either [BootError] PrunerWiring)
-planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
+planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepStore -> BuildStoreObservation -> BootPlan -> IO (Either [BootError] PrunerWiring)
+planPrunerWiring logEnv tracing buildCredentials buildStore buildObservation bootPlan = do
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
-    credentials <- buildCredentials (credentialReportersOver deferredMetrics) prunerMounts
+    credentials <- buildCredentials (credentialReportersOver deferredMetrics) credentialBackends
     stores <-
         planStoreMaintenance
             buildStore
@@ -196,6 +198,14 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
             (fromRight noCredentialProviders credentials)
             (bpLimits bootPlan)
             (vpMirrorStores validated)
+    caches <-
+        planStoreMaintenanceFor
+            PrivateCacheCredential
+            buildObservation
+            tracing
+            (fromRight noCredentialProviders credentials)
+            (bpLimits bootPlan)
+            (Map.map snd (vpPreviewCaches validated))
     -- A refused sync leaves the rules abstaining, so the policies below still prepare and still
     -- report. The accumulation then discards them along with the sync.
     let ruleDepsFor =
@@ -208,10 +218,28 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
         prunerWiringFrom deferredMetrics policies
             <$> eitherToValidation cveSync
             <* eitherToValidation credentials
-            <*> eitherToValidation stores
+            <*> eitherToValidation (Map.mapWithKey (attachCache (fromRight mempty caches)) <$> stores)
+            <* eitherToValidation caches
   where
     validated = bpValidated bootPlan
     prunerMounts = map vmMount (vpMounts validated)
+    credentialBackends =
+        [((eco, MirrorCredential), backend) | (eco, backend) <- mirrorBackends prunerMounts]
+            <> [((eco, PrivateCacheCredential), backend) | (eco, (Just backend, _)) <- Map.toAscList (vpPreviewCaches validated)]
+    attachCache caches eco store = case (Map.lookup eco caches, Map.lookup eco (vpPreviewCaches validated), Map.lookup eco (vpMirrorStores validated)) of
+        (Just cache, Just (_, clearedCache), Just clearedMirror) ->
+            store
+                { ssObserve = labelObservation "mirrorTarget" clearedMirror (ssObserve store)
+                , ssPrivate = Just (labelObservation "privateUpstream" clearedCache cache)
+                , ssVersionLimit = maxVersionCount (bpLimits bootPlan)
+                }
+        _ -> store{ssVersionLimit = maxVersionCount (bpLimits bootPlan)}
+
+labelObservation :: Text -> ClearedBackend -> StoreObservation -> StoreObservation
+labelObservation role backend observation =
+    observation
+        { obFacts = (obFacts observation){factBackend = role <> " " <> registryUrlText (cbUrl backend)}
+        }
 
 {- What decides for one mount's store: its own rule set, prepared as the serve path prepares its,
 and the shared first-party predicate. A mount declaring no namespaces owns none. -}

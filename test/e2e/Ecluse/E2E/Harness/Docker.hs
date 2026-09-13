@@ -5,6 +5,7 @@
 module Ecluse.E2E.Harness.Docker (
     e2eUnavailable,
     withGlobalDataPlane,
+    withDredgerPrivateCache,
     withE2E,
     withE2EWith,
 
@@ -156,7 +157,7 @@ withGlobalDataPlane action = do
                     -- aliases below. The raw docker CLI takes that, testcontainers 0.5.3.0 does not.
                     stubRun =
                         (dockerRun stub net stubImage)
-                            { drAliases = ["upstream", "mirror", "private-upstream", "pypi-upstream"]
+                            { drAliases = ["upstream", "mirror", "private-upstream", "private-cache", "pypi-upstream"]
                             , drMounts =
                                 [ (workDir </> "html", "/usr/share/nginx/html:ro")
                                 , (workDir </> "pypi", "/usr/share/nginx/pypi:ro")
@@ -178,6 +179,27 @@ withGlobalDataPlane action = do
                                 miniPort <- publishedPort mini "4566/tcp"
                                 verdPort <- publishedPort verd "4873/tcp"
                                 action GlobalDataPlane{gdpNet = net, gdpStub = stub, gdpVerd = verd, gdpMini = mini, gdpVerdPort = verdPort, gdpMiniPort = miniPort, gdpWorkDir = workDir}
+
+-- | Run a separate Verdaccio for the Dredger preview, using the existing fixture configuration.
+withDredgerPrivateCache :: GlobalDataPlane -> E2E -> (E2E -> IO ()) -> IO ()
+withDredgerPrivateCache plane mirror action = do
+    suffix <- uniqueSuffix
+    labels <- dockerLabelArgs "e2e"
+    image <- pinnedExternal verdaccioImage
+    let name = "ecluse-e2e-private-cache-" <> suffix
+        container =
+            (dockerRun name (gdpNet plane) image)
+                { drAliases = ["cache-verdaccio"]
+                , drPorts = ["127.0.0.1:0:4873"]
+                , drMounts = [(gdpWorkDir plane </> "verdaccio.yaml", "/verdaccio/conf/config.yaml:ro")]
+                }
+    withDockerContainer labels container $ \_ -> do
+        port <- publishedPort name "4873/tcp"
+        let url = "http://127.0.0.1:" <> show port
+            cache = mirror{e2eRegistry = url, e2eVerdaccio = url, e2eMirrorContainer = name}
+        ready <- waitFor (e2eManager mirror) (url <> "/-/ping") 200
+        unless ready (fail "the private preview cache did not become ready")
+        action cache
 
 {- | Bring a proxy up on the shared data plane, wait for readiness, run the action, then
 tear it down on every exit path. Plain topology ('defaultE2EConfig'), with no collector.
@@ -500,7 +522,13 @@ runRoleOnce gdp env args = do
 -}
 runDredgerOnce :: GlobalDataPlane -> [Text] -> [(Text, Text)] -> IO RoleRun
 runDredgerOnce gdp flags extraEnv =
-    runRoleOnce gdp (dredgerEnv <> extraEnv) ("dredger" : map toString flags)
+    runRoleOnce gdp (environment <> extraEnv) ("dredger" : map toString flags)
+  where
+    environment
+        | "--dry-run" `elem` flags =
+            filter ((/= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL") . fst) dredgerEnv
+                <> [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://private-cache/")]
+        | otherwise = dredgerEnv
 
 {- | The Dredger's own environment, carrying the operator consent its mirror target's tag admits.
 Its private upstream is a registry of its own: a deleting role refuses a shared one.
@@ -538,7 +566,7 @@ generateCerts dir = do
         srvKey = dir </> "server.key"
         srvCsr = dir </> "server.csr"
         ext = dir </> "san.ext"
-    writeFileText ext "subjectAltName=DNS:upstream,DNS:mirror,DNS:private-upstream,DNS:pypi-upstream,DNS:localhost,IP:127.0.0.1\n"
+    writeFileText ext "subjectAltName=DNS:upstream,DNS:mirror,DNS:private-upstream,DNS:private-cache,DNS:pypi-upstream,DNS:localhost,IP:127.0.0.1\n"
     opensslOk ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", caKey, "-out", caCrt, "-days", "2", "-subj", "/CN=Ecluse E2E Test CA"]
     opensslOk ["genrsa", "-out", srvKey, "2048"]
     opensslOk ["req", "-new", "-key", srvKey, "-out", srvCsr, "-subj", "/CN=ecluse-e2e"]
@@ -682,6 +710,19 @@ nginxStubConfig =
         , "    ssl_certificate_key /certs/server.key;"
         , "    location / {"
         , "        return 404;"
+        , "    }"
+        , "}"
+        , "server {"
+        , "    listen 443 ssl;"
+        , "    server_name private-cache;"
+        , "    ssl_certificate /certs/server.crt;"
+        , "    ssl_certificate_key /certs/server.key;"
+        , "    resolver 127.0.0.11 valid=5s;"
+        , "    location / {"
+        , "        set $cache_backend cache-verdaccio:4873;"
+        , "        proxy_pass http://$cache_backend;"
+        , "        proxy_set_header Host $host;"
+        , "        proxy_set_header X-Forwarded-Proto https;"
         , "    }"
         , "}"
         , "server {"

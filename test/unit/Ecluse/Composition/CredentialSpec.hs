@@ -9,9 +9,12 @@ import Data.Map.Strict qualified as Map
 import Test.Hspec
 
 import Ecluse.Composition.Credential (
+    CredentialTarget (..),
     codeArtifactIdentityGroups,
+    initTargetCredentialProviders,
     initializedEcosystems,
     lookupProvider,
+    lookupTargetProvider,
     mirrorBackends,
     providerLabel,
  )
@@ -20,8 +23,9 @@ import Ecluse.Composition.Support (
     expectProviders,
     staticEnvVars,
  )
-import Ecluse.Config (Config (configMounts), StoreTag (TagCodeArtifact, TagRegistry, TagVerdaccio), sbTag)
-import Ecluse.Core.Credential (authSecret, currentToken, unSecret)
+import Ecluse.Config (Config (configMounts), StoreBackend (BackendRegistry), StoreTag (TagCodeArtifact, TagRegistry, TagVerdaccio), sbTag)
+import Ecluse.Core.Credential (authSecret, currentToken, mkSecret, unSecret)
+import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Telemetry.Metrics (Label (LProvider), renderLabel)
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..))
@@ -48,6 +52,20 @@ credentialProvidersSpec = describe "initCredentialProviders" $ do
                 tok <- currentToken provider
                 unSecret (authSecret tok) `shouldBe` "mirror-write-token"
 
+    it "keeps the mirror and private target credentials distinct within one ecosystem" $ do
+        result <-
+            initTargetCredentialProviders
+                (const (const noCredentialReporters))
+                [ ((Npm, MirrorCredential), BackendRegistry (mkSecret "mirror-fixture"))
+                , ((Npm, PrivateCacheCredential), BackendRegistry (mkSecret "cache-fixture"))
+                ]
+        case result of
+            Left errors -> expectationFailure (show errors)
+            Right providers -> for_ [(MirrorCredential, "mirror-fixture"), (PrivateCacheCredential, "cache-fixture")] $ \(target, expected) ->
+                case lookupTargetProvider target Npm providers of
+                    Nothing -> expectationFailure "expected the target's provider"
+                    Just provider -> (unSecret . authSecret <$> currentToken provider) `shouldReturn` expected
+
 {- | The label every credential signal carries. It derives from the mount's own declared tag, so a
 second minting store cannot report under the first one's name.
 -}
@@ -73,6 +91,13 @@ identityGroupsSpec = describe "codeArtifactIdentityGroups (per-domain provider s
         let shared = caConfig "shared-domain" Nothing
         map (fmap (second sortNE)) (codeArtifactIdentityGroups [(Npm, TagCodeArtifact, shared), (PyPI, TagCodeArtifact, shared)])
             `shouldBe` [(shared, (TagCodeArtifact, Npm :| [PyPI]))]
+
+    it "shares a domain across target roles but keeps another cache domain distinct" $ do
+        let shared = caConfig "shared-domain" Nothing
+            other = caConfig "cache-domain" Nothing
+            plans = [((Npm, MirrorCredential), TagCodeArtifact, shared), ((Npm, PrivateCacheCredential), TagCodeArtifact, shared)]
+        length (codeArtifactIdentityGroups plans) `shouldBe` 1
+        length (codeArtifactIdentityGroups (plans <> [((PyPI, PrivateCacheCredential), TagCodeArtifact, other)])) `shouldBe` 2
 
     it "keeps distinct domains on distinct providers" $ do
         let a = caConfig "domain-a" Nothing

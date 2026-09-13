@@ -101,11 +101,11 @@ collectSpec = describe "collectBucket" $ do
         outcome <- withBucket "a" $ \a -> collectBucket alphabet a (pagesOf [atBudget])
         fmap length (namesOf outcome) `shouldBe` Just bucketNameBudget
 
-    it "takes no budget at all on a store its listing cannot partition" $ do
-        -- Such a store is walked as one bucket and its leaf reads the document whole anyway, so a
-        -- budget could only abandon the read and skip the store's whole contents.
+    it "reports an oversized store whose listing cannot partition" $ do
         outcome <- withBucket "" $ \everything -> collectBucket noNameAlphabet everything (pagesOf [oversized])
-        fmap length (namesOf outcome) `shouldBe` Just (bucketNameBudget + 1)
+        case outcome of
+            BucketUnsplittable -> pass
+            _ -> expectationFailure "expected an incomplete unsplittable inventory"
 
     it "reports a bucket that outgrew the budget at the depth narrowing stops at" $ do
         -- Past the depth bound a further character has stopped dividing the names, so the walk

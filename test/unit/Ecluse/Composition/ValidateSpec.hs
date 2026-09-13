@@ -30,6 +30,7 @@ import Ecluse.Composition.Support (
     noMaintenanceBackend,
     overrideEnv,
     staticEnvVars,
+    withObservablePrivate,
     withoutPrivateUpstreamUrl,
  )
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
@@ -67,21 +68,21 @@ privatePublicationSpec = describe "vetBoot private upstream and publication targ
 
     forM_ [MirrorPruner, MirrorPreviewer] $ \role -> describe (show role) $ do
         it "returns no plan despite a usable maintenance backend" $ do
-            config <- expectConfig (publishingAt "https://private.example.test" codeArtifactEnvVars) Nothing
+            config <- expectConfig (withObservablePrivate (publishingAt "https://private.example.test" codeArtifactEnvVars)) Nothing
             let (advisories, outcome) = runVet role (vetBoot config)
             advisories `shouldBe` []
             fmap (Map.keys . vpMirrorStores) outcome `shouldBe` Left [collision]
 
         it "accumulates the collision and the unavailable maintenance backend" $
-            refusalsFor role (publishingAt "https://private.example.test" staticEnvVars)
+            refusalsFor role (withObservablePrivate (publishingAt "https://private.example.test" staticEnvVars))
                 `shouldReturn` [collision, noMaintenanceBackend]
 
         it "clears a usable store when publication is separate" $ do
-            plan <- expectVetted role (publishingAt "https://publish.example.test" codeArtifactEnvVars)
+            plan <- expectVetted role (withObservablePrivate (publishingAt "https://publish.example.test" codeArtifactEnvVars))
             fmap clearedRepository (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just (Just "mirror")
 
     it "clears the same-mount publication for proxy and mirror writers" $ do
-        plan <- expectVetted MirrorWriter (publishingAt "https://private.example.test" codeArtifactEnvVars)
+        plan <- expectVetted MirrorWriter (withObservablePrivate (publishingAt "https://private.example.test" codeArtifactEnvVars))
         fmap (registryUrlText . publicationTargetUrl . vpubTarget) (Map.lookup Npm (vpPublications plan))
             `shouldBe` Just "https://private.example.test"
 

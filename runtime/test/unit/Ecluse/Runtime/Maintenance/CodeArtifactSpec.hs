@@ -31,7 +31,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFault (..),
     StoreMaintenance (..),
     StoreManifestRead,
-    StoreObservation (obListPackagesIn),
+    StoreObservation (obEnumerateVersions, obListPackagesIn),
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed),
@@ -48,6 +48,7 @@ import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepExamined, 
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact (
     ControlPlane (..),
+    boundedObservationFor,
     maintenanceFor,
     maintenanceForEnv,
     observationFor,
@@ -154,6 +155,15 @@ enumerationCases store = describe "the handle's paged enumerations" $ do
     it "reads a version page carrying no versions field as an empty page" $ do
         let plane = reading inertReader{rpListVersions = \_ -> pure (Right (CA.newListPackageVersionsResponse 200))}
         enumerateVersions (handleOver store plane) aPackage `shouldReturn` Right []
+
+    it "stops preview pagination at the version bound without requesting a later page" $ do
+        tokens <- newIORef []
+        answer <- answersFrom [versionsPage (Just "v2") ["1.0.0"], versionsPage (Just "v3") ["1.1.0"], versionsPage Nothing ["1.2.0"]]
+        let reader = inertReader{rpListVersions = \request -> record tokens (request ^. CAL.listPackageVersions_nextToken) >> answer}
+            observation = boundedObservationFor 1 (mkNameAlphabet "abc") (\_ -> fail "inventory does not read metadata") store reader
+        result <- obEnumerateVersions observation aPackage
+        result `shouldSatisfy` isLeft
+        readIORef tokens `shouldReturn` [Nothing, Just "v2"]
 
 deleteCases :: CodeArtifactStore -> Spec
 deleteCases store = describe "the handle's chunked delete" $ do

@@ -23,7 +23,7 @@ import Ecluse.Composition.Executable (
     planExecutable,
  )
 import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, withObservablePrivate)
 import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootStorePreview, BootStorePruner))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvPort))
@@ -161,7 +161,7 @@ previewSpec = describe "the preview role's wiring" $ do
         rec' <- recordingPorts generation
         outcome <- sweepCycle testPacing (recPorts rec') (pwMounts pruner)
         outcomeHalt outcome `shouldBe` Nothing
-        map tpConsent (outcomePrerequisites outcome) `shouldBe` [PrerequisiteUnmet "attach it"]
+        map tpConsent (outcomePrerequisites outcome) `shouldBe` replicate 2 (PrerequisiteUnmet "attach it")
         tallyDeleted (outcomeTally outcome) `shouldBe` 0
         readFakeContents store `shouldReturn` seeded
 
@@ -175,8 +175,8 @@ names runs, so the other one reports being reached. -}
 plannedPruner :: BootRole -> StoreBuilds -> IO PrunerWiring
 plannedPruner role builds =
     bracket newTestLogEnv (void . closeScribes) $ \logEnv -> do
-        config <- expectConfig codeArtifactEnvVars Nothing
-        bootPlan <- expectPlanFor role codeArtifactEnvVars Nothing config noCeiling
+        config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
+        bootPlan <- expectPlanFor role (withObservablePrivate codeArtifactEnvVars) Nothing config noCeiling
         planned <-
             planExecutable
                 logEnv
@@ -221,7 +221,7 @@ advisoryAgeSpec = describe "runDredger advisory database ages" $
 
 withDredgerAges :: (SdkMeterEnv -> [(Ecosystem, CveSyncHandle)] -> IO ()) -> IO ()
 withDredgerAges use = withRoleTelemetry $ \logEnv telemetry meterEnv -> do
-    config <- expectConfig codeArtifactEnvVars Nothing
+    config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
     bootPlan <- expectPlanFor BootStorePruner codeArtifactEnvVars Nothing config noCeiling
     store <- newFakeStore defaultFakeStoreConfig
     planned <-

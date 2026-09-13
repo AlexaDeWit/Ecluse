@@ -184,6 +184,11 @@ request ceiling and stops later requests after a request fault. Earlier successe
 and a per-version refusal does not stop later requests. The cap charges the entire selected batch,
 including versions left unreached after a fault.
 
+A Dredger preview joins the mirror and private-cache observations within the declared mount.
+It retains per-location policy evidence and counts logical selections once. This exposes retained
+copies without extending deletion authority. The operator contract is in
+[Running the Dredger](../../web/content/docs/dredger.md#preview).
+
 ### Walking a store
 
 The handle lists a store one bucket of its name space at a time, as a stream of pages, so nothing

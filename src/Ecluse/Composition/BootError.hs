@@ -147,6 +147,8 @@ data StoreMaintenanceReason
       listing or version delete.
       -}
       NoProtocolMaintenance
+    | -- | The declared private cache lacks a supported maintenance or authentication operation.
+      PrivateCacheUnavailable Text
     | -- | Building the cleared backend's client against the live environment threw.
       ClientBuildFailed Text
     deriving stock (Eq, Show)
@@ -282,6 +284,8 @@ renderBootError = \case
         "the advisory sync named by ECLUSE_ADVISORIES__URL could not be prepared at boot: "
             <> detail
             <> " (a transient AWS or network error may clear on retry. A permanent one, such as unresolvable AWS credentials or an ECLUSE_ADVISORIES__DATA_DIR this process cannot create, must be fixed)"
+    StoreMaintenanceUnavailable eco (PrivateCacheUnavailable detail) ->
+        mountKeyRef eco "privateUpstream" <> " has no usable observation backend: " <> detail
     StoreMaintenanceUnavailable eco reason ->
         mountKeyRef eco "mirrorTarget"
             <> " has no usable store maintenance backend: "
@@ -310,6 +314,7 @@ renderStoreMaintenanceReason eco = \case
         "its store has no control plane, and the "
             <> ecosystemName eco
             <> " protocol carries no package listing or version delete for one"
+    PrivateCacheUnavailable detail -> "privateUpstream cannot be previewed: " <> detail
     ClientBuildFailed detail -> "building its client failed: " <> detail
 
 {- | Render an advisory as the warning line a boot logs and @ecluse check-config@ prints. Both

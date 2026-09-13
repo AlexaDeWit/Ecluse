@@ -9,11 +9,12 @@ versions the mount's own rules now deny. Run it when your mirror must not keep s
 new advisory condemns, and read this page before you point it at a store, because deletion is
 permanent.
 
-The current Dredger targets the mirror repository only. A CodeArtifact private read repository
-can retain another copy after mirror deletion. Follow
-[the revocation procedure](@/docs/operations.md#revoking-a-mirrored-version-internal-yank) to
-account for those retained copies. Automated cleanup of both locations is planned in
-[#1227](https://github.com/AlexaDeWit/Ecluse/issues/1227), not implemented.
+The deleting command targets the mirror repository only. `--dry-run` observes both the mirror
+and its declared private cache. It reports each location and counts a selected package version
+once across both. Private-cache deletion remains part of
+[#1227](https://github.com/AlexaDeWit/Ecluse/issues/1227).
+A private cache can retain a copy after mirror deletion. Follow
+[the revocation procedure](@/docs/operations.md#revoking-a-mirrored-version-internal-yank) for those copies.
 
 Dredger refuses to boot when a mount's `privateUpstream` and `publicationTarget` name the same
 registry. Preview applies the same refusal. The private read cache must remain separate from
@@ -161,9 +162,22 @@ indefinitely.
 
 ## Preview
 
-`ecluse dredger --dry-run` boots a role of its own. It is built from each backend's observing calls
-alone, so it holds no delete and no walk-marker write: the run cannot delete, because nothing it
-holds can.
+`ecluse dredger --dry-run` observes actual inventories from `mirrorTarget` and `privateUpstream`
+within each mirrored mount. Mirror-only, cache-only and shared versions all participate.
+Each location uses its own metadata and the same configured rules. First-party names remain
+excluded before metadata reads. Missing metadata still permits a decisive identity deny when
+that identity supplies sufficient evidence. Origin metadata does not veto a selected cache version.
+
+The preview constructs only observing calls. It cannot delete, publish, or write a cursor or
+consent marker. Ordinary metadata reads can cause a cache to retain upstream content, so those
+reads do not prove local presence. Only the actual inventory determines which versions participate.
+
+CodeArtifact resolves each repository from its own declared URL and authenticates through its
+own domain identity. Matching mint identities share a credential provider. Anonymous Verdaccio
+reads are supported, with missing deletion consent reported separately. A generic `registry`
+private target has no inventory backend and refuses preview. An inventory read that cannot
+authenticate makes the preview incomplete. No mirror, publication, or caller token is borrowed
+for a private target.
 
 A preview needs no deletion consent. It reads the consent marker and the store classification,
 reports each one per target, and keeps enumerating either way. Those findings print above the
@@ -171,12 +185,19 @@ counts, because a count says what your rules reach, never that this deployment m
 Everything else the deleting role needs still applies: the endpoint collision checks, the mirror
 target's own parsing, a backend this build can sweep, and the credential the store answers to.
 
+Combined names remain within the existing 10000-name bucket budget. Oversized buckets split
+within the existing depth bound of 4. An unsplittable overflow reports incomplete evidence.
+The combined versions of one package remain within `limits.maxVersionCount`. CodeArtifact
+preview enforces that limit while reading version pages. No overflow becomes a complete truncated scan.
+
 A full walk under a preview starts at the first bucket every time. It neither reads nor replaces
 the marker a real walk records, so a preview leaves a walk in progress where it was.
 
 The cap applies as logging only: passing it writes one line naming where a real run would have
-halted, and the preview counts on, so its closing tally reports the full reach. Its counter is
-`would_delete`, never `deleted`.
+halted, and the preview counts on, so its closing tally reports the full reach. Its metric is
+`would_delete`. The closing tally's `deleted` column counts
+logical selected versions once per mount, while target-labelled audit lines retain each copy's outcome.
+The derived default cap still counts mounts, so a second location does not double it.
 
 Under `--once` the exit status follows completeness alone:
 
@@ -186,7 +207,8 @@ Under `--once` the exit status follows completeness alone:
 | Stopped on a store fault, or decided without an advisory generation or a package's own metadata | non-zero, with partial counts and every candidate it did gather |
 
 Exit `0` means complete, not authorised. A preview that exits `0` with the consent marker absent
-has told you both what a real sweep would remove and that a real sweep would refuse to start.
+reports its selections and the missing permission. The deleting command still acts on the
+mirror only, so preview selections in the private cache are diagnostic.
 
 Use it before the first real sweep of a store, and after any rule change you are unsure of.
 
@@ -245,6 +267,10 @@ The mirror worker needs the same token-mint permissions, repository reads for it
 On CodeArtifact, Dredger does not need publication permission. See the
 [action/resource reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_codeartifact.html)
 and [token requirements](https://docs.aws.amazon.com/codeartifact/latest/ug/tokens-authentication.html).
+
+Preview needs the listed token-mint and observation permissions independently for both approved
+repositories. Apply the read resource scopes to each repository and its packages. Preview needs
+neither `DeletePackageVersions` nor tag-write permissions on either target.
 
 The full walk also needs cursor-write permissions:
 
