@@ -21,9 +21,11 @@ import Ecluse.Config (
     MintPlan (MintCodeArtifact, MintStatic),
     MirrorTarget (mtBackend),
     Mount (mountRegistries),
-    MountConfig,
+    MountConfig (mntPrivateUpstream),
+    PrivateEndpoint (preTarget),
     StoreBackend (BackendRegistry, BackendVerdaccio),
     StoreTag (TagCodeArtifact, TagRegistry, TagVerdaccio),
+    Target,
     loadConfig,
     regMirrorTarget,
     renderConfigError,
@@ -31,7 +33,7 @@ import Ecluse.Config (
     sbMint,
     sbTag,
  )
-import Ecluse.Config.Target (parseCodeArtifactHost)
+import Ecluse.Config.Target (parseCodeArtifactHost, resolvePrivateBackend)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Runtime.Credential.CodeArtifact (CodeArtifactConfig (..))
@@ -43,6 +45,7 @@ spec = do
     layeringSpec
     hostValidationSpec
     backendSpec
+    privateBackendSpec
     tagCollisionSpec
     parseCodeArtifactHostSpec
 
@@ -233,6 +236,28 @@ backendSpec = describe "the store backend a mirror target resolves to" $ do
     it "withholds deletion consent on a verdaccio store that never declares it" $ do
         backend <- backendFor [decl "mirrorTarget" "verdaccio" [url verdaccioUrl, field "token" "write-token"]]
         backend `shouldBe` BackendVerdaccio (mkSecret "write-token") DeletionWithheld
+
+{- The private cache is a store of its own. The pass that sweeps it resolves its backend from the
+private endpoint alone, so the repository it addresses is the one written there. -}
+privateBackendSpec :: Spec
+privateBackendSpec = describe "the store backend a private cache resolves to" $
+    it "resolves codeArtifact to the identity its host carries and the repository it addresses" $ do
+        target <- privateTargetFor [decl "privateUpstream" "codeArtifact" [url codeArtifactInternal]]
+        case resolvePrivateBackend Npm target of
+            Right (backend, store) -> do
+                sbTag backend `shouldBe` TagCodeArtifact
+                casRepository store `shouldBe` "internal"
+                formatToken (casFormat store) `shouldBe` "npm"
+                sbControl backend `shouldBe` ControlCodeArtifact store
+            Left err -> expectationFailure ("expected the private backend to resolve, got: " <> show (renderConfigError err))
+
+-- The npm mount's resolved private-upstream target, failing the test on a mount without one.
+privateTargetFor :: [Text] -> IO Target
+privateTargetFor endpoints = do
+    config <- expectLoad pubUrlEnv endpoints
+    case mntPrivateUpstream =<< Map.lookup Npm (cfgMounts (configApp config)) of
+        Just endpoint -> pure (preTarget endpoint)
+        Nothing -> fail "the npm mount resolved no private upstream"
 
 -- One store has one backend, so two endpoints at one registry must name one tag.
 tagCollisionSpec :: Spec
