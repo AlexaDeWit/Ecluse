@@ -9,6 +9,7 @@ module Ecluse.Composition.Credential (
     -- * Global credential providers
     CredentialProviders,
     noCredentialProviders,
+    BuildCredentials,
     initCredentialProviders,
     initTargetCredentialProviders,
     CredentialTarget (..),
@@ -68,12 +69,15 @@ providerLabel = \case
     TagCodeArtifact -> ProviderCodeArtifact
     TagVerdaccio -> ProviderVerdaccio
 
-{- | Build the global credential providers from the cleared mounts, or every boot error that
-blocks one. Each provider mints eagerly, so a bad identity fails here as 'CodeArtifactMintFailed'.
+-- | Build only credentials for the targets cleared by this boot role.
+type BuildCredentials = (Ecosystem -> StoreTag -> CredentialReporters) -> [((Ecosystem, CredentialTarget), StoreBackend)] -> IO (Either [BootError] CredentialProviders)
+
+{- | Build each mirroring mount's write-credential provider through the injected builder. The mint
+is eager, so a bad identity fails here as 'CodeArtifactMintFailed'.
 -}
-initCredentialProviders :: (Ecosystem -> StoreTag -> CredentialReporters) -> [Mount] -> IO (Either [BootError] CredentialProviders)
-initCredentialProviders reportersFor mounts =
-    initTargetCredentialProviders reportersFor [((eco, MirrorCredential), backend) | (eco, backend) <- mirrorBackends mounts]
+initCredentialProviders :: BuildCredentials -> (Ecosystem -> StoreTag -> CredentialReporters) -> [Mount] -> IO (Either [BootError] CredentialProviders)
+initCredentialProviders build reportersFor mounts =
+    build reportersFor [((eco, MirrorCredential), backend) | (eco, backend) <- mirrorBackends mounts]
 
 -- | Build target-bound providers, sharing only matching CodeArtifact mint identities.
 initTargetCredentialProviders ::

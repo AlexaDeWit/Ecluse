@@ -30,7 +30,7 @@ import Ecluse.Composition (
     BootWiring,
     PublishBudget (PublishBudget, pbBodyBudget, pbMaxRequestBytes),
     ResolveAdapter,
-    WiringPorts (WiringPorts, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
+    WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
     firstPartyName,
     resolveBootWiring,
  )
@@ -38,7 +38,7 @@ import Ecluse.Composition.BootError (
     BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, PilotWithoutEcosystem),
     refuseOnThrow,
  )
-import Ecluse.Composition.Credential (CredentialProviders, CredentialTarget (..), mirrorBackends, noCredentialProviders, providerLabel)
+import Ecluse.Composition.Credential (BuildCredentials, CredentialTarget (..), mirrorBackends, noCredentialProviders, providerLabel)
 import Ecluse.Composition.Maintenance (
     BuildStoreObservation,
     ClearedBackend (cbUrl),
@@ -55,6 +55,7 @@ import Ecluse.Composition.MirrorQueue (
     MirrorQueuePlan,
     MirrorRuntimePlan (MirrorWith, NoMirroring),
  )
+import Ecluse.Composition.MirrorRole (mirrorMintPlan)
 import Ecluse.Composition.Plan (
     BootPlan (bpLimits, bpMemoryPlan, bpMirrorRuntime, bpRole, bpS3Endpoint, bpValidated),
  )
@@ -66,7 +67,7 @@ import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPreviewCaches, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
  )
-import Ecluse.Config (AppConfig (cfgAdvisories), Mount (mountPolicy), MountConfig (mntFirstParty), StoreBackend, StoreTag, mountAdvisoryAge, mountEpssRequirement)
+import Ecluse.Config (AppConfig (cfgAdvisories), Mount (mountPolicy), MountConfig (mntFirstParty), StoreTag, mountAdvisoryAge, mountEpssRequirement)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
@@ -148,9 +149,6 @@ so a spec can drive this phase's refusals without reaching a cloud.
 -}
 type BuildMirrorQueue = LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 
--- | Build only credentials for the targets cleared by this boot role.
-type BuildCredentials = (Ecosystem -> StoreTag -> CredentialReporters) -> [((Ecosystem, CredentialTarget), StoreBackend)] -> IO (Either [BootError] CredentialProviders)
-
 {- How the booting role builds one store as the sweep holds it. Both Dredger roles plan through the
 one arm below and differ only in which of 'StoreBuilds' they ran. -}
 type BuildSweepStore = StorePorts -> Limits -> ClearedBackend -> IO SweepStore
@@ -170,7 +168,7 @@ planExecutable ::
 planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds bootPlan = case bpRole bootPlan of
     BootMirrorPipeline role ->
         fmap (executablePlan . MirrorPipelineWiring)
-            <$> planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan
+            <$> planMirrorWiring logEnv resolveAdapter buildQueue buildCredentials role bootPlan
     BootStorePruner -> prunerArm (deleting (sbDeleting builds))
     BootStorePreview -> prunerArm (previewing (sbObserving builds))
     BootWithoutPipeline -> pure (executablePlan . PilotWiring <$> pilotExportPlan (bpValidated bootPlan))
@@ -301,8 +299,8 @@ pilotExportPlan validated = maybeToRight [PilotWithoutEcosystem] (exportLoopPlan
 
 {- The mirror pipeline's arm: the advisory sync, the queue backend, and the mount wiring. The three
 refusable steps accumulate, so one launch reports every one rather than the earliest alone. -}
-planMirrorWiring :: LogEnv -> ResolveAdapter -> BuildMirrorQueue -> MirrorRole -> BootPlan -> IO (Either [BootError] MirrorWiring)
-planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan = do
+planMirrorWiring :: LogEnv -> ResolveAdapter -> BuildMirrorQueue -> BuildCredentials -> MirrorRole -> BootPlan -> IO (Either [BootError] MirrorWiring)
+planMirrorWiring logEnv resolveAdapter buildQueue buildCredentials role bootPlan = do
     -- The metric instruments do not exist until the assembly builds the telemetry substrate. The
     -- credential providers minted below record through reporters 'installMetrics' makes live.
     deferredMetrics <- newDeferredMetrics getCurrentTime
@@ -319,13 +317,14 @@ planMirrorWiring logEnv resolveAdapter buildQueue role bootPlan = do
         ports =
             WiringPorts
                 { wpReporters = credentialReportersOver deferredMetrics
+                , wpBuildCredentials = buildCredentials
                 , wpResolveAdapter = resolveAdapter
                 , wpClock = getCurrentTime
                 , wpRuleDeps = ruleDeps
                 }
     -- The wiring reads the rule deps and the publish budget above, so it follows them rather than
     -- accumulating with them.
-    wiring <- resolveBootWiring ports (bpLimits bootPlan) publishBudget validated
+    wiring <- resolveBootWiring ports (mirrorMintPlan role) (bpLimits bootPlan) publishBudget validated
     pure . validationToEither $
         mirrorWiringFrom role deferredMetrics
             <$> eitherToValidation cveSync

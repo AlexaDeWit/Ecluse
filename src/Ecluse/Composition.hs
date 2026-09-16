@@ -5,10 +5,10 @@
 {- | The wiring half of the boot's effectful tier: turn the 'ValidatedPlan' that
 "Ecluse.Composition.Plan" resolves and "Ecluse.Composition.Validate" clears into the served
 'MountBinding's and the worker's publish targets. Every refusal 'resolveBootWiring' reports needs a
-live environment: it mints each mount's mirror-write credential and runs
+live environment: a writing role mints each mount's mirror-write credential, and every role runs
 'Ecluse.Core.Rules.prepare', which allocates per-rule engine state once at boot. That is why this
 is 'IO' and why @ecluse check-config@ reaches none of it. "Ecluse.Composition.Executable" runs it
-as one phase, and 'WiringPorts' carries the clock and the adapter resolver in, so a unit test runs
+as one phase, and 'WiringPorts' carries every capability it needs in, so a unit test runs
 the assembly without opening a listener (see @docs\/architecture\/configuration.md@ → "Validation").
 -}
 module Ecluse.Composition (
@@ -38,12 +38,15 @@ import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Composition.BootError (BootError (..))
 import Ecluse.Composition.Credential (
+    BuildCredentials,
     CredentialProviders,
     initCredentialProviders,
     initializedEcosystems,
     lookupProvider,
+    noCredentialProviders,
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
+import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirrorWrite))
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMounts, vpPublications, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
@@ -100,6 +103,8 @@ assembly without opening a listener.
 data WiringPorts = WiringPorts
     { wpReporters :: Ecosystem -> StoreTag -> CredentialReporters
     -- ^ Reporters keyed by the shared credential's canonical ecosystem and store label.
+    , wpBuildCredentials :: BuildCredentials
+    -- ^ How this boot builds the mirror-write providers, for the roles that mint them.
     , wpResolveAdapter :: ResolveAdapter
     -- ^ The ecosystem-to-binding resolver, 'Nothing' for an ecosystem this build ships no adapter for.
     , wpClock :: IO UTCTime
@@ -115,27 +120,34 @@ data BootWiring = BootWiring
     { bwBindings :: [MountBinding]
     -- ^ The resolved mounts. A worker-only role builds them for their rules, and serves none.
     , bwPublishTargets :: [PublishTarget]
-    -- ^ One target per mirrored mount, each holding the provider that mints its write token.
+    {- ^ One target per mirrored mount, each holding the provider that mints its write token. A
+    role that writes nothing plans none.
+    -}
     }
 
 {- | Build the boot wiring from the cleared plan, or the refusals only a live environment can
 settle. The credential providers stay internal: a mount reaches one through the wiring it produced.
 -}
-resolveBootWiring :: WiringPorts -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
-resolveBootWiring ports limits publishBudget plan = do
-    -- The mirror-write credential mints once, eagerly, so a misconfiguration fails at boot. Both
-    -- groups below consume the providers, so this step runs before them, not alongside them.
-    providersE <- initCredentialProviders (wpReporters ports) (map vmMount (vpMounts plan))
+resolveBootWiring :: WiringPorts -> MirrorMintPlan -> Limits -> Maybe PublishBudget -> ValidatedPlan -> IO (Either [BootError] BootWiring)
+resolveBootWiring ports mintPlan limits publishBudget plan = do
+    providersE <- mintedProviders
     case providersE of
         Left errs -> pure (Left errs)
         Right providers -> do
-            bindingsE <- planMounts (wpResolveAdapter ports) (wpClock ports) (wpRuleDeps ports) providers limits publishBudget plan
+            bindingsE <- planMounts (wpResolveAdapter ports) (wpClock ports) (wpRuleDeps ports) mintPlan providers limits publishBudget plan
             -- The serve side and the publish side read the same providers independently, so
             -- 'Validation' reports both rather than the mounts' refusals alone.
             pure . validationToEither $
                 BootWiring
                     <$> eitherToValidation bindingsE
-                    <*> eitherToValidation (planPublishTargets providers plan)
+                    <*> eitherToValidation (planPublishTargets mintPlan providers plan)
+  where
+    -- A minting role mints once, eagerly, and before either group above consumes the providers,
+    -- so a misconfigured identity fails at boot rather than on the first write.
+    mintedProviders :: IO (Either [BootError] CredentialProviders)
+    mintedProviders = case mintPlan of
+        SkipMirrorWrite -> pure (Right noCredentialProviders)
+        MintMirrorWrite -> initCredentialProviders (wpBuildCredentials ports) (wpReporters ports) (map vmMount (vpMounts plan))
 
 {- | The publish-side byte discipline: the process-wide aggregate admission and the
 per-request cap. It exists exactly when a publication target is configured.
@@ -152,12 +164,13 @@ planMounts ::
     ResolveAdapter ->
     IO UTCTime ->
     (Ecosystem -> RuleDeps) ->
+    MirrorMintPlan ->
     CredentialProviders ->
     Limits ->
     Maybe PublishBudget ->
     ValidatedPlan ->
     IO (Either [BootError] [MountBinding])
-planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget plan = do
+planMounts resolveAdapter clock ruleDepsFor mintPlan providers limits publishBudget plan = do
     bindingResults <- traverse bindingFor (vpMounts plan)
     pure $ case partitionEithers bindingResults of
         ([], bindings) -> Right bindings
@@ -176,7 +189,7 @@ planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget plan 
     bindingFor :: VettedMount -> IO (Either [BootError] MountBinding)
     bindingFor vetted = do
         deps <- packumentDepsFor (vmAdapter vetted) (vmMount vetted) (vmConfig vetted)
-        pure $ case (credentialError providers (vmMount vetted), resolveAdapter eco deps (publishDeps vetted)) of
+        pure $ case (credentialError mintPlan providers (vmMount vetted), resolveAdapter eco deps (publishDeps vetted)) of
             (Nothing, Just binding) -> Right binding
             (mCredErr, mBinding) ->
                 Left (maybeToList mCredErr <> [MissingAdapter eco | isNothing mBinding])
@@ -235,11 +248,13 @@ planMounts resolveAdapter clock ruleDepsFor providers limits publishBudget plan 
                 , pdEgressUrl = mkRegistryUrl
                 }
 
--- A serve-only mount never writes, so it references no provider and can never fail here.
-credentialError :: CredentialProviders -> Mount -> Maybe BootError
-credentialError providers mount = case regMirrorTarget (mountRegistries mount) of
-    Nothing -> Nothing
-    Just _ ->
+-- A role that mints nothing references nothing, and a mount with no mirror target never writes,
+-- so neither can fail here.
+credentialError :: MirrorMintPlan -> CredentialProviders -> Mount -> Maybe BootError
+credentialError mintPlan providers mount = case (mintPlan, regMirrorTarget (mountRegistries mount)) of
+    (SkipMirrorWrite, _) -> Nothing
+    (MintMirrorWrite, Nothing) -> Nothing
+    (MintMirrorWrite, Just _) ->
         if mountEcosystem mount `Set.member` initializedEcosystems providers
             then Nothing
             else Just (UnresolvedCredential (mountEcosystem mount))
@@ -299,17 +314,20 @@ data PublishTarget = PublishTarget
     -- ^ The provider minting the mirror-target write token.
     }
 
-{- | Resolve each cleared mount to its publish target, or the aggregated boot errors. An
-unresolved credential raises the same error 'planMounts' reports for the serve side.
+{- | Resolve each cleared mount to its publish target, or the aggregated boot errors. A role that
+mints no write credential plans no target, because nothing in its process writes.
 -}
 planPublishTargets ::
+    MirrorMintPlan ->
     CredentialProviders ->
     ValidatedPlan ->
     Either [BootError] [PublishTarget]
-planPublishTargets providers plan =
-    case partitionEithers (mapMaybe (publishTargetFor providers . vmMount) (vpMounts plan)) of
-        ([], targets) -> Right targets
-        (errs, _) -> Left (concat errs)
+planPublishTargets mintPlan providers plan = case mintPlan of
+    SkipMirrorWrite -> Right []
+    MintMirrorWrite ->
+        case partitionEithers (mapMaybe (publishTargetFor providers . vmMount) (vpMounts plan)) of
+            ([], targets) -> Right targets
+            (errs, _) -> Left (concat errs)
 
 -- 'Nothing' for a serve-only mount, which writes nothing and has no target. A
 -- mirrored mount without an initialised provider is the unresolved-credential error.

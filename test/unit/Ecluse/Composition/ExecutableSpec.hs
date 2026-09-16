@@ -27,7 +27,7 @@ import Ecluse.Composition.BootError (
     ),
     StoreMaintenanceReason (ClientBuildFailed, PrivateCacheUnavailable),
  )
-import Ecluse.Composition.Credential (noCredentialProviders)
+import Ecluse.Composition.Credential (initTargetCredentialProviders, noCredentialProviders)
 import Ecluse.Composition.Executable (
     BuildCredentials,
     BuildMirrorQueue,
@@ -42,7 +42,7 @@ import Ecluse.Composition.Plan (BootPlan (bpRole))
 import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, staticEnvVars, withObservablePrivate)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
-    MirrorRole (ServeAndMirror),
+    MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
@@ -135,6 +135,24 @@ spec = describe "planExecutable" $ do
             Right _ -> expectationFailure "expected the planning phase to refuse"
             Left [AdvisorySyncUnavailable _, MirrorQueueUnavailable _, MissingAdapter Npm] -> pass
             Left errs -> expectationFailure ("expected all three refusals in one list, got: " <> show errs)
+
+    for_ [ServeAndMirror, MirrorOnly] $ \role ->
+        it ("refuses a mirror-write mint the live environment refuses, under " <> show role) $ do
+            -- Both roles write to the mirror store, so a bad identity refuses here rather than
+            -- on the first publish an admitted version asks for.
+            outcome <- planUnder staticEnvVars (BootMirrorPipeline role) mountBindingFor inertQueue refusingCredentials inertStore
+            case outcome of
+                Right _ -> expectationFailure "expected the planning phase to refuse"
+                Left errs -> errs `shouldBe` [CodeArtifactMintFailed ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET" :| []) "no identity answered"]
+
+    it "mints nothing on a serve-only boot, and plans it no publish target" $ do
+        -- A build that refuses every mint still yields the plan, because the serve-only role
+        -- calls none: its identity needs no rights over the mirror store.
+        outcome <- planUnder staticEnvVars (BootMirrorPipeline ServeOnly) mountBindingFor inertQueue refusingCredentials inertStore
+        plan <- either (\errs -> fail ("planning refused: " <> show errs)) pure outcome
+        mirror <- expectMirrorWiring plan
+        map bindingPrefix (bwBindings (mwBootWiring mirror)) `shouldBe` [pure "npm"]
+        map ptEcosystem (bwPublishTargets (mwBootWiring mirror)) `shouldBe` []
 
     it "plans the store pruner a sweepable mount per cleared store" $ do
         -- The build carries a sweep, so the arm yields the plan rather than refusing: one mount
@@ -335,7 +353,15 @@ planFor = planWith staticEnvVars
 
 -- | 'planFor' over a named environment layer, for a refusal 'staticEnvVars' cannot reach.
 planWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> StoreBuilds -> IO (Either [BootError] ExecutablePlan)
-planWith envVars role resolveAdapter buildQueue = planUnder envVars role resolveAdapter buildQueue inertCredentials
+planWith envVars role resolveAdapter buildQueue = planUnder envVars role resolveAdapter buildQueue (defaultCredentialsFor role)
+
+{- | The credential build a case takes by default: the production one for the mirror pipeline,
+whose static fixture mints without a cloud, and an inert one for the store roles' CodeArtifact one.
+-}
+defaultCredentialsFor :: BootRole -> BuildCredentials
+defaultCredentialsFor = \case
+    BootMirrorPipeline _ -> initTargetCredentialProviders
+    _ -> inertCredentials
 
 -- | 'planWith' over a chosen credential build, for the deleting role's own mint.
 planUnder ::

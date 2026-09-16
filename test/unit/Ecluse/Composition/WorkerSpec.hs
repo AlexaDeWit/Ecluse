@@ -9,6 +9,7 @@ import Test.Hspec
 
 import Ecluse (mountBindingFor)
 import Ecluse.Composition (PublishTarget (ptEcosystem), planMounts, planPublishTargets)
+import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite))
 import Ecluse.Composition.Support (expectConfig, expectProviders, expectValidated, fixedNow, overrideEnv, scopedName, staticEnvVars, testLimits)
 import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -124,9 +125,9 @@ composedFixturesFrom envVars limits = do
     providers <- expectProviders config
     plan <- expectValidated config
     bindings <-
-        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits Nothing plan
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers limits Nothing plan
             >>= either (\errs -> fail ("unexpected boot errors: " <> show errs)) pure
     targets <-
-        either (\errs -> fail ("unexpected publish-target errors: " <> show errs)) pure (planPublishTargets providers plan)
+        either (\errs -> fail ("unexpected publish-target errors: " <> show errs)) pure (planPublishTargets MintMirrorWrite providers plan)
     env <- newTestEnv
     pure (env, bindings, targets)
