@@ -158,11 +158,8 @@ diagrams:
         outOfScope: false
         reasonOutOfScope: ""
         containedElements:
-          - 0ec10e5e-0000-4000-8000-000000000012
           - 0ec10e5e-0000-4000-8000-000000000020
           - 0ec10e5e-0000-4000-8000-000000000021
-          - 0ec10e5e-0000-4000-8000-000000000022
-          - 0ec10e5e-0000-4000-8000-000000000030
           - 0ec10e5e-0000-4000-8000-000000000031
           - 0ec10e5e-0000-4000-8000-000000000032
           - 0ec10e5e-0000-4000-8000-000000000033
@@ -170,21 +167,20 @@ diagrams:
           - f1646094-9885-422a-b7e7-7888c72905ef
           - c8455307-cef2-4843-a821-ff90db9643d2
           - f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
-          - d5da865d-6e80-44da-a2ee-841f6bebd567
-          - c9e4d8b4-1234-4d1c-8948-a0ba03f82abd
         crossingFlows:
           - 0ec10e5e-0000-4000-8000-000000000040
-          - 0ec10e5e-0000-4000-8000-000000000043
-          - 0ec10e5e-0000-4000-8000-000000000047
+          - e4a10f2e-9b48-4173-b2d1-9798f82a347b
+          - 029fb3b3-40df-4197-bac2-142912c50fe5
           - 4e565871-45cc-4987-abba-24859ee2cf60
+          - c02b5948-c82c-419b-a240-cf223204dba4
         shape:
           kind: box
           position:
-            x: 240
-            y: 10
+            x: -109.26889205770078
+            y: -8.454039918540502
           size:
-            width: 1180
-            height: 1180
+            width: 1290
+            height: 1196
       - kind: trust-boundary
         id: 0ec10e5e-0000-4000-8000-000000000002
         name: Public internet (untrusted)
@@ -194,128 +190,90 @@ diagrams:
         containedElements:
           - 0ec10e5e-0000-4000-8000-000000000011
         crossingFlows:
-          - 0ec10e5e-0000-4000-8000-000000000043
-          - 0ec10e5e-0000-4000-8000-000000000047
+          - e4a10f2e-9b48-4173-b2d1-9798f82a347b
+          - 029fb3b3-40df-4197-bac2-142912c50fe5
         shape:
           kind: box
           position:
-            x: -90
-            y: 640
+            x: -400.4360496953759
+            y: 163.91625580313897
           size:
             width: 240
             height: 200
       - kind: trust-boundary
         id: bdf95436-cb02-4248-99a2-4e50b0d286fa
-        name: Public internet (untrusted)
+        name: Public internet (advisory sources)
         description: ""
         outOfScope: false
         reasonOutOfScope: ""
         containedElements:
           - 7528590e-7392-46c4-9b8c-7ca872d63590
-        crossingFlows: []
+          - 7ecb4bda-c005-4c1c-8eb6-868168c304db
+        crossingFlows:
+          - 4e565871-45cc-4987-abba-24859ee2cf60
+          - c02b5948-c82c-419b-a240-cf223204dba4
         shape:
           kind: box
           position:
-            x: 1452
-            y: 755
+            x: -453.5619967467145
+            y: 475.81461489228866
           size:
             width: 281
             height: 424
       - kind: actor
         id: 0ec10e5e-0000-4000-8000-000000000010
         name: |-
-          npm client
+          Package client
           (developer / CI)
         description: The caller. It presents its own CodeArtifact bearer token. The operator's access edge authenticates it to the proxy, not Écluse.
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: -42.901618929016195
-          y: 416.12702366127024
+          x: 682.938115837379
+          y: -196.04003535740344
         size:
           width: 170
           height: 90
         providesAuthentication: true
       - kind: actor
         id: 0ec10e5e-0000-4000-8000-000000000011
-        name: Public npm registry
+        name: |-
+          Public registry
+          (npm, PyPI)
         description: The upstream registry. Its tarball bytes and author-supplied manifest fields are untrusted. The rules engine and the integrity floor gate them, and Écluse never serves them blindly. Écluse trusts the fields the registry itself asserts only to the floor that the registry operator is honest. The per-version publish time is server-stamped, and so is server-side integrity. npm, PyPI, and RubyGems record the publish time server-side, and it is absent from the publish document, so a publisher cannot backdate it. A compromised or malicious registry operator that forged those fields sits below this necessary trust floor and is out of scope. Écluse queries the registry anonymously, with the caller credential stripped.
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: -60
-          y: 695
+          x: -370.4360496953759
+          y: 218.91625580313902
         size:
           width: 180
           height: 90
         providesAuthentication: false
-      - kind: actor
-        id: 0ec10e5e-0000-4000-8000-000000000012
-        name: AWS IMDS + STS
-        description: Instance-metadata and token endpoint. It sources the container-role credentials the worker exchanges for a CodeArtifact write token. Écluse reaches it over amazonka's own client, off the guarded data-plane manager.
-        outOfScope: false
-        reasonOutOfScope: ""
-        position:
-          x: 601.5753424657534
-          y: 724.8069738480697
-        size:
-          width: 190
-          height: 90
-        providesAuthentication: true
       - kind: process
         id: 0ec10e5e-0000-4000-8000-000000000020
         name: Écluse proxy
-        description: "The request pipeline: router, parallel upstream fetch, packument merge, deny-by-default rules and integrity gate, then serve. It relays publishes. It holds forwarded caller credentials transiently. It polls S3 for OSV db updates and performs an atomic shadow-swap for CVE boundaries."
+        description: "The request pipeline: router, parallel upstream fetch, packument merge, deny-by-default rules and integrity gate, then serve. It relays publishes. It holds forwarded caller credentials transiently. It keeps an in-memory cache of anonymous public metadata, which private-upstream reads never enter. It syncs advisory artifacts from the advisory store and swaps each new database in atomically."
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: 530
-          y: 475
+          x: 704.8692403486922
+          y: 89.99377334993774
         size:
           width: 130
           height: 130
       - kind: process
         id: 0ec10e5e-0000-4000-8000-000000000021
-        name: Mirror worker
+        name: Écluse mirror worker
         description: The demand-driven asynchronous worker. It polls the mirror queue, back-fills the approved artifact from the upstream registry, and verifies the bytes against dist.integrity. It then publishes to the mirror store with Écluse's own minted write token.
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: 343.9227895392279
-          y: 1037.0983810709838
+          x: 172.50132695398298
+          y: 762.0768041497566
         size:
           width: 130
           height: 130
-      - kind: process
-        id: 0ec10e5e-0000-4000-8000-000000000022
-        name: Credential provider
-        description: It holds each mirroring mount's write credential for that mount's mirror target, built from the store the target's tag names. A CodeArtifact store mints and refreshes a short-lived token under the container or task role, with single-flight and a breaker, and identities that coincide share one provider. Every other store carries the operator's static token. Only the mirror worker's identity holds this write authority.
-        outOfScope: false
-        reasonOutOfScope: ""
-        position:
-          x: 601.5753424657534
-          y: 884.1718555417185
-        size:
-          width: 140
-          height: 140
-      - kind: store
-        id: 0ec10e5e-0000-4000-8000-000000000030
-        name: |-
-          Metadata cache
-          (public-gated only)
-        description: The shared in-proxy cache. It holds only the anonymous public gated origin. Écluse never enters the per-caller private origin, under any strategy.
-        outOfScope: false
-        reasonOutOfScope: ""
-        position:
-          x: 360
-          y: 110
-        size:
-          width: 180
-          height: 90
-        isALog: false
-        isEncrypted: false
-        isSigned: false
-        storesCredentials: false
       - kind: store
         id: 0ec10e5e-0000-4000-8000-000000000031
         name: Mirror queue (SQS)
@@ -323,8 +281,8 @@ diagrams:
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: 325
-          y: 810
+          x: 989.0246963152606
+          y: 1029.254342573557
         size:
           width: 180
           height: 90
@@ -335,14 +293,14 @@ diagrams:
       - kind: store
         id: 0ec10e5e-0000-4000-8000-000000000032
         name: |-
-          Registry C:
-          pull-through read endpoint
+          Registry C: private upstream
+          (pull-through read endpoint)
         description: The trusted private-upstream read view, declared under the mount's `privateUpstream` with the tag that names its store. It is a pull-through aggregator over the first-party store (A) and the mirror store (B), and it is what the proxy reads.
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: 910
-          y: 475
+          x: 648.4308841843088
+          y: 420.62889165628883
         size:
           width: 200
           height: 90
@@ -353,14 +311,14 @@ diagrams:
       - kind: store
         id: 0ec10e5e-0000-4000-8000-000000000033
         name: |-
-          Registry A:
-          private store (first-party)
+          Registry A: publication target
+          (first-party store)
         description: First-party and internal packages, written by a client npm publish under passthrough. Écluse trusts this store and serves it unfiltered. It is the publication target.
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: 912.988792029888
-          y: 220.5230386052304
+          x: 816.2628011919799
+          y: 800.9574269374531
         size:
           width: 200
           height: 90
@@ -371,14 +329,14 @@ diagrams:
       - kind: store
         id: 0ec10e5e-0000-4000-8000-000000000034
         name: |-
-          Registry B:
-          mirror store (public-derived)
+          Registry B: mirror target
+          (public-derived store)
         description: Public packages that the rules approved and the worker replicated. It is the mirror target. It stays distinct from A so first-party and public-derived inventory remain separable.
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: 1208.2316313823162
-          y: 651.3262764632627
+          x: 499.4216980016642
+          y: 783.7410740350336
         size:
           width: 200
           height: 90
@@ -388,7 +346,7 @@ diagrams:
         storesCredentials: false
       - kind: flow
         id: 0ec10e5e-0000-4000-8000-000000000040
-        name: npm read / publish (passthrough CodeArtifact token)
+        name: install and publish (caller credential)
         description: The caller's request, carrying its own CodeArtifact bearer token. It crosses the operator access edge.
         outOfScope: false
         reasonOutOfScope: ""
@@ -407,7 +365,7 @@ diagrams:
         bidirectional: false
       - kind: flow
         id: 0ec10e5e-0000-4000-8000-000000000041
-        name: read packument / tarball (caller token forwarded)
+        name: private read (caller credential forwarded)
         description: A per-request private read with the caller's own token. The upstream re-authorises each request. Écluse never shared-caches this read under passthrough.
         outOfScope: false
         reasonOutOfScope: ""
@@ -421,62 +379,6 @@ diagrams:
         target:
           kind: attached
           element: 0ec10e5e-0000-4000-8000-000000000032
-        waypoints: []
-        bidirectional: false
-      - kind: flow
-        id: 0ec10e5e-0000-4000-8000-000000000042
-        name: cache public-gated metadata
-        description: Reads and writes of the anonymous public gated origin only.
-        outOfScope: false
-        reasonOutOfScope: ""
-        protocol: in-process
-        isEncrypted: false
-        isPublicNetwork: false
-        trustBoundaryIds: []
-        source:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000020
-        target:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000030
-        waypoints: []
-        bidirectional: false
-      - kind: flow
-        id: 0ec10e5e-0000-4000-8000-000000000043
-        name: anonymous packument / tarball fetch (caller token stripped)
-        description: Untrusted egress to the upstream registry. The target is attacker-influenceable, so Écluse strips the caller credential. The flow crosses to the public internet and is forced HTTPS-only.
-        outOfScope: false
-        reasonOutOfScope: ""
-        protocol: HTTPS
-        isEncrypted: true
-        isPublicNetwork: true
-        trustBoundaryIds:
-          - 0ec10e5e-0000-4000-8000-000000000001
-          - 0ec10e5e-0000-4000-8000-000000000002
-        source:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000020
-        target:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000011
-        waypoints: []
-        bidirectional: false
-      - kind: flow
-        id: 0ec10e5e-0000-4000-8000-000000000044
-        name: relay npm publish (publisher token forwarded)
-        description: A first-party publish relayed to the private store with the publisher's own token. The mount's first-party namespaces gate it before any write.
-        outOfScope: false
-        reasonOutOfScope: ""
-        protocol: HTTPS
-        isEncrypted: true
-        isPublicNetwork: false
-        trustBoundaryIds: []
-        source:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000020
-        target:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000033
         waypoints: []
         bidirectional: false
       - kind: flow
@@ -495,85 +397,13 @@ diagrams:
         target:
           kind: attached
           element: 0ec10e5e-0000-4000-8000-000000000031
-        waypoints: []
-        bidirectional: false
-      - kind: flow
-        id: 0ec10e5e-0000-4000-8000-000000000046
-        name: poll jobs
-        description: The worker polls the mirror queue for demand-driven jobs.
-        outOfScope: false
-        reasonOutOfScope: ""
-        protocol: AWS SQS
-        isEncrypted: true
-        isPublicNetwork: false
-        trustBoundaryIds: []
-        source:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000021
-        target:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000031
-        waypoints: []
-        bidirectional: false
-      - kind: flow
-        id: 0ec10e5e-0000-4000-8000-000000000047
-        name: back-fill artifact fetch (untrusted)
-        description: The worker fetches the approved artifact from the upstream registry to mirror it. This is untrusted egress, forced HTTPS-only. The worker verifies the bytes against dist.integrity before it publishes.
-        outOfScope: false
-        reasonOutOfScope: ""
-        protocol: HTTPS
-        isEncrypted: true
-        isPublicNetwork: true
-        trustBoundaryIds:
-          - 0ec10e5e-0000-4000-8000-000000000001
-          - 0ec10e5e-0000-4000-8000-000000000002
-        source:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000021
-        target:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000011
-        waypoints: []
-        bidirectional: false
-      - kind: flow
-        id: 0ec10e5e-0000-4000-8000-000000000048
-        name: request mirror-write token
-        description: The worker asks the credential provider for a mirror-target write token.
-        outOfScope: false
-        reasonOutOfScope: ""
-        protocol: in-process
-        isEncrypted: false
-        isPublicNetwork: false
-        trustBoundaryIds: []
-        source:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000021
-        target:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000022
-        waypoints: []
-        bidirectional: false
-      - kind: flow
-        id: 0ec10e5e-0000-4000-8000-000000000049
-        name: mint via container role (IMDSv2 / STS)
-        description: The credential provider exchanges container-role credentials for a CodeArtifact write token. It reaches an internal address by design.
-        outOfScope: false
-        reasonOutOfScope: ""
-        protocol: HTTPS
-        isEncrypted: true
-        isPublicNetwork: false
-        trustBoundaryIds: []
-        source:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000022
-        target:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000012
-        waypoints: []
+        waypoints:
+          - x: 1090.3735900036718
+            y: 376.59813113570124
         bidirectional: false
       - kind: flow
         id: 0ec10e5e-0000-4000-8000-00000000004a
-        name: publish mirrored artifact (minted write token)
+        name: publish mirrored artifact (mirror worker identity)
         description: The worker writes the verified, approved artifact to the mirror store with Écluse's own minted token.
         outOfScope: false
         reasonOutOfScope: ""
@@ -587,26 +417,6 @@ diagrams:
         target:
           kind: attached
           element: 0ec10e5e-0000-4000-8000-000000000034
-        waypoints:
-          - x: 1298.0961044520545
-            y: 1103.0893913449565
-        bidirectional: false
-      - kind: flow
-        id: 0ec10e5e-0000-4000-8000-00000000004b
-        name: pull-through (first-party)
-        description: Registry C aggregates the first-party store A on read. This is trusted, registry-level composition.
-        outOfScope: false
-        reasonOutOfScope: ""
-        protocol: HTTPS
-        isEncrypted: true
-        isPublicNetwork: false
-        trustBoundaryIds: []
-        source:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000032
-        target:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000033
         waypoints: []
         bidirectional: false
       - kind: flow
@@ -628,97 +438,38 @@ diagrams:
         waypoints: []
         bidirectional: false
       - kind: flow
-        id: c928bb63-2ec8-44ff-b34b-39d4afb19dc6
-        name: mint token (container role)
-        description: ""
-        outOfScope: false
-        reasonOutOfScope: ""
-        protocol: https
-        isEncrypted: false
-        isPublicNetwork: false
-        trustBoundaryIds: []
-        source:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000012
-          side: right
-        target:
-          kind: attached
-          element: f1646094-9885-422a-b7e7-7888c72905ef
-          side: left
-        waypoints: []
-        bidirectional: false
-      - kind: flow
         id: 4e565871-45cc-4987-abba-24859ee2cf60
-        name: OSV Dataset for Supported Registries
+        name: OSV advisory exports
         description: ""
         outOfScope: false
         reasonOutOfScope: ""
-        protocol: https
+        protocol: HTTPS
         isEncrypted: true
-        isPublicNetwork: false
+        isPublicNetwork: true
         trustBoundaryIds:
           - 0ec10e5e-0000-4000-8000-000000000001
+          - bdf95436-cb02-4248-99a2-4e50b0d286fa
         source:
           kind: attached
           element: 7528590e-7392-46c4-9b8c-7ca872d63590
-          side: left
+          side: right
         target:
           kind: attached
           element: f1646094-9885-422a-b7e7-7888c72905ef
-          side: right
-        waypoints: []
-        bidirectional: false
-      - kind: flow
-        id: ec4bbc95-8582-4e22-ab64-3c87cff87239
-        name: Push osv.db (SQLite)
-        description: Pilot pushes the optimised osv.db to S3.
-        outOfScope: false
-        reasonOutOfScope: ""
-        protocol: https
-        isEncrypted: true
-        isPublicNetwork: false
-        trustBoundaryIds: []
-        source:
-          kind: attached
-          element: f1646094-9885-422a-b7e7-7888c72905ef
-          side: top
-        target:
-          kind: attached
-          element: c8455307-cef2-4843-a821-ff90db9643d2
-          side: bottom
-        waypoints: []
-        bidirectional: false
-      - kind: flow
-        id: f2d6c311-b8b3-4a9f-bef7-b78e4adaa17e
-        name: Download osv.db
-        description: The proxy polls S3 and downloads osv.db with GetObject.
-        outOfScope: false
-        reasonOutOfScope: ""
-        protocol: https
-        isEncrypted: true
-        isPublicNetwork: false
-        trustBoundaryIds: []
-        source:
-          kind: attached
-          element: c8455307-cef2-4843-a821-ff90db9643d2
           side: left
-        target:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000020
-          side: right
         waypoints: []
         bidirectional: false
       - kind: process
         id: f1646094-9885-422a-b7e7-7888c72905ef
         name: |-
           Écluse Pilot
-          (Ingestion Pipeline)
+          (advisory ingestion)
         description: "Pilot fetches configured OSV exports and the independent EPSS score feed, compiles per-ecosystem SQLite artifacts, and publishes them to S3. It produces advisory evidence rather than package-admission decisions. Proxy, mirror-worker, and Dredger roles use the shared rules engine against their loaded artifacts. Current Pilot compilation requires a successful EPSS feed and records that success in artifact metadata. A consumer with an EPSS-dependent rule refuses an artifact without that record. Configuration-dependent optional EPSS failure is planned in #1224."
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: 938.2316313823163
-          y: 861.8244084682441
+          x: -73.32366424067035
+          y: 657.6912082238971
         size:
           width: 130
           height: 130
@@ -733,30 +484,32 @@ diagrams:
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: 1475.480697384807
-          y: 956.3013698630137
+          x: -407.1143123682673
+          y: 742.1555925476123
         size:
           width: 170
           height: 110
         providesAuthentication: false
       - kind: flow
         id: c02b5948-c82c-419b-a240-cf223204dba4
-        name: EPSS scores by CVE identity
+        name: EPSS scores
         description: Pilot fetches the configured gzip CSV feed over HTTPS and joins scores onto OSV advisory ranges through CVE identifiers and aliases. This fetch is independent of the OSV export.
         outOfScope: false
         reasonOutOfScope: ""
         protocol: HTTPS
         isEncrypted: true
         isPublicNetwork: true
-        trustBoundaryIds: []
+        trustBoundaryIds:
+          - 0ec10e5e-0000-4000-8000-000000000001
+          - bdf95436-cb02-4248-99a2-4e50b0d286fa
         source:
           kind: attached
           element: 7ecb4bda-c005-4c1c-8eb6-868168c304db
-          side: left
+          side: right
         target:
           kind: attached
           element: f1646094-9885-422a-b7e7-7888c72905ef
-          side: right
+          side: left
         waypoints: []
         bidirectional: false
       - kind: actor
@@ -766,21 +519,21 @@ diagrams:
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: 1477
-          y: 810
+          x: -410.1944471125912
+          y: 532.651369855701
         size:
           width: 170
           height: 110
         providesAuthentication: false
       - kind: store
         id: c8455307-cef2-4843-a821-ff90db9643d2
-        name: S3 (OSV Datasets)
+        name: Advisory store (S3)
         description: Per-ecosystem SQLite snapshots of OSV advisory ranges and EPSS enrichment. Consumers validate and load these artifacts, but current source-age and coverage controls have the gaps recorded in threat 112.
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: 920
-          y: 640
+          x: 121.11500428110139
+          y: 402.8322630893142
         size:
           width: 180
           height: 130
@@ -792,23 +545,25 @@ diagrams:
       - kind: process
         id: f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
         name: Écluse Dredger
-        description: "The pruning role, run as `ecluse dredger`, exposes health probes and uses the shared rules engine with its own boot configuration. Current code deletes eligible named-denied versions from B only. #1227 extends cleanup to approved retained mirror-derived copies in C, using DeletePackageVersions on both B and C and never DisposePackageVersions. That extension is unimplemented. Its proposed C flow records additional authority and completion risks."
+        description: The pruning role, run as `ecluse dredger`. It exposes health probes and uses the shared rules engine with its own boot configuration. It deletes named-denied versions from the mirror store B and their retained copies in the private read endpoint C, using DeletePackageVersions and never DisposePackageVersions.
         outOfScope: false
         reasonOutOfScope: ""
         position:
-          x: 1228.0199252801992
-          y: 218.80448318804503
+          x: 417.36834610268994
+          y: 400.63345513330677
         size:
           width: 130
           height: 130
       - kind: flow
         id: d5da865d-6e80-44da-a2ee-841f6bebd567
-        name: delete pruned versions
+        name: delete denied versions
         description: Dredger issues delete requests to Registry B based on the versions the shared rules engine denies, advisory-driven or identity-driven.
         outOfScope: false
         reasonOutOfScope: ""
+        protocol: HTTPS
         isEncrypted: true
         isPublicNetwork: false
+        trustBoundaryIds: []
         source:
           kind: attached
           element: f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
@@ -819,12 +574,14 @@ diagrams:
         bidirectional: false
       - kind: flow
         id: c9e4d8b4-1234-4d1c-8948-a0ba03f82abd
-        name: delete retained mirror versions (proposed)
-        description: "Dredger preview reads actual B and C inventories, preserving per-location presence and provenance. Deleting from C is proposed in #1227 and not implemented. Both targets use DeletePackageVersions only, never DisposePackageVersions. Guidance must state package-scoped permissions, per-target consent, first-party exclusions, and recovery limits. Repeated scans rediscover residual copies under the accepted eventual-consistency contract. An optional queue or journal cannot replace actual repository state."
+        name: delete retained mirror-derived copies
+        description: Dredger reads the actual inventories of B and C and deletes an eligible retained copy from C after its mirror source, using DeletePackageVersions only. Each target needs its own consent. Repeated scans rediscover residual copies after a failure or restart, and no queue or journal replaces the actual repository state.
         outOfScope: false
         reasonOutOfScope: ""
+        protocol: HTTPS
         isEncrypted: true
         isPublicNetwork: false
+        trustBoundaryIds: []
         source:
           kind: attached
           element: f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
@@ -834,35 +591,175 @@ diagrams:
         waypoints: []
         bidirectional: false
       - kind: flow
-        id: fd44cd74-341a-4185-a3f3-f58357ccf91d
-        name: mint container credentials
-        description: Pilot requests IAM credentials to push to S3.
+        id: bc70f625-f86a-405c-97a1-8b0fb156965f
+        name: relay first-party publish (publisher or static publication token)
+        description: A first-party publish relayed to the publication target. The mount's first-party namespaces gate it before any write. It carries the publisher's own token, or the static publication token when one is configured behind the edge token.
         outOfScope: false
         reasonOutOfScope: ""
+        protocol: HTTPS
         isEncrypted: true
         isPublicNetwork: false
-        source:
-          kind: attached
-          element: f1646094-9885-422a-b7e7-7888c72905ef
-        target:
-          kind: attached
-          element: 0ec10e5e-0000-4000-8000-000000000012
-        waypoints: []
-        bidirectional: false
-      - kind: flow
-        id: 5dacf1eb-231a-49d3-8612-9ecf49f1839d
-        name: poll & download osv.db
-        description: The proxy polls S3 for ETag changes and downloads the osv.db snapshot with the GetObject permission.
-        outOfScope: false
-        reasonOutOfScope: ""
-        isEncrypted: true
-        isPublicNetwork: false
+        trustBoundaryIds: []
         source:
           kind: attached
           element: 0ec10e5e-0000-4000-8000-000000000020
         target:
           kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000033
+        waypoints:
+          - x: 890.3357853156081
+            y: 410.360352202497
+        bidirectional: false
+      - kind: flow
+        id: 0fae263a-780c-4ded-a335-da3a438c29f7
+        name: publish advisory artifacts
+        description: Pilot uploads each ecosystem's compiled advisory SQLite artifact to the advisory store with PutObject.
+        outOfScope: false
+        reasonOutOfScope: ""
+        protocol: HTTPS
+        isEncrypted: true
+        isPublicNetwork: false
+        trustBoundaryIds: []
+        source:
+          kind: attached
+          element: f1646094-9885-422a-b7e7-7888c72905ef
+          side: top
+        target:
+          kind: attached
           element: c8455307-cef2-4843-a821-ff90db9643d2
+          side: bottom
+        waypoints: []
+        bidirectional: false
+      - kind: flow
+        id: e7322f48-8b14-431f-8657-68561cbcd57a
+        name: sync advisory artifacts (read-only)
+        description: The proxy polls the advisory store for a changed artifact and downloads it with GetObject under its own role identity.
+        outOfScope: false
+        reasonOutOfScope: ""
+        protocol: HTTPS
+        isEncrypted: true
+        isPublicNetwork: false
+        trustBoundaryIds: []
+        source:
+          kind: attached
+          element: c8455307-cef2-4843-a821-ff90db9643d2
+        target:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000020
+        waypoints: []
+        bidirectional: false
+      - kind: flow
+        id: 1627ccc4-ec16-4eb1-9a7b-79a0b1669d7c
+        name: sync advisory artifacts (read-only)
+        description: Dredger polls the advisory store and downloads changed artifacts with GetObject, and holds its first sweep until each mount's advisory data has synced.
+        outOfScope: false
+        reasonOutOfScope: ""
+        protocol: HTTPS
+        isEncrypted: true
+        isPublicNetwork: false
+        trustBoundaryIds: []
+        source:
+          kind: attached
+          element: c8455307-cef2-4843-a821-ff90db9643d2
+        target:
+          kind: attached
+          element: f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff
+        waypoints: []
+        bidirectional: false
+      - kind: flow
+        id: 65fc7a41-c967-44e9-857a-fda9095b5172
+        name: sync advisory artifacts (read-only)
+        description: The mirror worker polls the advisory store and downloads changed artifacts with GetObject, so its re-evaluation uses the same advisory evidence as the proxy.
+        outOfScope: false
+        reasonOutOfScope: ""
+        protocol: HTTPS
+        isEncrypted: true
+        isPublicNetwork: false
+        trustBoundaryIds: []
+        source:
+          kind: attached
+          element: c8455307-cef2-4843-a821-ff90db9643d2
+        target:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000021
+        waypoints: []
+        bidirectional: false
+      - kind: flow
+        id: e6cac04a-530a-44b0-b4be-2c7cbc9dc778
+        name: pull-through (first-party)
+        description: Registry C aggregates the first-party store A on read. This is trusted, registry-level composition.
+        outOfScope: false
+        reasonOutOfScope: ""
+        protocol: HTTPS
+        isEncrypted: true
+        isPublicNetwork: false
+        trustBoundaryIds: []
+        source:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000033
+        target:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000032
+        waypoints: []
+        bidirectional: false
+      - kind: flow
+        id: 1fd354fb-84eb-483d-8c56-2b8e3820115e
+        name: receive mirror jobs
+        description: The worker receives demand-driven jobs from the mirror queue under its own role identity, and renews each job's visibility while it holds it.
+        outOfScope: false
+        reasonOutOfScope: ""
+        protocol: AWS SQS
+        isEncrypted: true
+        isPublicNetwork: false
+        trustBoundaryIds: []
+        source:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000031
+        target:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000021
+        waypoints:
+          - x: 385.5656565240887
+            y: 1079.6709817041287
+        bidirectional: false
+      - kind: flow
+        id: e4a10f2e-9b48-4173-b2d1-9798f82a347b
+        name: public metadata and artifact fetch (anonymous)
+        description: Untrusted data from the public registry. The target is attacker-influenceable, so Écluse strips the caller credential before the fetch. The flow crosses from the public internet and is HTTPS-only.
+        outOfScope: false
+        reasonOutOfScope: ""
+        protocol: HTTPS
+        isEncrypted: true
+        isPublicNetwork: true
+        trustBoundaryIds:
+          - 0ec10e5e-0000-4000-8000-000000000001
+          - 0ec10e5e-0000-4000-8000-000000000002
+        source:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000011
+        target:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000020
+        waypoints: []
+        bidirectional: false
+      - kind: flow
+        id: 029fb3b3-40df-4197-bac2-142912c50fe5
+        name: back-fill artifact fetch (untrusted)
+        description: The worker fetches the approved artifact from the public registry to mirror it. This is untrusted, HTTPS-only data, and the worker verifies the bytes against dist.integrity before it publishes.
+        outOfScope: false
+        reasonOutOfScope: ""
+        protocol: HTTPS
+        isEncrypted: true
+        isPublicNetwork: true
+        trustBoundaryIds:
+          - 0ec10e5e-0000-4000-8000-000000000001
+          - 0ec10e5e-0000-4000-8000-000000000002
+        source:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000011
+        target:
+          kind: attached
+          element: 0ec10e5e-0000-4000-8000-000000000021
         waypoints: []
         bidirectional: false
 mitigations:
@@ -1346,7 +1243,7 @@ threats:
     status: mitigated
     description: The upstream registry is attacker-influenceable and must never receive a caller's credential. A failure to strip the caller token on the public fetch would disclose a live CodeArtifact token to public npm. So would following a cross-host 3xx with the bearer still attached, to an attacker-chosen redirect target, over the unguarded private manager.
     elements:
-      - 0ec10e5e-0000-4000-8000-000000000043
+      - e4a10f2e-9b48-4173-b2d1-9798f82a347b
   - id: 0ec10e5e-0000-4000-8000-000000000105
     number: 5
     title: SSRF via crafted identifier or upstream-declared dist.tarball
@@ -1357,7 +1254,7 @@ threats:
     status: mitigated
     description: Écluse builds outbound URLs from client-supplied package identifiers and upstream-declared artifact locations. A traversal, encoded-slash, or absolute-URL name could steer a fetch to an unintended target such as cloud metadata or the private network. So could a dist.tarball that points at an internal or attacker-chosen host.
     elements:
-      - 0ec10e5e-0000-4000-8000-000000000043
+      - e4a10f2e-9b48-4173-b2d1-9798f82a347b
   - id: 0ec10e5e-0000-4000-8000-000000000106
     number: 6
     title: Package shadowing via first-party publish
@@ -1368,7 +1265,7 @@ threats:
     status: mitigated
     description: A publish reaches the publication target with the caller's credential, or with a static publication token after edge authentication. Every edge-token holder can publish anything the static token permits within the configured first-party scopes. The packument merge serves private versions as trusted, winning collisions over public ones. A compromised CI system or an insider publisher could clear the first-party check, or slip past it when the name the check authorises differs from the name the relay writes. They could then publish a name that the merge serves as a trusted version over the public package. That is a dependency-confusion path through Écluse's own trust model.
     elements:
-      - 0ec10e5e-0000-4000-8000-000000000044
+      - bc70f625-f86a-405c-97a1-8b0fb156965f
   - id: 0ec10e5e-0000-4000-8000-000000000107
     number: 7
     title: Mirror-write credential is a standing privilege over the trusted store
@@ -1390,7 +1287,8 @@ threats:
     status: mitigated
     description: Container-role token minting must reach the instance-metadata endpoint (169.254.169.254) and STS. An SSRF that reached metadata could mint the worker's CodeArtifact credential.
     elements:
-      - 0ec10e5e-0000-4000-8000-000000000049
+      - 0ec10e5e-0000-4000-8000-000000000020
+      - 0ec10e5e-0000-4000-8000-000000000021
   - id: 0ec10e5e-0000-4000-8000-000000000109
     number: 9
     title: Cross-client disclosure of a private package via shared cache
@@ -1401,7 +1299,7 @@ threats:
     status: mitigated
     description: A cache key carries no credential dimension. If the cache held a private-origin document, one caller could warm an entry and a second, differently authorised caller could receive it. That second caller receives the document without the upstream ever authorising their own request.
     elements:
-      - 0ec10e5e-0000-4000-8000-000000000030
+      - 0ec10e5e-0000-4000-8000-000000000020
   - id: 0ec10e5e-0000-4000-8000-00000000010a
     number: 10
     title: Registry collapse erases provenance and per-store policy
@@ -1456,7 +1354,7 @@ threats:
     status: mitigated
     description: "The mirror worker fetches the approved artifact from an upstream-declared `dist.tarball` location to replicate it. Like the serve-path public fetch, this is untrusted egress to a target an attacker can influence, and it carries the same SSRF surface: a `dist.tarball` steered at an internal or cloud-metadata address. The fetch is a blind sink, because the worker publishes the bytes to the mirror and never returns them to a caller."
     elements:
-      - 0ec10e5e-0000-4000-8000-000000000047
+      - 029fb3b3-40df-4197-bac2-142912c50fe5
   - id: 0ec10e5e-0000-4000-8000-00000000010f
     number: 15
     title: Private-upstream aggregation admits the public registry, bypassing the gate
@@ -1478,7 +1376,7 @@ threats:
     status: accepted-risk
     description: An attacker who controls the DNS for an allowlisted host can repoint it at internal addresses. Certificate validation makes the TLS handshake fail, so Écluse sends no request and leaks no data. The success or failure and the timing of the TCP connect and the TLS handshake still form a coarse internal-reachability or port-scan oracle. The oracle covers only allowlisted hosts whose DNS the attacker already controls. The owner accepts this residual.
     elements:
-      - 0ec10e5e-0000-4000-8000-000000000043
+      - e4a10f2e-9b48-4173-b2d1-9798f82a347b
   - id: b1a6332d-8def-4df9-922e-53718c920155
     number: 17
     title: Pilot container-role privilege escalation
@@ -1599,7 +1497,7 @@ threats:
     status: mitigated
     description: "The publish path sends the caller's credential or a configured static publication token to the operator-declared publication target. A publication target written by mistake, or edited to a wrong value, would send that live bearer credential to an unintended registry. A public registry is the worst case: an operator who points the publication target at the public upstream turns every publish into a credential disclosure to a third party that can log or replay it."
     elements:
-      - 0ec10e5e-0000-4000-8000-000000000044
+      - bc70f625-f86a-405c-97a1-8b0fb156965f
   - id: c87367bd-fc3f-4792-94b6-8db459011823
     number: 101
     title: Oracle Blackout / Supply Chain DoS via OSV.dev compromise
@@ -1632,7 +1530,7 @@ threats:
     status: mitigated
     description: "A mount declares the namespaces the deployment owns. An attacker registers a package on the public upstream under a name, scope, or prefix inside one of them, choosing a name the private store does not carry, or a version of one it does. Without the privilege the public leg would answer for that name: the packument merge would fold the public document in, the artifact path would stream its bytes after a private miss, and the mirror would write the admitted version into the deployment's own store. A build resolving a first-party dependency would install the attacker's package. That is dependency confusion, and the public leg is where it enters. Each role reads the declaration from its own configuration, so during a rollout an older worker can still apply the earlier predicate. A namespace that is not declared receives no first-party protection."
     elements:
-      - 0ec10e5e-0000-4000-8000-000000000043
+      - e4a10f2e-9b48-4173-b2d1-9798f82a347b
   - id: 0ec10e5e-0000-4000-8000-000000000127
     number: 104
     title: Configured deletion consent stays valid when the store it names changes
@@ -1776,4 +1674,4 @@ threats:
     description: An upstream PyPI index can declare the same filename on admitted and refused entries. Assembly by filename alone could restore a sibling that location or integrity admission removed, return the refused digest fields in the listing, and rebase a foreign URL to the local artifact route. This is a listing-admission mismatch, not direct foreign-host egress, downloaded malicious bytes, or a demonstrated bypass of package-manager verification.
     elements:
       - 0ec10e5e-0000-4000-8000-000000000020
-lastIssuedThreatNumber: 116
+lastIssuedThreatNumber: 117
