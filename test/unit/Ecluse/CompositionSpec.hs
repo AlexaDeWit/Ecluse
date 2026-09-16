@@ -11,12 +11,14 @@ import Ecluse (mountBindingFor)
 import Ecluse.Composition (
     BootWiring (bwBindings),
     PublishBudget (..),
-    WiringPorts (WiringPorts, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
+    WiringPorts (WiringPorts, wpBuildCredentials, wpClock, wpReporters, wpResolveAdapter, wpRuleDeps),
     firstPartyName,
     planMounts,
     resolveBootWiring,
  )
 import Ecluse.Composition.BootError (BootError (..), renderBootError)
+import Ecluse.Composition.Credential (initTargetCredentialProviders)
+import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirrorWrite))
 import Ecluse.Composition.Support (
     expectConfig,
     expectEnv,
@@ -102,6 +104,7 @@ testWiringPorts :: WiringPorts
 testWiringPorts =
     WiringPorts
         { wpReporters = const (const noCredentialReporters)
+        , wpBuildCredentials = initTargetCredentialProviders
         , wpResolveAdapter = mountBindingFor
         , wpClock = pure fixedNow
         , wpRuleDeps = const inertRuleDeps
@@ -110,12 +113,12 @@ testWiringPorts =
 -- Build the served bindings from an env + optional document through the boot's own pure pass
 -- and then its environment-dependent tier, exactly as the composition root does.
 planFrom :: [(String, String)] -> Maybe ByteString -> IO (Either [BootError] [MountBinding])
-planFrom = planFromWith testLimits
+planFrom = planFromWith MintMirrorWrite testLimits
 
 -- As 'planFrom', but with the caller's resolved 'Limits' (the record the memory
--- budget would hand the composition root).
-planFromWith :: Limits -> [(String, String)] -> Maybe ByteString -> IO (Either [BootError] [MountBinding])
-planFromWith limits envVars mDocBytes = do
+-- budget would hand the composition root) and the booting role's own mint plan.
+planFromWith :: MirrorMintPlan -> Limits -> [(String, String)] -> Maybe ByteString -> IO (Either [BootError] [MountBinding])
+planFromWith mintPlan limits envVars mDocBytes = do
     case loadConfig envVars mDocBytes of
         Left cfgErrs -> pure (Left (concatMap toBoot errs))
           where
@@ -135,7 +138,7 @@ planFromWith limits envVars mDocBytes = do
                 -- generous test budget keeps these specs about the wiring.
                 bodyBudget <- newByteAdmission (128 * 1024 * 1024)
                 let publishBudget = PublishBudget{pbBodyBudget = bodyBudget, pbMaxRequestBytes = 26214400}
-                fmap bwBindings <$> resolveBootWiring testWiringPorts limits (Just publishBudget) plan
+                fmap bwBindings <$> resolveBootWiring testWiringPorts mintPlan limits (Just publishBudget) plan
 
 planMountsSpec :: Spec
 planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
@@ -192,7 +195,7 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
         config <- expectConfig (("ECLUSE_SERVER__AUTH_TOKEN", "edge-secret") : ("ECLUSE_SERVER__HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
         providers <- expectProviders config
         plan <- expectValidated config
-        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers testLimits Nothing plan >>= \case
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers testLimits Nothing plan >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -235,7 +238,7 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
         -- The memory budget resolves the byte cap before the root runs, and the bindings carry the
         -- resolved 'Limits' record verbatim.
         let custom = defaultLimits{maxBodyBytes = 2048, maxVersionCount = 10, maxNestingDepth = 16}
-        planFromWith custom staticEnvVars Nothing >>= \case
+        planFromWith MintMirrorWrite custom staticEnvVars Nothing >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 maxBodyBytes (pdLimits deps) `shouldBe` 2048
@@ -279,6 +282,15 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
                 pdMinTrustedIntegrity deps `shouldBe` sha1Floor
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "binds a mirrored mount under a skipped mint, still enqueueing toward the target" $ do
+        -- The serve-only role writes nothing, so it holds no write credential and no mount may
+        -- refuse for want of one. It still admits versions and still enqueues each one.
+        planFromWith SkipMirrorWrite testLimits staticEnvVars Nothing >>= \case
+            Right [binding] -> do
+                let deps = bindingPackumentDeps binding
+                mirrorTargetText (pdMirror deps) `shouldBe` Just "https://mirror.example.test"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "refines the trusted floor per mount over the global default" $ do

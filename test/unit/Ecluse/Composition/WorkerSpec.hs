@@ -9,6 +9,7 @@ import Test.Hspec
 
 import Ecluse (mountBindingFor)
 import Ecluse.Composition (PublishTarget (ptEcosystem), planMounts, planPublishTargets)
+import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite))
 import Ecluse.Composition.Support (expectConfig, expectProviders, expectValidated, fixedNow, overrideEnv, scopedName, staticEnvVars, testLimits)
 import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -59,9 +60,8 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
                 map (wpFirstParty policy) names `shouldBe` map (pdFirstParty deps) names
 
     it "contributes no bundle for an ecosystem without a resolved publish target" $ do
-        -- The bundle is whole or absent: without a publish target there is no mirror
-        -- write to marry, so no half-wired bundle exists. A job for the ecosystem then
-        -- fails closed at the worker rather than publishing nowhere.
+        -- The bundle is whole or absent: with no publish target to marry, a job for that
+        -- ecosystem fails closed at the worker rather than publishing nowhere.
         (env, bindings, _) <- composedFixtures
         Map.keys (workerPoliciesFor env bindings [] testArtifactCap) `shouldBe` []
 
@@ -124,9 +124,9 @@ composedFixturesFrom envVars limits = do
     providers <- expectProviders config
     plan <- expectValidated config
     bindings <-
-        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers limits Nothing plan
+        planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) MintMirrorWrite providers limits Nothing plan
             >>= either (\errs -> fail ("unexpected boot errors: " <> show errs)) pure
     targets <-
-        either (\errs -> fail ("unexpected publish-target errors: " <> show errs)) pure (planPublishTargets providers plan)
+        either (\errs -> fail ("unexpected publish-target errors: " <> show errs)) pure (planPublishTargets MintMirrorWrite providers plan)
     env <- newTestEnv
     pure (env, bindings, targets)

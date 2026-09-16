@@ -164,10 +164,6 @@ No role identity reads the private upstream or writes the publication target for
 those requests carry the caller credential. A static publication token is the exception, described
 under [Edge authentication](#edge-authentication-and-client-credentials).
 
-`ecluse proxy --no-worker` still mints the mirror-write token at boot, so its identity also needs
-the mirror store's token-mint rights until
-[#1393](https://github.com/AlexaDeWit/Ecluse/issues/1393) lands.
-
 ## Splitting the proxy from the mirror worker
 
 By default one `ecluse proxy` process serves clients and drains the mirror queue. The two loads are
@@ -465,8 +461,9 @@ the selected backend. Pilot uses `osv-vulnerabilities.storage.googleapis.com` an
 enabled. On a `5xx`, `408`, or `429` from either host, Pilot retries with capped, jittered backoff,
 so a transient outage does not get your NAT address rate-limited.
 
-Allow CodeArtifact API access for token minting on every role that mints, `ecluse proxy
---no-worker` included. Dredger also uses the CodeArtifact maintenance API.
+Allow CodeArtifact API access for token minting on every role that mints: `ecluse proxy`,
+`ecluse mirror`, and Dredger. `ecluse proxy --no-worker` mints no mirror-write token. Dredger also
+uses the CodeArtifact maintenance API.
 
 **Permit the identity endpoints your deployment uses.** The AWS credential chain can need IMDS,
 an ECS credential endpoint, or STS for an assumed role. On EC2, require IMDSv2 with hop limit 1

@@ -10,7 +10,7 @@ import Data.Time (addUTCTime, getCurrentTime)
 import Test.Hspec
 
 import Ecluse.Boot (BootEnv (BootEnv))
-import Ecluse.Composition.Credential (noCredentialProviders)
+import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.Executable (ExecutablePlan (epRoleWiring), MirrorWiring (mwCveSync), RoleWiring (MirrorPipelineWiring), planExecutable)
 import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
 import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, staticEnvVars)
@@ -102,7 +102,7 @@ advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
                         passthroughTracingPort
                         mountBindingFor
                         (\_ _ _ -> pure noMirrorQueue)
-                        (\_ _ -> pure (Right noCredentialProviders))
+                        initTargetCredentialProviders
                         StoreBuilds
                             { sbDeleting = \_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
                             , sbObserving = \_ _ _ -> fakeObservation <$> newFakeStore defaultFakeStoreConfig

@@ -12,7 +12,9 @@ import Ecluse.Composition.MirrorQueue (
     MirrorRuntimePlan (MirrorWith, NoMirroring),
  )
 import Ecluse.Composition.MirrorRole (
+    MirrorMintPlan (MintMirrorWrite, SkipMirrorWrite),
     enqueuesJobs,
+    mirrorMintPlan,
     mirrorRoleRefusal,
     runsWorker,
     spawnsWorker,
@@ -68,6 +70,16 @@ spec = do
 
         it "enqueues in the single-process role" $
             enqueuesJobs ServeAndMirror `shouldBe` True
+
+    describe "mirrorMintPlan -- which roles hold the mirror-write identity" $ do
+        it "mints nothing under --no-worker, whose identity needs no mirror-store rights" $
+            mirrorMintPlan ServeOnly `shouldBe` SkipMirrorWrite
+
+        it "mints for the single-process role, which writes what its own worker drains" $
+            mirrorMintPlan ServeAndMirror `shouldBe` MintMirrorWrite
+
+        it "mints for the dedicated worker, the one role that only writes" $
+            mirrorMintPlan MirrorOnly `shouldBe` MintMirrorWrite
 
     describe "mirrorRoleRefusal -- a split role over the in-memory queue" $ do
         it "refuses --no-worker on the in-memory queue, whose jobs would never be consumed" $

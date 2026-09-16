@@ -2,8 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | What each half of the demand-driven mirror pipeline needs of the process running it, and the
-boot refusal a role earns against the resolved mirror runtime.
+{- | What each half of the demand-driven mirror pipeline needs of the process running it, the
+mirror-write credential it mints, and the boot refusal a role earns against the resolved mirror
+runtime.
 
 Mirroring has a producer half (the serve path enqueues a job for every artifact it admits) and
 a consumer half (the worker drains the queue and publishes). One process runs both, or a
@@ -14,6 +15,8 @@ module Ecluse.Composition.MirrorRole (
     runsWorker,
     spawnsWorker,
     enqueuesJobs,
+    MirrorMintPlan (..),
+    mirrorMintPlan,
     mirrorRoleRefusal,
 ) where
 
@@ -47,6 +50,22 @@ enqueuesJobs = \case
     ServeAndMirror -> True
     ServeOnly -> True
     MirrorOnly -> False
+
+{- | Whether a role's boot mints each mirrored mount's write credential. Only a role that writes
+to the mirror store holds that identity.
+-}
+data MirrorMintPlan
+    = -- | @ecluse proxy@ and @ecluse mirror@: mint at boot, so a bad identity refuses there.
+      MintMirrorWrite
+    | -- | @ecluse proxy --no-worker@: the front door writes nothing, so it needs no write identity.
+      SkipMirrorWrite
+    deriving stock (Eq, Show)
+
+-- | The worker is the only writer, so the roles that run one are the roles that mint.
+mirrorMintPlan :: MirrorRole -> MirrorMintPlan
+mirrorMintPlan role
+    | runsWorker role = MintMirrorWrite
+    | otherwise = SkipMirrorWrite
 
 {- | Refuse a role the resolved mirror runtime cannot serve. A split role over the bounded
 in-memory queue would strand every job, because that queue lives inside one process.

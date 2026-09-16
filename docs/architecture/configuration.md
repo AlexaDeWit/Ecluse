@@ -201,7 +201,8 @@ error, not a silent skip:
   mount.
 - An endpoint must carry exactly one tag and only the keys that tag admits there. The mirror-write
   credential falls out of that: the minting tag admits no static token and the two non-minting tags
-  require one. Écluse still rejects a CodeArtifact identity that cannot mint an initial token.
+  require one. Écluse still rejects a CodeArtifact identity that cannot mint an initial token, on
+  the roles that hold one.
 - A `codeArtifact` endpoint's URL must match its tag. Écluse rejects a host that is not a
   CodeArtifact endpoint on any endpoint, and on a mirror target it also rejects a path that is not
   the repository endpoint for the mount's own ecosystem (`/npm/{repository}/` for an npm mount) and

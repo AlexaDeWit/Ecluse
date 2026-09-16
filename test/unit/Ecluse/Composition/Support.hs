@@ -36,7 +36,7 @@ module Ecluse.Composition.Support (
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane))
-import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders)
+import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
 import Ecluse.Composition.Maintenance (
     ClearedBackend (cbControl),
     ClearedControl (ClearedCodeArtifact, ClearedProtocol),
@@ -181,7 +181,7 @@ expectValidated config =
 expectProviders :: Config -> IO CredentialProviders
 expectProviders config = do
     plan <- expectValidated config
-    initCredentialProviders (const (const noCredentialReporters)) (map vmMount (vpMounts plan))
+    initCredentialProviders initTargetCredentialProviders (const (const noCredentialReporters)) (map vmMount (vpMounts plan))
         >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
 
 -- | Build a 'Config' from an env and an optional document, failing the test on a policy error.
