@@ -22,15 +22,14 @@ records the two floors that fail closed: the integrity digest and a static publi
 
 ## Trust assumptions & credential posture
 
-This section records the deployment
-assumptions the [threat model](https://ecluse-proxy.com/docs/threat-model/) rests on. It also
-records the consequences of the canonical posture: per-caller passthrough credentials, the
-three-registry topology, and CodeArtifact over VPC endpoints.
+The [threat model](https://ecluse-proxy.com/docs/threat-model/) records each trust assumption as
+its own record, linked to the threats that rest on it. This section explains the posture those
+assumptions add up to: per-caller passthrough credentials, the three-registry topology, and
+CodeArtifact over VPC endpoints.
 
 **Edge access is an operator concern.** `ECLUSE_SERVER__AUTH_TOKEN` is off by default, so the
-deployment's access edge decides who may reach the proxy. That edge must hold east-west as well
-as north-south. An ingress-only allow-list that leaves pod-to-pod traffic open is the usual gap.
-Passthrough softens this: a caller with no forwarded token gets no private read or publish. An
+deployment's access edge decides who may reach the proxy, east-west as well as north-south.
+Passthrough softens a gap in that edge: a caller with no forwarded token gets no private read or publish. An
 edge breach then exposes only the public-gated view plus the untrusted-egress and DoS surface,
 never private packages.
 
@@ -71,8 +70,8 @@ three-registry topology
 keeps first-party and public-derived inventory physically separable. That gives per-provenance
 rule-sets, scanning, and clean post-disclosure scoping. Collapsing toward one registry degrades
 auditability and mitigation depth but doesn't move the trust perimeter. The public-to-trusted
-admission gate is identical at one registry or three. Storage-layer scanning is out of scope for
-Écluse. It's ecosystem- and backend-specific, the operator's to configure.
+admission gate is identical at one registry or three. Storage-layer scanning stays the operator's,
+as the threat model's assumptions record.
 
 ## Integrity floors
 

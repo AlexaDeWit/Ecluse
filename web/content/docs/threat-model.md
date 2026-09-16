@@ -15,13 +15,16 @@ such as edge access control and storage-layer scanning.
 
 Each threat carries one status:
 
-- **Mitigated:** The code carries the compensating control, or Écluse delegates
-  it to a mandatory operator boundary.
+- **Mitigated:** The code carries the compensating control. Operator
+  responsibilities that also apply are recorded as assumptions.
 - **Accepted risk:** Écluse retains the risk on purpose. It follows from a trust
   assumption or a deliberate operator trade-off, not from a missing
   implementation.
 - **Open:** Écluse plans a fix but the code does not carry it yet. A threat
   stays Open until its code lands, so a milestone entry never reads as done.
+- **Transferred:** Écluse has no control of its own, and the operator's
+  configuration carries the whole defence. The threat's assumptions say what
+  the operator owns.
 
 [Security
 posture](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md)
