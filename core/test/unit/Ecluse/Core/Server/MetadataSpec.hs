@@ -37,7 +37,7 @@ import Ecluse.Core.Registry.Metadata (
     digestOf,
  )
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache)
-import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached), newMetadataClient, readOfInfo)
+import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, readOfInfo)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamFetchError))
 import Ecluse.Core.Version (Version, mkVersion)
@@ -48,7 +48,7 @@ import Ecluse.Test.Server.Cache (defaultCacheConfig)
 -- | Tests for the serve-path read handle, whose single-version op is hybrid.
 spec :: Spec
 spec = do
-    describe "newMetadataClient -- single-version hybrid topology" $ do
+    describe "publicMetadataClient -- single-version hybrid topology" $ do
         it "reuses the warm full-packument cache: a GET then its version select is one upstream call" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
@@ -98,24 +98,24 @@ spec = do
             fmap (fmap pkgVersion . vrDetails) absentHit `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
 
-    describe "newMetadataClient -- caching policy" $
+    describe "the caching policy each builder settles" $
         it "an uncached handle fetches on every call (the per-client private origin)" $ do
             calls <- newIORef (0 :: Int)
             let info = manifest name ["1.0.0"]
                 client =
-                    newMetadataClient noopMetricsPort Metric.Private Uncached noLog noInvalidLog noFetchLog (countingFull calls info) (countingVersion calls info)
+                    privateMetadataClient (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (countingFull calls info) (countingVersion calls info))
             _ <- fetchFullManifest client name
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 2
 
-    describe "newMetadataClient -- failure propagation" $ do
+    describe "metadata read handles -- failure propagation" $ do
         for_ httpFailures $ \(refusal, expectedCause) ->
             it ("records and preserves " <> show refusal <> " on every read") $ do
                 causes <- newIORef []
                 failures <- newIORef []
                 let port = noopMetricsPort{mpUpstreamFetchError = \upstream cause -> modifyIORef' causes ((upstream, cause) :)}
                     recordFailure who err = modifyIORef' failures ((who, err) :)
-                    client = newMetadataClient port Metric.Private Uncached recordFailure noInvalidLog noFetchLog (const (pure (Left refusal))) (\_ _ -> pure (Left refusal))
+                    client = privateMetadataClient (newMetadataReads port recordFailure noInvalidLog noFetchLog (const (pure (Left refusal))) (\_ _ -> pure (Left refusal)))
                 replicateM_ 2 $ do
                     full <- fetchFullManifest client name
                     void full `shouldBe` Left refusal
@@ -156,7 +156,7 @@ spec = do
             cache <- newMetadataCache defaultCacheConfig
             let port = noopMetricsPort{mpUpstreamFetchError = \_ cause -> atomicModifyIORef' causes (\cs -> (cause : cs, ()))}
                 client =
-                    newMetadataClient port Metric.Public (Cached cache source) noLog noInvalidLog noFetchLog (unreachableFull calls) (failingVersion calls)
+                    publicMetadataClient cache source (newMetadataReads port noLog noInvalidLog noFetchLog (unreachableFull calls) (failingVersion calls))
             _ <- fetchFullManifest client name
             readIORef causes `shouldReturn` [Metric.Connection]
 
@@ -175,7 +175,7 @@ spec = do
                     pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))
                 countingLog _name _err = atomicModifyIORef' failureLogs (\n -> (n + 1, ()))
                 client =
-                    newMetadataClient noopMetricsPort Metric.Public (Cached cache source) countingLog noInvalidLog noFetchLog blockingOutage (failingVersion fetches)
+                    publicMetadataClient cache source (newMetadataReads noopMetricsPort countingLog noInvalidLog noFetchLog blockingOutage (failingVersion fetches))
             (results, ()) <-
                 concurrently
                     (mapConcurrently (const (fetchFullManifest client name)) [1 .. 8 :: Int])
@@ -218,8 +218,8 @@ publicClient ::
     (PackageName -> IO (Either MetadataError Manifest)) ->
     (PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
     MetadataClient
-publicClient cache =
-    newMetadataClient noopMetricsPort Metric.Public (Cached cache source) noLog noInvalidLog noFetchLog
+publicClient cache full version =
+    publicMetadataClient cache source (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog full version)
 
 countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError Manifest)
 countingFull calls info _name = do

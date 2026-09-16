@@ -39,12 +39,11 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Maintenance (NameAlphabet, StoreRefusal)
-import Ecluse.Core.Registry.Metadata (Manifest, MetadataClient, MetadataError)
+import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
-import Ecluse.Core.Server.Metadata (ManifestCaching)
+import Ecluse.Core.Server.Metadata (MetadataReads)
 import Ecluse.Core.Snapshot (Snapshot)
-import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version)
@@ -58,25 +57,23 @@ type ProjectName = Text -> Maybe PackageName
 assembling the served document, and encoding it ('Ecluse.Core.Server.Context.pdMetadata').
 -}
 data AdapterMetadata = AdapterMetadata
-    { metadataNewClient ::
+    { metadataNewReads ::
         TracingPort ->
         MetricsPort ->
-        Metric.Upstream ->
-        ManifestCaching ->
         (PackageName -> MetadataError -> IO ()) ->
         (PackageName -> [InvalidEntry] -> IO ()) ->
         (PackageName -> IO ()) ->
         OriginClient ->
-        MetadataClient
-    {- ^ Build a per-request metadata client for one origin. The adapter closes over the
-    ecosystem's raw fetch primitives, and the caller names the origin and the observers.
+        MetadataReads
+    {- ^ Bind one origin's metadata reads to their observers. The caller settles the caching policy
+    with 'Ecluse.Core.Server.Metadata.publicMetadataClient' or its private counterpart.
     -}
     , metadataAssemble :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
     -- ^ Select exact admitted entries from the supplied snapshots before rendering their wire shape.
     , metadataSerialise :: CachedDoc -> LByteString
     -- ^ Encode an assembled served document ('CachedDoc') to its wire bytes.
     , metadataFetchManifest :: ManifestFetch
-    -- ^ The raw read under 'metadataNewClient', without its caching and metrics, for a store sweep.
+    -- ^ The raw read under 'metadataNewReads', without its caching and metrics, for a store sweep.
     }
 
 {- | Fetching and projecting one package's full manifest from an origin. Every failure is a
@@ -97,16 +94,13 @@ data AdapterArtifact = AdapterArtifact
     URL is complete on its own, and the mirror worker's fetch has none to give.
     -}
     , artifactHosts :: [Text]
-    {- ^ The ecosystem's canonical artifact hosts, whose authorities feed the tarball-host gate.
-    The secure-default same-host policy admits them (PyPI's is @https://files.pythonhosted.org@)
-    without the operator naming hostnames. Empty for npm, whose artifacts ride the registry host.
+    {- ^ The ecosystem's canonical artifact hosts, which the same-host tarball gate admits without the
+    operator naming them (PyPI's is @https://files.pythonhosted.org@). Empty for npm's own host.
     -}
     }
 
-{- | The ecosystem's publish capability: the first-party relay, the name canonicaliser, the
-declared-name extractor, and the mirror write's protocol codec. The composition root marries
-the codec to the shared publish transport per mounted ecosystem
-('Ecluse.Core.Registry.Publish.newMirrorPublish').
+{- | The ecosystem's publish capability. The composition root marries its codec to the shared
+publish transport per mounted ecosystem ('Ecluse.Core.Registry.Publish.newMirrorPublish').
 -}
 data AdapterPublish = AdapterPublish
     { publishRelay :: OriginClient -> PackageName -> ByteString -> IO (Either FetchFault PublishRelayResponse)
@@ -114,14 +108,12 @@ data AdapterPublish = AdapterPublish
     write through, and return the target's own response.
     -}
     , publishDeclaredNames :: LByteString -> [Text]
-    {- ^ Extract every package name a publish body declares as its own identity. The
-    anti-shadowing guard refuses any declared name that disagrees with the URL-path name. A body
-    that declares no readable name yields @[]@.
+    {- ^ Every package name a publish body declares as its own identity, @[]@ when none is readable.
+    The anti-shadowing guard refuses a declared name that disagrees with the URL-path name.
     -}
     , publishCodec :: PublishCodec
-    {- ^ The mirror write's protocol codec: publish document assembly, request formation, the
-    probe's request and version-list projection, and the status semantics. Protocol only: the
-    manager, credential mint, and fault classification belong to the shared transport.
+    {- ^ The mirror write's protocol codec: document assembly, request formation, the probe, and the
+    status semantics. The manager, credential mint, and fault classification are the transport's.
     -}
     }
 

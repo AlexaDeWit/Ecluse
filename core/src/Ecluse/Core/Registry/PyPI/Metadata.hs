@@ -7,7 +7,7 @@ The fetch digest scopes full-document assembly, while selective reads retain ori
 -}
 module Ecluse.Core.Registry.PyPI.Metadata (
     -- * Per-request read handle
-    newPyPIMetadataClient,
+    newPyPIMetadataReads,
 
     -- * PyPI index fetch
     fetchPyPIManifest,
@@ -34,7 +34,6 @@ import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
-    MetadataClient,
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
     VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
     digestOf,
@@ -64,25 +63,22 @@ import Ecluse.Core.Security (
     maxNestingDepth,
  )
 import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Server.Metadata (ManifestCaching, newMetadataClient)
-import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | Build an origin read handle with shared caching and telemetry.
-newPyPIMetadataClient ::
+-- | Bind one origin's PyPI metadata reads to their observers, leaving the caching policy to the caller.
+newPyPIMetadataReads ::
     TracingPort ->
     MetricsPort ->
-    Metric.Upstream ->
-    ManifestCaching ->
     (PackageName -> MetadataError -> IO ()) ->
     (PackageName -> [InvalidEntry] -> IO ()) ->
     (PackageName -> IO ()) ->
     OriginClient ->
-    MetadataClient
-newPyPIMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch origin =
-    newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchPyPIManifest tracing origin) (fetchPyPIVersion tracing origin)
+    MetadataReads
+newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch origin =
+    newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing origin) (fetchPyPIVersion tracing origin)
 
 fetchSimpleIndex :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
 fetchSimpleIndex origin name =

@@ -40,15 +40,18 @@ import Ecluse.Core.Registry.Sweep.Types (CycleOutcome (outcomeTally), SweepMount
 import Ecluse.Core.Rules (PreparedRule, evalRules, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Rules.Types qualified as Rules
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, withServeAdmission)
-import Ecluse.Core.Server.Cache (newMetadataCache)
+import Ecluse.Core.Server.Cache (Source (Source), cachedMetadata, newMetadataCache)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (..),
     PackumentDeps (..),
     RequestCtx (RequestCtx),
-    ServeRuntime (ServeRuntime, srMetrics),
+    ServeRuntime (ServeRuntime, srMetadataCache, srMetrics),
+    pdPrivateBaseUrl,
+    pdPublicBaseUrl,
     runHandler,
  )
 import Ecluse.Core.Server.Contract (ResponseContract, responseToWai)
@@ -82,6 +85,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     admissionLifetimeSpec
     divergenceEvidenceSpec
     distTagSpec
+    sharedCacheSpec
 
     for_ [(status200, Admit), (status304, Admit), (status401, Deny), (status403, Deny)] $ \(upstreamStatus, expected) ->
         it ("records private artifact HTTP " <> show (statusCode upstreamStatus) <> " as " <> show expected <> " for GET and HEAD") $
@@ -332,6 +336,26 @@ distTagSpec = describe "served dist-tags.latest" $ do
             fields <- servedFields resp
             KeyMap.lookup "dist-tags" fields `shouldBe` Just (object ["latest" .= ("1.0.0" :: Text)])
             servedKeys fields `shouldBe` Just ["1.0.0", "2.0.0"]
+
+sharedCacheSpec :: Spec
+sharedCacheSpec = describe "the shared metadata cache across the two origins" $
+    it "keeps the private origin out of the cache and answers the public origin from it" $ do
+        privateHits <- newIORef 0
+        let public = publicAppOver ["1.0.0", "2.0.0"] "2.0.0" id
+            private = countingUpstream privateHits (privateAppOver ["1.0.0"] "1.0.0")
+        withConflictOrigins public private $ \rt deps _divergences publicHits -> do
+            replicateM_ 2 (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest))
+            -- The private leg re-reads its upstream per request, so it never answers one caller
+            -- from another's authorised read. The public leg reads once and then serves the cache.
+            readIORef privateHits `shouldReturn` 2
+            readIORef publicHits `shouldReturn` 1
+            privateCached <- traverse (cachedUnder rt) (pdPrivateBaseUrl deps)
+            privateCached `shouldBe` Just False
+            cachedUnder rt (pdPublicBaseUrl deps) `shouldReturn` True
+
+-- Whether the shared cache holds a full-document entry under an origin's own key.
+cachedUnder :: ServeRuntime -> RegistryUrl -> IO Bool
+cachedUnder rt baseUrl = isJust <$> cachedMetadata (srMetadataCache rt) (Source (registryUrlText baseUrl)) leftpad
 
 withConflictOrigins :: Application -> Application -> (ServeRuntime -> PackumentDeps -> IO Int -> IORef Int -> IO ()) -> IO ()
 withConflictOrigins public private action = do

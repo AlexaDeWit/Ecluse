@@ -38,7 +38,7 @@ import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, renderPackageName)
 import Ecluse.Core.Package.Entry (EntryKey)
 import Ecluse.Core.Package.Merge (Provenance)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewClient))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewReads))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     ContentDigest,
@@ -56,9 +56,8 @@ import Ecluse.Core.Server.Context (
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
  )
-import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached))
+import Ecluse.Core.Server.Metadata (MetadataReads, privateMetadataClient, publicMetadataClient)
 import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)
-import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
 -- | A parsed contribution with opaque source bytes and a digest for the derived validator.
 data Contribution = Contribution
@@ -155,20 +154,17 @@ request's @katip@ context into the failure logs, and the fetch holds the mount's
 withMetadataClient ::
     ServeRuntime ->
     PackumentDeps ->
-    Metric.Upstream ->
-    ManifestCaching ->
+    (MetadataReads -> MetadataClient) ->
     OriginClient ->
     (MetadataClient -> IO a) ->
     Handler a
-withMetadataClient rt deps upstream caching origin k =
+withMetadataClient rt deps settle origin k =
     withRunInIO $ \runInIO ->
-        k $
-            metadataNewClient
+        k . settle $
+            metadataNewReads
                 (pdMetadata deps)
                 (srTracing rt)
                 (srMetrics rt)
-                upstream
-                caching
                 (\nm err -> runInIO (logMetadataFailure nm baseUrl err))
                 (\nm entries -> runInIO (logInvalidEntries nm baseUrl entries))
                 (\nm -> runInIO (logFM DebugS (ls ("fetching packument from origin for " <> renderPackageName nm))))
@@ -179,14 +175,14 @@ withMetadataClient rt deps upstream caching origin k =
 -- | Bypass shared caching so the private upstream authorises each caller's credential.
 withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> RegistryUrl -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a
 withPrivateMetadataClient rt deps baseUrl token =
-    withMetadataClient rt deps Metric.Private Uncached (mountOrigin deps (srPrivateManager rt) baseUrl token)
+    withMetadataClient rt deps privateMetadataClient (mountOrigin deps (srPrivateManager rt) baseUrl token)
 
 -- | An anonymous read handle sharing the metadata cache across listing and artifact requests.
 withPublicMetadataClient :: ServeRuntime -> PackumentDeps -> RegistryUrl -> (MetadataClient -> IO a) -> Handler a
 withPublicMetadataClient rt deps baseUrl =
-    withMetadataClient rt deps Metric.Public caching (mountOrigin deps (srPublicManager rt) baseUrl Nothing)
+    withMetadataClient rt deps settle (mountOrigin deps (srPublicManager rt) baseUrl Nothing)
   where
-    caching = Cached (srMetadataCache rt) (Source (registryUrlText baseUrl))
+    settle = publicMetadataClient (srMetadataCache rt) (Source (registryUrlText baseUrl))
 
 -- | Build an origin with the mount's response bound and the caller-selected manager and credential.
 mountOrigin :: PackumentDeps -> Manager -> RegistryUrl -> Maybe ClientCredential -> OriginClient

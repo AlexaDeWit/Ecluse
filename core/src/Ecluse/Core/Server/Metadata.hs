@@ -3,14 +3,16 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Caching, metrics, and failure logs around registry metadata reads.
-Private reads remain uncached. Anonymous public reads share full-document and version caches.
+The caching policy is not exported. A read handle comes from 'publicMetadataClient', which takes
+the shared cache, or from 'privateMetadataClient', which has no cache parameter to take, so a
+private read cannot be given the cache. Anonymous public reads share full-document and version caches.
 -}
 module Ecluse.Core.Server.Metadata (
-    -- * Caching policy
-    ManifestCaching (..),
-
     -- * Constructing a per-request read handle
-    newMetadataClient,
+    MetadataReads,
+    newMetadataReads,
+    publicMetadataClient,
+    privateMetadataClient,
 
     -- * Projecting one version
     selectVersion,
@@ -41,14 +43,38 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | Private reads require per-client authorisation. Only anonymous public metadata may use the shared cache.
+-- Private reads re-authorise the caller at the upstream, so only anonymous public metadata
+-- resolves through the shared cache, keyed by the origin's Source.
 data ManifestCaching
-    = -- | Re-authorise the caller at the private upstream on every request.
-      Uncached
-    | -- | Resolve through the shared metadata cache under the origin's 'Source' key: the anonymous public origin.
-      Cached MetadataCache Source
+    = Uncached
+    | Cached MetadataCache Source
 
--- | Apply caching, failure logging, and metrics to the adapter's metadata reads.
+{- | One origin's raw reads bound to their observers, before a caching policy settles them into a
+'MetadataClient'. The policy is no argument here: each builder below fixes its own.
+-}
+newtype MetadataReads = MetadataReads (Metric.Upstream -> ManifestCaching -> MetadataClient)
+
+-- | Bind one origin's raw reads to the metrics port and the failure, invalid-entry, and fetch logs.
+newMetadataReads ::
+    MetricsPort ->
+    (PackageName -> MetadataError -> IO ()) ->
+    (PackageName -> [InvalidEntry] -> IO ()) ->
+    (PackageName -> IO ()) ->
+    (PackageName -> IO (Either MetadataError Manifest)) ->
+    (PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
+    MetadataReads
+newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion =
+    MetadataReads $ \upstream caching ->
+        newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFetch rawFetchVersion
+
+-- | The anonymous public origin's handle, resolving through the shared cache under its 'Source' key.
+publicMetadataClient :: MetadataCache -> Source -> MetadataReads -> MetadataClient
+publicMetadataClient cache source (MetadataReads settle) = settle Metric.Public (Cached cache source)
+
+-- | The private origin's handle. It takes no cache, so the upstream re-authorises every caller.
+privateMetadataClient :: MetadataReads -> MetadataClient
+privateMetadataClient (MetadataReads settle) = settle Metric.Private Uncached
+
 newMetadataClient ::
     MetricsPort ->
     Metric.Upstream ->

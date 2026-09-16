@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.Maintenance (mkNameAlphabet)
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocToken))
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
-import Ecluse.Core.Registry.PyPI.Metadata (fetchPyPIManifest, newPyPIMetadataClient)
+import Ecluse.Core.Registry.PyPI.Metadata (fetchPyPIManifest, newPyPIMetadataReads)
 import Ecluse.Core.Registry.PyPI.Project (projectName, pypiNameLeadChars)
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPIRequest
 import Ecluse.Core.Registry.PyPI.Route qualified as PyPIRoute
@@ -47,7 +47,7 @@ pypiAdapter =
                 }
         , adapterMetadata =
             AdapterMetadata
-                { metadataNewClient = newPyPIMetadataClient
+                { metadataNewReads = newPyPIMetadataReads
                 , metadataAssemble = assembleSimpleDocument
                 , metadataSerialise = serialiseSimpleDocument
                 , metadataFetchManifest = fetchPyPIManifest

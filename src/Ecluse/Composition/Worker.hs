@@ -21,7 +21,7 @@ import Ecluse.Composition (PublishTarget (ptCredentials, ptEcosystem, ptMirrorUr
 import Ecluse.Core.Credential (mintSecret)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish, publishCodec)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewClient))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewReads))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Origin (originClient)
 import Ecluse.Core.Registry.Publish (
@@ -45,17 +45,15 @@ import Ecluse.Core.Server.Context (
     pdTarballHostGate,
     tarballHostHonoured,
  )
-import Ecluse.Core.Server.Metadata (ManifestCaching (Cached))
-import Ecluse.Core.Telemetry.Metrics (Upstream (Public))
+import Ecluse.Core.Server.Metadata (publicMetadataClient)
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..))
 import Ecluse.Runtime.Env (Env, envManager, envMetadataCache, envMetrics, envPrivateManager, envTelemetry)
 import Ecluse.Runtime.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
 import Ecluse.Runtime.Telemetry.Instruments (metricsPortOf)
 import Ecluse.Runtime.Telemetry.Tracing (tracingPortOf)
 
-{- | Build the worker's per-ecosystem bundles from the served mounts and the resolved
-publish targets, keyed by the ecosystem each mount's path prefix names. A job for an
-ecosystem absent here is fail-closed at the worker.
+{- | Build the worker's per-ecosystem bundles from the served mounts and the resolved publish
+targets, keyed by the ecosystem each mount's path prefix names. An absent ecosystem fails closed.
 -}
 workerPoliciesFor :: Env -> [MountBinding] -> [PublishTarget] -> Int -> WorkerPolicies
 workerPoliciesFor env bindings targets artifactMaxBytes =
@@ -79,9 +77,8 @@ mirrorPublishFor env deps targets eco = do
     publish <- adapterPublish adapter
     pure (newMirrorPublish (mirrorTransportFor env deps target) (ptMirrorUrl target) (publishCodec publish))
 
-{- | The shared mirror-write transport for one mount. The presence probe reads under the
-mount's own 'pdLimits', because the shipped metadata-path default would let a larger
-mirror packument overrun the bound and defeat duplicate suppression.
+{- | The shared mirror-write transport for one mount. The presence probe reads under the mount's
+own 'pdLimits': a larger mirror packument would overrun the default and defeat duplicate suppression.
 -}
 mirrorTransportFor :: Env -> PackumentDeps -> PublishTarget -> MirrorTransport
 mirrorTransportFor env deps target =
@@ -92,9 +89,7 @@ mirrorTransportFor env deps target =
         }
 
 {- Build one mount's worker bundle. The metadata client is anonymous, so no client credential
-reaches the public origin, and the host allowlist gates it with certificate validation
-authenticating the dialled host. The no-op callbacks elide the client's own failure and
-dropped-entry logs, because the worker logs its re-evaluation outcome per job. -}
+reaches the public origin. Its no-op logs defer to the worker's own per-job outcome log. -}
 workerPolicyFor :: Env -> PackumentDeps -> MirrorPublish -> Int -> WorkerPolicy
 workerPolicyFor env deps publish artifactMaxBytes =
     WorkerPolicy
@@ -120,16 +115,15 @@ workerPolicyFor env deps publish artifactMaxBytes =
         }
   where
     client =
-        metadataNewClient
-            (pdMetadata deps)
-            (tracingPortOf (envTelemetry env))
-            (metricsPortOf (envMetrics env))
-            Public
-            (Cached (envMetadataCache env) (Source (registryUrlText publicBaseUrl)))
-            (\_ _ -> pure ())
-            (\_ _ -> pure ())
-            (\_ -> pure ())
-            publicOrigin
+        publicMetadataClient (envMetadataCache env) (Source (registryUrlText publicBaseUrl)) $
+            metadataNewReads
+                (pdMetadata deps)
+                (tracingPortOf (envTelemetry env))
+                (metricsPortOf (envMetrics env))
+                (\_ _ -> pure ())
+                (\_ _ -> pure ())
+                (\_ -> pure ())
+                publicOrigin
 
     publicBaseUrl = pdPublicBaseUrl deps
 
