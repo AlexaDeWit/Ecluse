@@ -161,15 +161,15 @@ spec = do
             fmap (infoName . manifestInfo) second' `shouldBe` Right name
             readIORef calls `shouldReturn` 2
 
-        it "records the Connection error cause for an unreachable upstream" $ do
+        it "records the public upstream and the Connection error cause for an unreachable upstream" $ do
             calls <- newIORef (0 :: Int)
-            causes <- newIORef ([] :: [Metric.Cause])
+            causes <- newIORef ([] :: [(Metric.Upstream, Metric.Cause)])
             cache <- newMetadataCache defaultCacheConfig
-            let port = noopMetricsPort{mpUpstreamFetchError = \_ cause -> atomicModifyIORef' causes (\cs -> (cause : cs, ()))}
+            let port = noopMetricsPort{mpUpstreamFetchError = \upstream cause -> atomicModifyIORef' causes (\cs -> ((upstream, cause) : cs, ()))}
                 client =
                     publicMetadataClient cache source (newMetadataReads port noLog noInvalidLog noFetchLog (const (unreachableFull calls)) (const (failingVersion calls)) anonymous)
             _ <- fetchFullManifest client name
-            readIORef causes `shouldReturn` [Metric.Connection]
+            readIORef causes `shouldReturn` [(Metric.Public, Metric.Connection)]
 
         it "logs a failure once per real fetch: coalesced followers never re-log" $ do
             -- Coalesced followers share the failing leader's typed Left, and the failure log fires

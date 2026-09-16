@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE RoleAnnotations #-}
 
 {- | Everything a registry data plane needs to reach __one origin__: where it is, what to
 dial it through, what to present, and what response bound to hold it to.
@@ -54,10 +55,14 @@ originClient :: Limits -> Manager -> RegistryUrl -> Maybe ClientCredential -> Or
 originClient limits manager baseUrl token =
     OriginClient{ocBaseUrl = baseUrl, ocManager = manager, ocToken = token, ocLimits = limits}
 
-{- | An 'OriginClient' whose credential posture its builder fixed. The parameter is a phantom, and
-the constructor stays here, so no caller outside this module can retag an origin.
+{- | An 'OriginClient' whose credential posture its builder fixed. No caller can retag one: the
+constructor stays here, and the role annotation below forbids reaching the parameter through 'coerce'.
 -}
 newtype OriginFor (posture :: Type) = OriginFor OriginClient
+
+-- RoleAnnotations is not in GHC2021. Without this line the parameter takes GHC's phantom role,
+-- and coerce changes it from any module, constructor in scope or not.
+type role OriginFor nominal
 
 -- The two postures. Neither type is inhabited: each names a posture in a type, never a value.
 data Public

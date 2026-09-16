@@ -1,6 +1,7 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE RoleAnnotations #-}
 
 {- | Caching, metrics, and failure logs around registry metadata reads.
 The caching policy is not exported, and an origin carries its credential posture in its type.
@@ -57,8 +58,12 @@ data ManifestCaching
 -}
 newtype MetadataReads (posture :: Type) = MetadataReads (Metric.Upstream -> ManifestCaching -> MetadataClient)
 
+-- As on OriginFor in Ecluse.Core.Registry.Origin: the default phantom role would let coerce
+-- turn per-caller reads into the ones the public builder accepts.
+type role MetadataReads nominal
+
 {- | Bind one origin's raw reads to the metrics port and the failure, invalid-entry, and fetch logs.
-The reads run against the origin given here, so they carry its posture and no other.
+The origin is applied to the fetch pair the caller supplies, and its posture tags the result.
 -}
 newMetadataReads ::
     MetricsPort ->
