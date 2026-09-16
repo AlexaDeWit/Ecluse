@@ -70,8 +70,8 @@ holds it, so a job slower than one window is not redelivered to a second consume
 refuses, and reads one push against that maximum.
 
 [`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules
-engine, and the mirror queue. The threat model (OWASP Threat Dragon, STRIDE) lives in
-[`threat-modelling/ecluse.json`](threat-modelling/ecluse.json). The site build renders it as a
+engine, and the mirror queue. The threat model (Saerskriven, STRIDE) lives in
+[`threat-modelling/ecluse.yaml`](threat-modelling/ecluse.yaml). The site build renders it as a
 readable [register](https://ecluse-proxy.com/docs/threat-model/).
 
 ## Using Écluse

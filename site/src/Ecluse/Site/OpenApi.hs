@@ -56,7 +56,6 @@ import Data.OpenApi (
 import Network.HTTP.Media (MediaType)
 
 import Ecluse.Site.Markdown (
-    Alignment (AlignLeft),
     attributedHeading,
     bold,
     code,
@@ -87,7 +86,7 @@ serverLines servers
         heading 2 "Servers"
             : ""
             : table
-                [(AlignLeft, "URL"), (AlignLeft, "Description")]
+                ["URL", "Description"]
                 [[code (_serverUrl s), escapeCell (fromMaybe "" (_serverDescription s))] | s <- servers]
                 <> [""]
 
@@ -138,11 +137,11 @@ parameterLines params
         bold "Parameters"
             : ""
             : table
-                [ (AlignLeft, "Name")
-                , (AlignLeft, "In")
-                , (AlignLeft, "Required")
-                , (AlignLeft, "Type")
-                , (AlignLeft, "Description")
+                [ "Name"
+                , "In"
+                , "Required"
+                , "Type"
+                , "Description"
                 ]
                 (map parameterRow params)
                 <> [""]
@@ -182,7 +181,7 @@ requiredSuffix required
 contentTable :: InsOrd.InsOrdHashMap MediaType MediaTypeObject -> [Text]
 contentTable content
     | null entries = []
-    | otherwise = table [(AlignLeft, "Media type"), (AlignLeft, "Schema")] (map contentRow entries) <> [""]
+    | otherwise = table ["Media type", "Schema"] (map contentRow entries) <> [""]
   where
     entries = sortedContent content
     contentRow (mediaType, object) =
@@ -195,10 +194,10 @@ responseLines responses
         bold "Responses"
             : ""
             : table
-                [ (AlignLeft, "Status")
-                , (AlignLeft, "Description")
-                , (AlignLeft, "Media type")
-                , (AlignLeft, "Schema")
+                [ "Status"
+                , "Description"
+                , "Media type"
+                , "Schema"
                 ]
                 rows
                 <> [""]
@@ -240,10 +239,10 @@ propertyTable schema
     | null properties = []
     | otherwise =
         table
-            [ (AlignLeft, "Property")
-            , (AlignLeft, "Type")
-            , (AlignLeft, "Required")
-            , (AlignLeft, "Description")
+            [ "Property"
+            , "Type"
+            , "Required"
+            , "Description"
             ]
             (map propertyRow properties)
             <> [""]

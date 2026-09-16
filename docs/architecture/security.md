@@ -9,14 +9,14 @@ manual states what a deployment must fence around that
 records the deployment assumptions the threat model rests on and the credential posture. It also
 records the two floors that fail closed: the integrity digest and a static publish credential.
 
-> The full STRIDE threat register lives in the OWASP Threat Dragon model
-> ([`threat-modelling/ecluse.json`](../../threat-modelling/ecluse.json)), published readably
+> The full STRIDE threat register lives in the Saerskriven model
+> ([`threat-modelling/ecluse.yaml`](../../threat-modelling/ecluse.yaml)), published readably
 > at [Threat model](https://ecluse-proxy.com/docs/threat-model/). The threat statements and
 > dispositions live there, not here.
 
 <!--
   Do not re-grow this into a full threat enumeration. The authoritative register is
-  the Threat Dragon model (threat-modelling/ecluse.json), rendered to the Pages site
+  the Saerskriven model (threat-modelling/ecluse.yaml), rendered to the Pages site
   from web/content/docs/threat-model.md. Add or revise threats in the model, not here.
 -->
 

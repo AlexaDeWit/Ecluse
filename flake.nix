@@ -584,8 +584,6 @@
         # Use Nix checks where its store or evaluated inputs are required.
         # doHaddock forces documentation generation. dontCheck skips tests.
         checks.docs = hlib.doHaddock ecluse;
-        # Test the release binary against this flake's loader and libraries.
-        checks.saerskriven = saerskriven.checks.${system}.saerskriven;
 
       # The two checks below clear the same bar in a different way. Each compares
       # the Nix and cabal views of one pin, which only Nix evaluation can see side

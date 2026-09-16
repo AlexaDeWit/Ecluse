@@ -31,6 +31,6 @@ the release, subject to the other rules and integrity floors.
 A **planned** registry is already a valid `mounts` key, but no adapter answers its routes yet,
 so activating one refuses the boot.
 
-{{ openapi_reference() }}
+{{ generated(name="openapi") }}
 
 The raw OpenAPI document is published at [/api/openapi.json](/api/openapi.json).

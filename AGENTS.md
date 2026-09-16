@@ -95,7 +95,7 @@ only after explicit architect kickoff. The team lead never merges or pushes to `
 - The repository rules (SHA-pinned Actions, injection-free workflows, no Semgrep or Stan ignores
   without repo-owner approval, SPDX headers, Mermaid diagrams) are in
   [CONTRIBUTING, Repository requirements](CONTRIBUTING.md#repository-requirements).
-- Keep the threat model in `threat-modelling/ecluse.json`. Do not create a competing prose risk
+- Keep the threat model in `threat-modelling/ecluse.yaml`. Do not create a competing prose risk
   register.
 - The version authority is `ecluse.cabal`'s `version:` field ([`VERSIONING.md`](VERSIONING.md)).
 - Every commit is Conventional-Commit formatted, GPG-signed, DCO-signed off as the human author, and

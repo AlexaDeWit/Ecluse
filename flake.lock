@@ -51,11 +51,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1788854222,
-        "narHash": "sha256-644Mi4RW8pW64OJnUXzG9ciiJsOsFUYB24b7vMt6/Ds=",
+        "lastModified": 1789514858,
+        "narHash": "sha256-pHMw2lZKzMnqmcqqT5v1wtVJlwCyqIpeFBMI8HiZBbo=",
         "owner": "AlexaDeWit",
         "repo": "Saerskriven",
-        "rev": "ec3f53815b0ee90451f5634a59582a81142549a8",
+        "rev": "96bb4cba403421c2b5634739a7686264f0d115c8",
         "type": "github"
       },
       "original": {
