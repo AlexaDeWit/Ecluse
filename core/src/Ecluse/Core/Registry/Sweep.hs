@@ -235,19 +235,20 @@ withCandidates ports mount act =
         ctx <- mkEvalContext (sweepNow ports) (pure (fst <$> mLookup))
         act candidates ctx
 
-{- Say once per mount when no generation is loaded. Only the identity half then sweeps, so a rule
-set that reads advisories decided on less than it names, which is the gap recorded here. -}
+{- Say once per mount whose rules read advisories and no generation is loaded. Only the identity
+half then sweeps, so that rule set decided on less than it names, which is the gap recorded here. -}
 reportAdvisoryHalf :: SweepPorts -> SweepState -> SweepMount -> IO ()
 reportAdvisoryHalf ports counters mount =
-    rdWithCveLookup (smRuleDeps mount) $ \mLookup ->
-        whenNothing_ mLookup $ do
-            when (any readsAdvisories (smConfigured mount)) (recordGap counters unloadedGeneration)
-            auditError
-                (sweepAudit ports)
-                ( "no advisory database generation is loaded for the "
-                    <> ecosystemName (smEcosystem mount)
-                    <> " mount, so this cycle sweeps only the names an identity deny pins"
-                )
+    when (any readsAdvisories (smConfigured mount)) $
+        rdWithCveLookup (smRuleDeps mount) $ \mLookup ->
+            whenNothing_ mLookup $ do
+                recordGap counters unloadedGeneration
+                auditError
+                    (sweepAudit ports)
+                    ( "no advisory database generation is loaded for the "
+                        <> ecosystemName (smEcosystem mount)
+                        <> " mount, so this cycle sweeps only the names an identity deny pins"
+                    )
 
 paceName :: SweepPacing -> SweepPorts -> SweepState -> IO ()
 paceName pacing ports counters = do

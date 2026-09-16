@@ -4,13 +4,16 @@
 
 {- | The verdict behind @\/readyz@, and the per-mount advisory state it was decided from.
 One configured ecosystem awaiting its advisory database does not take the whole listener out
-of rotation, so a router keeps sending the healthy mounts their traffic. The constructors are
-exported for matching and 'mountReadiness' is the sanctioned builder, so a verdict a producer
-makes agrees with its own map. Readiness routes traffic. It gates no request: a mount with no
-advisory database refuses what needs one through its own rule policy.
+of rotation, so a router keeps sending the healthy mounts their traffic. Only a mount whose
+rules deny on the database waits for one: the rest are ready before any artifact loads.
+The constructors are exported for matching and 'mountReadiness' is the sanctioned builder,
+so a verdict a producer makes agrees with its own map. Readiness routes traffic. It gates no
+request: a mount with no advisory database refuses what needs one through its own rule policy.
 -}
 module Ecluse.Core.Server.Readiness (
+    DatabaseRequirement (..),
     MountReadiness (..),
+    mountStateFor,
     Readiness (..),
     mountReadiness,
     alwaysReady,
@@ -22,11 +25,25 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 
+-- | Whether a mount's own rules deny on the advisory database, so it cannot decide without one.
+data DatabaseRequirement
+    = DatabaseRequired
+    | DatabaseOptional
+    deriving stock (Eq, Show)
+
 -- | One mount's advisory state. The flip is one-way, so a mount never falls back to awaiting.
 data MountReadiness
     = MountReady
     | MountAwaitingFirstSync
     deriving stock (Eq, Show)
+
+{- | One mount's state from what its rules need and whether its first sync has landed. A mount
+that only reads the database, and never denies on it, serves before any artifact is published.
+-}
+mountStateFor :: DatabaseRequirement -> Bool -> MountReadiness
+mountStateFor requirement synced = case requirement of
+    DatabaseOptional -> MountReady
+    DatabaseRequired -> bool MountAwaitingFirstSync MountReady synced
 
 -- | The readiness verdict, carrying the mounts it was decided from.
 data Readiness
@@ -55,8 +72,8 @@ routable = \case
     AwaitingMounts _ -> False
     Latched -> False
 
-{- | Whether every configured mount holds its advisory database. This is a wait condition and
-not the routing verdict: the Dredger holds its first sweep for it.
+{- | Whether every configured mount is ready, which for one that denies on the advisory database
+means it holds one. A wait condition, not the routing verdict: the Dredger holds its first sweep.
 -}
 allMountsReady :: Readiness -> Bool
 allMountsReady = \case

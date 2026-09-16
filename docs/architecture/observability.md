@@ -88,8 +88,8 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
   that ecosystem's serving advisory database was installed. Écluse measures it at each collection,
   from the slot that holds the database, so it climbs on its own whether or not a sync task is
   alive. One threshold therefore alarms on a stale database, on a sync that stopped swapping, and
-  on a sync task that is crash-looping. Before the first swap it reads from the slot's creation,
-  which is process start.
+  on a sync task that is crash-looping. It observes nothing before the first swap, so a slot that
+  has never loaded an artifact reports no age rather than one that reads like a fresh database.
 - `ecluse.advisory.source.age.seconds` (a gauge) carries (ecosystem). It reads the seconds since
   the serving artifact was published, which is the age the CVE-deny path expires on. That makes it
   the one to alarm on for data freshness, while `ecluse.advisory.database.age.seconds` above stays

@@ -431,6 +431,11 @@ spec = do
                         let notices = filter (T.isInfixOf "the store maintenance client") (lines output)
                         notices `shouldBe` [notice | hasControlPlane]
 
+        it "refuses an advisory deny with no advisory store with exit 2, naming the rule" $ do
+            (outcome, report) <- bootRefusal ["check-config"] (overrideEnv "ECLUSE_RULES" cveDenyRule runEnv)
+            outcome `shouldBe` Left (ExitFailure 2)
+            report `shouldSatisfy` any (T.isInfixOf "enables the advisory deny rules DenyIfCve")
+
         it "prints the mirror-collapse advisory a writing role boots on" $
             -- The typed advisory reaches an operator as this line or as nothing at all, so this
             -- is what pins the render to the print path rather than to the pass that logged it.
@@ -525,6 +530,10 @@ bootRefusal args envVars = do
 
 splitRoleRefusal :: [String] -> IO (Either ExitCode (Maybe ()), [Text])
 splitRoleRefusal args = bootRefusal args (withoutQueueUrl runEnv)
+
+-- | A shared policy carrying one advisory deny, which needs a store no fixture here configures.
+cveDenyRule :: String
+cveDenyRule = "{\"gate\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}"
 
 collapsedMirrorEnv :: [(String, String)]
 collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL" "https://private.example.test" runEnv

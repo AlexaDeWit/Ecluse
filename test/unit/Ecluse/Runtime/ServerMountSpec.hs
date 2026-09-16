@@ -84,7 +84,7 @@ spec = do
 
                 awaiting <- requestPath app "/readyz"
                 status awaiting `shouldBe` 200
-                bodyOf awaiting `shouldSatisfy` BS.isInfixOf "\"pypi\":\"awaiting startup readiness\""
+                bodyOf awaiting `shouldSatisfy` BS.isInfixOf "\"pypi\":\"awaiting the advisory database that ecluse pilot publishes\""
 
                 -- The recovery is what pins that 503 on the empty slot, because an upstream
                 -- failure renders a bare 503 too and this upstream never changed.

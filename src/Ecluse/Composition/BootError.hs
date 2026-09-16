@@ -129,6 +129,10 @@ data BootError
       Only the deleting role reads the @dredger@ group, so only that role refuses.
       -}
       DredgerChunkPauseBeneathFloor NominalDiffTime NominalDiffTime
+    | {- | A mount's rules deny on the advisory database and no advisory store is configured, so
+      those rules could never decide. Carries the mount and the rule names, in policy order.
+      -}
+      AdvisoryDenyWithoutStore Ecosystem (NonEmpty Text)
     | {- | An advisory store is configured and no mount is, so @ecluse pilot@ has no ecosystem
       to compile an artifact for and would publish nothing.
       -}
@@ -297,6 +301,12 @@ renderBootError = \case
             <> ", beneath the floor of "
             <> show floorPause
             <> ": the pause between chunks is what leaves time to stop a mistaken sweep. Deletion is permanent, so the pause may be raised and never lowered"
+    AdvisoryDenyWithoutStore eco rules ->
+        "mount \""
+            <> ecosystemName eco
+            <> "\" enables the advisory deny rules "
+            <> T.intercalate ", " (toList rules)
+            <> ", but ECLUSE_ADVISORIES__URL (advisories.url) is unset: those rules have no advisory database to read, so every version they evaluate would refuse. Set the advisory store and run ecluse pilot to publish an artifact for this mount, or remove these rules from its policy"
     PilotWithoutEcosystem ->
         "ECLUSE_ADVISORIES__URL is set but no mount is declared, so ecluse pilot has no ecosystem to compile an advisory artifact for: declare the mounts this deployment serves under ECLUSE_MOUNTS__<ECOSYSTEM>__, or run a role this configuration has work for"
 

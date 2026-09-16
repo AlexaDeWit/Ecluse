@@ -49,7 +49,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     prerequisitesMet,
  )
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup), prepare)
-import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny), Rule (DenyByIdentity, DenyIfCve, DenyIfEpss))
+import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny), Rule (AllowIfRemediatesCve, DenyByIdentity, DenyIfCve, DenyIfEpss))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
 import Ecluse.Test.Maintenance (
@@ -334,10 +334,21 @@ candidateCycleSpec = describe "the candidate cycle" $ do
     it "reports once that no advisory generation is loaded, and still sweeps the identity half" $ do
         store <- seededStore
         rec' <- recordingPorts Nothing
-        outcome <- sweepCycle testPacing (recPorts rec') [testMount (fakeMaintenance store) [denyRule] [DenyByIdentity "left-pad"]]
+        let configured = [AllowIfRemediatesCve, DenyByIdentity "left-pad"]
+        outcome <- sweepCycle testPacing (recPorts rec') [testMount (fakeMaintenance store) [denyRule] configured]
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
         errors <- recErrors rec'
         length (filter (T.isInfixOf "no advisory database generation is loaded") errors) `shouldBe` 1
+
+    it "says nothing about the advisory database for a mount whose rules never read one" $ do
+        -- An identity deny names everything it can name without a database, so the missing
+        -- generation costs this mount no coverage and is no operator's problem.
+        store <- seededStore
+        rec' <- recordingPorts Nothing
+        outcome <- sweepCycle testPacing (recPorts rec') [testMount (fakeMaintenance store) [denyRule] [DenyByIdentity "left-pad"]]
+        tallyDeleted (outcomeTally outcome) `shouldBe` 1
+        errors <- recErrors rec'
+        errors `shouldSatisfy` (not . any (T.isInfixOf "no advisory database generation is loaded"))
 
     it "closes a completed cycle with its counts on a routine line" $ do
         store <- seededStore

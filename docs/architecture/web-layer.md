@@ -51,8 +51,8 @@ explicit configuration (`server.publicUrl` plus its derived prefix).
 
 `/livez` and `/readyz` stay distinct for orchestration. Liveness means the process responds and,
 where a mirror worker runs, its consume loop keeps making progress.
-Readiness includes startup, draining, and the first advisory sync of at least one configured
-ecosystem, with the state of every mount in the body.
+Readiness includes startup, draining, and the first advisory sync of at least one mount whose own
+rules deny on the advisory database, with the state of every mount in the body.
 Public-upstream reachability is not a readiness requirement, because private hits can still serve
 during a public outage. The [operator probe contract](https://ecluse-proxy.com/docs/operations/#health-probes)
 also describes role-specific conditions. `/-/ping` answers locally, and

@@ -25,6 +25,7 @@ module Ecluse.E2E.Harness.Docker (
     runRoleOnce,
     runDredgerOnce,
     advisoryDataDir,
+    ministackAwsEnv,
 
     -- * Container logs
     awaitContainerLog,
@@ -295,16 +296,30 @@ proxyEnv hostPort queueUrl =
       ("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", pypiUpstreamUrl)
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
     , ("ECLUSE_QUEUE__URL", queueUrl)
-    , -- The production endpoint override (AWS-SDK-standard), aimed at the ministack
-      -- alias. The dummy keys sign the request the emulator does not validate.
-      ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")
-    , ("AWS_REGION", "us-east-1")
-    , ("AWS_ACCESS_KEY_ID", "test")
-    , ("AWS_SECRET_ACCESS_KEY", "test")
+    , -- The SQS endpoint override (AWS-SDK-standard), aimed at the ministack alias.
+      ("AWS_ENDPOINT_URL_SQS", ministackEndpoint)
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
     , -- DenyInstallTimeExecution gives the deny scenario a rule to fire, and min-age drops to
       -- zero because the shipped week would quarantine every freshly built fixture.
       ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0},\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}")
+    ]
+        <> ministackAwsEnv
+
+-- | The ministack alias every role inside the test network reaches an AWS-compatible store on.
+ministackEndpoint :: Text
+ministackEndpoint = "http://ministack:4566"
+
+{- | The AWS environment every role boots with. A role that is given an advisory store prepares its
+sync at boot, so each needs a credential chain and an endpoint inside the test network.
+-}
+ministackAwsEnv :: [(Text, Text)]
+ministackAwsEnv =
+    [ -- The generic endpoint override (AWS-SDK-standard) the S3 advisory client reads. The
+      -- dummy keys sign a request the emulator does not validate.
+      ("AWS_ENDPOINT_URL", ministackEndpoint)
+    , ("AWS_REGION", "us-east-1")
+    , ("AWS_ACCESS_KEY_ID", "test")
+    , ("AWS_SECRET_ACCESS_KEY", "test")
     ]
 
 {- | A detached test container's @docker run@ specification: everything that varies between
@@ -542,6 +557,7 @@ dredgerEnv =
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
     ]
+        <> ministackAwsEnv
 
 -- | Run a docker command, failing the test loudly if it exits non-zero.
 dockerOk :: [String] -> IO ()

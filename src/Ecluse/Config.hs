@@ -70,6 +70,8 @@ module Ecluse.Config (
     mountPostureLines,
     mountAdvisoryAge,
     mountEpssRequirement,
+    mountAdvisoryDenials,
+    mountDatabaseRequirement,
     advisoryAgeLines,
     resolvedKeyProvenance,
 ) where
@@ -99,9 +101,10 @@ import Ecluse.Core.Rules.Freshness (
     MaxAdvisoryAge (maxAdvisoryAge, maxAdvisoryAgeBasis),
     maxAdvisoryAgeFor,
  )
-import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule (DenyIfEpss), readsAdvisories)
+import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule (DenyIfEpss), deniesOnAdvisories, readsAdvisories, ruleName)
 import Ecluse.Core.Security (HostPort, hostPortAddress)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
+import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
 import Ecluse.Core.Text (registryPath, stripTrailingSlash)
 
 -- | The rule policy embedded in the shipped configuration.
@@ -330,13 +333,24 @@ mountEpssRequirement = bool EpssOptional EpssRequired . any requiresEpss . mount
 mountRulesOf :: Mount -> [Rule]
 mountRulesOf = map prRule . mountPolicy
 
+{- | The names of this mount's rules that deny on the advisory database, in policy order. A
+non-empty list is what makes an advisory store mandatory and the mount's readiness wait for one.
+-}
+mountAdvisoryDenials :: Mount -> [Text]
+mountAdvisoryDenials = ordNub . map ruleName . filter deniesOnAdvisories . mountRulesOf
+
+-- | Whether this mount must hold an advisory database before it can serve anything.
+mountDatabaseRequirement :: Mount -> DatabaseRequirement
+mountDatabaseRequirement = bool DatabaseRequired DatabaseOptional . null . mountAdvisoryDenials
+
 {- | The effective maximum push age of every mount whose rules read the advisory database, with
-the basis that produced it. A mount that reads no advisories has no limit to report.
+the basis that produced it. With no store configured nothing syncs, so nothing has an age.
 -}
 advisoryAgeLines :: Config -> [Text]
 advisoryAgeLines config =
     [ ageLine eco (mountAdvisoryAge advisories mount)
-    | (eco, mount) <- Map.toAscList (configMounts config)
+    | isJust (advUrl advisories)
+    , (eco, mount) <- Map.toAscList (configMounts config)
     , any readsAdvisories (mountRulesOf mount)
     ]
   where

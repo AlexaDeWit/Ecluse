@@ -67,11 +67,11 @@ spec = do
                 get "/livez"
                     `shouldRespondWith` 503{matchBody = bodyContainsAll ["liveness check failed", "2026-06-23T00:00:00"]}
 
-    describe "the dedicated worker's probes -- awaiting startup readiness" $
+    describe "the dedicated worker's probes -- awaiting the advisory database" $
         with (mirrorApp alive neitherSynced) $ do
             it "fails /readyz with 503 until an advisory sync lands, naming both mounts" $
                 get "/readyz"
-                    `shouldRespondWith` 503{matchBody = bodyContainsAll ["\"npm\":\"awaiting startup readiness\"", "\"pypi\":\"awaiting startup readiness\""]}
+                    `shouldRespondWith` 503{matchBody = bodyContainsAll ["\"npm\":\"awaiting the advisory database that ecluse pilot publishes\"", "\"pypi\":\"awaiting the advisory database that ecluse pilot publishes\""]}
 
             it "keeps /livez at 200 (a worker still syncing is alive, not stalled)" $
                 get "/livez" `shouldRespondWith` 200
@@ -82,7 +82,7 @@ spec = do
                 -- A missing PyPI database must not pull the pod, and its healthy npm mount,
                 -- out of rotation.
                 get "/readyz"
-                    `shouldRespondWith` 200{matchBody = bodyContainsAll ["\"status\":\"ready\"", "\"npm\":\"ready\"", "\"pypi\":\"awaiting startup readiness\""]}
+                    `shouldRespondWith` 200{matchBody = bodyContainsAll ["\"status\":\"ready\"", "\"npm\":\"ready\"", "\"pypi\":\"awaiting the advisory database that ecluse pilot publishes\""]}
   where
     alive = Liveness{liveHealthy = True, liveLastPoll = Just polledAt}
     stalled = Liveness{liveHealthy = False, liveLastPoll = Just polledAt}

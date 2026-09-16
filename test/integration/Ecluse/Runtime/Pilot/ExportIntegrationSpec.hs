@@ -98,7 +98,7 @@ spec = do
                     published ^. S3L.headObjectResponse_lastModified `shouldSatisfy` isJust
                     source <- newS3CveSource (Just endpoint)
                     slot <- newCveSlot
-                    let env = SyncEnv (s3CveFetchFor source bucket objectKey (512 * 1024 * 1024)) Npm EpssRequired (tmpDir <> "/consumer.sqlite") slot
+                    let env = SyncEnv (s3CveFetchFor source bucket objectKey (512 * 1024 * 1024)) Npm EpssRequired (tmpDir <> "/consumer.sqlite") slot ("s3://" <> bucket)
                     initialSync <- syncStep env Nothing
                     acceptedEtag <- case initialSync of
                         SyncSwapped etag _ -> pure etag

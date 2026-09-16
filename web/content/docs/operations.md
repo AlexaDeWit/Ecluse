@@ -23,7 +23,8 @@ both:
 | `GET /readyz` | Whether the role can accept its work. | Startup, drain, a pending first advisory sync, or a latched Dredger cap halt. |
 
 On a process that runs no mirror worker, liveness is the listener alone. The readiness advisory gate
-lifts once any configured ecosystem completes its first advisory sync.
+lifts once any mount whose rules deny on the advisory database completes its first sync, and a mount
+whose rules never deny on it is ready without one.
 
 The `/livez` body is a JSON object with two keys, in no guaranteed order: `status`, the same
 verdict the status code carries, and `lastPoll`, the mirror worker's last successful poll as an
@@ -36,17 +37,21 @@ progress. `lastPoll` stays `null` until a successful poll or completed job. Each
 the same allowance, so later stalls also fail liveness after 660 seconds without progress.
 
 Readiness is deliberately lenient about public-upstream reachability, so a transient blip does not
-pull a healthy pod from rotation. The starting-up case is the one to plan for. With an advisory
-store configured, that startup gate waits for the first advisory sync of at least one mounted
-ecosystem, a one-way flip that never flaps back. Give a cold pod room for that first database
-download: a Kubernetes `startupProbe`, or a readiness `failureThreshold` sized for it. Pilot
-publishes an artifact for every ecosystem the configuration mounts. If acquisition fails, the
-process stays alive and keeps polling.
+pull a healthy pod from rotation. The starting-up case is the one to plan for. Readiness follows
+each mount's own rules. A mount whose rules include `DenyIfCve` or `DenyIfEpss` waits for its first
+advisory sync, a one-way flip that never flaps back. A mount with no such rule is ready before any
+artifact exists, because every rule it holds decides without the database. Give a cold pod room for
+that first database download: a Kubernetes `startupProbe`, or a readiness `failureThreshold` sized
+for it. Pilot publishes an artifact for every ecosystem the configuration mounts. If acquisition
+fails, the process stays alive and keeps polling. Once the boot retry budget is spent, the sync
+logs an `ERROR` naming Pilot and the store, and repeats it every 15 minutes until an artifact
+loads. Alarm on that line: it is the one that says a rollout is stuck on Pilot.
 
 Readiness reports every mount separately, so one ecosystem's missing artifact does not take the
 others out of rotation. The `/readyz` body carries a `mounts` object keyed by ecosystem, and each
-value is `ready` or `awaiting startup readiness`. A missing PyPI database therefore leaves a healthy
-npm mount routable, and the body names PyPI as the mount still waiting. A latched Dredger reports
+value is `ready` or `awaiting the advisory database that ecluse pilot publishes`. A missing PyPI
+database therefore leaves a healthy npm mount routable, and the body names PyPI as the mount still
+waiting. A latched Dredger reports
 `halted` instead, and a draining instance reports `draining`. Readiness does not itself block direct
 requests: a request that needs advisory data its mount does not have is refused by that mount's own
 `onUnavailable` policy, and a rule that admits without reading the database still admits. A
@@ -54,7 +59,7 @@ successful first sync does not prove that data remains fresh. [Advisory push age
 governs retained evidence.
 
 An EPSS-dependent ecosystem rejects artifacts without the exact `epss_status=available` marker.
-Without an accepted qualified generation, its slot stays empty and its readiness remains awaiting startup readiness.
+Without an accepted qualified generation, its slot stays empty, and its readiness keeps awaiting the advisory database.
 Other ecosystems can accept marker-free artifacts and become routable independently.
 A running consumer keeps its accepted qualified generation after a rejected replacement.
 Restarting creates empty slots, even when canonical files remain on disk.
@@ -233,7 +238,8 @@ value and where it came from, once per mount.
 At half the maximum, Écluse logs `error` once, naming the ecosystem, the push time, the age, and
 the maximum. It logs once per crossing, not once per poll, and re-arms when a fresh push brings
 the age back under half. `ecluse.advisory.source.age.seconds` carries the same age for a
-dashboard.
+dashboard. `ecluse.advisory.database.age.seconds` reports nothing at all while no artifact has
+loaded, so an alert on it never reads a never-filled slot as a fresh database.
 
 Two remedies:
 

@@ -95,8 +95,9 @@ spec =
                                         , syncEpssRequirement = EpssOptional
                                         , syncDbPath = dataDir <> "/npm-osv-schema4.db"
                                         , syncSlot = slot
+                                        , syncStoreRef = "s3://" <> bucket
                                         }
-                                schedule = SyncSchedule{schedBootBackoff = [50_000, 50_000], schedPollDelay = 100_000}
+                                schedule = SyncSchedule{schedBootBackoff = [50_000, 50_000], schedPollDelay = 100_000, schedAbsentReport = 600_000_000}
                             app <- proxyApp ruleDeps privateUrl publicUrl
                             withAsync (runQuiet (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort syncEnv schedule (SyncHooks{hookFirstSync = pass, hookPushAge = pass}))) $ \_ -> do
                                 -- Phase 1 control: no database, and the fix is too young for the

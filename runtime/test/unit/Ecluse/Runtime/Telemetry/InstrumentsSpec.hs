@@ -129,8 +129,8 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
     it "registers the advisory-age callback against the inert instrument without throwing" $ do
         m <- newMetrics telemetryDisabled
         stamp <- getMonotonicTime
-        registerAdvisoryDatabaseAge m Npm (pure stamp)
-        registerAdvisoryDatabaseAge m PyPI (pure stamp)
+        registerAdvisoryDatabaseAge m Npm (pure (Just stamp))
+        registerAdvisoryDatabaseAge m PyPI (pure (Just stamp))
         pure () :: Expectation
 
     it "reports the advisory database's age as whole seconds since its generation was installed" $ do
@@ -138,14 +138,19 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         now <- getMonotonicTime
         -- An install stamp an hour and a half-second in the past. The sub-second gap between
         -- this reading and the callback's own floors away, so the answer is exactly 3600.
-        reportAdvisoryDatabaseAge Npm (pure (now - 3600.5)) (capture reported)
+        reportAdvisoryDatabaseAge Npm (pure (Just (now - 3600.5))) (capture reported)
         readIORef reported `shouldReturn` [(3600, metricAttributes [LEcosystem Npm])]
 
     it "reports zero rather than a negative age for a stamp that is not in the past" $ do
         reported <- newIORef []
         now <- getMonotonicTime
-        reportAdvisoryDatabaseAge PyPI (pure (now + 60)) (capture reported)
+        reportAdvisoryDatabaseAge PyPI (pure (Just (now + 60))) (capture reported)
         readIORef reported `shouldReturn` [(0, metricAttributes [LEcosystem PyPI])]
+
+    it "reports nothing at all while no generation has ever been installed" $ do
+        reported <- newIORef []
+        reportAdvisoryDatabaseAge Npm (pure Nothing) (capture reported)
+        readIORef reported `shouldReturn` []
 
     it "registers the advisory source-age callback against the inert instrument without throwing" $ do
         m <- newMetrics telemetryDisabled

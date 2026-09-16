@@ -13,6 +13,7 @@ module Ecluse.Core.Rules.Types (
     DenyIfEpssParams (..),
     ruleName,
     readsAdvisories,
+    deniesOnAdvisories,
 
     -- * Precedence
     PrecededRule (..),
@@ -140,6 +141,20 @@ readsAdvisories = \case
     AllowIfRemediatesCve -> True
     DenyIfCve{} -> True
     DenyIfEpss{} -> True
+    AllowScope{} -> False
+    AllowIfOlderThan{} -> False
+    DenyInstallTimeExecution -> False
+    DenyByIdentity{} -> False
+    AllowByIdentity{} -> False
+
+{- | Whether a rule denies on the advisory database rather than abstaining without one. A rule set
+holding one cannot decide anything until an artifact loads, which is what makes a store mandatory.
+-}
+deniesOnAdvisories :: Rule -> Bool
+deniesOnAdvisories = \case
+    DenyIfCve{} -> True
+    DenyIfEpss{} -> True
+    AllowIfRemediatesCve -> False
     AllowScope{} -> False
     AllowIfOlderThan{} -> False
     DenyInstallTimeExecution -> False

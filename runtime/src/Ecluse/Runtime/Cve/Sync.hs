@@ -27,6 +27,7 @@ module Ecluse.Runtime.Cve.Sync (
     SyncHooks (..),
     runCveSync,
     bootBackoffDelays,
+    absentReportInterval,
 ) where
 
 import Conduit (ConduitT, runResourceT, (.|))
@@ -49,7 +50,7 @@ import Amazonka.S3.Lens qualified as S3L
 import Lens.Micro ((^.))
 
 import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, DbEtag (..), openCveDb)
-import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisorySource, observeAdvisoryPublication, swapIn)
+import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, observeAdvisoryPublication, swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apEpssScoreDate, apOsvNewestModified, apOsvSource))
@@ -121,6 +122,8 @@ data SyncEnv = SyncEnv
     -- ^ The canonical on-disk artifact path (the stable per-ecosystem name).
     , syncSlot :: CveSlot
     -- ^ The slot this task's swaps publish to.
+    , syncStoreRef :: Text
+    -- ^ How the configured store reads back, for the reports that name where an artifact belongs.
     }
 
 {- | What one 'syncStep' concluded. The caller ('runCveSync') logs it and decides
@@ -199,6 +202,8 @@ data SyncSchedule = SyncSchedule
     -- ^ Delays before each boot-burst retry. The list's length is the budget.
     , schedPollDelay :: Int
     -- ^ The steady ETag-poll interval.
+    , schedAbsentReport :: Int
+    -- ^ How long between repeats of the unloaded-database report, once the burst has conceded.
     }
 
 {- | The shipped boot-burst backoff: an immediate first attempt, then a retry after each delay,
@@ -206,6 +211,12 @@ then the burst concedes to the steady poll. The poll interval, not this, is the 
 -}
 bootBackoffDelays :: [Int]
 bootBackoffDelays = [1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000]
+
+{- | The shipped gap between repeats of the unloaded-database report, in microseconds. A stuck
+rollout keeps saying so without filling the log at the poll interval.
+-}
+absentReportInterval :: Int
+absentReportInterval = 900_000_000
 
 {- | What the shell hangs off one sync task. Both run inside the task, so neither may block it,
 and both must tolerate being called again.
@@ -228,9 +239,7 @@ runCveSync ::
     SyncSchedule ->
     SyncHooks ->
     m ()
-runCveSync metrics tracing env schedule hooks = do
-    seen <- burst
-    poll seen
+runCveSync metrics tracing env schedule hooks = burst >>= poll 0
   where
     eco = show (syncEcosystem env) :: Text
 
@@ -242,24 +251,53 @@ runCveSync metrics tracing env schedule hooks = do
     -- 'lastSeen' is fixed at 'Nothing' because the only not-settled outcomes ('SyncAbsent',
     -- 'SyncFetchFaulted') return it untouched, so it never changes across the burst.
     burst = do
-        (settled, seen') <-
+        (result, (settled, seen')) <-
             retrying
                 (delayListPolicy (schedBootBackoff schedule))
-                (\_ (done, _) -> pure (not done))
+                (\_ (_, (done, _)) -> pure (not done))
                 (\_ -> step Nothing)
-        unless settled $
-            -- The readiness gate reads 'csReady', so this ecosystem denies by default.
-            -- Logged at 'ErrorS' because a persistent failure here is a misconfiguration.
-            logFM ErrorS (ls ("cve-sync[" <> eco <> "]: boot fetch did not acquire an advisory database within the boot budget; this ecosystem stays not-ready and denies by default until one is acquired. Continuing to poll; investigate the bucket, object, or IAM if this persists."))
+        unless settled (reportUnloaded eco (syncStoreRef env) result)
         pure seen'
 
-    poll lastSeen = do
+    poll sinceReport lastSeen = do
         threadDelay (schedPollDelay schedule)
-        (_, seen') <- step lastSeen
-        poll seen'
+        (result, (_, seen')) <- step lastSeen
+        waited <- repeatUnloaded result (sinceReport + schedPollDelay schedule)
+        poll waited seen'
 
-{- One observed step, yielding (the burst may stop, the ETag now last seen). Residue propagates to
-the task's supervision. The span closes after the two records, so it reads marginally longer.
+    -- The report repeats only while the slot has never been filled, so the first swap ends it
+    -- and a later outage starts the interval again.
+    repeatUnloaded result elapsed =
+        liftIO (currentAdvisoryEtag (syncSlot env)) >>= \case
+            Just _ -> pure 0
+            Nothing
+                | elapsed < schedAbsentReport schedule -> pure elapsed
+                | otherwise -> 0 <$ reportUnloaded eco (syncStoreRef env) result
+
+{- The line an operator alerts on while nothing is loaded. Its cause separates an artifact never
+published from one verification refused and from an access that keeps failing. -}
+reportUnloaded :: (KatipContext m) => Text -> Text -> AdvisorySyncResult -> m ()
+reportUnloaded eco store result =
+    logFM ErrorS (ls ("cve-sync[" <> eco <> "]: " <> unloadedCause store result))
+
+-- Why nothing is loaded, worded to name the role or the access that has to change.
+unloadedCause :: Text -> AdvisorySyncResult -> Text
+unloadedCause store = \case
+    AdvisoryNonePublished ->
+        "no advisory artifact has ever been published to " <> store <> ", and ecluse pilot is what compiles and publishes one. This ecosystem stays not-ready and its advisory denies refuse until an artifact lands."
+    AdvisoryRefused -> refusedArtifact
+    -- A poll that finds nothing changed while nothing is loaded is the refused artifact standing.
+    AdvisoryUnchanged -> refusedArtifact
+    AdvisoryFetchFailed ->
+        "no advisory database could be fetched from " <> store <> ": this ecosystem stays not-ready and denies by default until one loads. Continuing to poll; investigate the bucket, object, or IAM if this persists."
+    AdvisorySwapped ->
+        "no advisory database is loaded from " <> store <> ", so this ecosystem stays not-ready and denies by default until one is."
+  where
+    refusedArtifact =
+        "the advisory artifact at " <> store <> " was refused by verification, so nothing is loaded and this ecosystem stays not-ready. The refusal line names what failed, and ecluse pilot must publish an artifact that verifies."
+
+{- One observed step, yielding its classification beside (the burst may stop, the ETag now last
+seen). Residue propagates to supervision, and the span closes after the two records, so it reads longer.
 -}
 observedStep ::
     (MonadUnliftIO m, KatipContext m) =>
@@ -269,10 +307,10 @@ observedStep ::
     Text ->
     IO () ->
     Maybe DbEtag ->
-    m (Bool, Maybe DbEtag)
+    m (AdvisorySyncResult, (Bool, Maybe DbEtag))
 observedStep metrics tracing env eco notifyFirstSync lastSeen =
     withRunInIO $ \runInIO ->
-        snd <$> astpSyncAttemptSpan tracing ecosystem fst (metered (runInIO attempt))
+        astpSyncAttemptSpan tracing ecosystem fst (metered (runInIO attempt))
   where
     ecosystem = syncEcosystem env
 

@@ -311,6 +311,9 @@ The advisory rules carry details the table leaves out:
 
 - `remediation-fast-track` abstains until a first advisory database syncs, so without one only the
   quarantine governs. Set `ECLUSE_ADVISORIES__URL` and run Pilot to sync one.
+- Both advisory denies need an advisory store. A mount that enables one with `advisories.url` unset
+  refuses the boot, whatever `onUnavailable` says, and `ecluse check-config` reports the same
+  refusal.
 - The npm malware feed carries no score, so `DenyIfCve` counts a malware entry as above every
   threshold. Enabling it also blocks known-malicious packages.
 - EPSS is FIRST.org's estimate of the probability that attackers exploit a vulnerability within 30

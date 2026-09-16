@@ -27,7 +27,7 @@ import Network.HTTP.Types (hAuthorization, statusCode)
 import UnliftIO (handleAny)
 
 import Ecluse.E2E.Fixtures.Advisories (advisoryEpssPath, advisoryExportPath)
-import Ecluse.E2E.Harness.Docker (RoleRun, advisoryDataDir, runRoleOnce)
+import Ecluse.E2E.Harness.Docker (RoleRun, advisoryDataDir, ministackAwsEnv, runRoleOnce)
 import Ecluse.E2E.Harness.Types (GlobalDataPlane (gdpMiniPort))
 import Ecluse.Test.Osv (CorpusVersion)
 import Ecluse.Test.Poll (pollUntil)
@@ -43,13 +43,8 @@ advisoryStoreEnv :: [(Text, Text)]
 advisoryStoreEnv =
     [ ("ECLUSE_ADVISORIES__URL", "s3://" <> advisoryBucket)
     , ("ECLUSE_ADVISORIES__POLL_INTERVAL", "2")
-    , -- The AWS-SDK-standard generic override, which the S3 advisory client reads. The dummy
-      -- keys sign a request the emulator does not validate.
-      ("AWS_ENDPOINT_URL", "http://ministack:4566")
-    , ("AWS_REGION", "us-east-1")
-    , ("AWS_ACCESS_KEY_ID", "test")
-    , ("AWS_SECRET_ACCESS_KEY", "test")
     ]
+        <> ministackAwsEnv
 
 {- | Create the advisory bucket in the ministack S3 emulator, retrying while it warms up.
 @CreateBucket@ is idempotent for its own owner, so a retry after a partial answer is safe.

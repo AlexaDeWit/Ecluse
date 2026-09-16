@@ -244,7 +244,11 @@ Parsing raw JSON advisory dumps on the proxy costs heavy GC pressure and memory 
 Écluse decouples that work into **Écluse Pilot**, a standalone service. Pilot pulls OSV's
 per-ecosystem exports, compiles them into a read-only SQLite database (`osv.db`), and pushes it
 to a private object store. `advisories.url` names that store as `s3://bucket[/prefix]`, its
-scheme picking the provider the way `queue.url` does. Unset, the advisory stack is off.
+scheme picking the provider the way `queue.url` does. Unset, the advisory stack is off: the artifact
+carries no signature and a bucket name is global, so a shipped default would name a bucket the
+project does not own. With the stack off, a mount whose rules include `DenyIfCve` or `DenyIfEpss`
+refuses the boot: those rules cannot decide without a database, so the pairing is a configuration
+error rather than a mount that denies every version it evaluates.
 
 OSV retains withdrawn records in its [GCS exports](https://google.github.io/osv.dev/faq/#how-does-osvdev-handle-withdrawn-records).
 Pilot excludes records carrying a withdrawal timestamp before it emits affected ranges or exact versions.
@@ -268,9 +272,12 @@ displaced generation's readers to drain. The last reader closes a retired genera
 if the sync task is cancelled, so pruning remains the kernel's reclamation. The proxy discards a refused artifact and remembers its ETag. The last-good
 generation keeps serving within its existing maximum push age. Rejection and repeated polls for the
 rejected ETag cannot refresh that age. A cold process creates empty slots and does not recover the
-canonical file from disk. [Readiness](web-layer.md#meta-routes-ping-health-and-search) turns
-true once at least one ecosystem completes its first sync, while the listener serves throughout. An absent database only
-abstains into deny-by-default.
+canonical file from disk. [Readiness](web-layer.md#meta-routes-ping-health-and-search) is decided
+per mount from that mount's own rules: one whose rules include an advisory deny waits for its first
+sync, and one whose rules do not is ready without a database. The listener serves throughout. A
+never-published artifact keeps the role polling and logs an operator-facing `ERROR` naming Pilot
+and the store, first when the boot retry budget is spent and then every 15 minutes until one loads.
+An absent database only abstains into deny-by-default.
 
 Polling removes the one external dependency that would otherwise sit under the fail-closed gate:
 an advisory-source outage becomes sync lag, not per-package blocking. Lookups also leave the hot

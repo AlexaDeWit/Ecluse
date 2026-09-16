@@ -67,11 +67,13 @@ command. Examples are `ecluse mirror` without a durable queue or without any `mi
 
 ### Running without Pilot
 
-Only the rules that read advisories need Pilot. Without an advisory store (`ECLUSE_ADVISORIES__URL`
-unset):
+Only the rules that read advisories need Pilot. `advisories.url` ships unset, so the advisory stack
+is off until you point it at a bucket of your own. Without an advisory store:
 
 - The fast lane abstains, so every public version waits out the quarantine.
-- `DenyIfCve` and `DenyIfEpss` answer `503` under `onUnavailable: deny`, and abstain under `skip`.
+- A mount whose rules include `DenyIfCve` or `DenyIfEpss` refuses the boot, whatever
+  `onUnavailable` says. Those rules cannot decide without a database, so every version they
+  evaluate would refuse. `ecluse check-config` reports the same refusal.
 - Dredger's default sweep considers only the names a `DenyByIdentity` rule pins. A full walk still
   covers every name.
 - Every other rule works unchanged, and readiness does not wait for advisories.
@@ -79,10 +81,16 @@ unset):
 The shipped policy reads advisories only through the fast lane. So it runs without Pilot, and it
 gives up only the fast lane.
 
-With a store configured, run Pilot before the other roles. A role reports not ready until an
-artifact syncs, and it stays not ready if no ecosystem ever receives one. If Pilot stops later, the
-last artifact keeps serving until it passes the maximum advisory age. The advisory denies then
-refuse, whatever `onUnavailable` says ([Advisory push age](@/docs/operations.md#advisory-push-age)).
+With a store configured, run Pilot before the roles that need a database. Readiness follows each
+mount's own rules. A mount whose rules include `DenyIfCve` or `DenyIfEpss` reports not ready until
+an artifact syncs, and answers `/readyz` with `503` naming the missing database and Pilot as its
+producer. A mount with no such rule is ready before any artifact exists. The role keeps polling and
+never exits. Once the boot retry budget is spent it logs an `ERROR` naming Pilot and the store, and
+repeats that line every 15 minutes until an artifact loads.
+
+If Pilot stops later, the last artifact keeps serving until it passes the maximum advisory age. The
+advisory denies then refuse, whatever `onUnavailable` says
+([Advisory push age](@/docs/operations.md#advisory-push-age)).
 
 ## The recommended topology
 

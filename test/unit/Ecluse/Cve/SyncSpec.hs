@@ -38,12 +38,13 @@ import Ecluse.Core.Rules.Freshness (
  )
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
 import Ecluse.Core.Server.Readiness (
+    DatabaseRequirement (DatabaseOptional, DatabaseRequired),
     MountReadiness (MountAwaitingFirstSync, MountReady),
     Readiness (AwaitingMounts, Routable),
  )
 import Ecluse.Core.Supervision (delayListPolicy)
-import Ecluse.Cve.Sync (CveSyncHandle (..), advisoryFreshnessFor, cveRuleDepsFor, cveSyncReadiness, cveSyncScheduleFor, planCveSync, reportPushAge, sweepStaleTemps, sweepStep)
-import Ecluse.Runtime.Cve.Sync (FetchedObject (..), SyncEnv (..), SyncHooks (..), SyncOutcome (..), SyncSchedule (..), bootBackoffDelays, runCveSync, syncStep)
+import Ecluse.Cve.Sync (AdvisoryNeed (..), CveSyncHandle (..), advisoryFreshnessFor, cveRuleDepsFor, cveSyncReadiness, cveSyncScheduleFor, planCveSync, reportPushAge, sweepStaleTemps, sweepStep)
+import Ecluse.Runtime.Cve.Sync (FetchedObject (..), SyncEnv (..), SyncHooks (..), SyncOutcome (..), SyncSchedule (..), absentReportInterval, bootBackoffDelays, runCveSync, syncStep)
 import Ecluse.Runtime.Test.Cve (fetchServingAt, headOnlyFetch, refusingFetch)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv, runQuietKatip)
@@ -76,12 +77,13 @@ spec = do
                         ]
                         (Just mountedNpmDoc)
                 logEnv <- newTestLogEnv
-                plan <- planCveSync logEnv Nothing cfg [(Npm, sixDayLimit, EpssRequired), (PyPI, sixDayLimit, EpssOptional)]
+                plan <- planCveSync logEnv Nothing cfg [needFor Npm EpssRequired DatabaseRequired, needFor PyPI EpssOptional DatabaseOptional]
                 Map.keys plan `shouldBe` [Npm, PyPI]
                 Map.map (syncEpssRequirement . csEnv) plan `shouldBe` Map.fromList [(Npm, EpssRequired), (PyPI, EpssOptional)]
                 for_ (Map.lookup Npm plan) $ \handle -> do
                     syncEcosystem (csEnv handle) `shouldBe` Npm
                     syncDbPath (csEnv handle) `shouldBe` dataDir </> "npm-osv-schema4.db"
+                    syncStoreRef (csEnv handle) `shouldBe` "s3://advisories"
                     -- Not ready and serving nothing until the first sync.
                     readTVarIO (csReady handle) `shouldReturn` False
                     withSlotGeneration (syncSlot (csEnv handle)) (pure . isJust) `shouldReturn` False
@@ -215,6 +217,13 @@ spec = do
             (plan, _) <- twoMountPlan
             cveSyncReadiness plan `shouldReturn` AwaitingMounts (bothAt MountAwaitingFirstSync)
 
+        it "reports a mount whose rules never deny on the database ready before any sync" $ do
+            npmHandle <- stubSyncHandle
+            pypiHandle <- stubSyncHandle
+            let plan = Map.fromList [(Npm, npmHandle), (PyPI, pypiHandle{csDatabase = DatabaseOptional})]
+            cveSyncReadiness plan
+                `shouldReturn` Routable (Map.fromList [(Npm, MountAwaitingFirstSync), (PyPI, MountReady)])
+
         it "keeps npm routable while the PyPI artifact is missing, then reports the recovery" $ do
             (plan, (npmHandle, pypiHandle)) <- twoMountPlan
             landed npmHandle
@@ -231,7 +240,7 @@ spec = do
                     markerFree eco = fetchServingAt (Just alarmNow) (Just "legacy") $ \dest -> do
                         mkMinimalValidDbWithMeta dest "pkg" []
                         when (eco == PyPI) $ bracket (open dest) close $ \conn -> execute_ conn "UPDATE meta SET value = 'pypi' WHERE key = 'ecosystem'"
-                    schedule = SyncSchedule [] 600_000_000
+                    schedule = SyncSchedule [] 600_000_000 absentReportInterval
                 done <- newTVarIO (0 :: Int)
                 (tracing, _) <- recordingAdvisorySyncTracingPort
                 let run handle env = runQuietKatip $ runCveSync noopAdvisorySyncMetricsPort tracing env schedule (SyncHooks (landed handle) (atomically (modifyTVar' done (+ 1))))
@@ -253,6 +262,7 @@ spec = do
             let schedule = cveSyncScheduleFor cfg
             schedPollDelay schedule `shouldBe` 90_000_000
             schedBootBackoff schedule `shouldBe` bootBackoffDelays
+            schedAbsentReport schedule `shouldBe` absentReportInterval
 
     describe "the boot burst compiled to a retry policy" $
         it "attempts immediately, backs off over the shipped schedule, then concedes" $ do
@@ -276,6 +286,11 @@ bothAt readiness = Map.fromList [(Npm, readiness), (PyPI, readiness)]
 landed :: CveSyncHandle -> IO ()
 landed handle = atomically (writeTVar (csReady handle) True)
 
+-- One mount's ask of the advisory stack, for the planning cases.
+needFor :: Ecosystem -> EpssRequirement -> DatabaseRequirement -> AdvisoryNeed
+needFor eco epss database =
+    AdvisoryNeed{anEcosystem = eco, anMaxAge = sixDayLimit, anEpss = epss, anDatabase = database}
+
 -- A fresh plan handle whose transport refuses unless the test replaces it.
 stubSyncHandle :: IO CveSyncHandle
 stubSyncHandle = stubHandleAt sixDayLimit getCurrentTime
@@ -296,10 +311,12 @@ stubHandleAt maxAge clock = do
                     , syncEpssRequirement = EpssOptional
                     , syncDbPath = "unused.db"
                     , syncSlot = slot
+                    , syncStoreRef = "s3://advisories"
                     }
             , csMaxAge = maxAge
             , csClock = clock
             , csAgeAlarmed = alarmed
+            , csDatabase = DatabaseRequired
             }
 
 -- | The maximum a mount deriving from the shipped seven-day quarantine gets: six days.
