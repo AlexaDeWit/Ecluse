@@ -81,7 +81,7 @@
   // Refresh flake.lock weekly. The inputs track *branches* (nixos-26.05), which
   // carry no version for Renovate to bump; a lock refresh is how the whole
   // closure moves forward, C libraries and Haskell package set alike. This is
-  // the single freshness lever now that the freeze is derived from the set. If
+  // the single dependency-update lever now that the freeze is derived from the set. If
   // a refresh moves Haskell versions, checks.freeze-sync reds the PR and one
   // `task freeze` commit completes it (docs/getting-started.md → "Dependency locking").
   lockFileMaintenance: {

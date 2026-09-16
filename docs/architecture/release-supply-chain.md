@@ -130,10 +130,10 @@ duration and reaches no other repository. It signs the attestations through GitH
 runs on a `vX.Y.Z` tag or a `workflow_dispatch`, behind
 [the release environment](#the-release-environment).
 
-## Vulnerability scanning and dependency freshness
+## Vulnerability scanning and dependency updates
 
 Three arms keep the shipped closure honest: C-closure detection, Haskell-closure detection, and
-freshness.
+dependency updates.
 
 **Detection, `grype` (the C-closure authority).** `task scan` builds the sbomnix SBOM of the
 application closure into `sbom/` and runs `grype`. It writes the severity-rated findings as
@@ -151,7 +151,7 @@ closes itself once a later scan no longer reports it. On a PR the workflow runs 
 dependency plan changes. On a daily schedule it scans `main`, so CVEs disclosed after a release still
 surface.
 
-**Freshness, Renovate.** [`renovate.json5`](../../.github/renovate.json5) runs one bot across the
+**Dependency updates, Renovate.** [`renovate.json5`](../../.github/renovate.json5) runs one bot across the
 ecosystems the repo automates: flake inputs, GitHub Actions, and Hackage cabal dependencies.
 Renovate's `nix` manager is beta and off by default, so the config enables it explicitly. Without
 that opt-in the weekly refresh does not run at all.
@@ -162,7 +162,7 @@ pending. A release yanked shortly after it ships therefore never reaches a branc
 raised from a vulnerability alert skips that wait, because for a known-vulnerable dependency the
 delay is the greater risk.
 
-The weekly `flake.lock` refresh is the single freshness lever. The flake pins the package set that
+The weekly `flake.lock` refresh is the single dependency-update lever. The flake pins the package set that
 supplies both the image's C-library closure and every Haskell dependency, and `cabal.project.freeze`
 is *generated* from that set (`task freeze`). The `freeze-sync` flake check fails CI whenever the
 committed freeze drifts. That refresh sits outside the quarantine. A lock bump carries no publication

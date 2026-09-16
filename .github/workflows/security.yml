@@ -16,7 +16,7 @@ name: Security
 # so advisories disclosed after a release still surface. Remediation is always
 # flake-side, carried by Renovate's weekly flake.lock refresh. See
 # docs/architecture/release-supply-chain.md → "Vulnerability scanning and
-# dependency freshness".
+# dependency updates".
 on:
   pull_request:
     paths: ["flake.lock", "flake.nix", "cabal.project.freeze", ".github/workflows/security.yml"]

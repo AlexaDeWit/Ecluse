@@ -47,7 +47,7 @@ What Écluse supports, and what it does not, is in
 | [Security posture](architecture/security.md) | The trust assumptions the threat model rests on, the credential posture, and the two floors that fail closed. |
 | [Threat model](https://ecluse-proxy.com/docs/threat-model/) | The STRIDE register, generated from the Saerskriven model (`threat-modelling/ecluse.yaml`). The single source of truth for the system's threats. |
 | [Observability](architecture/observability.md) | Opt-in OpenTelemetry/OTLP tracing and metrics, with Datadog optional. |
-| [Release and supply-chain operations](architecture/release-supply-chain.md) | The reproducible OCI image, the publish/attest chain (provenance + SBOM), and CVE and freshness scanning. |
+| [Release and supply-chain operations](architecture/release-supply-chain.md) | The reproducible OCI image, the publish/attest chain (provenance + SBOM), and CVE scanning and dependency updates. |
 
 ## Out of scope
 
