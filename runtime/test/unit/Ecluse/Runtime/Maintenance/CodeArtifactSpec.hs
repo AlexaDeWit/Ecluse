@@ -174,7 +174,7 @@ deleteCases store = describe "the handle's chunked delete" $ do
                     successful = (faultAt - 1) * 100
                 requests <- newIORef []
                 let plane =
-                        inertPlane
+                        (reading (stillHolding versions))
                             { cpDeleteVersions = \request -> do
                                 let submitted = request ^. CAL.deletePackageVersions_versions
                                 record requests submitted
@@ -222,7 +222,7 @@ deleteCases store = describe "the handle's chunked delete" $ do
         requests <- newIORef []
         let versions = versionRun 101
             plane =
-                inertPlane
+                (reading (stillHolding versions))
                     { cpDeleteVersions = \request -> do
                         let submitted = request ^. CAL.deletePackageVersions_versions
                         record requests submitted
@@ -457,6 +457,17 @@ unexpected name _ = pure (Left (faultSaying ("the spec wired no " <> name <> " a
 -- The inert plane with its reads replaced, which is how a case wires one read call.
 reading :: ReadPlane -> ControlPlane
 reading observer = inertPlane{cpRead = observer}
+
+{- The reads a grouped sweep makes before each destructive batch: the inventory it reassesses
+against, and the two standing permissions it rechecks. The repository keeps every version, because
+these planes answer a delete without removing one, which is what a confirmation then reports. -}
+stillHolding :: [Version] -> ReadPlane
+stillHolding versions =
+    inertReader
+        { rpListVersions = \_ -> pure (Right (versionsPage Nothing (map renderVersion versions)))
+        , rpDescribeRepository = \_ -> pure (Right describedWithArn)
+        , rpListTags = \_ -> pure (Right (taggedWith [markerTag]))
+        }
 
 -- Answer from a fixed sequence, one response per call, so a paging walk is drivable.
 answersFrom :: [a] -> IO (IO (Either StoreFault a))
