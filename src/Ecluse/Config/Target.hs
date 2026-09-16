@@ -69,12 +69,14 @@ resolveStoreBackend eco endpoint = case meWrite endpoint of
         store <- codeArtifactStore eco (registryUrlText (meUrl endpoint)) domain owner region
         Right (BackendCodeArtifact (mintIdentity domain owner region mDuration) store)
 
--- | Resolve a private target already classified as CodeArtifact, using the default token lifetime.
-resolvePrivateBackend :: Ecosystem -> Target -> Either ConfigError StoreBackend
+{- | Resolve a private target already classified as CodeArtifact, using the default token lifetime.
+The repository is returned beside the backend, so a caller needs no second read of the control plane.
+-}
+resolvePrivateBackend :: Ecosystem -> Target -> Either ConfigError (StoreBackend, CodeArtifactStore)
 resolvePrivateBackend eco target = do
     (domain, owner, region) <- codeArtifactHost eco "privateUpstream" (tgtUrl target)
     store <- codeArtifactStore eco (registryUrlText (tgtUrl target)) domain owner region
-    pure (BackendCodeArtifact (mintIdentity domain owner region Nothing) store)
+    pure (BackendCodeArtifact (mintIdentity domain owner region Nothing) store, store)
 
 {- | Vet a read or publish endpoint's URL against its declared tag. Only @codeArtifact@ constrains
 the host, and only a mirror target constrains the path, so this is total over the other tags.

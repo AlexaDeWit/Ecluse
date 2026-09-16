@@ -174,13 +174,15 @@ vetStoreBackends resolveAdapter mounts = withRole $ \role ->
 
 -- | Vet each private cache under its own backend declaration and maintenance authority.
 vetPrivateCaches :: ResolveMaintenanceAdapter -> Map Ecosystem MountConfig -> MountMap -> Vet (Map Ecosystem (Maybe StoreBackend, ClearedBackend))
-vetPrivateCaches resolveAdapter configured mounts = withRole $ \role -> case role of
+vetPrivateCaches resolveAdapter configured mounts = withRole $ \case
     MirrorWriter -> pure Map.empty
-    _ ->
+    MirrorPruner -> clearedFor MirrorPruner
+    MirrorPreviewer -> clearedFor MirrorPreviewer
+  where
+    clearedFor role =
         let resolved = resolvedFor role
          in Map.fromList [(eco, backend) | (eco, Right backend) <- resolved]
                 <$ traverse_ (rule (const (Refuse (uncurry StoreMaintenanceUnavailable))) unmaintained) resolved
-  where
     resolvedFor role =
         [ (eco, resolve role eco endpoint)
         | (eco, mount) <- Map.toAscList mounts
@@ -191,10 +193,8 @@ vetPrivateCaches resolveAdapter configured mounts = withRole $ \role -> case rol
     unmaintained (eco, outcome) = (eco,) <$> leftToMaybe outcome
     resolve role eco endpoint = case tgtTag target of
         TagCodeArtifact -> do
-            backend <- first (PrivateCacheUnavailable . show) (resolvePrivateBackend eco target)
-            case sbControl backend of
-                ControlCodeArtifact store -> pure (Just backend, clearedBackend (tgtUrl target) adapter (ClearedCodeArtifactCache store))
-                _ -> Left (PrivateCacheUnavailable "the declared cache has no CodeArtifact control plane")
+            (backend, store) <- first (PrivateCacheUnavailable . show) (resolvePrivateBackend eco target)
+            pure (Just backend, clearedBackend (tgtUrl target) adapter (ClearedCodeArtifactCache store))
         TagRegistry -> Left (PrivateCacheUnavailable "registry has no inventory control plane")
         TagVerdaccio -> do
             when (refusesWithoutConsent role && preConsent endpoint == DeletionWithheld) $

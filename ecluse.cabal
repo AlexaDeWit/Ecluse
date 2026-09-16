@@ -147,8 +147,8 @@ library ecluse-core
     Ecluse.Core.Registry.Publish
     Ecluse.Core.Registry.Sweep
     Ecluse.Core.Registry.Sweep.Candidates
-    Ecluse.Core.Registry.Sweep.Group
     Ecluse.Core.Registry.Sweep.Deletion
+    Ecluse.Core.Registry.Sweep.Group
     Ecluse.Core.Registry.Sweep.Package
     Ecluse.Core.Registry.Sweep.Types
     Ecluse.Core.Registry.Sweep.Walk
@@ -723,8 +723,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.MaintenanceSpec
     Ecluse.Core.Registry.ExchangeSpec
     Ecluse.Core.Registry.Sweep.CandidatesSpec
-    Ecluse.Core.Registry.Sweep.GroupSpec
     Ecluse.Core.Registry.Sweep.DeletionSpec
+    Ecluse.Core.Registry.Sweep.GroupSpec
     Ecluse.Core.Registry.Sweep.PackageSpec
     Ecluse.Core.Registry.Sweep.TypesSpec
     Ecluse.Core.Registry.Sweep.WalkSpec

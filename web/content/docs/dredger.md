@@ -113,7 +113,7 @@ An ordinary mirror with upstream refill remains ineligible. The separately vette
 cache capability permits refill and removes retained local versions under its own consent.
 Verdaccio's `permitDeletion` retains the operator-declared standalone classification used by the
 development backend. Its maintenance token belongs to that target. Boot cannot inspect its uplinks.
-Our real Verdaccio coverage uses `uplinks: {}`. Metadata from an uplink-enabled Verdaccio does not
+A standalone Verdaccio declares no uplinks. Metadata from an uplink-enabled Verdaccio does not
 establish a complete local version inventory.
 
 Before each backend batch, Dredger rechecks policy, consent, classification and both inventories.
@@ -221,8 +221,7 @@ Under `--once` the exit status follows completeness alone:
 
 Exit `0` means complete, not authorised. A preview that exits `0` with the consent marker absent
 reports its selections and the missing permission. The deleting command acts on both configured
-stores, with independent consent and fresh evidence for each target. Full client recovery, late-refill
-coverage and separately authorised live CodeArtifact validation remain in #1227.
+stores, with independent consent and fresh evidence for each target.
 
 Use it before the first real sweep of a store, and after any rule change you are unsure of.
 

@@ -12,7 +12,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
+import Network.HTTP.Client (Manager, ManagerSettings (managerModifyRequest), Request (requestHeaders), defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (Status, status200, status201, status404, status408, status429, status500, status503, statusCode)
 import Test.Hspec
 
@@ -23,6 +23,7 @@ import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (maintenanceListing, maintenanceVersionDelete),
  )
+import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
@@ -328,6 +329,14 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
             sent <- allCaptured stub
             map (headerValue "Authorization") sent `shouldBe` replicate 3 (Just "Bearer write-token")
 
+    it "sends every destructive call over the injected client, and the document read over the reading one" $
+        withSplitOrigins answerStore $ \handle stub -> do
+            _ <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
+            sent <- allCaptured stub
+            map (\cap -> (capMethod cap, headerValue deleteClientHeader cap)) sent
+                `shouldBe` [("GET", Nothing), ("PUT", Just "1"), ("DELETE", Just "1")]
+            map (headerValue "Authorization") sent `shouldBe` replicate 3 (Just "Bearer write-token")
+
     it "sends a packument edit with the deleted version gone and the rest intact" $
         withStore True answerStore $ \handle stub -> do
             _ <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
@@ -386,6 +395,28 @@ withStoreUnder permitted limits answer action =
         action (newProtocolMaintenance store) stub
   where
     reply captured = let (status, body) = answer captured in (status, [], body)
+
+{- The store as the root wires it: a second client for the destructive leg, over a manager that
+never retries an uncertain call. That client marks its own requests, so a case reads which leg
+carried each call. -}
+withSplitOrigins ::
+    (Captured -> (Status, LBS.ByteString)) ->
+    (StoreMaintenance -> Stub -> IO a) ->
+    IO a
+withSplitOrigins answer action =
+    withRoutedStub reply $ \stub -> do
+        reading <- newManager defaultManagerSettings
+        deleting <- newManager (singleAttemptSettings defaultManagerSettings{managerModifyRequest = pure . marked})
+        store <- protocolStore True (originAt reading defaultLimits (stubLocalhostUrl stub))
+        let destructive = originAt deleting defaultLimits (stubLocalhostUrl stub)
+        action (newProtocolMaintenance store{psDeleteOrigin = destructive}) stub
+  where
+    reply captured = let (status, body) = answer captured in (status, [], body)
+    marked request = request{requestHeaders = (deleteClientHeader, "1") : requestHeaders request}
+
+-- The header the destructive client stamps on its own requests.
+deleteClientHeader :: (IsString a) => a
+deleteClientHeader = "X-Ecluse-Delete-Client"
 
 -- The same store as a reader reaches it: the observing calls, built without the delete verb.
 withObservation ::

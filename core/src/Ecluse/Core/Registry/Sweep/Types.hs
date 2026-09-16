@@ -497,7 +497,10 @@ tallyOf = \case
 -- | Keep per-target audit messages distinct when one cycle sweeps associated stores.
 labelAudit :: Text -> SweepAudit -> SweepAudit
 labelAudit target audit =
-    audit
-        { auditInfo = auditInfo audit . ((target <> ": ") <>)
-        , auditError = auditError audit . ((target <> ": ") <>)
+    SweepAudit
+        { auditInfo = labelled (auditInfo audit)
+        , auditWarn = labelled (auditWarn audit)
+        , auditError = labelled (auditError audit)
         }
+  where
+    labelled write = write . ((target <> ": ") <>)

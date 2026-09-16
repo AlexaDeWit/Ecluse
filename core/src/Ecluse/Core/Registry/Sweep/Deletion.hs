@@ -57,7 +57,7 @@ deleteLocation run report (store, initial) = case ssExecute store of
     SweepCounts -> pure ()
     SweepRemoves deletion -> do
         selected <- runSelect run True (atStore run store) initial
-        let checks = DeleteGuard (checkBatch run store) (retryDelete run)
+        let checks = DeleteGuard (checkBatch run store) (retryDelete run store)
         offered <- withinAllowance run store (map selVersion selected)
         outcomes <- dlDeleteVersions deletion checks (runName run) offered
         traverse_ (report (labelled run store)) outcomes
@@ -105,7 +105,7 @@ assessBatch run store phase proposed inventories = do
                 Left fault -> refuse run (backend store) fault
                 Right () -> do
                     let allowed = [version | version <- proposed, version `elem` map selVersion decisions, version `notElem` sourceDenied, unchanged version before (inventory store checked), isSource run store || entry version (inventory source inventories) == entry version (inventory source checked)]
-                    admitted <- if phase == BeforeDelete then charge run (filter ((`elem` allowed) . selVersion) decisions) else pure allowed
+                    admitted <- if phase == BeforeDelete then charge run store (filter ((`elem` allowed) . selVersion) decisions) else pure allowed
                     when (phase == BeforeDelete) $
                         traverse_ (auditInfo (sweepAudit (labelled run store)) . selMessage) (filter ((`elem` admitted) . selVersion) decisions)
                     pure (Right admitted)
@@ -135,8 +135,8 @@ permission store = do
             StorePreserved why -> Left (protocolFault why)
             StoreDestroyable -> pure ()
 
-charge :: DeletionRun -> [Selection] -> IO [Version]
-charge run selections = do
+charge :: DeletionRun -> SweepStore -> [Selection] -> IO [Version]
+charge run store selections = do
     let selected = map selVersion selections
     halted <- readIORef (runHalt run)
     held <- readIORef (runCharged run)
@@ -148,7 +148,7 @@ charge run selections = do
     modifyIORef' (stIssued (runCounters run)) (+ length admitted)
     when (issued < swpDeletionCap (runPacing run) && issued + length admitted >= swpDeletionCap (runPacing run)) $
         writeIORef (runCapGeneration run) (listToMaybe (reverse admitted) >>= \version -> selGeneration =<< find ((== version) . selVersion) selections)
-    traverse_ (const (record (runPorts run) (runCounters run) SweepGuardSkipped)) (filter (`notElem` permitted) selected)
+    traverse_ (const (record (labelled run store) (runCounters run) SweepGuardSkipped)) (filter (`notElem` permitted) selected)
     pure permitted
 
 refuse :: DeletionRun -> Text -> StoreFault -> IO (Either StoreFault a)
@@ -156,14 +156,14 @@ refuse run target fault = do
     writeIORef (runHalt run) (Just (HaltStoreFault (smEcosystem (runMount run)) target (renderStoreFault fault)))
     pure (Left fault)
 
-retryDelete :: DeletionRun -> StoreFault -> IO Bool
-retryDelete run fault = case faultRetry fault of
+retryDelete :: DeletionRun -> SweepStore -> StoreFault -> IO Bool
+retryDelete run store fault = case faultRetry fault of
     RetryFutile -> pure False
     RetryWorthwhile -> pause (swpChunkPause (runPacing run))
     RetryDelayed (RetryAfter seconds) -> pause (fromIntegral seconds)
   where
     pause delay = do
-        auditWarn (sweepAudit (runPorts run)) ("reassessing an uncertain deletion after " <> renderStoreFault fault)
+        auditWarn (sweepAudit (labelled run store)) ("reassessing an uncertain deletion after " <> renderStoreFault fault)
         sweepDelay (runPorts run) delay
         pure True
 

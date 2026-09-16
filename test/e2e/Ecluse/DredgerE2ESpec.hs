@@ -106,6 +106,10 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         verdaccioSnapshot e2e `shouldReturn` initial
 
     it "deletes shared and cache-only versions while preserving each store's other contents" $ \(plane, mirror, cache) -> do
+        -- The mirror never serves this version, so the case holds its own cache-only copy.
+        void $ withPublishProject cache (psName dredgerDryRunPkg) cacheOnlyVersion npmPublishIn >>= shouldSucceed
+        verdaccioHasVersion cache (psName dredgerDryRunPkg) cacheOnlyVersion `shouldReturn` True
+        verdaccioHasVersion mirror (psName dredgerDryRunPkg) cacheOnlyVersion `shouldReturn` False
         mirrorBefore <- verdaccioSnapshot mirror
         cacheBefore <- verdaccioSnapshot cache
         run <- runDredgerOnce plane ["--once"] (sweepEnv dredgerDryRunPkg)
@@ -138,6 +142,10 @@ seededVersions = Map.fromList ((publishDredgerName, firstPartyVersions) : [(psNa
 
 firstPartyVersions :: [Text]
 firstPartyVersions = [publishVersion, "2.0.0"]
+
+-- | A version the seeded mirror never holds, published into the private cache alone.
+cacheOnlyVersion :: Text
+cacheOnlyVersion = "3.0.0"
 
 consentKey :: Text
 consentKey = "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION"

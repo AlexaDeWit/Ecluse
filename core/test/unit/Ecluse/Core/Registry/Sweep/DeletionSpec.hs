@@ -7,17 +7,19 @@ module Ecluse.Core.Registry.Sweep.DeletionSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (NominalDiffTime)
 import Test.Hspec
 
 import Ecluse.Core.Cve (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Types
 import Ecluse.Core.Rules (PreparedRule (prepEval), prepare)
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity), RuleVerdict (Allow, Deny))
-import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted), SweepTarget (..))
+import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepGuardSkipped), SweepTarget (..))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Maintenance
 import Ecluse.Test.Package (sampleManifest)
@@ -60,6 +62,18 @@ spec = describe "grouped deletion" $ do
         outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount]
         outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 Nothing)
         held mirror `shouldReturn` [version "2.0.0"]
+        held cache `shouldReturn` [version "2.0.0"]
+
+    it "counts a cache-only version the cap held back under the private target" $ do
+        mirror <- seeded "mirror" ["1.0.0"]
+        cache <- seeded "cache" ["1.0.0", "2.0.0"]
+        mount <- grouped mirror cache
+        recorded <- recordingPorts Nothing
+        outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount]
+        outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 Nothing)
+        operations <- recTargetResults recorded
+        operations `shouldSatisfy` elem (SweepPrivate, SweepGuardSkipped)
+        operations `shouldSatisfy` notElem (SweepMirror, SweepGuardSkipped)
         held cache `shouldReturn` [version "2.0.0"]
 
     it "submits mirror work before cache work and rediscovers a failed cache after restart" $ do
@@ -145,6 +159,37 @@ spec = describe "grouped deletion" $ do
         readIORef attempts `shouldReturn` 1
         held cache `shouldReturn` []
         recErrors recorded >>= (`shouldSatisfy` any (T.isInfixOf "outcome is uncertain"))
+        recWarnings recorded >>= (`shouldSatisfy` any (T.isInfixOf "mirror: reassessing an uncertain deletion"))
+
+    it "waits the delay the fault advises, then reassesses the delete exactly once" $ do
+        mirror <- seeded "mirror" ["1.0.0"]
+        cache <- seeded "cache" []
+        mount <- grouped mirror cache
+        attempts <- newIORef (0 :: Int)
+        delays <- newIORef ([] :: [NominalDiffTime])
+        let delayed = (protocolFault "response lost"){faultRetry = RetryDelayed (RetryAfter 7)}
+            original = fakeMaintenance mirror
+            source =
+                mapDeletion
+                    ( \_ checks name versions ->
+                        deleteAll
+                            checks
+                            ( \batch -> do
+                                count <- atomicModifyIORef' attempts (\n -> (n + 1, n + 1))
+                                if count == 1
+                                    then pure (Left delayed)
+                                    else Right <$> deleteVersions original testDeleteGuard name batch
+                            )
+                            [versions]
+                    )
+                    (smStore mount)
+        recorded <- recordingPorts Nothing
+        let ports = (recPorts recorded){sweepDelay = \seconds -> modifyIORef' delays (<> [seconds])}
+        outcome <- sweepCycle testPacing ports [mount{smStore = source}]
+        outcomeHalt outcome `shouldBe` Nothing
+        readIORef attempts `shouldReturn` 2
+        readIORef delays `shouldReturn` [7]
+        held mirror `shouldReturn` []
 
     it "honours a consent withdrawal between the source and cache attempts" $ do
         mirror <- seeded "mirror" ["1.0.0"]
