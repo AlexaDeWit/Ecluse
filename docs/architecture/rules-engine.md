@@ -12,9 +12,9 @@ precedence. At boot the rule set becomes one total order: highest precedence fir
 name ascending as the deterministic tiebreak. Evaluation walks that order and takes the first
 decisive result. If nothing is decisive, the proxy denies the package. A precedence tie breaks
 by name, not by a deny-over-allow priority, so shuffling the configured set yields the same
-decision. Built-in deny rules default above allow rules, so "any deny overrides any allow" holds
-out of the box. An operator can still rank a specific allow above a specific deny, say to let a
-trusted internal scope through an install-script deny.
+decision. Each built-in rule type carries a fixed default precedence, set out in the
+[default precedence ladder](#initial-rule-set). An operator can still rank a specific allow above a
+specific deny, say to let a trusted internal scope through an install-script deny.
 
 A rule evaluates one `RuleEvidence` value: the package identity, plus one entry per further fact
 the vocabulary reads, each of which is either a reading or nothing at all. The serve, admission,
@@ -126,11 +126,10 @@ DenyIfCve = DenyIfEpss (225) < AllowByIdentity (250) <
 DenyInstallTimeExecution (300) < DenyByIdentity (400)
 ```
 
-`DenyInstallTimeExecution` and `DenyByIdentity` default strictly above every allow, so "any deny
-overrides any allow" holds for them out of the box. The two advisory denies are the deliberate
-exception. They share a rung **below** `AllowByIdentity` (225 against 250), so an operator's
+`DenyInstallTimeExecution` and `DenyByIdentity` default strictly above every allow. The two
+advisory denies share a rung **below** `AllowByIdentity` (225 against 250), so an operator's
 exact-identity allow overrides either. That is the explicit "I have decided this version must ship"
-escape hatch. Both still sit above the passive age gate, the remediation lane, and a scope
+escape hatch. Both still sit above the quarantine, the remediation lane, and a scope
 allow-list, and configured together they tie, which the boot order resolves by name. An operator may
 raise a specific allow above a specific deny, or the reverse, with an explicit precedence.
 
@@ -153,8 +152,9 @@ evaluation still reads it. Two rules read it in opposite directions.
 
 ### `AllowIfRemediatesCve`, remediation fast-track
 
-A publish-age quarantine would also hold back the security patch that fixes an in-the-wild
-vulnerability, delaying remediation by exactly the window meant to catch typosquats.
+The quarantine would also hold back the security patch that fixes an in-the-wild
+vulnerability, delaying remediation by exactly the window that lets registries find and yank a
+malicious publish.
 `AllowIfRemediatesCve` removes that tension. For version *V* of *P*:
 
 - **`Allow`** when an advisory names *V* as its exact fixed version and no advisory's affected
@@ -165,8 +165,8 @@ vulnerability, delaying remediation by exactly the window meant to catch typosqu
   quarantine instead of being admitted on an unverified claim.
 
 It ranks above the quarantine allow, so the rule admits a fix immediately. It ranks below the
-scope allow-list, so a trusted scope never pays the probe. The fix test is a deliberate exact string
-match on the advisory's canonical `fixed` version. A fix published under any other string waits
+scope allow-list, so a trusted scope never pays the probe. The fix test is an exact text match on the
+advisory's `fixed` version as written. A fix published under any other spelling waits
 out the quarantine, with `AllowByIdentity` as the operator's workaround. The rule decides range
 membership in Haskell with the same per-ecosystem ordering as
 [`compareVersions`](registry-model.md#the-internal-domain-model). Every unprovable comparison
@@ -185,8 +185,9 @@ every threshold**, so the rule always denies malware while `minCvss` governs the
 - **`NoDecision`** when no affecting advisory clears it.
 - **`CannotVet`** when no advisory database is loaded, and the harness's **`Unavailable`** when a
   loaded-database lookup faults. Both align by `onUnavailable`. **`FailDeny`** (the default)
-  refuses the version with a retryable `503`. **`FailNoDecision`** skips the rule and logs
-  loudly. This is the inverse of `AllowIfRemediatesCve`: neither an allow nor a deny that cannot
+  refuses the version with a retryable `503`. **`FailNoDecision`** skips the rule. Only a
+  lookup fault that exhausts its retries logs, at `warn`. A skip with no database loaded, or behind
+  an open breaker, logs nothing per package, and #1230 plans ERROR-level outage reporting. This is the inverse of `AllowIfRemediatesCve`: neither an allow nor a deny that cannot
   confirm safety may admit.
 - **`CannotVet FailDeny`** when the serving artifact's push is older than the mount's maximum,
   whatever `onUnavailable` says. Expiry is unavailability the operator cannot waive, so the
@@ -250,9 +251,6 @@ Pilot excludes records carrying a withdrawal timestamp before it emits affected 
 Their retained ranges cannot justify an advisory deny, a remediation exception, or Dredger deletion after a replacement artifact syncs.
 Independent active advisories still supply their own evidence.
 
-This selection fix keeps epoch 4 because the meaning of each emitted row remains unchanged.
-[Deployment](../../web/content/docs/deployment.md) covers replacement artifacts and older publishers during rollout.
-
 The proxy runs one supervised sync task per configured mount ecosystem
 ([`Ecluse.Runtime.Cve.Sync`](../../runtime/src/Ecluse/Runtime/Cve/Sync.hs)). Each task polls the
 store's stable per-ecosystem key for ETag and publication-time changes at `advisories.pollInterval`. That interval
@@ -270,8 +268,8 @@ displaced generation's readers to drain. The last reader closes a retired genera
 if the sync task is cancelled, so pruning remains the kernel's reclamation. The proxy discards a refused artifact and remembers its ETag. The last-good
 generation keeps serving within its existing maximum push age. Rejection and repeated polls for the
 rejected ETag cannot refresh that age. A cold process creates empty slots and does not recover the
-canonical file from disk. [Readiness](web-layer.md#meta-routes-ping-health-and-search) waits
-for each ecosystem's first sync while the listener serves throughout. An absent database only
+canonical file from disk. [Readiness](web-layer.md#meta-routes-ping-health-and-search) turns
+true once at least one ecosystem completes its first sync, while the listener serves throughout. An absent database only
 abstains into deny-by-default.
 
 Polling removes the one external dependency that would otherwise sit under the fail-closed gate:
@@ -340,14 +338,16 @@ Each denial's audit log records the advisory database ETag live
 at emit (`active_advisory_db_etag`). That is deliberately the ETag live at emit rather than the
 one the rule evaluated against, since a shadow-swap can land mid-request.
 
-### Point-in-time gating, a known limitation
+### Re-checking stored versions
 
-CVE gating happens at ingestion. Écluse checks a version once, before it enters the mirror, and
-serves it rule-free thereafter. So the gate does not catch a CVE disclosed after the version
-reaches the mirror. The [threat model](https://ecluse-proxy.com/docs/threat-model/) catalogues
-the post-ingestion disposition: operator scanning, a hard deny-by-identity revocation, and
-operator purge, *deny-then-purge*. Holding the dataset locally keeps a periodic mirror re-scan
-straightforward to add later.
+The serve path gates a version once, before it enters the mirror, and serves it from the trusted
+store without gating it again at request time. A stored version does not stay exempt, because
+[Dredger](https://ecluse-proxy.com/docs/dredger/) re-checks the mirror store against the current
+rules and prunes what they now deny. A CVE disclosed after mirroring, or a policy change, therefore
+removes the version on a later Dredger cycle. Pruning the copies a private read cache retains is
+still planned (#1227). Until it lands, the
+[revocation procedure](https://ecluse-proxy.com/docs/operations/#revoking-a-mirrored-version-internal-yank)
+covers those copies.
 
 ## Denial responses
 

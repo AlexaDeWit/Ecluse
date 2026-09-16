@@ -72,7 +72,7 @@ fileSpec = describe "IndexFile" $ do
         file <- shouldDecodeFile (fileEntry ["size" .= (1.5 :: Double)])
         ifSize file `shouldBe` Nothing
 
-    it "reads an undecodable upload instant as absent, which fails the age quarantine" $ do
+    it "reads an undecodable upload instant as absent, which fails the quarantine" $ do
         file <- shouldDecodeFile (fileEntry ["upload-time" .= ("last tuesday" :: Text)])
         ifUploadTime file `shouldBe` Nothing
 

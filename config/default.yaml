@@ -105,7 +105,7 @@ integrity:
   # Deprecated compatibility key:
   # divergencePolicy: warn
   # Remove the key. Missing/null or warn keeps alarms and private preference.
-  # fail-closed and its old aliases refuse startup. Remove that setting only after
+  # fail-closed (also fail_closed or failclosed) refuses startup. Remove that setting only after
   # accepting private preference: divergence alone can leave a damaged private copy served.
 
 # Extra CIDR ranges denied registry egress, on top of the built-in internal-range

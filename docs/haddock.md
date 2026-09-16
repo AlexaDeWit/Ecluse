@@ -116,8 +116,8 @@ sibling modules and the architecture documents.
 
 A rule set is evaluated against a single 'PackageDetails' snapshot to produce a
 'Decision'. The model is __deny by default; precedence decides__: the
-highest-precedence rule that does not abstain wins, and at equal precedence a
-deny beats an allow.
+highest-precedence rule that does not abstain wins, and at equal precedence the
+rule name decides.
 
 The rule data types live in "Ecluse.Core.Rules.Types".
 -}
@@ -158,8 +158,8 @@ data Rule
     = -- | Unconditionally allow every package under the given scope.
       AllowScope Scope
     | -- | Allow a version only if it was published at least this long ago.
-      -- Guards against race-to-publish attacks: an attacker publishes a
-      -- malicious version hoping it is consumed before takedown.
+      -- The delay gives the registry time to find and yank a malicious
+      -- publish before a build can consume it.
       AllowIfOlderThan NominalDiffTime
     deriving stock (Eq, Show)
 ```

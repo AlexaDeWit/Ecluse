@@ -47,12 +47,12 @@ flag dev-http-egress
   manual:      True
 
 -- Shared settings for every component. relude replaces the default prelude via
--- cabal mixins (see docs/architecture.md "relude as the implicit prelude").
+-- cabal mixins (see docs/style.md).
 common shared
   -- Warning set: -Wall plus extra warnings that reinforce the conventions in
-  -- STYLE.md. cabal.project promotes a warning to an error for our own package.
+  -- docs/style.md. cabal.project promotes a warning to an error for our own package.
   -- Deliberately omitted: -Wunused-packages (the relude mixin defeats its attribution,
-  -- see docs/architecture.md), -Wmissing-import-lists (open imports for internal
+  -- see docs/style.md), -Wmissing-import-lists (open imports for internal
   -- modules), and -Wmissing-local-signatures (a where-helper may stay inferred).
   ghc-options:
     -Wall -Wcompat -Widentities -Wincomplete-record-selectors
@@ -533,33 +533,29 @@ executable openapi-gen
     , ecluse:ecluse-manifest
     , filepath           ^>=1.5
 
--- The site page renderers: the PURE Markdown rendering behind the site-gen
--- executable. It turns the OWASP Threat Dragon model into the threat register, and an
--- OpenAPI document into the static API reference. An INTERNAL sublibrary, following
--- the ecluse-manifest pattern, so the gating unit suite exercises the rendering
--- deterministically. It reads no file and holds no OpenAPI assembly, so it links
--- neither the app library nor ecluse-manifest, and it stays out of the shipped
--- library closure.
+-- The site page renderer: the PURE Markdown rendering behind the site-gen
+-- executable. It turns an OpenAPI document into the static API reference. An INTERNAL
+-- sublibrary, following the ecluse-manifest pattern, so the gating unit suite
+-- exercises the rendering deterministically. It reads no file and holds no OpenAPI
+-- assembly, so it links neither the app library nor ecluse-manifest, and it stays out
+-- of the shipped library closure.
 library ecluse-site
   import:          shared
   hs-source-dirs:  site/src
   exposed-modules:
     Ecluse.Site.Markdown
     Ecluse.Site.OpenApi
-    Ecluse.Site.ThreatRegister
 
   build-depends:
-    , aeson                      >=2.2 && <2.4
     , http-media                 ^>=0.8
     , insert-ordered-containers  ^>=0.2
     , openapi3                   ^>=3.2
     , text                       ^>=2.1
 
--- The site fragment generator: the thin file-reading shell over ecluse-site. The site
--- build runs it for the threat register and the OpenAPI reference, and Zola embeds
--- both fragments. It takes the OpenAPI document from ecluse-manifest, the same value
--- openapi-gen serialises, so the page and the published JSON come from one source. Run
--- with `cabal run site-gen`.
+-- The site fragment generator: the thin file-writing shell over ecluse-site. The site
+-- build runs it for the OpenAPI reference, and Zola embeds the fragment. It takes the
+-- OpenAPI document from ecluse-manifest, the same value openapi-gen serialises, so the
+-- page and the published JSON come from one source. Run with `cabal run site-gen`.
 executable site-gen
   import:         shared
   main-is:        Main.hs
@@ -925,7 +921,6 @@ test-suite ecluse-unit
     Ecluse.ServiceSpec
     Ecluse.Site.MarkdownSpec
     Ecluse.Site.OpenApiSpec
-    Ecluse.Site.ThreatRegisterSpec
     Ecluse.Test.OsvSpec
     Paths_ecluse
 

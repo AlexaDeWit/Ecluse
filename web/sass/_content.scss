@@ -1,16 +1,11 @@
-// Prose keeps the reading measure, and the blocks that carry wide content step
-// out to the full column and scroll inside their own box.
+// One width holds every block, so prose, headings, tables, and diagrams share both
+// edges. A block wider than the column scrolls inside its own box.
 .page,
 .docs-main {
+  container-type: inline-size;
+
   > * {
     max-width: var(--measure);
-  }
-
-  > pre,
-  > table,
-  > .cards,
-  > figure.diagram {
-    max-width: 100%;
   }
 }
 
@@ -150,13 +145,20 @@ blockquote {
   }
 }
 
+// A table fills a full-width column, so its columns share the width. A table box
+// cannot scroll, so a narrower column turns it into a scrolling block instead.
 table {
-  display: block;
   width: 100%;
   margin: 1.5rem 0;
   border-collapse: collapse;
-  overflow-x: auto;
   font-size: 0.95rem;
+}
+
+@container (max-width: 52rem) {
+  table {
+    display: block;
+    overflow-x: auto;
+  }
 }
 
 th,
@@ -171,6 +173,11 @@ tr > :first-child {
   padding-left: 0;
 }
 
+// A first-column identifier names its row, so it stays on one line.
+td:first-child > code {
+  white-space: nowrap;
+}
+
 tr > :last-child {
   padding-right: 0;
 }
@@ -183,70 +190,27 @@ thead th {
   text-transform: uppercase;
 }
 
-.badge {
-  display: inline-block;
-  padding: 0.1em 0.55em;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 0.78em;
-  font-weight: 600;
-  line-height: 1.6;
-  white-space: nowrap;
-}
+// Saerskriven's stylesheet draws the register badges. The register takes the page's
+// colours and fonts, and its table steps out of the reading measure.
+.saer-register {
+  color: inherit;
+  background: none;
+  font-family: inherit;
 
-.severity-critical {
-  background: var(--badge-critical-bg);
-  border-color: var(--badge-critical-border);
-  color: var(--badge-critical-fg);
-}
+  --saer-badge-radius: 999px;
+  --saer-badge-border-width: 1px;
 
-.severity-high,
-.status-open {
-  background: var(--badge-high-bg);
-  border-color: var(--badge-high-border);
-  color: var(--badge-high-fg);
-}
+  // The model prose carries bare URLs and long identifiers, which would otherwise
+  // widen a phone page.
+  p,
+  li {
+    overflow-wrap: anywhere;
+  }
 
-.severity-medium {
-  background: var(--badge-medium-bg);
-  border-color: var(--badge-medium-border);
-  color: var(--badge-medium-fg);
-}
-
-.severity-low {
-  background: var(--badge-low-bg);
-  border-color: var(--badge-low-border);
-  color: var(--badge-low-fg);
-}
-
-.status-mitigated {
-  background: var(--badge-mitigated-bg);
-  border-color: var(--badge-mitigated-border);
-  color: var(--badge-mitigated-fg);
-}
-
-.status-accepted {
-  background: var(--badge-accepted-bg);
-  border-color: var(--badge-accepted-border);
-  color: var(--badge-accepted-fg);
-}
-
-.status-na {
-  background: var(--badge-na-bg);
-  border-color: var(--badge-na-border);
-  color: var(--badge-na-fg);
-}
-
-// One rule per register entry, so a long detail run reads as separate entries.
-h3.threat {
-  margin-top: 2.75rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border);
-
-  // The badge, category, and element line under the entry heading.
-  + p {
-    margin-bottom: 1rem;
-    color: var(--muted);
-    font-size: 0.95rem;
+  // One rule per register entry, so a long detail run reads as separate entries.
+  h3 {
+    margin-top: 2.75rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
   }
 }

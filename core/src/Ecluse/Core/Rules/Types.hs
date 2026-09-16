@@ -183,7 +183,7 @@ Yield to 'AllowScope', whose trusted packages need no advisory probe.
 defaultAllowIfRemediatesCvePrecedence :: Int
 defaultAllowIfRemediatesCvePrecedence = 150
 
-{- | Default precedence of 'AllowScope': above the passive age quarantine, because an
+{- | Default precedence of 'AllowScope': above the quarantine, because an
 explicit allow-list is a stronger statement than the time gate. Still below every deny.
 -}
 defaultAllowScopePrecedence :: Int

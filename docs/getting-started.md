@@ -28,11 +28,9 @@ exact Nix-store closure (GHC and C libraries from `flake.lock`), use the Nix out
 | Build the `ecluse` binary | `task nix-build` (`nix build`) → `./result/bin/ecluse` |
 | Evaluate the flake and build its checks | `task nix-check` (`nix flake check`) |
 
-`nix flake check` builds the `docs`, `freeze-sync`, `amazonka-lockstep`, and
-`saerskriven` checks. The first builds library Haddock. The next two verify
-the dependency locks described below.
-The last runs the pinned Saerskriven CLI against this flake's libraries,
-including PDF rendering. Test suites, formatting, and linting run through
+`nix flake check` builds the `docs`, `freeze-sync`, and `amazonka-lockstep`
+checks. The first builds library Haddock. The other two verify the dependency
+locks described below. Test suites, formatting, and linting run through
 separate `task` targets. The authoritative CI tiers and their
 external-service requirements are in [Testing Strategy](testing.md#what-gates-and-what-doesnt).
 
@@ -67,22 +65,22 @@ can parse. Versions themselves move only through the flake.
 
 ### Threat modelling tools
 
-The default and CI shells include the released Saerskriven CLI. Its locked
+The default and CI shells include the released Saerskriven CLI, `saer`. Its locked
 flake input follows Écluse's nixpkgs and flake-utils inputs. Saerskriven owns
 the binary version, asset hashes, and Nix package definition.
 
-```bash
-nix develop --command saerskriven --version
-nix develop .#ci --command saerskriven validate threat-modelling/ecluse.json
-```
+The threat model is `threat-modelling/ecluse.yaml`, in Saerskriven's YAML format. The site
+build renders the register and the data-flow diagram from it, so `task site-stub`
+fails on a model Saerskriven cannot read. That render is also the CI check that the
+pinned CLI runs.
 
-The current source remains `threat-modelling/ecluse.json`. The site still uses
-`site-gen` to render its threat register. The CLI is available for the later
-migration to Saerskriven's model and rendering workflow.
+```bash
+nix develop --command saer validate threat-modelling/ecluse.yaml
+```
 
 After Saerskriven publishes and reviews a packaging update, update its input
 with `nix flake update saerskriven` and review `flake.lock` in a PR. Run
-`task nix-check` to test the package against Écluse's pinned libraries.
+`task site-stub` to test the new CLI against the model.
 [Saerskriven's Nix guide](https://github.com/AlexaDeWit/Saerskriven/blob/main/docs/nix.md)
 records the upstream release update process and platform execution coverage.
 

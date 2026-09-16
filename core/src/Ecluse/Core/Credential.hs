@@ -12,10 +12,11 @@ protocol and differs only in how it hands out a bearer token. That holds for AWS
 CodeArtifact, GCP Artifact Registry, and a self-hosted Verdaccio alike (see
 @docs\/architecture\/cloud-backends.md@ → "Credential Provider").
 
-A 'CredentialProvider' serves the mirror-target write __only__, never a read on a
-user's behalf. A private-upstream read forwards the /client's/ own credential, and a
-public read is anonymous (see @docs\/architecture\/registry-model.md@ → "Credential
-flow and authority"). A deployment therefore configures exactly one provider.
+A 'CredentialProvider' serves Écluse's own store access, never a read on a user's
+behalf: the mirror worker's mirror-target write and Dredger's store reads, including its
+preview reads of the private cache. A private-upstream read forwards the /client's/ own
+credential, and a public read is anonymous (see @docs\/architecture\/registry-model.md@ →
+"Credential flow and authority").
 
 Like the other handles, the effectful field returns __'IO', not @App@__. An adapter
 closes over its own backend state (an @amazonka@ env, an HTTP manager) and never

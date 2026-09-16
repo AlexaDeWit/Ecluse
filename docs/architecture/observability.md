@@ -21,7 +21,7 @@ on a log line, Agent-side sampling.
 
 ## What gets traced
 
-The instrumentation maps onto the [request lifecycle](../architecture.md#request-lifecycle). Each
+The instrumentation maps onto the [request path](https://ecluse-proxy.com/docs/how-it-works/#a-request-step-by-step). Each
 request opens a WAI server span, with a child span for each upstream fetch, private then public.
 A child span carries W3C TraceContext to the next hop. Metrics ride the same OTLP pipeline.
 Hand-added domain spans carry the decisions operators care about:
@@ -78,8 +78,9 @@ change. Against Datadog the node-local Agent resamples, so always-on is not wast
 - `ecluse.advisory.sync.attempts` (a counter) and `ecluse.advisory.sync.duration` (a histogram, in
   seconds) both carry (ecosystem, result), where result is one of `swapped`, `unchanged`,
   `none_published`, `fetch_failed`, or `refused`. A run of `fetch_failed` or `refused` means that
-  ecosystem gates against an ageing advisory database or none at all. Its rules then deny by
-  default. Check the bucket, the object key, and the IAM the sync task reads under. The artifact's
+  ecosystem gates against an ageing advisory database or none at all. The fast lane then abstains,
+  the advisory denies follow `onUnavailable`, and every other rule, the quarantine included, decides
+  as usual. Past the maximum advisory age, the advisory denies refuse. Check the bucket, the object key, and the IAM the sync task reads under. The artifact's
   own identifiers stay on the sync log line, never a label.
 - `ecluse.advisory.database.age.seconds` (a gauge) carries (ecosystem). The proxy, mirror worker,
   and Dredger each observe their own slots. The gauge reads the seconds since

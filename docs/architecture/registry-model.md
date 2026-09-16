@@ -84,8 +84,9 @@ trigger, content, and credential from the mirror write.
   base64 `_attachments`.
 - **Credential.** See [Credential flow and authority](#credential-flow-and-authority).
 - **No read-back role.** Write-only from the proxy's view. Published packages read back through
-  the private upstream. So the operator points the publication target at the same registry as the
-  private upstream, or aggregates it into that read path.
+  the private upstream, so the operator aggregates the publication target into that read path. A
+  publication target on the private upstream's own registry also serves reads, but Dredger refuses
+  that setup, because its deletions would reach first-party packages that exist only there.
 - **Opt-in.** The path exists only when `mounts.npm.publicationTarget` is declared. Otherwise
   a `PUT /{pkg}` is `405 Method Not Allowed`.
 
@@ -128,8 +129,8 @@ against a file it could not have installed. A release disappears when no file of
 The same check runs at the download gate from the same definition, so the listing and the gate
 cannot disagree.
 
-For npm this is visible: a packument naming a tarball on a foreign host used to serve the
-rewritten URL and refuse when the client asked for the bytes. That version now does not appear.
+For npm, a packument that names a tarball on a foreign host drops that version from the served
+document.
 
 ## Serving a tarball
 
@@ -378,7 +379,7 @@ Declaring a `mirrorTarget` later upgrades the mount in place.
 
 #### The one rule of registry composition: Écluse is the only path from public
 
-Écluse applies ingestion-time policy (freshness gating, integrity floors, the rule algebra) that
+Écluse applies ingestion-time policy (the quarantine, integrity floors, the rule algebra) that
 managed registries do not. That value holds only if public packages enter through Écluse and
 nowhere else. So the aggregating read endpoint, the private upstream, must union trusted stores
 only: your first-party publications and Écluse's sanitised mirror. It must not carry a direct
@@ -433,5 +434,5 @@ supplies.
 The two sides share only the vocabulary above: `Ecosystem`, `PackageName`, and `Version`. Neither
 imports the other, and a store that needs an ecosystem fact reads it off the `Ecosystem` value, as
 the CodeArtifact format token does. A backend matrix therefore costs one adapter per ecosystem plus
-one backend per store, never a cell per pair. npm is the only ecosystem this build carries, and its
-stores are CodeArtifact, any host that speaks the protocol, and Verdaccio for development.
+one backend per store, never a cell per pair. npm and PyPI ship in this build, PyPI for reads only. Their stores
+are CodeArtifact, any host that speaks the protocol, and Verdaccio for development.

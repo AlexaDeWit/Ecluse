@@ -124,7 +124,7 @@ data WorkerPolicy = WorkerPolicy
     -}
     , wpNow :: IO UTCTime
     {- ^ The wall-clock "now" for the rules' 'EvalContext', injected so the
-    time-sensitive age gate is deterministic under test.
+    time-sensitive quarantine is deterministic under test.
     -}
     }
 

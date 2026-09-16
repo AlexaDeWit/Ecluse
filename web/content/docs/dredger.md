@@ -17,8 +17,9 @@ A private cache can retain a copy after mirror deletion. Follow
 [the revocation procedure](@/docs/operations.md#revoking-a-mirrored-version-internal-yank) for those copies.
 
 Dredger refuses to boot when a mount's `privateUpstream` and `publicationTarget` name the same
-registry. Preview applies the same refusal. The private read cache must remain separate from
-user publications. Distinct repository paths on one host remain valid. Proxy and mirror still
+registry. Preview applies the same refusal. Dredger is destructive, and a first-party package can
+exist only in the publication target, so Dredger never runs against a store that also receives
+publications. Distinct repository paths on one host remain valid. Proxy and mirror still
 accept this same-mount pair.
 
 The Dredger takes no ingress. It exposes only `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`.

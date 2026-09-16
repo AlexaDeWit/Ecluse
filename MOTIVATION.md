@@ -1,7 +1,7 @@
 # Why Écluse?
 
 Écluse is a supply-chain policy proxy. It holds fresh public packages behind a short
-freshness quarantine, under a deny-by-default policy, at a single chokepoint that CI and
+quarantine, under a deny-by-default policy, at a single chokepoint that CI and
 developers both pass through. This document is the reasoning behind that design. The *how*
 is in the [architecture docs](docs/architecture.md), and
 [`ALTERNATIVES.md`](ALTERNATIVES.md) maps the other tools in this space.
@@ -29,7 +29,7 @@ never-certain target, and "we think it's clean" isn't the same as knowing.
 
 Écluse makes a narrower bet: don't adjudicate whether a version is malicious, just arrange
 for nothing to reach a build *inside its dangerous window*. The plainest form is a
-**freshness quarantine**. A public version stays ineligible until it ages in public long
+**quarantine**. A public version stays ineligible until it ages in public long
 enough that the ecosystem very likely already found and pulled a malicious one. The premise
 rests on a real regularity: analyses of past attacks put most exploitation windows under a
 week. The name comes from that: *écluse* is French for a canal lock, the controlled passage
@@ -105,7 +105,7 @@ flowchart TD
     R(["install request"]) --> P{"in the private upstream?"}
     P -->|"hit, already vetted"| HIT(["serve as-is"])
     P -->|"miss"| PUB["consult the public upstream"]
-    PUB --> POL{"clears policy?<br/>deny-by-default + freshness gate"}
+    PUB --> POL{"clears policy?<br/>deny-by-default + quarantine"}
     POL -->|"too fresh / known-bad"| DENY(["denied, never served"])
     POL -->|"aged & clean"| SERVE(["serve now"])
     SERVE --> MIR["enqueue demand-driven mirror"]
@@ -114,7 +114,7 @@ flowchart TD
 
 - A hit in the private upstream is already vetted, so Écluse serves it as-is.
 - On a miss, Écluse consults the public upstream and serves the version *only if it clears
-  the policy, freshness gate included*. A sufficiently-aged package never 404s, and Écluse
+  the policy, quarantine included*. A sufficiently-aged package never 404s, and Écluse
   denies a too-fresh or known-bad one. "No false 404" and "no serving fresh malware" both
   hold at once.
 - Serving on a miss enqueues demand-driven replication. The worker copies only what's used,

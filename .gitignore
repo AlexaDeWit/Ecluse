@@ -5,7 +5,7 @@ dist-coverage/
 .hpc/
 .direnv/
 _site/
-# The Markdown fragments site-gen writes for the Zola pages, and Zola's own output.
+# The generated fragments and diagrams for the Zola pages, and Zola's own output.
 /web/generated/
 /web/public/
 # Zola's highlighter drops its theme stylesheet here on every build. The site
