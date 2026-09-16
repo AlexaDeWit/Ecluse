@@ -9,6 +9,7 @@ module Ecluse.Core.Server.MetadataSpec (spec) where
 
 import Data.Aeson (Value (String))
 import Data.Map.Strict qualified as Map
+import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Test.Hspec
 import UnliftIO (concurrently, mapConcurrently)
 import UnliftIO.Concurrent (threadDelay)
@@ -36,6 +37,10 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead (vrDetails, vrUpstreamLatest),
     digestOf,
  )
+import Ecluse.Core.Registry.Origin (OriginFor, Public, anonymousOrigin, perCallerOrigin)
+import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache)
 import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, readOfInfo)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -48,12 +53,18 @@ import Ecluse.Test.Server.Cache (defaultCacheConfig)
 -- | Tests for the serve-path read handle, whose single-version op is hybrid.
 spec :: Spec
 spec = do
+    -- Every case here drives the read functions directly, so neither origin is ever dialled:
+    -- only the posture its builder fixes is under test.
+    manager <- runIO (newManager defaultManagerSettings)
+    let anonymous = anonymousOrigin defaultLimits manager stubUrl
+        perCaller = perCallerOrigin defaultLimits manager stubUrl Nothing
+
     describe "publicMetadataClient -- single-version hybrid topology" $ do
         it "reuses the warm full-packument cache: a GET then its version select is one upstream call" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0", "2.0.0"]
-                client = publicClient cache (countingFull calls info) (countingVersion calls info)
+                client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 1
             found <- fetchVersionMetadata client name (ver "1.0.0")
@@ -64,7 +75,7 @@ spec = do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
-                client = publicClient cache (countingFull calls info) (countingVersion calls info)
+                client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             cold <- fetchVersionMetadata client name (ver "1.0.0")
             fmap (fmap pkgVersion . vrDetails) cold `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 1
@@ -79,7 +90,7 @@ spec = do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
             let info = tagged (manifest name ["1.0.0", "2.0.0"]) "2.0.0"
-                client = publicClient cache (countingFull calls info) (countingVersion calls info)
+                client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             cold <- fetchVersionMetadata client name (ver "1.0.0")
             fmap vrUpstreamLatest cold `shouldBe` Right (Just (ver "2.0.0"))
             _ <- fetchFullManifest client name
@@ -90,7 +101,7 @@ spec = do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
-                client = publicClient cache (countingFull calls info) (countingVersion calls info)
+                client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             absent <- fetchVersionMetadata client name (ver "2.0.0")
             fmap (fmap pkgVersion . vrDetails) absent `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
@@ -103,7 +114,7 @@ spec = do
             calls <- newIORef (0 :: Int)
             let info = manifest name ["1.0.0"]
                 client =
-                    privateMetadataClient (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (countingFull calls info) (countingVersion calls info))
+                    privateMetadataClient (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) perCaller)
             _ <- fetchFullManifest client name
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 2
@@ -115,7 +126,7 @@ spec = do
                 failures <- newIORef []
                 let port = noopMetricsPort{mpUpstreamFetchError = \upstream cause -> modifyIORef' causes ((upstream, cause) :)}
                     recordFailure who err = modifyIORef' failures ((who, err) :)
-                    client = privateMetadataClient (newMetadataReads port recordFailure noInvalidLog noFetchLog (const (pure (Left refusal))) (\_ _ -> pure (Left refusal)))
+                    client = privateMetadataClient (newMetadataReads port recordFailure noInvalidLog noFetchLog (\_ _ -> pure (Left refusal)) (\_ _ _ -> pure (Left refusal)) perCaller)
                 replicateM_ 2 $ do
                     full <- fetchFullManifest client name
                     void full `shouldBe` Left refusal
@@ -129,7 +140,7 @@ spec = do
                 calls <- newIORef (0 :: Int)
                 cache <- newMetadataCache defaultCacheConfig
                 let failRead _ = modifyIORef' calls (+ 1) $> Left failure
-                    client = publicClient cache failRead (\_ _ -> failRead ())
+                    client = publicClient anonymous cache failRead (\_ _ -> failRead ())
                 replicateM_ 2 $ do
                     full <- fetchFullManifest client name
                     void full `shouldBe` Left failure
@@ -143,10 +154,10 @@ spec = do
             let info = manifest name ["1.0.0"]
                 outage = unreachableFull calls
                 recovered = countingFull calls info
-            first' <- fetchFullManifest (publicClient cache outage (failingVersion calls)) name
+            first' <- fetchFullManifest (publicClient anonymous cache outage (failingVersion calls)) name
             isUnreachable first' `shouldBe` True
             cachedMetadata cache source name `shouldReturn` Nothing
-            second' <- fetchFullManifest (publicClient cache recovered (failingVersion calls)) name
+            second' <- fetchFullManifest (publicClient anonymous cache recovered (failingVersion calls)) name
             fmap (infoName . manifestInfo) second' `shouldBe` Right name
             readIORef calls `shouldReturn` 2
 
@@ -156,7 +167,7 @@ spec = do
             cache <- newMetadataCache defaultCacheConfig
             let port = noopMetricsPort{mpUpstreamFetchError = \_ cause -> atomicModifyIORef' causes (\cs -> (cause : cs, ()))}
                 client =
-                    publicMetadataClient cache source (newMetadataReads port noLog noInvalidLog noFetchLog (unreachableFull calls) (failingVersion calls))
+                    publicMetadataClient cache source (newMetadataReads port noLog noInvalidLog noFetchLog (const (unreachableFull calls)) (const (failingVersion calls)) anonymous)
             _ <- fetchFullManifest client name
             readIORef causes `shouldReturn` [Metric.Connection]
 
@@ -175,7 +186,7 @@ spec = do
                     pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))
                 countingLog _name _err = atomicModifyIORef' failureLogs (\n -> (n + 1, ()))
                 client =
-                    publicMetadataClient cache source (newMetadataReads noopMetricsPort countingLog noInvalidLog noFetchLog blockingOutage (failingVersion fetches))
+                    publicMetadataClient cache source (newMetadataReads noopMetricsPort countingLog noInvalidLog noFetchLog (const blockingOutage) (const (failingVersion fetches)) anonymous)
             (results, ()) <-
                 concurrently
                     (mapConcurrently (const (fetchFullManifest client name)) [1 .. 8 :: Int])
@@ -214,12 +225,17 @@ noFetchLog :: PackageName -> IO ()
 noFetchLog _ = pure ()
 
 publicClient ::
+    OriginFor Public ->
     MetadataCache ->
     (PackageName -> IO (Either MetadataError Manifest)) ->
     (PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
     MetadataClient
-publicClient cache full version =
-    publicMetadataClient cache source (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog full version)
+publicClient origin cache full version =
+    publicMetadataClient cache source (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (const full) (const version) origin)
+
+-- A never-dialled loopback origin, so no fixture here reaches the network.
+stubUrl :: RegistryUrl
+stubUrl = loopbackRegistryUrl "http://localhost:1"
 
 countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError Manifest)
 countingFull calls info _name = do

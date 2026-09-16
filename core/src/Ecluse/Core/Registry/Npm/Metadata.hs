@@ -50,7 +50,7 @@ import Ecluse.Core.Registry.Npm.SelectiveDecode (
     SelectedVersion (svDistTagLatest, svName, svTime, svVersion, svVersionCount),
     selectVersionFromPackument,
  )
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits))
+import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits), OriginFor)
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (
@@ -73,10 +73,10 @@ newNpmMetadataReads ::
     (PackageName -> MetadataError -> IO ()) ->
     (PackageName -> [InvalidEntry] -> IO ()) ->
     (PackageName -> IO ()) ->
-    OriginClient ->
-    MetadataReads
-newNpmMetadataReads tracing metrics logFailure logInvalid logFetch origin =
-    newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing origin) (fetchNpmVersion tracing origin)
+    OriginFor posture ->
+    MetadataReads posture
+newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
+    newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing)
 
 fetchNpmPackument :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
 fetchNpmPackument origin = fetchMetadataFormBounded origin Full noValidators

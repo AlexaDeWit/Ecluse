@@ -40,7 +40,7 @@ import Ecluse.Core.Registry.Metadata (
     fetchThenProject,
  )
 import Ecluse.Core.Registry.Metadata.Projection (projectMetadata, projectionResult, selectiveError, validateReportedName)
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken), OriginFor)
 import Ecluse.Core.Registry.PyPI.Project (
     fileVersionKey,
     projectName,
@@ -75,10 +75,10 @@ newPyPIMetadataReads ::
     (PackageName -> MetadataError -> IO ()) ->
     (PackageName -> [InvalidEntry] -> IO ()) ->
     (PackageName -> IO ()) ->
-    OriginClient ->
-    MetadataReads
-newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch origin =
-    newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing origin) (fetchPyPIVersion tracing origin)
+    OriginFor posture ->
+    MetadataReads posture
+newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
+    newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
 
 fetchSimpleIndex :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
 fetchSimpleIndex origin name =

@@ -25,7 +25,7 @@ import Ecluse.Core.Registry.Metadata (
     fetchThenProject,
  )
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataReads)
-import Ecluse.Core.Registry.Origin (originClient)
+import Ecluse.Core.Registry.Origin (perCallerOrigin)
 import Ecluse.Core.Registry.PyPI.Metadata (newPyPIMetadataReads)
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -87,7 +87,7 @@ rawReadersSpec = describe "raw metadata readers" $
                 testWithApplication (pure (\_ respond -> respond (responseLBS (mkStatus code "test") [] (bodyFor ecosystem)))) $ \port -> do
                     manager <- newManager defaultManagerSettings
                     let name = mkPackageName ecosystem Nothing "thing"
-                        origin = originClient defaultLimits manager (loopbackRegistryUrl ("http://localhost:" <> show port)) Nothing
+                        origin = perCallerOrigin defaultLimits manager (loopbackRegistryUrl ("http://localhost:" <> show port)) Nothing
                         makeReads = case ecosystem of
                             PyPI -> newPyPIMetadataReads
                             _ -> newNpmMetadataReads

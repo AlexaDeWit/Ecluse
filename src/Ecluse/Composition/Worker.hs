@@ -23,7 +23,7 @@ import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish, publishCodec)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewReads))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
-import Ecluse.Core.Registry.Origin (originClient)
+import Ecluse.Core.Registry.Origin (anonymousOrigin)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
@@ -88,8 +88,8 @@ mirrorTransportFor env deps target =
         , ptLimits = pdLimits deps
         }
 
-{- Build one mount's worker bundle. The metadata client is anonymous, so no client credential
-reaches the public origin. Its no-op logs defer to the worker's own per-job outcome log. -}
+{- Build one mount's worker bundle. The metadata client is anonymous, so no client credential reaches
+the public origin, pdTarballHostGate owns the artifact host gate, and the no-op logs defer to the worker's per-job log. -}
 workerPolicyFor :: Env -> PackumentDeps -> MirrorPublish -> Int -> WorkerPolicy
 workerPolicyFor env deps publish artifactMaxBytes =
     WorkerPolicy
@@ -107,9 +107,8 @@ workerPolicyFor env deps publish artifactMaxBytes =
           -- carry, so the worker fetches a job's bytes exactly as the serve path would.
           wpArtifact = pdArtifact deps
         , wpPublish = publish
-        , -- The artifact fetch cap comes from the memory plan's mirror-artifact tenant,
-          -- not the metadata-path default, because a tarball far exceeds the packument cap. The
-          -- other limits do not apply to an opaque tarball, so they stay at their defaults.
+        , -- The artifact fetch cap comes from the memory plan's mirror-artifact tenant, not the
+          -- metadata-path default, because a tarball far exceeds the packument cap.
           wpArtifactLimits = defaultLimits{maxBodyBytes = artifactMaxBytes}
         , wpNow = pdNow deps
         }
@@ -127,4 +126,4 @@ workerPolicyFor env deps publish artifactMaxBytes =
 
     publicBaseUrl = pdPublicBaseUrl deps
 
-    publicOrigin = originClient (pdLimits deps) (envManager env) publicBaseUrl Nothing
+    publicOrigin = anonymousOrigin (pdLimits deps) (envManager env) publicBaseUrl

@@ -46,7 +46,7 @@ import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchFullManifest),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataNameMismatch),
  )
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl), originClient)
+import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl), OriginFor, anonymousOrigin, originClient, originClientOf, perCallerOrigin)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
@@ -154,8 +154,8 @@ request's @katip@ context into the failure logs, and the fetch holds the mount's
 withMetadataClient ::
     ServeRuntime ->
     PackumentDeps ->
-    (MetadataReads -> MetadataClient) ->
-    OriginClient ->
+    (MetadataReads posture -> MetadataClient) ->
+    OriginFor posture ->
     (MetadataClient -> IO a) ->
     Handler a
 withMetadataClient rt deps settle origin k =
@@ -170,17 +170,17 @@ withMetadataClient rt deps settle origin k =
                 (\nm -> runInIO (logFM DebugS (ls ("fetching packument from origin for " <> renderPackageName nm))))
                 origin
   where
-    baseUrl = registryUrlText (ocBaseUrl origin)
+    baseUrl = registryUrlText (ocBaseUrl (originClientOf origin))
 
 -- | Bypass shared caching so the private upstream authorises each caller's credential.
 withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> RegistryUrl -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a
 withPrivateMetadataClient rt deps baseUrl token =
-    withMetadataClient rt deps privateMetadataClient (mountOrigin deps (srPrivateManager rt) baseUrl token)
+    withMetadataClient rt deps privateMetadataClient (perCallerOrigin (pdLimits deps) (srPrivateManager rt) baseUrl token)
 
 -- | An anonymous read handle sharing the metadata cache across listing and artifact requests.
 withPublicMetadataClient :: ServeRuntime -> PackumentDeps -> RegistryUrl -> (MetadataClient -> IO a) -> Handler a
 withPublicMetadataClient rt deps baseUrl =
-    withMetadataClient rt deps settle (mountOrigin deps (srPublicManager rt) baseUrl Nothing)
+    withMetadataClient rt deps settle (anonymousOrigin (pdLimits deps) (srPublicManager rt) baseUrl)
   where
     settle = publicMetadataClient (srMetadataCache rt) (Source (registryUrlText baseUrl))
 

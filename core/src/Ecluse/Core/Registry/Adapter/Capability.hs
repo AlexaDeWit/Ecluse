@@ -40,7 +40,7 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Maintenance (NameAlphabet, StoreRefusal)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
-import Ecluse.Core.Registry.Origin (OriginClient)
+import Ecluse.Core.Registry.Origin (OriginClient, OriginFor)
 import Ecluse.Core.Registry.Publish (PublishCodec)
 import Ecluse.Core.Server.Metadata (MetadataReads)
 import Ecluse.Core.Snapshot (Snapshot)
@@ -58,15 +58,17 @@ assembling the served document, and encoding it ('Ecluse.Core.Server.Context.pdM
 -}
 data AdapterMetadata = AdapterMetadata
     { metadataNewReads ::
+        forall posture.
         TracingPort ->
         MetricsPort ->
         (PackageName -> MetadataError -> IO ()) ->
         (PackageName -> [InvalidEntry] -> IO ()) ->
         (PackageName -> IO ()) ->
-        OriginClient ->
-        MetadataReads
-    {- ^ Bind one origin's metadata reads to their observers. The caller settles the caching policy
-    with 'Ecluse.Core.Server.Metadata.publicMetadataClient' or its private counterpart.
+        OriginFor posture ->
+        MetadataReads posture
+    {- ^ Bind one origin's metadata reads to their observers, carrying its posture. The caller
+    settles the caching policy with 'Ecluse.Core.Server.Metadata.publicMetadataClient' or its
+    private counterpart, and the posture decides which of the two will typecheck.
     -}
     , metadataAssemble :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
     -- ^ Select exact admitted entries from the supplied snapshots before rendering their wire shape.
@@ -95,7 +97,7 @@ data AdapterArtifact = AdapterArtifact
     -}
     , artifactHosts :: [Text]
     {- ^ The ecosystem's canonical artifact hosts, which the same-host tarball gate admits without the
-    operator naming them (PyPI's is @https://files.pythonhosted.org@). Empty for npm's own host.
+    operator naming them (PyPI's is @https://files.pythonhosted.org@). Empty for npm, whose artifacts ride the registry host.
     -}
     }
 
