@@ -220,7 +220,10 @@ spec = describe "planExecutable" $ do
                         }
             outcome <- planWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ -> Nothing) refusingQueue builds
             case (mirrorFails, outcome) of
-                (False, Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable detail)]) ->
+                {- The mirror store was built and its cache was not, so the boot names the cache
+                it could not build and the mirror target it will not sweep without one. -}
+                (False, Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable unpaired), StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable detail)]) -> do
+                    unpaired `shouldBe` "no private cache was cleared to sweep beside this mirror target"
                     detail `shouldSatisfy` T.isPrefixOf "client build failed: NoCredentials"
                 (True, Left [StoreMaintenanceUnavailable Npm (ClientBuildFailed mirrorDetail), StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable privateDetail)]) -> do
                     mirrorDetail `shouldSatisfy` T.isPrefixOf "NoCredentials"

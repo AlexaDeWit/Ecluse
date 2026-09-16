@@ -101,7 +101,7 @@ runDredger bootEnv opts pruner = do
     moduleLog logEnv dredgerModule InfoS capLine
     when (doMode opts == SweepDeletes) $
         moduleLog logEnv dredgerModule InfoS "this command deletes permitted mirrorTarget and privateUpstream versions under independent target consent"
-    traverse_ (\mount -> traverse_ (logBlastRadius logEnv opts pacing) [mount, mount{smStore = privateStore (smStore mount)}]) mounts
+    traverse_ (logMountStores logEnv opts pacing) mounts
     moduleLog logEnv dredgerModule InfoS ("Dredger starting up, health probes on port " <> show (scPort (cfg status)))
     raceServerAgainstLoop
         (runWarp (cfg status) probeOnlyApplication)
@@ -198,14 +198,23 @@ sweepPortsFor logEnv metrics report cveSync =
         , sweepReport = report
         }
 
+-- Both of a mount's stores, each on its own line under the role that mount gives it.
+logMountStores :: LogEnv -> DredgerOptions -> SweepPacing -> SweepMount -> IO ()
+logMountStores logEnv opts pacing mount =
+    traverse_
+        (uncurry (logBlastRadius logEnv opts pacing))
+        [("mirror store", mount), ("private cache", mount{smStore = privateStore (smStore mount)})]
+
 {- One boot line per store, putting the Dredger's blast radius on record: which backend holds it,
 whether a deleted version can come back, what this run does, and whether a walk over it resumes. -}
-logBlastRadius :: LogEnv -> DredgerOptions -> SweepPacing -> SweepMount -> IO ()
-logBlastRadius logEnv opts pacing mount =
+logBlastRadius :: LogEnv -> DredgerOptions -> SweepPacing -> Text -> SweepMount -> IO ()
+logBlastRadius logEnv opts pacing subject mount =
     moduleLog logEnv dredgerModule InfoS $
         "sweeping the "
             <> ecosystemName (smEcosystem mount)
-            <> " mirror store on "
+            <> " "
+            <> subject
+            <> " on "
             <> factBackend facts
             <> ", "
             <> refill

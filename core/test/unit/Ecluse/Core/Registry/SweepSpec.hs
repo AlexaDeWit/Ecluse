@@ -408,7 +408,7 @@ recordingCursor handle = do
 
 pacingSpec :: Spec
 pacingSpec = describe "cycle chunk pacing" $ do
-    it "pauses before the second one-name page" $
+    it "pauses before the second name, though each arrived on its own page" $
         assertPacing SweepCandidates 1 "" [["a"], ["b"]] ["a", "b"] [("a", 0), ("b", 1)]
 
     it "carries a partial chunk across short pages without a trailing pause" $
@@ -522,7 +522,11 @@ assertPacing shape chunkSize alphabet pages candidates expected = do
     outcome <- sweepCycle pacing ports [testMount handle [denyRule] (map DenyByIdentity candidates)]
     outcomeHalt outcome `shouldBe` Nothing
     tallyDeleted (outcomeTally outcome) `shouldBe` length expected
-    reverse <$> readIORef observed `shouldReturn` map (first packageName) expected
+    {- One examination per name, at the pause count it was reached under. The per-batch
+    reassessment reads a condemned name's inventory again, so equal neighbours collapse, and a
+    name examined again across a pause boundary still stands on its own. -}
+    examined <- mapMaybe listToMaybe . group . reverse <$> readIORef observed
+    examined `shouldBe` map (first packageName) expected
     recDelays rec' `shouldReturn` foldl' max 0 (map snd expected)
 
 epssSpec :: Spec

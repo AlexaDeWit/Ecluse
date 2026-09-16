@@ -224,7 +224,9 @@ beltSpec = describe "the first-party belt" $
         unshielded <- recordingPorts generation
         runStep unshielded testPacing (mount tracked rules) (served ["1.0.0"]) `shouldReturn` Nothing
         recResults unshielded `shouldReturn` [SweepExamined, SweepDeleted]
-        readIORef manifestReads `shouldReturn` 1
+        {- The belt reads nothing at all. Without it the package's metadata is read to decide the
+        version, and again to reassess it against current evidence before the delete leaves. -}
+        readIORef manifestReads `shouldReturn` 2
         held store `shouldReturn` []
 
 {- A refused or unreached delete leaves the version in the store, so it counts as kept and reports

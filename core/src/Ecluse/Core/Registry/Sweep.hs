@@ -131,7 +131,7 @@ sweepMount pacing ports counters mount = case ssExecute (smStore mount) of
     targets = [mount, atPrivateCache mount]
     walk = walkStore pacing ports counters mount
 
--- | The same mount seen at its private cache, whose permissions and inventory are its own.
+-- The same mount seen at its private cache, whose permissions and inventory are its own.
 atPrivateCache :: SweepMount -> SweepMount
 atPrivateCache mount = mount{smStore = privateStore (smStore mount)}
 

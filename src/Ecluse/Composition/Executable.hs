@@ -22,7 +22,7 @@ module Ecluse.Composition.Executable (
 
 import Data.Time (getCurrentTime)
 import Katip (LogEnv)
-import Validation (eitherToValidation, validationToEither)
+import Validation (Validation (Failure), eitherToValidation, validationToEither)
 
 import Data.Map.Strict qualified as Map
 
@@ -35,7 +35,8 @@ import Ecluse.Composition (
     resolveBootWiring,
  )
 import Ecluse.Composition.BootError (
-    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, PilotWithoutEcosystem),
+    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, PilotWithoutEcosystem, StoreMaintenanceUnavailable),
+    StoreMaintenanceReason (PrivateCacheUnavailable),
     refuseOnThrow,
  )
 import Ecluse.Composition.Credential (BuildCredentials, CredentialTarget (..), mirrorBackends, noCredentialProviders, providerLabel)
@@ -215,7 +216,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
         prunerWiringFrom deferredMetrics policies
             <$> eitherToValidation cveSync
             <* eitherToValidation credentials
-            <*> eitherToValidation (Map.mapMaybeWithKey (pairWithCache (fromRight mempty caches)) <$> stores)
+            <*> eitherToValidation (stores >>= pairEach (fromRight mempty caches))
             <* eitherToValidation caches
   where
     validated = bpValidated bootPlan
@@ -223,17 +224,23 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     credentialBackends =
         [((eco, MirrorCredential), backend) | (eco, backend) <- mirrorBackends prunerMounts]
             <> [((eco, PrivateCacheCredential), backend) | (eco, (Just backend, _)) <- Map.toAscList (vpPrivateCaches validated)]
-    {- Both of a mount's stores under the bound they share. The pass clears a private cache for
-    every mirrored mount, so a mirror store arriving here without one cannot come about. -}
-    pairWithCache caches eco mirror = do
-        cache <- Map.lookup eco caches
-        clearedCache <- snd <$> Map.lookup eco (vpPrivateCaches validated)
-        clearedMirror <- Map.lookup eco (vpMirrorStores validated)
-        pure $
-            pairedStore
-                (maxVersionCount (bpLimits bootPlan))
-                (labelCache "mirrorTarget" clearedMirror mirror)
-                (labelCache "privateUpstream" clearedCache cache)
+    -- Every mirror store beside the cache it is swept with, reporting each that has none.
+    pairEach caches = validationToEither . Map.traverseWithKey (pairWithCache caches)
+
+    {- Both of a mount's stores under the bound they share. A mirrored mount is vetted with its
+    private cache, so a mirror store with none here is a refusal rather than a mount swept alone. -}
+    pairWithCache caches eco mirror =
+        maybe (Failure [unpaired eco]) pure $ do
+            cache <- Map.lookup eco caches
+            clearedCache <- snd <$> Map.lookup eco (vpPrivateCaches validated)
+            clearedMirror <- Map.lookup eco (vpMirrorStores validated)
+            pure $
+                pairedStore
+                    (maxVersionCount (bpLimits bootPlan))
+                    (labelCache "mirrorTarget" clearedMirror mirror)
+                    (labelCache "privateUpstream" clearedCache cache)
+
+    unpaired eco = StoreMaintenanceUnavailable eco (PrivateCacheUnavailable "no private cache was cleared to sweep beside this mirror target")
 
 labelCache :: Text -> ClearedBackend -> SweepCache -> SweepCache
 labelCache role backend cache = cache{scObserve = labelObservation role backend (scObserve cache)}

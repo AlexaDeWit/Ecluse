@@ -719,9 +719,9 @@ test-suite ecluse-core-unit
     Ecluse.Core.SnapshotSpec
     Ecluse.Core.Registry.AdapterSpec
     Ecluse.Core.Registry.CachedDocumentSpec
+    Ecluse.Core.Registry.ExchangeSpec
     Ecluse.Core.Registry.Maintenance.ProtocolSpec
     Ecluse.Core.Registry.MaintenanceSpec
-    Ecluse.Core.Registry.ExchangeSpec
     Ecluse.Core.Registry.Sweep.CandidatesSpec
     Ecluse.Core.Registry.Sweep.DeletionSpec
     Ecluse.Core.Registry.Sweep.GroupSpec

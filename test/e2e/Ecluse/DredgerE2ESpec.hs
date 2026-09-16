@@ -73,8 +73,8 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         run <- runDredgerOnce plane ["--once", "--dry-run"] (sweepEnv dredgerDryRunPkg)
         roleExit run `shouldSatisfy` (/= ExitSuccess)
         let output = roleOutput run
-        output `shouldSatisfy` T.isInfixOf "mirrorTarget https://mirror/"
-        output `shouldSatisfy` T.isInfixOf "privateUpstream https://private-cache/"
+        output `shouldSatisfy` T.isInfixOf "npm mirror store on mirrorTarget https://mirror/"
+        output `shouldSatisfy` T.isInfixOf "npm private cache on privateUpstream https://private-cache/"
         output `shouldSatisfy` T.isInfixOf ("dry run, would delete " <> psName dredgerDryRunPkg <> "@2.0.0")
         output `shouldSatisfy` T.isInfixOf "deleted 2"
         output `shouldSatisfy` T.isInfixOf "counted from partial evidence"

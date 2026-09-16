@@ -42,8 +42,10 @@ Each cycle:
 3. Keeps only the names the synced advisory database covers, plus the names an identity-deny rule
    pins. Both sides are read through the ecosystem's own name parser, so a spelling difference
    between the advisory database and the store cannot miss a match.
-4. Reads each of those packages' metadata **back from the store**, one read per package, and
-   evaluates every version the store holds against the mount's whole rule set.
+4. Reads each of those packages' metadata **back from the store** and evaluates every version the
+   store holds against the mount's whole rule set. A package whose versions nothing condemns is
+   read once. A condemned version's package is read again before the delete leaves, so the
+   decision that destroys it is taken on the evidence standing at that moment.
 5. Deletes only what a named decisive deny condemns.
 
 A cycle reads each bucket's listing whole and metadata for candidate names. A newly covered package can
