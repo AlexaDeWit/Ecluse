@@ -259,7 +259,7 @@ stepped steps = do
 seededConfig :: FakeStoreConfig
 seededConfig =
     defaultFakeStoreConfig
-        { fakeContents = Map.fromList [(name, [StoredVersion (version "1.0.0") VersionServed]) | name <- names]
+        { fakeContents = Map.fromList [(name, [StoredVersion (version "1.0.0") VersionServed Nothing]) | name <- names]
         , fakeManifests = Map.fromList [(name, sampleManifest name [version "1.0.0"]) | name <- names]
         }
   where
@@ -275,7 +275,7 @@ cappedPacing = testPacing{swpDeletionCap = 1}
 held :: FakeStore -> IO [Version]
 held store = concatMap (map storedVersionOf) . Map.elems <$> readFakeContents store
   where
-    storedVersionOf (StoredVersion v _) = v
+    storedVersionOf (StoredVersion v _ _) = v
 
 generation :: Maybe DbEtag
 generation = Just (DbEtag "etag-1")

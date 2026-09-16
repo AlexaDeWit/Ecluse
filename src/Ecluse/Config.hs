@@ -28,6 +28,7 @@ module Ecluse.Config (
     StoreTag (..),
     storeTagName,
     Target (..),
+    PrivateEndpoint (..),
     DeletionConsent (..),
     MirrorWrite (..),
     MirrorEndpoint (..),
@@ -192,16 +193,16 @@ resolveMounts globalPolicy appConfig =
 target is absent because 'resolveStoreBackend' vets it while resolving its backend. -}
 readAndPublishTargets :: MountConfig -> [(Text, Target)]
 readAndPublishTargets mcfg =
-    [("privateUpstream", target) | Just target <- [mntPrivateUpstream mcfg]]
+    [("privateUpstream", preTarget target) | Just target <- [mntPrivateUpstream mcfg]]
         <> [("publicationTarget", peTarget endpoint) | Just endpoint <- [mntPublicationTarget mcfg]]
 
 -- A declared mirror target makes the mount mirrored, which then needs its private upstream.
 resolveMode :: RulePolicy -> Ecosystem -> MountConfig -> Either [ConfigError] Mount
 resolveMode globalPolicy eco mcfg = case (mntMirrorTarget mcfg, mntPrivateUpstream mcfg) of
     (Just mirrorTarget, Just privateUpstream) ->
-        resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg
+        resolveMirrored globalPolicy eco (preTarget privateUpstream) mirrorTarget mcfg
     (Just _, Nothing) -> Left [MountMissingPrivateUpstream eco]
-    (Nothing, mPrivate) -> resolveServeOnly globalPolicy eco mPrivate mcfg
+    (Nothing, mPrivate) -> resolveServeOnly globalPolicy eco (preTarget <$> mPrivate) mcfg
 
 resolveMirrored :: RulePolicy -> Ecosystem -> Target -> MirrorEndpoint -> MountConfig -> Either [ConfigError] Mount
 resolveMirrored globalPolicy eco privateUpstream mirrorTarget mcfg = do

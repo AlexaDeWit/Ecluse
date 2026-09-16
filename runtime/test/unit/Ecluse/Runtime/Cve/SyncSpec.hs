@@ -34,10 +34,10 @@ import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apOsvNewestModified, apOs
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (IngestStats (IngestStats), PilotIngestAborted (PilotIngestAborted))
 import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
-import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
-import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty), newSweepState)
+import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
+import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty, smStore), newSweepState)
 import Ecluse.Core.Rules (RuleDeps (..), evalRule, prepare)
-import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), EvalContext, FailureAlignment (FailDeny), Rule (..), RuleVerdict (..), completeEvidence, mkEvalContext)
+import Ecluse.Core.Rules.Types (DenyIfCveParams (DenyIfCveParams), DenyIfEpssParams (DenyIfEpssParams), FailureAlignment (FailDeny), Rule (..), RuleVerdict (..), completeEvidence, mkEvalContext)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
  )
@@ -245,21 +245,21 @@ withdrawalSpec = describe "compiled withdrawal through sync and shared policy" $
                         verdict `shouldSatisfy` \case
                             Deny _ _ -> True
                             _ -> False
-                    sweepWithdrawal deps ctx rule False "withdrawal-only" `shouldReturn` not active
-                    sweepWithdrawal deps ctx rule False "withdrawal-overlap" `shouldReturn` False
-                    sweepWithdrawal deps ctx rule True "withdrawal-overlap" `shouldReturn` True
+                    sweepWithdrawal deps rule False "withdrawal-only" `shouldReturn` not active
+                    sweepWithdrawal deps rule False "withdrawal-overlap" `shouldReturn` False
+                    sweepWithdrawal deps rule True "withdrawal-overlap" `shouldReturn` True
                 fixVerdict <- evalRule deps ctx AllowIfRemediatesCve (completeEvidence (sampleDetails (unscopedNpm "withdrawal-only") (mkVersion Npm "2.0.0")))
                 case fixVerdict of
                     Allow _ -> active `shouldBe` True
                     NoDecision _ -> active `shouldBe` False
                     other -> expectationFailure ("unexpected withdrawal remediation verdict: " <> show other)
-            sweepWithdrawal deps ctx (DenyByIdentity "withdrawal-only") False "withdrawal-only" `shouldReturn` False
+            sweepWithdrawal deps (DenyByIdentity "withdrawal-only") False "withdrawal-only" `shouldReturn` False
 
-sweepWithdrawal :: RuleDeps -> EvalContext -> Rule -> Bool -> Text -> IO Bool
-sweepWithdrawal deps ctx rule firstParty rawName = do
+sweepWithdrawal :: RuleDeps -> Rule -> Bool -> Text -> IO Bool
+sweepWithdrawal deps rule firstParty rawName = do
     let name = unscopedNpm rawName
         version = mkVersion Npm "1.0.0"
-        stored = [StoredVersion version VersionServed]
+        stored = [StoredVersion version VersionServed Nothing]
     store <-
         newFakeStore
             defaultFakeStoreConfig
@@ -272,7 +272,7 @@ sweepWithdrawal deps ctx rule firstParty rawName = do
     counters <- newSweepState
     let handle = fakeMaintenance store
         mount = (testMount handle rules [rule]){smFirstParty = const firstParty}
-    sweepPackage testPacing (recPorts recorded) counters mount ctx name stored `shouldReturn` Nothing
+    sweepPackageGroup testPacing (recPorts recorded) counters mount name [(smStore mount, stored)] `shouldReturn` Nothing
     contents <- readFakeContents store
     pure (maybe False (not . null) (Map.lookup name contents))
 

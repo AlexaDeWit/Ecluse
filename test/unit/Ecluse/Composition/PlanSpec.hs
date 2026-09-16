@@ -16,10 +16,8 @@ import Ecluse.Composition.BootError (
         MirrorTargetOnMountEndpoint,
         MissingAdapter,
         QueueUrlUnrecognised,
-        SplitRoleNeedsDurableQueue,
-        StoreMaintenanceUnavailable
+        SplitRoleNeedsDurableQueue
     ),
-    StoreMaintenanceReason (PrivateCacheUnavailable),
     renderBootError,
  )
 import Ecluse.Composition.MemoryPlan (MemoryPlan (mpOverrideViolations, mpQueueMemoryMaxDepth))
@@ -45,9 +43,12 @@ import Ecluse.Composition.Support (
     noCeiling,
     noMaintenanceBackend,
     overrideEnv,
+    privateInventoryRefusal,
     staticEnvVars,
+    withDredgeablePrivate,
     withObservablePrivate,
     withoutMirrorTargetUrl,
+    withoutPrivateUpstreamUrl,
     withoutQueueUrl,
  )
 import Ecluse.Composition.Types (
@@ -244,11 +245,10 @@ spec = describe "resolveBootPlan" $ do
             brAdvisories report `shouldBe` [mirrorCollapseAdvisory]
 
         it "gives the deleting role the refusal alone, never the writing roles' advisory too" $ do
-            -- One rule turns the detected collapse into exactly one outcome per role, and the
-            -- collapsed target is also one no backend here sweeps, so the pass reports both.
+            -- The collision and each unsupported target contribute their own refusal.
             config <- expectConfig collapsedMirrorEnv Nothing
             let report = resolveBootPlan BootStorePruner (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
-            refusalsOf report `shouldBe` Left [collapsedMirrorRefusal, noMaintenanceBackend]
+            refusalsOf report `shouldBe` Left [collapsedMirrorRefusal, noMaintenanceBackend, privateInventoryRefusal]
             brAdvisories report `shouldBe` []
 
     describe "the runtime posture each entry point sizes against" $
@@ -285,6 +285,7 @@ spec = describe "resolveBootPlan" $ do
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor collapsedMirrorEnv Nothing config noCeiling)
                 `shouldBe` [ wouldRefuse "ecluse dredger" collapsedMirrorRefusal
                            , wouldRefuse "ecluse dredger" noMaintenanceBackend
+                           , wouldRefuse "ecluse dredger" privateInventoryRefusal
                            , wouldRefuse "ecluse dredger --dry-run" collapsedMirrorRefusal
                            , wouldRefuse "ecluse dredger --dry-run" noMaintenanceBackend
                            , wouldRefuse "ecluse dredger --dry-run" privateInventoryRefusal
@@ -293,7 +294,7 @@ spec = describe "resolveBootPlan" $ do
         it "names the Dredger on a mirror target this build has no maintenance backend for" $ do
             -- The writing roles boot on such a target and log nothing, so this line is where an
             -- operator who never runs the Dredger against it still learns that they cannot.
-            let envVars = withObservablePrivate staticEnvVars
+            let envVars = withDredgeablePrivate staticEnvVars
             config <- expectConfig envVars Nothing
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling)
                 `shouldBe` [ wouldRefuse "ecluse dredger" noMaintenanceBackend
@@ -311,10 +312,11 @@ spec = describe "resolveBootPlan" $ do
             config <- expectConfig envVars Nothing
             roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling) `shouldBe` []
 
-        it "names preview alone when the private registry has no inventory backend" $ do
-            config <- expectConfig codeArtifactEnvVars Nothing
-            roleRefusalWarnings BootWithoutPipeline (bootInputsFor codeArtifactEnvVars Nothing config noCeiling)
-                `shouldBe` [wouldRefuse "ecluse dredger --dry-run" privateInventoryRefusal]
+        it "names both Dredger modes when the private registry has no inventory backend" $ do
+            let envVars = [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")] <> withoutPrivateUpstreamUrl codeArtifactEnvVars
+            config <- expectConfig envVars Nothing
+            roleRefusalWarnings BootWithoutPipeline (bootInputsFor envVars Nothing config noCeiling)
+                `shouldMatchList` [wouldRefuse "ecluse dredger" privateInventoryRefusal, wouldRefuse "ecluse dredger --dry-run" privateInventoryRefusal]
 
 -- | One warning line as a checker prints it: the command that refuses, and the refusal itself.
 wouldRefuse :: Text -> BootError -> Text
@@ -381,6 +383,3 @@ fallbackClause = " (built-in default; no heap-ceiling datapoint)"
 
 mib :: Int
 mib = 1024 * 1024
-
-privateInventoryRefusal :: BootError
-privateInventoryRefusal = StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "registry has no inventory control plane")

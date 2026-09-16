@@ -9,9 +9,13 @@ module Ecluse.Core.Registry.Sweep.Types (
     -- * What a sweep runs over
     SweepMount (..),
     SweepStore (..),
+    SweepCache (..),
     SweepExecution (..),
-    deletingStore,
-    previewStore,
+    deletingCache,
+    previewCache,
+    pairedStore,
+    privateStore,
+    countingAt,
     walkMarkerOf,
     SweepPacing (..),
     minimumChunkPause,
@@ -49,7 +53,10 @@ module Ecluse.Core.Registry.Sweep.Types (
     -- * The cycle's running state
     SweepState (..),
     newSweepState,
+    labelAudit,
     record,
+    recordMetric,
+    recordTally,
     recordGap,
     recordPrerequisites,
 ) where
@@ -73,8 +80,7 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Rules (PreparedRule, RuleDeps)
 import Ecluse.Core.Rules.Types (Rule)
-import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
-import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
+import Ecluse.Core.Telemetry.Metrics (SweepResult (..), SweepTarget)
 import Ecluse.Core.Telemetry.Record (DredgerMetricsPort (dmpSweptVersion))
 
 -- | One mount's sweepable store, and everything that decides for it.
@@ -101,16 +107,26 @@ data SweepMount = SweepMount
     -}
     }
 
-{- | One mount's store as the booting role holds it: the calls that observe it, and what this run
-executes against a condemned version. Only the two builders below pair the halves.
+{- | One mount's store as the booting role holds it: the calls that observe it, what this run
+executes against a condemned version, and the cache the mount pairs it with.
 -}
 data SweepStore = SweepStore
     { ssObserve :: StoreObservation
     , ssExecute :: SweepExecution
-    , ssPrivate :: Maybe StoreObservation
-    -- ^ The associated private cache, held only by previews.
+    , ssPrivate :: SweepCache
+    {- ^ The mount's private cache. Every view of the mount's stores carries it, because the
+    pairing is a fact about the mount rather than about the store in hand.
+    -}
     , ssVersionLimit :: Int
     -- ^ Maximum distinct versions held for one package across both observations.
+    }
+
+{- | One store's own two halves: what observes it, and what this run executes against a condemned
+version. A cache is paired with no further store, so it carries none.
+-}
+data SweepCache = SweepCache
+    { scObserve :: StoreObservation
+    , scExecute :: SweepExecution
     }
 
 -- | What a run does with a condemned version. Only one arm carries a write.
@@ -121,13 +137,29 @@ data SweepExecution
       SweepCounts
 
 -- | The whole handle as a deleting run holds it: its reads, and its writes as the execution.
-deletingStore :: StoreMaintenance -> SweepStore
-deletingStore handle =
-    SweepStore{ssObserve = observationOf handle, ssExecute = SweepRemoves (deletionOf handle), ssPrivate = Nothing, ssVersionLimit = maxVersionCount defaultLimits}
+deletingCache :: StoreMaintenance -> SweepCache
+deletingCache handle = SweepCache{scObserve = observationOf handle, scExecute = SweepRemoves (deletionOf handle)}
 
 -- | The observing calls alone, as a preview holds them.
-previewStore :: StoreObservation -> SweepStore
-previewStore observation = SweepStore{ssObserve = observation, ssExecute = SweepCounts, ssPrivate = Nothing, ssVersionLimit = maxVersionCount defaultLimits}
+previewCache :: StoreObservation -> SweepCache
+previewCache observation = SweepCache{scObserve = observation, scExecute = SweepCounts}
+
+{- | A mount's store: the mirror target's own halves, the private cache it is swept with, and the
+bound the two inventories share.
+-}
+pairedStore :: Int -> SweepCache -> SweepCache -> SweepStore
+pairedStore limit mirror cache =
+    SweepStore{ssObserve = scObserve mirror, ssExecute = scExecute mirror, ssPrivate = cache, ssVersionLimit = limit}
+
+-- | The mount's other store: its private cache, under the same pairing and bound.
+privateStore :: SweepStore -> SweepStore
+privateStore store = store{ssObserve = scObserve (ssPrivate store), ssExecute = scExecute (ssPrivate store)}
+
+{- | The mount's store seen at one observation, counting only. A located view names its own
+backend in an audit line and reaches nothing that could change a store.
+-}
+countingAt :: SweepStore -> StoreObservation -> SweepStore
+countingAt store observation = store{ssObserve = observation, ssExecute = SweepCounts}
 
 {- | The marker a full walk resumes from. A preview holds none, so its walk starts at the first
 bucket and the recorded marker is neither read nor replaced.
@@ -214,6 +246,7 @@ data SweepPorts = SweepPorts
     -- ^ The active advisory generation for one ecosystem, for the audit line alone.
     , sweepDelay :: NominalDiffTime -> IO ()
     -- ^ The pause, injected so a spec observes pacing without waiting for it.
+    , sweepTarget :: SweepTarget
     , sweepMetrics :: DredgerMetricsPort
     -- ^ Where each version's disposition is counted.
     , sweepAudit :: SweepAudit
@@ -469,8 +502,16 @@ recordPrerequisites counters target = modifyIORef' (stPrerequisites counters) (t
 -- | Count one version's disposition, in the cycle tally and at the metrics port together.
 record :: SweepPorts -> SweepState -> SweepResult -> IO ()
 record ports counters result = do
-    dmpSweptVersion (sweepMetrics ports) result
-    modifyIORef' (stTally counters) (<> tallyOf result)
+    recordMetric ports result
+    recordTally counters result
+
+-- | Count a target operation separately from a deduplicated logical preview tally.
+recordMetric :: SweepPorts -> SweepResult -> IO ()
+recordMetric ports = dmpSweptVersion (sweepMetrics ports) (sweepTarget ports)
+
+-- | Update the cycle tally without recording a second target operation.
+recordTally :: SweepState -> SweepResult -> IO ()
+recordTally counters result = modifyIORef' (stTally counters) (<> tallyOf result)
 
 {- A previewed deletion counts under its own metric arm and in the cycle's deleted column, so
 one dry run reports the reach a real run would have. -}
@@ -481,3 +522,14 @@ tallyOf = \case
     SweepWouldDelete -> mempty{tallyDeleted = 1}
     SweepKept -> mempty{tallyKept = 1}
     SweepGuardSkipped -> mempty{tallyGuardSkipped = 1}
+
+-- | Keep per-target audit messages distinct when one cycle sweeps associated stores.
+labelAudit :: Text -> SweepAudit -> SweepAudit
+labelAudit target audit =
+    SweepAudit
+        { auditInfo = labelled (auditInfo audit)
+        , auditWarn = labelled (auditWarn audit)
+        , auditError = labelled (auditError audit)
+        }
+  where
+    labelled write = write . ((target <> ": ") <>)

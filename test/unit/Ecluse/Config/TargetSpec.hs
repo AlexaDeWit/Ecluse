@@ -75,11 +75,10 @@ admissionSpec = describe "the tags and keys each endpoint admits" $ do
             loadsWith [decl "privateUpstream" "codeArtifact" [url codeArtifactInternal]]
             loadsWith [decl "privateUpstream" "verdaccio" [url verdaccioUrl]]
 
-        it "requires the url and admits no credential, because a read is passthrough" $ do
+        it "requires the url and admits independent Verdaccio maintenance fields" $ do
             refuses [decl "privateUpstream" "registry" []] "privateUpstream.registry.url is required"
-            refuses
-                [decl "privateUpstream" "verdaccio" [url verdaccioUrl, field "token" "t"]]
-                "unexpected privateUpstream.verdaccio key(s): \"token\""
+            loadsWith [decl "privateUpstream" "verdaccio" [url verdaccioUrl, field "token" "private-token", permitDeletion]]
+            refuses [decl "privateUpstream" "registry" [url privateUrl, permitDeletion]] "unexpected privateUpstream.registry key(s): \"permitDeletion\""
 
     describe "mirrorTarget" $ do
         it "admits registry with a url and the static write token it needs" $

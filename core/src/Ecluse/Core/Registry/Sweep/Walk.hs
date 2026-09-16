@@ -12,14 +12,12 @@ module Ecluse.Core.Registry.Sweep.Walk (
     walkBuckets,
     resumeAfter,
     BucketNames (..),
-    collectBucket,
     collectBucketWith,
     insertInventory,
 ) where
 
 import Control.Monad (foldM)
-import Data.Conduit (ConduitT, await, fuseBothMaybe, fuseUpstream, runConduit)
-import Data.Conduit.List qualified as CL
+import Data.Conduit (ConduitT, await, fuseBothMaybe, runConduit)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
@@ -27,7 +25,6 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
     NameAlphabet,
     NamePrefix,
-    StoreFault,
     extendBucket,
     initialBuckets,
     renderNamePrefix,
@@ -74,17 +71,6 @@ data BucketNames fault a
     | -- | The listing stopped on a fault, and nothing was read.
       BucketFaulted fault
     deriving stock (Functor)
-
-{- | Read one bucket's names, sorted, or report that it must be split. The stream is abandoned as
-soon as the budget is crossed, so an oversized bucket costs a partial listing and never the whole.
--}
-collectBucket ::
-    NameAlphabet ->
-    NamePrefix ->
-    ConduitT () [PackageName] IO (Maybe StoreFault) ->
-    IO (BucketNames StoreFault PackageName)
-collectBucket alphabet prefix source =
-    fmap fst <$> collectBucketWith alphabet prefix const (fuseUpstream source (CL.map (map (,()))))
 
 -- | Merge package inventory pages under one distinct-name bound, preserving caller-supplied location evidence.
 collectBucketWith ::

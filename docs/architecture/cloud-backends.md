@@ -179,20 +179,21 @@ abstraction](registry-model.md#registry-abstraction):
    their own, and each backend builds one directly, so `ecluse dredger --dry-run` reaches no write
    at all.
 
-The sweep hands each cap-selected version batch to the backend once. The backend applies its
-request ceiling and stops later requests after a request fault. Earlier successes stay recorded,
-and a per-version refusal does not stop later requests. The cap charges the entire selected batch,
-including versions left unreached after a fault.
+The sweep joins actual mirror and private-cache inventories within the declared mount.
+It hands each target's selected versions to its backend once, with a callback that reassesses
+policy, consent and current inventory before each backend-owned batch. Request faults stop later
+batches, while earlier per-version results remain visible. Destructive clients disable automatic
+transport retries so an uncertain call cannot bypass reassessment.
 
-A Dredger preview joins the mirror and private-cache observations within the declared mount.
-It retains per-location policy evidence and counts logical selections once. This exposes retained
-copies without extending deletion authority. The operator contract is in
-[Running the Dredger](../../web/content/docs/dredger.md#preview).
+Associated copies share one logical cap charge before their first destructive attempt.
+Source operations precede cache operations. A cache residual is rediscovered from actual state
+after restart, without an internal pending-work record. The operator contract is in
+[Running the Dredger](../../web/content/docs/dredger.md).
 
 ### Walking a store
 
-The handle lists a store one bucket of its name space at a time, as a stream of pages, so nothing
-downstream holds a listing whole and a large store costs the same memory as a small one. A bucket is
+The handle lists a store one bucket of its name space at a time, as a stream of pages, so a large
+store costs the memory of one bounded bucket rather than of its whole listing. A bucket is
 a prefix of a package name's base component, the part after any namespace, because that is the
 component a store's own listing filters on. The characters those prefixes are built from come from
 the mount's ecosystem, whose grammar decides what a name may begin with. A store whose listing

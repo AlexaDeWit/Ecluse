@@ -22,7 +22,7 @@ module Ecluse.Composition.Executable (
 
 import Data.Time (getCurrentTime)
 import Katip (LogEnv)
-import Validation (eitherToValidation, validationToEither)
+import Validation (Validation (Failure), eitherToValidation, validationToEither)
 
 import Data.Map.Strict qualified as Map
 
@@ -35,12 +35,12 @@ import Ecluse.Composition (
     resolveBootWiring,
  )
 import Ecluse.Composition.BootError (
-    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, PilotWithoutEcosystem),
+    BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, PilotWithoutEcosystem, StoreMaintenanceUnavailable),
+    StoreMaintenanceReason (PrivateCacheUnavailable),
     refuseOnThrow,
  )
 import Ecluse.Composition.Credential (BuildCredentials, CredentialTarget (..), mirrorBackends, noCredentialProviders, providerLabel)
 import Ecluse.Composition.Maintenance (
-    BuildStoreObservation,
     ClearedBackend (cbUrl),
     StoreBuilds (sbDeleting, sbObserving),
     StorePorts,
@@ -64,7 +64,7 @@ import Ecluse.Composition.Types (
     MirrorRole,
  )
 import Ecluse.Composition.Validate (
-    ValidatedPlan (vpMirrorStores, vpMounts, vpPreviewCaches, vpSettings),
+    ValidatedPlan (vpMirrorStores, vpMounts, vpPrivateCaches, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
  )
 import Ecluse.Config (AppConfig (cfgAdvisories), Mount (mountPolicy), MountConfig (mntFirstParty), StoreTag, mountAdvisoryAge, mountEpssRequirement)
@@ -74,7 +74,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Registry.Adapter (ProjectName, adapterProjectName)
 import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend), StoreObservation (obFacts))
-import Ecluse.Core.Registry.Sweep.Types (SweepMount (..), SweepStore (..), deletingStore, previewStore)
+import Ecluse.Core.Registry.Sweep.Types (SweepCache (..), SweepMount (..), SweepStore, deletingCache, pairedStore, previewCache)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule)
 import Ecluse.Core.Security (Limits (maxVersionCount))
@@ -149,9 +149,9 @@ so a spec can drive this phase's refusals without reaching a cloud.
 -}
 type BuildMirrorQueue = LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 
-{- How the booting role builds one store as the sweep holds it. Both Dredger roles plan through the
-one arm below and differ only in which of 'StoreBuilds' they ran. -}
-type BuildSweepStore = StorePorts -> Limits -> ClearedBackend -> IO SweepStore
+{- How the booting role builds one store's halves as the sweep holds them. Both Dredger roles plan
+through the one arm below and differ only in which of 'StoreBuilds' they ran. -}
+type BuildSweepCache = StorePorts -> Limits -> ClearedBackend -> IO SweepCache
 
 {- | Plan the runtime the cleared plan's role starts, or report every refusal only a live
 environment can settle. Each role has one arm here, and a refusal is spent once for all of them.
@@ -177,15 +177,15 @@ planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds 
 
     prunerArm build =
         fmap (executablePlan . StorePrunerWiring)
-            <$> planPrunerWiring logEnv tracing buildCredentials build (sbObserving builds) bootPlan
+            <$> planPrunerWiring logEnv tracing buildCredentials build bootPlan
 
-    deleting build ports limits cleared = deletingStore <$> build ports limits cleared
-    previewing build ports limits cleared = previewStore <$> build ports limits cleared
+    deleting build ports limits cleared = deletingCache <$> build ports limits cleared
+    previewing build ports limits cleared = previewCache <$> build ports limits cleared
 
 {- The store roles' shared arm: the advisory sync their rules read, the credential their stores
 answer to, and one store per cleared target. All three refusable steps accumulate. -}
-planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepStore -> BuildStoreObservation -> BootPlan -> IO (Either [BootError] PrunerWiring)
-planPrunerWiring logEnv tracing buildCredentials buildStore buildObservation bootPlan = do
+planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepCache -> BootPlan -> IO (Either [BootError] PrunerWiring)
+planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     credentials <- buildCredentials (credentialReportersOver deferredMetrics) credentialBackends
@@ -199,11 +199,11 @@ planPrunerWiring logEnv tracing buildCredentials buildStore buildObservation boo
     caches <-
         planStoreMaintenanceFor
             PrivateCacheCredential
-            buildObservation
+            buildStore
             tracing
             (fromRight noCredentialProviders credentials)
             (bpLimits bootPlan)
-            (Map.map snd (vpPreviewCaches validated))
+            (Map.map snd (vpPrivateCaches validated))
     -- A refused sync leaves the rules abstaining, so the policies below still prepare and still
     -- report. The accumulation then discards them along with the sync.
     let ruleDepsFor =
@@ -216,22 +216,34 @@ planPrunerWiring logEnv tracing buildCredentials buildStore buildObservation boo
         prunerWiringFrom deferredMetrics policies
             <$> eitherToValidation cveSync
             <* eitherToValidation credentials
-            <*> eitherToValidation (Map.mapWithKey (attachCache (fromRight mempty caches)) <$> stores)
+            <*> eitherToValidation (stores >>= pairEach (fromRight mempty caches))
             <* eitherToValidation caches
   where
     validated = bpValidated bootPlan
     prunerMounts = map vmMount (vpMounts validated)
     credentialBackends =
         [((eco, MirrorCredential), backend) | (eco, backend) <- mirrorBackends prunerMounts]
-            <> [((eco, PrivateCacheCredential), backend) | (eco, (Just backend, _)) <- Map.toAscList (vpPreviewCaches validated)]
-    attachCache caches eco store = case (Map.lookup eco caches, Map.lookup eco (vpPreviewCaches validated), Map.lookup eco (vpMirrorStores validated)) of
-        (Just cache, Just (_, clearedCache), Just clearedMirror) ->
-            store
-                { ssObserve = labelObservation "mirrorTarget" clearedMirror (ssObserve store)
-                , ssPrivate = Just (labelObservation "privateUpstream" clearedCache cache)
-                , ssVersionLimit = maxVersionCount (bpLimits bootPlan)
-                }
-        _ -> store{ssVersionLimit = maxVersionCount (bpLimits bootPlan)}
+            <> [((eco, PrivateCacheCredential), backend) | (eco, (Just backend, _)) <- Map.toAscList (vpPrivateCaches validated)]
+    -- Every mirror store beside the cache it is swept with, reporting each that has none.
+    pairEach caches = validationToEither . Map.traverseWithKey (pairWithCache caches)
+
+    {- Both of a mount's stores under the bound they share. A mirrored mount is vetted with its
+    private cache, so a mirror store with none here is a refusal rather than a mount swept alone. -}
+    pairWithCache caches eco mirror =
+        maybe (Failure [unpaired eco]) pure $ do
+            cache <- Map.lookup eco caches
+            clearedCache <- snd <$> Map.lookup eco (vpPrivateCaches validated)
+            clearedMirror <- Map.lookup eco (vpMirrorStores validated)
+            pure $
+                pairedStore
+                    (maxVersionCount (bpLimits bootPlan))
+                    (labelCache "mirrorTarget" clearedMirror mirror)
+                    (labelCache "privateUpstream" clearedCache cache)
+
+    unpaired eco = StoreMaintenanceUnavailable eco (PrivateCacheUnavailable "no private cache was cleared to sweep beside this mirror target")
+
+labelCache :: Text -> ClearedBackend -> SweepCache -> SweepCache
+labelCache role backend cache = cache{scObserve = labelObservation role backend (scObserve cache)}
 
 labelObservation :: Text -> ClearedBackend -> StoreObservation -> StoreObservation
 labelObservation role backend observation =

@@ -12,7 +12,9 @@ decisions live in "Ecluse.Runtime.Maintenance.CodeArtifact.Decide".
 module Ecluse.Runtime.Maintenance.CodeArtifact (
     newCodeArtifactMaintenance,
     newCodeArtifactObservation,
-    maintenanceForEnv,
+    newCodeArtifactCacheMaintenance,
+    newCodeArtifactCacheObservation,
+    cacheMaintenanceFor,
 
     -- * The calls the handle makes
     ControlPlane (..),
@@ -26,14 +28,19 @@ module Ecluse.Runtime.Maintenance.CodeArtifact (
 import Amazonka qualified as AWS
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
+import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Lens.Micro ((^.))
+import Network.HTTP.Client (newManager)
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict,
+    DeleteGuard,
     NameAlphabet,
     NamePrefix,
+    StoreClass (StoreDestroyable),
     StoreCursor (..),
     StoreFault,
     StoreMaintenance (..),
@@ -68,6 +75,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     listPackagesRequest,
     listTagsRequest,
     listVersionsRequest,
+    listVersionsResult,
     packagesOfPage,
     repositoryOfResponse,
  )
@@ -90,10 +98,10 @@ data ControlPlane = ControlPlane
 {- | Build the maintenance handle for one CodeArtifact repository, over an environment whose AWS
 credentials are discovered the standard way.
 -}
-newCodeArtifactMaintenance :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
-newCodeArtifactMaintenance alphabet readManifest store =
-    maintenanceForEnv alphabet readManifest store
-        <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+newCodeArtifactMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
+newCodeArtifactMaintenance limit alphabet readManifest store = do
+    env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+    boundedMaintenance limit alphabet readManifest store <$> controlPlaneFor env
 
 {- | Build the observing calls alone for one repository, over an environment discovered the same
 way. No deletion, no tag write, and no publication is built, so the caller holds none.
@@ -103,29 +111,52 @@ newCodeArtifactObservation limit alphabet readManifest store =
     boundedObservationFor limit alphabet readManifest store . readPlaneFor
         <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
 
-{- | Build the handle over a caller-supplied @amazonka@ 'AWS.Env'. Exposed so a test can hold the
-handle, and the facts it supplies, without discovering an ambient AWS identity.
--}
-maintenanceForEnv :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> AWS.Env -> StoreMaintenance
-maintenanceForEnv alphabet readManifest store env =
-    maintenanceFor alphabet readManifest store (controlPlaneFor env)
+-- | Build cache deletion with target-local reads and consent, allowing its declared refill role.
+newCodeArtifactCacheMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
+newCodeArtifactCacheMaintenance limit alphabet readManifest store = do
+    env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+    plane <- controlPlaneFor env
+    pure (cacheMaintenanceFor limit alphabet readManifest store plane)
+
+-- | Observe the configured cache under its distinct refill classification without constructing writes.
+newCodeArtifactCacheObservation :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
+newCodeArtifactCacheObservation limit alphabet readManifest store = do
+    env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+    let readCalls = readPlaneFor env
+    pure (boundedObservationFor limit alphabet readManifest store readCalls){obClassifyStore = cacheClassification readCalls store}
+
+-- | Build the configured cache capability over injected calls without relaxing the mirror constructor.
+cacheMaintenanceFor :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
+cacheMaintenanceFor limit alphabet readManifest store plane =
+    (boundedMaintenance limit alphabet readManifest store plane){classifyStore = cacheClassification (cpRead plane) store, storeCursor = Nothing}
+
+boundedMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
+boundedMaintenance limit alphabet readManifest store plane =
+    (maintenanceFor alphabet readManifest store plane)
+        { enumerateVersions = obEnumerateVersions (boundedObservationFor limit alphabet readManifest store (cpRead plane))
+        }
+
+cacheClassification :: ReadPlane -> CodeArtifactStore -> IO (Either StoreFault StoreClass)
+cacheClassification readCalls store = fmap (const StoreDestroyable) <$> describeStore readCalls store
 
 -- | Every call sent over one env, with the AWS error folded into a 'StoreFault'.
-controlPlaneFor :: AWS.Env -> ControlPlane
-controlPlaneFor env =
-    ControlPlane
-        { cpRead = readPlaneFor env
-        , cpDeleteVersions = sendStore env
-        , cpTagResource = sendStore env
-        , cpUntagResource = sendStore env
-        }
+controlPlaneFor :: AWS.Env -> IO ControlPlane
+controlPlaneFor env = do
+    deletionManager <- newManager (singleAttemptSettings tlsManagerSettings)
+    pure
+        ControlPlane
+            { cpRead = readPlaneFor env
+            , cpDeleteVersions = sendStore (AWS.once env{AWS.retryCheck = \_ _ -> False, AWS.manager = deletionManager})
+            , cpTagResource = sendStore env
+            , cpUntagResource = sendStore env
+            }
 
 -- | The observing calls alone, over one env, so a caller handed these can change nothing.
 readPlaneFor :: AWS.Env -> ReadPlane
 readPlaneFor env =
     ReadPlane
         { rpListPackages = sendStore env
-        , rpListVersions = sendStore env
+        , rpListVersions = fmap listVersionsResult . sendClassified id env
         , rpDescribeRepository = sendStore env
         , rpListTags = sendStore env
         }
@@ -198,9 +229,9 @@ versionPage observer store name token =
             (fromMaybe [] (response ^. CAL.listPackageVersionsResponse_versions))
         )
 
-deleteChunks :: ControlPlane -> CodeArtifactStore -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
-deleteChunks plane store name versions =
-    deleteAll send (chunksOfCeiling deleteCeiling versions)
+deleteChunks :: ControlPlane -> CodeArtifactStore -> DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
+deleteChunks plane store checks name versions =
+    deleteAll checks send (chunksOfCeiling deleteCeiling versions)
   where
     send batch =
         fmap (foldDeleteResponse batch) <$> cpDeleteVersions plane (deleteRequest store name batch)

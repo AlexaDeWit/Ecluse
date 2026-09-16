@@ -102,7 +102,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Cause,
     CredentialResult,
     Decision,
-    Label (LAdvisoryCompileResult, LAdvisoryDropCause, LAdvisorySyncResult, LBreakerSource, LCacheResult, LCause, LCredentialResult, LDecision, LEcosystem, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LSweepResult, LTier, LUpstream),
+    Label (LAdvisoryCompileResult, LAdvisoryDropCause, LAdvisorySyncResult, LBreakerSource, LCacheResult, LCause, LCredentialResult, LDecision, LEcosystem, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LSweepResult, LSweepTarget, LTier, LUpstream),
     MetricName (..),
     MirrorResult,
     Provider,
@@ -111,6 +111,7 @@ import Ecluse.Core.Telemetry.Metrics (
     RequestFaultCause,
     StatusClass,
     SweepResult,
+    SweepTarget,
     Tier,
     Upstream,
     breakerStateCode,
@@ -401,8 +402,8 @@ recordMirrorJobProcessed m result =
     addOne (mMirrorJobsProcessed m) [LMirrorResult result]
 
 -- | Record one disposition of one swept mirror-store version (@ecluse.dredger.versions@).
-recordSweptVersion :: (MonadIO m) => Metrics -> SweepResult -> m ()
-recordSweptVersion m result = addOne (mDredgerVersions m) [LSweepResult result]
+recordSweptVersion :: (MonadIO m) => Metrics -> SweepTarget -> SweepResult -> m ()
+recordSweptVersion m target result = addOne (mDredgerVersions m) [LSweepTarget target, LSweepResult result]
 
 -- | Record a mirror publish latency sample (@ecluse.mirror.publish.duration@).
 recordMirrorPublishDuration :: (MonadIO m) => Metrics -> Double -> m ()

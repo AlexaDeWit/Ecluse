@@ -36,6 +36,7 @@ import Ecluse.Composition.Vet (
  )
 import Ecluse.Config (
     MountConfig (..),
+    PrivateEndpoint (preTarget),
     PublicationEndpoint (peTarget),
     StoreTag (TagRegistry),
     Target (Target, tgtTag, tgtUrl),
@@ -279,7 +280,7 @@ upstream, so its tag is the one the parser pinned rather than one the mount wrot
 endpointOf :: EndpointKey -> MountConfig -> Maybe Target
 endpointOf key mcfg = case key of
     KeyPublicUpstream -> Just (Target TagRegistry (mntPublicUpstream mcfg))
-    KeyPrivateUpstream -> mntPrivateUpstream mcfg
+    KeyPrivateUpstream -> preTarget <$> mntPrivateUpstream mcfg
     KeyMirrorTarget -> meTarget <$> mntMirrorTarget mcfg
     KeyPublicationTarget -> peTarget <$> mntPublicationTarget mcfg
 

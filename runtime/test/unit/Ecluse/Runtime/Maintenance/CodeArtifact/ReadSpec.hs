@@ -122,13 +122,13 @@ projectionSpec store = describe "versionsOfPage" $ do
         let page = [summaryOf raw status | (raw, status) <- statusRun]
         stored store page `shouldBe` map storedOfObservation (observed store page)
 
-    it "carries nothing but the version and its presence, so no origin or revision reaches a delete" $ do
+    it "preserves the opaque revision without turning origin into deletion authority" $ do
         let evidenced = revised "rev-1" (originating (originTyped CA.PackageVersionOriginType_INTERNAL) (published "1.0.0"))
-        stored store [published "1.0.0"] `shouldBe` stored store [evidenced]
+        map storedRevision (stored store [evidenced]) `shouldBe` [Just "rev-1"]
 
     it "reads a served version as one the store still holds" $
         stored store [published "1.0.0"]
-            `shouldBe` [StoredVersion{storedVersion = version "1.0.0", storedPresence = VersionServed}]
+            `shouldBe` [StoredVersion{storedVersion = version "1.0.0", storedPresence = VersionServed, storedRevision = Nothing}]
 
 observed :: CodeArtifactStore -> [CA.PackageVersionSummary] -> [VersionObservation]
 observed store = observationsOfPage (identityOfStore store) scopedName

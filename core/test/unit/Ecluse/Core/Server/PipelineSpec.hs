@@ -516,7 +516,7 @@ checkLifetime shape policy storeState = do
                 }
     outcome <- sweepCycle testPacing{swpShape = shape} (recPorts recorded) [mount]
     let retained = stopsBeforeRules storeState || lpDisposition policy == Retained
-        expectedVersions = [StoredVersion version VersionServed | retained]
+        expectedVersions = [StoredVersion version VersionServed Nothing | retained]
         examined
             | stopsBeforeRules storeState = 0
             | shape == SweepCandidates && identityDeny `notElem` lpRules policy = 0
@@ -536,7 +536,7 @@ lifetimeStoreConfig storeState = case storeState of
     version = mkVersion Npm "1.0.0"
     seeded =
         defaultFakeStoreConfig
-            { fakeContents = Map.singleton leftpad [StoredVersion version VersionServed]
+            { fakeContents = Map.singleton leftpad [StoredVersion version VersionServed Nothing]
             , fakeManifests = Map.singleton leftpad (sampleManifest leftpad [version])
             }
 
@@ -565,7 +565,7 @@ nextPrivateGet store rules retained = do
 storedUpstream :: FakeStore -> Application
 storedUpstream store req respond = do
     contents <- readFakeContents store
-    if StoredVersion (mkVersion Npm "1.0.0") VersionServed `elem` Map.findWithDefault [] leftpad contents
+    if StoredVersion (mkVersion Npm "1.0.0") VersionServed Nothing `elem` Map.findWithDefault [] leftpad contents
         then upstreamApp req respond
         else respond (responseLBS status404 [] "")
 

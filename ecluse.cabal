@@ -147,6 +147,7 @@ library ecluse-core
     Ecluse.Core.Registry.Publish
     Ecluse.Core.Registry.Sweep
     Ecluse.Core.Registry.Sweep.Candidates
+    Ecluse.Core.Registry.Sweep.Deletion
     Ecluse.Core.Registry.Sweep.Group
     Ecluse.Core.Registry.Sweep.Package
     Ecluse.Core.Registry.Sweep.Types
@@ -718,9 +719,11 @@ test-suite ecluse-core-unit
     Ecluse.Core.SnapshotSpec
     Ecluse.Core.Registry.AdapterSpec
     Ecluse.Core.Registry.CachedDocumentSpec
+    Ecluse.Core.Registry.ExchangeSpec
     Ecluse.Core.Registry.Maintenance.ProtocolSpec
     Ecluse.Core.Registry.MaintenanceSpec
     Ecluse.Core.Registry.Sweep.CandidatesSpec
+    Ecluse.Core.Registry.Sweep.DeletionSpec
     Ecluse.Core.Registry.Sweep.GroupSpec
     Ecluse.Core.Registry.Sweep.PackageSpec
     Ecluse.Core.Registry.Sweep.TypesSpec

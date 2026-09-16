@@ -104,6 +104,7 @@ labelKeySpec = describe "label keys (the cardinality guard)" $ do
                               , "upstream"
                               , "status_class"
                               , "result"
+                              , "target"
                               , "provider"
                               , "cause"
                               , "source"
@@ -121,9 +122,8 @@ labelKeySpec = describe "label keys (the cardinality guard)" $ do
 boundedDomainSpec :: Spec
 boundedDomainSpec = describe "bounded label value domains" $ do
     it "draws the whole bounded-label series space from a small, fixed product" $
-        -- The operator-bounded `rule` aside, this handful is the whole space of label values, never
-        -- the unbounded space of package identifiers. An infinite domain has no Universe to
-        -- enumerate.
+        -- The operator-bounded `rule` aside, this handful is the whole label-value space: an
+        -- unbounded package identifier has no Universe to enumerate.
         length allBoundedLabels `shouldSatisfy` (< 64)
 
     it "renders every bounded label to a non-empty value under a closed key" $
@@ -192,6 +192,7 @@ allBoundedLabels =
         , LStatusClass <$> universe
         , LCacheResult <$> universe
         , LMirrorResult <$> universe
+        , LSweepTarget <$> universe
         , LCredentialResult <$> universe
         , LAdvisorySyncResult <$> universe
         , LAdvisoryCompileResult <$> universe

@@ -18,6 +18,7 @@ module Ecluse.Test.Sweep (
     testPacing,
     testMount,
     previewMount,
+    withPrivateCache,
 ) where
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
@@ -25,22 +26,29 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Registry.Adapter (adapterProjectName)
-import Ecluse.Core.Registry.Maintenance (StoreMaintenance, StoreObservation)
+import Ecluse.Core.Registry.Maintenance (
+    StoreFacts (factBackend),
+    StoreMaintenance,
+    StoreObservation (obEnumerateVersions, obFacts, obListPackagesIn),
+ )
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Sweep.Types (
     SweepAudit (SweepAudit, auditError, auditInfo, auditWarn),
+    SweepCache (scObserve),
     SweepMount (..),
     SweepPacing (SweepPacing, swpChunkPause, swpChunkSize, swpCyclePause, swpDeletionCap, swpShape),
-    SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepMetrics, sweepNow, sweepReport),
+    SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepMetrics, sweepNow, sweepReport, sweepTarget),
     SweepReport (SweepReport, reportCapHalts, reportOpening, reportRemoval),
     SweepShape (SweepCandidates),
-    SweepStore,
-    deletingStore,
-    previewStore,
+    SweepStore (ssPrivate),
+    deletingCache,
+    pairedStore,
+    previewCache,
  )
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Rules.Types (Rule)
-import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepWouldDelete))
+import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
+import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepWouldDelete), SweepTarget (..))
 import Ecluse.Core.Telemetry.Record (DredgerMetricsPort (DredgerMetricsPort, dmpSweptVersion))
 import Ecluse.Test.Rules (inertRuleDeps)
 
@@ -53,6 +61,7 @@ data RecordedSweep = RecordedSweep
     -- ^ The lines an operator must act on, oldest first.
     , recResults :: IO [SweepResult]
     -- ^ Every disposition the sweep counted, in the order it counted them.
+    , recTargetResults :: IO [(SweepTarget, SweepResult)]
     , recWarnings :: IO [Text]
     -- ^ The lines that may clear on their own, oldest first.
     , recDelays :: IO Int
@@ -72,6 +81,7 @@ recordingPortsUnder report etag = do
     warnings <- newIORef []
     errors <- newIORef []
     results <- newIORef []
+    targetResults <- newIORef []
     delays <- newIORef (0 :: Int)
     let push ref line = modifyIORef' ref (line :)
     pure
@@ -81,12 +91,14 @@ recordingPortsUnder report etag = do
                     { sweepNow = pure epoch
                     , sweepAdvisoryEtag = const (pure etag)
                     , sweepDelay = const (modifyIORef' delays (+ 1))
-                    , sweepMetrics = DredgerMetricsPort{dmpSweptVersion = push results}
+                    , sweepTarget = SweepMirror
+                    , sweepMetrics = DredgerMetricsPort{dmpSweptVersion = \target result -> push results result >> push targetResults (target, result)}
                     , sweepAudit =
                         SweepAudit{auditInfo = push info, auditWarn = push warnings, auditError = push errors}
                     , sweepReport = report
                     }
             , recInfo = reverse <$> readIORef info
+            , recTargetResults = reverse <$> readIORef targetResults
             , recWarnings = reverse <$> readIORef warnings
             , recErrors = reverse <$> readIORef errors
             , recResults = reverse <$> readIORef results
@@ -113,13 +125,30 @@ testPacing =
 a belt that shields nothing. Override 'smFirstParty' for a case about the belt.
 -}
 testMount :: StoreMaintenance -> [PreparedRule] -> [Rule] -> SweepMount
-testMount = mountOver . deletingStore
+testMount = mountOver . groupedStore . deletingCache
 
 {- | The same mount as a preview holds it: the store's observing calls, and an execution that
 counts. Nothing it carries can delete or record a walk marker.
 -}
 previewMount :: StoreObservation -> [PreparedRule] -> [Rule] -> SweepMount
-previewMount = mountOver . previewStore
+previewMount = mountOver . groupedStore . previewCache
+
+-- | The mount's own private cache, for a case about the two stores together.
+withPrivateCache :: SweepCache -> SweepMount -> SweepMount
+withPrivateCache cache mount = mount{smStore = (smStore mount){ssPrivate = cache}}
+
+{- A mount's store paired with a cache that holds nothing, so a case about the mirror alone reads
+the counts and lines that store produced. It answers every other call as the mirror does. -}
+groupedStore :: SweepCache -> SweepStore
+groupedStore mirror = pairedStore (maxVersionCount defaultLimits) mirror (previewCache (holdingNothing (scObserve mirror)))
+
+holdingNothing :: StoreObservation -> StoreObservation
+holdingNothing mirror =
+    mirror
+        { obFacts = (obFacts mirror){factBackend = "empty private cache"}
+        , obListPackagesIn = \_ -> pure Nothing
+        , obEnumerateVersions = \_ -> pure (Right [])
+        }
 
 mountOver :: SweepStore -> [PreparedRule] -> [Rule] -> SweepMount
 mountOver store rules configured =

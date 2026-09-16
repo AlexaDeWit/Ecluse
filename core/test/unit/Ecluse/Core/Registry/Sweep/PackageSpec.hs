@@ -17,23 +17,27 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
-    DeleteCeiling (AtMost),
     StoreFacts (factDeleteCeiling),
     StoreMaintenance (deleteVersions, readStoreManifest, storeFacts),
     StoredVersion (StoredVersion, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUnreached),
     VersionPresence (VersionServed, VersionWithdrawn),
+    chunksOfCeiling,
+    deleteAll,
     protocolFault,
     storeRefusal,
  )
 import Ecluse.Core.Registry.Metadata (Manifest)
-import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
+import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltDeletionCap),
     EvidenceGaps (gapManifests),
-    SweepMount (smConfigured, smFirstParty, smRuleDeps),
+    SweepExecution (SweepCounts, SweepRemoves),
+    SweepMount (smConfigured, smFirstParty, smRuleDeps, smStore),
     SweepPacing (swpDeletionCap),
+    SweepPorts (sweepAdvisoryEtag, sweepNow),
     SweepState (stEvidence, stIssued),
+    SweepStore (ssExecute, ssObserve),
     evidenceComplete,
     newSweepState,
  )
@@ -46,7 +50,6 @@ import Ecluse.Core.Rules.Freshness (
  )
 import Ecluse.Core.Rules.Types (
     DenyIfCveParams (DenyIfCveParams),
-    EvalContext,
     FailureAlignment (FailDeny),
     PrecededRule (PrecededRule),
     Rule (AllowByIdentity, AllowIfOlderThan, DenyByIdentity, DenyIfCve),
@@ -121,7 +124,7 @@ verdictSpec = describe "the delete verdict" $ do
         -- destructive call for it every cycle.
         store <- storeWith [] (Just (sampleManifest packageName [version "1.0.0"]))
         rec' <- recordingPorts generation
-        halt <- runStep rec' testPacing (mount store [denyRule]) [StoredVersion (version "1.0.0") VersionWithdrawn]
+        halt <- runStep rec' testPacing (mount store [denyRule]) [StoredVersion (version "1.0.0") VersionWithdrawn Nothing]
         halt `shouldBe` Nothing
         recResults rec' `shouldReturn` []
 
@@ -221,7 +224,9 @@ beltSpec = describe "the first-party belt" $
         unshielded <- recordingPorts generation
         runStep unshielded testPacing (mount tracked rules) (served ["1.0.0"]) `shouldReturn` Nothing
         recResults unshielded `shouldReturn` [SweepExamined, SweepDeleted]
-        readIORef manifestReads `shouldReturn` 1
+        {- The belt reads nothing at all. Without it the package's metadata is read to decide the
+        version, and again to reassess it against current evidence before the delete leaves. -}
+        readIORef manifestReads `shouldReturn` 2
         held store `shouldReturn` []
 
 {- A refused or unreached delete leaves the version in the store, so it counts as kept and reports
@@ -266,20 +271,21 @@ capSpec = describe "the per-cycle deletion cap" $ do
             let original = fakeMaintenance store
                 handle =
                     original
-                        { storeFacts = (storeFacts original){factDeleteCeiling = AtMost 1}
-                        , deleteVersions = \_ selected -> do
-                            modifyIORef' calls (<> [selected])
-                            pure (zip selected (replicate successful VersionRemoved <> repeat (VersionUnreached fault)))
+                        { deleteVersions = \checks _ selected ->
+                            deleteAll
+                                checks
+                                ( \batch -> do
+                                    modifyIORef' calls (<> [batch])
+                                    pure (Right (zip batch (replicate successful VersionRemoved <> repeat (VersionUnreached fault))))
+                                )
+                                (chunksOfCeiling (factDeleteCeiling (storeFacts original)) selected)
                         }
-            ctx <- evalContext
             halt <-
-                sweepPackage
+                stepUnder
+                    rec'
                     testPacing{swpDeletionCap = 2}
-                    (recPorts rec')
                     counters
                     (testMount handle [denyRule] [])
-                    ctx
-                    packageName
                     (served ["1.0.0", "2.0.0", "3.0.0"])
             readIORef calls `shouldReturn` [take 2 versions]
             readIORef (stIssued counters) `shouldReturn` 2
@@ -376,22 +382,30 @@ sweepOne rules stored inManifest = do
 stepEvidence :: RecordedSweep -> SweepMount -> [StoredVersion] -> IO EvidenceGaps
 stepEvidence rec' mount' stored = do
     counters <- newSweepState
-    ctx <- evalContext
-    void (sweepPackage testPacing (recPorts rec') counters mount' ctx packageName stored)
+    void (stepUnder rec' testPacing counters mount' stored)
     readIORef (stEvidence counters)
 
 runStep :: RecordedSweep -> SweepPacing -> SweepMount -> [StoredVersion] -> IO (Maybe CycleHalt)
-runStep rec' pacing mount' stored = do
-    counters <- newSweepState
-    ctx <- evalContext
-    sweepPackage pacing (recPorts rec') counters mount' ctx packageName stored
+runStep rec' pacing mount' stored = newSweepState >>= \counters -> stepUnder rec' pacing counters mount' stored
+
+{- One package's step at the mount's own store, under the execution the boot handed it. The
+dispatch is the one a cycle makes: a preview counts its selections and a real run hands them over.
+-}
+stepUnder :: RecordedSweep -> SweepPacing -> SweepState -> SweepMount -> [StoredVersion] -> IO (Maybe CycleHalt)
+stepUnder rec' pacing counters mount' stored = case ssExecute (smStore mount') of
+    SweepRemoves _ -> sweepPackageGroup pacing ports counters mount' packageName [(smStore mount', stored)]
+    SweepCounts -> do
+        ctx <- mkEvalContext (sweepNow ports) (sweepAdvisoryEtag ports Npm)
+        previewPackageGroup pacing ports counters mount' ctx packageName [(ssObserve (smStore mount'), stored)]
+  where
+    ports = recPorts rec'
 
 -- A store holding those versions, serving that manifest, or serving none at all.
 storeWith :: [Version] -> Maybe Manifest -> IO FakeStore
 storeWith stored manifest =
     newFakeStore
         defaultFakeStoreConfig
-            { fakeContents = Map.singleton packageName [StoredVersion v VersionServed | v <- stored]
+            { fakeContents = Map.singleton packageName [StoredVersion v VersionServed Nothing | v <- stored]
             , fakeManifests = maybe Map.empty (Map.singleton packageName) manifest
             }
 
@@ -405,7 +419,7 @@ refusingStore' :: Maybe Manifest -> VersionOutcome -> IO FakeStore
 refusingStore' manifest outcome = do
     store <- storeWith [version "1.0.0"] manifest
     let handle = fakeMaintenance store
-    pure store{fakeMaintenance = handle{deleteVersions = \_ versions -> pure [(v, outcome) | v <- versions]}}
+    pure store{fakeMaintenance = handle{deleteVersions = \_ _ versions -> pure [(v, outcome) | v <- versions]}}
 
 mount :: FakeStore -> [PreparedRule] -> SweepMount
 mount store rules = testMount (fakeMaintenance store) rules []
@@ -414,10 +428,7 @@ held :: FakeStore -> IO [Version]
 held store = maybe [] (map storedVersion) . Map.lookup packageName <$> readFakeContents store
 
 served :: [Text] -> [StoredVersion]
-served = map (\raw -> StoredVersion (version raw) VersionServed)
-
-evalContext :: IO EvalContext
-evalContext = mkEvalContext (pure epoch) (pure generation)
+served = map (\raw -> StoredVersion (version raw) VersionServed Nothing)
 
 generation :: Maybe DbEtag
 generation = Just (DbEtag "etag-1")
@@ -521,10 +532,12 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
                 generations = map (Just . DbEtag) ["first", "threshold", "last"]
             store <- storeWith (map version versions) (Just (sampleManifest packageName (map version versions)))
             queuedGenerations <- newIORef generations
+            -- The queue cycles, because the grouped executor reassesses every version before it
+            -- hands the batch over, and each pass acquires the same evidence in the same order.
             let deciding =
                     denyRule
                         { prepEval = \_ _ -> do
-                            etag <- atomicModifyIORef' queuedGenerations (\case [] -> ([], Nothing); item : rest -> (rest, item))
+                            etag <- atomicModifyIORef' queuedGenerations (\case [] -> ([], Nothing); item : rest -> (rest <> [item], item))
                             pure (Deny etag "acquired advisory evidence")
                         }
                 swept =
@@ -534,8 +547,7 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
             rec' <- if preview then recordingPortsUnder previewingReport generation else recordingPorts generation
             counters <- newSweepState
             writeIORef (stIssued counters) 1
-            ctx <- evalContext
-            halt <- sweepPackage testPacing{swpDeletionCap = 3} (recPorts rec') counters swept ctx packageName (served versions)
+            halt <- stepUnder rec' testPacing{swpDeletionCap = 3} counters swept (served versions)
             halt `shouldBe` if preview then Nothing else Just (HaltDeletionCap 3 3 (Just (DbEtag "threshold")))
             readIORef (stIssued counters) `shouldReturn` if preview then 4 else 3
             info <- recInfo rec'
@@ -565,8 +577,9 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
         rules <- prepare deps (map atDefaultPrecedence configured)
         rec' <- recordingPorts generation
         let swept = (mount store rules){smRuleDeps = deps, smConfigured = configured}
-        runStep rec' testPacing{swpDeletionCap = 1} swept (served versions)
-            `shouldReturn` Just (HaltDeletionCap 1 1 Nothing)
+        -- The cap admits both, so the recheck rather than the cap is what withholds the stale one.
+        runStep rec' testPacing{swpDeletionCap = 2} swept (served versions)
+            `shouldReturn` Nothing
         held store `shouldReturn` [version "1.0.0"]
         info <- recInfo rec'
         let deletions = filter (T.isInfixOf "blocked by") info
