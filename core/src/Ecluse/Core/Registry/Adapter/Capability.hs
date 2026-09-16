@@ -67,8 +67,7 @@ data AdapterMetadata = AdapterMetadata
         OriginFor posture ->
         MetadataReads posture
     {- ^ Bind one origin's metadata reads to their observers, carrying its posture. The caller
-    settles the caching policy with 'Ecluse.Core.Server.Metadata.publicMetadataClient' or its
-    private counterpart, and the posture decides which of the two will typecheck.
+    settles the caching policy with the builders in "Ecluse.Core.Server.Metadata".
     -}
     , metadataAssemble :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
     -- ^ Select exact admitted entries from the supplied snapshots before rendering their wire shape.
