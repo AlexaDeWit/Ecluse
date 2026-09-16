@@ -113,7 +113,9 @@ mountsOf mounts =
 
 readyLabel, awaitingLabel :: Text
 readyLabel = "ready"
-awaitingLabel = "awaiting startup readiness"
+-- Only a mount that denies on the advisory database waits, so the label names what is missing and
+-- which role publishes it rather than reporting a generic startup delay.
+awaitingLabel = "awaiting the advisory database that ecluse pilot publishes"
 
 -- A probe body carrying the verdict alone, for a state no mount detail explains.
 statusOnly :: Status -> Text -> Response

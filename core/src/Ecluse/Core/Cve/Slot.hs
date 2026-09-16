@@ -44,17 +44,12 @@ data AdvisorySource = AdvisorySource
     }
     deriving stock (Eq, Show)
 
-{- | The slot: the currently-active generation, or nothing before the first sync, beside the
-monotonic time the slot itself was created.
--}
-data CveSlot = CveSlot
-    { slotCell :: TVar (Maybe Generation)
-    , slotCreatedAt :: Double
-    }
+-- | The slot: the currently-active generation, or nothing before the first sync.
+newtype CveSlot = CveSlot {slotCell :: TVar (Maybe Generation)}
 
 -- | A fresh, empty slot: readers see 'Nothing' until the first 'swapIn'.
 newCveSlot :: IO CveSlot
-newCveSlot = CveSlot <$> newTVarIO Nothing <*> getMonotonicTime
+newCveSlot = CveSlot <$> newTVarIO Nothing
 
 -- | Borrow a lookup and its own ETag together until the action returns or is cancelled.
 withSlotGeneration :: CveSlot -> (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
@@ -92,12 +87,11 @@ observeAdvisoryPublication slot etag pushedAt = atomically $ do
         when (genEtag g == etag && pushedAt > asPushedAt (genSource g)) $
             writeTVar (slotCell slot) (Just g{genSource = (genSource g){asPushedAt = pushedAt}})
 
-{- | When the serving generation went live, or when the slot was created if no swap has landed.
-Only 'swapIn' moves it, so it measures what the slot serves, not the liveness of what fills it.
+{- | When the serving generation went live, or 'Nothing' while no swap has landed. Only 'swapIn'
+moves it, so it measures what the slot serves, not the liveness of what fills it.
 -}
-generationInstalledAt :: CveSlot -> IO Double
-generationInstalledAt slot =
-    maybe (slotCreatedAt slot) genInstalledAt <$> readTVarIO (slotCell slot)
+generationInstalledAt :: CveSlot -> IO (Maybe Double)
+generationInstalledAt slot = fmap genInstalledAt <$> readTVarIO (slotCell slot)
 
 {- | Install a newly verified generation, drain the displaced one's readers, then close it.
 The slot owns @newDb@ from entry, so no caller cleanup may close it.

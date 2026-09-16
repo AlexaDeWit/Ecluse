@@ -39,7 +39,7 @@ import Ecluse.Composition.Executable (
  )
 import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl), StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, staticEnvVars, withObservablePrivate)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noAdvisoryStoreDoc, noCeiling, overrideEnv, staticEnvVars, withObservablePrivate)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
@@ -373,8 +373,10 @@ planUnder ::
     StoreBuilds ->
     IO (Either [BootError] ExecutablePlan)
 planUnder envVars role resolveAdapter buildQueue buildCredentials buildStore = do
-    config <- expectConfig envVars Nothing
-    bootPlan <- expectPlanFor role envVars Nothing config noCeiling
+    -- The shipped advisory store is erased here, so only a case that declares one plans a sync.
+    -- The environment layer outranks the document, so a case that declares one still gets it.
+    config <- expectConfig envVars (Just noAdvisoryStoreDoc)
+    bootPlan <- expectPlanFor role envVars (Just noAdvisoryStoreDoc) config noCeiling
     logEnv <- newTestLogEnv
     planExecutable logEnv passthroughTracingPort resolveAdapter buildQueue buildCredentials buildStore bootPlan
 

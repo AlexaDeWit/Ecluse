@@ -295,9 +295,10 @@ proxyEnv hostPort queueUrl =
       ("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", pypiUpstreamUrl)
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
     , ("ECLUSE_QUEUE__URL", queueUrl)
-    , -- The production endpoint override (AWS-SDK-standard), aimed at the ministack
-      -- alias. The dummy keys sign the request the emulator does not validate.
+    , -- The production endpoint overrides (AWS-SDK-standard), aimed at the ministack alias. The
+      -- generic one keeps the shipped advisories.url default inside the test network.
       ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")
+    , ("AWS_ENDPOINT_URL", "http://ministack:4566")
     , ("AWS_REGION", "us-east-1")
     , ("AWS_ACCESS_KEY_ID", "test")
     , ("AWS_SECRET_ACCESS_KEY", "test")

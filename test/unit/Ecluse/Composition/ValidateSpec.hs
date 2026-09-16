@@ -9,6 +9,7 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (
     BootError (
+        AdvisoryDenyWithoutStore,
         DredgerChunkPauseBeneathFloor,
         FirstPartyMissing,
         FirstPartyWithoutPrivateUpstream,
@@ -28,6 +29,7 @@ import Ecluse.Composition.Support (
     codeArtifactEnvVars,
     codeArtifactMirrorUrl,
     expectConfig,
+    noAdvisoryStoreDoc,
     noMaintenanceBackend,
     overrideEnv,
     staticEnvVars,
@@ -60,8 +62,32 @@ spec :: Spec
 spec = do
     clearedSpec
     refusalSpec
+    advisoryStoreSpec
     firstPartyAuthoritySpec
     privatePublicationSpec
+
+{- An advisory deny cannot decide without a database, so the pairing is a refusal in every role
+that evaluates rules, whatever the rule's own onUnavailable setting says. -}
+advisoryStoreSpec :: Spec
+advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store" $ do
+    forM_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role ->
+        it ("refuses under " <> show role) $
+            refusalsUnder role (denyingOn "DenyIfCve" (withObservablePrivate codeArtifactEnvVars))
+                >>= (`shouldSatisfy` elem (AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| [])))
+
+    it "names the EPSS deny on its own terms" $
+        refusalsUnder MirrorWriter (denyingOn "DenyIfEpss" staticEnvVars)
+            `shouldReturn` [AdvisoryDenyWithoutStore Npm ("DenyIfEpss" :| [])]
+
+    it "refuses a deny that fails open, because skip still cannot decide without a database" $
+        refusalsUnder MirrorWriter (denyingWith "DenyIfCve" "skip" staticEnvVars)
+            `shouldReturn` [AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| [])]
+
+    it "clears the shipped policy, whose only advisory rule abstains without a database" $
+        refusalsUnder MirrorWriter staticEnvVars `shouldReturn` []
+
+    it "clears an advisory deny once a store is configured" $
+        refusalsFor MirrorWriter (denyingOn "DenyIfCve" staticEnvVars) `shouldReturn` []
 
 privatePublicationSpec :: Spec
 privatePublicationSpec = describe "vetBoot private upstream and publication target collision" $ do
@@ -249,6 +275,21 @@ expectVetted role envVars = do
 
 refusalsFor :: RegistryRole -> [(String, String)] -> IO [BootError]
 refusalsFor role envVars = fromLeft [] . vetted role <$> expectConfig envVars Nothing
+
+-- | 'refusalsFor' with the shipped advisory store erased, which only a document layer can do.
+refusalsUnder :: RegistryRole -> [(String, String)] -> IO [BootError]
+refusalsUnder role envVars = fromLeft [] . vetted role <$> expectConfig envVars (Just noAdvisoryStoreDoc)
+
+-- | Add the named advisory deny to the shared policy, failing closed as its own default does.
+denyingOn :: String -> [(String, String)] -> [(String, String)]
+denyingOn ruleType = denyingWith ruleType "deny"
+
+-- | 'denyingOn' under a chosen @onUnavailable@, at the threshold the rule's own type reads.
+denyingWith :: String -> String -> [(String, String)] -> [(String, String)]
+denyingWith ruleType alignment = overrideEnv "ECLUSE_RULES" rules
+  where
+    rules = "{\"gate\":{\"type\":\"" <> ruleType <> "\",\"onUnavailable\":\"" <> alignment <> "\"," <> threshold <> "}}"
+    threshold = if ruleType == "DenyIfEpss" then "\"minEpss\":0.5" else "\"minCvss\":8"
 
 vetted :: RegistryRole -> Config -> Either [BootError] ValidatedPlan
 vetted role config = snd (runVet role (vetBoot config))

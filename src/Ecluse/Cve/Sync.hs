@@ -10,6 +10,7 @@ role registers the observations once and runs one supervised sync task per handl
 -}
 module Ecluse.Cve.Sync (
     CveSyncHandle (..),
+    AdvisoryNeed (..),
     planCveSync,
     sweepStaleTemps,
     sweepStep,
@@ -38,6 +39,7 @@ import Ecluse.Config (
     LimitsSettings (limMaxAdvisoryDatabaseBytes),
     advisoryObjectKey,
     advisoryStoreBucket,
+    advisoryStoreUrlText,
  )
 import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotGeneration)
@@ -53,9 +55,11 @@ import Ecluse.Core.Rules.Freshness (
     assessAdvisoryAge,
  )
 import Ecluse.Core.Server.Readiness (
-    MountReadiness (MountAwaitingFirstSync, MountReady),
+    DatabaseRequirement,
+    MountReadiness,
     Readiness,
     mountReadiness,
+    mountStateFor,
  )
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
@@ -65,7 +69,7 @@ import Ecluse.Core.Supervision (
  )
 import Ecluse.Core.Text (renderIso8601Utc)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint)
-import Ecluse.Runtime.Cve.Sync (S3CveSource, SyncEnv (..), SyncHooks (SyncHooks, hookFirstSync, hookPushAge), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, newS3CveSource, runCveSync, s3CveFetchFor)
+import Ecluse.Runtime.Cve.Sync (S3CveSource, SyncEnv (..), SyncHooks (SyncHooks, hookFirstSync, hookPushAge), SyncSchedule (SyncSchedule, schedAbsentReport, schedBootBackoff, schedPollDelay), absentReportInterval, bootBackoffDelays, newS3CveSource, runCveSync, s3CveFetchFor)
 import Ecluse.Runtime.Log (logLine, moduleField)
 import Ecluse.Runtime.Telemetry (Telemetry)
 import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisorySyncMetricsPortOf, registerAdvisoryDatabaseAge, registerAdvisorySourceAge)
@@ -146,15 +150,15 @@ katipFaultReporter logEnv =
             WarningS
             "effectful rule evaluation faulted"
 
-{- | The readiness verdict over the sync plan: routable once at least one configured ecosystem
-completes its first sync, so one ecosystem's missing artifact leaves the others routable.
+{- | The readiness verdict over the sync plan. Only a mount whose rules deny on the database waits
+for its first sync, and one ecosystem's missing artifact leaves the others routable.
 -}
 cveSyncReadiness :: Map.Map Ecosystem CveSyncHandle -> IO Readiness
 cveSyncReadiness plan = mountReadiness <$> traverse mountStateOf plan
 
--- One mount's advisory state, read off the one-way flag its own sync task flips.
+-- One mount's advisory state, from what its rules need and the one-way flag its sync task flips.
 mountStateOf :: CveSyncHandle -> IO MountReadiness
-mountStateOf = fmap (bool MountAwaitingFirstSync MountReady) . readTVarIO . csReady
+mountStateOf handle = mountStateFor (csDatabase handle) <$> readTVarIO (csReady handle)
 
 {- | The sync tasks' timing: the shipped boot burst over the configured poll interval. The microsecond
 conversion cannot wrap: the config decoder bounds the interval to @[1, maxBound div 1_000_000]@ seconds.
@@ -164,6 +168,7 @@ cveSyncScheduleFor env =
     SyncSchedule
         { schedBootBackoff = bootBackoffDelays
         , schedPollDelay = secondsToMicros (advPollInterval (cfgAdvisories env))
+        , schedAbsentReport = absentReportInterval
         }
 
 {- | One supervised sync task per configured ecosystem, each flipping its own one-way readiness
@@ -213,29 +218,40 @@ data CveSyncHandle = CveSyncHandle
     -- ^ The wall clock the push age is read on, injected so a suite can fix it.
     , csAgeAlarmed :: TVar Bool
     -- ^ Whether the half-maximum crossing has already been reported for the current push.
+    , csDatabase :: DatabaseRequirement
+    -- ^ Whether this mount's own rules deny on the database, which is what its readiness turns on.
+    }
+
+-- | What one vetted mount's rules ask of the advisory stack, read off its own policy at boot.
+data AdvisoryNeed = AdvisoryNeed
+    { anEcosystem :: Ecosystem
+    , anMaxAge :: MaxAdvisoryAge
+    , anEpss :: EpssRequirement
+    , anDatabase :: DatabaseRequirement
     }
 
 {- | Build the advisory-sync plan, one 'CveSyncHandle' per vetted mount ecosystem, or nothing with
 no store. A mount the build does not ship awaits an artifact that never comes, so it stays unready.
 -}
-planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> [(Ecosystem, MaxAdvisoryAge, EpssRequirement)] -> IO (Map.Map Ecosystem CveSyncHandle)
-planCveSync logEnv s3Endpoint appCfg limits = case advUrl (cfgAdvisories appCfg) of
+planCveSync :: LogEnv -> Maybe AwsEndpoint -> AppConfig -> [AdvisoryNeed] -> IO (Map.Map Ecosystem CveSyncHandle)
+planCveSync logEnv s3Endpoint appCfg needs = case advUrl (cfgAdvisories appCfg) of
     Nothing -> pure Map.empty
     Just store -> do
         let dataDir = advDataDir (cfgAdvisories appCfg)
         createDirectoryIfMissing True dataDir
         sweepStaleTemps logEnv dataDir
         cveSource <- newS3CveSource s3Endpoint
-        Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource store) limits
+        Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource store) needs
 
 -- 'cveSource' captures the S3 environment once, so every ecosystem's transport shares one
 -- credential discovery. The store addresses the remote object, the local copy its bare file name.
-cveSyncHandleFor :: AppConfig -> S3CveSource -> AdvisoryStoreUrl -> (Ecosystem, MaxAdvisoryAge, EpssRequirement) -> IO (Ecosystem, CveSyncHandle)
-cveSyncHandleFor appCfg cveSource store (eco, maxAge, epssRequirement) = do
+cveSyncHandleFor :: AppConfig -> S3CveSource -> AdvisoryStoreUrl -> AdvisoryNeed -> IO (Ecosystem, CveSyncHandle)
+cveSyncHandleFor appCfg cveSource store need = do
     slot <- newCveSlot
     ready <- newTVarIO False
     alarmed <- newTVarIO False
-    let fileName = osvDbFileName (ecosystemName eco)
+    let eco = anEcosystem need
+        fileName = osvDbFileName (ecosystemName eco)
         maxBytes = limMaxAdvisoryDatabaseBytes (cfgLimits appCfg)
         syncEnv =
             SyncEnv
@@ -246,18 +262,20 @@ cveSyncHandleFor appCfg cveSource store (eco, maxAge, epssRequirement) = do
                         (advisoryObjectKey store fileName)
                         maxBytes
                 , syncEcosystem = eco
-                , syncEpssRequirement = epssRequirement
+                , syncEpssRequirement = anEpss need
                 , syncDbPath = advDataDir (cfgAdvisories appCfg) </> fileName
                 , syncSlot = slot
+                , syncStoreRef = advisoryStoreUrlText store
                 }
     pure
         ( eco
         , CveSyncHandle
             { csReady = ready
             , csEnv = syncEnv
-            , csMaxAge = maxAge
+            , csMaxAge = anMaxAge need
             , csClock = getCurrentTime
             , csAgeAlarmed = alarmed
+            , csDatabase = anDatabase need
             }
         )
 

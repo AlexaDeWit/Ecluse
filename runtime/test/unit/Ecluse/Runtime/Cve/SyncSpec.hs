@@ -85,8 +85,13 @@ withSyncEnv use =
                     , syncEpssRequirement = EpssOptional
                     , syncDbPath = dir </> osvDbFileName "npm"
                     , syncSlot = slot
+                    , syncStoreRef = testStoreRef
                     }
         use dir slot envWith
+
+-- | The store every case here reads from, which the unloaded-database report names back.
+testStoreRef :: Text
+testStoreRef = "s3://test-advisories"
 
 transportDown :: OsvDbFetchFault
 transportDown = OsvDbTransport (transportFault TransportUnreachable "transport down")
@@ -95,15 +100,22 @@ transportDown = OsvDbTransport (transportFault TransportUnreachable "transport d
 publishedAt :: UTCTime
 publishedAt = UTCTime (fromGregorian 2026 9 1) 0
 
+-- Run a sync task against a capturing scribe until 'settle' returns, and hand back its whole log.
+captureSyncLog :: SyncEnv -> SyncSchedule -> SyncHooks -> IO () -> IO Text
+captureSyncLog env schedule hooks settle = captureStdout $ do
+    logEnv <- jsonLogEnv
+    withAsync (runKatipContextT logEnv () mempty (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort env schedule hooks)) (const settle)
+    void (closeScribes logEnv)
+
 -- Run one boot attempt against a capturing scribe and hand back everything it logged.
 captureSwapLog :: SyncEnv -> IO Text
 captureSwapLog env = do
     (swaps, notify) <- newSwapCounter
-    captureStdout $ do
-        logEnv <- jsonLogEnv
-        withAsync (runKatipContextT logEnv () mempty (runUnobserved env oneAttempt notify)) $ \_ ->
-            awaitCount "provenance swap" swaps 1
-        void (closeScribes logEnv)
+    captureSyncLog env oneAttempt (notifyOnly notify) (awaitCount "provenance swap" swaps 1)
+
+-- How many unloaded-database reports a captured log holds.
+unloadedReports :: Text -> Int
+unloadedReports = T.count "no advisory artifact has ever been published"
 
 installedSource :: CveSlot -> IO AdvisorySource
 installedSource slot =
@@ -147,9 +159,19 @@ runUnobserved env schedule notify =
 notifyOnly :: IO () -> SyncHooks
 notifyOnly notify = SyncHooks{hookFirstSync = notify, hookPushAge = pass}
 
+{- A schedule whose unloaded-database report outlasts the test, so only the case that asks for
+that report ever sees one. -}
+scheduleOf :: [Int] -> Int -> SyncSchedule
+scheduleOf backoff pollDelay =
+    SyncSchedule{schedBootBackoff = backoff, schedPollDelay = pollDelay, schedAbsentReport = 600_000_000}
+
 -- The first poll interval outlasts every test, leaving only the immediate boot attempt.
 oneAttempt :: SyncSchedule
-oneAttempt = SyncSchedule{schedBootBackoff = [], schedPollDelay = 600_000_000}
+oneAttempt = scheduleOf [] 600_000_000
+
+-- A schedule whose unloaded-database report is due at every poll, so a short case sees repeats.
+reportingEveryPoll :: SyncSchedule
+reportingEveryPoll = SyncSchedule{schedBootBackoff = [], schedPollDelay = 10_000, schedAbsentReport = 10_000}
 
 data Observed = Observed
     { obsSpans :: [(Ecosystem, AdvisorySyncResult)]
@@ -611,7 +633,7 @@ spec = do
                             , fetchDownload = \dest -> readIORef current >>= (`fetchDownload` dest)
                             }
                     env = (envWith fetch){syncEpssRequirement = EpssRequired}
-                    schedule = SyncSchedule [] 20_000
+                    schedule = scheduleOf [] 20_000
                 withAsync (runQuietKatip (runCveSync metrics tracing env schedule (notifyOnly onSwap))) $ \_ -> do
                     waitFor "the rejected attempt to finish" (not . null <$> readSpans)
                     take 1 <$> readAttempts `shouldReturn` [(Npm, AdvisoryRefused)]
@@ -646,7 +668,7 @@ spec = do
                                         else Right (Just (FetchedObject (DbEtag "e1") Nothing))
                             , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (FetchedObject (DbEtag "e1") Nothing)
                             }
-                    schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 5_000_000}
+                    schedule = scheduleOf (replicate 5 10_000) 5_000_000
                 withAsync (runQuietKatip (runUnobserved (envWith flaky) schedule onSwap)) $ \_ -> do
                     awaitCount "the first swap to publish" swaps 1
                     probesFor slot "pkg-a" `shouldReturn` Just True
@@ -666,7 +688,7 @@ spec = do
                                     True -> Right (Just (FetchedObject (DbEtag "e1") Nothing))
                             , fetchDownload = \dest -> mkMinimalValidDb dest "pkg-a" $> Right (FetchedObject (DbEtag "e1") Nothing)
                             }
-                    schedule = SyncSchedule{schedBootBackoff = [5_000, 5_000], schedPollDelay = 25_000}
+                    schedule = scheduleOf [5_000, 5_000] 25_000
                     burstAttempts = length (schedBootBackoff schedule) + 1
                 withAsync (runQuietKatip (runUnobserved (envWith lateFetch) schedule onSwap)) $ \_ -> do
                     -- Each attempt reads the flag in one transaction with the counter, so
@@ -688,13 +710,48 @@ spec = do
                                 mkDbWithWrongEpoch dest
                                 pure (Right (FetchedObject (DbEtag "bad") Nothing))
                             }
-                    schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 20_000}
+                    schedule = scheduleOf (replicate 5 10_000) 20_000
                 withAsync (runQuietKatip (runUnobserved (envWith fetch) schedule pass)) $ \_ -> do
                     threadDelay 200_000
                     -- Identical bytes cannot verify differently. The remembered ETag prevents
                     -- another download until a re-publish.
                     readIORef downloads `shouldReturn` 1
                     probesFor slot "pkg" `shouldReturn` Nothing
+
+        it "names Pilot and the store once the boot budget ends with nothing ever published" $
+            withSyncEnv $ \_ _ envWith -> do
+                (steps, onStep) <- newSwapCounter
+                logged <-
+                    captureSyncLog
+                        (envWith (headOnlyFetch (Right Nothing)))
+                        (scheduleOf [] 20_000)
+                        SyncHooks{hookFirstSync = pass, hookPushAge = onStep}
+                        (awaitCount "the poll that follows the boot burst" steps 2)
+                unloadedReports logged `shouldSatisfy` (>= 1)
+                logged `shouldSatisfy` T.isInfixOf testStoreRef
+                logged `shouldSatisfy` T.isInfixOf "ecluse pilot"
+
+        it "repeats that report at its own interval while nothing is published" $
+            withSyncEnv $ \_ _ envWith -> do
+                (steps, onStep) <- newSwapCounter
+                logged <-
+                    captureSyncLog
+                        (envWith (headOnlyFetch (Right Nothing)))
+                        reportingEveryPoll
+                        SyncHooks{hookFirstSync = pass, hookPushAge = onStep}
+                        (awaitCount "three polls past the boot burst" steps 4)
+                unloadedReports logged `shouldSatisfy` (>= 2)
+
+        it "writes no such report once an artifact has loaded" $
+            withSyncEnv $ \_ _ envWith -> do
+                (swaps, onSwap) <- newSwapCounter
+                logged <-
+                    captureSyncLog
+                        (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
+                        reportingEveryPoll
+                        (notifyOnly onSwap)
+                        (awaitCount "the first swap to publish" swaps 1 >> threadDelay 100_000)
+                unloadedReports logged `shouldBe` 0
 
     describe "advisory sync observation" $ do
         it "observes a swapped-in artifact as one attempt" $
@@ -723,7 +780,7 @@ spec = do
             withSyncEnv $ \_ _ envWith -> do
                 -- The burst has no last-seen ETag. The first poll can report unchanged,
                 -- so only the first two attempts matter here.
-                let polling = SyncSchedule{schedBootBackoff = [], schedPollDelay = 20_000}
+                let polling = scheduleOf [] 20_000
                 observed <- observeAttempts 2 polling (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a")))
                 truncateObserved 2 observed `shouldObserve` [(Npm, AdvisorySwapped), (Npm, AdvisoryUnchanged)]
 
@@ -738,7 +795,7 @@ spec = do
                                 count <- atomicModifyIORef' heads (\n -> (n + 1, n))
                                 pure (Right (Just (FetchedObject (DbEtag "e1") (Just (if count == 0 then publishedAt else newer)))))
                             }
-                    schedule = SyncSchedule{schedBootBackoff = [], schedPollDelay = 20_000}
+                    schedule = scheduleOf [] 20_000
                 (metrics, readAttempts, _) <- recordingAdvisorySyncMetricsPort
                 withAsync (runQuietKatip (runCveSync metrics passthroughAdvisorySyncTracingPort (envWith fetch) schedule (notifyOnly onSwap))) $ \_ -> do
                     waitFor "republication observation" ((>= 2) . length <$> readAttempts)

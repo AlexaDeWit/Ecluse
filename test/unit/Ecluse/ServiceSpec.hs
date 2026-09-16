@@ -13,9 +13,11 @@ import Ecluse.Boot (BootEnv (BootEnv))
 import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.Executable (ExecutablePlan (epRoleWiring), MirrorWiring (mwCveSync), RoleWiring (MirrorPipelineWiring), planExecutable)
 import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
-import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, staticEnvVars)
+import Ecluse.Composition.Support (expectConfig, expectPlanFor, noAdvisoryStoreDoc, noCeiling, staticEnvVars)
 import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
+import Ecluse.Core.Cve (DbEtag (DbEtag))
+import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (noMirrorQueue)
 import Ecluse.Core.Telemetry.Metrics (Label (LEcosystem), metricAttributes)
@@ -27,8 +29,11 @@ import Ecluse.Core.Worker (
     workerHeartbeatStaleAfter,
  )
 import Ecluse.Core.Worker.Liveness (newWorkerHeartbeatWithClock)
+import Ecluse.Cve.Sync (CveSyncHandle (csEnv))
+import Ecluse.Runtime.Cve.Sync (SyncEnv (syncSlot))
 import Ecluse.Runtime.Server (MountBinding (bindingPrefix))
 import Ecluse.Service (mountBindingFor, withServiceRuntime, workerLiveness)
+import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
@@ -94,8 +99,8 @@ advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
     for_ [ServeAndMirror, ServeOnly, MirrorOnly] $ \role ->
         it ("emits configured ecosystem ages for " <> show role) $
             withRoleTelemetry $ \logEnv telemetry meterEnv -> do
-                config <- expectConfig staticEnvVars Nothing
-                bootPlan <- expectPlanFor (BootMirrorPipeline role) staticEnvVars Nothing config noCeiling
+                config <- expectConfig staticEnvVars (Just noAdvisoryStoreDoc)
+                bootPlan <- expectPlanFor (BootMirrorPipeline role) staticEnvVars (Just noAdvisoryStoreDoc) config noCeiling
                 planned <-
                     planExecutable
                         logEnv
@@ -111,6 +116,9 @@ advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
                 case planned of
                     Right plan | MirrorPipelineWiring mirror <- epRoleWiring plan -> do
                         handles <- newAdvisoryHandles [Npm, PyPI]
+                        -- The gauge reports nothing for a slot that never loaded an artifact, so
+                        -- each handle serves one before the observation reads it.
+                        for_ handles $ \(_, handle) -> swapIn (syncSlot (csEnv handle)) (DbEtag "installed") Nothing (fakeCveDb [])
                         let boot = BootEnv config logEnv telemetry bootPlan
                         withServiceRuntime boot plan mirror{mwCveSync = Map.fromList handles} $ \_ -> do
                             points <- advisoryAgePoints meterEnv

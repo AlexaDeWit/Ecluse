@@ -32,9 +32,11 @@ import Ecluse.E2E.Harness.Types (GlobalDataPlane (gdpMiniPort))
 import Ecluse.Test.Osv (CorpusVersion)
 import Ecluse.Test.Poll (pollUntil)
 
--- | The bucket Pilot uploads compiled advisory artifacts to, and the proxy and Dredger read.
+{- | The bucket Pilot uploads compiled advisory artifacts to, and the proxy and Dredger read. It
+is the shipped @advisories.url@ default, so the tier exercises the configuration as shipped.
+-}
 advisoryBucket :: Text
-advisoryBucket = "ecluse-e2e-advisories"
+advisoryBucket = "ecluse-advisories"
 
 {- | The advisory-store environment every role shares. The poll interval is short because one
 scenario observes two generations, where a deployment waits out the shipped minute.

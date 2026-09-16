@@ -53,6 +53,10 @@ runEnv =
     , ("AWS_ACCESS_KEY_ID", "test")
     , ("AWS_SECRET_ACCESS_KEY", "test")
     , ("ECLUSE_SERVER__PORT", "0")
+    , -- A boot here prepares the shipped advisory store, so the data directory moves off
+      -- /var/lib and the endpoint override keeps its first poll on a closed local port.
+      ("ECLUSE_ADVISORIES__DATA_DIR", "/tmp/ecluse-bootspec-advisories")
+    , ("AWS_ENDPOINT_URL", "http://127.0.0.1:1")
     ]
 
 codeArtifactRepository :: String
@@ -127,17 +131,22 @@ spec = do
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Nothing
 
-        it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $ do
-            unsetEnv "AWS_REGION"
-            unsetEnv "ECLUSE_QUEUE__URL"
-            setEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true"
-            setEnv "ECLUSE_SERVER__PUBLIC_URL" "https://registry.example.test"
-            setEnv "ECLUSE_SERVER__PORT" "0"
-            outcome <- timeout 100000 (withArgs ["proxy"] run)
-            unsetEnv "ECLUSE_MOUNTS__NPM__ENABLED"
-            unsetEnv "ECLUSE_SERVER__PUBLIC_URL"
-            unsetEnv "ECLUSE_SERVER__PORT"
-            outcome `shouldBe` Nothing
+        it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $
+            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
+                -- Erasing advisories.url is what leaves the shipped advisory store behind, and
+                -- only a document can do it. That is what makes this gate need no AWS at all.
+                let path = dir </> "config.yaml"
+                    keys = ["ECLUSE_CONFIG", "ECLUSE_MOUNTS__NPM__ENABLED", "ECLUSE_SERVER__PUBLIC_URL", "ECLUSE_SERVER__PORT"]
+                writeFileText path "advisories:\n  url: null\n"
+                unsetEnv "AWS_REGION"
+                unsetEnv "ECLUSE_QUEUE__URL"
+                setEnv "ECLUSE_CONFIG" path
+                setEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true"
+                setEnv "ECLUSE_SERVER__PUBLIC_URL" "https://registry.example.test"
+                setEnv "ECLUSE_SERVER__PORT" "0"
+                outcome <- timeout 100000 (withArgs ["proxy"] run)
+                traverse_ unsetEnv keys
+                outcome `shouldBe` Nothing
 
         it "boots with a config document at the ECLUSE_CONFIG override path and serves" $ do
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do

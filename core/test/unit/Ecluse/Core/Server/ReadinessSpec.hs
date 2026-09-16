@@ -9,16 +9,29 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Server.Readiness (
+    DatabaseRequirement (DatabaseOptional, DatabaseRequired),
     MountReadiness (MountAwaitingFirstSync, MountReady),
     Readiness (AwaitingMounts, Latched, Routable),
     allMountsReady,
     alwaysReady,
     mountReadiness,
+    mountStateFor,
     routable,
  )
 
 spec :: Spec
 spec = do
+    describe "mountStateFor -- one mount's state, decided from its own rules" $ do
+        it "waits for the first sync where the mount's rules deny on the database" $ do
+            mountStateFor DatabaseRequired False `shouldBe` MountAwaitingFirstSync
+            mountStateFor DatabaseRequired True `shouldBe` MountReady
+
+        it "is ready before any artifact loads where no rule denies on the database" $ do
+            -- The fast lane abstains without a database, so the mount decides everything it
+            -- can decide and never holds the listener out of rotation for Pilot.
+            mountStateFor DatabaseOptional False `shouldBe` MountReady
+            mountStateFor DatabaseOptional True `shouldBe` MountReady
+
     describe "mountReadiness -- the verdict decided from the mounts" $ do
         it "is routable with no configured mount, because nothing gates routing" $
             mountReadiness Map.empty `shouldBe` Routable Map.empty

@@ -19,6 +19,7 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition.BootError (
     BootError (
+        AdvisoryDenyWithoutStore,
         DredgerChunkPauseBeneathFloor,
         FirstPartyMissing,
         FirstPartyWithoutPrivateUpstream,
@@ -37,7 +38,8 @@ import Ecluse.Composition.Maintenance (ClearedBackend, vetPreviewCaches, vetStor
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (Severity (Ignore, Refuse), Vet, rule)
 import Ecluse.Config (
-    AppConfig (cfgDredger, cfgMounts, cfgServer),
+    AdvisoriesSettings (advUrl),
+    AppConfig (cfgAdvisories, cfgDredger, cfgMounts, cfgServer),
     Config (configApp, configMounts),
     DredgerSettings (drgChunkPause),
     FirstParty,
@@ -48,6 +50,7 @@ import Ecluse.Config (
     StoreBackend,
     StoreTag,
     Target (tgtTag),
+    mountAdvisoryDenials,
     mountRegistries,
     regMirrorTarget,
  )
@@ -103,6 +106,7 @@ vetBoot config =
         <*> vetStoreBackends adapterFor (configMounts config)
         <*> vetPreviewCaches adapterFor (cfgMounts app) (configMounts config)
         <* vetSweepPacing app
+        <* vetAdvisoryStore config
   where
     app = configApp config
 
@@ -128,6 +132,19 @@ vetSweepPacing app = rule severity beneathFloor (drgChunkPause (cfgDredger app))
         MirrorWriter -> Ignore
 
     beneathFloor configured = configured <$ guard (configured < minimumChunkPause)
+
+{- An advisory deny cannot decide without a database, whatever its onUnavailable says, so every
+role that evaluates rules refuses the pairing rather than serving a mount that denies everything. -}
+vetAdvisoryStore :: Config -> Vet ()
+vetAdvisoryStore config =
+    traverse_ (rule (const (Refuse (uncurry AdvisoryDenyWithoutStore))) denyingWithoutStore) mounts
+  where
+    stored = isJust (advUrl (cfgAdvisories (configApp config)))
+    mounts = Map.toAscList (configMounts config)
+
+    denyingWithoutStore (eco, mount)
+        | stored = Nothing
+        | otherwise = (,) eco <$> nonEmpty (mountAdvisoryDenials mount)
 
 vetMounts :: Config -> Vet [VettedMount]
 vetMounts config = catMaybes <$> traverse vetMount (activeMounts config)

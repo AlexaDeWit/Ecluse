@@ -436,18 +436,22 @@ recordAdvisorySyncDuration m eco result seconds =
 {- | Attach one ecosystem's advisory-database age to @ecluse.advisory.database.age.seconds@. The
 SDK calls back at each collection, so a sync task that dies cannot freeze or reset the age.
 -}
-registerAdvisoryDatabaseAge :: Metrics -> Ecosystem -> IO Double -> IO ()
+registerAdvisoryDatabaseAge :: Metrics -> Ecosystem -> IO (Maybe Double) -> IO ()
 registerAdvisoryDatabaseAge m eco installedAt =
     void (observableGaugeRegisterCallback (mAdvisoryDatabaseAgeSeconds m) (reportAdvisoryDatabaseAge eco installedAt))
 
-{- | What one collection reports: whole seconds from the install stamp to now. The clamp holds the
-age non-negative even for a stamp from the future.
+{- | What one collection reports: whole seconds from the install stamp to now. With no generation
+installed it observes nothing, so a never-filled slot never reads as a fresh database. The clamp
+holds the age non-negative even for a stamp from the future.
 -}
-reportAdvisoryDatabaseAge :: Ecosystem -> IO Double -> ObservableResult Int64 -> IO ()
-reportAdvisoryDatabaseAge eco installedAt result = do
-    stamp <- installedAt
-    now <- getMonotonicTime
-    observe result (max 0 (floor (now - stamp))) (metricAttributes [LEcosystem eco])
+reportAdvisoryDatabaseAge :: Ecosystem -> IO (Maybe Double) -> ObservableResult Int64 -> IO ()
+reportAdvisoryDatabaseAge eco installedAt result =
+    installedAt
+        >>= traverse_
+            ( \stamp -> do
+                now <- getMonotonicTime
+                observe result (max 0 (floor (now - stamp))) (metricAttributes [LEcosystem eco])
+            )
 
 {- | Attach one ecosystem's advisory-source age to @ecluse.advisory.source.age.seconds@: the age
 the CVE-deny path expires on, where 'registerAdvisoryDatabaseAge' is an installation diagnostic.

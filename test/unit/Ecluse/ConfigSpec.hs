@@ -10,7 +10,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, noAdvisoryStoreDoc)
 import Ecluse.Config (
     AppConfig (cfgQueue),
     Config (configApp, configMounts),
@@ -23,6 +23,8 @@ import Ecluse.Config (
     advisoryAgeLines,
     defaultPolicy,
     loadConfig,
+    mountAdvisoryDenials,
+    mountDatabaseRequirement,
     mountEpssRequirement,
     mountPostureLines,
     renderConfigError,
@@ -32,6 +34,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), defaultDeliveryBudget)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
+import Ecluse.Core.Server.Readiness (DatabaseRequirement (DatabaseOptional, DatabaseRequired))
 
 -- | Configuration loading and operator diagnostics.
 spec :: Spec
@@ -153,6 +156,22 @@ spec = do
             cfg <- expectConfig (pubUrlEnv <> [("ECLUSE_RULES", "{\"remediation-fast-track\":{\"enabled\":false}}")]) (Just privateMountDoc)
             advisoryAgeLines cfg `shouldBe` []
 
+        it "reports nothing at all with the advisory store erased, because nothing syncs" $ do
+            cfg <- expectConfig (pubUrlEnv <> privateNpmEnv) (Just noAdvisoryStoreDoc)
+            advisoryAgeLines cfg `shouldBe` []
+
+    describe "the advisory database a mount's rules require" $ do
+        it "names the deny rules that cannot decide without one" $ do
+            cfg <- configFor "{\"rules\":{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false}}}}}"
+            Map.map mountAdvisoryDenials (configMounts cfg) `shouldBe` Map.fromList [(Npm, ["DenyIfEpss"]), (PyPI, [])]
+            Map.map mountDatabaseRequirement (configMounts cfg)
+                `shouldBe` Map.fromList [(Npm, DatabaseRequired), (PyPI, DatabaseOptional)]
+
+        it "leaves the shipped policy needing no database, because the fast lane only abstains" $ do
+            cfg <- configFor privateMountDoc
+            Map.map mountAdvisoryDenials (configMounts cfg) `shouldBe` Map.singleton Npm []
+            Map.map mountDatabaseRequirement (configMounts cfg) `shouldBe` Map.singleton Npm DatabaseOptional
+
     describe "mountEpssRequirement" $ do
         it "requires inherited EPSS rules only where the mount keeps them" $ do
             cfg <- configFor "{\"rules\":{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false}}}}}"
@@ -191,6 +210,10 @@ spec = do
 -- | The client-facing base URL every active-mount load needs (server.publicUrl).
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
+
+-- | The serve-only npm mount as environment keys, for a case that spends its document layer.
+privateNpmEnv :: [(String, String)]
+privateNpmEnv = [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://priv.example.test")]
 
 -- | Load a config document under the client-facing base URL every active mount needs.
 configFor :: ByteString -> IO Config

@@ -133,6 +133,12 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "ECLUSE_ADVISORIES__URL is set but no mount is declared"
         renderBootError PilotWithoutEcosystem
             `shouldSatisfy` infixed "ECLUSE_MOUNTS__<ECOSYSTEM>__"
+        renderBootError (AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| ["DenyIfEpss"]))
+            `shouldSatisfy` infixed "mount \"npm\" enables the advisory deny rules DenyIfCve, DenyIfEpss"
+        renderBootError (AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| []))
+            `shouldSatisfy` infixed "ECLUSE_ADVISORIES__URL (advisories.url) is unset"
+        renderBootError (AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| []))
+            `shouldSatisfy` infixed "run ecluse pilot to publish an artifact"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay

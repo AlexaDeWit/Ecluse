@@ -209,24 +209,18 @@ spec = describe "CveSlot" $ do
         swapIn slot (DbEtag "gen-b") Nothing (fakeDb "gen-b" closeLog)
         currentAdvisoryEtag slot `shouldReturn` Just (DbEtag "gen-b")
 
-    it "stamps its creation time, so the age gauge reads a real interval before the first swap" $ do
-        before <- getMonotonicTime
+    it "carries no stamp before the first swap, so the age gauge reports no age at all" $ do
         slot <- newCveSlot
-        after <- getMonotonicTime
-        stamp <- generationInstalledAt slot
-        stamp `shouldSatisfy` within before after
+        generationInstalledAt slot `shouldReturn` Nothing
 
-    it "restamps on the swap that installs a generation, and the new stamp is the install time" $ do
+    it "stamps on the swap that installs a generation, at the install time" $ do
         closeLog <- newIORef []
         slot <- newCveSlot
-        created <- generationInstalledAt slot
-        threadDelay 2_000
         before <- getMonotonicTime
         swapIn slot (DbEtag "gen-a") Nothing (fakeDb "gen-a" closeLog)
         after <- getMonotonicTime
         installed <- generationInstalledAt slot
-        installed `shouldSatisfy` within before after
-        installed `shouldSatisfy` (> created)
+        installed `shouldSatisfy` maybe False (within before after)
 
     it "leaves the stamp alone for a read, and for a poll that installs nothing" $ do
         closeLog <- newIORef []

@@ -23,7 +23,7 @@ import Ecluse.Composition.Executable (
     planExecutable,
  )
 import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, withObservablePrivate)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noAdvisoryStoreDoc, noCeiling, withObservablePrivate)
 import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootStorePreview, BootStorePruner))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvPort))
@@ -175,8 +175,8 @@ names runs, so the other one reports being reached. -}
 plannedPruner :: BootRole -> StoreBuilds -> IO PrunerWiring
 plannedPruner role builds =
     bracket newTestLogEnv (void . closeScribes) $ \logEnv -> do
-        config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
-        bootPlan <- expectPlanFor role (withObservablePrivate codeArtifactEnvVars) Nothing config noCeiling
+        config <- expectConfig (withObservablePrivate codeArtifactEnvVars) (Just noAdvisoryStoreDoc)
+        bootPlan <- expectPlanFor role (withObservablePrivate codeArtifactEnvVars) (Just noAdvisoryStoreDoc) config noCeiling
         planned <-
             planExecutable
                 logEnv
@@ -221,8 +221,8 @@ advisoryAgeSpec = describe "runDredger advisory database ages" $
 
 withDredgerAges :: (SdkMeterEnv -> [(Ecosystem, CveSyncHandle)] -> IO ()) -> IO ()
 withDredgerAges use = withRoleTelemetry $ \logEnv telemetry meterEnv -> do
-    config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
-    bootPlan <- expectPlanFor BootStorePruner codeArtifactEnvVars Nothing config noCeiling
+    config <- expectConfig (withObservablePrivate codeArtifactEnvVars) (Just noAdvisoryStoreDoc)
+    bootPlan <- expectPlanFor BootStorePruner codeArtifactEnvVars (Just noAdvisoryStoreDoc) config noCeiling
     store <- newFakeStore defaultFakeStoreConfig
     planned <-
         planExecutable

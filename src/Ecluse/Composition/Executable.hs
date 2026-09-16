@@ -67,7 +67,7 @@ import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPreviewCaches, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
  )
-import Ecluse.Config (AppConfig (cfgAdvisories), Mount (mountPolicy), MountConfig (mntFirstParty), StoreTag, mountAdvisoryAge, mountEpssRequirement)
+import Ecluse.Config (AppConfig (cfgAdvisories), Mount (mountPolicy), MountConfig (mntFirstParty), StoreTag, mountAdvisoryAge, mountDatabaseRequirement, mountEpssRequirement)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
@@ -82,7 +82,7 @@ import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule))
 import Ecluse.Core.Telemetry.Span (TracingPort)
-import Ecluse.Cve.Sync (CveSyncHandle, cveRuleDepsFor, katipFaultReporter, planCveSync)
+import Ecluse.Cve.Sync (AdvisoryNeed (AdvisoryNeed, anDatabase, anEcosystem, anEpss, anMaxAge), CveSyncHandle, cveRuleDepsFor, katipFaultReporter, planCveSync)
 import Ecluse.Pilot.Plan (ExportLoopPlan, exportLoopPlan)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
@@ -355,7 +355,12 @@ planAdvisorySync logEnv bootPlan =
     validated = bpValidated bootPlan
     settings = vpSettings validated
     requirements =
-        [ (vmEcosystem vetted, mountAdvisoryAge (cfgAdvisories settings) mount, mountEpssRequirement mount)
+        [ AdvisoryNeed
+            { anEcosystem = vmEcosystem vetted
+            , anMaxAge = mountAdvisoryAge (cfgAdvisories settings) mount
+            , anEpss = mountEpssRequirement mount
+            , anDatabase = mountDatabaseRequirement mount
+            }
         | vetted <- vpMounts validated
         , let mount = vmMount vetted
         ]
