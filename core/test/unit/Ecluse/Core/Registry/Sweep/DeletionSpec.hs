@@ -64,7 +64,7 @@ spec = describe "grouped deletion" $ do
         held mirror `shouldReturn` [version "2.0.0"]
         held cache `shouldReturn` [version "2.0.0"]
 
-    it "counts a cache-only version the cap held back under the private target" $ do
+    it "counts a cache version the allowance held back under the private target" $ do
         mirror <- seeded "mirror" ["1.0.0"]
         cache <- seeded "cache" ["1.0.0", "2.0.0"]
         mount <- grouped mirror cache
@@ -74,6 +74,22 @@ spec = describe "grouped deletion" $ do
         operations <- recTargetResults recorded
         operations `shouldSatisfy` elem (SweepPrivate, SweepGuardSkipped)
         operations `shouldSatisfy` notElem (SweepMirror, SweepGuardSkipped)
+        held cache `shouldReturn` [version "2.0.0"]
+
+    it "counts a cache version the per-batch recheck refuses under the private target" $ do
+        mirror <- seeded "mirror" ["1.0.0"]
+        cache <- seeded "cache" ["1.0.0", "2.0.0"]
+        mount <- grouped mirror cache
+        -- The backend hands the guard a version the allowance withheld, which is the batch the
+        -- recheck exists to refuse, so the cap charge and not the allowance holds it back.
+        let widened = mapDeletion (\send checks name _ -> send checks name (map version ["1.0.0", "2.0.0"])) (deletingStore (fakeMaintenance cache))
+        recorded <- recordingPorts Nothing
+        outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount{smStore = (smStore mount){ssPrivate = Just widened}}]
+        outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 Nothing)
+        operations <- recTargetResults recorded
+        length (filter (== (SweepPrivate, SweepGuardSkipped)) operations) `shouldBe` 2
+        operations `shouldSatisfy` notElem (SweepMirror, SweepGuardSkipped)
+        held mirror `shouldReturn` []
         held cache `shouldReturn` [version "2.0.0"]
 
     it "submits mirror work before cache work and rediscovers a failed cache after restart" $ do

@@ -396,9 +396,8 @@ withStoreUnder permitted limits answer action =
   where
     reply captured = let (status, body) = answer captured in (status, [], body)
 
-{- The store as the root wires it: a second client for the destructive leg, over a manager that
-never retries an uncertain call. That client marks its own requests, so a case reads which leg
-carried each call. -}
+{- The store as the root wires it: a second client for the destructive leg. That client marks its
+own requests, so a case reads which leg carried each call. -}
 withSplitOrigins ::
     (Captured -> (Status, LBS.ByteString)) ->
     (StoreMaintenance -> Stub -> IO a) ->
