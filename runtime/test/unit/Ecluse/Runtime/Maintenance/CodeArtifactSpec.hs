@@ -6,7 +6,6 @@
 module Ecluse.Runtime.Maintenance.CodeArtifactSpec (spec) where
 
 import Data.Text qualified as T
-import Data.Time (getCurrentTime)
 import Lens.Micro ((.~), (?~), (^.))
 import Test.Hspec
 
@@ -41,9 +40,8 @@ import Ecluse.Core.Registry.Maintenance (
     refusalCode,
     renderNamePrefix,
  )
-import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
-import Ecluse.Core.Registry.Sweep.Types (CycleHalt (HaltDeletionCap), SweepPacing (swpDeletionCap), SweepState (stIssued), newSweepState)
-import Ecluse.Core.Rules.Types (mkEvalContext)
+import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
+import Ecluse.Core.Registry.Sweep.Types (CycleHalt (HaltDeletionCap, HaltStoreFault), SweepMount (smStore), SweepPacing (swpDeletionCap), SweepState (stIssued), newSweepState)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepExamined, SweepKept))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact (
@@ -190,7 +188,6 @@ deleteCases store = describe "the handle's chunked delete" $ do
                             recorded <- newIORef []
                             rec' <- recordingPorts Nothing
                             counters <- newSweepState
-                            ctx <- mkEvalContext getCurrentTime (pure Nothing)
                             let tracked =
                                     handle
                                         { deleteVersions = \checks name selected -> do
@@ -199,16 +196,21 @@ deleteCases store = describe "the handle's chunked delete" $ do
                                             pure result
                                         }
                             -- The configured cap must exceed the default 100 to reach a second backend chunk.
-                            sweepPackage
-                                testPacing{swpDeletionCap = count}
-                                (recPorts rec')
-                                counters
-                                (testMount tracked [denyRule] [])
-                                ctx
-                                aPackage
-                                [StoredVersion v VersionServed Nothing | v <- versions]
-                                `shouldReturn` Just (HaltDeletionCap count count Nothing)
-                            readIORef (stIssued counters) `shouldReturn` count
+                            let swept = testMount tracked [denyRule] []
+                            halt <-
+                                sweepPackageGroup
+                                    testPacing{swpDeletionCap = count}
+                                    (recPorts rec')
+                                    counters
+                                    swept
+                                    aPackage
+                                    [(smStore swept, [StoredVersion v VersionServed Nothing | v <- versions])]
+                            {- The fault abandons the last chunk before its recheck, so the cap charges
+                            every version the backend was handed and none it never reached. -}
+                            readIORef (stIssued counters) `shouldReturn` (count - 1)
+                            halt `shouldSatisfy` \case
+                                Just (HaltStoreFault Npm _ detail) -> "cleanup remains incomplete" `T.isInfixOf` detail
+                                _ -> False
                             recResults rec'
                                 `shouldReturn` (replicate count SweepExamined <> replicate successful SweepDeleted <> replicate (count - successful) SweepKept)
                             readIORef recorded
@@ -229,15 +231,14 @@ deleteCases store = describe "the handle's chunked delete" $ do
             handle = (handleOver store plane){readStoreManifest = \_ -> pure (Right (sampleManifest aPackage versions))}
         rec' <- recordingPorts Nothing
         counters <- newSweepState
-        ctx <- mkEvalContext getCurrentTime (pure Nothing)
-        sweepPackage
+        let swept = testMount handle [denyRule] []
+        sweepPackageGroup
             testPacing{swpDeletionCap = 101}
             (recPorts rec')
             counters
-            (testMount handle [denyRule] [])
-            ctx
+            swept
             aPackage
-            [StoredVersion v VersionServed Nothing | v <- versions]
+            [(smStore swept, [StoredVersion v VersionServed Nothing | v <- versions])]
             `shouldReturn` Just (HaltDeletionCap 101 101 Nothing)
         map length <$> readIORef requests `shouldReturn` [100, 1]
         recResults rec' `shouldReturn` (replicate 101 SweepExamined <> replicate 100 SweepKept <> [SweepDeleted])

@@ -10,16 +10,15 @@ module Ecluse.Core.Server.Pipeline.OriginIntegrationSpec (spec) where
 import Data.Aeson (Value (String))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Ecluse.Composition (firstPartyName)
 import Ecluse.Config.Types (FirstParty (FirstPartyNpmScopes))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion, storedVersion), VersionPresence (VersionServed))
-import Ecluse.Core.Registry.Sweep.Package (sweepPackage)
-import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty), newSweepState)
+import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
+import Ecluse.Core.Registry.Sweep.Types (SweepMount (smFirstParty, smStore), newSweepState)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (Rule (DenyByIdentity), mkEvalContext)
+import Ecluse.Core.Rules.Types (Rule (DenyByIdentity))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepGuardSkipped))
 import Ecluse.Core.Version (mkVersion, renderVersion)
@@ -227,8 +226,7 @@ namespaceTransitionSpec = describe "declaring a namespace after public ingestion
             protectedMount = (testMount maintenance rules [DenyByIdentity "@acme/thing"]){smFirstParty = declared}
         recorded <- recordingPorts Nothing
         counters <- newSweepState
-        ctx <- mkEvalContext (pure (UTCTime (fromGregorian 2026 1 1) 0)) (pure Nothing)
-        sweepPackage testPacing (recPorts recorded) counters protectedMount ctx transitionName retained `shouldReturn` Nothing
+        sweepPackageGroup testPacing (recPorts recorded) counters protectedMount transitionName [(smStore protectedMount, retained)] `shouldReturn` Nothing
         recResults recorded `shouldReturn` [SweepGuardSkipped, SweepGuardSkipped]
         readFakeContents store `shouldReturn` inventory
         withProxyEnvQueueDeps queue privateUp publicUp Nothing afterDeclaration $ \app env _port -> do

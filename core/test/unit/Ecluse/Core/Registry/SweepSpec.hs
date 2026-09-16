@@ -116,17 +116,19 @@ permissionSpec = describe "consent and classification" $ do
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
         held `shouldBe` []
 
-    it "reads both at every cycle start, so nothing stale decides a delete" $ do
+    it "reads both at every cycle start, for each target, so nothing stale decides a delete" $ do
         store <- seededStore
         reads' <- newIORef (0 :: Int)
+        rec' <- recordingPorts generation
         let counting h =
                 h
                     { verifyConsent = modifyIORef' reads' (+ 1) >> pure (Right ConsentGranted)
                     , classifyStore = modifyIORef' reads' (+ 1) >> pure (Right StoreDestroyable)
                     }
-        void (runCycle testPacing (withStore store counting))
-        void (runCycle testPacing (withStore store counting))
-        readIORef reads' `shouldReturn` 4
+            -- No rule condemns anything here, so the only reads are the two each target opens with.
+            mount = testMount (withStore store counting) [] []
+        replicateM_ 2 (void (sweepCycle testPacing (recPorts rec') [mount]))
+        readIORef reads' `shouldReturn` 8
 
 {- A preview holds the store's observing calls and an execution that counts, so it reaches no
 delete and no marker. The two standing permissions become findings rather than halts. -}
@@ -137,7 +139,8 @@ previewSpec = describe "a preview cycle" $ do
         (rec', outcome) <- previewCycle testPacing store
         outcomeHalt outcome `shouldBe` Nothing
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
-        map tpConsent (outcomePrerequisites outcome) `shouldBe` [PrerequisiteUnmet "attach it"]
+        -- The mirror and the private cache each report their own, in mount order.
+        map tpConsent (outcomePrerequisites outcome) `shouldBe` replicate 2 (PrerequisiteUnmet "attach it")
         warnings <- recWarnings rec'
         warnings `shouldSatisfy` any (T.isInfixOf "deletion consent is not met: attach it")
 
@@ -146,7 +149,7 @@ previewSpec = describe "a preview cycle" $ do
         (_, outcome) <- previewCycle testPacing store
         outcomeHalt outcome `shouldBe` Nothing
         map tpClassification (outcomePrerequisites outcome)
-            `shouldBe` [PrerequisiteUnmet "it has an upstream"]
+            `shouldBe` replicate 2 (PrerequisiteUnmet "it has an upstream")
 
     it "leaves every version in the store, because it holds nothing that deletes" $ do
         store <- newFakeStore seededConfig{fakeConsent = ConsentWithheld "attach it"}
@@ -204,8 +207,8 @@ previewSpec = describe "a preview cycle" $ do
     it "reads both standing permissions as met where the store carries them" $ do
         store <- seededStore
         (_, outcome) <- previewCycle testPacing store
-        map tpConsent (outcomePrerequisites outcome) `shouldBe` [PrerequisiteMet]
-        map tpClassification (outcomePrerequisites outcome) `shouldBe` [PrerequisiteMet]
+        map tpConsent (outcomePrerequisites outcome) `shouldBe` replicate 2 PrerequisiteMet
+        map tpClassification (outcomePrerequisites outcome) `shouldBe` replicate 2 PrerequisiteMet
 
     it "carries on when a standing permission could not be read, and reports that as well" $ do
         -- Nothing a preview reads settles the permission, which is a finding rather than an end to
@@ -456,18 +459,11 @@ pacingSpec = describe "cycle chunk pacing" $ do
     it "retains the single-name fallback for a non-positive chunk size" $
         assertPacing SweepCandidates 0 "" [["a", "b"]] ["a", "b"] [("a", 0), ("b", 1)]
 
-    it "halts at the cap without pausing or requesting another page" $ do
+    it "halts at the cap without pausing" $ do
         store <- seededStore
         rec' <- recordingPorts generation
-        let handle =
-                (fakeMaintenance store)
-                    { listPackagesIn = \_ -> do
-                        yield [packageName "left-pad"]
-                        lift (expectationFailure "the cap must abandon the listing before its next page")
-                        pure Nothing
-                    }
-            pacing = testPacing{swpChunkSize = 1, swpDeletionCap = 1}
-        outcome <- sweepCycle pacing (recPorts rec') [testMount handle [denyRule] [DenyByIdentity "left-pad"]]
+        let pacing = testPacing{swpChunkSize = 1, swpDeletionCap = 1}
+        outcome <- sweepCycle pacing (recPorts rec') [testMount (fakeMaintenance store) [denyRule] [DenyByIdentity "left-pad"]]
         outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 Nothing)
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
         recDelays rec' `shouldReturn` 0
@@ -504,16 +500,12 @@ assertPacing shape chunkSize alphabet pages candidates expected = do
     rec' <- recordingPorts generation
     observed <- newIORef []
     let base = fakeMaintenance store
-        selected name = shape == SweepEverything || name `elem` map packageName candidates
         handle =
             base
                 { listPackagesIn = \prefix -> do
-                    forM_ pages $ \page -> do
-                        let namesInPage = filter (inBucket prefix) (map packageName page)
-                        priorCount <- lift (length <$> readIORef observed)
-                        yield namesInPage
-                        when (shape == SweepCandidates) $
-                            lift ((length <$> readIORef observed) `shouldReturn` (priorCount + length (filter selected namesInPage)))
+                    -- The walk joins both inventories, so it reads a bucket whole before it
+                    -- decides any name in it. Pacing still counts names rather than pages.
+                    forM_ pages $ \page -> yield (filter (inBucket prefix) (map packageName page))
                     pure Nothing
                 , enumerateVersions = \name -> do
                     pauses <- recDelays rec'

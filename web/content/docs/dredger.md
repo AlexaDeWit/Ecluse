@@ -37,7 +37,8 @@ Each cycle:
    `verdaccio` store consent is a configuration key, so withdrawing it takes a restart. Where a
    rule reads the advisory database, the first cycle also waits for the first advisory sync, for
    at most one `cyclePause`.
-2. Lists the store's package names, a page at a time.
+2. Lists the mirror target's and the private cache's package names, one name-space bucket at a
+   time, and joins the two inventories so a version held in either is decided once.
 3. Keeps only the names the synced advisory database covers, plus the names an identity-deny rule
    pins. Both sides are read through the ecosystem's own name parser, so a spelling difference
    between the advisory database and the store cannot miss a match.
@@ -45,7 +46,7 @@ Each cycle:
    evaluates every version the store holds against the mount's whole rule set.
 5. Deletes only what a named decisive deny condemns.
 
-A cycle reads listings page by page and metadata for candidate names. A newly covered package can
+A cycle reads each bucket's listing whole and metadata for candidate names. A newly covered package can
 wait until the next cycle if its name was absent from the current candidate set. Store failures,
 consent, and the cap can delay or prevent deletion. A metadata failure narrows the facts a rule
 has to decide on rather than stopping the package.

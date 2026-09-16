@@ -9,9 +9,13 @@ module Ecluse.Core.Registry.Sweep.Types (
     -- * What a sweep runs over
     SweepMount (..),
     SweepStore (..),
+    SweepCache (..),
     SweepExecution (..),
-    deletingStore,
-    previewStore,
+    deletingCache,
+    previewCache,
+    pairedStore,
+    privateStore,
+    countingAt,
     walkMarkerOf,
     SweepPacing (..),
     minimumChunkPause,
@@ -76,7 +80,6 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Rules (PreparedRule, RuleDeps)
 import Ecluse.Core.Rules.Types (Rule)
-import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..), SweepTarget)
 import Ecluse.Core.Telemetry.Record (DredgerMetricsPort (dmpSweptVersion))
 
@@ -104,16 +107,26 @@ data SweepMount = SweepMount
     -}
     }
 
-{- | One mount's store as the booting role holds it: the calls that observe it, and what this run
-executes against a condemned version. Only the two builders below pair the halves.
+{- | One mount's store as the booting role holds it: the calls that observe it, what this run
+executes against a condemned version, and the cache the mount pairs it with.
 -}
 data SweepStore = SweepStore
     { ssObserve :: StoreObservation
     , ssExecute :: SweepExecution
-    , ssPrivate :: Maybe SweepStore
-    -- ^ The associated private cache holds the same role authority and no further group.
+    , ssPrivate :: SweepCache
+    {- ^ The mount's private cache. Every view of the mount's stores carries it, because the
+    pairing is a fact about the mount rather than about the store in hand.
+    -}
     , ssVersionLimit :: Int
     -- ^ Maximum distinct versions held for one package across both observations.
+    }
+
+{- | One store's own two halves: what observes it, and what this run executes against a condemned
+version. A cache is paired with no further store, so it carries none.
+-}
+data SweepCache = SweepCache
+    { scObserve :: StoreObservation
+    , scExecute :: SweepExecution
     }
 
 -- | What a run does with a condemned version. Only one arm carries a write.
@@ -124,13 +137,29 @@ data SweepExecution
       SweepCounts
 
 -- | The whole handle as a deleting run holds it: its reads, and its writes as the execution.
-deletingStore :: StoreMaintenance -> SweepStore
-deletingStore handle =
-    SweepStore{ssObserve = observationOf handle, ssExecute = SweepRemoves (deletionOf handle), ssPrivate = Nothing, ssVersionLimit = maxVersionCount defaultLimits}
+deletingCache :: StoreMaintenance -> SweepCache
+deletingCache handle = SweepCache{scObserve = observationOf handle, scExecute = SweepRemoves (deletionOf handle)}
 
 -- | The observing calls alone, as a preview holds them.
-previewStore :: StoreObservation -> SweepStore
-previewStore observation = SweepStore{ssObserve = observation, ssExecute = SweepCounts, ssPrivate = Nothing, ssVersionLimit = maxVersionCount defaultLimits}
+previewCache :: StoreObservation -> SweepCache
+previewCache observation = SweepCache{scObserve = observation, scExecute = SweepCounts}
+
+{- | A mount's store: the mirror target's own halves, the private cache it is swept with, and the
+bound the two inventories share.
+-}
+pairedStore :: Int -> SweepCache -> SweepCache -> SweepStore
+pairedStore limit mirror cache =
+    SweepStore{ssObserve = scObserve mirror, ssExecute = scExecute mirror, ssPrivate = cache, ssVersionLimit = limit}
+
+-- | The mount's other store: its private cache, under the same pairing and bound.
+privateStore :: SweepStore -> SweepStore
+privateStore store = store{ssObserve = scObserve (ssPrivate store), ssExecute = scExecute (ssPrivate store)}
+
+{- | The mount's store seen at one observation, counting only. A located view names its own
+backend in an audit line and reaches nothing that could change a store.
+-}
+countingAt :: SweepStore -> StoreObservation -> SweepStore
+countingAt store observation = store{ssObserve = observation, ssExecute = SweepCounts}
 
 {- | The marker a full walk resumes from. A preview holds none, so its walk starts at the first
 bucket and the recorded marker is neither read nor replaced.

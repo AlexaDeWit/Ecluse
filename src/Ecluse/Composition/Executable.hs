@@ -73,7 +73,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Registry.Adapter (ProjectName, adapterProjectName)
 import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend), StoreObservation (obFacts))
-import Ecluse.Core.Registry.Sweep.Types (SweepMount (..), SweepStore (..), deletingStore, previewStore)
+import Ecluse.Core.Registry.Sweep.Types (SweepCache (..), SweepMount (..), SweepStore, deletingCache, pairedStore, previewCache)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule)
 import Ecluse.Core.Security (Limits (maxVersionCount))
@@ -148,9 +148,9 @@ so a spec can drive this phase's refusals without reaching a cloud.
 -}
 type BuildMirrorQueue = LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 
-{- How the booting role builds one store as the sweep holds it. Both Dredger roles plan through the
-one arm below and differ only in which of 'StoreBuilds' they ran. -}
-type BuildSweepStore = StorePorts -> Limits -> ClearedBackend -> IO SweepStore
+{- How the booting role builds one store's halves as the sweep holds them. Both Dredger roles plan
+through the one arm below and differ only in which of 'StoreBuilds' they ran. -}
+type BuildSweepCache = StorePorts -> Limits -> ClearedBackend -> IO SweepCache
 
 {- | Plan the runtime the cleared plan's role starts, or report every refusal only a live
 environment can settle. Each role has one arm here, and a refusal is spent once for all of them.
@@ -178,12 +178,12 @@ planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds 
         fmap (executablePlan . StorePrunerWiring)
             <$> planPrunerWiring logEnv tracing buildCredentials build bootPlan
 
-    deleting build ports limits cleared = deletingStore <$> build ports limits cleared
-    previewing build ports limits cleared = previewStore <$> build ports limits cleared
+    deleting build ports limits cleared = deletingCache <$> build ports limits cleared
+    previewing build ports limits cleared = previewCache <$> build ports limits cleared
 
 {- The store roles' shared arm: the advisory sync their rules read, the credential their stores
 answer to, and one store per cleared target. All three refusable steps accumulate. -}
-planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepStore -> BootPlan -> IO (Either [BootError] PrunerWiring)
+planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepCache -> BootPlan -> IO (Either [BootError] PrunerWiring)
 planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
@@ -215,7 +215,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
         prunerWiringFrom deferredMetrics policies
             <$> eitherToValidation cveSync
             <* eitherToValidation credentials
-            <*> eitherToValidation (Map.mapWithKey (attachCache (fromRight mempty caches)) <$> stores)
+            <*> eitherToValidation (Map.mapMaybeWithKey (pairWithCache (fromRight mempty caches)) <$> stores)
             <* eitherToValidation caches
   where
     validated = bpValidated bootPlan
@@ -223,14 +223,20 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     credentialBackends =
         [((eco, MirrorCredential), backend) | (eco, backend) <- mirrorBackends prunerMounts]
             <> [((eco, PrivateCacheCredential), backend) | (eco, (Just backend, _)) <- Map.toAscList (vpPrivateCaches validated)]
-    attachCache caches eco store = case (Map.lookup eco caches, Map.lookup eco (vpPrivateCaches validated), Map.lookup eco (vpMirrorStores validated)) of
-        (Just cache, Just (_, clearedCache), Just clearedMirror) ->
-            store
-                { ssObserve = labelObservation "mirrorTarget" clearedMirror (ssObserve store)
-                , ssPrivate = Just cache{ssObserve = labelObservation "privateUpstream" clearedCache (ssObserve cache)}
-                , ssVersionLimit = maxVersionCount (bpLimits bootPlan)
-                }
-        _ -> store{ssVersionLimit = maxVersionCount (bpLimits bootPlan)}
+    {- Both of a mount's stores under the bound they share. The pass clears a private cache for
+    every mirrored mount, so a mirror store arriving here without one cannot come about. -}
+    pairWithCache caches eco mirror = do
+        cache <- Map.lookup eco caches
+        clearedCache <- snd <$> Map.lookup eco (vpPrivateCaches validated)
+        clearedMirror <- Map.lookup eco (vpMirrorStores validated)
+        pure $
+            pairedStore
+                (maxVersionCount (bpLimits bootPlan))
+                (labelCache "mirrorTarget" clearedMirror mirror)
+                (labelCache "privateUpstream" clearedCache cache)
+
+labelCache :: Text -> ClearedBackend -> SweepCache -> SweepCache
+labelCache role backend cache = cache{scObserve = labelObservation role backend (scObserve cache)}
 
 labelObservation :: Text -> ClearedBackend -> StoreObservation -> StoreObservation
 labelObservation role backend observation =

@@ -34,6 +34,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt,
     CycleOutcome (outcomeHalt),
     SweepAudit (SweepAudit, auditError, auditInfo, auditWarn),
+    SweepCache (scObserve),
     SweepMount (smEcosystem, smStore),
     SweepPacing (swpCyclePause, swpShape),
     SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepMetrics, sweepNow, sweepReport, sweepTarget),
@@ -41,6 +42,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepShape (SweepCandidates, SweepEverything),
     SweepStore (ssObserve, ssPrivate),
     latches,
+    privateStore,
     renderCycleHalt,
     walkMarkerOf,
  )
@@ -99,7 +101,7 @@ runDredger bootEnv opts pruner = do
     moduleLog logEnv dredgerModule InfoS capLine
     when (doMode opts == SweepDeletes) $
         moduleLog logEnv dredgerModule InfoS "this command deletes permitted mirrorTarget and privateUpstream versions under independent target consent"
-    traverse_ (\mount -> traverse_ (logBlastRadius logEnv opts pacing) (mount : [mount{smStore = store} | store <- maybeToList (ssPrivate (smStore mount))])) mounts
+    traverse_ (\mount -> traverse_ (logBlastRadius logEnv opts pacing) [mount, mount{smStore = privateStore (smStore mount)}]) mounts
     moduleLog logEnv dredgerModule InfoS ("Dredger starting up, health probes on port " <> show (scPort (cfg status)))
     raceServerAgainstLoop
         (runWarp (cfg status) probeOnlyApplication)
@@ -220,7 +222,7 @@ logBlastRadius logEnv opts pacing mount =
         SweepPreviews -> "previewing only: this run holds nothing that could delete"
     compatibleCursor = do
         let mirror = smStore mount
-        guard (maybe True (\cache -> factNameAlphabet (obFacts (ssObserve cache)) == factNameAlphabet facts) (ssPrivate mirror))
+        guard (factNameAlphabet (obFacts (scObserve (ssPrivate mirror))) == factNameAlphabet facts)
         walkMarkerOf mirror
     resumption = case (swpShape pacing, compatibleCursor) of
         (SweepCandidates, _) -> ""

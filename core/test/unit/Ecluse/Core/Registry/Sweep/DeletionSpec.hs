@@ -82,9 +82,9 @@ spec = describe "grouped deletion" $ do
         mount <- grouped mirror cache
         -- The backend hands the guard a version the allowance withheld, which is the batch the
         -- recheck exists to refuse, so the cap charge and not the allowance holds it back.
-        let widened = mapDeletion (\send checks name _ -> send checks name (map version ["1.0.0", "2.0.0"])) (deletingStore (fakeMaintenance cache))
+        let widened = mapCacheDeletion (\send checks name _ -> send checks name (map version ["1.0.0", "2.0.0"])) (deletingCache (fakeMaintenance cache))
         recorded <- recordingPorts Nothing
-        outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount{smStore = (smStore mount){ssPrivate = Just widened}}]
+        outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount{smStore = (smStore mount){ssPrivate = widened}}]
         outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 Nothing)
         operations <- recTargetResults recorded
         length (filter (== (SweepPrivate, SweepGuardSkipped)) operations) `shouldBe` 2
@@ -98,10 +98,10 @@ spec = describe "grouped deletion" $ do
         mount <- grouped mirror cache
         calls <- newIORef ([] :: [Text])
         let failed = protocolFault "cache unavailable"
-            cacheStore = (deletingStore (fakeMaintenance cache)){ssExecute = SweepRemoves (StoreDeletion (\checks _ versions -> deleteAll checks (\_ -> modifyIORef' calls (<> ["cache"]) $> Left failed) [versions]) Nothing)}
+            cacheStore = (deletingCache (fakeMaintenance cache)){scExecute = SweepRemoves (StoreDeletion (\checks _ versions -> deleteAll checks (\_ -> modifyIORef' calls (<> ["cache"]) $> Left failed) [versions]) Nothing)}
             sourceStore = mapDeletion (\send checks name versions -> modifyIORef' calls (<> ["mirror"]) >> send checks name versions) (smStore mount)
         recorded <- recordingPorts Nothing
-        _ <- sweepCycle testPacing (recPorts recorded) [mount{smStore = sourceStore{ssPrivate = Just cacheStore}}]
+        _ <- sweepCycle testPacing (recPorts recorded) [mount{smStore = sourceStore{ssPrivate = cacheStore}}]
         readIORef calls `shouldReturn` ["mirror", "cache"]
         held mirror `shouldReturn` []
         held cache `shouldReturn` [version "1.0.0"]
@@ -212,10 +212,10 @@ spec = describe "grouped deletion" $ do
         cache <- seeded "cache" ["1.0.0"]
         mount <- grouped mirror cache
         permitted <- newIORef True
-        let withdrawn = (deletingStore (fakeMaintenance cache)){ssObserve = (fakeObservation cache){obVerifyConsent = readIORef permitted <&> \yes -> Right (if yes then ConsentGranted else ConsentWithheld "cache revoked")}}
+        let withdrawn = (deletingCache (fakeMaintenance cache)){scObserve = (fakeObservation cache){obVerifyConsent = readIORef permitted <&> \yes -> Right (if yes then ConsentGranted else ConsentWithheld "cache revoked")}}
             source = mapDeletion (\send checks name versions -> send checks name versions <* writeIORef permitted False) (smStore mount)
         recorded <- recordingPorts Nothing
-        outcome <- sweepCycle testPacing (recPorts recorded) [mount{smStore = source{ssPrivate = Just withdrawn}}]
+        outcome <- sweepCycle testPacing (recPorts recorded) [mount{smStore = source{ssPrivate = withdrawn}}]
         outcomeHalt outcome `shouldSatisfy` isJust
         held mirror `shouldReturn` []
         held cache `shouldReturn` [version "1.0.0"]
@@ -293,10 +293,12 @@ spec = describe "grouped deletion" $ do
         mirror <- seeded "mirror" ["1.0.0"]
         cache <- seeded "cache" ["1.0.0"]
         mount <- grouped mirror cache
-        let protect target = target{ssObserve = (ssObserve target){obReadManifest = \_ -> fail "first-party metadata must not be read"}}
+        let unread _ = fail "first-party metadata must not be read"
+            protect target = target{ssObserve = (ssObserve target){obReadManifest = unread}}
+            protectCache target = target{ssPrivate = (ssPrivate target){scObserve = (scObserve (ssPrivate target)){obReadManifest = unread}}}
             store = smStore mount
         recorded <- recordingPorts Nothing
-        outcome <- sweepCycle testPacing (recPorts recorded) [mount{smFirstParty = const True, smStore = (protect store){ssPrivate = protect <$> ssPrivate store}}]
+        outcome <- sweepCycle testPacing (recPorts recorded) [mount{smFirstParty = const True, smStore = protectCache (protect store)}]
         tallyGuardSkipped (outcomeTally outcome) `shouldBe` 2
         held mirror `shouldReturn` [version "1.0.0"]
         held cache `shouldReturn` [version "1.0.0"]
@@ -317,7 +319,7 @@ grouped mirror cache = do
     let configured = [DenyByIdentity "left-pad"]
     rules <- prepare inertRuleDeps (map atDefaultPrecedence configured)
     let mount = testMount (fakeMaintenance mirror) rules configured
-    pure mount{smStore = (smStore mount){ssPrivate = Just (deletingStore (fakeMaintenance cache))}}
+    pure (withPrivateCache (deletingCache (fakeMaintenance cache)) mount)
 
 held :: FakeStore -> IO [Version]
 held store = map storedVersion . Map.findWithDefault [] packageName <$> readFakeContents store
@@ -326,6 +328,11 @@ mapDeletion :: ((DeleteGuard -> PackageName -> [Version] -> IO [(Version, Versio
 mapDeletion f store = case ssExecute store of
     SweepCounts -> store
     SweepRemoves deletion -> store{ssExecute = SweepRemoves deletion{dlDeleteVersions = f (dlDeleteVersions deletion)}}
+
+mapCacheDeletion :: ((DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]) -> DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]) -> SweepCache -> SweepCache
+mapCacheDeletion f cache = case scExecute cache of
+    SweepCounts -> cache
+    SweepRemoves deletion -> cache{scExecute = SweepRemoves deletion{dlDeleteVersions = f (dlDeleteVersions deletion)}}
 
 packageName :: PackageName
 packageName = mkPackageName Npm Nothing "left-pad"

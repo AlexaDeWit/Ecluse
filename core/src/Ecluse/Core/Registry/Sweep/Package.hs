@@ -4,7 +4,6 @@
 
 -- | Decide stored versions from the store's evidence and hand named denials to its execution.
 module Ecluse.Core.Registry.Sweep.Package (
-    sweepPackage,
     previewPackageGroup,
     sweepPackageGroup,
 ) where
@@ -16,8 +15,6 @@ import Data.Set qualified as Set
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
-    DeleteGuard (..),
-    StoreDeletion (dlDeleteVersions),
     StoreFacts (factBackend),
     StoreFault,
     StoreObservation (obFacts, obReadManifest),
@@ -30,17 +27,16 @@ import Ecluse.Core.Registry.Maintenance (
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Sweep.Deletion (Selection (Selection), deleteGroup)
 import Ecluse.Core.Registry.Sweep.Types (
-    CycleHalt (HaltDeletionCap),
+    CycleHalt,
     SweepAudit (auditError, auditInfo),
-    SweepExecution (SweepCounts, SweepRemoves),
     SweepMount (smConfigured, smEcosystem, smFirstParty, smRuleDeps, smRules, smStore),
     SweepPacing (swpDeletionCap),
     SweepPorts (sweepAdvisoryEtag, sweepAudit, sweepNow, sweepReport, sweepTarget),
-    SweepReport (reportCapHalts, reportOpening, reportRemoval),
+    SweepReport (reportOpening, reportRemoval),
     SweepState (stIssued),
-    SweepStore (ssExecute, ssObserve),
+    SweepStore (ssObserve),
+    countingAt,
     labelAudit,
-    previewStore,
     record,
     recordGap,
     recordMetric,
@@ -54,21 +50,6 @@ import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvi
 import Ecluse.Core.Server.Metadata (selectVersion)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept), SweepTarget (..))
 import Ecluse.Core.Version (Version, renderVersion)
-
-{- | Decide one package's stored versions and hand the condemned ones over, yielding the halt the
-deletion cap raised. A faulted read decides on identity alone, so it too can reach the cap.
--}
-sweepPackage ::
-    SweepPacing ->
-    SweepPorts ->
-    SweepState ->
-    SweepMount ->
-    EvalContext ->
-    PackageName ->
-    [StoredVersion] ->
-    IO (Maybe CycleHalt)
-sweepPackage pacing ports counters mount ctx name stored =
-    selectPackage ports counters mount ctx name stored >>= deleteSelected pacing ports counters mount name
 
 selectPackage :: SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [StoredVersion] -> IO [Condemned]
 selectPackage = selectPackageWith True
@@ -92,7 +73,7 @@ selectPackageWith counting ports counters mount ctx name stored
 previewPackageGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [(StoreObservation, [StoredVersion])] -> IO (Maybe CycleHalt)
 previewPackageGroup pacing ports counters mount ctx name locations = do
     selections <- forM locations $ \(store, versions) -> do
-        let locatedMount = mount{smStore = previewStore store}
+        let locatedMount = mount{smStore = countingAt (smStore mount) store}
             locatedPorts = ports{sweepAudit = labelAudit (factBackend (obFacts store)) (sweepAudit ports), sweepTarget = targetOf mount store}
         selected <-
             selectPackage locatedPorts counters locatedMount ctx name versions
@@ -187,43 +168,6 @@ decideVersion counting ports counters mount ctx evidence version = do
         Blocked rule etag reason -> pure (Just Condemned{cdVersion = version, cdRule = rule, cdAdvisoryEtag = etag, cdReason = reason})
         _ -> when counting (record ports counters SweepKept) $> Nothing
 
-{- Hand the condemned versions over, up to what the cycle's cap still allows. The cap counts
-what was handed over rather than what came back, because the cap bounds destructive calls. -}
-deleteSelected ::
-    SweepPacing ->
-    SweepPorts ->
-    SweepState ->
-    SweepMount ->
-    PackageName ->
-    [Condemned] ->
-    IO (Maybe CycleHalt)
-deleteSelected pacing ports counters mount name decided
-    | null decided = pure Nothing
-    | otherwise = do
-        condemned <- stillEligible ports counters mount name decided
-        issued <- readIORef (stIssued counters)
-        let allowance = max 0 (cap - issued)
-            (taken, held) = splitAt (if capHalts then allowance else length condemned) condemned
-            reached = issued + length taken
-            thresholdEtag = cdAdvisoryEtag =<< listToMaybe (drop (cap - issued - 1) taken)
-        traverse_ (const (record ports counters SweepGuardSkipped)) held
-        unless (null taken) $ do
-            traverse_ (announce ports name) taken
-            writeIORef (stIssued counters) reached
-            when (crossedCap issued reached) (announceCap ports cap reached thresholdEtag)
-            outcomes <- sendDeletes (smStore mount) name (map cdVersion taken)
-            traverse_ (recordOutcome ports counters name) outcomes
-        pure (cappedHalt pacing reached thresholdEtag <$ guard (halts reached))
-  where
-    cap = swpDeletionCap pacing
-    capHalts = reportCapHalts (sweepReport ports)
-
-    -- Reaching the cap latches, whether or not this package had more to hand over.
-    halts reached = capHalts && reached >= cap
-
-    -- A run that counts past the cap says once where a run that halts on it would have stopped.
-    crossedCap issued reached = not capHalts && issued < cap && reached >= cap
-
 {- The push can stop being eligible evidence between a version's decision and this hand-over,
 across a long manifest read or a batch, and a delete is permanent. So it is read again here. -}
 stillEligible :: SweepPorts -> SweepState -> SweepMount -> PackageName -> [Condemned] -> IO [Condemned]
@@ -252,10 +196,6 @@ announceIneligible ports name why withheld =
             <> " versions an advisory rule denied stay in the store, because "
             <> why
         )
-
--- The halt the cap raises, carrying what an operator needs to judge the generation that filled it.
-cappedHalt :: SweepPacing -> Int -> Maybe DbEtag -> CycleHalt
-cappedHalt pacing = HaltDeletionCap (swpDeletionCap pacing)
 
 {- The cap as a run that does not halt on it reports it: where a halting run would have stopped,
 and that this one carries on, so the closing tally names the full reach. -}
@@ -287,13 +227,6 @@ condemnationMessage ports name condemned =
         <> cdReason condemned
         <> "); advisory generation "
         <> renderGeneration (cdAdvisoryEtag condemned)
-
--- The backend owns chunk limits and stops later requests after a fault.
-sendDeletes :: SweepStore -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
-sendDeletes store name versions = case ssExecute store of
-    SweepRemoves deletion -> dlDeleteVersions deletion (DeleteGuard (const (pure . Right)) (const (pure False))) name versions
-    -- The audit line above has already put the reach on record, so the count reads from it.
-    SweepCounts -> pure [(version, VersionRemoved) | version <- versions]
 
 {- What the backend reported for one version. A refusal or an unreached call leaves the version
 in the store, so it counts as kept and reports for an operator to follow up. -}

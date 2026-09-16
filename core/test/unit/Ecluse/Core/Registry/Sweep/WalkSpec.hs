@@ -4,13 +4,15 @@
 
 module Ecluse.Core.Registry.Sweep.WalkSpec (spec) where
 
-import Data.Conduit (ConduitT, yield)
+import Data.Conduit (ConduitT, fuseUpstream, yield)
+import Data.Conduit.List qualified as CL
 import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
+    NameAlphabet,
     NamePrefix,
     StoreFault,
     mkNameAlphabet,
@@ -23,7 +25,7 @@ import Ecluse.Core.Registry.Sweep.Walk (
     BucketNames (BucketFaulted, BucketOverflowed, BucketRead, BucketUnsplittable),
     bucketDepthLimit,
     bucketNameBudget,
-    collectBucket,
+    collectBucketWith,
     resumeAfter,
     walkBuckets,
  )
@@ -74,7 +76,7 @@ resumeSpec = describe "resumeAfter" $ do
     buckets = walkBuckets (mkNameAlphabet "abc")
 
 collectSpec :: Spec
-collectSpec = describe "collectBucket" $ do
+collectSpec = describe "collectBucketWith" $ do
     it "reads a bucket whole and sorts it, so the walk's order does not follow the store's" $ do
         outcome <- withBucket "a" $ \a -> collectBucket alphabet a (pagesOf [["apricot", "almond"], ["apple"]])
         namesOf outcome `shouldBe` Just (map name ["almond", "apple", "apricot"])
@@ -123,6 +125,16 @@ collectSpec = describe "collectBucket" $ do
     namesOf = \case
         BucketRead names -> Just names
         _ -> Nothing
+
+{- One listing read under the bucket budget, with no location evidence to retain. The grouped
+walk joins two inventories through the same reader, so the arms below are its own. -}
+collectBucket ::
+    NameAlphabet ->
+    NamePrefix ->
+    ConduitT () [PackageName] IO (Maybe StoreFault) ->
+    IO (BucketNames StoreFault PackageName)
+collectBucket alphabet prefix source =
+    fmap fst <$> collectBucketWith alphabet prefix const (fuseUpstream source (CL.map (map (,()))))
 
 -- A listing that yields the given pages and ends cleanly.
 pagesOf :: [[Text]] -> ConduitT () [PackageName] IO (Maybe StoreFault)

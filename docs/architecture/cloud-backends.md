@@ -192,8 +192,8 @@ after restart, without an internal pending-work record. The operator contract is
 
 ### Walking a store
 
-The handle lists a store one bucket of its name space at a time, as a stream of pages, so nothing
-downstream holds a listing whole and a large store costs the same memory as a small one. A bucket is
+The handle lists a store one bucket of its name space at a time, as a stream of pages, so a large
+store costs the memory of one bounded bucket rather than of its whole listing. A bucket is
 a prefix of a package name's base component, the part after any namespace, because that is the
 component a store's own listing filters on. The characters those prefixes are built from come from
 the mount's ecosystem, whose grammar decides what a name may begin with. A store whose listing
