@@ -522,9 +522,8 @@ assertPacing shape chunkSize alphabet pages candidates expected = do
     outcome <- sweepCycle pacing ports [testMount handle [denyRule] (map DenyByIdentity candidates)]
     outcomeHalt outcome `shouldBe` Nothing
     tallyDeleted (outcomeTally outcome) `shouldBe` length expected
-    {- One examination per name, at the pause count it was reached under. The per-batch
-    reassessment reads a condemned name's inventory again, so equal neighbours collapse, and a
-    name examined again across a pause boundary still stands on its own. -}
+    {- One examination per name, at the pause count it was reached under. Equal neighbours collapse
+    (the reassessment re-reads), so a repeat across a pause boundary still stands on its own. -}
     examined <- mapMaybe listToMaybe . group . reverse <$> readIORef observed
     examined `shouldBe` map (first packageName) expected
     recDelays rec' `shouldReturn` foldl' max 0 (map snd expected)
