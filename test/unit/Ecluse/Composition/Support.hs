@@ -22,7 +22,6 @@ module Ecluse.Composition.Support (
     withoutMirrorTargetToken,
     withoutPrivateUpstreamUrl,
     withoutQueueUrl,
-    noAdvisoryStoreDoc,
     overrideEnv,
     expectEnv,
     expectAppConfig,
@@ -158,12 +157,6 @@ to the bounded in-memory queue.
 -}
 withoutQueueUrl :: [(String, String)] -> [(String, String)]
 withoutQueueUrl = filter ((/= "ECLUSE_QUEUE__URL") . fst)
-
-{- | The document layer that erases the shipped @advisories.url@ default, which is how an operator
-turns the advisory stack off. The environment layer cannot express an absent key.
--}
-noAdvisoryStoreDoc :: ByteString
-noAdvisoryStoreDoc = "{\"advisories\":{\"url\":null}}"
 
 -- | Override (or insert) one environment entry.
 overrideEnv :: String -> String -> [(String, String)] -> [(String, String)]

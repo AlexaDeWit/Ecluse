@@ -29,7 +29,6 @@ import Ecluse.Composition.Support (
     codeArtifactEnvVars,
     codeArtifactMirrorUrl,
     expectConfig,
-    noAdvisoryStoreDoc,
     noMaintenanceBackend,
     overrideEnv,
     staticEnvVars,
@@ -72,22 +71,22 @@ advisoryStoreSpec :: Spec
 advisoryStoreSpec = describe "vetBoot -- an advisory deny with no advisory store" $ do
     forM_ [MirrorWriter, MirrorPruner, MirrorPreviewer] $ \role ->
         it ("refuses under " <> show role) $
-            refusalsUnder role (denyingOn "DenyIfCve" (withObservablePrivate codeArtifactEnvVars))
+            refusalsFor role (denyingOn "DenyIfCve" (withObservablePrivate codeArtifactEnvVars))
                 >>= (`shouldSatisfy` elem (AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| [])))
 
     it "names the EPSS deny on its own terms" $
-        refusalsUnder MirrorWriter (denyingOn "DenyIfEpss" staticEnvVars)
+        refusalsFor MirrorWriter (denyingOn "DenyIfEpss" staticEnvVars)
             `shouldReturn` [AdvisoryDenyWithoutStore Npm ("DenyIfEpss" :| [])]
 
     it "refuses a deny that fails open, because skip still cannot decide without a database" $
-        refusalsUnder MirrorWriter (denyingWith "DenyIfCve" "skip" staticEnvVars)
+        refusalsFor MirrorWriter (denyingWith "DenyIfCve" "skip" staticEnvVars)
             `shouldReturn` [AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| [])]
 
     it "clears the shipped policy, whose only advisory rule abstains without a database" $
-        refusalsUnder MirrorWriter staticEnvVars `shouldReturn` []
+        refusalsFor MirrorWriter staticEnvVars `shouldReturn` []
 
     it "clears an advisory deny once a store is configured" $
-        refusalsFor MirrorWriter (denyingOn "DenyIfCve" staticEnvVars) `shouldReturn` []
+        refusalsFor MirrorWriter (withAdvisoryStore (denyingOn "DenyIfCve" staticEnvVars)) `shouldReturn` []
 
 privatePublicationSpec :: Spec
 privatePublicationSpec = describe "vetBoot private upstream and publication target collision" $ do
@@ -276,9 +275,9 @@ expectVetted role envVars = do
 refusalsFor :: RegistryRole -> [(String, String)] -> IO [BootError]
 refusalsFor role envVars = fromLeft [] . vetted role <$> expectConfig envVars Nothing
 
--- | 'refusalsFor' with the shipped advisory store erased, which only a document layer can do.
-refusalsUnder :: RegistryRole -> [(String, String)] -> IO [BootError]
-refusalsUnder role envVars = fromLeft [] . vetted role <$> expectConfig envVars (Just noAdvisoryStoreDoc)
+-- | Declare an advisory store, which is what an advisory deny needs to clear the boot.
+withAdvisoryStore :: [(String, String)] -> [(String, String)]
+withAdvisoryStore = overrideEnv "ECLUSE_ADVISORIES__URL" "s3://advisories"
 
 -- | Add the named advisory deny to the shared policy, failing closed as its own default does.
 denyingOn :: String -> [(String, String)] -> [(String, String)]

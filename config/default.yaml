@@ -160,12 +160,12 @@ advisories:
   # The object store the compiled advisory databases sync from, as
   # s3://<bucket>[/<prefix>]. The scheme picks the provider, the way queue.url does, and
   # a scheme this build does not know is refused at load. AWS_ENDPOINT_URL still points
-  # the S3 client at an emulator or a VPC endpoint. Point this at the bucket your Pilot
-  # uploads to. To run with the advisory stack off, erase the key in your own document
-  # (write `url: null` under advisories). AllowIfRemediatesCve then abstains, and a mount
-  # whose rules include DenyIfCve or DenyIfEpss refuses the boot, because those rules
-  # have no database to decide on.
-  url: s3://ecluse-advisories
+  # the S3 client at an emulator or a VPC endpoint. There is no default: the artifact
+  # carries no signature and a bucket name is global, so a shipped one would name a
+  # bucket this project does not own. Unset, the advisory stack is off.
+  # AllowIfRemediatesCve then abstains, and a mount whose rules include DenyIfCve or
+  # DenyIfEpss refuses the boot, because those rules have no database to decide on.
+  # url: s3://my-advisory-bucket/ecluse
 
 # Process sizing. Écluse computes every key at boot from the container's cgroup
 # limits, the RTS posture, and the file-descriptor budget. The boot log records each
@@ -350,8 +350,8 @@ rules:
     precedence: 100
     ageSeconds: 604800
   # The remediation fast lane. Écluse admits a version a synced advisory names as its
-  # exact fix ahead of the min-age quarantine. With the advisory store erased
-  # (advisories.url null) the rule abstains, and only the quarantine governs.
+  # exact fix ahead of the min-age quarantine. With no advisory database configured
+  # (no advisories.url) the rule abstains, and only the quarantine governs.
   remediation-fast-track:
     type: AllowIfRemediatesCve
     precedence: 150
@@ -366,8 +366,8 @@ rules:
   # 0-10). Unscored npm malware advisories count as above every threshold, so
   # enabling this also blocks known malware. It sits just below `AllowByIdentity`, so
   # an identity pin still overrides it. It needs advisories.url, so a mount that enables
-  # it with the advisory store erased refuses the boot, and the mount stays not-ready
-  # until Pilot publishes an artifact. On a cold mirror it can deny historical
+  # it without one refuses the boot, and with one the mount stays not-ready until Pilot
+  # publishes an artifact. On a cold mirror it can deny historical
   # versions your builds depend on. Warm the mirror first:
   # https://ecluse-proxy.com/docs/configuration/#onboarding-the-advisory-denies
   # deny-known-cves:

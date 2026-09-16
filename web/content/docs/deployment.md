@@ -38,7 +38,7 @@ outcome per role.
 
 ### The advisory data volume
 
-With `advisories.url` set, which it is by default, a role that syncs advisories stores each database under
+Once `advisories.url` is set, a role that syncs advisories stores each database under
 `advisories.dataDir` (default `/var/lib/ecluse/advisories`), and Pilot compiles there. The image
 runs as uid `65532` and sets no working directory. So mount a writable volume at that path on every
 role that reads or writes advisories, and let uid `65532` write it.
@@ -62,11 +62,8 @@ command. Examples are `ecluse mirror` without a durable queue or without any `mi
 
 ### Running without Pilot
 
-The advisory stack is on by default: `advisories.url` ships a value, so point it at the bucket your
-Pilot uploads to. To run without Pilot, erase the key in your own configuration document by writing
-`url: null` under `advisories`. The environment layer cannot express an absent key.
-
-With the store erased:
+Only the rules that read advisories need Pilot. `advisories.url` ships unset, so the advisory stack
+is off until you point it at a bucket of your own. Without an advisory store:
 
 - The fast lane abstains, so every public version waits out the quarantine.
 - A mount whose rules include `DenyIfCve` or `DenyIfEpss` refuses the boot, whatever

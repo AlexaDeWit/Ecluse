@@ -13,7 +13,7 @@ import Data.Text qualified as T
 import System.Environment (setEnv, unsetEnv, withArgs)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.FilePath ((</>))
-import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory, withSystemTempDirectory)
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO (bracket_, throwIO, timeout, try)
 import UnliftIO.Concurrent (threadDelay)
@@ -53,16 +53,7 @@ runEnv =
     , ("AWS_ACCESS_KEY_ID", "test")
     , ("AWS_SECRET_ACCESS_KEY", "test")
     , ("ECLUSE_SERVER__PORT", "0")
-    , -- A boot here prepares the shipped advisory store, so the endpoint override keeps its
-      -- first poll on a closed local port rather than on the real AWS.
-      ("AWS_ENDPOINT_URL", "http://127.0.0.1:1")
     ]
-
-{- | This run's own advisory data directory. The shipped default is under @\/var\/lib@, which the
-suite cannot create, and a shared name lets two runs on one host sweep each other's temp files.
--}
-uniqueAdvisoryDataDir :: IO FilePath
-uniqueAdvisoryDataDir = getCanonicalTemporaryDirectory >>= (`createTempDirectory` "ecluse-bootspec-advisories")
 
 codeArtifactRepository :: String
 codeArtifactRepository = "https://d-111122223333.d.codeartifact.us-east-1.amazonaws.com/npm/r/"
@@ -79,9 +70,6 @@ awsRunEnv =
 -- | Verify role boot, process outcomes, and cleanup through the application entry points.
 spec :: Spec
 spec = do
-    -- Set once, and never unset with a case's own layer: every boot below plans the shipped
-    -- advisory store, and each needs the same directory to prepare it in.
-    runIO (uniqueAdvisoryDataDir >>= setEnv "ECLUSE_ADVISORIES__DATA_DIR")
     describe "shared listener settings" $ do
         forM_ [("default", [], 30), ("override", [("ECLUSE_SERVER__SHUTDOWN_DRAIN_TIMEOUT", "7")], 7)] $ \(label, timeoutEnv, expected) ->
             it ("uses the " <> label <> " timeout and configured port for every listener") $ do
@@ -139,22 +127,17 @@ spec = do
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Nothing
 
-        it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $
-            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
-                -- Erasing advisories.url is what leaves the shipped advisory store behind, and
-                -- only a document can do it. That is what makes this gate need no AWS at all.
-                let path = dir </> "config.yaml"
-                    keys = ["ECLUSE_CONFIG", "ECLUSE_MOUNTS__NPM__ENABLED", "ECLUSE_SERVER__PUBLIC_URL", "ECLUSE_SERVER__PORT"]
-                writeFileText path "advisories:\n  url: null\n"
-                unsetEnv "AWS_REGION"
-                unsetEnv "ECLUSE_QUEUE__URL"
-                setEnv "ECLUSE_CONFIG" path
-                setEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true"
-                setEnv "ECLUSE_SERVER__PUBLIC_URL" "https://registry.example.test"
-                setEnv "ECLUSE_SERVER__PORT" "0"
-                outcome <- timeout 100000 (withArgs ["proxy"] run)
-                traverse_ unsetEnv keys
-                outcome `shouldBe` Nothing
+        it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $ do
+            unsetEnv "AWS_REGION"
+            unsetEnv "ECLUSE_QUEUE__URL"
+            setEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true"
+            setEnv "ECLUSE_SERVER__PUBLIC_URL" "https://registry.example.test"
+            setEnv "ECLUSE_SERVER__PORT" "0"
+            outcome <- timeout 100000 (withArgs ["proxy"] run)
+            unsetEnv "ECLUSE_MOUNTS__NPM__ENABLED"
+            unsetEnv "ECLUSE_SERVER__PUBLIC_URL"
+            unsetEnv "ECLUSE_SERVER__PORT"
+            outcome `shouldBe` Nothing
 
         it "boots with a config document at the ECLUSE_CONFIG override path and serves" $ do
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
@@ -448,14 +431,10 @@ spec = do
                         let notices = filter (T.isInfixOf "the store maintenance client") (lines output)
                         notices `shouldBe` [notice | hasControlPlane]
 
-        it "refuses an advisory deny with no advisory store with exit 2, naming the rule" $
-            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
-                let path = dir </> "config.yaml"
-                writeFileText path "advisories:\n  url: null\n"
-                bracket_ (setEnv "ECLUSE_CONFIG" path) (unsetEnv "ECLUSE_CONFIG") $ do
-                    (outcome, report) <- bootRefusal ["check-config"] (overrideEnv "ECLUSE_RULES" cveDenyRule runEnv)
-                    outcome `shouldBe` Left (ExitFailure 2)
-                    report `shouldSatisfy` any (T.isInfixOf "enables the advisory deny rules DenyIfCve")
+        it "refuses an advisory deny with no advisory store with exit 2, naming the rule" $ do
+            (outcome, report) <- bootRefusal ["check-config"] (overrideEnv "ECLUSE_RULES" cveDenyRule runEnv)
+            outcome `shouldBe` Left (ExitFailure 2)
+            report `shouldSatisfy` any (T.isInfixOf "enables the advisory deny rules DenyIfCve")
 
         it "prints the mirror-collapse advisory a writing role boots on" $
             -- The typed advisory reaches an operator as this line or as nothing at all, so this

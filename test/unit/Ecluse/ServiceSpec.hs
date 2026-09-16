@@ -13,7 +13,7 @@ import Ecluse.Boot (BootEnv (BootEnv))
 import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.Executable (ExecutablePlan (epRoleWiring), MirrorWiring (mwCveSync), RoleWiring (MirrorPipelineWiring), planExecutable)
 import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
-import Ecluse.Composition.Support (expectConfig, expectPlanFor, noAdvisoryStoreDoc, noCeiling, staticEnvVars)
+import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, staticEnvVars)
 import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
 import Ecluse.Core.Cve (DbEtag (DbEtag))
@@ -99,8 +99,8 @@ advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
     for_ [ServeAndMirror, ServeOnly, MirrorOnly] $ \role ->
         it ("emits configured ecosystem ages for " <> show role) $
             withRoleTelemetry $ \logEnv telemetry meterEnv -> do
-                config <- expectConfig staticEnvVars (Just noAdvisoryStoreDoc)
-                bootPlan <- expectPlanFor (BootMirrorPipeline role) staticEnvVars (Just noAdvisoryStoreDoc) config noCeiling
+                config <- expectConfig staticEnvVars Nothing
+                bootPlan <- expectPlanFor (BootMirrorPipeline role) staticEnvVars Nothing config noCeiling
                 planned <-
                     planExecutable
                         logEnv

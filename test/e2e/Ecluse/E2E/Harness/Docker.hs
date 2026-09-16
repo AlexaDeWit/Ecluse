@@ -309,8 +309,8 @@ proxyEnv hostPort queueUrl =
 ministackEndpoint :: Text
 ministackEndpoint = "http://ministack:4566"
 
-{- | The AWS environment every role boots with. Each one prepares the advisory sync the shipped
-@advisories.url@ default names, so each needs a credential chain and an endpoint inside the network.
+{- | The AWS environment every role boots with. A role that is given an advisory store prepares its
+sync at boot, so each needs a credential chain and an endpoint inside the test network.
 -}
 ministackAwsEnv :: [(Text, Text)]
 ministackAwsEnv =

@@ -25,7 +25,6 @@ import Ecluse.Config (
     QueueTarget (..),
     RuntimeSettings (..),
     ServerSettings (..),
-    advisoryStoreUrlText,
     loadConfig,
     queueUrlTarget,
     queueUrlText,
@@ -315,7 +314,7 @@ spec = describe "decodeDocument" $ do
         loadConfig [] (Just "{\"limits\":{\"maxAdvisoryDatabaseBytes\":0}}")
             `shouldSatisfy` decodeErrorMentions "limits.maxAdvisoryDatabaseBytes"
 
-    it "loads the shipped advisory-sync defaults (poll interval, byte cap, data dir, store)" $
+    it "loads the shipped advisory-sync defaults (poll interval, byte cap, data dir, no store)" $
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
@@ -324,15 +323,15 @@ spec = describe "decodeDocument" $ do
                 -- Absolute on purpose: the shipped image sets no working directory, so a
                 -- relative path lands in a root the container's user cannot write.
                 advDataDir (cfgAdvisories (configApp doc)) `shouldBe` "/var/lib/ecluse/advisories"
-                -- The advisory stack is on by default, at the bucket the end-to-end tier uses.
-                advisoryStoreUrlText <$> advUrl (cfgAdvisories (configApp doc))
-                    `shouldBe` Just "s3://ecluse-advisories"
+                -- No default store: the artifact is unsigned and a bucket name is global, so a
+                -- shipped one would name a bucket this project does not own.
+                advUrl (cfgAdvisories (configApp doc)) `shouldBe` Nothing
 
     it "refuses a blank ECLUSE_ADVISORIES__URL rather than reading it as the erased key" $
         loadConfig [("ECLUSE_ADVISORIES__URL", "")] Nothing
             `shouldSatisfy` decodeErrorMentions "advisories.url"
 
-    it "takes an explicit null as the operator erasing the shipped advisory store" $
+    it "takes an explicit null as an absent advisory store, so a layer can withdraw one" $
         case loadConfig [] (Just "{\"advisories\":{\"url\":null}}") of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> advUrl (cfgAdvisories (configApp doc)) `shouldBe` Nothing

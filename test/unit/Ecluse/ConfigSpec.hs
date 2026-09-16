@@ -10,7 +10,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, noAdvisoryStoreDoc)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig)
 import Ecluse.Config (
     AppConfig (cfgQueue),
     Config (configApp, configMounts),
@@ -140,24 +140,24 @@ spec = do
 
     describe "the advisory push-age limit reported at boot" $ do
         it "derives six days from the shipped seven-day quarantine, naming the rule" $ do
-            cfg <- configFor privateMountDoc
+            cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv) (Just privateMountDoc)
             advisoryAgeLines cfg
                 `shouldBe` ["mount \"npm\": CVE-based denial refuses on an advisory push older than 6 days, derived a day ahead of this mount's earliest AllowIfOlderThan quarantine of 7 days"]
 
         it "names an explicit maximum as its own basis" $ do
-            cfg <- expectConfig (pubUrlEnv <> [("ECLUSE_ADVISORIES__MAX_AGE_SECONDS", "3600")]) (Just privateMountDoc)
+            cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv <> [("ECLUSE_ADVISORIES__MAX_AGE_SECONDS", "3600")]) (Just privateMountDoc)
             advisoryAgeLines cfg `shouldSatisfy` any (T.isInfixOf "1 hour, set by advisories.maxAgeSeconds")
 
         it "holds the floor under a two-day quarantine" $ do
-            cfg <- expectConfig (pubUrlEnv <> [("ECLUSE_RULES", "{\"min-age\":{\"ageSeconds\":172800}}")]) (Just privateMountDoc)
+            cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv <> [("ECLUSE_RULES", "{\"min-age\":{\"ageSeconds\":172800}}")]) (Just privateMountDoc)
             advisoryAgeLines cfg `shouldSatisfy` any (T.isInfixOf "3 days, the shipped floor")
 
         it "reports nothing for a mount whose rules read no advisory database" $ do
-            cfg <- expectConfig (pubUrlEnv <> [("ECLUSE_RULES", "{\"remediation-fast-track\":{\"enabled\":false}}")]) (Just privateMountDoc)
+            cfg <- expectConfig (pubUrlEnv <> advisoryStoreEnv <> [("ECLUSE_RULES", "{\"remediation-fast-track\":{\"enabled\":false}}")]) (Just privateMountDoc)
             advisoryAgeLines cfg `shouldBe` []
 
-        it "reports nothing at all with the advisory store erased, because nothing syncs" $ do
-            cfg <- expectConfig (pubUrlEnv <> privateNpmEnv) (Just noAdvisoryStoreDoc)
+        it "reports nothing at all without an advisory store, because nothing syncs" $ do
+            cfg <- configFor privateMountDoc
             advisoryAgeLines cfg `shouldBe` []
 
     describe "the advisory database a mount's rules require" $ do
@@ -211,9 +211,9 @@ spec = do
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 
--- | The serve-only npm mount as environment keys, for a case that spends its document layer.
-privateNpmEnv :: [(String, String)]
-privateNpmEnv = [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://priv.example.test")]
+-- | An advisory store, which the age lines report only once one is configured.
+advisoryStoreEnv :: [(String, String)]
+advisoryStoreEnv = [("ECLUSE_ADVISORIES__URL", "s3://advisories")]
 
 -- | Load a config document under the client-facing base URL every active mount needs.
 configFor :: ByteString -> IO Config

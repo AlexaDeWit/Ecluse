@@ -244,10 +244,11 @@ Parsing raw JSON advisory dumps on the proxy costs heavy GC pressure and memory 
 Écluse decouples that work into **Écluse Pilot**, a standalone service. Pilot pulls OSV's
 per-ecosystem exports, compiles them into a read-only SQLite database (`osv.db`), and pushes it
 to a private object store. `advisories.url` names that store as `s3://bucket[/prefix]`, its
-scheme picking the provider the way `queue.url` does. It ships a default, so the stack is on unless
-an operator's own document erases the key. With it erased, a mount whose rules include `DenyIfCve`
-or `DenyIfEpss` refuses the boot: those rules cannot decide without a database, so the pairing is a
-configuration error rather than a mount that denies every version it evaluates.
+scheme picking the provider the way `queue.url` does. Unset, the advisory stack is off: the artifact
+carries no signature and a bucket name is global, so a shipped default would name a bucket the
+project does not own. With the stack off, a mount whose rules include `DenyIfCve` or `DenyIfEpss`
+refuses the boot: those rules cannot decide without a database, so the pairing is a configuration
+error rather than a mount that denies every version it evaluates.
 
 OSV retains withdrawn records in its [GCS exports](https://google.github.io/osv.dev/faq/#how-does-osvdev-handle-withdrawn-records).
 Pilot excludes records carrying a withdrawal timestamp before it emits affected ranges or exact versions.
