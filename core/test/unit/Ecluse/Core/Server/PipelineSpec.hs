@@ -467,11 +467,11 @@ admissionLifetimeSpec = describe "admission lifetime after removing an allow" $
                 (LifetimePolicy [unavailableCveDeny] isUndecidable Retained)
                 ManifestMissing
 
-{- The cache a next read refills: the grouped cycle finished, the read put the version back, and the
-cycle after it decides on that state. It models retention on a read rather than observing one. -}
+{- The cache a next read refills. The trusted private leg serves a hit untouched, so the read puts
+the version back whatever the rules say, and the next grouped cycle decides on that state. -}
 cacheRetentionSpec :: Spec
 cacheRetentionSpec = describe "a private read that retains a version the cycle removed" $
-    it "removes the copy the read restored and keeps the version policy allows" $ do
+    it "serves the read untouched, removes the copy it restored, and keeps the version policy allows" $ do
         mirror <- newFakeStore (retentionStore "mirror" [deniedVersion, keptVersion])
         cache <- newFakeStore (retentionStore "cache" [])
         rules <- prepare inertRuleDeps [identityDeny]
@@ -480,7 +480,7 @@ cacheRetentionSpec = describe "a private read that retains a version the cycle r
         _ <- sweepCycle testPacing (recPorts cleared) [mount]
         storedVersions mirror `shouldReturn` [keptVersion]
         storedVersions cache `shouldReturn` []
-        nextPrivateGet (retainingUpstream cache) rules False
+        nextPrivateGet (retainingUpstream cache) rules True
         storedVersions cache `shouldReturn` [deniedVersion]
         reconciled <- recordingPorts Nothing
         _ <- sweepCycle testPacing (recPorts reconciled) [mount]
