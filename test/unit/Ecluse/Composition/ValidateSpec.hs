@@ -24,7 +24,7 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Endpoints (publicationTargetUrl)
 import Ecluse.Composition.Support (
-    clearedRepository,
+    clearedUrl,
     codeArtifactEnvVars,
     codeArtifactMirrorUrl,
     expectConfig,
@@ -81,7 +81,7 @@ privatePublicationSpec = describe "vetBoot private upstream and publication targ
 
         it "clears a usable store when publication is separate" $ do
             plan <- expectVetted role (withObservablePrivate (publishingAtTag "VERDACCIO" "https://publish.example.test" codeArtifactEnvVars))
-            fmap clearedRepository (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just (Just "mirror")
+            fmap clearedUrl (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just codeArtifactMirrorUrl
 
     it "clears the same-mount publication for proxy and mirror writers" $ do
         plan <- expectVetted MirrorWriter (withObservablePrivate (publishingAtTag "VERDACCIO" "https://private.example.test" codeArtifactEnvVars))
@@ -139,7 +139,7 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
 
     it "clears the deleting role the backend for a mirror store no other endpoint holds" $ do
         plan <- expectVetted MirrorPruner codeArtifactEnvVars
-        fmap repositoryOf (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just "mirror"
+        fmap clearedUrl (Map.lookup Npm (vpMirrorStores plan)) `shouldBe` Just codeArtifactMirrorUrl
 
     it "clears a backend for every mount that declares a mirror target" $ do
         plan <- expectVetted MirrorPruner codeArtifactEnvVars
@@ -154,8 +154,6 @@ clearedSpec = describe "vetBoot -- what a cleared configuration reifies" $ do
         let (advisories, outcome) = runVet MirrorWriter (vetBoot config)
         advisories `shouldBe` []
         fmap (Map.keys . vpMirrorStores) outcome `shouldBe` Right []
-  where
-    repositoryOf = fromMaybe "<not a CodeArtifact store>" . clearedRepository
 
 refusalSpec :: Spec
 refusalSpec = describe "vetBoot -- the refusals its groups earn" $ do

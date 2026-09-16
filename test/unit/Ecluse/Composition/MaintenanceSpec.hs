@@ -17,22 +17,23 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Maintenance (
-    ClearedBackend (cbAlphabet, cbControl, cbFetchManifest),
-    ClearedControl (ClearedCodeArtifact, ClearedCodeArtifactCache, ClearedProtocol),
-    ClearedProtocolStore (cpsConsent, cpsToken),
+    ClearedBackend (cbAlphabet, cbFetchManifest),
     ResolveMaintenanceAdapter,
     StorePorts (..),
     buildStoreMaintenance,
+    buildStoreObservation,
     planStoreMaintenance,
     vetPrivateCaches,
     vetStoreBackends,
  )
 import Ecluse.Composition.Support (
-    clearedRepository,
+    clearedUrl,
     codeArtifactEnvVars,
+    codeArtifactMirrorUrl,
     expectConfig,
     noMaintenanceBackend,
     overrideEnv,
+    privateInventoryRefusal,
     staticEnvVars,
     withObservablePrivate,
     withoutMirrorTargetToken,
@@ -44,9 +45,11 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
     AppConfig (cfgMounts),
     Config (configApp, configMounts),
-    DeletionConsent (DeletionWithheld),
+    ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
     MountMap,
+    StoreBackend,
     StoreTag (TagVerdaccio),
+    sbControl,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
@@ -66,11 +69,13 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (..),
     StoreFault (faultRetry),
     StoreMaintenance (readStoreManifest, storeFacts, verifyConsent),
+    StoreObservation (obFacts, obVerifyConsent),
     noNameAlphabet,
  )
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (casRepository)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Package (unsafeRegistryUrl, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
@@ -78,11 +83,29 @@ import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 
 spec :: Spec
 spec = do
+    boundarySpec
     passSpec
     protocolSpec
     buildSpec
     planSpec
     previewCachesSpec
+
+{- Both issuers at the boundary their refusals draw: a store a pass refused reaches no handle at
+all, because every cleared value in the map below came from the pass that returned it. -}
+boundarySpec :: Spec
+boundarySpec = describe "the cleared backend boundary" $ do
+    it "issues a mirror store's backend only where the deleting role's pass cleared it" $ do
+        withheld <- mountsFor (verdaccioEnv "false")
+        void (snd (vetted MirrorPruner withheld))
+            `shouldBe` Left [StoreMaintenanceUnavailable Npm (DeletionNotPermitted TagVerdaccio)]
+        consenting <- mountsFor (verdaccioEnv "true")
+        fmap Map.keys (snd (vetted MirrorPruner consenting)) `shouldBe` Right [Npm]
+
+    it "issues a private cache's backend only where the cache's own pass cleared it" $ do
+        refused <- expectConfig staticEnvVars Nothing
+        void (privateCaches adapterFor MirrorPruner refused) `shouldBe` Left [privateInventoryRefusal]
+        cleared <- expectConfig codeArtifactEnvVars Nothing
+        fmap Map.keys (privateCaches adapterFor MirrorPruner cleared) `shouldBe` Right [Npm]
 
 {- The rule as the boot applies it: over the loaded mounts, under each role. The deleting role
 is the one that refuses, and the checker's warning for it is what a writing role leaves behind. -}
@@ -92,8 +115,7 @@ passSpec = describe "vetStoreBackends" $ do
         mounts <- mountsFor codeArtifactEnvVars
         let (advisories, outcome) = vetted MirrorPruner mounts
         advisories `shouldBe` []
-        fmap (mapMaybe clearedRepository . Map.elems) outcome
-            `shouldBe` Right ["mirror"]
+        fmap (map clearedUrl . Map.elems) outcome `shouldBe` Right [codeArtifactMirrorUrl]
         fmap Map.keys outcome `shouldBe` Right [Npm]
 
     it "refuses the deleting role a mirror target this build cannot sweep, naming the key" $ do
@@ -138,7 +160,7 @@ protocolSpec = describe "vetStoreBackends -- a store swept through the ecosystem
     it "clears the deleting role a consenting Verdaccio target" $ do
         mounts <- mountsFor (verdaccioEnv "true")
         case vetted MirrorPruner mounts of
-            ([], Right cleared) -> map protocolArm (Map.elems cleared) `shouldBe` [True]
+            ([], Right cleared) -> traverse clearedBackendName (Map.elems cleared) `shouldReturn` ["verdaccio"]
             other -> expectationFailure ("expected one cleared protocol store, got: " <> show (refusalsOf other))
 
     it "refuses the deleting role a Verdaccio target carrying no deletion consent" $ do
@@ -156,7 +178,7 @@ protocolSpec = describe "vetStoreBackends -- a store swept through the ecosystem
         -- it reads the store and reports the verdict rather than refusing to boot on it.
         mounts <- mountsFor (verdaccioEnv "false")
         case vetted MirrorPreviewer mounts of
-            ([], Right cleared) -> map protocolArm (Map.elems cleared) `shouldBe` [True]
+            ([], Right cleared) -> traverse clearedBackendName (Map.elems cleared) `shouldReturn` ["verdaccio"]
             other -> expectationFailure ("expected one cleared protocol store, got: " <> show (refusalsOf other))
 
     it "refuses the preview role a target this build reaches no control plane for" $ do
@@ -189,7 +211,7 @@ and the verdicts it supplies are readable without a store to dial. -}
 buildSpec :: Spec
 buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosystem protocol" $ do
     it "supplies the backend's standing facts under the tag the store was declared with" $ do
-        handle <- protocolHandleFor id
+        handle <- protocolHandleFor MirrorPruner "true"
         let facts = storeFacts handle
         factBackend facts `shouldBe` "verdaccio"
         factDeleteCeiling facts `shouldBe` AtMost 1
@@ -199,34 +221,31 @@ buildSpec = describe "buildStoreMaintenance -- a store swept through the ecosyst
     it "reads a manifest over the store's own endpoint, not the public upstream" $ do
         -- The endpoint answers nothing, so the read reaching the network at all is what this
         -- shows: the handle carries the ecosystem's codec rather than an absent read.
-        handle <- protocolHandleFor id
+        handle <- protocolHandleFor MirrorPruner "true"
         (fmap faultRetry . leftToMaybe <$> readStoreManifest handle aPackage)
             `shouldReturn` Just RetryWorthwhile
 
     it "grants consent on the store the pass cleared" $ do
-        handle <- protocolHandleFor id
+        handle <- protocolHandleFor MirrorPruner "true"
         verifyConsent handle `shouldReturn` Right ConsentGranted
 
     it "withholds it, naming the key an operator sets, on a store carrying none" $ do
-        handle <- protocolHandleFor (\store -> store{cpsConsent = DeletionWithheld})
+        -- Only the preview role's pass clears a store carrying no consent, so its boot is the
+        -- one that builds the handle reporting the withheld verdict.
+        handle <- protocolHandleFor MirrorPreviewer "false"
         verifyConsent handle >>= \case
             Right (ConsentWithheld descriptor) ->
                 descriptor `shouldSatisfy` T.isInfixOf "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION"
             other -> expectationFailure ("expected a withheld verdict, got: " <> show other)
 
-{- The handle the live builder makes for the cleared Verdaccio store, under a caller's edit of
-the witness the pass issued. -}
-protocolHandleFor :: (ClearedProtocolStore -> ClearedProtocolStore) -> IO StoreMaintenance
-protocolHandleFor edit = do
-    cleared <- clearedBackendsFor (verdaccioEnv "true")
+{- The handle the live builder makes for the cleared Verdaccio store, under the role whose pass
+clears it and the deletion consent an operator wrote. -}
+protocolHandleFor :: RegistryRole -> String -> IO StoreMaintenance
+protocolHandleFor role permitDeletion = do
+    cleared <- clearedBackendsFor role (verdaccioEnv permitDeletion)
     case Map.elems cleared of
-        [backend] -> buildStoreMaintenance anonymousPorts defaultLimits (edited backend)
+        [backend] -> buildStoreMaintenance anonymousPorts defaultLimits backend
         other -> fail ("expected one cleared protocol store, got " <> show (length other))
-  where
-    edited backend = case cbControl backend of
-        ClearedProtocol store -> backend{cbControl = ClearedProtocol (edit store)}
-        ClearedCodeArtifact{} -> backend
-        ClearedCodeArtifactCache{} -> backend
 
 {- The ports a handle is built over when no live process supplies them: a passthrough tracing
 port, and no credential, which the store's origin then presents none of. -}
@@ -254,7 +273,7 @@ refusals accumulate rather than stopping at the first store whose client cannot 
 planSpec :: Spec
 planSpec = describe "planStoreMaintenance" $ do
     it "builds one handle per cleared store, keyed by the mount that declares it" $ do
-        backends <- clearedBackendsFor twoStoreEnv
+        backends <- clearedBackendsFor MirrorPruner twoStoreEnv
         outcome <-
             planStoreMaintenance
                 (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
@@ -265,7 +284,7 @@ planSpec = describe "planStoreMaintenance" $ do
         fmap Map.keys outcome `shouldBe` Right (Map.keys backends)
 
     it "reports a refusal for every store whose client the environment cannot build" $ do
-        backends <- clearedBackendsFor twoStoreEnv
+        backends <- clearedBackendsFor MirrorPruner twoStoreEnv
         Map.keys backends `shouldBe` [Npm, PyPI]
         outcome <-
             planStoreMaintenance
@@ -319,12 +338,10 @@ withoutMaintenance eco =
                     }
             }
 
--- Whether a cleared backend is the protocol arm, which is what a Verdaccio target resolves to.
-protocolArm :: ClearedBackend -> Bool
-protocolArm cleared = case cbControl cleared of
-    ClearedProtocol{} -> True
-    ClearedCodeArtifact{} -> False
-    ClearedCodeArtifactCache{} -> False
+{- The name a cleared store's own facts carry, which names the arm the pass cleared: a protocol
+store answers under its declared tag, and a vendor store under the vendor's. -}
+clearedBackendName :: ClearedBackend -> IO Text
+clearedBackendName cleared = factBackend . obFacts <$> buildStoreObservation anonymousPorts defaultLimits cleared
 
 -- A pass that logged nothing and cleared no store: what every writing role's pass looks like.
 clearsNothing :: ([Advisory], Either [BootError] (Map Ecosystem ClearedBackend)) -> Bool
@@ -342,11 +359,24 @@ renderedRefusals = maybe [] (map renderBootError) . refusalsOf
 mountsFor :: [(String, String)] -> IO MountMap
 mountsFor env = configMounts <$> expectConfig env Nothing
 
--- The deleting role's cleared backends for an environment layer, failing the test on a refusal.
-clearedBackendsFor :: [(String, String)] -> IO (Map Ecosystem ClearedBackend)
-clearedBackendsFor env = do
+-- The private-cache pass as a boot runs it, over the resolver the case drives it with.
+privateCaches :: ResolveMaintenanceAdapter -> RegistryRole -> Config -> Either [BootError] (Map Ecosystem (Maybe StoreBackend, ClearedBackend))
+privateCaches resolveAdapter role config =
+    snd (runVet role (vetPrivateCaches resolveAdapter (cfgMounts (configApp config)) (configMounts config)))
+
+-- The repository a cleared cache's own backend declaration addresses, absent on any other arm.
+privateRepository :: Maybe StoreBackend -> Maybe Text
+privateRepository backend = case sbControl <$> backend of
+    Just (ControlCodeArtifact store) -> Just (casRepository store)
+    Just ControlNone -> Nothing
+    Just (ControlProtocol _ _) -> Nothing
+    Nothing -> Nothing
+
+-- The backends a role's own pass clears for an environment layer, failing the test on a refusal.
+clearedBackendsFor :: RegistryRole -> [(String, String)] -> IO (Map Ecosystem ClearedBackend)
+clearedBackendsFor role env = do
     mounts <- mountsFor env
-    either (\errs -> fail ("the backend rule refused: " <> show errs)) pure (snd (vetted MirrorPruner mounts))
+    either (\errs -> fail ("the backend rule refused: " <> show errs)) pure (snd (vetted role mounts))
 
 -- | 'codeArtifactEnvVars' with a second mirrored mount, so the plan has two stores to build.
 twoStoreEnv :: [(String, String)]
@@ -369,21 +399,28 @@ pypiEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com
 pypiInternalEndpoint :: (IsString s) => s
 pypiInternalEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/pypi/internal/"
 
+-- | A private CodeArtifact cache on its own repository, distinct from the mirror target's.
+retainedEndpoint :: (IsString s) => s
+retainedEndpoint = "https://cache-999900001111.d.codeartifact.us-west-2.amazonaws.com/npm/retained/"
+
 previewCachesSpec :: Spec
 previewCachesSpec = describe "vetPrivateCaches" $ do
     it "clears anonymous protocol observation before private deletion consent exists" $ do
         config <- expectConfig (withObservablePrivate (withoutPrivateAuthority codeArtifactEnvVars)) Nothing
-        case snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config))) of
-            Right caches -> case map (cbControl . snd) (Map.elems caches) of
-                [ClearedProtocol store] -> do
-                    cpsToken store `shouldBe` Nothing
-                    cpsConsent store `shouldBe` DeletionWithheld
+        case privateCaches adapterFor MirrorPreviewer config of
+            Right caches -> case Map.elems caches of
+                [(credential, cleared)] -> do
+                    isNothing credential `shouldBe` True
+                    observation <- buildStoreObservation anonymousPorts defaultLimits cleared
+                    obVerifyConsent observation >>= \case
+                        Right (ConsentWithheld _) -> pass
+                        other -> expectationFailure ("expected a withheld verdict, got: " <> show other)
                 _ -> expectationFailure "expected one anonymous private protocol observation"
             Left errors -> expectationFailure (show errors)
 
     it "refuses a generic registry without an inventory backend" $ do
         config <- expectConfig staticEnvVars Nothing
-        let result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        let result = privateCaches adapterFor MirrorPreviewer config
         void result `shouldBe` Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "registry has no inventory control plane")]
 
     it "accumulates private inventory refusals across mounts" $ do
@@ -394,18 +431,18 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
                     <> [("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test/")]
                     <> withoutPrivateUpstreamUrl codeArtifactEnvVars
         config <- expectConfig env Nothing
-        let result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        let result = privateCaches adapterFor MirrorPreviewer config
             expected = [StoreMaintenanceUnavailable eco (PrivateCacheUnavailable "registry has no inventory control plane") | eco <- [Npm, PyPI]]
         void result `shouldBe` Left expected
 
     it "refuses a private protocol backend with no listing capability" $ do
         config <- expectConfig (withObservablePrivate (withoutPrivateAuthority codeArtifactEnvVars)) Nothing
-        let result = snd (runVet MirrorPreviewer (vetPrivateCaches withoutMaintenance (cfgMounts (configApp config)) (configMounts config)))
+        let result = privateCaches withoutMaintenance MirrorPreviewer config
         void result `shouldBe` Left [StoreMaintenanceUnavailable Npm NoProtocolMaintenance]
 
     it "clears the deleting role an independently consenting private store" $ do
         config <- expectConfig codeArtifactEnvVars Nothing
-        let result = snd (runVet MirrorPruner (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        let result = privateCaches adapterFor MirrorPruner config
         fmap Map.null result `shouldBe` Right False
 
     for_ ["TOKEN", "PERMIT_DELETION"] $ \missing ->
@@ -413,30 +450,35 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
             let key = "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__" <> missing
                 env = filter ((/= key) . fst) codeArtifactEnvVars
             config <- expectConfig env Nothing
-            let result = snd (runVet MirrorPruner (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+            let result = privateCaches adapterFor MirrorPruner config
             case result of
                 Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable detail)] -> detail `shouldSatisfy` T.isInfixOf (toText key)
                 other -> expectationFailure ("expected the private authority refusal, got " <> show (void other))
 
     it "adds no private observation when the mount has no mirror target" $ do
         config <- expectConfig (withoutMirrorTargetUrl (withoutMirrorTargetToken staticEnvVars)) Nothing
-        let result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        let result = privateCaches adapterFor MirrorPreviewer config
         fmap Map.null result `shouldBe` Right True
 
-    it "resolves the private CodeArtifact repository from its own endpoint" $ do
+    it "clears the private CodeArtifact cache on the repository its own endpoint addresses" $ do
         let env =
-                ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", "https://cache-999900001111.d.codeartifact.us-west-2.amazonaws.com/npm/retained/")
+                ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", retainedEndpoint)
                     : withoutPrivateUpstreamUrl codeArtifactEnvVars
         config <- expectConfig env Nothing
-        let result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
-        fmap (map (clearedRepository . snd) . Map.elems) result `shouldBe` Right [Just "retained"]
+        case privateCaches adapterFor MirrorPreviewer config of
+            Right caches -> case Map.elems caches of
+                [(backend, cleared)] -> do
+                    clearedUrl cleared `shouldBe` retainedEndpoint
+                    privateRepository backend `shouldBe` Just "retained"
+                _ -> expectationFailure "expected one cleared private CodeArtifact cache"
+            Left errors -> expectationFailure (show errors)
 
     it "refuses a private CodeArtifact endpoint for a different package format" $ do
         let env =
                 ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", "https://cache-999900001111.d.codeartifact.us-west-2.amazonaws.com/pypi/retained/")
                     : withoutPrivateUpstreamUrl codeArtifactEnvVars
         config <- expectConfig env Nothing
-        let result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor (cfgMounts (configApp config)) (configMounts config)))
+        let result = privateCaches adapterFor MirrorPreviewer config
         void result `shouldSatisfy` isLeft
 
 withoutPrivateAuthority :: [(String, String)] -> [(String, String)]
