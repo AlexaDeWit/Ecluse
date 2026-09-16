@@ -72,9 +72,8 @@ routable = \case
     AwaitingMounts _ -> False
     Latched -> False
 
-{- | Whether every configured mount is ready, which for a mount that denies on the advisory
-database means it holds one. This is a wait condition, not the routing verdict: the Dredger
-holds its first sweep for it.
+{- | Whether every configured mount is ready, which for one that denies on the advisory database
+means it holds one. A wait condition, not the routing verdict: the Dredger holds its first sweep.
 -}
 allMountsReady :: Readiness -> Bool
 allMountsReady = \case

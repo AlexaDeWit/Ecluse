@@ -274,18 +274,30 @@ runCveSync metrics tracing env schedule hooks = burst >>= poll 0
                 | elapsed < schedAbsentReport schedule -> pure elapsed
                 | otherwise -> 0 <$ reportUnloaded eco (syncStoreRef env) result
 
-{- The line an operator alerts on while nothing is loaded. The cause separates an artifact never
-published from a fetch that keeps failing, so it points at Pilot or at the store's own access. -}
+{- The line an operator alerts on while nothing is loaded. Its cause separates an artifact never
+published from one verification refused and from an access that keeps failing. -}
 reportUnloaded :: (KatipContext m) => Text -> Text -> AdvisorySyncResult -> m ()
-reportUnloaded eco store = \case
+reportUnloaded eco store result =
+    logFM ErrorS (ls ("cve-sync[" <> eco <> "]: " <> unloadedCause store result))
+
+-- Why nothing is loaded, worded to name the role or the access that has to change.
+unloadedCause :: Text -> AdvisorySyncResult -> Text
+unloadedCause store = \case
     AdvisoryNonePublished ->
-        logFM ErrorS (ls ("cve-sync[" <> eco <> "]: no advisory artifact has ever been published to " <> store <> ", and ecluse pilot is what compiles and publishes one. This ecosystem stays not-ready and its advisory denies refuse until an artifact lands."))
-    _ ->
-        logFM ErrorS (ls ("cve-sync[" <> eco <> "]: no advisory database has been acquired from " <> store <> "; this ecosystem stays not-ready and denies by default until one is. Continuing to poll; investigate the bucket, object, or IAM if this persists."))
+        "no advisory artifact has ever been published to " <> store <> ", and ecluse pilot is what compiles and publishes one. This ecosystem stays not-ready and its advisory denies refuse until an artifact lands."
+    AdvisoryRefused -> refusedArtifact
+    -- A poll that finds nothing changed while nothing is loaded is the refused artifact standing.
+    AdvisoryUnchanged -> refusedArtifact
+    AdvisoryFetchFailed ->
+        "no advisory database could be fetched from " <> store <> ": this ecosystem stays not-ready and denies by default until one loads. Continuing to poll; investigate the bucket, object, or IAM if this persists."
+    AdvisorySwapped ->
+        "no advisory database is loaded from " <> store <> ", so this ecosystem stays not-ready and denies by default until one is."
+  where
+    refusedArtifact =
+        "the advisory artifact at " <> store <> " was refused by verification, so nothing is loaded and this ecosystem stays not-ready. The refusal line names what failed, and ecluse pilot must publish an artifact that verifies."
 
 {- One observed step, yielding its classification beside (the burst may stop, the ETag now last
-seen). Residue propagates to the task's supervision. The span closes after the two records, so it
-reads marginally longer.
+seen). Residue propagates to supervision, and the span closes after the two records, so it reads longer.
 -}
 observedStep ::
     (MonadUnliftIO m, KatipContext m) =>

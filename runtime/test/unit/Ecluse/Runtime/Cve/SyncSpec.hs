@@ -731,6 +731,18 @@ spec = do
                 logged `shouldSatisfy` T.isInfixOf testStoreRef
                 logged `shouldSatisfy` T.isInfixOf "ecluse pilot"
 
+        it "names the store's access, not Pilot, when the fetch keeps failing" $
+            withSyncEnv $ \_ _ envWith -> do
+                (steps, onStep) <- newSwapCounter
+                logged <-
+                    captureSyncLog
+                        (envWith (headOnlyFetch (Left transportDown)))
+                        (scheduleOf [] 20_000)
+                        SyncHooks{hookFirstSync = pass, hookPushAge = onStep}
+                        (awaitCount "the poll that follows the boot burst" steps 2)
+                unloadedReports logged `shouldBe` 0
+                logged `shouldSatisfy` T.isInfixOf "investigate the bucket, object, or IAM"
+
         it "repeats that report at its own interval while nothing is published" $
             withSyncEnv $ \_ _ envWith -> do
                 (steps, onStep) <- newSwapCounter

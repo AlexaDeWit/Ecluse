@@ -328,6 +328,10 @@ spec = describe "decodeDocument" $ do
                 advisoryStoreUrlText <$> advUrl (cfgAdvisories (configApp doc))
                     `shouldBe` Just "s3://ecluse-advisories"
 
+    it "refuses a blank ECLUSE_ADVISORIES__URL rather than reading it as the erased key" $
+        loadConfig [("ECLUSE_ADVISORIES__URL", "")] Nothing
+            `shouldSatisfy` decodeErrorMentions "advisories.url"
+
     it "takes an explicit null as the operator erasing the shipped advisory store" $
         case loadConfig [] (Just "{\"advisories\":{\"url\":null}}") of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)

@@ -440,9 +440,8 @@ registerAdvisoryDatabaseAge :: Metrics -> Ecosystem -> IO (Maybe Double) -> IO (
 registerAdvisoryDatabaseAge m eco installedAt =
     void (observableGaugeRegisterCallback (mAdvisoryDatabaseAgeSeconds m) (reportAdvisoryDatabaseAge eco installedAt))
 
-{- | What one collection reports: whole seconds from the install stamp to now. With no generation
-installed it observes nothing, so a never-filled slot never reads as a fresh database. The clamp
-holds the age non-negative even for a stamp from the future.
+{- | What one collection reports: whole seconds from the install stamp to now, clamped non-negative.
+With no generation installed it observes nothing, so a never-filled slot never reads as fresh.
 -}
 reportAdvisoryDatabaseAge :: Ecosystem -> IO (Maybe Double) -> ObservableResult Int64 -> IO ()
 reportAdvisoryDatabaseAge eco installedAt result =

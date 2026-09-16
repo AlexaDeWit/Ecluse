@@ -336,7 +336,7 @@ mountRulesOf = map prRule . mountPolicy
 non-empty list is what makes an advisory store mandatory and the mount's readiness wait for one.
 -}
 mountAdvisoryDenials :: Mount -> [Text]
-mountAdvisoryDenials = map ruleName . filter deniesOnAdvisories . mountRulesOf
+mountAdvisoryDenials = ordNub . map ruleName . filter deniesOnAdvisories . mountRulesOf
 
 -- | Whether this mount must hold an advisory database before it can serve anything.
 mountDatabaseRequirement :: Mount -> DatabaseRequirement
