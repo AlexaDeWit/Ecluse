@@ -18,6 +18,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
 
     -- * What the backend does
     codeArtifactFacts,
+    codeArtifactBudget,
     deleteCeiling,
 
     -- * The npm codec
@@ -60,6 +61,7 @@ import Amazonka qualified as AWS
 import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 import Data.HashMap.Strict qualified as HM
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Lens.Micro ((.~), (?~), (^.))
 import Network.HTTP.Types (Header, statusCode)
@@ -91,6 +93,13 @@ import Ecluse.Core.Registry.Maintenance (
     parseNamePrefix,
     renderNamePrefix,
     storeRefusal,
+ )
+import Ecluse.Core.Registry.Maintenance.Budget (
+    QuotaDimension (AccountReads, AccountWrites, NameListing, TokenReads, VersionListing),
+    QuotaOrigin (QuotaDocumented),
+    RequestKind (CursorRead, CursorWrite, DeleteBatch, ListingPage, ManifestRead, PermissionRead, VersionPage),
+    StoreBudget (StoreBudget, bgCosts, bgOrigin, bgQuotas, bgScope),
+    mkQuotaScope,
  )
 import Ecluse.Core.Text (nonBlank, readDecimalText)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -148,7 +157,40 @@ codeArtifactFacts alphabet =
         , factRefill = RefillPermitted
         , factCompletion = CompletesOnCall
         , factNameAlphabet = alphabet
+        , factBudget = codeArtifactBudget
         }
+
+{- | The capacity a CodeArtifact account and Region is taken to have: the per-Region defaults AWS
+publishes, which this build reads from its documentation rather than discovering.
+-}
+codeArtifactBudget :: StoreBudget
+codeArtifactBudget =
+    StoreBudget
+        { bgScope = mkQuotaScope ""
+        , bgQuotas =
+            Map.fromList
+                [ (NameListing, 200)
+                , (VersionListing, 200)
+                , (AccountReads, 800)
+                , (AccountWrites, 100)
+                , (TokenReads, 1200)
+                ]
+        , bgOrigin = QuotaDocumented
+        , bgCosts = Map.fromList codeArtifactCosts
+        }
+
+{- The pools each call is charged to. Assigning the account read and write dimensions to the IAM
+access level is a conservative inference: AWS publishes no exhaustive operation-to-quota map. -}
+codeArtifactCosts :: [(RequestKind, Map QuotaDimension Rational)]
+codeArtifactCosts =
+    [ (ListingPage, Map.fromList [(NameListing, 1), (AccountReads, 1)])
+    , (VersionPage, Map.fromList [(VersionListing, 1), (AccountReads, 1)])
+    , (ManifestRead, Map.fromList [(AccountReads, 1), (TokenReads, 1)])
+    , (PermissionRead, Map.fromList [(AccountReads, 1)])
+    , (CursorRead, Map.fromList [(AccountReads, 1)])
+    , (CursorWrite, Map.fromList [(AccountWrites, 1)])
+    , (DeleteBatch, Map.fromList [(AccountWrites, 1)])
+    ]
 
 -- | The most versions one @DeletePackageVersions@ call accepts.
 deleteCeiling :: DeleteCeiling

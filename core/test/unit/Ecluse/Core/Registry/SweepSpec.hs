@@ -21,17 +21,29 @@ import Ecluse.Core.Registry.Maintenance (
     RetryAdvice (RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
     StoreCursor (writeCursor),
-    StoreFacts (factNameAlphabet),
+    StoreFacts (factBudget, factNameAlphabet),
     StoreFault (StoreFault, faultRetry, faultTransport),
     StoreMaintenance (classifyStore, enumerateVersions, listPackagesIn, readStoreManifest, storeCursor, verifyConsent),
     StoreObservation (obVerifyConsent),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
     inBucket,
+    meteredMaintenance,
     mkNameAlphabet,
     protocolFault,
     renderNamePrefix,
     storedVersion,
+ )
+import Ecluse.Core.Registry.Maintenance.Budget (
+    QuotaDimension (StoreRequests),
+    QuotaOrigin (QuotaDeclared),
+    QuotaScope,
+    RequestKind (ListingPage, PermissionRead),
+    RequestTally,
+    StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope),
+    mkQuotaScope,
+    tallyCounts,
+    undeclaredBudget,
  )
 import Ecluse.Core.Registry.Sweep (sweepCycle, withStoreRetry)
 import Ecluse.Core.Registry.Sweep.Types (
@@ -40,7 +52,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     EvidenceGaps (gapAdvisoryGeneration),
     PrerequisiteStatus (PrerequisiteMet, PrerequisiteUnmet, PrerequisiteUnread),
     SweepMount (smConfigured, smFirstParty, smRuleDeps),
-    SweepPacing (swpChunkPause, swpChunkSize, swpDeletionCap, swpShape),
+    SweepPacing (swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
     SweepPorts (sweepDelay),
     SweepShape (SweepCandidates, SweepEverything),
     SweepTally (tallyDeleted, tallyExamined, tallyGuardSkipped, tallyKept),
@@ -78,6 +90,7 @@ spec = do
     retrySpec
     candidateCycleSpec
     fullWalkSpec
+    budgetSpec
     epssSpec
     pacingSpec
     generationSpec
@@ -416,6 +429,55 @@ recordingCursor handle = do
     let recorded cursor =
             cursor{writeCursor = \prefix -> modifyIORef' written (prefix :) >> writeCursor cursor prefix}
     pure (reverse <$> readIORef written, handle{storeCursor = recorded <$> storeCursor handle})
+
+{- The cycle measures what it asked of each store, and paces the next one to land inside the target
+window. A window the measurement cannot reach warns and leaves the sweep at its ceiling. -}
+budgetSpec :: Spec
+budgetSpec = describe "the cycle request budget" $ do
+    it "counts what the cycle asked of the store it swept" $ do
+        (rec', _) <- meteredCycle testPacing
+        counted <- Map.lookup pacedScope <$> recRequests rec'
+        fmap (`kinds` ListingPage) counted `shouldBe` Just 1
+        -- Consent and classification are read again per target, so the grouped pair costs four.
+        fmap (`kinds` PermissionRead) counted `shouldBe` Just 4
+
+    it "says nothing about a window the measured cycle fits" $ do
+        (rec', _) <- meteredCycle testPacing
+        filter (T.isInfixOf "target cycle window") <$> recWarnings rec' `shouldReturn` []
+
+    it "warns and stays at its ceiling when the window cannot be reached" $ do
+        (rec', _) <- meteredCycle testPacing{swpCycleWindow = swpCyclePause testPacing}
+        warned <- filter (T.isInfixOf "target cycle window") <$> recWarnings rec'
+        warned `shouldSatisfy` any (T.isInfixOf "runs on at that ceiling")
+
+{- One cycle over a store whose capacity the operator declared, with every request it makes passing
+through the meter the ports read back. -}
+meteredCycle :: SweepPacing -> IO (RecordedSweep, CycleOutcome)
+meteredCycle pacing = do
+    store <- newFakeStore seededConfig{fakeFacts = pacedFacts}
+    rec' <- recordingPorts generation
+    let handle = meteredMaintenance (recGateFor rec' pacedScope) (fakeMaintenance store)
+    outcome <- sweepCycle pacing (recPorts rec') [testMount handle [denyRule] []]
+    pure (rec', outcome)
+
+pacedFacts :: StoreFacts
+pacedFacts = (fakeFacts defaultFakeStoreConfig){factBudget = pacedBudget}
+
+-- A store whose operator declared ten requests a second, which is capacity enough to pace against.
+pacedBudget :: StoreBudget
+pacedBudget =
+    undeclaredBudget
+        { bgScope = pacedScope
+        , bgQuotas = Map.singleton StoreRequests 10
+        , bgOrigin = QuotaDeclared
+        , bgCosts = Map.fromList [(kind, Map.singleton StoreRequests 1) | kind <- [minBound .. maxBound]]
+        }
+
+pacedScope :: QuotaScope
+pacedScope = mkQuotaScope "store.example.test"
+
+kinds :: RequestTally -> RequestKind -> Int
+kinds tally kind = sum [count | (counted, count) <- tallyCounts tally, counted == kind]
 
 pacingSpec :: Spec
 pacingSpec = describe "cycle chunk pacing" $ do

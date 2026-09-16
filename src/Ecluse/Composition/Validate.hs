@@ -18,6 +18,7 @@ module Ecluse.Composition.Validate (
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Composition.BootError (
+    Advisory (DredgerQuotaOverrideUnmatched),
     BootError (
         AdvisoryDenyWithoutStore,
         DredgerChunkPauseBeneathFloor,
@@ -34,22 +35,24 @@ import Ecluse.Composition.Endpoints (
     VettedEndpoints (vePublicationTargets),
     vetEndpoints,
  )
-import Ecluse.Composition.Maintenance (ClearedBackend, vetPrivateCaches, vetStoreBackends)
+import Ecluse.Composition.Maintenance (ClearedBackend, overrideKey, vetPrivateCaches, vetStoreBackends)
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
-import Ecluse.Composition.Vet (Severity (Ignore, Refuse), Vet, rule)
+import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, rule)
 import Ecluse.Config (
     AdvisoriesSettings (advUrl),
     AppConfig (cfgAdvisories, cfgDredger, cfgMounts, cfgServer),
     Config (configApp, configMounts),
-    DredgerSettings (drgChunkPause),
+    DredgerSettings (drgChunkPause, drgQuotaOverrides),
     FirstParty,
+    MirrorTarget (mtUrl),
     Mount,
     MountConfig (mntFirstParty, mntPrivateUpstream, mntPublicationTarget),
+    PrivateEndpoint (preTarget),
     PublicationEndpoint (peTarget, peToken),
     ServerSettings (srvAuthToken),
     StoreBackend,
     StoreTag,
-    Target (tgtTag),
+    Target (tgtTag, tgtUrl),
     mountAdvisoryDenials,
     mountRegistries,
     regMirrorTarget,
@@ -58,6 +61,7 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Registry.Adapter (RegistryAdapter, adapterFor, adapterPublish)
 import Ecluse.Core.Registry.Sweep.Types (minimumChunkPause)
+import Ecluse.Core.Security.Egress (registryUrlText)
 
 {- | What the pure boot pass cleared: the mounts a role may serve, the endpoints it may use, and
 the settings no rule vets.
@@ -107,6 +111,7 @@ vetBoot config =
         <*> vetPrivateCaches adapterFor (cfgMounts app) (configMounts config)
         <* vetSweepPacing app
         <* vetAdvisoryStore config
+        <* vetQuotaOverrides config
   where
     app = configApp config
 
@@ -145,6 +150,25 @@ vetAdvisoryStore config =
     denyingWithoutStore (eco, mount)
         | stored = Nothing
         | otherwise = (,) eco <$> nonEmpty (mountAdvisoryDenials mount)
+
+{- A declared capacity that matches no store paces nothing. It advises rather than refuses,
+because an endpoint renamed under a running Dredger would otherwise stop the role outright. -}
+vetQuotaOverrides :: Config -> Vet ()
+vetQuotaOverrides config = traverse_ (rule severity unmatched) declaredKeys
+  where
+    severity = \case
+        MirrorPruner -> Advise DredgerQuotaOverrideUnmatched
+        MirrorPreviewer -> Advise DredgerQuotaOverrideUnmatched
+        MirrorWriter -> Ignore
+    declaredKeys = Map.keys (drgQuotaOverrides (cfgDredger (configApp config)))
+    unmatched key = key <$ guard (overrideKey key `notElem` storeKeys)
+    storeKeys = map overrideKey (declaredStoreUrls config)
+
+-- Every store URL a mount declares as a sweep target: its mirror target and its private cache.
+declaredStoreUrls :: Config -> [Text]
+declaredStoreUrls config =
+    [registryUrlText (mtUrl target) | mount <- Map.elems (configMounts config), Just target <- [regMirrorTarget (mountRegistries mount)]]
+        <> [registryUrlText (tgtUrl (preTarget endpoint)) | mcfg <- Map.elems (cfgMounts (configApp config)), Just endpoint <- [mntPrivateUpstream mcfg]]
 
 vetMounts :: Config -> Vet [VettedMount]
 vetMounts config = catMaybes <$> traverse vetMount (activeMounts config)

@@ -16,6 +16,11 @@ module Ecluse.Composition.Maintenance (
 
     -- * The environment-dependent half
     StorePorts (..),
+    BudgetPorts (..),
+    storeScope,
+    scopeFor,
+    overrideKey,
+    resolvedBudget,
     BuildStoreMaintenance,
     BuildStoreObservation,
     StoreBuilds (..),
@@ -27,6 +32,7 @@ module Ecluse.Composition.Maintenance (
 ) where
 
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Validation (eitherToValidation, validationToEither)
@@ -48,6 +54,7 @@ import Ecluse.Config (
     MountConfig (mntPrivateUpstream),
     MountMap,
     PrivateEndpoint (..),
+    QuotaOverride (qoQuotas, qoScope, qoWeights),
     StoreBackend (BackendVerdaccio),
     StoreTag (TagCodeArtifact, TagRegistry, TagVerdaccio),
     Target (tgtTag, tgtUrl),
@@ -79,11 +86,21 @@ import Ecluse.Core.Registry.Adapter.Capability (
 import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Ecluse.Core.Registry.Maintenance (
     NameAlphabet,
-    StoreMaintenance,
+    StoreFacts (factBudget),
+    StoreMaintenance (storeFacts),
     StoreManifestRead,
-    StoreObservation,
+    StoreObservation (obFacts),
+    meteredMaintenance,
+    meteredObservation,
     noNameAlphabet,
     storeFaultOfMetadata,
+ )
+import Ecluse.Core.Registry.Maintenance.Budget (
+    QuotaOrigin (QuotaDeclared),
+    QuotaScope,
+    RequestGate,
+    StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope),
+    mkQuotaScope,
  )
 import Ecluse.Core.Registry.Maintenance.Protocol (
     ProtocolRead (..),
@@ -94,8 +111,8 @@ import Ecluse.Core.Registry.Maintenance.Protocol (
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
-import Ecluse.Core.Security (Limits (maxVersionCount))
-import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Core.Security (Limits (maxVersionCount), authorityLabel)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactCacheMaintenance, newCodeArtifactCacheObservation, newCodeArtifactMaintenance, newCodeArtifactObservation)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
@@ -268,6 +285,18 @@ data StorePorts = StorePorts
     -- ^ The tracing port the manifest read is bracketed by.
     , spCredential :: Maybe CredentialProvider
     -- ^ The credential for this exact target. An anonymous protocol observation holds none.
+    , spBudget :: RequestGate
+    -- ^ The gate this store's own requests are counted and paced through.
+    , spQuotaOverrides :: Map Text QuotaOverride
+    -- ^ What the operator declared about store capacity, keyed by the store URL.
+    }
+
+{- | What the boot knows about request capacity before any store is built: the gate for each
+capacity pool, and what the operator declared about those pools.
+-}
+data BudgetPorts = BudgetPorts
+    { bpGateFor :: QuotaScope -> RequestGate
+    , bpOverrides :: Map Text QuotaOverride
     }
 
 {- | How a boot builds one store's maintenance handle, under the response bound the plan resolved.
@@ -296,26 +325,84 @@ storeBuilds = StoreBuilds{sbDeleting = buildStoreMaintenance, sbObserving = buil
 way, and both arms read and dial over one manager of the store's own.
 -}
 buildStoreMaintenance :: BuildStoreMaintenance
-buildStoreMaintenance ports limits cleared = do
-    (readManifest, manager) <- storeAccess ports limits cleared
-    case cbControl cleared of
-        ClearedCodeArtifact store -> newCodeArtifactMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
-        ClearedCodeArtifactCache store -> newCodeArtifactCacheMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
-        ClearedProtocol store -> do
-            deletionManager <- newPooledManager storeConnections (singleAttemptSettings tlsManagerSettings)
-            pure (newProtocolMaintenance (protocolStore limits cleared store readManifest manager deletionManager))
+buildStoreMaintenance ports limits cleared = budgeted ports cleared <$> built
+  where
+    built = do
+        (readManifest, manager) <- storeAccess ports limits cleared
+        case cbControl cleared of
+            ClearedCodeArtifact store -> newCodeArtifactMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
+            ClearedCodeArtifactCache store -> newCodeArtifactCacheMaintenance (maxVersionCount limits) (cbAlphabet cleared) readManifest store
+            ClearedProtocol store -> do
+                deletionManager <- newPooledManager storeConnections (singleAttemptSettings tlsManagerSettings)
+                pure (newProtocolMaintenance (protocolStore limits cleared store readManifest manager deletionManager))
+
+-- The handle under this store's resolved capacity, with every request it makes counted and paced.
+budgeted :: StorePorts -> ClearedBackend -> StoreMaintenance -> StoreMaintenance
+budgeted ports cleared handle =
+    (meteredMaintenance (spBudget ports) handle){storeFacts = resolvedFacts ports cleared (storeFacts handle)}
 
 {- | The observing calls for a cleared store, built from the backend's own read capability rather
 than from a handle with its writes taken away.
 -}
 buildStoreObservation :: BuildStoreObservation
-buildStoreObservation ports limits cleared = do
-    (readManifest, manager) <- storeAccess ports limits cleared
-    case cbControl cleared of
-        ClearedCodeArtifact store -> newCodeArtifactObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest store
-        ClearedCodeArtifactCache store -> newCodeArtifactCacheObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest store
-        ClearedProtocol store ->
-            pure (newProtocolObservation (protocolRead limits cleared store readManifest manager))
+buildStoreObservation ports limits cleared = observed <$> built
+  where
+    observed handle =
+        (meteredObservation (spBudget ports) handle){obFacts = resolvedFacts ports cleared (obFacts handle)}
+    built = do
+        (readManifest, manager) <- storeAccess ports limits cleared
+        case cbControl cleared of
+            ClearedCodeArtifact store -> newCodeArtifactObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest store
+            ClearedCodeArtifactCache store -> newCodeArtifactCacheObservation (maxVersionCount limits) (cbAlphabet cleared) readManifest store
+            ClearedProtocol store ->
+                pure (newProtocolObservation (protocolRead limits cleared store readManifest manager))
+
+resolvedFacts :: StorePorts -> ClearedBackend -> StoreFacts -> StoreFacts
+resolvedFacts ports cleared facts =
+    facts{factBudget = resolvedBudget (spQuotaOverrides ports) (cbUrl cleared) (factBudget facts)}
+
+{- | The capacity pool a store shares: its own authority. Two repositories of one CodeArtifact
+account and Region, and two paths on one host, therefore land in the same pool.
+-}
+storeScope :: RegistryUrl -> QuotaScope
+storeScope = mkQuotaScope . authorityLabel . registryUrlText
+
+{- | The spelling a declared capacity's key and a store URL are compared under, so a trailing
+slash or a difference of case cannot miss a match.
+-}
+overrideKey :: Text -> Text
+overrideKey = T.dropWhileEnd (== '/') . T.toLower . T.strip
+
+-- What the operator declared about this exact store, where they declared anything.
+matchingOverride :: Map Text QuotaOverride -> RegistryUrl -> Maybe QuotaOverride
+matchingOverride overrides url = Map.lookup (overrideKey (registryUrlText url)) keyed
+  where
+    keyed = Map.fromList [(overrideKey key, override) | (key, override) <- Map.toList overrides]
+
+-- | The pool this store's requests are metered in, which a declared scope can join to another's.
+scopeFor :: Map Text QuotaOverride -> RegistryUrl -> QuotaScope
+scopeFor overrides url = maybe (storeScope url) mkQuotaScope (qoScope =<< matchingOverride overrides url)
+
+{- | The store's capacity as this boot resolves it: the backend's own description under the
+store's scope, with the operator's declaration replacing the scope, quotas, and weights it names.
+-}
+resolvedBudget :: Map Text QuotaOverride -> RegistryUrl -> StoreBudget -> StoreBudget
+resolvedBudget overrides url budget =
+    maybe located (declared located) (matchingOverride overrides url)
+  where
+    located = budget{bgScope = storeScope url}
+
+-- A declared capacity wins per dimension, and a declared weight scales that kind's own costs.
+declared :: StoreBudget -> QuotaOverride -> StoreBudget
+declared budget override =
+    budget
+        { bgScope = maybe (bgScope budget) mkQuotaScope (qoScope override)
+        , bgQuotas = Map.union (qoQuotas override) (bgQuotas budget)
+        , bgOrigin = if Map.null (qoQuotas override) then bgOrigin budget else QuotaDeclared
+        , bgCosts = Map.mapWithKey weighted (bgCosts budget)
+        }
+  where
+    weighted kind costs = maybe costs (\weight -> Map.map (* weight) costs) (Map.lookup kind (qoWeights override))
 
 -- One manager of the store's own, and the manifest read that leads over it.
 storeAccess :: StorePorts -> Limits -> ClearedBackend -> IO (StoreManifestRead, Manager)
@@ -335,10 +422,10 @@ storeManifestRead ports limits cleared manager name = do
 storeOrigin :: Limits -> ClearedBackend -> Manager -> Maybe ClientCredential -> OriginClient
 storeOrigin limits cleared manager = originClient limits manager (cbUrl cleared)
 
-{- The maintenance calls are not the proxy's data plane, so this manager carries none of its
-tracing, exactly as the vendor client's own does not. -}
+{- No proxy tracing: these calls are not the data plane. Dropping http-client's hidden replay on
+a reused connection keeps every attempt one the request budget counted. -}
 storeManager :: IO Manager
-storeManager = newPooledManager storeConnections tlsManagerSettings
+storeManager = newPooledManager storeConnections (singleAttemptSettings tlsManagerSettings)
 
 -- One store, swept package by package, so the pool holds what one in-flight request needs.
 storeConnections :: Int
@@ -378,6 +465,7 @@ environment earns. The builds accumulate, so one launch reports every store that
 planStoreMaintenance ::
     (StorePorts -> Limits -> ClearedBackend -> IO store) ->
     TracingPort ->
+    BudgetPorts ->
     CredentialProviders ->
     Limits ->
     Map Ecosystem ClearedBackend ->
@@ -389,15 +477,23 @@ planStoreMaintenanceFor ::
     CredentialTarget ->
     (StorePorts -> Limits -> ClearedBackend -> IO store) ->
     TracingPort ->
+    BudgetPorts ->
     CredentialProviders ->
     Limits ->
     Map Ecosystem ClearedBackend ->
     IO (Either [BootError] (Map Ecosystem store))
-planStoreMaintenanceFor target build tracing credentials limits backends =
+planStoreMaintenanceFor target build tracing budget credentials limits backends =
     validationToEither . traverse eitherToValidation <$> Map.traverseWithKey planOne backends
   where
-    planOne eco backend = refuseOnThrow (StoreMaintenanceUnavailable eco . reason) (build (portsFor eco) limits backend)
+    planOne eco backend =
+        refuseOnThrow (StoreMaintenanceUnavailable eco . reason) (build (portsFor eco backend) limits backend)
     reason = case target of
         MirrorCredential -> ClientBuildFailed
         PrivateCacheCredential -> PrivateCacheUnavailable . ("client build failed: " <>)
-    portsFor eco = StorePorts{spTracing = tracing, spCredential = lookupTargetProvider target eco credentials}
+    portsFor eco backend =
+        StorePorts
+            { spTracing = tracing
+            , spCredential = lookupTargetProvider target eco credentials
+            , spBudget = bpGateFor budget (scopeFor (bpOverrides budget) (cbUrl backend))
+            , spQuotaOverrides = bpOverrides budget
+            }

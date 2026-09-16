@@ -17,6 +17,7 @@ module Ecluse.Config (
     RuntimeSettings (..),
     ObservabilitySettings (..),
     DredgerSettings (..),
+    QuotaOverride (..),
     MountMap,
     Mount (..),
     MountRegistries (..),

@@ -47,6 +47,7 @@ import Ecluse.Core.Registry.Maintenance (
     storeFaultOfMetadata,
     storeRefusal,
  )
+import Ecluse.Core.Registry.Maintenance.Budget (undeclaredBudget)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError (MetadataUndecodable))
 import Ecluse.Core.Version (Version)
 
@@ -83,6 +84,7 @@ defaultFakeStoreConfig =
                 , factRefill = RefillRefused
                 , factCompletion = CompletesLater
                 , factNameAlphabet = noNameAlphabet
+                , factBudget = undeclaredBudget
                 }
         , fakeFault = Nothing
         , fakePageSize = 2

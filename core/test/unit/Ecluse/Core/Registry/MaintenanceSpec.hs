@@ -6,6 +6,7 @@ module Ecluse.Core.Registry.MaintenanceSpec (spec) where
 
 import Data.Conduit (fuseUpstream, runConduit, (.|))
 import Data.Conduit.List qualified as CL
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
@@ -16,8 +17,12 @@ import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Maintenance (
     DeleteCeiling (AtMost, NoCeiling),
     RetryAdvice (RetryFutile, RetryWorthwhile),
+    StoreCursor (writeCursor),
     StoreFault (..),
+    StoreMaintenance (classifyStore, deleteVersions, enumerateVersions, listPackagesIn, readStoreManifest, storeCursor, verifyConsent),
+    StoredVersion (StoredVersion, storedPresence, storedRevision, storedVersion),
     VersionOutcome (VersionRemoved, VersionUncertain, VersionUnreached),
+    VersionPresence (VersionServed),
     chunksOfCeiling,
     collectPages,
     collectPagesBounded,
@@ -25,6 +30,7 @@ import Ecluse.Core.Registry.Maintenance (
     extendBucket,
     inBucket,
     initialBuckets,
+    meteredMaintenance,
     mkNameAlphabet,
     noNameAlphabet,
     pageAll,
@@ -39,12 +45,23 @@ import Ecluse.Core.Registry.Maintenance (
     unreachedBatch,
     wholeNameSpace,
  )
+import Ecluse.Core.Registry.Maintenance.Budget (
+    RequestGate (RequestGate, gateSpend),
+    RequestKind (CursorWrite, DeleteBatch, ListingPage, ManifestRead, PermissionRead, VersionPage),
+ )
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
  )
 import Ecluse.Core.Security (LimitError (TooManyVersions))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
-import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
+import Ecluse.Test.Maintenance (
+    FakeStore (fakeMaintenance),
+    FakeStoreConfig (fakeContents, fakePageSize),
+    defaultFakeStoreConfig,
+    newFakeStore,
+    testDeleteGuard,
+    withBucket,
+ )
 
 spec :: Spec
 spec = do
@@ -54,6 +71,7 @@ spec = do
     pagingSpec
     chunkingSpec
     deleteDriveSpec
+    meteringSpec
 
 bucketSpec :: Spec
 bucketSpec = do
@@ -374,3 +392,57 @@ aFault =
         { faultTransport = transportFault TransportTimeout "the store did not answer"
         , faultRetry = RetryWorthwhile
         }
+
+{- Every request a handle makes is counted where the backend actually makes one: per listing page,
+per batch the delete ceiling divides the versions into, and once per read that answers directly. -}
+meteringSpec :: Spec
+meteringSpec = describe "meteredMaintenance" $ do
+    it "counts one request per listing page rather than one per bucket" $ do
+        (gate, counted) <- recordingGate
+        handle <- meteredMaintenance gate . fakeMaintenance <$> newFakeStore onePageEach
+        _ <- collectPages (listPackagesIn handle wholeNameSpace)
+        (kinds ListingPage <$> counted) `shouldReturn` 2
+
+    it "counts one request per batch the backend's own ceiling makes" $ do
+        (gate, counted) <- recordingGate
+        handle <- meteredMaintenance gate . fakeMaintenance <$> newFakeStore seededStore
+        _ <- deleteVersions handle testDeleteGuard (unscoped "left-pad") (map version ["1.0.0", "1.0.1", "1.0.2"])
+        (kinds DeleteBatch <$> counted) `shouldReturn` 2
+
+    it "counts each read that answers directly exactly once" $ do
+        (gate, counted) <- recordingGate
+        handle <- meteredMaintenance gate . fakeMaintenance <$> newFakeStore seededStore
+        _ <- verifyConsent handle
+        _ <- classifyStore handle
+        _ <- enumerateVersions handle (unscoped "left-pad")
+        _ <- readStoreManifest handle (unscoped "left-pad")
+        traverse_ (`writeCursor` wholeNameSpace) (storeCursor handle)
+        spent <- counted
+        map (`kinds` spent) [PermissionRead, VersionPage, ManifestRead, CursorWrite] `shouldBe` [2, 1, 1, 1]
+
+-- A gate that records what it was asked to spend instead of waiting for it.
+recordingGate :: IO (RequestGate, IO [RequestKind])
+recordingGate = do
+    spent <- newIORef []
+    pure (RequestGate{gateSpend = \kind -> modifyIORef' spent (kind :)}, reverse <$> readIORef spent)
+
+kinds :: RequestKind -> [RequestKind] -> Int
+kinds kind = length . filter (== kind)
+
+{- Two names, one holding three versions, so the fake's ceiling of two cuts a delete into two
+batches. Its listing pages one name at a time, so a bucket takes two pages. -}
+seededStore :: FakeStoreConfig
+seededStore =
+    defaultFakeStoreConfig
+        { fakeContents =
+            Map.fromList
+                [ (unscoped "left-pad", map stored ["1.0.0", "1.0.1", "1.0.2"])
+                , (unscoped "lodash", [stored "4.0.0"])
+                ]
+        }
+
+onePageEach :: FakeStoreConfig
+onePageEach = seededStore{fakePageSize = 1}
+
+stored :: Text -> StoredVersion
+stored raw = StoredVersion{storedVersion = version raw, storedPresence = VersionServed, storedRevision = Nothing}

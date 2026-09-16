@@ -17,12 +17,15 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Maintenance (
+    BudgetPorts (BudgetPorts, bpGateFor, bpOverrides),
     ClearedBackend (cbAlphabet, cbFetchManifest),
     ResolveMaintenanceAdapter,
     StorePorts (..),
     buildStoreMaintenance,
     buildStoreObservation,
     planStoreMaintenance,
+    resolvedBudget,
+    storeScope,
     vetPrivateCaches,
     vetStoreBackends,
  )
@@ -47,6 +50,7 @@ import Ecluse.Config (
     Config (configApp, configMounts),
     ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
     MountMap,
+    QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights),
     StoreBackend,
     StoreTag (TagVerdaccio),
     sbControl,
@@ -72,6 +76,15 @@ import Ecluse.Core.Registry.Maintenance (
     StoreObservation (obFacts, obVerifyConsent),
     noNameAlphabet,
  )
+import Ecluse.Core.Registry.Maintenance.Budget (
+    QuotaDimension (StoreRequests),
+    QuotaOrigin (QuotaDeclared),
+    RequestGate (RequestGate, gateSpend),
+    StoreBudget (bgOrigin, bgQuotas, bgScope),
+    budgetDeclared,
+    mkQuotaScope,
+    undeclaredBudget,
+ )
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Security (defaultLimits)
@@ -89,6 +102,7 @@ spec = do
     buildSpec
     planSpec
     previewCachesSpec
+    budgetSpec
 
 {- Both issuers at the boundary their refusals draw: a store a pass refused reaches no handle at
 all, because every cleared value in the map below came from the pass that returned it. -}
@@ -250,7 +264,20 @@ protocolHandleFor role permitDeletion = do
 {- The ports a handle is built over when no live process supplies them: a passthrough tracing
 port, and no credential, which the store's origin then presents none of. -}
 anonymousPorts :: StorePorts
-anonymousPorts = StorePorts{spTracing = passthroughTracingPort, spCredential = Nothing}
+anonymousPorts =
+    StorePorts
+        { spTracing = passthroughTracingPort
+        , spCredential = Nothing
+        , spBudget = ungatedRequests
+        , spQuotaOverrides = Map.empty
+        }
+
+-- Ports that pace nothing, for the cases about the handles a boot builds rather than their rate.
+unpacedBudget :: BudgetPorts
+unpacedBudget = BudgetPorts{bpGateFor = const ungatedRequests, bpOverrides = Map.empty}
+
+ungatedRequests :: RequestGate
+ungatedRequests = RequestGate{gateSpend = const pass}
 
 aPackage :: PackageName
 aPackage = unscopedNpm "leftpad"
@@ -278,6 +305,7 @@ planSpec = describe "planStoreMaintenance" $ do
             planStoreMaintenance
                 (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
                 passthroughTracingPort
+                unpacedBudget
                 noCredentialProviders
                 defaultLimits
                 backends
@@ -290,6 +318,7 @@ planSpec = describe "planStoreMaintenance" $ do
             planStoreMaintenance
                 (\_ _ _ -> throwIO NoStoreClient)
                 passthroughTracingPort
+                unpacedBudget
                 noCredentialProviders
                 defaultLimits
                 backends
@@ -483,3 +512,30 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
 
 withoutPrivateAuthority :: [(String, String)] -> [(String, String)]
 withoutPrivateAuthority = filter (\(key, _) -> key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN" && key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION")
+
+{- A store's capacity pool is its own authority, so two repositories of one CodeArtifact account
+land in one pool. A backend that publishes no quota runs unpaced until an operator declares one. -}
+budgetSpec :: Spec
+budgetSpec = describe "the request capacity a boot resolves for a store" $ do
+    it "puts two repositories of one account and Region in the same pool" $
+        storeScope (unsafeRegistryUrl (repository <> "mirror/"))
+            `shouldBe` storeScope (unsafeRegistryUrl (repository <> "internal/"))
+
+    it "leaves a backend that publishes no quota undeclared" $ do
+        let resolved = resolvedBudget Map.empty verdaccio undeclaredBudget
+        budgetDeclared resolved `shouldBe` False
+        bgScope resolved `shouldBe` mkQuotaScope "verdaccio.example.com"
+
+    it "takes an operator's declared capacity, matching the URL past case and a trailing slash" $ do
+        let declared = Map.singleton "HTTPS://Verdaccio.Example.com" capacity
+            resolved = resolvedBudget declared verdaccio undeclaredBudget
+        bgQuotas resolved `shouldBe` Map.singleton StoreRequests 100
+        bgOrigin resolved `shouldBe` QuotaDeclared
+
+    it "joins two endpoints of one pool under the scope the operator declared" $
+        bgScope (resolvedBudget (Map.singleton "https://verdaccio.example.com/" capacity{qoScope = Just "shared"}) verdaccio undeclaredBudget)
+            `shouldBe` mkQuotaScope "shared"
+  where
+    repository = "https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/"
+    verdaccio = unsafeRegistryUrl "https://verdaccio.example.com/"
+    capacity = QuotaOverride{qoScope = Nothing, qoQuotas = Map.singleton StoreRequests 100, qoWeights = Map.empty}

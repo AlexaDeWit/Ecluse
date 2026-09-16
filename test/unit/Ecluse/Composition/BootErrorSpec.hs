@@ -9,7 +9,7 @@ import Data.Text.Encoding qualified as TE
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
-    Advisory (MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream),
+    Advisory (DredgerQuotaOverrideUnmatched, MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream),
     BootError (..),
     StoreMaintenanceReason (ClientBuildFailed, NoControlPlane),
     renderAdvisory,
@@ -159,5 +159,9 @@ renderAdvisorySpec = describe "renderAdvisory" $ do
     it "quotes the mirror target as configured, trailing slash included" $
         advisoryBytes (MirrorTargetOnOwnPublicationTarget Npm (unsafeRegistryUrl "https://store.example.test/npm/mirror/"))
             `shouldBe` "mount \"npm\": mirrorTarget and publicationTarget resolve to the same registry (https://store.example.test/npm/mirror/); the Dredger refuses this configuration, so pruning this mirror stays manual"
+
+    it "quotes a declared capacity that names no store, and says it paces nothing" $
+        advisoryBytes (DredgerQuotaOverrideUnmatched "https://gone.example.test/")
+            `shouldBe` "dredger.quotaOverrides: \"https://gone.example.test/\" names no store this deployment declares, so it paces nothing"
   where
     advisoryBytes = TE.encodeUtf8 . renderAdvisory

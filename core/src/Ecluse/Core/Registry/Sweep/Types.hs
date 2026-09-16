@@ -78,6 +78,7 @@ import Ecluse.Core.Registry.Maintenance (
     deletionOf,
     observationOf,
  )
+import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps)
 import Ecluse.Core.Rules.Types (Rule)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..), SweepTarget)
@@ -179,6 +180,14 @@ data SweepPacing = SweepPacing
     {- ^ The wait between the end of one cycle and the start of the next, a halted one
     included. The role's own loop applies it, so a cycle is one supervised step.
     -}
+    , swpCycleWindow :: NominalDiffTime
+    {- ^ The window an advisory is paced to reach every affected mirrored version inside. It
+    covers the rest of the running cycle, the cycle pause, and the next whole cycle.
+    -}
+    , swpBudgetFraction :: Maybe Rational
+    {- ^ The share of a store's request capacity one sweep may take. Unset, each scope's share
+    is computed from its own tightest quota.
+    -}
     , swpDeletionCap :: Int
     -- ^ Versions one cycle may hand over for deletion before it halts for good.
     , swpShape :: SweepShape
@@ -253,6 +262,8 @@ data SweepPorts = SweepPorts
     -- ^ Where the sweep's own lines go.
     , sweepReport :: SweepReport
     -- ^ How this run reports a removal, and whether its cap stops the cycle.
+    , sweepBudget :: BudgetPort
+    -- ^ Where the cycle's own request counts are measured and the next cycle's rate installed.
     }
 
 -- | What one cycle did with the versions it examined.

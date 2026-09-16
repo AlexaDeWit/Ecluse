@@ -100,7 +100,7 @@ credentials are discovered the standard way.
 -}
 newCodeArtifactMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
 newCodeArtifactMaintenance limit alphabet readManifest store = do
-    env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+    env <- newMaintenanceEnv store
     boundedMaintenance limit alphabet readManifest store <$> controlPlaneFor env
 
 {- | Build the observing calls alone for one repository, over an environment discovered the same
@@ -108,20 +108,19 @@ way. No deletion, no tag write, and no publication is built, so the caller holds
 -}
 newCodeArtifactObservation :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
 newCodeArtifactObservation limit alphabet readManifest store =
-    boundedObservationFor limit alphabet readManifest store . readPlaneFor
-        <$> newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+    boundedObservationFor limit alphabet readManifest store . readPlaneFor <$> newMaintenanceEnv store
 
 -- | Build cache deletion with target-local reads and consent, allowing its declared refill role.
 newCodeArtifactCacheMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
 newCodeArtifactCacheMaintenance limit alphabet readManifest store = do
-    env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+    env <- newMaintenanceEnv store
     plane <- controlPlaneFor env
     pure (cacheMaintenanceFor limit alphabet readManifest store plane)
 
 -- | Observe the configured cache under its distinct refill classification without constructing writes.
 newCodeArtifactCacheObservation :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
 newCodeArtifactCacheObservation limit alphabet readManifest store = do
-    env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+    env <- newMaintenanceEnv store
     let readCalls = readPlaneFor env
     pure (boundedObservationFor limit alphabet readManifest store readCalls){obClassifyStore = cacheClassification readCalls store}
 
@@ -138,6 +137,14 @@ boundedMaintenance limit alphabet readManifest store plane =
 
 cacheClassification :: ReadPlane -> CodeArtifactStore -> IO (Either StoreFault StoreClass)
 cacheClassification readCalls store = fmap (const StoreDestroyable) <$> describeStore readCalls store
+
+{- The env every maintenance call is sent over. Its manager drops http-client's hidden replay on a
+reused connection, so an attempt the SDK did not make is not made below it either. -}
+newMaintenanceEnv :: CodeArtifactStore -> IO AWS.Env
+newMaintenanceEnv store = do
+    env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+    manager <- newManager (singleAttemptSettings tlsManagerSettings)
+    pure env{AWS.manager = manager}
 
 -- | Every call sent over one env, with the AWS error folded into a 'StoreFault'.
 controlPlaneFor :: AWS.Env -> IO ControlPlane

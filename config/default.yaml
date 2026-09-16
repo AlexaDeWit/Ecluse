@@ -224,6 +224,35 @@ dredger:
   # Seconds between the end of one cycle and the start of the next. A cycle that halted
   # waits the same pause and repeats its error line at each one.
   cyclePause: 3600
+  # Seconds within which an advisory reaches every affected mirrored version. A name an
+  # advisory newly covers can miss the running cycle's selection, so the window has to
+  # cover the rest of that cycle, the cyclePause, and the next whole cycle. Each complete
+  # cycle therefore gets (targetCycleWindow - cyclePause) / 2. Computed at boot as three
+  # cyclePause, which grants an active cycle the same allowance as the idle interval
+  # between cycles. The sweep measures what a cycle asks of the store and paces the next
+  # one to land inside the window. A window it cannot reach logs a warning naming the
+  # request budget it would need, and the sweep carries on at its ceiling.
+  # targetCycleWindow: 10800
+  # The share of a store's request capacity one sweep may take, above 0 and below 1, so a
+  # sweep cannot starve the proxy's own calls. Computed per capacity pool as the smaller
+  # of one half and chunkSize / chunkPause divided by the pool's tightest quota. On the
+  # shipped values against a CodeArtifact account that works out at 0.25. Set this to
+  # hold every pool to a share of your own choosing.
+  # requestBudgetFraction: 0.25
+  # Declared request capacity, keyed by the store URL it describes. A codeArtifact store
+  # needs none: its account and Region quotas are the AWS documented defaults. A
+  # verdaccio store publishes no quota at all, so it is paced by chunkSize and chunkPause
+  # alone until you declare one here. The value is yours to choose for your deployment,
+  # not a Verdaccio default. `scope` joins two endpoints of one capacity pool, and
+  # defaults to the store's own host and port. `quotas` are requests per second, keyed by
+  # nameListing, versionListing, accountReads, accountWrites, tokenReads, or
+  # storeRequests. `requestWeights` scale what one request costs, keyed by listingPage,
+  # versionPage, manifestRead, deleteBatch, permissionRead, cursorRead, or cursorWrite.
+  # An entry naming a store no mount declares warns at boot and paces nothing.
+  # quotaOverrides:
+  #   https://verdaccio.example.com/:
+  #     quotas:
+  #       storeRequests: 100
   # Versions one cycle may hand over for deletion. Reaching it halts the sweep for the
   # life of the process: no further cycle runs until you restart the Dredger deliberately.
   # It is the breaker against an advisory database that denies far more than it should.

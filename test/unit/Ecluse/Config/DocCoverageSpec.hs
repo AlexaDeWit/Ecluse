@@ -60,6 +60,8 @@ documentedEnvVars =
     , ("ECLUSE_DREDGER__CHUNK_SIZE", "25")
     , ("ECLUSE_DREDGER__CHUNK_PAUSE", "5")
     , ("ECLUSE_DREDGER__CYCLE_PAUSE", "600")
+    , ("ECLUSE_DREDGER__TARGET_CYCLE_WINDOW", "5000")
+    , ("ECLUSE_DREDGER__REQUEST_BUDGET_FRACTION", "0.1")
     , ("ECLUSE_DREDGER__DELETION_CAP", "500")
     , ("ECLUSE_DREDGER__FULL_WALK", "true")
     , ("ECLUSE_RULES", "{\"min-age\":{\"ageSeconds\":100}}")

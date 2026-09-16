@@ -165,6 +165,10 @@ data Advisory
       MirrorTargetOnPrivateUpstream Ecosystem Ecosystem RegistryUrl
     | -- | A mount's mirror target is also its own publication target, at the carried registry.
       MirrorTargetOnOwnPublicationTarget Ecosystem RegistryUrl
+    | {- | A @dredger.quotaOverrides@ entry names a store no mount declares, carried as the key it
+      was written under.
+      -}
+      DredgerQuotaOverrideUnmatched Text
     deriving stock (Eq, Show)
 
 {- | Fold a thrown fault into the boot error the caller names, so a phase that dials a live
@@ -336,6 +340,10 @@ renderAdvisory = \case
         mirrorCollapseLine eco (endpointRef eco other "privateUpstream") url
     MirrorTargetOnOwnPublicationTarget eco url ->
         mirrorCollapseLine eco "publicationTarget" url
+    DredgerQuotaOverrideUnmatched key ->
+        "dredger.quotaOverrides: \""
+            <> key
+            <> "\" names no store this deployment declares, so it paces nothing"
 
 -- The line both mirror collapses take: the collapsed pair, the registry they share, and the
 -- consequence of keeping the configuration.

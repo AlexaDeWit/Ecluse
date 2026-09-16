@@ -64,6 +64,79 @@ The pause comes before examining the next package after a completed chunk, never
 your value, and the floor. The pause is what leaves you time to stop a mistaken sweep, so you may
 raise it and never lower it.
 
+## The target cycle window
+
+`chunkSize` and `chunkPause` set how fast one chunk of packages is examined. They say nothing about
+how long a whole cycle takes, and a cycle's length is what decides how long an advisory takes to
+reach every affected mirrored version. `targetCycleWindow` is that time, in seconds.
+
+A name an advisory newly covers can miss the running cycle's selection. The window therefore has to
+cover the rest of that cycle, one `cyclePause`, and the next whole cycle. One complete cycle gets
+`(targetCycleWindow - cyclePause) / 2`. Left unset, the window is computed at boot as three
+`cyclePause`, which grants an active cycle the same allowance as the idle interval between cycles.
+On the shipped `cyclePause: 3600` that is a window of 10800 seconds and an allowance of 3600.
+
+The sweep measures what each cycle asks of the store: every listing page, every version
+enumeration, every metadata read, every delete call, every permission read, and every walk-marker
+read or write. It then paces the next cycle to land inside the allowance. A candidate cycle scales
+with the listing and the candidate count; a full walk scales with the whole store in prefix buckets.
+Pacing only ever comes from a cycle that completed. A cycle that halted read part of the store, so
+its counts are discarded rather than allowed to slow the next cycle on partial evidence.
+
+## The request budget
+
+A sweep shares a store with the proxy's own reads and writes, so it is held to a share of that
+store's request capacity. `requestBudgetFraction` is that share, above 0 and below 1.
+
+Left unset, the share is computed for each capacity pool as the smaller of one half and
+`chunkSize / chunkPause` divided by the pool's tightest quota. On the shipped values against a
+CodeArtifact account that is `min(0.5, 25/100) = 0.25`, which allows the sweep 50 listing calls,
+200 reads, and 25 writes per second. The budget covers the store being dredged alone. The public
+upstream is never read by a sweep.
+
+A `codeArtifact` store needs no declaration. Its capacity is taken from the per-Region service
+quotas AWS publishes, read from that documentation rather than discovered from your account, and
+the account and Region are read from the repository endpoint you declared. Charging a listing call
+to its named quota and an account read or write dimension is a conservative reading: AWS publishes
+no exhaustive operation-to-quota map.
+
+A `verdaccio` store publishes no quota at all. Until you declare one, nothing bounds its request
+rate and `chunkSize` and `chunkPause` are all that pace it. Declare one under `quotaOverrides`,
+keyed by the store URL:
+
+```yaml
+dredger:
+  quotaOverrides:
+    https://verdaccio.example.com/:
+      quotas:
+        storeRequests: 100
+```
+
+100 requests per second is an example, not a Verdaccio default and not a measured guarantee. The
+number is yours to choose for your deployment. An entry can also carry a `scope`, which joins two
+endpoints of one capacity pool so the sweep paces them together, and `requestWeights`, which scale
+what one kind of request costs. An entry naming a store no mount declares warns at boot and paces
+nothing.
+
+Each cycle's boot line records the pool each store runs under, where its numbers came from, and the
+quotas in force.
+
+**An unattainable window warns and carries on.** When the measured cycle needs more of the store's
+capacity than the share allows, the Dredger logs a warning naming the share the window would need
+and the share in force, then runs the next cycle at its ceiling. When the cycle's own work already
+fills the allowance, the warning says that no request budget reaches the window. The sweep never
+refuses over pacing, because a refused cycle leaves the denied version served.
+
+**One Dredger per store.** The budget reserves capacity from this sweep alone. It guarantees
+nothing against unrelated workloads, and two Dredger processes sharing one account need shares you
+allocate between them.
+
+**Not every physical attempt is counted.** The sweep counts the calls it makes. A retry the AWS SDK
+makes inside one call is not counted, and a version enumeration counts as one request however many
+pages the store takes to answer it. Maintenance clients no longer replay a request on a reused
+connection below that accounting, so a failure that http-client used to repair silently now reaches
+the store-fault policy: a metadata read that fails keeps its package until a later cycle.
+
 ## What is deleted, and what never is
 
 A version is deleted **only** on a named decisive deny. Everything else keeps it:
