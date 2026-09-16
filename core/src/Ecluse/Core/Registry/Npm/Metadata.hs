@@ -8,7 +8,7 @@ Selective reads materialise only the requested version and timestamp.
 -}
 module Ecluse.Core.Registry.Npm.Metadata (
     -- * Per-request read handle
-    newNpmMetadataClient,
+    newNpmMetadataReads,
 
     -- * npm full-manifest fetch
     fetchNpmManifest,
@@ -33,7 +33,6 @@ import Ecluse.Core.Registry (FetchFault, RegistryResponse)
 import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
-    MetadataClient,
     MetadataError (MetadataBoundExceeded),
     VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
     digestOf,
@@ -51,7 +50,7 @@ import Ecluse.Core.Registry.Npm.SelectiveDecode (
     SelectedVersion (svDistTagLatest, svName, svTime, svVersion, svVersionCount),
     selectVersionFromPackument,
  )
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits))
+import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits), OriginFor)
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (
@@ -62,25 +61,22 @@ import Ecluse.Core.Security (
     maxNestingDepth,
  )
 import Ecluse.Core.Security.Egress (registryUrlText)
-import Ecluse.Core.Server.Metadata (ManifestCaching, newMetadataClient)
-import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
--- | Build an origin read handle with shared caching and telemetry.
-newNpmMetadataClient ::
+-- | Bind one origin's npm metadata reads to their observers, leaving the caching policy to the caller.
+newNpmMetadataReads ::
     TracingPort ->
     MetricsPort ->
-    Metric.Upstream ->
-    ManifestCaching ->
     (PackageName -> MetadataError -> IO ()) ->
     (PackageName -> [InvalidEntry] -> IO ()) ->
     (PackageName -> IO ()) ->
-    OriginClient ->
-    MetadataClient
-newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch origin =
-    newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchNpmManifest tracing origin) (fetchNpmVersion tracing origin)
+    OriginFor posture ->
+    MetadataReads posture
+newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
+    newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing)
 
 fetchNpmPackument :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
 fetchNpmPackument origin = fetchMetadataFormBounded origin Full noValidators

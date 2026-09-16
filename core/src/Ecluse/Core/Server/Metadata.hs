@@ -1,16 +1,21 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
+{-# LANGUAGE RoleAnnotations #-}
 
 {- | Caching, metrics, and failure logs around registry metadata reads.
-Private reads remain uncached. Anonymous public reads share full-document and version caches.
+The caching policy is not exported, and an origin carries its credential posture in its type.
+'publicMetadataClient' takes reads over a 'Public' origin, which only
+'Ecluse.Core.Registry.Origin.anonymousOrigin' builds and which presents no credential, so reads
+that carry a caller's credential cannot reach the shared cache. 'privateMetadataClient' takes no
+cache at all. Anonymous public reads share full-document and version caches.
 -}
 module Ecluse.Core.Server.Metadata (
-    -- * Caching policy
-    ManifestCaching (..),
-
     -- * Constructing a per-request read handle
-    newMetadataClient,
+    MetadataReads,
+    newMetadataReads,
+    publicMetadataClient,
+    privateMetadataClient,
 
     -- * Projecting one version
     selectVersion,
@@ -27,6 +32,7 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
     VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
  )
+import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, originClientOf)
 
 import Ecluse.Core.Server.Cache (
     CacheEntry (CacheEntry, entryDigest, entryInfo, entryRaw),
@@ -41,14 +47,47 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | Private reads require per-client authorisation. Only anonymous public metadata may use the shared cache.
+-- Private reads re-authorise the caller at the upstream, so only anonymous public metadata
+-- resolves through the shared cache, keyed by the origin's Source.
 data ManifestCaching
-    = -- | Re-authorise the caller at the private upstream on every request.
-      Uncached
-    | -- | Resolve through the shared metadata cache under the origin's 'Source' key: the anonymous public origin.
-      Cached MetadataCache Source
+    = Uncached
+    | Cached MetadataCache Source
 
--- | Apply caching, failure logging, and metrics to the adapter's metadata reads.
+{- | One origin's raw reads bound to their observers, before a caching policy settles them into a
+'MetadataClient'. The phantom is the posture of the origin the reads were bound to.
+-}
+newtype MetadataReads (posture :: Type) = MetadataReads (Metric.Upstream -> ManifestCaching -> MetadataClient)
+
+-- As on OriginFor in Ecluse.Core.Registry.Origin: the default phantom role would let coerce
+-- turn per-caller reads into the ones the public builder accepts.
+type role MetadataReads nominal
+
+{- | Bind one origin's raw reads to the metrics port and the failure, invalid-entry, and fetch logs.
+The origin is applied to the fetch pair the caller supplies, and its posture tags the result.
+-}
+newMetadataReads ::
+    MetricsPort ->
+    (PackageName -> MetadataError -> IO ()) ->
+    (PackageName -> [InvalidEntry] -> IO ()) ->
+    (PackageName -> IO ()) ->
+    (OriginClient -> PackageName -> IO (Either MetadataError Manifest)) ->
+    (OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
+    OriginFor posture ->
+    MetadataReads posture
+newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion origin =
+    MetadataReads $ \upstream caching ->
+        newMetadataClient metrics upstream caching logFailure logInvalid logFetch (rawFetch client) (rawFetchVersion client)
+  where
+    client = originClientOf origin
+
+-- | The anonymous origin's handle, resolving through the shared cache under its 'Source' key.
+publicMetadataClient :: MetadataCache -> Source -> MetadataReads Public -> MetadataClient
+publicMetadataClient cache source (MetadataReads settle) = settle Metric.Public (Cached cache source)
+
+-- | The per-caller origin's handle. It takes no cache, so the upstream re-authorises every caller.
+privateMetadataClient :: MetadataReads Private -> MetadataClient
+privateMetadataClient (MetadataReads settle) = settle Metric.Private Uncached
+
 newMetadataClient ::
     MetricsPort ->
     Metric.Upstream ->

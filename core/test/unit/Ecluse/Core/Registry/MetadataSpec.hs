@@ -24,13 +24,12 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
     fetchThenProject,
  )
-import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataClient)
-import Ecluse.Core.Registry.Origin (originClient)
-import Ecluse.Core.Registry.PyPI.Metadata (newPyPIMetadataClient)
+import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataReads)
+import Ecluse.Core.Registry.Origin (perCallerOrigin)
+import Ecluse.Core.Registry.PyPI.Metadata (newPyPIMetadataReads)
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Metadata (ManifestCaching (Uncached))
-import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Server.Metadata (privateMetadataClient)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (unscopedNpm)
@@ -88,11 +87,11 @@ rawReadersSpec = describe "raw metadata readers" $
                 testWithApplication (pure (\_ respond -> respond (responseLBS (mkStatus code "test") [] (bodyFor ecosystem)))) $ \port -> do
                     manager <- newManager defaultManagerSettings
                     let name = mkPackageName ecosystem Nothing "thing"
-                        origin = originClient defaultLimits manager (loopbackRegistryUrl ("http://localhost:" <> show port)) Nothing
-                        makeClient = case ecosystem of
-                            PyPI -> newPyPIMetadataClient
-                            _ -> newNpmMetadataClient
-                        client = makeClient passthroughTracingPort noopMetricsPort Metric.Private Uncached (\_ _ -> pass) (\_ _ -> pass) (const pass) origin
+                        origin = perCallerOrigin defaultLimits manager (loopbackRegistryUrl ("http://localhost:" <> show port)) Nothing
+                        makeReads = case ecosystem of
+                            PyPI -> newPyPIMetadataReads
+                            _ -> newNpmMetadataReads
+                        client = privateMetadataClient (makeReads passthroughTracingPort noopMetricsPort (\_ _ -> pass) (\_ _ -> pass) (const pass) origin)
                     full <- fetchFullManifest client name
                     void full `shouldBe` expected
                     single <- fetchVersionMetadata client name (mkVersion ecosystem "1.0.0")
