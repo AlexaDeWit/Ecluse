@@ -60,9 +60,8 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
                 map (wpFirstParty policy) names `shouldBe` map (pdFirstParty deps) names
 
     it "contributes no bundle for an ecosystem without a resolved publish target" $ do
-        -- The bundle is whole or absent: without a publish target there is no mirror
-        -- write to marry, so no half-wired bundle exists. A job for the ecosystem then
-        -- fails closed at the worker rather than publishing nowhere.
+        -- The bundle is whole or absent: with no publish target to marry, a job for that
+        -- ecosystem fails closed at the worker rather than publishing nowhere.
         (env, bindings, _) <- composedFixtures
         Map.keys (workerPoliciesFor env bindings [] testArtifactCap) `shouldBe` []
 
