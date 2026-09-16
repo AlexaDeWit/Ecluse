@@ -68,7 +68,7 @@ import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, remove
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess, readProcessStdout)
-import UnliftIO (bracket, bracket_, handleAny)
+import UnliftIO (bracket, bracket_, finally, handleAny)
 
 import Ecluse.E2E.Fixtures.Advisories (buildAdvisoryFixtures)
 import Ecluse.E2E.Fixtures.Npm (artifactFile, buildFixtures, fixturePackages)
@@ -779,17 +779,18 @@ withUpstreamPaused e2e =
 one target's deletes fail while its reads keep answering.
 -}
 withPrivateCacheDeletesRefused :: GlobalDataPlane -> IO a -> IO a
-withPrivateCacheDeletesRefused plane =
-    bracket_ (reloadStub plane refuseCacheWrites) (reloadStub plane "")
+withPrivateCacheDeletesRefused plane action =
+    finally (reloadStub plane refuseCacheWrites >> action) (reloadStub plane "")
 
 -- The stub answers this before it picks a location, so it covers the whole route.
 refuseCacheWrites :: Text
 refuseCacheWrites = "    if ($request_method !~ ^(GET|HEAD)$) { return 503; }"
 
--- Rewrite the bind-mounted configuration in place, then have the running nginx pick it up.
+-- Rewrite the bind-mounted configuration in place, then have the running nginx pick it up. The
+-- write lands before the reload can fail, so a caller restores the file on every exit path.
 reloadStub :: GlobalDataPlane -> Text -> IO ()
-reloadStub plane guard = do
-    writeFileText (gdpWorkDir plane </> "nginx.conf") (nginxStubConfig guard)
+reloadStub plane cacheGuard = do
+    writeFileText (gdpWorkDir plane </> "nginx.conf") (nginxStubConfig cacheGuard)
     dockerOk ["exec", gdpStub plane, "nginx", "-s", "reload"]
 
 {- | Withhold one public artifact for the duration of the action, leaving its metadata served, and

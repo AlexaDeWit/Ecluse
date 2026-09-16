@@ -407,7 +407,10 @@ recoveryScenarios = describe "next private reads and recovery after a grouped cl
         verdaccioVersions cache name `shouldReturn` []
         withPublicArtifactWithheld plane name version $
             withRelaxedProxy plane $ \relaxed -> do
+                (fst <$> proxyGet relaxed (npmTarballPath name version)) `shouldReturn` 404
                 withNpmProject relaxed (\project -> void (npmInstallIn project name >>= shouldFail))
+                -- Give the worker a 1.5s window to mirror bytes it never obtained, then read both stores.
+                threadDelay 1500000
                 verdaccioVersions relaxed name `shouldReturn` []
                 verdaccioVersions cache name `shouldReturn` []
 
@@ -491,9 +494,9 @@ withRelaxedProxy plane action = withE2EWith defaultE2EConfig{ecExtraEnv = relaxe
 recoveryRules :: Text
 recoveryRules = renderRules (minAgeRule : zipWith identityEntry [1 :: Int ..] recoveryDenials)
   where
-    identityEntry index identity =
-        fromString ("revoke-" <> show index)
-            .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= identity]
+    identityEntry position revoked =
+        fromString ("revoke-" <> show position)
+            .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= revoked]
 
 -- Every fixture version predates the shipped quarantine, but a copy the publisher wrote does not.
 minAgeRule :: Pair
@@ -505,7 +508,7 @@ recoveryDenials =
         : map psName [recoveryFaultPkg, recoveryReadmitPkg, recoveryLostPkg, recoveryLatePkg]
 
 recoverySweepEnv :: Text -> [(Text, Text)]
-recoverySweepEnv identity = [("ECLUSE_RULES", identityRule identity)]
+recoverySweepEnv revoked = [("ECLUSE_RULES", identityRule revoked)]
 
 -- The label the Dredger's audit lines carry for the private cache it swept.
 privateTarget :: Text
