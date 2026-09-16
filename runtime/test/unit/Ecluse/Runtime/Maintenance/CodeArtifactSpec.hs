@@ -458,9 +458,8 @@ unexpected name _ = pure (Left (faultSaying ("the spec wired no " <> name <> " a
 reading :: ReadPlane -> ControlPlane
 reading observer = inertPlane{cpRead = observer}
 
-{- The reads a grouped sweep makes before each destructive batch: the inventory it reassesses
-against, and the two standing permissions it rechecks. The repository keeps every version, because
-these planes answer a delete without removing one, which is what a confirmation then reports. -}
+{- The reads a grouped sweep makes before each batch: the inventory it reassesses against and the
+two standing permissions. It keeps every version, so the confirmation reports an incomplete cleanup. -}
 stillHolding :: [Version] -> ReadPlane
 stillHolding versions =
     inertReader
