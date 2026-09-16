@@ -21,7 +21,6 @@ module Ecluse.Core.Server.Metadata (
     readOfInfo,
 ) where
 
-import Data.Kind (Type)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoDistTags, infoInvalidEntries, infoVersions), PackageName)

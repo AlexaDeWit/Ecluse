@@ -23,7 +23,6 @@ module Ecluse.Core.Registry.Origin (
     originClientOf,
 ) where
 
-import Data.Kind (Type)
 import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Credential (ClientCredential)
