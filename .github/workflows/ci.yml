@@ -279,9 +279,9 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-latest
-    # Sized for a cold run after a dependency-overlay change in flake.nix, which
-    # rebuilds the overridden closure's doc outputs from source.
-    timeout-minutes: 100
+    # Sized for a cold run: any flake.lock change misses the nix-docs cache and
+    # rebuilds the Haskell closure's doc outputs from source, which ran past 100 minutes.
+    timeout-minutes: 160
     # `checks.docs`, not `cabal haddock`: the cabal path wants a documentation variant of
     # the deps that build-test's store lacks, so it rebuilds the whole closure every run.
     steps:
