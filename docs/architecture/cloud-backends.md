@@ -264,9 +264,11 @@ Backends that add an ecosystem also owe the [ecosystem checklist](../testing.md#
 ### The credential mint
 
 Outbound auth (proxy to registry) is the mint facet of a hosted store. A `CredentialProvider`
-yields the current bearer token for that store's endpoint, refreshing before expiry. Only the
-mirror-target write uses it: reads forward the caller's own credential and the public upstream is
-anonymous ([Credential flow and authority](registry-model.md#credential-flow-and-authority)). The
+yields the current bearer token for that store's endpoint, refreshing before expiry. Two consumers
+use it: the mirror worker's write to the mirror target, and Dredger's store reads, including its
+preview reads of the private cache. Client reads forward the caller's own credential and the public
+upstream is anonymous
+([Credential flow and authority](registry-model.md#credential-flow-and-authority)). The
 tag the mirror target declares picks the mint, see
 [Outbound registry credentials](configuration.md#outbound-registry-credentials).
 

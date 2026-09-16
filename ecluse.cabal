@@ -47,12 +47,12 @@ flag dev-http-egress
   manual:      True
 
 -- Shared settings for every component. relude replaces the default prelude via
--- cabal mixins (see docs/architecture.md "relude as the implicit prelude").
+-- cabal mixins (see docs/style.md).
 common shared
   -- Warning set: -Wall plus extra warnings that reinforce the conventions in
-  -- STYLE.md. cabal.project promotes a warning to an error for our own package.
+  -- docs/style.md. cabal.project promotes a warning to an error for our own package.
   -- Deliberately omitted: -Wunused-packages (the relude mixin defeats its attribution,
-  -- see docs/architecture.md), -Wmissing-import-lists (open imports for internal
+  -- see docs/style.md), -Wmissing-import-lists (open imports for internal
   -- modules), and -Wmissing-local-signatures (a where-helper may stay inferred).
   ghc-options:
     -Wall -Wcompat -Widentities -Wincomplete-record-selectors

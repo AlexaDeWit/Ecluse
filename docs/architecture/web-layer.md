@@ -49,7 +49,8 @@ explicit configuration (`server.publicUrl` plus its derived prefix).
 
 ## Meta-routes: ping, health, and search
 
-`/livez` and `/readyz` stay distinct for orchestration. Liveness means the process responds.
+`/livez` and `/readyz` stay distinct for orchestration. Liveness means the process responds and,
+where a mirror worker runs, its consume loop keeps making progress.
 Readiness includes startup, draining, and the first advisory sync of at least one configured
 ecosystem, with the state of every mount in the body.
 Public-upstream reachability is not a readiness requirement, because private hits can still serve

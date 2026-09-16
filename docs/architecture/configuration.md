@@ -78,8 +78,10 @@ admits no static token for either mirror writes or private observations. The two
 tags each require a `token` under a mirror target.
 
 A tag never moves the proxy's credential posture. Private reads stay per-caller passthrough,
-public reads stay anonymous, and a `publicationTarget` token stays the fallback forwarded only
-when the publishing client sends none. Dredger uses its private credential only for observations.
+public reads stay anonymous. A `publicationTarget` token replaces the authenticated edge token on
+every publish, so Écluse's own credential becomes its authority at the publication target and the
+client's token only grants access to Écluse. The boot refuses that token without an edge token,
+because an open edge would let any caller publish under it. Dredger uses its private credential only for observations.
 
 The CodeArtifact mint is per domain. Mirror and private observation consumers whose resolved
 mint identities coincide share one
@@ -159,9 +161,10 @@ document owns only the document-merge schema above.
 #### The default policy
 
 The shipped default enables two rules. `min-age` (`AllowIfOlderThan`, 7 days) admits a public
-version that survived a quarantine window, the core defence against race-to-publish typosquatting
-and dependency confusion. `remediation-fast-track` (`AllowIfRemediatesCve`) ranks above it, so
-Écluse admits a release fixing a known CVE at once rather than waiting out the quarantine (see
+version only after a quarantine window. Registries usually find and yank a malicious publish within
+days, so the delay keeps it out of your builds. This quarantine is Écluse's core security boundary.
+`remediation-fast-track` (`AllowIfRemediatesCve`) ranks above it, so Écluse admits a release fixing
+a known CVE at once rather than waiting out the quarantine (see
 [Rules engine](rules-engine.md#allowifremediatescve-remediation-fast-track)).
 
 Every other built-in rule is off and opts in by name. The advisory denies (`DenyIfCve` and
@@ -176,7 +179,7 @@ API per request. The compilation, ETag polling, and atomic shadow-swap are under
 subsystem](rules-engine.md#cve-subsystem). The operator knobs (the store URL, the poll interval, the
 OSV export and EPSS feed sources, and the download size cap) are in the
 [configuration reference](https://ecluse-proxy.com/docs/configuration/#the-configuration-reference).
-With no store configured, the fast lane abstains and the age quarantine governs alone.
+With no store configured, the fast lane abstains and the quarantine governs alone.
 
 ### Validation: fail fast, reject the unknown
 

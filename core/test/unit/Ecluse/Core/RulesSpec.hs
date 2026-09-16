@@ -514,8 +514,7 @@ spec = do
                 `shouldBe` ("PrecededRule {rulePrecedence = 250, prRule = DenyInstallTimeExecution}" :: String)
 
     describe "defaultPrecedence" $ do
-        it "ranks every deny default strictly above every allow default" $ do
-            -- The out-of-the-box invariant: a matching deny overrides any allow.
+        it "ranks DenyInstallTimeExecution strictly above every allow default" $ do
             let allows = [AllowScope (mkScope "x"), AllowIfOlderThan 0, AllowByIdentity "x", AllowIfRemediatesCve]
             defaultPrecedence DenyInstallTimeExecution
                 `shouldSatisfy` (\d -> all ((d >) . defaultPrecedence) allows)

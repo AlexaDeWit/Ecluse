@@ -36,12 +36,11 @@
   --code-name: var(--water-deep);
   --code-punctuation: var(--slate);
 
-
-  // Prose keeps the reading measure. Code, tables, and card grids reclaim the
-  // full column, and the shell bounds header, footer, and the docs grid alike.
-  --measure: 62ch;
+  // Every content block shares the measure, and the shell bounds header, footer,
+  // and the docs grid alike.
+  --measure: 60rem;
   --column: 62rem;
-  --shell: 78rem;
+  --shell: 84rem;
   --gutter: 1.25rem;
 }
 
@@ -68,6 +67,5 @@
     --code-number: #d8bb7c;
     --code-name: #b9d2c8;
     --code-punctuation: #b3a992;
-
   }
 }

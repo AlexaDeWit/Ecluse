@@ -125,7 +125,7 @@ data PackumentDeps = PackumentDeps
     -}
     , pdNow :: IO UTCTime
     {- ^ The wall-clock "now" for the rules' 'Ecluse.Core.Rules.Types.EvalContext'.
-    Injected so the time-sensitive age gate is deterministic under test.
+    Injected so the time-sensitive quarantine is deterministic under test.
     -}
     , pdAdvisoryEtag :: IO (Maybe DbEtag)
     -- ^ Non-pinning read of the active advisory etag. 'Nothing' means no database is loaded.

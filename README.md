@@ -34,8 +34,9 @@ PyPI is served for reads, so pip, uv, and Poetry install through the same gate.
 
 A new public version waits in a quarantine, seven days by default, before a build can install it.
 Most malicious publishes are found and pulled within days, so the wait alone sidesteps them, with no
-attempt to detect malice. With an advisory database synced, a version that an advisory names as
-the exact fix for a vulnerability skips the wait, so the quarantine never delays a security patch.
+attempt to detect malice. A security patch overrides the quarantine as soon as the advisory data is
+available: a version that a synced advisory names as the exact fix for a vulnerability skips the
+wait.
 Everything else is deny by default and opt-in by name.
 
 If you run a private registry, Écluse reads it first and passes your own packages through untouched.
@@ -52,22 +53,6 @@ the only role that deletes, and it does so only from a store carrying the operat
 marker, under a per-cycle cap.
 
 The [operator manual](https://ecluse-proxy.com/docs/) covers running Écluse.
-`Ecluse.Core.Snapshot` carries each upstream body's digest through metadata projection and assembly.
-`Ecluse.Core.Package.Entry` defines artifact coordinates, and `Registry.ServedDocument` selects only
-the exact entries that admission kept. The npm and PyPI adapters own their wire parsing and rendering.
-`Ecluse.Core.Registry.Metadata.Projection` shares full-document validation and metadata error mapping across adapters.
-`Ecluse.Core.Server.Readiness` decides the `/readyz` verdict from each mount's advisory state, so one
-ecosystem awaiting its database leaves the healthy mounts routable.
-`Ecluse.Core.Osv.Provenance` holds what each advisory source said about itself, which Pilot writes
-into the artifact and reads against the operator's quiet-time threshold.
-`Ecluse.Runtime.Maintenance.CodeArtifact.Read` holds the CodeArtifact calls that only observe, and
-the evidence one observed version keeps: its exact repository, status, revision, and origin.
-`Ecluse.Core.Registry.Sweep.Group` joins bounded mirror and private-cache inventories for Dredger preview.
-The dry run evaluates both locations. The deleting command still removes only mirror-target versions.
-`Ecluse.Core.Worker.Lease` renews a received queue message's visibility for as long as the worker
-holds it, so a job slower than one window is not redelivered to a second consumer.
-`Ecluse.Core.Rules.Freshness` derives how old an advisory push may be before CVE-based denial
-refuses, and reads one push against that maximum.
 
 [`docs/architecture.md`](docs/architecture.md) has the design: the registry roles, the rules
 engine, and the mirror queue. The threat model (Saerskriven, STRIDE) lives in
@@ -163,16 +148,9 @@ DCO sign-off. The [Code of Conduct](CODE_OF_CONDUCT.md) governs participation, a
 
 ## Project structure
 
-`Ecluse.Core.Stream` provides the byte limiter shared by EPSS ingestion and advisory downloads.
-`Ecluse.Test.EcosystemBench` supplies format-specific performance inputs and adapter operations.
-The benchmark groups share projected package metadata, while adapters own raw document handling.
-`Ecluse.BenchLoad.Fixture` shares the composed proxy wiring for npm and PyPI load scenarios.
-`Ecluse.BenchLoad.Selection` qualifies scenario identities and groups reports by ecosystem.
-
 | Path        | Purpose                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `core/`     | `ecluse-core` library: the pure, ecosystem-agnostic capability core (`Ecluse.Core.*`)                                    |
-| `core/src/Ecluse/Core/Server/Cache/` | Bounded stores and conservative accounting for retained release fields |
 | `runtime/`  | `ecluse-runtime` library: the effectful edge (OTel SDK, warp, scribes, and cloud adapters, `Ecluse.Runtime.*`)           |
 | `src/`      | `ecluse` library: the composition shell that assembles and runs the tiers (`Ecluse.*`)                                  |
 | `app/`      | Executable entry point, thin wiring only                                                                                  |

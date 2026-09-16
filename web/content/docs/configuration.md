@@ -9,18 +9,6 @@ every default, so you write down only what you change: a wider quarantine, a mir
 policy of your own. Start with where a setting lives, because there are two places and one always
 wins.
 
-## Migrating the removed divergence refusal
-
-The former `integrity.divergencePolicy: fail-closed` setting now refuses startup.
-Remove it only after accepting private preference and divergence alarms.
-This also applies to `mounts.<ecosystem>.integrity.divergencePolicy` and their environment variables.
-The old `fail_closed` and `failclosed` spellings also refuse startup.
-
-The deprecated `warn` value still loads, including surrounding whitespace and case variants.
-An absent or null key uses the same behaviour. Remove these unused compatibility keys.
-Digest disagreement alone never removes a private version or its tags, blocks a private artifact
-request, or authorises deletion. Independent integrity checks still apply.
-
 ## Two layers, one spelling rule
 
 Configuration has two layers. **Environment variables** carry process and secret values. An
@@ -53,9 +41,12 @@ document keys, and each one has a deliberately narrow reach:
 
 | Variable | Écluse reads it for | Never affects |
 |---|---|---|
-| `AWS_REGION` | Scoping SQS, and only under an `AWS_ENDPOINT_URL_SQS` override, because a real SQS URL carries its own region. The AWS SDK still reads it on its own to region every other client | CodeArtifact, whose region comes from the mirror-target host |
+| `AWS_REGION` | Scoping SQS, only under an `AWS_ENDPOINT_URL_SQS` override | CodeArtifact, whose region comes from the mirror-target host |
 | `AWS_ENDPOINT_URL_SQS` | The SQS endpoint, and it forces the SQS reading of `queue.url` | S3 |
 | `AWS_ENDPOINT_URL` | The S3 advisory client, including against an emulator or a VPC endpoint | SQS |
+
+Écluse ignores `AWS_REGION` for SQS without the override, because a real SQS URL carries its own
+region. The AWS SDK still reads `AWS_REGION` on its own to region every other client.
 
 Both endpoint values get the same hygiene as every other URL: whitespace is trimmed, and a value
 with userinfo, a query, a fragment, or a malformed port fails the boot. The error names the
@@ -73,16 +64,18 @@ when more than one row applies.
 | Publication target and public upstream | Any mount pair | Host | Refuse | Refuse |
 | Mirror target and private upstream | Any mount pair | Registry | Warn | Refuse |
 | Mirror target and publication target | Same mount | Registry | Warn | Refuse |
+| Publication target and private upstream | Same mount | Registry | Allow | Refuse |
 | Publication target and another mount's private, mirror, or publication target | Other mounts | Registry | Refuse | Refuse |
 | Private and public upstream | Same mount | Registry | Refuse | Refuse |
 | One registry declared under different backend tags | Any endpoints | Registry | Refuse | Refuse |
 
-A publication target may equal its own mount's private upstream unless another refusal applies.
+Proxy and mirror serve normally when a publication target equals its own mount's private upstream.
+Dredger refuses the pair, because it deletes from the stores it maintains, and a first-party package
+can exist only in the publication target.
 Distinct repositories sharing a CodeArtifact host are not otherwise collapsed by the registry
 comparison. A mount's private and public upstreams must name distinct repositories, because
 the private leg forwards caller credentials and admits versions without the public rules.
 Boot and `check-config` refuse this collision, naming both configuration keys and the repository.
-Configurations that previously logged the private/public warning now refuse to start.
 
 ## The configuration reference
 
@@ -167,8 +160,11 @@ The keys each tag admits depend on the endpoint, because the endpoints hold diff
 
 Proxy reads forward the caller's own credential to the private upstream, while public reads
 remain anonymous. The mirror write uses Écluse's credential: `codeArtifact` mints it and admits
-no `token`, while the two non-minting tags require one. Every publication tag admits a fallback
-token, forwarded only when the publishing client sends none.
+no `token`, while the two non-minting tags require one. Every publication tag admits an optional
+static `token`. With one set, Écluse publishes with its own token, and a client's edge token only
+grants access to Écluse. This is not the preferred deployment. The boot refuses a static
+publication token unless `ECLUSE_SERVER__AUTH_TOKEN` also closes the edge, because an open edge
+would let any caller publish under it ([Edge authentication and client credentials](@/docs/deployment.md#edge-authentication-and-client-credentials)).
 
 Dredger preview also mints a CodeArtifact credential for private-cache observations from that
 target's own host identity. It never borrows a caller or publication token. Matching mirror and
@@ -194,8 +190,8 @@ names with a public one.
 | Path | What the privilege decides |
 | --- | --- |
 | Publish | Only a first-party name may be published through the relay. Every other name is a `403`. |
-| Serve | A first-party name resolves from `privateUpstream` alone. Écluse never fetches it from `publicUpstream` and never merges a public document into it. |
-| Mirror | Nothing first-party is mirrored, because nothing first-party is fetched from the public leg. The worker drops, and does not mirror, a job that was already on the queue when you declared the namespace. |
+| Serve | A first-party name resolves from `privateUpstream` alone. Écluse never fetches it from `publicUpstream` or merges a public document into it. |
+| Mirror | Nothing first-party is mirrored. The worker drops a job that was already queued when you declared the namespace. |
 
 The shape follows the ecosystem, and an empty or malformed list is refused at boot.
 
@@ -212,9 +208,8 @@ publish a distribution under that exact name.
 
 Exact PyPI declarations must follow the routed project-name grammar: at most 100 ASCII
 characters, with a letter or digit at each end. Internal `.`, `_`, and `-` separators remain
-accepted and normalised. Previously accepted exact declarations longer than 100 characters or
-with leading or trailing separators now fail configuration loading. Replace them with valid
-project names before upgrading. Prefix declarations `acme-*`, `acme_*`, and `acme.*` remain
+accepted and normalised. An exact declaration longer than 100 characters, or with a leading or
+trailing separator, fails configuration loading. Prefix declarations `acme-*`, `acme_*`, and `acme.*` remain
 equivalent and accepted.
 
 Setting `firstParty` on an npm mount narrows what a scoped install reaches. A name under one of
@@ -249,8 +244,8 @@ Secrets never live in the config document: client and registry tokens are always
 `codeArtifact` mirror target needs none, because Écluse mints its short-lived write token from the
 container's ambient AWS credentials. The two non-minting tags take the `token` key under the target,
 so a Verdaccio mirror write reads `ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN`. A
-**mirrored** mount therefore holds one write credential, and a serve-only mount never writes, so it
-holds none.
+**mirrored** mount's worker writes with one credential, and a serve-only mount needs none unless it
+declares a static publication token.
 
 The secret-typed variables also accept the container-secret file pattern. Set the `_FILE` form
 (`ECLUSE_SERVER__AUTH_TOKEN_FILE`, `ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN_FILE`,
@@ -278,6 +273,15 @@ refusal only one command earns prints as a warning naming that command instead o
 check. It decides everything the configuration alone decides and makes no cloud call. The
 validation model is in [Validation: fail fast, reject the unknown](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md#validation-fail-fast-reject-the-unknown).
 
+`integrity.divergencePolicy` is a deprecated key with no effect: `warn` (in any case, with
+surrounding whitespace), an absent value, and null all keep private preference and divergence
+alarms, so remove the key and its environment variable. The value `fail-closed`
+(also spelled `fail_closed` or `failclosed`) refuses startup, at the top level and under
+`mounts.<ecosystem>.integrity`. Before you remove it, accept that a digest disagreement keeps the
+private version and raises an alarm. Digest disagreement alone never removes a private version or
+its tags, blocks a private artifact request, or authorises deletion. Independent integrity checks
+still apply.
+
 ## Rule policy
 
 The policy is a named map of rules over the deny-by-default gate described in
@@ -287,18 +291,32 @@ stays the reviewable home for a real policy.
 
 Écluse ships eight built-in rule types, catalogued below. A shipped name patches the rule it names,
 `enabled: false` suppresses it, and a new name with a `type` adds a rule. A rule reads only its own
-type's knobs, and a knob written under a type that does not read it fails the load:
+type's knobs, and a knob written under a type that does not read it fails the load. The table lists
+the types from the highest default precedence to the lowest, so an earlier row wins over a later
+one:
 
-| Name | Type | On by default | What it decides | Key knobs |
-|---|---|---|---|---|
-| `min-age` | `AllowIfOlderThan` | Yes | Admits public versions older than the quarantine window, the core defence against race-to-publish typosquatting and dependency confusion. | `ageSeconds` (7 days by default) |
-| `remediation-fast-track` | `AllowIfRemediatesCve` | Yes | Admits a release a synced advisory names as its exact fixed version ahead of the quarantine, provided no other advisory still affects it. Abstains until a first advisory database syncs (set `ECLUSE_ADVISORIES__URL` and run Pilot), so without one only the quarantine governs. | (none) |
-| yours to add | `AllowScope` | No | Admits every version under an npm scope you already trust, past the quarantine and without reaching the advisory database. Sits above `min-age` and below every deny. | `scope` (the scope without its leading `@`) |
-| yours to add | `AllowByIdentity` | No | Explicit rules-engine escape hatch for a package or `package@version`. A bare name matches all versions. Sits above both advisory denies and below `DenyInstallTimeExecution` and `DenyByIdentity` by default. | `identity` |
-| yours to add | `DenyByIdentity` | No | Hard-denies a specific package or `package@version` (the `revoke` shape). | `identity` |
-| yours to add | `DenyInstallTimeExecution` | No, because many legitimate packages ship install scripts | Denies install-time code execution. | (none) |
-| yours to add | `DenyIfCve` | No | Blocks a version a synced advisory records as affected at or above the CVSS threshold. The npm malware feed carries no score and counts as above every threshold, so enabling it also blocks known-malicious packages. Sits just below `AllowByIdentity`, so an identity pin overrides it. | `minCvss` (0-10). `onUnavailable` (`deny` by default, or `skip`) decides what happens when the advisory database cannot answer. |
-| yours to add | `DenyIfEpss` | No | Blocks a version a synced advisory records as affected when that advisory's EPSS score is at or above the threshold. EPSS is FIRST.org's estimate of the probability a vulnerability is exploited in the wild within 30 days, so this gates on likelihood where `DenyIfCve` gates on severity. An individual missing EPSS score makes this rule abstain for that advisory. Shares `DenyIfCve`'s precedence. | `minEpss` (0-1). `onUnavailable` as for `DenyIfCve`. |
+| Type | On by default | Description | Knobs |
+|---|---|---|---|
+| `DenyByIdentity` | No | Denies a package or `package@version`. This is the revoke. | `identity` |
+| `DenyInstallTimeExecution` | No | Denies a version that runs code at install time. Many legitimate packages do, so it ships off. | None |
+| `AllowByIdentity` | No | Admits a package or `package@version`, and a bare name matches every version. It overrides both advisory denies. | `identity` |
+| `DenyIfCve` | No | Denies a version that a synced advisory marks as affected at or above a CVSS threshold. | `minCvss` (0-10), `onUnavailable` |
+| `DenyIfEpss` | No | Denies a version that a synced advisory marks as affected when its EPSS score meets a threshold. Ties with `DenyIfCve`. | `minEpss` (0-1), `onUnavailable` |
+| `AllowScope` | No | Admits every version under an npm scope you trust, past the quarantine and without consulting the advisory database. | `scope`, without the leading `@` |
+| `AllowIfRemediatesCve` | Yes | Provided by default with the name `remediation-fast-track`. Admits the exact fixed version a synced advisory names, ahead of the quarantine, if no other advisory still affects it. | None |
+| `AllowIfOlderThan` | Yes | Provided by default with the name `min-age`. Holds each new public version for the quarantine window, so a malicious publish is usually found and yanked before a build can install it. | `ageSeconds` (7 days by default) |
+
+The advisory rules carry details the table leaves out:
+
+- `remediation-fast-track` abstains until a first advisory database syncs, so without one only the
+  quarantine governs. Set `ECLUSE_ADVISORIES__URL` and run Pilot to sync one.
+- The npm malware feed carries no score, so `DenyIfCve` counts a malware entry as above every
+  threshold. Enabling it also blocks known-malicious packages.
+- EPSS is FIRST.org's estimate of the probability that attackers exploit a vulnerability within 30
+  days. `DenyIfEpss` gates on that likelihood, where `DenyIfCve` gates on severity. A missing EPSS
+  score makes the rule abstain for that advisory.
+- `onUnavailable` decides what both advisory denies do when the advisory database cannot answer:
+  `deny` by default, or `skip`.
 
 Before you enable `DenyIfCve` or `DenyIfEpss`, read
 [Onboarding the advisory denies](@/docs/configuration.md#onboarding-the-advisory-denies).
@@ -345,13 +363,18 @@ still needs historical versions your existing builds depend on, and an advisory 
 covered them. Enable them *after* you warm your private mirror:
 
 1. Leave both out of your policy and run Écluse normally, so your CI and developers pull the
-   versions you depend on. Each lands in the trusted store, which the rules never re-gate once the
-   version is there.
+   versions you depend on. Each lands in the trusted store, and Écluse serves it from there without
+   gating it again at request time.
 2. Once your must-have builds have mirrored, add `DenyIfCve` with a `minCvss` you are
    comfortable with. A threshold of 8 blocks high and critical CVEs, and malware blocks regardless
    of the threshold.
 3. If Écluse then denies a specific version you must keep, pin it with an `AllowByIdentity` rule,
    which outranks both. That covers a false positive or a risk you accept.
+
+A warmed version is not exempt forever. `ecluse dredger` checks the stored versions against your
+current rules and prunes what they now deny, so a policy change cannot leave an ineligible version
+in the mirror. When Dredger runs, pin every version you must keep before you add a deny, and run
+`ecluse dredger --dry-run` to see what it would remove.
 
 Add `DenyIfEpss` alongside `DenyIfCve`, not instead of it. EPSS estimates exploitation probability,
 not severity or proof of exploitation. An individual missing score makes EPSS abstain, including
@@ -388,13 +411,6 @@ The consumer rejects missing, unavailable, or unrecognised markers before instal
 A successful marker establishes whole-feed enrichment, not an individual score or a new timestamp.
 Optional feed dates and individual scores can remain absent.
 
-Upgrade in this order:
-
-1. Deploy a producer that writes the success marker and publish marked artifacts for every EPSS-dependent ecosystem.
-2. Upgrade consumers, including proxy, worker, and Dredger roles, to enforce qualification.
-3. Keep optional producer failure disabled until all advisory-reading consumers enforce qualification.
-
-Older epoch 4 artifacts can contain scores without the marker. Only consumers without EPSS-dependent rules accept those artifacts.
+An artifact without the marker serves only ecosystems with no EPSS-dependent rule.
 A running consumer retains its accepted qualified generation after rejection, subject to its existing maximum age.
 A restarted consumer starts with an empty slot and does not recover the local canonical file.
-Publish marked artifacts before upgrading dependent consumers. Epoch 4 remains unchanged.

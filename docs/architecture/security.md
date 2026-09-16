@@ -35,8 +35,8 @@ edge breach then exposes only the public-gated view plus the untrusted-egress an
 never private packages.
 
 **Passthrough relocates credential risk to the proxy runtime.** Forwarding each caller's own
-credential ([credential flow](registry-model.md#credential-flow-and-authority)) leaves Écluse holding no standing read or publish
-credential. It does hold every in-transit caller's credential in memory, transiently. So
+credential ([credential flow](registry-model.md#credential-flow-and-authority)) leaves the proxy with no read or publish
+credential of its own, unless you configure a static publication token. It does hold every in-transit caller's credential in memory, transiently. So
 Écluse's own runtime and supply-chain integrity are a first-class control: the attested,
 reproducible image ([release supply chain](release-supply-chain.md)). The token-stripping
 boundary and the no-redirect-with-credential invariant are load-bearing, because real caller credentials cross them.
@@ -48,9 +48,10 @@ operator-declared destination (the private upstream, the mirror and publication 
 S3, the OTLP collector), which goes where the configuration says. Https-only with certificate
 validation applies to every registry endpoint regardless.
 
-**The mirror-target write token is the one standing credential a mirrored deployment holds.** A
-serve-only deployment holds none. The token is also the sharpest privilege, since it writes the
-trusted store. Scope it to mirror publication and the repository reads needed for the presence
+**Each role runs under its own identity, and the mirror worker's is the only one that writes the
+trusted store.** A serve-only deployment has no such identity. That write authority is the sharpest
+privilege, since it feeds the trusted read path. The per-role grants are in
+[Role identities and least privilege](https://ecluse-proxy.com/docs/deployment/#role-identities-and-least-privilege). Scope it to mirror publication and the repository reads needed for the presence
 probe. Token-mint permission is separate from both. Prefer container-role minting over a static
 secret and minimise its TTL. Dredger needs a different action set: reads and deletion, not
 publication. The [operator permission table](https://ecluse-proxy.com/docs/dredger/#permissions)

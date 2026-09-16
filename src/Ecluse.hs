@@ -11,13 +11,15 @@ chamber whose gates never open at once. Every dependency is held and cleared
 through that controlled passage before it enters a build.
 
 The goal is __resilience, not malware detection__. Shrink the blast radius of a bad
-publish (a hijacked maintainer account, a race-to-publish, a typosquat), rather than
-promise to recognise malice.
+publish, such as a version pushed from a hijacked maintainer account, rather than
+promise to recognise malice. The quarantine is the central control: each new public
+version waits out a window, because registries usually find and yank a malicious
+publish within it.
 
 Écluse is __not a registry__. The operator's own backend stores the packages (AWS
-CodeArtifact, GCP Artifact Registry). Écluse governs only what may be fetched from,
-and mirrored to, those backends. npm is the first ecosystem. The domain model is
-ecosystem-agnostic, so PyPI and RubyGems can follow.
+CodeArtifact, or any registry that speaks the ecosystem's protocol). Écluse governs only
+what may be fetched from, and mirrored to, those backends. npm and PyPI ship today. The
+domain model is ecosystem-agnostic, so further ecosystems can follow.
 
 == How a request is cleared
 
@@ -34,12 +36,14 @@ registry. The two request shapes use them differently:
   public upstreams in parallel, filters the public versions through the rules, and
   trusts the private ones. It then combines the two into one document. Private wins
   a version collision, Écluse flags an integrity divergence as a supply-chain
-  signal, and @latest@ repoints to the newest survivor.
+  signal, and @latest@ stays where it is unless denied, and otherwise moves to the
+  highest stable survivor.
 
 Two properties run through both shapes. The rules engine is __deny by default__: a
-version is admitted only if some rule allows it and none denies it. __Mirroring is
-demand-driven__, so Écluse mirrors only the versions a client actually pulls, never
-on the request's critical path.
+version is admitted only when the first decisive rule in precedence order allows it.
+When no rule decides, Écluse denies it. __Mirroring is demand-driven__, so Écluse
+mirrors only the versions a client actually pulls, never on the request's critical
+path.
 
 == How the code is organised
 
@@ -75,9 +79,9 @@ importable unit. @app\/Main.hs@ stays a thin shell that only calls it.
 
 == Further reading
 
-@docs\/architecture.md@ is the systems-design index: the vision, the end-to-end
-request lifecycle, and a map to the per-concern design documents. @CONTRIBUTING.md@
-covers the codebase layout and testing strategy, and @STYLE.md@ the coding and
+@docs\/architecture.md@ is the systems-design index: what Écluse is, the roles it runs,
+and a map to the per-concern design documents. @CONTRIBUTING.md@
+covers the codebase layout and testing strategy, and @docs\/style.md@ the coding and
 documentation conventions.
 -}
 module Ecluse (

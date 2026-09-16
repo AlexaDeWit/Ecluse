@@ -19,8 +19,11 @@ both:
 
 | Endpoint | What it reports | When it answers `503` |
 |---|---|---|
-| `GET /livez` | Process liveness: `200` while the process is healthy. On a process that runs no mirror worker that is the listener alone. | When the process is not healthy. Where a mirror worker runs, a stalled consume loop fails it. |
-| `GET /readyz` | Whether the role can accept its work. | During startup or drain, before any configured ecosystem completes its first advisory sync, and while Dredger's cap halt is latched. |
+| `GET /livez` | Process liveness: `200` while the process is healthy. | The process is not healthy, or its mirror worker's consume loop stalled. |
+| `GET /readyz` | Whether the role can accept its work. | Startup, drain, a pending first advisory sync, or a latched Dredger cap halt. |
+
+On a process that runs no mirror worker, liveness is the listener alone. The readiness advisory gate
+lifts once any configured ecosystem completes its first advisory sync.
 
 The `/livez` body is a JSON object with two keys, in no guaranteed order: `status`, the same
 verdict the status code carries, and `lastPoll`, the mirror worker's last successful poll as an
@@ -55,7 +58,7 @@ Without an accepted qualified generation, its slot stays empty and its readiness
 Other ecosystems can accept marker-free artifacts and become routable independently.
 A running consumer keeps its accepted qualified generation after a rejected replacement.
 Restarting creates empty slots, even when canonical files remain on disk.
-Publish marked artifacts before upgrading dependent consumers, following
+Publish marked artifacts before you enable an EPSS-dependent rule, following
 [the onboarding order](@/docs/configuration.md#onboarding-the-advisory-denies).
 
 The npm liveness probe `GET /npm/-/ping` answers locally with `200 {}`. `GET /npm/-/v1/search`
@@ -92,9 +95,14 @@ The exit status states how a run ended, so an orchestrator can branch without pa
 |---|---|
 | `0` | Graceful shutdown: the drain completed and the services returned. |
 | `1` | A service exited abnormally. The last `ecluse: service exited:` line on standard error carries the detail. |
-| `2` | The boot aborted: Écluse refused the configuration, refused a role this build cannot run, or could not build what the configuration names in the live environment, and reported every problem. A configuration refusal fails identically on a restart without changes. A report that names a transient AWS or network fault may clear on retry. |
+| `2` | The boot aborted, and Écluse reported every problem. |
 | `3` | Something outside cancelled the run: a kill that bypassed the graceful path. |
 | `130` | The local-development halt (Ctrl-D on an interactive terminal). |
+
+A boot aborts with `2` when Écluse refuses the configuration, refuses a role this build cannot run,
+or cannot build what the configuration names in the live environment. A configuration refusal fails
+identically on a restart without changes. A report that names a transient AWS or network fault may
+clear on retry.
 
 ## Logs
 
@@ -124,8 +132,7 @@ time, the OSV source as `host:port`, its newest advisory date, and the EPSS scor
 artifact never recorded reads as `<unrecorded>`. Malformed or oversized display values appear as
 absent without changing artifact acceptance.
 
-Older artifacts can still contain credentials. Rebuild those artifacts and review access to
-their stored copies and historical logs. The boot configuration echo prints configured endpoint
+The boot configuration echo prints configured endpoint
 values. Use the dedicated [secret settings](@/docs/configuration.md#secrets) rather than putting
 secrets into URLs.
 
@@ -148,9 +155,17 @@ Use the severity together with the event and its repetition:
 | Status | What it means | What to do with it |
 |---|---|---|
 | `error` | A failed operation, exhausted budget, or halted role needs attention. Some conditions can recover on retry. | Page and check the affected role. |
-| `warn` | Écluse absorbed it and carried on degraded. An upstream it could not reach, a mirror job left to redeliver, a store call it is retrying, a malformed advisory entry it dropped, an advisory date it had to ignore, a background loop backing off. | Chart it, and alert on a sustained rate rather than on a line. |
+| `warn` | Écluse absorbed a problem and carried on degraded. | Chart it, and alert on a sustained rate rather than on a line. |
 | `info` | What the run did: a completed sweep cycle, a version deleted, a mirrored artifact, a served package. | Index it, and read it back during an incident. |
 | `debug` | Per-request and per-entry detail. Verbose under load, and off by default. | Turn it on while you investigate. |
+
+Typical `warn` lines record:
+
+- An upstream Écluse could not reach.
+- A mirror job left to redeliver.
+- A store call Écluse is retrying.
+- A malformed advisory entry Écluse dropped, or an advisory date it had to ignore.
+- A background loop backing off.
 
 A loop that keeps failing warns on every attempt, so `error` alone does not catch a slow death.
 The mirror worker is covered: a stalled consume loop fails `GET /livez`
@@ -343,7 +358,8 @@ version and stores before acting.
 3. Identify and remove retained mirror-derived copies from private read repositories. CodeArtifact
    retains them independently of the mirror, so deleting the mirror alone is insufficient.
    Use `DeletePackageVersions`, not disposal, for the reviewed CodeArtifact copies. Automated
-   B+C deletion remains planned in [#1227](https://github.com/AlexaDeWit/Ecluse/issues/1227).
+   deletion from the private read repository remains planned in
+   [#1227](https://github.com/AlexaDeWit/Ecluse/issues/1227).
    `ecluse dredger --once --dry-run` previews both configured inventories and their rule decisions.
    It does not remove private-cache copies.
 4. Verify both store inventories and authorised metadata/artifact reads after earlier writes

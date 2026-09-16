@@ -17,11 +17,13 @@ selects the role:
   mirror worker. It scales horizontally behind a load balancer.
 - **`ecluse mirror`**: the mirror worker on its own, for a worker fleet you scale separately. See
   [Splitting the proxy from the mirror worker](#splitting-the-proxy-from-the-mirror-worker).
-- **`ecluse pilot`**: the OSV advisory ingestion pipeline.
+- **`ecluse pilot`**: builds each ecosystem's advisory database from the OSV exports and the EPSS
+  feed, and publishes it for the proxy, the mirror worker, and Dredger to sync.
 - **`ecluse dredger`**: deletes mirrored versions your rules now deny, and the only role that
   deletes. It refuses a configuration that would put the wrong store in its blast radius: a mount's
   `mirrorTarget` that is also any mount's `privateUpstream` or its own mount's `publicationTarget`,
-  and one whose tag names a store this build carries no control plane for. The other roles start
+  a mount's `privateUpstream` that is also its own `publicationTarget`, and one whose tag names a
+  store this build carries no control plane for. The other roles start
   and warn on the collapsed pairs instead. See [Running the Dredger](@/docs/dredger.md).
 
 - **`ecluse check-config`**: validates the shared configuration and prints the resolved posture
@@ -30,6 +32,23 @@ selects the role:
   `ecluse mirror` where no mount declares a `mirrorTarget`, `ecluse dredger` on a collapsed
   endpoint pair or on a `mirrorTarget` it has no maintenance backend for) prints here as a warning
   naming that command. Run it in CI or before a rollout.
+
+**Running without Pilot.** Only the rules that read advisories need Pilot. Without an advisory
+store (`ECLUSE_ADVISORIES__URL` unset):
+
+- The fast lane abstains, so every public version waits out the quarantine.
+- `DenyIfCve` and `DenyIfEpss` answer `503` under `onUnavailable: deny`, and abstain under `skip`.
+- Dredger's default sweep considers only the names a `DenyByIdentity` rule pins. A full walk still
+  covers every name.
+- Every other rule works unchanged, and readiness does not wait for advisories.
+
+The shipped policy reads advisories only through the fast lane, so it runs without Pilot and gives
+up only the fast lane.
+
+With a store configured, run Pilot before the other roles. A role reports not ready until an
+artifact syncs, and stays not ready if no ecosystem ever receives one. If Pilot stops later, the
+last artifact keeps serving until it passes the maximum advisory age. The advisory denies then
+refuse, whatever `onUnavailable` says.
 
 Dredger preview reads both the mirror target and the configured private cache with independent
 observation capabilities. `privateUpstream` supplies cache reads, `mirrorTarget` receives mirrors,
@@ -88,13 +107,10 @@ failure. `--out DIR` is required. The rest are optional:
 - `--upload` also publishes the artifact to the advisory store, a full sync cycle in one
   invocation. Without a configured store it aborts at once.
 
-Advisory epoch 4 uses canonical package names, including PEP 503 names for PyPI.
-Before switching consumers, use the updated Pilot to compile and publish epoch 4 artifacts for
-every mounted ecosystem. Update IAM policies that name exact object keys to include the new
-`<ecosystem>-osv-schema4.db` keys. Retain epoch 3 objects for old consumers during the rollout.
-New consumers reject epoch 3 artifacts and wait for their first compatible sync. No automatic
-migration or fallback rewrites an old artifact. Version strings keep their existing exact-match
-meaning for remediation.
+Artifacts use schema epoch 4, stored as `<ecosystem>-osv-schema4.db`, with canonical package names
+(PEP 503 names for PyPI). An IAM policy that names exact object keys must name these keys. A
+consumer rejects an artifact from any other epoch and waits for its first compatible sync, and
+nothing rewrites an old artifact.
 
 A corrupt or truncated export aborts the compile without publishing, so a running proxy keeps its
 last-good database. Pilot also refuses output with zero relevant advisory ranges after filtering
@@ -112,11 +128,10 @@ The `built_at` value records compilation completion, not the source snapshot's a
 Pin the image by digest and verify its provenance and SBOM attestations before you run it. The
 recipe is in [Verifying the image](https://github.com/AlexaDeWit/Ecluse/blob/main/README.md#verifying-the-image).
 
-Pilot excludes withdrawn OSV records from new artifacts without changing epoch 4.
-Update every Pilot publisher because older binaries can still publish withdrawn evidence.
-Existing artifacts retain that evidence until a successful compile and sync replace them.
-The zero-output refusal from [#1234](https://github.com/AlexaDeWit/Ecluse/issues/1234) retains the prior artifact if no relevant active rows remain.
-Withdrawal does not cancel independent active advisories or operator identity denies.
+Pilot excludes withdrawn OSV records from the artifacts it builds. An artifact keeps the records
+it was built with until a successful compile and sync replace it, and the zero-output refusal keeps
+the prior artifact when no relevant active rows remain. Withdrawal does not cancel independent
+active advisories or operator identity denies.
 
 ## The recommended topology
 
@@ -135,14 +150,15 @@ unless you have a specific reason to diverge.
    [registry-level composition](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/registry-model.md#registry-level-composition-the-recommended-topology).
 2. **Let callers use their own identity.** The default forwards each caller's credential to the
    private upstream and publication target, with nothing to set: access then matches your registry
-   IAM exactly, and Écluse holds no standing read credential. See
+   IAM exactly, and the proxy holds no read credential of its own. See
    [Credential flow and authority](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/registry-model.md#credential-flow-and-authority).
-3. **Mint the mirror-write token from the container role.** Declare the mirror target under the
-   `codeArtifact` tag (`ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL`), and the worker
-   mints a short-lived token under the task or instance role instead of carrying a static secret.
-   Grant mirror repository reads for the presence probe and package publication, and keep
-   `ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__TOKEN_DURATION` short, because this is Écluse's only
-   standing credential and it writes the trusted store. Scope the mirror queue the same way.
+3. **Give each role its own identity.** Declare the mirror target under the `codeArtifact` tag
+   (`ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL`), and the worker mints a short-lived
+   token from its role identity instead of carrying a static secret. Keep
+   `ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__TOKEN_DURATION` short, because the mirror
+   worker's identity is the only one that writes the trusted store. See
+   [Role identities and least privilege](#role-identities-and-least-privilege). Scope the mirror
+   queue the same way.
    Anyone who can write the queue can request a mirror write, subject to worker admission. Grant only the serve
    role `SendMessage`, and only the worker
    `ReceiveMessage`/`DeleteMessage`/`ChangeMessageVisibility`. `ChangeMessageVisibility` is
@@ -170,6 +186,42 @@ The reasoning behind each choice, and the residual risks it accepts, is in the
 [threat model](@/docs/threat-model.md) and
 [Security posture](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/security.md#trust-assumptions--credential-posture).
 
+## Role identities and least privilege
+
+Écluse handles three kinds of credential, and each has a different lifetime:
+
+- **Caller credential:** the token a client presents. Écluse forwards it to the private upstream
+  and the publication target, and keeps it only for that request.
+- **Role identity:** the workload identity a role runs under, such as an AWS IAM role through EKS
+  Pod Identity, IRSA, or an ECS task role. The platform's credential chain issues short-lived tokens
+  and renews them, so Écluse stores no secret. A CodeArtifact token that a role mints derives from
+  its role identity.
+- **Static secret:** a token you configure, which lasts until you replace it. Only a `registry` or
+  `verdaccio` store and the optional static publication token need one.
+
+Give every role its own identity, and grant each identity only its role's work. The Needs column
+holds on any backend, and the AWS column shows one way to grant it:
+
+| Role | Needs | AWS example |
+|---|---|---|
+| `ecluse proxy --no-worker` | Send mirror jobs, read advisory artifacts | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `s3:GetObject` |
+| `ecluse mirror` | Consume mirror jobs, publish to the mirror store, read advisory artifacts | SQS receive, delete, change visibility, and get attributes. CodeArtifact token mint, reads, and publish on the mirror repository. `s3:GetObject` |
+| `ecluse pilot` | Publish advisory artifacts | `s3:PutObject` on the advisory prefix |
+| `ecluse dredger` | Read and delete in the mirror store, read advisory artifacts | CodeArtifact token mint, reads, and delete on the mirror repository ([full list](@/docs/dredger.md#permissions)). `s3:GetObject` |
+
+`ecluse proxy` without `--no-worker` runs the mirror worker in the same process, so its identity
+needs the proxy row and the mirror row together. Split the proxy from the worker when the serving
+fleet must hold no write access to the mirror store. Only the mirror worker's identity writes the
+trusted store, and only Dredger's identity deletes from it.
+
+No role identity reads the private upstream or writes the publication target for a client, because
+those requests carry the caller credential. A static publication token is the exception, described
+under [Edge authentication](#edge-authentication-and-client-credentials).
+
+`ecluse proxy --no-worker` still mints the mirror-write token at boot today, so its identity also
+needs the mirror store's token-mint rights until
+[#1393](https://github.com/AlexaDeWit/Ecluse/issues/1393) lands.
+
 ## What a deviation costs
 
 Some deviations warn, while others refuse startup. The
@@ -177,13 +229,20 @@ Some deviations warn, while others refuse startup. The
 Private registry upstream wiring is different: Écluse cannot inspect it, so a public uplink there
 can bypass public admission without a warning.
 
-| Deviation | What you lose | Does anything warn you? |
+| Deviation | What you lose | Warning |
 |---|---|---|
-| One store for two roles | Provenance separation and per-store governance can be lost | Depending on the pair, startup warns or refuses. Use the [collision table](@/docs/configuration.md#endpoint-collisions) rather than assuming every collapse is allowed |
-| A private upstream that itself draws directly from public | Public rules, quarantine, and the public-admission integrity floor are bypassed. The trusted listing floor still applies, but conventional private npm artifact hits bypass metadata admission | **No. Écluse cannot detect this wiring.** |
-| A closed edge: `ECLUSE_SERVER__AUTH_TOKEN` set | Per-caller passthrough: every caller presents the one edge token and reaches the private upstream as one identity. With a static publish token configured, publication granularity: any edge-token holder can publish anything that token permits within the configured first-party scopes | Nothing fires. The posture is your own explicit setting |
-| A static publish credential without an edge token | Nothing at runtime, because it never boots | Yes. The boot fails closed |
-| A static mirror-write secret | The short-lived token minted from the container role | Nothing fires. The secret is visible in the configuration you wrote |
+| One store for two roles | Provenance separation and per-store governance can be lost | Startup warns or refuses, depending on the pair |
+| A private upstream that draws directly from public | Public rules, the quarantine, and the public-admission integrity floor | **None. Écluse cannot detect this wiring.** |
+| A closed edge: `ECLUSE_SERVER__AUTH_TOKEN` set | Per-caller passthrough, and per-caller publication with a static publish token | None. The posture is your own explicit setting |
+| A static publish credential without an edge token | Nothing at runtime, because it never boots | The boot fails closed |
+| A static mirror-write secret | The short-lived token minted from the container role | None. The secret is visible in the configuration you wrote |
+
+Use the [collision table](@/docs/configuration.md#endpoint-collisions) for a shared store rather
+than assuming every collapse is allowed. With a private upstream that draws from public, the
+trusted listing floor still applies, but conventional private npm artifact hits bypass metadata
+admission. With a closed edge, every caller presents the one edge token and reaches the private
+upstream as one identity. With a static publish token as well, any edge-token holder can publish
+anything that token permits within the configured first-party scopes.
 
 The silent row has one remedy: aggregate **trusted stores only** into the private upstream. The
 [threat model](@/docs/threat-model.md) records both store-level deviations.
@@ -218,7 +277,7 @@ Edge authentication to the proxy ships in two modes:
    index-url = https://__token__:${PYPI_EDGE_TOKEN}@ecluse.example.internal/pypi/simple/
    ```
 
-Écluse holds no read credential of its own. Reads run **passthrough**: Écluse forwards the
+The proxy holds no read credential of its own. Reads run **passthrough**: Écluse forwards the
 caller's own credential to the private upstream, which stays the authority on what that caller may
 see. With `ECLUSE_SERVER__AUTH_TOKEN` set, the value a client presents both satisfies the edge
 gate and travels upstream. A deployment therefore cannot combine the static-token recipe above
@@ -371,13 +430,15 @@ collector when enabled:
 Only the proxy serves package-client traffic. Other roles expose health probes, and Prometheus
 adds a separate metrics listener only when that exporter is selected.
 
-| Role | Registry or feed egress | Configured queue and advisory egress | Role credentials |
-|---|---|---|---|
-| `ecluse proxy` with embedded worker | Public/private metadata and artifact hosts, mirror repository, optional publication target | Queue send/receive/ack/visibility and redrive probe, advisory S3 read | Caller passthrough, mirror token with read/publication rights, queue rights, `s3:GetObject` |
-| `ecluse proxy --no-worker` | Public/private metadata and artifact hosts, optional publication target | Queue send and redrive probe, advisory S3 read | Caller passthrough, configured mirror-token mint still runs at boot, queue producer rights, `s3:GetObject` |
-| `ecluse mirror` | Public metadata/artifact hosts and mirror repository | Queue receive/ack/visibility and redrive probe, advisory S3 read | Mirror token with read/publication rights, queue consumer rights, `s3:GetObject` |
-| `ecluse pilot` | OSV export host and EPSS feed host | Advisory S3 upload, no mirror queue | `s3:PutObject` and its AWS identity |
-| `ecluse dredger` | Mirror repository metadata and its maintenance API | Advisory S3 read, no mirror queue | Token mint, mirror read/deletion and maintenance rights, `s3:GetObject` |
+| Role | Registry or feed egress | Configured queue and advisory egress |
+|---|---|---|
+| `ecluse proxy` with embedded worker | Public/private metadata and artifact hosts, mirror repository, optional publication target | Queue send/receive/ack/visibility and redrive probe, advisory S3 read |
+| `ecluse proxy --no-worker` | Public/private metadata and artifact hosts, optional publication target | Queue send and redrive probe, advisory S3 read |
+| `ecluse mirror` | Public metadata/artifact hosts and mirror repository | Queue receive/ack/visibility and redrive probe, advisory S3 read |
+| `ecluse pilot` | OSV export host and EPSS feed host | Advisory S3 upload, no mirror queue |
+| `ecluse dredger` | Mirror repository metadata and its maintenance API | Advisory S3 read, no mirror queue |
+
+Each role's permissions are in [Role identities and least privilege](#role-identities-and-least-privilege).
 
 For the default public endpoints, npm metadata and artifacts use `registry.npmjs.org`. PyPI
 metadata uses `pypi.org`, while distributions use `files.pythonhosted.org`. Private artifact

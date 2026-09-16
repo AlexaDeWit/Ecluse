@@ -12,9 +12,12 @@ reads, but not mirroring or publication.
 
 A new public version waits in a quarantine, seven days by default, before a build can install it.
 Most malicious publishes are found and pulled within days, so the wait alone sidesteps them, with
-no attempt to detect malice. With an advisory database synced, a version that an advisory names
-as the exact fix for a vulnerability skips the wait, so the quarantine never delays a security
-patch. Everything else is deny by default and opt-in by name.
+no attempt to detect malice. A security patch overrides the quarantine as soon as the advisory
+data is available: a version that a synced advisory names as the exact fix for a vulnerability
+skips the wait. A fix still waits when no advisory database has synced, when the advisory data is
+too old, when another advisory still affects the version, or when the advisory spells the version
+differently. Pin such a fix with `AllowByIdentity`. Everything else is deny by default and opt-in by
+name.
 
 If you run a private registry, Écluse reads it first and passes your own packages through
 untouched. Any https registry that speaks the ecosystem's protocol serves in that role. Écluse can
@@ -27,7 +30,8 @@ other tags take a static token you supply. Écluse hosts no packages itself.
 
 - `ecluse proxy` serves clients and runs the mirror worker.
 - `ecluse mirror` runs the mirror worker alone, when you want to scale it apart from the proxy.
-- `ecluse pilot` compiles the advisory database the fast lane reads.
+- `ecluse pilot` builds the advisory database from the OSV exports and the EPSS feed. The fast
+  lane, the advisory denies, and Dredger all read it.
 - `ecluse dredger` deletes mirrored versions your rules now deny. It is the only role that
   deletes, and [Running the Dredger](@/docs/dredger.md) covers it.
 
@@ -122,16 +126,16 @@ The policy is deny by default: a public version reaches a build only when a rule
 run in precedence order and the first decisive one wins. The revoke and the install-time deny sit
 above every allow by default.
 
-| Rule | Band | On by default? | What it decides |
+| Rule | Band | On by default | What it decides |
 |------|------|----------------|-----------------|
-| `min-age` | Allow | On | Admits a public version older than seven days: the quarantine |
-| `remediation-fast-track` | Allow | On | Admits a version a synced advisory names as the exact fix for a vulnerability, as long as no other advisory still affects it |
-| `AllowScope` | Allow | Off | Allow-lists every package under a scope you name |
-| `AllowByIdentity` | Allow | Off | Pins a package or a `package@version` by exact name |
-| `DenyByIdentity` | Deny | Off | Revokes a package or version |
-| `DenyInstallTimeExecution` | Deny | Off | Denies packages that run code at install time |
-| `DenyIfCve` | Deny | Off | Denies versions with a known vulnerability above a severity you choose |
-| `DenyIfEpss` | Deny | Off | Denies versions with a known vulnerability whose exploitation probability (EPSS) is at or above a threshold you choose |
+| `min-age` | Allow | Yes | Admits a public version older than seven days: the quarantine |
+| `remediation-fast-track` | Allow | Yes | Admits a version a synced advisory names as the exact fix for a vulnerability, as long as no other advisory still affects it |
+| `AllowScope` | Allow | No | Allow-lists every package under a scope you name |
+| `AllowByIdentity` | Allow | No | Pins a package or a `package@version` by exact name |
+| `DenyByIdentity` | Deny | No | Revokes a package or version |
+| `DenyInstallTimeExecution` | Deny | No | Denies packages that run code at install time |
+| `DenyIfCve` | Deny | No | Denies versions with a known vulnerability above a severity you choose |
+| `DenyIfEpss` | Deny | No | Denies versions with a known vulnerability whose exploitation probability (EPSS) is at or above a threshold you choose |
 
 `remediation-fast-track` abstains until a first advisory database syncs, so without one only the
 quarantine governs. The off rules opt in by name, and

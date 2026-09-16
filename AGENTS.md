@@ -39,8 +39,9 @@ durable memory: load detailed guidance only when the task needs it. See
   default, and its meaning live there as comments. `docs/architecture/` owns the *why*. A section
   there earns its place only by answering an operator or adoption question. Contributors read the
   code and the Haddock, so never re-home cut prose in either.
-- Update the architecture section of `README.md` when adding a module or significantly changing a
-  module's responsibility.
+- Update the Project structure table in `README.md` when a change adds a top-level area or moves a
+  responsibility between areas. A module's own purpose belongs in its Haddock header, not in the
+  README.
 
 ## Implementation coordination
 
