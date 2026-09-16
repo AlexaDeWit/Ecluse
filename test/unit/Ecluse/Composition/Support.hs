@@ -18,7 +18,7 @@ module Ecluse.Composition.Support (
     withDredgeablePrivate,
     noMaintenanceBackend,
     privateInventoryRefusal,
-    clearedRepository,
+    clearedUrl,
     malformedAwsEndpoint,
     withoutMirrorTargetUrl,
     withoutMirrorTargetToken,
@@ -39,10 +39,7 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
-import Ecluse.Composition.Maintenance (
-    ClearedBackend (cbControl),
-    ClearedControl (ClearedCodeArtifact, ClearedCodeArtifactCache, ClearedProtocol),
- )
+import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl))
 import Ecluse.Composition.Plan (
     BootInputs (BootInputs, biConfig, biDocument, biEnvVars, biFdLimit, biRuntimePlan),
     BootPlan,
@@ -56,8 +53,8 @@ import Ecluse.Config (AppConfig, Config (configApp), StoreTag (TagRegistry), loa
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Security (Limits (..))
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
-import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (casRepository)
 import Ecluse.Test.Credential (noCredentialReporters)
 
 -- | A fixed clock for the injected 'pdNow', never advanced (no timing here).
@@ -149,12 +146,9 @@ noMaintenanceBackend = StoreMaintenanceUnavailable Npm (NoControlPlane TagRegist
 privateInventoryRefusal :: BootError
 privateInventoryRefusal = StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable "registry has no inventory control plane")
 
--- | The repository a cleared CodeArtifact store addresses, 'Nothing' for any other arm.
-clearedRepository :: ClearedBackend -> Maybe Text
-clearedRepository cleared = case cbControl cleared of
-    ClearedCodeArtifact store -> Just (casRepository store)
-    ClearedCodeArtifactCache store -> Just (casRepository store)
-    ClearedProtocol{} -> Nothing
+-- | The endpoint a cleared store reads and deletes over, which its declaration named.
+clearedUrl :: ClearedBackend -> Text
+clearedUrl = registryUrlText . cbUrl
 
 -- | Drop the registry mirror-target URL, so a test can declare its own target under any tag.
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]

@@ -3,13 +3,13 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Vet store backends, then build the boot role's maintenance or observation capabilities.
-The preview observes the declared private cache without constructing a deletion handle.
+The preview observes the declared private cache without constructing a deletion handle. No cleared
+type's constructor is exported, so a value a deletion handle builds from exists only where a pass
+here issued it.
 -}
 module Ecluse.Composition.Maintenance (
     -- * The config-decidable half
-    ClearedBackend (..),
-    ClearedControl (..),
-    ClearedProtocolStore (..),
+    ClearedBackend (cbUrl, cbAlphabet, cbFetchManifest),
     ResolveMaintenanceAdapter,
     vetStoreBackends,
     vetPrivateCaches,
@@ -100,8 +100,8 @@ import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactCacheMaintenance, newCodeArtifactCacheObservation, newCodeArtifactMaintenance, newCodeArtifactObservation)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
 
-{- | A store the deleting role's pass cleared, one arm per backend kind. Only 'vetStoreBackends'
-issues one, so a handle that can delete is built for no store that pass did not clear.
+{- | A store a deleting role's pass cleared, one arm per backend kind. Only 'vetStoreBackends' and
+'vetPrivateCaches' issue one, so no store their passes did not clear gets a handle that can delete.
 -}
 data ClearedBackend = ClearedBackend
     { cbUrl :: RegistryUrl
