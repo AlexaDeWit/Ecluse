@@ -3,9 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Dredger lifecycle evidence from a real Verdaccio store.
-Complete version snapshots connect store contents with each cycle's audit records. One group
-decides by operator identity alone, the other by the advisory generation Pilot compiles and every
-role reads back from object storage.
+Complete version snapshots connect store contents with each cycle's audit records. One group decides
+by operator identity alone, one by the advisory generation Pilot compiles, and one follows what the
+next private read sees once a cleanup has run.
 -}
 module Ecluse.DredgerE2ESpec (spec) where
 
@@ -27,6 +27,11 @@ import Ecluse.E2E.Fixtures.Npm (
     psName,
     psVersion,
     psVersions,
+    recoveryFaultPkg,
+    recoveryLatePkg,
+    recoveryLostPkg,
+    recoveryPkg,
+    recoveryReadmitPkg,
  )
 import Ecluse.E2E.Harness
 import Ecluse.Test.Log (lineMessage)
@@ -41,6 +46,7 @@ spec = do
         Nothing -> do
             aroundAll withGlobalDataPlane (aroundAllWith withSeededStore identityScenarios)
             aroundAll withGlobalDataPlane revocationScenario
+            aroundAll withGlobalDataPlane (aroundAllWith withRecoveryStores recoveryScenarios)
 
 identityScenarios :: SpecWith (GlobalDataPlane, E2E, E2E)
 identityScenarios = describe "identity denies with no advisory database" $ do
@@ -341,6 +347,184 @@ vulnerableVersion, fixedVersion :: Text
 vulnerableVersion = "1.0.0"
 fixedVersion = "1.2.0"
 
+recoveryScenarios :: SpecWith (GlobalDataPlane, E2E, E2E)
+recoveryScenarios = describe "next private reads and recovery after a grouped cleanup" $ do
+    it "serves the sibling and refuses the denied version once both stores lose it" $ \(plane, proxy, cache) -> do
+        let name = psName recoveryPkg
+            sibling = psVersion recoveryPkg
+        verdaccioVersions cache name `shouldReturn` sort (psVersions recoveryPkg)
+        verdaccioArtifact cache name deniedRecoveryVersion >>= (`shouldSatisfy` servedBytes)
+        run <- runDredgerOnce plane ["--once"] (recoverySweepEnv (name <> "@" <> deniedRecoveryVersion))
+        roleExit run `shouldBe` ExitSuccess
+        verdaccioVersions proxy name `shouldReturn` [sibling]
+        verdaccioVersions cache name `shouldReturn` [sibling]
+        (fst <$> verdaccioArtifact cache name deniedRecoveryVersion) `shouldReturn` 404
+        (fst <$> proxyGet proxy ("/npm/" <> name)) `shouldReturn` 200
+        (fst <$> proxyGet proxy (npmTarballPath name sibling)) `shouldReturn` 200
+        assertRefusedNext proxy name deniedRecoveryVersion
+        withNpmProject proxy $ \project -> do
+            void $ npmInstallIn project (name <> "@" <> sibling) >>= shouldSucceed
+            installedVersion project name `shouldReturn` Just sibling
+        verdaccioVersions proxy name `shouldReturn` [sibling]
+        verdaccioVersions cache name `shouldReturn` [sibling]
+
+    it "keeps the cache copy its backend refused and removes it on a later run" $ \(plane, proxy, cache) -> do
+        let name = psName recoveryFaultPkg
+            version = psVersion recoveryFaultPkg
+        refused <- withPrivateCacheDeletesRefused plane (runDredgerOnce plane ["--once"] (recoverySweepEnv name))
+        auditMessages refused
+            `shouldSatisfy` any (T.isInfixOf (privateTarget <> ": " <> name <> "@" <> version <> ": the backend refused the delete, HTTP 503"))
+        verdaccioVersions proxy name `shouldReturn` []
+        verdaccioVersions cache name `shouldReturn` [version]
+        verdaccioArtifact cache name version >>= (`shouldSatisfy` servedBytes)
+        residual <- runDredgerOnce plane ["--once"] (recoverySweepEnv name)
+        roleExit residual `shouldBe` ExitSuccess
+        verdaccioVersions cache name `shouldReturn` []
+        assertRefusedNext proxy name version
+        verdaccioVersions proxy name `shouldReturn` []
+        verdaccioVersions cache name `shouldReturn` []
+
+    it "mirrors the version again when the policy lifts and the public source still holds bytes" $ \(plane, proxy, cache) -> do
+        let name = psName recoveryReadmitPkg
+            version = psVersion recoveryReadmitPkg
+        run <- runDredgerOnce plane ["--once"] (recoverySweepEnv name)
+        roleExit run `shouldBe` ExitSuccess
+        verdaccioVersions proxy name `shouldReturn` []
+        verdaccioVersions cache name `shouldReturn` []
+        withRelaxedProxy plane $ \relaxed -> do
+            withNpmProject relaxed $ \project -> do
+                void $ npmInstallIn project name >>= shouldSucceed
+                installedVersion project name `shouldReturn` Just version
+            verdaccioAwaitVersions relaxed name [version] `shouldReturn` [version]
+            verdaccioArtifact relaxed name version >>= (`shouldSatisfy` servedBytes)
+
+    it "leaves both stores empty when the policy lifts and no source bytes remain" $ \(plane, proxy, cache) -> do
+        let name = psName recoveryLostPkg
+            version = psVersion recoveryLostPkg
+        run <- runDredgerOnce plane ["--once"] (recoverySweepEnv name)
+        roleExit run `shouldBe` ExitSuccess
+        verdaccioVersions proxy name `shouldReturn` []
+        verdaccioVersions cache name `shouldReturn` []
+        withPublicArtifactWithheld plane name version $
+            withRelaxedProxy plane $ \relaxed -> do
+                withNpmProject relaxed (\project -> void (npmInstallIn project name >>= shouldFail))
+                verdaccioVersions relaxed name `shouldReturn` []
+                verdaccioVersions cache name `shouldReturn` []
+
+    it "removes the copies each store received after the cycle that reported them gone" $ \(plane, proxy, cache) -> do
+        let name = psName recoveryLatePkg
+            version = psVersion recoveryLatePkg
+        removed <- runDredgerOnce plane ["--once"] (recoverySweepEnv name)
+        roleExit removed `shouldBe` ExitSuccess
+        verdaccioVersions proxy name `shouldReturn` []
+        verdaccioVersions cache name `shouldReturn` []
+        for_ [publishingDirectly proxy, cache] $ \store ->
+            void $ withPublishProject store name version npmPublishIn >>= shouldSucceed
+        for_ [proxy, cache] $ \store -> do
+            verdaccioAwaitVersions store name [version] `shouldReturn` [version]
+            awaitListed store [name]
+        rediscovered <- runDredgerOnce plane ["--once"] (recoverySweepEnv name)
+        roleExit rediscovered `shouldBe` ExitSuccess
+        verdaccioVersions proxy name `shouldReturn` []
+        verdaccioVersions cache name `shouldReturn` []
+
+{- The recovery group's stores: a mirror the real worker fills, and a private cache the fixture
+publisher seeds with the same identities. The group's own proxy reads that cache. -}
+withRecoveryStores :: ((GlobalDataPlane, E2E, E2E) -> IO ()) -> GlobalDataPlane -> IO ()
+withRecoveryStores action plane =
+    withE2EWith defaultE2EConfig{ecExtraEnv = recoveryProxyEnv} boot plane
+  where
+    boot proxy = withDredgerPrivateCache plane proxy $ \cache -> do
+        seedMirrorCopies plane
+        seedCacheCopies cache
+        action (plane, proxy, cache)
+
+{- Seed the mirror through a proxy that still permits these versions, because the group's own proxy
+denies every one of them from boot. -}
+seedMirrorCopies :: GlobalDataPlane -> IO ()
+seedMirrorCopies = withE2EWith defaultE2EConfig install
+  where
+    install seeder = do
+        for_ recoveryCopies $ \(name, version) ->
+            void $ npmInstall seeder (name <> "@" <> version) >>= shouldSucceed
+        for_ recoveryPackages $ \pkg ->
+            verdaccioAwaitVersions seeder (psName pkg) (sort (psVersions pkg)) `shouldReturn` sort (psVersions pkg)
+        awaitListed seeder (map psName recoveryPackages)
+
+-- The cache's copies come from the fixture publisher, which writes to the store and not the proxy.
+seedCacheCopies :: E2E -> IO ()
+seedCacheCopies cache = do
+    for_ recoveryCopies $ \(name, version) ->
+        void $ withPublishProject cache name version npmPublishIn >>= shouldSucceed
+    awaitListed cache (map psName recoveryPackages)
+
+-- Every recovery copy, oldest version first, so a mirrored older version never retags the store.
+recoveryCopies :: [(Text, Text)]
+recoveryCopies = [(psName pkg, version) | pkg <- recoveryPackages, version <- sort (psVersions pkg)]
+
+recoveryPackages :: [PkgSpec]
+recoveryPackages = [recoveryPkg, recoveryFaultPkg, recoveryReadmitPkg, recoveryLostPkg, recoveryLatePkg]
+
+-- The version of 'recoveryPkg' the recovery policy names, leaving 'psVersion' as its sibling.
+deniedRecoveryVersion :: Text
+deniedRecoveryVersion = "1.0.0"
+
+{- The group's proxy reads the cache the Dredger cleans and denies every version these cases
+delete. Its packument cache turns over in a second, so a read after a cycle sees current state. -}
+recoveryProxyEnv :: [(Text, Text)]
+recoveryProxyEnv = privateCacheEnv <> [("ECLUSE_RULES", recoveryRules)]
+
+-- The same topology once the deny is lifted, which is what a re-admission is decided under.
+relaxedProxyEnv :: [(Text, Text)]
+relaxedProxyEnv = privateCacheEnv <> [("ECLUSE_RULES", renderRules [minAgeRule])]
+
+privateCacheEnv :: [(Text, Text)]
+privateCacheEnv =
+    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://private-cache/")
+    , ("ECLUSE_CACHE__TTL", "1")
+    ]
+
+-- Run a second proxy over the same stores, for a case whose next read decides under a new policy.
+withRelaxedProxy :: GlobalDataPlane -> (E2E -> IO ()) -> IO ()
+withRelaxedProxy plane action = withE2EWith defaultE2EConfig{ecExtraEnv = relaxedProxyEnv} action plane
+
+recoveryRules :: Text
+recoveryRules = renderRules (minAgeRule : zipWith identityEntry [1 :: Int ..] recoveryDenials)
+  where
+    identityEntry index identity =
+        fromString ("revoke-" <> show index)
+            .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= identity]
+
+-- Every fixture version predates the shipped quarantine, but a copy the publisher wrote does not.
+minAgeRule :: Pair
+minAgeRule = "min-age" .= object ["type" .= ("AllowIfOlderThan" :: Text), "ageSeconds" .= (0 :: Int)]
+
+recoveryDenials :: [Text]
+recoveryDenials =
+    (psName recoveryPkg <> "@" <> deniedRecoveryVersion)
+        : map psName [recoveryFaultPkg, recoveryReadmitPkg, recoveryLostPkg, recoveryLatePkg]
+
+recoverySweepEnv :: Text -> [(Text, Text)]
+recoverySweepEnv identity = [("ECLUSE_RULES", identityRule identity)]
+
+-- The label the Dredger's audit lines carry for the private cache it swept.
+privateTarget :: Text
+privateTarget = "privateUpstream https://private-cache/"
+
+-- npm publishes into a store directly when the store's own URL is the project's registry.
+publishingDirectly :: E2E -> E2E
+publishingDirectly e2e = e2e{e2eRegistry = e2eVerdaccio e2e}
+
+-- A denied version reaches no client, whatever either store still holds.
+assertRefusedNext :: E2E -> Text -> Text -> IO ()
+assertRefusedNext proxy name version = do
+    (status, _) <- proxyGet proxy (npmTarballPath name version)
+    status `shouldBe` 403
+    void $ withNpmProject proxy (\project -> npmInstallIn project (name <> "@" <> version)) >>= shouldFail
+
+servedBytes :: (Int, Int64) -> Bool
+servedBytes (status, size) = status == 200 && size > 0
+
 -- Fail with the store's own diagnostic for any package its listing never reported.
 awaitListed :: E2E -> [Text] -> IO ()
 awaitListed e2e names =
@@ -352,8 +536,12 @@ awaitListed e2e names =
 renderRules :: [Pair] -> Text
 renderRules = decodeUtf8 . toStrict . encode . object
 
+-- Every line the role logged, as the message its JSONL record carried.
+auditMessages :: RoleRun -> [Text]
+auditMessages run = mapMaybe lineMessage (T.lines (roleOutput run))
+
 sweepMessages :: RoleRun -> [Text]
-sweepMessages run = filter isSweepMessage (map withoutTarget (mapMaybe lineMessage (T.lines (roleOutput run))))
+sweepMessages run = filter isSweepMessage (map withoutTarget (auditMessages run))
 
 isSweepMessage :: Text -> Bool
 isSweepMessage message = any (`T.isPrefixOf` message) ["deleting ", "dry run, would delete ", "mirror sweep cycle "]

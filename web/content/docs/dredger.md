@@ -317,6 +317,12 @@ package when its last version is removed. Otherwise it edits the package documen
 the version's tarball. Verdaccio does not enforce the document revision on these writes, so
 either path can lose a concurrent publish of another version of the same package.
 
+**Deleting a version does not keep its bytes.** Lifting the deny permits the version again, but the
+next install still needs a source that holds it: the public registry, or a copy another store
+retained. Where no source remains, the version stays unavailable after your policy agrees to it. A
+read against the private cache can itself restore a copy there, and the next cycle finds and
+removes that copy.
+
 **Pre-declaration public copies remain served and protected from Dredger.** Before declaring a
 namespace first-party, review its existing copies in both the mirror and the private read
 repository. Distinguish public-derived copies from genuine private releases and remove only the
