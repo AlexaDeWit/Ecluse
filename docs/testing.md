@@ -116,6 +116,16 @@ is deleted. `Ecluse.DredgerE2ESpec` also drives `listPackagesIn` against the sto
 complete package-version snapshots with the audit records and cycle counts. Its first-party
 fixture holds two versions. These cases do not verify behaviour against a real CodeArtifact repository.
 
+A further Dredger group covers what the next private read sees after a cleanup. It runs a second
+Verdaccio as the proxy's `privateUpstream`, seeds the mirror through a proxy that still permits the
+versions, and seeds the cache through the fixture publisher. After one cycle it reads both
+inventories, the cache's metadata and artifact directly, and the same version through the proxy and
+a fresh `npm` project. The group also refuses the cache's write methods at the nginx forwarder and
+completes the residual on a later run, withholds one public artifact so no bytes remain to
+re-admit, and republishes a late copy into each store for the next cycle to find. Verdaccio stands
+in for a retaining cache here, and the unit tier models a read that restores a copy, so neither
+covers CodeArtifact's own retention, permissions, or deletion.
+
 One further Dredger scenario connects advisory compilation to revocation. Pilot compiles the `v1`
 corpus through the product image and uploads it to the emulated advisory store. The proxy syncs it,
 and `npm` installs both versions of the corpus fixture the `v2` delta condemns, which the worker

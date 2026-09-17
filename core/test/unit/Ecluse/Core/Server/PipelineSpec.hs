@@ -25,7 +25,7 @@ import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mk
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (HashAlg (SHA512), PackageName, mkPackageName)
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
-import Ecluse.Core.Registry.Maintenance (ConsentVerdict (ConsentWithheld), StoreClass (StorePreserved), StoredVersion (StoredVersion), VersionPresence (VersionServed))
+import Ecluse.Core.Registry.Maintenance (ConsentVerdict (ConsentWithheld), StoreClass (StorePreserved), StoreFacts (factBackend), StoredVersion (StoredVersion, storedVersion), VersionPresence (VersionServed))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (
     npmPackumentContract,
@@ -36,7 +36,7 @@ import Ecluse.Core.Registry.Npm.Route (
  )
 import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
 import Ecluse.Core.Registry.Sweep (sweepCycle)
-import Ecluse.Core.Registry.Sweep.Types (CycleOutcome (outcomeTally), SweepMount (smFirstParty), SweepPacing (swpShape), SweepShape (SweepCandidates, SweepEverything), SweepTally (tallyDeleted, tallyExamined))
+import Ecluse.Core.Registry.Sweep.Types (CycleOutcome (outcomeTally), SweepMount (smFirstParty), SweepPacing (swpShape), SweepShape (SweepCandidates, SweepEverything), SweepTally (tallyDeleted, tallyExamined), deletingCache)
 import Ecluse.Core.Rules (PreparedRule, evalRules, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Rules.Types qualified as Rules
@@ -59,11 +59,11 @@ import Ecluse.Core.Server.Pipeline (headTarball, servePackument, serveTarball)
 import Ecluse.Core.Server.Pipeline.Publish ()
 import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
-import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable))
+import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable), SweepResult (SweepDeleted), SweepTarget (SweepPrivate))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
-import Ecluse.Core.Version (mkVersion)
+import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
-import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents), FakeStoreConfig (fakeClass, fakeConsent, fakeContents, fakeManifests), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents, writeFakeContents), FakeStoreConfig (fakeClass, fakeConsent, fakeContents, fakeFacts, fakeManifests), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Package (hexSha1Of, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -71,7 +71,7 @@ import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, 
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, inertRuleDeps, isUndecidable)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Server.Mount (npmServeDeps, withPrivateBaseUrl)
-import Ecluse.Test.Sweep (RecordedSweep (recPorts), recordingPorts, testMount, testPacing)
+import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
 import Network.HTTP.Types.Header (RequestHeaders, hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -83,6 +83,7 @@ import UnliftIO.Exception (bracket, throwIO)
 spec :: Spec
 spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)" $ do
     admissionLifetimeSpec
+    cacheRetentionSpec
     divergenceEvidenceSpec
     distTagSpec
     sharedCacheSpec
@@ -466,6 +467,49 @@ admissionLifetimeSpec = describe "admission lifetime after removing an allow" $
                 (LifetimePolicy [unavailableCveDeny] isUndecidable Retained)
                 ManifestMissing
 
+{- The cache a next read refills. The trusted private leg serves a hit untouched, so the read puts
+the version back whatever the rules say, and the next grouped cycle decides on that state. -}
+cacheRetentionSpec :: Spec
+cacheRetentionSpec = describe "a private read that retains a version the cycle removed" $
+    it "serves the read untouched, removes the copy it restored, and keeps the version policy allows" $ do
+        mirror <- newFakeStore (retentionStore "mirror" [deniedVersion, keptVersion])
+        cache <- newFakeStore (retentionStore "cache" [])
+        rules <- prepare inertRuleDeps [identityDeny]
+        let mount = withPrivateCache (deletingCache (fakeMaintenance cache)) (testMount (fakeMaintenance mirror) rules [Rules.prRule identityDeny])
+        cleared <- recordingPorts Nothing
+        _ <- sweepCycle testPacing (recPorts cleared) [mount]
+        storedVersions mirror `shouldReturn` [keptVersion]
+        storedVersions cache `shouldReturn` []
+        nextPrivateGet (retainingUpstream cache) rules True
+        storedVersions cache `shouldReturn` [deniedVersion]
+        reconciled <- recordingPorts Nothing
+        _ <- sweepCycle testPacing (recPorts reconciled) [mount]
+        recTargetResults reconciled >>= (`shouldSatisfy` elem (SweepPrivate, SweepDeleted))
+        storedVersions cache `shouldReturn` []
+        storedVersions mirror `shouldReturn` [keptVersion]
+
+-- Each store answers under its own backend name, because a grouped cycle keys its inventories on it.
+retentionStore :: Text -> [Version] -> FakeStoreConfig
+retentionStore backend versions =
+    defaultFakeStoreConfig
+        { fakeContents = Map.singleton leftpad [StoredVersion item VersionServed Nothing | item <- versions]
+        , fakeManifests = Map.singleton leftpad (sampleManifest leftpad [deniedVersion, keptVersion])
+        , fakeFacts = (fakeFacts defaultFakeStoreConfig){factBackend = backend}
+        }
+
+-- A cache that retains what it serves, the way a read through an upstream relationship refills one.
+retainingUpstream :: FakeStore -> Application
+retainingUpstream store req respond = do
+    writeFakeContents store (Map.singleton leftpad [StoredVersion deniedVersion VersionServed Nothing])
+    upstreamApp req respond
+
+storedVersions :: FakeStore -> IO [Version]
+storedVersions store = map storedVersion . Map.findWithDefault [] leftpad <$> readFakeContents store
+
+deniedVersion, keptVersion :: Version
+deniedVersion = mkVersion Npm "1.0.0"
+keptVersion = mkVersion Npm "2.0.0"
+
 data CopyDisposition = Retained | Removed
     deriving stock (Eq)
 
@@ -524,7 +568,7 @@ checkLifetime shape policy storeState = do
     tallyExamined (outcomeTally outcome) `shouldBe` examined
     tallyDeleted (outcomeTally outcome) `shouldBe` if retained then 0 else 1
     Map.lookup leftpad <$> readFakeContents store `shouldReturn` Just expectedVersions
-    nextPrivateGet store preparedAfter retained
+    nextPrivateGet (storedUpstream store) preparedAfter retained
 
 lifetimeStoreConfig :: LifetimeStore -> FakeStoreConfig
 lifetimeStoreConfig storeState = case storeState of
@@ -540,12 +584,12 @@ lifetimeStoreConfig storeState = case storeState of
             , fakeManifests = Map.singleton leftpad (sampleManifest leftpad [version])
             }
 
-nextPrivateGet :: FakeStore -> [PreparedRule] -> Bool -> Expectation
-nextPrivateGet store rules retained = do
+nextPrivateGet :: Application -> [PreparedRule] -> Bool -> Expectation
+nextPrivateGet privateUpstream rules retained = do
     publicHits <- newIORef (0 :: Int)
     privateHits <- newIORef (0 :: Int)
     testWithApplication (pure (countingUpstream publicHits upstreamApp)) $ \publicPort ->
-        testWithApplication (pure (countingUpstream privateHits (storedUpstream store))) $ \privatePort -> do
+        testWithApplication (pure (countingUpstream privateHits privateUpstream)) $ \privatePort -> do
             (metricsPort, decisions) <- recordingMetricsPort
             rt <- mkRuntime metricsPort
             base <- depsFor publicPort

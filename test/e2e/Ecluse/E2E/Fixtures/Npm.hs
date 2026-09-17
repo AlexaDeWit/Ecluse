@@ -17,6 +17,11 @@ module Ecluse.E2E.Fixtures.Npm (
     dredgerPkg,
     dredgerKeepPkg,
     dredgerDryRunPkg,
+    recoveryPkg,
+    recoveryFaultPkg,
+    recoveryReadmitPkg,
+    recoveryLostPkg,
+    recoveryLatePkg,
     corpusRevokedPkg,
     tamperPkg,
     headPkg,
@@ -24,6 +29,7 @@ module Ecluse.E2E.Fixtures.Npm (
     telemetryDdPkg,
     fixturePackages,
     buildFixtures,
+    artifactFile,
 ) where
 
 import Data.Aeson (Value, object, (.=))
@@ -99,6 +105,28 @@ dredgerKeepPkg = defaultPkgSpec "e2e-dredger-keep"
 dredgerDryRunPkg :: PkgSpec
 dredgerDryRunPkg = defaultPkgSpec "e2e-dredger-dry-run"
 
+{- | A two-version package for the recovery cases. A deny names @1.0.0@ alone, so @2.0.0@ is the
+sibling a next read must still serve.
+-}
+recoveryPkg :: PkgSpec
+recoveryPkg = (defaultPkgSpec "e2e-recovery"){psVersion = "2.0.0", psOlderVersions = ["1.0.0"]}
+
+-- | A package whose private-cache deletion the recovery case makes fail.
+recoveryFaultPkg :: PkgSpec
+recoveryFaultPkg = defaultPkgSpec "e2e-recovery-fault"
+
+-- | A package a recovery case installs again once the policy that removed it is lifted.
+recoveryReadmitPkg :: PkgSpec
+recoveryReadmitPkg = defaultPkgSpec "e2e-recovery-readmit"
+
+-- | A package whose public artifact a recovery case withholds, so no source bytes remain.
+recoveryLostPkg :: PkgSpec
+recoveryLostPkg = defaultPkgSpec "e2e-recovery-lost"
+
+-- | A package a recovery case republishes into both stores after a completed removal.
+recoveryLatePkg :: PkgSpec
+recoveryLatePkg = defaultPkgSpec "e2e-recovery-late"
+
 {- | The package the OSV corpus names in its V2 delta alone. The name matches that advisory, so a
 generation swap condemns @1.0.0@ and leaves @1.2.0@, its stated fix.
 -}
@@ -125,10 +153,22 @@ fixturePackages =
     , dredgerPkg
     , dredgerKeepPkg
     , dredgerDryRunPkg
+    , recoveryPkg
+    , recoveryFaultPkg
+    , recoveryReadmitPkg
+    , recoveryLostPkg
+    , recoveryLatePkg
     , corpusRevokedPkg
     , telemetryPkg
     , telemetryDdPkg
     ]
+
+{- | Where the stub serves one version's artifact, under the root 'buildFixtures' writes into.
+A case that withholds an artifact brackets this path.
+-}
+artifactFile :: FilePath -> Text -> Text -> FilePath
+artifactFile root name version =
+    root </> toString name </> "-" </> toString (name <> "-" <> version <> ".tgz")
 
 -- | Write nginx fixtures with matching artifact integrity, then apply any requested tampering.
 buildFixtures :: FilePath -> [PkgSpec] -> IO ()
@@ -147,7 +187,7 @@ buildOne root spec = do
 buildArtifact :: FilePath -> PkgSpec -> Text -> IO (Text, Text)
 buildArtifact root spec version = do
     let name = toString (psName spec)
-        tgzPath = root </> name </> "-" </> (name <> "-" <> toString version <> ".tgz")
+        tgzPath = artifactFile root (psName spec) version
         -- A scratch directory holding the package tree `tar` archives.
         workRoot = root </> (".work-" <> name <> "-" <> toString version)
         workPkg = workRoot </> "package"

@@ -20,6 +20,10 @@ module Ecluse.E2E.Harness.Docker (
     -- * Observability
     withUpstreamPaused,
 
+    -- * Fixture controls
+    withPrivateCacheDeletesRefused,
+    withPublicArtifactWithheld,
+
     -- * The product image, run to completion
     RoleRun (..),
     runRoleOnce,
@@ -61,14 +65,14 @@ import Network.Socket (
     socket,
     tupleToHostAddress,
  )
-import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
+import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly, renamePath)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess, readProcessStdout)
-import UnliftIO (bracket, bracket_, handleAny)
+import UnliftIO (bracket, bracket_, finally, handleAny)
 
 import Ecluse.E2E.Fixtures.Advisories (buildAdvisoryFixtures)
-import Ecluse.E2E.Fixtures.Npm (buildFixtures, fixturePackages)
+import Ecluse.E2E.Fixtures.Npm (artifactFile, buildFixtures, fixturePackages)
 import Ecluse.E2E.Fixtures.PyPI (buildPyPIFixtures, pypiUpstreamUrl)
 import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Container.Image (
@@ -122,7 +126,7 @@ withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
         buildPyPIFixtures (workDir </> "pypi")
         buildAdvisoryFixtures htmlDir
         writeFileText (workDir </> "verdaccio.yaml") verdaccioConfig
-        writeFileText (workDir </> "nginx.conf") nginxStubConfig
+        writeFileText (workDir </> "nginx.conf") (nginxStubConfig "")
         generateCerts (workDir </> "certs")
         pure workDir
 
@@ -676,11 +680,11 @@ uniqueSuffix = do
     t <- getPOSIXTime
     pure (show (round (t * 1000) :: Integer))
 
-{- | The nginx stub config. One nginx terminates TLS for every registry stub by @server_name@, so
-the proxy dials https-only endpoints while the harness's own probes stay plain HTTP.
+{- | The nginx stub config. One nginx terminates TLS for every registry stub by @server_name@, so the
+proxy dials https-only endpoints. @cacheGuard@ adds a directive to the private-cache route alone.
 -}
-nginxStubConfig :: Text
-nginxStubConfig =
+nginxStubConfig :: Text -> Text
+nginxStubConfig cacheGuard =
     T.unlines
         [ "server {"
         , "    listen 443 ssl;"
@@ -730,6 +734,7 @@ nginxStubConfig =
         , "    ssl_certificate /certs/server.crt;"
         , "    ssl_certificate_key /certs/server.key;"
         , "    resolver 127.0.0.11 valid=5s;"
+        , cacheGuard
         , "    location / {"
         , "        set $cache_backend cache-verdaccio:4873;"
         , "        proxy_pass http://$cache_backend;"
@@ -785,6 +790,34 @@ withUpstreamPaused e2e =
     bracket_
         (dockerOk ["pause", e2eStubContainer e2e])
         (dockerOk ["unpause", e2eStubContainer e2e])
+
+{- | Refuse every write method on the private-cache route for the duration of the action, so that
+one target's deletes fail while its reads keep answering.
+-}
+withPrivateCacheDeletesRefused :: GlobalDataPlane -> IO a -> IO a
+withPrivateCacheDeletesRefused plane action =
+    finally (reloadStub plane refuseCacheWrites >> action) (reloadStub plane "")
+
+-- The stub answers this before it picks a location, so it covers the whole route.
+refuseCacheWrites :: Text
+refuseCacheWrites = "    if ($request_method !~ ^(GET|HEAD)$) { return 503; }"
+
+-- Rewrite the bind-mounted configuration in place, then have the running nginx pick it up. The
+-- write lands before the reload can fail, so a caller restores the file on every exit path.
+reloadStub :: GlobalDataPlane -> Text -> IO ()
+reloadStub plane cacheGuard = do
+    writeFileText (gdpWorkDir plane </> "nginx.conf") (nginxStubConfig cacheGuard)
+    dockerOk ["exec", gdpStub plane, "nginx", "-s", "reload"]
+
+{- | Withhold one public artifact for the duration of the action, leaving its metadata served, and
+put the file back on every exit path.
+-}
+withPublicArtifactWithheld :: GlobalDataPlane -> Text -> Text -> IO a -> IO a
+withPublicArtifactWithheld plane name version =
+    bracket_ (renamePath served withheld) (renamePath withheld served)
+  where
+    served = artifactFile (gdpWorkDir plane </> "html") name version
+    withheld = served <> ".withheld"
 
 {- | Poll a container's logs until the predicate holds, up to @attempts@ times at ~250ms.
 'False' means it never held inside the budget.
