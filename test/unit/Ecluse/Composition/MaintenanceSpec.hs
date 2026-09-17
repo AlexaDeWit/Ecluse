@@ -83,6 +83,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     RequestKind (CursorWrite, DeleteBatch, ListingPage),
     StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope),
     mkQuotaScope,
+    requestKinds,
     undeclaredBudget,
  )
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
@@ -553,7 +554,7 @@ budgetSpec = describe "the request capacity a boot resolves for a store" $ do
     verdaccio = unsafeRegistryUrl key
     overriding declaredKey override = unpacedBudget{bpOverrides = Map.singleton declaredKey override}
     capacity = QuotaOverride{qoScope = Nothing, qoQuotas = Map.singleton StoreRequests 100, qoWeights = Map.empty}
-    protocolCosts = undeclaredBudget{bgCosts = Map.fromList [(kind, Map.singleton StoreRequests 1) | kind <- [minBound .. maxBound]]}
+    protocolCosts = undeclaredBudget{bgCosts = Map.fromList [(kind, Map.singleton StoreRequests 1) | kind <- requestKinds]}
     noCursorCost = undeclaredBudget{bgCosts = Map.singleton ListingPage (Map.singleton StoreRequests 1)}
 
 -- Twenty-five requests a second: the shipped chunk of fifty every two seconds.

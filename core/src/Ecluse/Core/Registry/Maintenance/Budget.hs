@@ -12,6 +12,7 @@ module Ecluse.Core.Registry.Maintenance.Budget (
     mkQuotaScope,
     renderQuotaScope,
     QuotaDimension (..),
+    quotaDimensions,
     quotaDimensionName,
     parseQuotaDimension,
     QuotaOrigin (..),
@@ -25,6 +26,7 @@ module Ecluse.Core.Registry.Maintenance.Budget (
 
     -- * What a cycle spends
     RequestKind (..),
+    requestKinds,
     requestKindName,
     parseRequestKind,
     RequestTally,
@@ -79,7 +81,13 @@ data QuotaDimension
       TokenReads
     | -- | The single undivided request capacity of a backend that publishes no other pool.
       StoreRequests
-    deriving stock (Eq, Ord, Show, Enum, Bounded)
+    deriving stock (Eq, Ord, Show)
+
+{- | Every pool this build meters under. 'quotaDimensionName' carries no wildcard and the spec
+pins this list, so a new arm fails both until it is named in each.
+-}
+quotaDimensions :: [QuotaDimension]
+quotaDimensions = [NameListing, VersionListing, AccountReads, AccountWrites, TokenReads, StoreRequests]
 
 -- | The dimension as a configuration key spells it.
 quotaDimensionName :: QuotaDimension -> Text
@@ -93,7 +101,7 @@ quotaDimensionName = \case
 
 -- | Read a configured dimension, refusing a spelling this build meters nothing under.
 parseQuotaDimension :: Text -> Maybe QuotaDimension
-parseQuotaDimension raw = find ((== raw) . quotaDimensionName) [minBound .. maxBound]
+parseQuotaDimension raw = find ((== raw) . quotaDimensionName) quotaDimensions
 
 -- | Where a scope's quota numbers came from, which the boot line reports.
 data QuotaOrigin
@@ -191,7 +199,11 @@ data RequestKind
       CursorRead
     | -- | One write or clearing of that marker.
       CursorWrite
-    deriving stock (Eq, Ord, Show, Enum, Bounded)
+    deriving stock (Eq, Ord, Show)
+
+-- | Every request a cycle can make, held to 'requestKindName' the way 'quotaDimensions' is.
+requestKinds :: [RequestKind]
+requestKinds = [ListingPage, VersionPage, ManifestRead, DeleteBatch, PermissionRead, CursorRead, CursorWrite]
 
 -- | The kind as a configuration weight spells it.
 requestKindName :: RequestKind -> Text
@@ -206,7 +218,7 @@ requestKindName = \case
 
 -- | Read a configured request kind, refusing a spelling no cycle makes.
 parseRequestKind :: Text -> Maybe RequestKind
-parseRequestKind raw = find ((== raw) . requestKindName) [minBound .. maxBound]
+parseRequestKind raw = find ((== raw) . requestKindName) requestKinds
 
 -- | What one cycle attempted, counted per request kind.
 newtype RequestTally = RequestTally (Map RequestKind Int)

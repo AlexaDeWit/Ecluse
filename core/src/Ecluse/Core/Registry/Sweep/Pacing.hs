@@ -44,6 +44,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     quotaDimensionName,
     renderQuotaScope,
     renderStoreBudget,
+    requestKinds,
     smallestQuota,
     tallyCounts,
     toHundredths,
@@ -168,7 +169,7 @@ decidePace pacing budget sample
 
     -- A share below one stretches every request's own cost by the same factor.
     paceAt share =
-        paceOf (Map.fromList [(kind, held (seconds kind / share)) | kind <- [minBound .. maxBound], seconds kind > 0])
+        paceOf (Map.fromList [(kind, held (seconds kind / share)) | kind <- requestKinds, seconds kind > 0])
     held = min (paceBound pacing)
     seconds kind = cycleDemand ceilings budget (oneRequest kind)
 

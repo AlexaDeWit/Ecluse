@@ -43,6 +43,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     RequestTally,
     StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope),
     mkQuotaScope,
+    requestKinds,
     tallyCounts,
     undeclaredBudget,
  )
@@ -515,7 +516,7 @@ pacedBudget =
         { bgScope = pacedScope
         , bgQuotas = Map.singleton StoreRequests 10
         , bgOrigin = QuotaDeclared
-        , bgCosts = Map.fromList [(kind, Map.singleton StoreRequests 1) | kind <- [minBound .. maxBound]]
+        , bgCosts = Map.fromList [(kind, Map.singleton StoreRequests 1) | kind <- requestKinds]
         }
 
 pacedScope :: QuotaScope

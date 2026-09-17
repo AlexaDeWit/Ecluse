@@ -65,6 +65,7 @@ import Ecluse.Core.Registry.Maintenance (
 import Ecluse.Core.Registry.Maintenance.Budget (
     QuotaDimension (StoreRequests),
     StoreBudget (bgCosts),
+    requestKinds,
     undeclaredBudget,
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken))
@@ -145,7 +146,7 @@ protocolFacts backend =
 operator declares one. Every call it makes debits the one undivided request dimension. -}
 protocolBudget :: StoreBudget
 protocolBudget =
-    undeclaredBudget{bgCosts = Map.fromList [(kind, Map.singleton StoreRequests 1) | kind <- [minBound .. maxBound]]}
+    undeclaredBudget{bgCosts = Map.fromList [(kind, Map.singleton StoreRequests 1) | kind <- requestKinds]}
 
 {- The delete edit addresses the document revision it was formed from, and applying one changes
 that revision, so a batch of two would send the second against a revision that no longer exists. -}

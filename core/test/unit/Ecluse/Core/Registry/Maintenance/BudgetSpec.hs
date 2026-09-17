@@ -7,17 +7,17 @@ module Ecluse.Core.Registry.Maintenance.BudgetSpec (spec) where
 import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
 import Data.Time (NominalDiffTime)
-import Test.Hspec
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 
 import Ecluse.Core.Clock (monoSecondsBetween, monotonicNow, waitSeconds)
 import Ecluse.Core.Registry.Maintenance.Budget (
     BudgetPort (budgetClose, budgetOpen, budgetPaced),
     CycleCost (ccRequests, ccWorkSeconds),
-    QuotaDimension (AccountReads, AccountWrites, StoreRequests),
+    QuotaDimension (AccountReads, AccountWrites, NameListing, StoreRequests, TokenReads, VersionListing),
     QuotaOrigin (QuotaDeclared, QuotaDerived, QuotaUndeclared),
     QuotaScope,
     RequestGate (gateSpend),
-    RequestKind (DeleteBatch, ListingPage, ManifestRead),
+    RequestKind (CursorRead, CursorWrite, DeleteBatch, ListingPage, ManifestRead, PermissionRead, VersionPage),
     StoreBudget (bgCosts, bgOrigin, bgQuotas),
     budgetDeclared,
     mkQuotaScope,
@@ -29,8 +29,10 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     parseQuotaDimension,
     parseRequestKind,
     quotaDimensionName,
+    quotaDimensions,
     renderRequestTally,
     requestKindName,
+    requestKinds,
     smallestQuota,
     tallyCounts,
     undeclaredBudget,
@@ -45,10 +47,22 @@ spec = do
 vocabularySpec :: Spec
 vocabularySpec = describe "the budget vocabulary" $ do
     it "reads back every dimension and request kind it can spell" $ do
-        traverse (parseQuotaDimension . quotaDimensionName) [minBound .. maxBound]
-            `shouldBe` Just [minBound .. maxBound]
-        traverse (parseRequestKind . requestKindName) [minBound .. maxBound]
-            `shouldBe` Just [minBound .. maxBound]
+        traverse (parseQuotaDimension . quotaDimensionName) quotaDimensions
+            `shouldBe` Just quotaDimensions
+        traverse (parseRequestKind . requestKindName) requestKinds
+            `shouldBe` Just requestKinds
+
+    {- The lists are written out rather than enumerated, so a constructor added without being added
+    to them fails here as well as at the wildcard-free case in 'quotaDimensionName'. -}
+    it "holds every constructor of both vocabularies in its own list" $ do
+        quotaDimensions
+            `shouldBe` [NameListing, VersionListing, AccountReads, AccountWrites, TokenReads, StoreRequests]
+        requestKinds
+            `shouldBe` [ListingPage, VersionPage, ManifestRead, DeleteBatch, PermissionRead, CursorRead, CursorWrite]
+        map quotaDimensionName quotaDimensions
+            `shouldBe` ["nameListing", "versionListing", "accountReads", "accountWrites", "tokenReads", "storeRequests"]
+        map requestKindName requestKinds
+            `shouldBe` ["listingPage", "versionPage", "manifestRead", "deleteBatch", "permissionRead", "cursorRead", "cursorWrite"]
 
     it "refuses a dimension and a request kind this build meters nothing under" $ do
         parseQuotaDimension "diskBytes" `shouldBe` Nothing
@@ -111,9 +125,9 @@ meterSpec = describe "the cycle meter" $ do
     it "serves a sub-second pace through the wait the boot wires in" $ do
         (port, gateFor) <- newBudgetMeter waitSeconds
         budgetPaced port (Map.fromList [(mirror, paceOf (Map.fromList [(ListingPage, 1 % 20)]))])
-        before <- monotonicNow
+        startedAt <- monotonicNow
         gateSpend (gateFor mirror) ListingPage
-        served <- monoSecondsBetween before <$> monotonicNow
+        served <- monoSecondsBetween startedAt <$> monotonicNow
         served `shouldSatisfy` (> 0.02)
 
     it "counts the waits it imposed out of the work it measured" $ do

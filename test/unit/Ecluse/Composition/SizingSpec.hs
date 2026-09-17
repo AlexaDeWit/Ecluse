@@ -5,6 +5,7 @@
 module Ecluse.Composition.SizingSpec (spec) where
 
 import Data.Text qualified as T
+import Data.Time (NominalDiffTime)
 import Network.HTTP.Client (ManagerSettings (managerConnCount), defaultManagerSettings)
 import Test.Hspec
 
@@ -24,12 +25,17 @@ spec = do
 resolveSizedSpec :: Spec
 resolveSizedSpec = describe "resolveSized" $ do
     it "takes the explicit value and names config as the provenance" $
-        resolveSized "memory plan: cache byte bound" (Just 7) 3 "computed from the heap ceiling"
+        resolveSized "memory plan: cache byte bound" (Just (7 :: Int)) 3 "computed from the heap ceiling"
             `shouldBe` (7, "memory plan: cache byte bound 7 (from config)")
 
     it "takes the computed value and names the datapoint behind it" $
-        resolveSized "memory plan: cache byte bound" Nothing 3 "computed from the heap ceiling"
+        resolveSized "memory plan: cache byte bound" Nothing (3 :: Int) "computed from the heap ceiling"
             `shouldBe` (3, "memory plan: cache byte bound 3 (computed from the heap ceiling)")
+
+    -- The resolution carries any shown value, so a duration resolves and renders as one.
+    it "renders a duration the same way, without a numeric conversion" $
+        resolveSized "dredger: target cycle window" Nothing (10800 :: NominalDiffTime) "computed as three cycle pauses"
+            `shouldBe` (10800, "dredger: target cycle window 10800s (computed as three cycle pauses)")
 
 connectionPoolSpec :: Spec
 connectionPoolSpec = do

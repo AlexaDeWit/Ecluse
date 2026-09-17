@@ -7,7 +7,7 @@ module Ecluse.Core.Registry.Sweep.PacingSpec (spec) where
 import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
 import Data.Text qualified as T
-import Test.Hspec
+import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Ecluse.Core.Registry.Maintenance.Budget (
     QuotaDimension (AccountReads, AccountWrites, NameListing, StoreRequests, TokenReads, VersionListing),
@@ -19,6 +19,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     mkQuotaScope,
     oneRequest,
     paceSeconds,
+    requestKinds,
     undeclaredBudget,
  )
 import Ecluse.Core.Registry.Sweep.Pacing (
@@ -222,7 +223,7 @@ declaredAt capacity =
     undeclaredBudget
         { bgQuotas = Map.fromList [(StoreRequests, capacity)]
         , bgOrigin = QuotaDeclared
-        , bgCosts = Map.fromList [(kind, Map.fromList [(StoreRequests, 1)]) | kind <- [minBound .. maxBound]]
+        , bgCosts = Map.fromList [(kind, Map.fromList [(StoreRequests, 1)]) | kind <- requestKinds]
         }
 
 {- A measured cycle over six thousand candidate packages: a hundred name pages, one version page
