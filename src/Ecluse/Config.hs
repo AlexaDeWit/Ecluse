@@ -301,9 +301,21 @@ renderLeafValue path v
 
 -- | Mount modes followed by the live-environment limits of @check-config@, shared with boot.
 mountPostureLines :: Config -> [Text]
-mountPostureLines config = map postureLine mounts <> mapMaybe maintenanceClientLine mounts
+mountPostureLines config =
+    map postureLine mounts <> mapMaybe maintenanceClientLine mounts <> mapMaybe upstreamProbeLine mounts
   where
     mounts = Map.toAscList (configMounts config)
+
+{- Asking a backend what its private upstream aggregates is a call against the live control plane,
+which a checker makes none of. -}
+upstreamProbeLine :: (Ecosystem, Mount) -> Maybe Text
+upstreamProbeLine (eco, mount) =
+    notice <$ regPrivateUpstream (mountRegistries mount)
+  where
+    notice =
+        "mount \""
+            <> ecosystemName eco
+            <> "\": the private upstream is asked at boot whether it, or a repository in its upstream chain, connects to a public registry. check-config does not make that call."
 
 maintenanceClientLine :: (Ecosystem, Mount) -> Maybe Text
 maintenanceClientLine (eco, mount) = do

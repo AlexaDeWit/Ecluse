@@ -9,7 +9,7 @@ import Data.Text.Encoding qualified as TE
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
-    Advisory (DredgerQuotaOverrideUnmatched, MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream),
+    Advisory (DredgerQuotaOverrideUnmatched, MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream, PrivateUpstreamUndecided),
     BootError (..),
     StoreMaintenanceReason (ClientBuildFailed, NoControlPlane),
     renderAdvisory,
@@ -22,6 +22,13 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Registry.Maintenance.Upstream (
+    ExternalConnection (ExternalConnection),
+    PermissionName (PermissionName),
+    RepositoryName (RepositoryName),
+    UndecidabilityReason (ChainBoundExceeded, NetworkFailure, NoMechanism),
+    UnsafeReason (ConfigurationEvidence, InsufficientPermissions),
+ )
 import Ecluse.Test.Package (unsafeRegistryUrl)
 
 spec :: Spec
@@ -143,6 +150,16 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "ECLUSE_ADVISORIES__URL (advisories.url) is unset"
         renderBootError (AdvisoryDenyWithoutStore Npm ("DenyIfCve" :| []))
             `shouldSatisfy` infixed "run ecluse pilot to publish an artifact"
+        -- The refusal names the mount, the repository the evidence came from, and the connection,
+        -- because the operator fixes it in that repository rather than in this configuration.
+        renderBootError (PrivateUpstreamUnsafe Npm (ConfigurationEvidence (RepositoryName "shared") (ExternalConnection "public:npmjs")))
+            `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM admits public content: repository shared carries the external connection public:npmjs"
+        renderBootError (PrivateUpstreamUnsafe Npm (ConfigurationEvidence (RepositoryName "shared") (ExternalConnection "public:npmjs")))
+            `shouldSatisfy` infixed "point privateUpstream at a repository that has none"
+        renderBootError (PrivateUpstreamUnsafe Npm (InsufficientPermissions (PermissionName "codeartifact:DescribeRepository")))
+            `shouldSatisfy` infixed "refused codeartifact:DescribeRepository"
+        renderBootError (PrivateUpstreamUnsafe Npm (InsufficientPermissions (PermissionName "codeartifact:DescribeRepository")))
+            `shouldSatisfy` infixed "An identity that cannot ask cannot clear the repository"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay
@@ -159,6 +176,12 @@ renderAdvisorySpec = describe "renderAdvisory" $ do
     it "names the neighbouring mount whose private upstream the mirror target collapsed onto" $
         advisoryBytes (MirrorTargetOnPrivateUpstream Npm PyPI (unsafeRegistryUrl "https://store.example.test"))
             `shouldBe` "mount \"npm\": mirrorTarget and mount \"pypi\" privateUpstream resolve to the same registry (https://store.example.test); the Dredger refuses this configuration, so pruning this mirror stays manual"
+
+    it "names why an unchecked private upstream stayed the operator's to verify" $ do
+        advisoryBytes (PrivateUpstreamUndecided Npm NoMechanism)
+            `shouldBe` "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM was not checked for a connection to a public registry: its backend does not report the repositories and registries it aggregates. A repository that aggregates a public registry serves public packages as trusted private content, so confirming that this one does not stays yours"
+        renderAdvisory (PrivateUpstreamUndecided Npm NetworkFailure) `shouldSatisfy` T.isInfixOf "its backend did not answer"
+        renderAdvisory (PrivateUpstreamUndecided Npm ChainBoundExceeded) `shouldSatisfy` T.isInfixOf "crossed this walk's bounds"
 
     it "quotes the mirror target as configured, trailing slash included" $
         advisoryBytes (MirrorTargetOnOwnPublicationTarget Npm (unsafeRegistryUrl "https://store.example.test/npm/mirror/"))

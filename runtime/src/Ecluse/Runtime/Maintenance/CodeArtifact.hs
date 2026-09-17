@@ -12,6 +12,7 @@ decisions live in "Ecluse.Runtime.Maintenance.CodeArtifact.Decide".
 module Ecluse.Runtime.Maintenance.CodeArtifact (
     newCodeArtifactMaintenance,
     newCodeArtifactObservation,
+    newCodeArtifactUpstreamProbe,
     newCodeArtifactCacheMaintenance,
     newCodeArtifactCacheObservation,
     cacheMaintenanceFor,
@@ -23,6 +24,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact (
     maintenanceFor,
     observationFor,
     boundedObservationFor,
+    probeUpstreamSafety,
 ) where
 
 import Amazonka qualified as AWS
@@ -54,6 +56,11 @@ import Ecluse.Core.Registry.Maintenance (
     pageAll,
     pageSource,
  )
+import Ecluse.Core.Registry.Maintenance.Upstream (
+    UndecidabilityReason (NetworkFailure),
+    UpstreamSafety (Undecidable),
+    walkUpstreamChain,
+ )
 import Ecluse.Core.Version (Version)
 import Ecluse.Runtime.Aws.Env (newAwsEnv)
 import Ecluse.Runtime.Aws.Fault (sendClassified)
@@ -70,6 +77,8 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     deleteCeiling,
     deleteRequest,
     describeRepositoryRequest,
+    describeUpstreamRefusal,
+    describeUpstreamRequest,
     foldDeleteResponse,
     formatEcosystem,
     listPackagesRequest,
@@ -78,6 +87,8 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     listVersionsResult,
     packagesOfPage,
     repositoryOfResponse,
+    repositoryOfStore,
+    upstreamLinksOf,
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (
     ReadPlane (..),
@@ -109,6 +120,14 @@ way. No deletion, no tag write, and no publication is built, so the caller holds
 newCodeArtifactObservation :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreObservation
 newCodeArtifactObservation limit alphabet readManifest store =
     boundedObservationFor limit alphabet readManifest store . readPlaneFor <$> newMaintenanceEnv store
+
+{- | Probe one repository's chain over an environment discovered the standard way, for a role
+that holds no maintenance handle for the repository it serves private content from.
+-}
+newCodeArtifactUpstreamProbe :: CodeArtifactStore -> IO UpstreamSafety
+newCodeArtifactUpstreamProbe store = do
+    env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+    probeUpstreamSafety (readPlaneFor env) store
 
 -- | Build cache deletion with target-local reads and consent, allowing its declared refill role.
 newCodeArtifactCacheMaintenance :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> IO StoreMaintenance
@@ -165,6 +184,7 @@ readPlaneFor env =
         { rpListPackages = sendStore env
         , rpListVersions = fmap listVersionsResult . sendClassified id env
         , rpDescribeRepository = sendStore env
+        , rpDescribeUpstream = sendClassified describeUpstreamRefusal env
         , rpListTags = sendStore env
         }
 
@@ -181,6 +201,7 @@ maintenanceFor alphabet readManifest store plane =
         , deleteVersions = deleteChunks plane store
         , verifyConsent = obVerifyConsent observed
         , classifyStore = obClassifyStore observed
+        , probeUpstream = obProbeUpstream observed
         , storeCursor = Just (walkCursor alphabet plane store)
         }
   where
@@ -196,7 +217,22 @@ observationFor alphabet readManifest store observer =
         , obReadManifest = readManifest
         , obVerifyConsent = readConsent observer store
         , obClassifyStore = fmap (fmap classifyRepository) (describeStore observer store)
+        , obProbeUpstream = probeUpstreamSafety observer store
         }
+
+{- | Walk the repository's upstream chain, under the bounds the walk itself holds. The reads are
+the ambient role's own, so no caller's credential reaches this call.
+-}
+probeUpstreamSafety :: ReadPlane -> CodeArtifactStore -> IO UpstreamSafety
+probeUpstreamSafety observer store = walkUpstreamChain linksOf (repositoryOfStore store)
+  where
+    linksOf repository =
+        describedLinks <$> rpDescribeUpstream observer (describeUpstreamRequest store repository)
+
+    -- An answer that described no repository settled nothing, so the question stays open.
+    describedLinks response = do
+        described <- response
+        maybe (Left (Undecidable NetworkFailure)) (Right . upstreamLinksOf) (described ^. CAL.describeRepositoryResponse_repository)
 
 -- | Build observation with version pagination bounded before another page is requested.
 boundedObservationFor :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ReadPlane -> StoreObservation

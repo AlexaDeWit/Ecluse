@@ -48,6 +48,7 @@ import Ecluse.Core.Registry.Maintenance (
     storeRefusal,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (undeclaredBudget)
+import Ecluse.Core.Registry.Maintenance.Upstream (UndecidabilityReason (NoMechanism), UpstreamSafety (Undecidable))
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError (MetadataUndecodable))
 import Ecluse.Core.Version (Version)
 
@@ -66,6 +67,8 @@ data FakeStoreConfig = FakeStoreConfig
     -- ^ Whether the store offers a walk cursor, the arm a protocol-only store does not take.
     , fakeManifests :: Map PackageName Manifest
     -- ^ The metadata the store serves per package. A package absent here reads as undecodable.
+    , fakeUpstream :: UpstreamSafety
+    -- ^ What the store answers about the public content reaching a client through it.
     }
 
 {- | A consenting, destroyable, empty store whose facts take the arm CodeArtifact does not: a small
@@ -90,6 +93,7 @@ defaultFakeStoreConfig =
         , fakePageSize = 2
         , fakeKeepsCursor = True
         , fakeManifests = Map.empty
+        , fakeUpstream = Undecidable NoMechanism
         }
 
 -- | A fake store: the calls a caller drives, and the state a test asserts against.
@@ -126,6 +130,7 @@ newFakeStore config = do
                             (chunksOfCeiling (factDeleteCeiling (fakeFacts config)) versions)
                     , verifyConsent = obVerifyConsent observed
                     , classifyStore = obClassifyStore observed
+                    , probeUpstream = obProbeUpstream observed
                     , storeCursor = fakeStoreCursor config cursor
                     }
             , fakeObservation = observed
@@ -145,6 +150,7 @@ fakeObserving config contents =
         , obReadManifest = pure . readSeededManifest config
         , obVerifyConsent = orFault config (pure (fakeConsent config))
         , obClassifyStore = orFault config (pure (fakeClass config))
+        , obProbeUpstream = pure (fakeUpstream config)
         }
 
 {- The names in one bucket, cut into pages of the configured size. A configured fault ends the

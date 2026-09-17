@@ -36,6 +36,15 @@ import Ecluse.Core.Registry.Maintenance (
     refusalDetail,
     renderNamePrefix,
  )
+import Ecluse.Core.Registry.Maintenance.Upstream (
+    ExternalConnection (ExternalConnection),
+    PermissionName (permissionNameText),
+    RepositoryLinks (rlConnections, rlUpstreams),
+    RepositoryName (RepositoryName),
+    UndecidabilityReason (NetworkFailure),
+    UnsafeReason (InsufficientPermissions),
+    UpstreamSafety (Undecidable, Unsafe),
+ )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     CodeArtifactStore (..),
@@ -52,7 +61,10 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     cursorUntagRequest,
     deleteCeiling,
     deleteRequest,
+    describeRepositoryGrant,
     describeRepositoryRequest,
+    describeUpstreamRefusal,
+    describeUpstreamRequest,
     foldDeleteResponse,
     formatEcosystem,
     formatToken,
@@ -65,6 +77,8 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     packagesOfPage,
     presenceOf,
     repositoryOfResponse,
+    repositoryOfStore,
+    upstreamLinksOf,
  )
 import Ecluse.Test.Maintenance (withBucket)
 
@@ -78,6 +92,7 @@ spec = do
     deleteFoldSpec
     faultSpec
     verdictSpec
+    upstreamSpec
     cursorSpec
 
 formatSpec :: Spec
@@ -335,6 +350,55 @@ verdictSpec = describe "the verdicts a sweep reads before it deletes" $ do
         ConsentWithheld descriptor ->
             consentTagKey `T.isInfixOf` descriptor && consentTagValue `T.isInfixOf` descriptor
         ConsentGranted -> False
+
+{- What one @DescribeRepository@ answer says about the content a repository admits, and how the
+probe reads a refusal of the call itself. -}
+upstreamSpec :: Spec
+upstreamSpec = describe "the private upstream's aggregation" $ do
+    it "reads the external connections and the upstream repositories a description carries" $ do
+        let described =
+                CA.newRepositoryDescription
+                    & CAL.repositoryDescription_externalConnections
+                    ?~ [CA.newRepositoryExternalConnectionInfo & CAL.repositoryExternalConnectionInfo_externalConnectionName ?~ "public:npmjs"]
+                        & CAL.repositoryDescription_upstreams
+                    ?~ [CA.newUpstreamRepositoryInfo & CAL.upstreamRepositoryInfo_repositoryName ?~ "shared"]
+        rlConnections (upstreamLinksOf described) `shouldBe` [ExternalConnection "public:npmjs"]
+        rlUpstreams (upstreamLinksOf described) `shouldBe` [RepositoryName "shared"]
+
+    it "reads a repository that aggregates nothing as carrying no links at all" $ do
+        rlConnections (upstreamLinksOf CA.newRepositoryDescription) `shouldBe` []
+        rlUpstreams (upstreamLinksOf CA.newRepositoryDescription) `shouldBe` []
+
+    it "drops an entry the store named neither a connection nor a repository in" $ do
+        let unnamed =
+                CA.newRepositoryDescription
+                    & CAL.repositoryDescription_externalConnections
+                    ?~ [CA.newRepositoryExternalConnectionInfo]
+                        & CAL.repositoryDescription_upstreams
+                    ?~ [CA.newUpstreamRepositoryInfo]
+        rlConnections (upstreamLinksOf unnamed) `shouldBe` []
+        rlUpstreams (upstreamLinksOf unnamed) `shouldBe` []
+
+    it "starts a walk at the repository the store's own coordinates name" $
+        fmap repositoryOfStore npmStore `shouldBe` Just (RepositoryName "mirror")
+
+    it "addresses a hop by name, inside the domain the store was declared in" $ do
+        let request = describeUpstreamRequest <$> npmStore <*> Just (RepositoryName "shared")
+        fmap (^. CAL.describeRepository_repository) request `shouldBe` Just "shared"
+        fmap (^. CAL.describeRepository_domain) request `shouldBe` Just "acme"
+        fmap (^. CAL.describeRepository_domainOwner) request `shouldBe` Just (Just "111122223333")
+
+    it "reads a refused identity as an unsafe answer, because it cannot clear the repository" $ do
+        describeUpstreamRefusal (serviceError status403 "AccessDeniedException" [])
+            `shouldBe` Unsafe (InsufficientPermissions describeRepositoryGrant)
+        permissionNameText describeRepositoryGrant `shouldBe` "codeartifact:DescribeRepository"
+
+    it "leaves every other refusal undecided, so a throttle or a fault decides nothing" $ do
+        describeUpstreamRefusal (serviceError status429 "ThrottlingException" []) `shouldBe` Undecidable NetworkFailure
+        describeUpstreamRefusal (serviceError status503 "ServiceUnavailable" []) `shouldBe` Undecidable NetworkFailure
+        describeUpstreamRefusal (serviceError status404 "ResourceNotFoundException" []) `shouldBe` Undecidable NetworkFailure
+        describeUpstreamRefusal (AWS.TransportError (HttpExceptionRequest defaultRequest ConnectionTimeout))
+            `shouldBe` Undecidable NetworkFailure
 
 -- The CodeArtifact npm repository the request cases address.
 npmStore :: Maybe CodeArtifactStore

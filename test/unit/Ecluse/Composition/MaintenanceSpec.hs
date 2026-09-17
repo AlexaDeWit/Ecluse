@@ -10,8 +10,8 @@ import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition.BootError (
-    Advisory,
-    BootError (StoreMaintenanceUnavailable),
+    Advisory (PrivateUpstreamUndecided),
+    BootError (PrivateUpstreamUnsafe, StoreMaintenanceUnavailable),
     StoreMaintenanceReason (ClientBuildFailed, DeletionNotPermitted, NoProtocolMaintenance, PrivateCacheUnavailable),
     renderBootError,
  )
@@ -23,9 +23,12 @@ import Ecluse.Composition.Maintenance (
     StorePorts (..),
     buildStoreMaintenance,
     buildStoreObservation,
+    buildUpstreamProbe,
     planStoreMaintenance,
+    readUpstreamSafety,
     resolvedBudget,
     storeScope,
+    upstreamFindings,
     vetPrivateCaches,
     vetStoreBackends,
  )
@@ -49,8 +52,10 @@ import Ecluse.Config (
     AppConfig (cfgMounts),
     Config (configApp, configMounts),
     ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
+    MountConfig (mntPrivateUpstream),
     MountMap,
     QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights),
+    PrivateEndpoint,
     StoreBackend,
     StoreTag (TagVerdaccio),
     sbControl,
@@ -86,6 +91,13 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     requestKinds,
     undeclaredBudget,
  )
+import Ecluse.Core.Registry.Maintenance.Upstream (
+    ExternalConnection (ExternalConnection),
+    RepositoryName (RepositoryName),
+    UndecidabilityReason (NetworkFailure, NoMechanism),
+    UnsafeReason (ConfigurationEvidence),
+    UpstreamSafety (Safe, Undecidable, Unsafe),
+ )
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Security (defaultLimits)
@@ -102,6 +114,7 @@ spec = do
     protocolSpec
     buildSpec
     planSpec
+    probeSpec
     previewCachesSpec
     budgetSpec
 
@@ -337,6 +350,43 @@ planSpec = describe "planStoreMaintenance" $ do
         StoreMaintenanceUnavailable eco (ClientBuildFailed detail) ->
             StoreMaintenanceUnavailable eco (ClientBuildFailed (T.takeWhile (/= '\n') detail))
         err -> err
+
+{- What a boot does with each backend's answer about its private upstream, and which backends
+answer at all. The severity is the same for every role that asks. -}
+probeSpec :: Spec
+probeSpec = describe "the private upstream's answer" $ do
+    it "refuses on an unsafe repository and says which connection it carries" $
+        upstreamFindings [(Npm, Unsafe evidence)]
+            `shouldBe` ([], Left [PrivateUpstreamUnsafe Npm evidence])
+
+    it "advises on an open question and boots" $
+        upstreamFindings [(Npm, Undecidable NoMechanism)]
+            `shouldBe` ([PrivateUpstreamUndecided Npm NoMechanism], Right ())
+
+    it "says nothing at all about a safe repository" $
+        upstreamFindings [(Npm, Safe)] `shouldBe` ([], Right ())
+
+    it "reports every mount's answer from one boot, refusals and advisories together" $
+        upstreamFindings [(Npm, Unsafe evidence), (PyPI, Undecidable NetworkFailure)]
+            `shouldBe` ([PrivateUpstreamUndecided PyPI NetworkFailure], Left [PrivateUpstreamUnsafe Npm evidence])
+
+    it "leaves a probe whose client could not be built undecided, rather than refusing the role" $
+        readUpstreamSafety [(Npm, throwIO NoStoreClient)]
+            `shouldReturn` ([PrivateUpstreamUndecided Npm NetworkFailure], Right ())
+
+    it "answers undecided for a private upstream whose backend does not report its aggregation" $
+        for_ [staticEnvVars, withObservablePrivate staticEnvVars] $ \envVars -> do
+            endpoint <- privateEndpointFor envVars
+            buildUpstreamProbe Npm endpoint `shouldReturn` Undecidable NoMechanism
+  where
+    evidence = ConfigurationEvidence (RepositoryName "shared") (ExternalConnection "public:npmjs")
+
+-- The npm mount's declared private upstream, failing the case where the fixture declares none.
+privateEndpointFor :: [(String, String)] -> IO PrivateEndpoint
+privateEndpointFor envVars = do
+    config <- expectConfig envVars Nothing
+    maybe (fail "the fixture declares no private upstream") pure $
+        mntPrivateUpstream =<< Map.lookup Npm (cfgMounts (configApp config))
 
 -- | The typed stand-in for amazonka's credential-discovery failure.
 data NoStoreClient = NoStoreClient

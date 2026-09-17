@@ -7,6 +7,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifactSpec (spec) where
 
 import Data.Text qualified as T
 import Lens.Micro ((.~), (?~), (^.))
+import Network.HTTP.Types (Status, status403, status503)
 import Test.Hspec
 
 import Amazonka qualified as AWS
@@ -30,7 +31,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFault (..),
     StoreMaintenance (..),
     StoreManifestRead,
-    StoreObservation (obEnumerateVersions, obListPackagesIn),
+    StoreObservation (obEnumerateVersions, obListPackagesIn, obProbeUpstream),
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUncertain, VersionUnreached),
     VersionPresence (VersionServed),
@@ -39,6 +40,15 @@ import Ecluse.Core.Registry.Maintenance (
     mkNameAlphabet,
     refusalCode,
     renderNamePrefix,
+ )
+import Ecluse.Core.Registry.Maintenance.Upstream (
+    ExternalConnection (ExternalConnection),
+    RepositoryName (RepositoryName),
+    UndecidabilityReason (ChainBoundExceeded, NetworkFailure),
+    UnsafeReason (ConfigurationEvidence, InsufficientPermissions),
+    UpstreamSafety (Safe, Undecidable, Unsafe),
+    upstreamCallCeiling,
+    upstreamHopCeiling,
  )
 import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (CycleHalt (HaltDeletionCap, HaltStoreFault), SweepMount (smStore), SweepPacing (swpDeletionCap), SweepState (stIssued), newSweepState)
@@ -51,6 +61,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact (
     controlPlaneFor,
     maintenanceFor,
     observationFor,
+    probeUpstreamSafety,
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     CodeArtifactStore (..),
@@ -58,6 +69,8 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     consentTagKey,
     consentTagValue,
     cursorTagKey,
+    describeRepositoryGrant,
+    describeUpstreamRefusal,
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (ReadPlane (..))
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
@@ -81,6 +94,7 @@ handleCases store = do
     deleteCases store
     consentCases store
     classificationCases store
+    upstreamCases store
     cursorCases store
 
 factCases :: CodeArtifactStore -> Spec
@@ -315,6 +329,84 @@ classificationCases store = describe "the handle's store classification" $ do
         verdict <- classifyUnder store (Right (CA.newDescribeRepositoryResponse 200))
         first detailOf verdict `shouldBe` Left "the store described no repository"
 
+{- The probe of a private upstream, over describe answers seeded per repository, so the walk's
+own bounds and the refusals it reads are drivable without a repository. -}
+upstreamCases :: CodeArtifactStore -> Spec
+upstreamCases store = describe "the handle's private upstream probe" $ do
+    it "reads a repository that aggregates nothing as safe" $
+        probeOver store [("mirror", CA.newRepositoryDescription)] `shouldReturn` Safe
+
+    it "reports the repository's own connection to a public registry" $
+        probeOver store [("mirror", connectedTo "public:npmjs")]
+            `shouldReturn` Unsafe (ConfigurationEvidence (RepositoryName "mirror") (ExternalConnection "public:npmjs"))
+
+    it "reports a connection carried by a repository further along the chain" $
+        probeOver store [("mirror", routedTo ["shared"]), ("shared", connectedTo "public:npmjs")]
+            `shouldReturn` Unsafe (ConfigurationEvidence (RepositoryName "shared") (ExternalConnection "public:npmjs"))
+
+    it "terminates on a cycle rather than describing a repository twice" $
+        probeOver store [("mirror", routedTo ["shared"]), ("shared", routedTo ["mirror"])] `shouldReturn` Safe
+
+    it "leaves a chain deeper than the hop ceiling undecided, never safe" $
+        probeOver store (chainOf (upstreamHopCeiling + 2)) `shouldReturn` Undecidable ChainBoundExceeded
+
+    it "leaves a chain wider than the call ceiling undecided, never safe" $
+        probeOver store (fanOf (upstreamCallCeiling + 5)) `shouldReturn` Undecidable ChainBoundExceeded
+
+    it "reads a refused identity as unsafe, because it cannot clear the repository" $
+        probeRefusing store (serviceError status403 "AccessDeniedException")
+            `shouldReturn` Unsafe (InsufficientPermissions describeRepositoryGrant)
+
+    it "leaves a faulted call undecided" $
+        probeRefusing store (serviceError status503 "ServiceUnavailable") `shouldReturn` Undecidable NetworkFailure
+
+    it "leaves an answer that described no repository undecided" $
+        probeOver store [] `shouldReturn` Undecidable NetworkFailure
+
+    it "offers the probe on the whole handle and on the observing calls alike" $ do
+        let plane = reading inertReader{rpDescribeUpstream = \_ -> pure (Right (describing CA.newRepositoryDescription))}
+        probeUpstream (handleOver store plane) `shouldReturn` Safe
+        obProbeUpstream (observationFor testAlphabet unwiredRead store (cpRead plane)) `shouldReturn` Safe
+
+-- Probe over describes seeded per repository. A repository absent here is one the store answered nothing for.
+probeOver :: CodeArtifactStore -> [(Text, CA.RepositoryDescription)] -> IO UpstreamSafety
+probeOver store chain = probeUpstreamSafety inertReader{rpDescribeUpstream = answer} store
+  where
+    answer request =
+        pure . Right . maybe (CA.newDescribeRepositoryResponse 200) describing $
+            lookup (request ^. CAL.describeRepository_repository) chain
+
+-- Probe over a call the service refused, read through the leaf's own classification of that refusal.
+probeRefusing :: CodeArtifactStore -> AWS.Error -> IO UpstreamSafety
+probeRefusing store err =
+    probeUpstreamSafety inertReader{rpDescribeUpstream = \_ -> pure (Left (describeUpstreamRefusal err))} store
+
+serviceError :: Status -> Text -> AWS.Error
+serviceError status code =
+    AWS.ServiceError (AWS.ServiceError' "CodeArtifact" status [] (AWS.newErrorCode code) Nothing Nothing)
+
+connectedTo :: Text -> CA.RepositoryDescription
+connectedTo connection =
+    CA.newRepositoryDescription
+        & (CAL.repositoryDescription_externalConnections ?~ [CA.newRepositoryExternalConnectionInfo & (CAL.repositoryExternalConnectionInfo_externalConnectionName ?~ connection)])
+
+routedTo :: [Text] -> CA.RepositoryDescription
+routedTo upstreams =
+    CA.newRepositoryDescription
+        & (CAL.repositoryDescription_upstreams ?~ [CA.newUpstreamRepositoryInfo & (CAL.upstreamRepositoryInfo_repositoryName ?~ name) | name <- upstreams])
+
+-- A chain of the given length from the store's own repository, each forwarding to the next.
+chainOf :: Int -> [(Text, CA.RepositoryDescription)]
+chainOf depth = [("mirror", routedTo ["hop1"])] <> [(hop n, routedTo [hop (n + 1)]) | n <- [1 .. depth]]
+  where
+    hop n = "hop" <> show n
+
+-- The store's own repository forwarding to the given number of others, each aggregating nothing.
+fanOf :: Int -> [(Text, CA.RepositoryDescription)]
+fanOf width = [("mirror", routedTo (map leaf [1 .. width]))] <> [(leaf n, CA.newRepositoryDescription) | n <- [1 .. width]]
+  where
+    leaf n = "leaf" <> show n
+
 cursorCases :: CodeArtifactStore -> Spec
 cursorCases store = describe "the handle's walk cursor" $ do
     it "offers one, because a repository tag is somewhere to keep it" $
@@ -448,6 +540,7 @@ inertReader =
         { rpListPackages = unexpected "ListPackages"
         , rpListVersions = unexpected "ListPackageVersions"
         , rpDescribeRepository = unexpected "DescribeRepository"
+        , rpDescribeUpstream = \_ -> fail "the spec wired no DescribeRepository answer for the probe"
         , rpListTags = unexpected "ListTagsForResource"
         }
 

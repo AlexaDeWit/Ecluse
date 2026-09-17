@@ -17,12 +17,14 @@ import Ecluse.Composition (
     ResolveAdapter,
  )
 import Ecluse.Composition.BootError (
+    Advisory (PrivateUpstreamUndecided),
     BootError (
         AdvisorySyncUnavailable,
         CodeArtifactMintFailed,
         MirrorQueueUnavailable,
         MissingAdapter,
         PilotWithoutEcosystem,
+        PrivateUpstreamUnsafe,
         StoreMaintenanceUnavailable
     ),
     StoreMaintenanceReason (ClientBuildFailed, PrivateCacheUnavailable),
@@ -37,7 +39,7 @@ import Ecluse.Composition.Executable (
     RoleWiring (MirrorPipelineWiring, PilotWiring, StorePrunerWiring),
     planExecutable,
  )
-import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl), StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
+import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl), StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
 import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, staticEnvVars, withObservablePrivate)
 import Ecluse.Composition.Types (
@@ -48,6 +50,14 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Queue (noMirrorQueue)
 import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
+import Ecluse.Core.Registry.Maintenance.Upstream (
+    ExternalConnection (ExternalConnection),
+    RepositoryName (RepositoryName),
+    UndecidabilityReason (NoMechanism),
+    UnsafeReason (ConfigurationEvidence),
+    UpstreamSafety (Safe, Undecidable, Unsafe),
+    noUpstreamMechanism,
+ )
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Types (CycleOutcome (outcomePrerequisites, outcomeTally), SweepMount (smEcosystem), SweepTally (tallyDeleted))
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -58,7 +68,7 @@ import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEpssRequirement))
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeContents, fakeManifests), defaultFakeStoreConfig, newFakeStore)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeContents, fakeManifests, fakeUpstream), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Package (sampleManifest, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), previewingReport, recordingPortsUnder, testPacing)
@@ -273,6 +283,46 @@ spec = describe "planExecutable" $ do
             Right _ -> expectationFailure "expected the pilot arm to refuse"
             Left errs -> errs `shouldBe` [PilotWithoutEcosystem]
 
+    for_ [ServeAndMirror, ServeOnly] $ \role -> do
+        it ("refuses " <> show role <> ", whose private upstream admits public content") $ do
+            -- A repository that aggregates a public registry serves public packages as trusted
+            -- private content, which is the one topology the request path cannot tell apart.
+            (advisories, outcome) <- probedPlan role (Unsafe publicConnection)
+            advisories `shouldBe` []
+            case outcome of
+                Right _ -> expectationFailure "expected the private upstream to refuse the role"
+                Left errs -> errs `shouldBe` [PrivateUpstreamUnsafe Npm publicConnection]
+
+        it ("advises " <> show role <> ", and boots it, where the backend settled nothing") $ do
+            (advisories, outcome) <- probedPlan role (Undecidable NoMechanism)
+            advisories `shouldBe` [PrivateUpstreamUndecided Npm NoMechanism]
+            outcome `shouldSatisfy` isRight
+
+        it ("says nothing to " <> show role <> " about a private upstream that aggregates nothing") $ do
+            (advisories, outcome) <- probedPlan role Safe
+            advisories `shouldBe` []
+            outcome `shouldSatisfy` isRight
+
+    it "reads no private upstream on the mirror worker or the pilot, which serve no client from one" $
+        for_ [BootMirrorPipeline MirrorOnly, BootWithoutPipeline] $ \role -> do
+            (advisories, outcome) <- reportWith staticEnvVars role mountBindingFor inertQueue (neverProbing inertStore)
+            advisories `shouldBe` []
+            outcome `shouldSatisfy` isRight
+
+    it "refuses the preview through the private handle it already holds" $ do
+        -- The preview builds an observation for the private cache, so it asks that handle rather
+        -- than building a second client for the same repository.
+        (_, outcome) <-
+            reportWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ -> Nothing) refusingQueue (privateAnswering (Unsafe publicConnection))
+        case outcome of
+            Right _ -> expectationFailure "expected the private upstream to refuse the preview"
+            Left errs -> errs `shouldBe` [PrivateUpstreamUnsafe Npm publicConnection]
+
+-- | Plan a mirror-pipeline role over a probe that answers the same way for every mount.
+probedPlan :: MirrorRole -> UpstreamSafety -> IO ([Advisory], Either [BootError] ExecutablePlan)
+probedPlan role answer =
+    reportWith staticEnvVars (BootMirrorPipeline role) mountBindingFor inertQueue (probing answer inertStore)
+
 -- | Which arm of the phase a plan came back through, so an assertion names it rather than a shape.
 plannedArm :: RoleWiring -> Text
 plannedArm = \case
@@ -296,6 +346,7 @@ inertStore =
     StoreBuilds
         { sbDeleting = \_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
         , sbObserving = \_ _ _ -> fakeObservation <$> newFakeStore defaultFakeStoreConfig
+        , sbProbing = \_ _ -> noUpstreamMechanism
         }
 
 -- | Store builds that throw as @amazonka@ does when it discovers no credentials.
@@ -304,12 +355,41 @@ refusingStore =
     StoreBuilds
         { sbDeleting = \_ _ _ -> throwIO NoCredentials
         , sbObserving = \_ _ _ -> throwIO NoCredentials
+        , sbProbing = \_ _ -> noUpstreamMechanism
         }
 
 -- | Store builds whose deleting arm fails the case, so only a preview's own build can answer.
 observingOnly :: StoreBuilds
 observingOnly =
     inertStore{sbDeleting = \_ _ _ -> fail "a preview must not build the deleting handle"}
+
+-- | Store builds whose probe answers the same way for every mount that has a private upstream.
+probing :: UpstreamSafety -> StoreBuilds -> StoreBuilds
+probing answer builds = builds{sbProbing = \_ _ -> pure answer}
+
+-- | Store builds whose probe fails the case, for the roles that must never read a private upstream.
+neverProbing :: StoreBuilds -> StoreBuilds
+neverProbing builds = builds{sbProbing = \_ _ -> fail "this role must not read the private upstream"}
+
+-- | Observing builds whose private cache answers the given verdict about what it aggregates.
+privateAnswering :: UpstreamSafety -> StoreBuilds
+privateAnswering answer =
+    observingOnly
+        { sbObserving = \_ _ backend ->
+            fakeObservation
+                <$> newFakeStore
+                    defaultFakeStoreConfig
+                        { fakeUpstream = if registryUrlText (cbUrl backend) == privateUpstreamUrl then answer else Safe
+                        }
+        }
+
+-- | The private upstream the composition fixtures declare.
+privateUpstreamUrl :: Text
+privateUpstreamUrl = "https://private.example.test"
+
+-- | The evidence a backend reports when a repository in the chain connects to a public registry.
+publicConnection :: UnsafeReason
+publicConnection = ConfigurationEvidence (RepositoryName "shared") (ExternalConnection "public:npmjs")
 
 -- | A credential build that mints nothing, so a case reaches no cloud.
 inertCredentials :: BuildCredentials
@@ -358,6 +438,10 @@ planFor = planWith staticEnvVars
 planWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> StoreBuilds -> IO (Either [BootError] ExecutablePlan)
 planWith envVars role resolveAdapter buildQueue = planUnder envVars role resolveAdapter buildQueue (defaultCredentialsFor role)
 
+-- | 'planWith', keeping the advisories the phase logged beside the outcome it settled.
+reportWith :: [(String, String)] -> BootRole -> ResolveAdapter -> BuildMirrorQueue -> StoreBuilds -> IO ([Advisory], Either [BootError] ExecutablePlan)
+reportWith envVars role resolveAdapter buildQueue = reportUnder envVars role resolveAdapter buildQueue (defaultCredentialsFor role)
+
 {- | The credential build a case takes by default: the production one for the mirror pipeline,
 whose static fixture mints without a cloud, and an inert one for the store roles' CodeArtifact one.
 -}
@@ -375,7 +459,19 @@ planUnder ::
     BuildCredentials ->
     StoreBuilds ->
     IO (Either [BootError] ExecutablePlan)
-planUnder envVars role resolveAdapter buildQueue buildCredentials buildStore = do
+planUnder envVars role resolveAdapter buildQueue buildCredentials buildStore =
+    snd <$> reportUnder envVars role resolveAdapter buildQueue buildCredentials buildStore
+
+-- | 'planUnder', keeping the advisories the phase logged beside the outcome it settled.
+reportUnder ::
+    [(String, String)] ->
+    BootRole ->
+    ResolveAdapter ->
+    BuildMirrorQueue ->
+    BuildCredentials ->
+    StoreBuilds ->
+    IO ([Advisory], Either [BootError] ExecutablePlan)
+reportUnder envVars role resolveAdapter buildQueue buildCredentials buildStore = do
     config <- expectConfig envVars Nothing
     bootPlan <- expectPlanFor role envVars Nothing config noCeiling
     logEnv <- newTestLogEnv

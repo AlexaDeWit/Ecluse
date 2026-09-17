@@ -12,7 +12,7 @@ import Test.Hspec
 import Ecluse.Boot (BootEnv (BootEnv))
 import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.Executable (ExecutablePlan (epRoleWiring), MirrorWiring (mwCveSync), RoleWiring (MirrorPipelineWiring), planExecutable)
-import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
+import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing))
 import Ecluse.Composition.Support (expectConfig, expectPlanFor, noCeiling, staticEnvVars)
 import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootMirrorPipeline), MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
@@ -20,6 +20,7 @@ import Ecluse.Core.Cve (DbEtag (DbEtag))
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (noMirrorQueue)
+import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Telemetry.Metrics (Label (LEcosystem), metricAttributes)
 import Ecluse.Core.Worker (
     Liveness (liveHealthy, liveLastPoll),
@@ -101,7 +102,7 @@ advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
             withRoleTelemetry $ \logEnv telemetry meterEnv -> do
                 config <- expectConfig staticEnvVars Nothing
                 bootPlan <- expectPlanFor (BootMirrorPipeline role) staticEnvVars Nothing config noCeiling
-                planned <-
+                (_, planned) <-
                     planExecutable
                         logEnv
                         passthroughTracingPort
@@ -111,6 +112,7 @@ advisoryAgeSpec = describe "withServiceRuntime advisory database ages" $
                         StoreBuilds
                             { sbDeleting = \_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig
                             , sbObserving = \_ _ _ -> fakeObservation <$> newFakeStore defaultFakeStoreConfig
+                            , sbProbing = \_ _ -> noUpstreamMechanism
                             }
                         bootPlan
                 case planned of

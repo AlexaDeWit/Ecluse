@@ -385,8 +385,16 @@ nowhere else. So the aggregating read endpoint, the private upstream, must union
 only: your first-party publications and Écluse's sanitised mirror. It must not carry a direct
 upstream connection to the public registry. Such a connection would let raw, ungated public
 packages reach clients behind the gate rather than through it, and silently nullify the
-protection. The proxy cannot detect this from the outside, because it trusts the private upstream
-by construction. Keeping the internal registry disconnected from public is therefore an
+protection. The proxy cannot detect this from a request, because it trusts the private upstream by
+construction.
+
+It asks the backend at boot instead. Where a store's control plane reports what a repository
+aggregates, both proxy roles walk the private upstream's upstream chain once and refuse to serve
+when any repository in it carries an external connection to a public registry. The refusal names
+the mount, the repository and the connection. On CodeArtifact the walk is `DescribeRepository`
+under the role identity, bounded to 10 hops and 25 calls, and an identity refused that grant
+refuses the mount too: an identity that cannot ask cannot clear the store. A `registry` or
+`verdaccio` store reports no such configuration, so the boot warns once and the topology stays an
 operator-architecture invariant, catalogued in the
 [threat model](https://ecluse-proxy.com/docs/threat-model/).
 

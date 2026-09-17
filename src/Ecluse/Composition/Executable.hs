@@ -35,6 +35,7 @@ import Ecluse.Composition (
     resolveBootWiring,
  )
 import Ecluse.Composition.BootError (
+    Advisory,
     BootError (AdvisorySyncUnavailable, MirrorQueueUnavailable, PilotWithoutEcosystem, StoreMaintenanceUnavailable),
     StoreMaintenanceReason (PrivateCacheUnavailable),
     refuseOnThrow,
@@ -42,11 +43,13 @@ import Ecluse.Composition.BootError (
 import Ecluse.Composition.Credential (BuildCredentials, CredentialTarget (..), mirrorBackends, noCredentialProviders, providerLabel)
 import Ecluse.Composition.Maintenance (
     BudgetPorts (BudgetPorts, bpGateFor, bpNominalPace, bpOverrides),
+    BuildUpstreamProbe,
     ClearedBackend (cbUrl),
-    StoreBuilds (sbDeleting, sbObserving),
+    StoreBuilds (sbDeleting, sbObserving, sbProbing),
     StorePorts,
     planStoreMaintenance,
     planStoreMaintenanceFor,
+    readUpstreamSafety,
  )
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (mpMaxRequestBytes, mpPublishTenant, mpQueueMemoryMaxDepth),
@@ -62,20 +65,20 @@ import Ecluse.Composition.Plan (
  )
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
-    MirrorRole,
+    MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
  )
 import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPrivateCaches, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
  )
-import Ecluse.Config (AppConfig (cfgAdvisories, cfgDredger), DredgerSettings (drgChunkPause, drgChunkSize, drgQuotaOverrides), Mount (mountPolicy), MountConfig (mntFirstParty), StoreTag, mountAdvisoryAge, mountDatabaseRequirement, mountEpssRequirement)
+import Ecluse.Config (AppConfig (cfgAdvisories, cfgDredger), DredgerSettings (drgChunkPause, drgChunkSize, drgQuotaOverrides), Mount (mountPolicy), MountConfig (mntFirstParty, mntPrivateUpstream), PrivateEndpoint, StoreTag, mountAdvisoryAge, mountDatabaseRequirement, mountEpssRequirement)
 import Ecluse.Core.Clock (waitSeconds)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Registry.Adapter (ProjectName, adapterProjectName)
-import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend), StoreObservation (obFacts))
+import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend), StoreObservation (obFacts, obProbeUpstream))
 import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort, newBudgetMeter)
 import Ecluse.Core.Registry.Sweep.Pacing (nominalPackagePace)
 import Ecluse.Core.Registry.Sweep.Types (SweepCache (..), SweepMount (..), SweepStore, deletingCache, pairedStore, previewCache)
@@ -161,6 +164,10 @@ type BuildMirrorQueue = LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 through the one arm below and differ only in which of 'StoreBuilds' they ran. -}
 type BuildSweepCache = StorePorts -> Limits -> ClearedBackend -> IO SweepCache
 
+{- Whether this store role asks the private caches it built what they aggregate. The preview does,
+through the handles it already holds, and the deleting role reads its stores' own classification. -}
+type ProbeHeldCaches = Map Ecosystem SweepCache -> IO ([Advisory], Either [BootError] ())
+
 {- | Plan the runtime the cleared plan's role starts, or report every refusal only a live
 environment can settle. Each role has one arm here, and a refusal is spent once for all of them.
 -}
@@ -172,28 +179,63 @@ planExecutable ::
     BuildCredentials ->
     StoreBuilds ->
     BootPlan ->
-    IO (Either [BootError] ExecutablePlan)
+    IO ([Advisory], Either [BootError] ExecutablePlan)
 planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds bootPlan = case bpRole bootPlan of
-    BootMirrorPipeline role ->
-        fmap (executablePlan . MirrorPipelineWiring)
-            <$> planMirrorWiring logEnv resolveAdapter buildQueue buildCredentials role bootPlan
-    BootStorePruner -> prunerArm (deleting (sbDeleting builds))
-    BootStorePreview -> prunerArm (previewing (sbObserving builds))
-    BootWithoutPipeline -> pure (executablePlan . PilotWiring <$> pilotExportPlan (bpValidated bootPlan))
+    BootMirrorPipeline role -> do
+        (advisories, probed) <- probeServedUpstreams (sbProbing builds) role bootPlan
+        wiring <- planMirrorWiring logEnv resolveAdapter buildQueue buildCredentials role bootPlan
+        pure (advisories, accumulate probed (executablePlan . MirrorPipelineWiring <$> wiring))
+    BootStorePruner -> prunerArm skipUpstreamProbe (deleting (sbDeleting builds))
+    BootStorePreview -> prunerArm probeHeldCaches (previewing (sbObserving builds))
+    BootWithoutPipeline -> pure ([], executablePlan . PilotWiring <$> pilotExportPlan (bpValidated bootPlan))
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}
 
-    prunerArm build =
-        fmap (executablePlan . StorePrunerWiring)
-            <$> planPrunerWiring logEnv tracing buildCredentials build bootPlan
+    prunerArm probe build =
+        second (fmap (executablePlan . StorePrunerWiring))
+            <$> planPrunerWiring logEnv tracing buildCredentials probe build bootPlan
 
     deleting build ports limits cleared = deletingCache <$> build ports limits cleared
     previewing build ports limits cleared = previewCache <$> build ports limits cleared
 
+-- The probe's refusals join the arm's own, so one launch reports every one of them.
+accumulate :: Either [BootError] () -> Either [BootError] a -> Either [BootError] a
+accumulate probed outcome = validationToEither (eitherToValidation outcome <* eitherToValidation probed)
+
+{- The proxy serves private content from every mount's private upstream, so it asks each backend
+whether public content can reach a client through it. The worker reads no private upstream. -}
+probeServedUpstreams :: BuildUpstreamProbe -> MirrorRole -> BootPlan -> IO ([Advisory], Either [BootError] ())
+probeServedUpstreams buildProbe role bootPlan
+    | servesClients role = readUpstreamSafety [(eco, buildProbe eco endpoint) | (eco, endpoint) <- privateUpstreams bootPlan]
+    | otherwise = pure ([], Right ())
+
+-- Which halves of the mirror pipeline answer a client from the private upstream.
+servesClients :: MirrorRole -> Bool
+servesClients = \case
+    ServeAndMirror -> True
+    ServeOnly -> True
+    MirrorOnly -> False
+
+-- Each vetted mount's private upstream, in ascending ecosystem order, absent where none is declared.
+privateUpstreams :: BootPlan -> [(Ecosystem, PrivateEndpoint)]
+privateUpstreams bootPlan =
+    [ (vmEcosystem vetted, endpoint)
+    | vetted <- vpMounts (bpValidated bootPlan)
+    , Just endpoint <- [mntPrivateUpstream (vmConfig vetted)]
+    ]
+
+-- The preview asks the private handles it holds, rather than building a second client for each.
+probeHeldCaches :: ProbeHeldCaches
+probeHeldCaches caches =
+    readUpstreamSafety [(eco, obProbeUpstream (scObserve cache)) | (eco, cache) <- Map.toAscList caches]
+
+skipUpstreamProbe :: ProbeHeldCaches
+skipUpstreamProbe _ = pure ([], Right ())
+
 {- The store roles' shared arm: the advisory sync their rules read, the credential their stores
 answer to, and one store per cleared target. All three refusable steps accumulate. -}
-planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepCache -> BootPlan -> IO (Either [BootError] PrunerWiring)
-planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
+planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> ProbeHeldCaches -> BuildSweepCache -> BootPlan -> IO ([Advisory], Either [BootError] PrunerWiring)
+planPrunerWiring logEnv tracing buildCredentials probeCaches buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     credentials <- buildCredentials (credentialReportersOver deferredMetrics) credentialBackends
@@ -230,12 +272,14 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
                 (deferredBreakerReporter deferredMetrics EffectfulRule)
                 (katipFaultReporter logEnv)
     policies <- Map.fromList <$> traverse (sweepPolicyFor ruleDepsFor) (vpMounts validated)
-    pure . validationToEither $
+    (advisories, probed) <- probeCaches (fromRight mempty caches)
+    pure . (advisories,) . validationToEither $
         prunerWiringFrom deferredMetrics budgetPort policies
             <$> eitherToValidation cveSync
             <* eitherToValidation credentials
             <*> eitherToValidation (stores >>= pairEach (fromRight mempty caches))
             <* eitherToValidation caches
+            <* eitherToValidation probed
   where
     validated = bpValidated bootPlan
     dredger = cfgDredger (vpSettings validated)

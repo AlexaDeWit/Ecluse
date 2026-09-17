@@ -105,6 +105,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     RequestKind (CursorRead, CursorWrite, DeleteBatch, ListingPage, ManifestRead, PermissionRead, VersionPage),
     StoreBudget,
  )
+import Ecluse.Core.Registry.Maintenance.Upstream (UpstreamSafety)
 import Ecluse.Core.Registry.Metadata (
     Manifest,
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
@@ -127,6 +128,8 @@ data StoreMaintenance = StoreMaintenance
     -- ^ Whether the operator has marked this store for deletion.
     , classifyStore :: IO (Either StoreFault StoreClass)
     -- ^ Whether deleting from this store destroys anything.
+    , probeUpstream :: IO UpstreamSafety
+    -- ^ Whether public content can reach a client through this store.
     , storeCursor :: Maybe StoreCursor
     -- ^ Optional persisted progress. Without it, every walk starts at the first bucket.
     }
@@ -147,6 +150,8 @@ data StoreObservation = StoreObservation
     -- ^ Whether the operator has marked this store for deletion.
     , obClassifyStore :: IO (Either StoreFault StoreClass)
     -- ^ Whether deleting from this store destroys anything.
+    , obProbeUpstream :: IO UpstreamSafety
+    -- ^ Whether public content can reach a client through this store.
     }
 
 -- | The calls that change a store, which only a role authorised to delete from it holds.
@@ -181,6 +186,7 @@ observationOf store =
         , obReadManifest = readStoreManifest store
         , obVerifyConsent = verifyConsent store
         , obClassifyStore = classifyStore store
+        , obProbeUpstream = probeUpstream store
         }
 
 -- | The changing half of a whole handle.

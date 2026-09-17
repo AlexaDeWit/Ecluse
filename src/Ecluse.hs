@@ -113,7 +113,7 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.CheckConfig (runCheckConfig)
-import Ecluse.Composition.BootError (renderBootErrors)
+import Ecluse.Composition.BootError (renderAdvisory, renderBootErrors)
 import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.Executable (
     PrunerWiring,
@@ -169,7 +169,7 @@ runCommand = \case
 the one phase, so this is where a boot spends its last refusal whichever role it started. -}
 startPlannedRole :: Maybe DredgerOptions -> BootEnv -> IO ProcessOutcome
 startPlannedRole dredgerOptions bootEnv = do
-    plan <-
+    (advisories, outcome) <-
         planExecutable
             (beLogEnv bootEnv)
             (tracingPortOf (beTelemetry bootEnv))
@@ -178,7 +178,10 @@ startPlannedRole dredgerOptions bootEnv = do
             initTargetCredentialProviders
             storeBuilds
             (beBootPlan bootEnv)
-            >>= orExit renderBootErrors
+    -- A finding about a configuration that will not start is still one its operator must act on,
+    -- so this reports beside the refusal rather than instead of it.
+    traverse_ (logBootWarning (beLogEnv bootEnv) . renderAdvisory) advisories
+    plan <- orExit renderBootErrors outcome
     case epRoleWiring plan of
         MirrorPipelineWiring mirror -> shutdownAfter (withServiceRuntime bootEnv plan mirror runMirrorPipeline)
         -- Only 'RunDredger' names a store role, so it is the only command that reaches here and
