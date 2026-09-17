@@ -31,6 +31,11 @@ module Ecluse.E2E.Harness.Docker (
     advisoryDataDir,
     ministackAwsEnv,
 
+    -- * Roles that outlive one invocation
+    sharedMirrorQueue,
+    withMirrorRole,
+    mirrorRoleEnv,
+
     -- * Container logs
     awaitContainerLog,
     containerLogs,
@@ -247,8 +252,11 @@ withE2EWith cfg action gdp = do
                 manager <- newManager defaultManagerSettings
                 -- The proxy routes to ministack via AWS_ENDPOINT_URL_SQS and matches the queue by
                 -- its path, so this URL's host (ministack's own `localhost:4566`) is immaterial.
-                let queueName = "ecluse-e2e-queue-" <> T.pack sfx
-                queueUrl <- createMinistackQueue manager (gdpMiniPort gdp) queueName
+                queueUrl <-
+                    maybe
+                        (createMinistackQueue manager (gdpMiniPort gdp) ("ecluse-e2e-queue-" <> T.pack sfx))
+                        pure
+                        (ecQueueUrl cfg)
                 -- Pick the host port up front: ECLUSE_SERVER__PUBLIC_URL must be known before the
                 -- container starts, and it makes the proxy rewrite dist.tarball to an absolute URL.
                 proxyPort <- freeHostPort
@@ -260,6 +268,7 @@ withE2EWith cfg action gdp = do
                             , drMounts = [(certsDir, "/certs:ro")]
                             , drTmpfs = [advisoryDataTmpfs]
                             , drEnv = proxyEnv proxyPort queueUrl <> ecExtraEnv cfg
+                            , drCmd = ecArgs cfg
                             }
                 withDockerContainer labelArgs proxRun $ \_ -> do
                     let verdPort = gdpVerdPort gdp
@@ -293,8 +302,6 @@ proxyEnv hostPort queueUrl =
       -- every stub over TLS under the test CA that SSL_CERT_FILE below adds to the trust store.
       ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://mirror/")
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://mirror/")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "e2e-publish-token")
     , -- A serve-only pypi mount beside the npm one, so a real pip client reads the PEP 691
       -- index and the distribution files under it through the same proxy.
       ("ECLUSE_MOUNTS__PYPI__PUBLIC_UPSTREAM__REGISTRY__URL", pypiUpstreamUrl)
@@ -307,6 +314,33 @@ proxyEnv hostPort queueUrl =
       -- zero because the shipped week would quarantine every freshly built fixture.
       ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0},\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}")
     ]
+        <> mirrorTargetEnv
+        <> ministackAwsEnv
+
+-- | The mirror target every writing role on the shared data plane publishes into.
+mirrorTargetEnv :: [(Text, Text)]
+mirrorTargetEnv =
+    [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://mirror/")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "e2e-publish-token")
+    ]
+
+{- | The dedicated worker's environment: the queue it drains, the rules it boots with, and the
+mirror target it writes into, which is the store a proxy reads privately.
+-}
+mirrorRoleEnv :: Text -> Text -> [(Text, Text)]
+mirrorRoleEnv queueUrl rules =
+    [ ("ECLUSE_SERVER__PORT", "4873")
+    , ("ECLUSE_SERVER__PUBLIC_URL", "http://127.0.0.1:4873")
+    , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__URL", "https://mirror/")
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
+    , ("ECLUSE_QUEUE__URL", queueUrl)
+    , ("AWS_ENDPOINT_URL_SQS", ministackEndpoint)
+    , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
+    , ("ECLUSE_RULES", rules)
+    , ("SSL_CERT_FILE", "/certs/bundle.pem")
+    ]
+        <> mirrorTargetEnv
         <> ministackAwsEnv
 
 -- | The ministack alias every role inside the test network reaches an AWS-compatible store on.
@@ -522,19 +556,45 @@ and arguments. It joins the plane's network, so it addresses the same stores the
 -}
 runRoleOnce :: GlobalDataPlane -> [(Text, Text)] -> [String] -> IO RoleRun
 runRoleOnce gdp env args = do
-    image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
-    sfx <- uniqueSuffix
+    run <- roleRun gdp env args
     labelArgs <- dockerLabelArgs "e2e"
-    let role = fromMaybe "role" (listToMaybe args)
-        run =
-            (dockerRun ("ecluse-e2e-" <> role <> "-" <> sfx) (gdpNet gdp) (LocallyBuilt (toText image)))
-                { drMounts = [(gdpWorkDir gdp </> "certs", "/certs:ro")]
-                , drTmpfs = [advisoryDataTmpfs]
-                , drEnv = env
-                , drCmd = args
-                }
     (code, out, err) <- readProcess (proc "docker" (runArgs [] labelArgs run))
     pure RoleRun{roleExit = code, roleOutput = decodeUtf8 (LBS.toStrict (out <> err))}
+
+{- | One product-image container specification on the shared data plane: the test CA, the advisory
+directory, the caller's environment, and the role arguments the image runs.
+-}
+roleRun :: GlobalDataPlane -> [(Text, Text)] -> [String] -> IO DockerRun
+roleRun gdp env args = do
+    image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
+    sfx <- uniqueSuffix
+    let role = fromMaybe "role" (listToMaybe args)
+        base = dockerRun ("ecluse-e2e-" <> role <> "-" <> sfx) (gdpNet gdp) (LocallyBuilt (toText image))
+    pure
+        base
+            { drMounts = [(gdpWorkDir gdp </> "certs", "/certs:ro")]
+            , drTmpfs = [advisoryDataTmpfs]
+            , drEnv = env
+            , drCmd = args
+            }
+
+{- | Create a mirror queue on the shared emulator and return its URL, for a scenario whose roles
+must all drain the one queue rather than each create its own.
+-}
+sharedMirrorQueue :: GlobalDataPlane -> IO Text
+sharedMirrorQueue gdp = do
+    manager <- newManager defaultManagerSettings
+    sfx <- uniqueSuffix
+    createMinistackQueue manager (gdpMiniPort gdp) ("ecluse-e2e-shared-queue-" <> T.pack sfx)
+
+{- | Run a dedicated @ecluse mirror@ worker on the shared data plane for the action, removed on
+every exit path. The action gets the container name, so a case can wait on the worker's own log.
+-}
+withMirrorRole :: GlobalDataPlane -> [(Text, Text)] -> (String -> IO a) -> IO a
+withMirrorRole gdp env action = do
+    run <- roleRun gdp env ["mirror"]
+    labelArgs <- dockerLabelArgs "e2e"
+    withDockerContainer labelArgs run action
 
 {- | Run the product image as @ecluse dredger --once@ against the shared data plane, layering
 @extraEnv@ over 'dredgerEnv'. It deletes from the store the proxy mirrors into.
@@ -555,12 +615,11 @@ dredgerEnv =
     , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN", "e2e-private-maintenance-token")
     , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION", "true")
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://upstream/")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL", "https://mirror/")
-    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "e2e-publish-token")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__PERMIT_DELETION", "true")
     , ("ECLUSE_OBSERVABILITY__LOG_FORMAT", "json")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
     ]
+        <> mirrorTargetEnv
         <> ministackAwsEnv
 
 -- | Run a docker command, failing the test loudly if it exits non-zero.

@@ -53,11 +53,19 @@ data E2EConfig = E2EConfig
     -- ^ Stand up the OTLP collector container (reached by the proxy as @otelcol@).
     , ecExtraEnv :: [(Text, Text)]
     -- ^ Extra proxy environment, appended over (and so overriding) the base 'proxyEnv'.
+    , ecQueueUrl :: Maybe Text
+    {- ^ Join this existing mirror queue rather than create one, so several roles share the
+    queue a scenario hands between them. 'Nothing' creates a queue for this proxy alone.
+    -}
+    , ecArgs :: [String]
+    {- ^ The role arguments the product image runs, such as @["proxy", "--no-worker"]@. Empty
+    takes the image's default role, the proxy with its embedded worker.
+    -}
     }
 
 -- | The base configuration: the plain topology, no collector and no extra environment.
 defaultE2EConfig :: E2EConfig
-defaultE2EConfig = E2EConfig{ecCollector = False, ecExtraEnv = []}
+defaultE2EConfig = E2EConfig{ecCollector = False, ecExtraEnv = [], ecQueueUrl = Nothing, ecArgs = []}
 
 data GlobalDataPlane = GlobalDataPlane
     { gdpNet :: String

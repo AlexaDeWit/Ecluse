@@ -25,6 +25,7 @@ import Ecluse.Integration.Ministack (
  )
 import Ecluse.Integration.WorkerLoop (
     mirrorPoliciesAt,
+    mirrorPoliciesUnderAt,
     newQueueEnv,
     publishedAtLeast,
     runLoopFor,
@@ -33,11 +34,11 @@ import Ecluse.Integration.WorkerLoop (
  )
 import Ecluse.Runtime.Env (envWorkerHeartbeat, lastPoll)
 import Ecluse.Test.Package (sriSha512Of, unsafeFilename, unsafeHash)
+import Ecluse.Test.Rules (admitRule, denyRule)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
-{- | The mirror worker end to end against real SQS (a @ministack@ container) and WAI
-stubs. It covers the queue semantics the in-memory double cannot reproduce: visibility
-timeouts, redelivery, and held messages. Needs a Docker daemon and no real AWS.
+{- | The mirror worker end to end against real SQS (a @ministack@ container) and WAI stubs: the
+visibility, redelivery, and boot-policy semantics the in-memory double cannot reproduce.
 -}
 spec :: Spec
 spec =
@@ -113,6 +114,34 @@ spec =
                         runLoopFor policies env 4_000_000
                         published <- readIORef publishLog
                         published `shouldBe` []
+
+            it "refuses a queued job under the stricter policy the consuming worker booted" $ \container ->
+                withUpstream $ \upstreamUrl ->
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                        queue <- freshQueue container "worker-rollout-strict" defaultQueueOptions
+                        env <- newQueueEnv queue
+                        -- A permissive role queued this job. The queue carries no policy, so the
+                        -- worker's own boot rules decide, and a deny is terminal rather than retried.
+                        strict <- mirrorPoliciesUnderAt [denyRule] mirrorUrl (unsafeHash SRI trueSri :| [])
+                        unwrapQ (enqueue queue (job upstreamUrl))
+                        runLoopFor strict env 4_000_000
+                        readIORef publishLog `shouldReturn` []
+                        -- The refusal is acked, so the job does not redeliver against a policy it
+                        -- can never satisfy.
+                        leftover <- unwrapQ (receive queue)
+                        leftover `shouldBe` []
+
+            it "publishes that same queued job under the older policy the consuming worker booted" $ \container ->
+                withUpstream $ \upstreamUrl ->
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                        queue <- freshQueue container "worker-rollout-old" defaultQueueOptions
+                        env <- newQueueEnv queue
+                        old <- mirrorPoliciesUnderAt [admitRule] mirrorUrl (unsafeHash SRI trueSri :| [])
+                        unwrapQ (enqueue queue (job upstreamUrl))
+                        runLoopUntil old env (publishedAtLeast publishLog 1)
+                        readIORef publishLog `shouldReturn` [npmPublishPath]
+                        leftover <- unwrapQ (receive queue)
+                        leftover `shouldBe` []
 
             it "advances the heartbeat as the loop polls a real queue" $ \container ->
                 withUpstream $ \_upstreamUrl ->

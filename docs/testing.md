@@ -126,6 +126,18 @@ re-admit, and republishes a late copy into each store for the next cycle to find
 in for a retaining cache here, and the unit tier models a read that restores a copy, so neither
 covers CodeArtifact's own retention, permissions, or deletion.
 
+A fourth Dredger group rolls policy out across roles in the wrong order. One case runs a proxy with
+`--no-worker` on a durable ministack queue, stops it, starts a stricter proxy that denies the target,
+and only then starts a dedicated `ecluse mirror` container on the same queue under the old policy.
+The stricter proxy serves that late mirror write on a private hit, and repeated cycles then remove
+both store copies while an unaffected and a first-party version stay. Two further cases let an
+old-policy Dredger delete a version the newer roles permit: a fresh client restores it through real
+admission when the public source still holds bytes, and the version stays gone when it does not.
+That second outcome is the accepted residual the threat model records, not a defect to repair. The
+`ecluse-integration` worker cases cover the same split beneath the roles: one enqueued `MirrorJob`
+is refused by a worker booted with a stricter policy and published by one booted with the older
+policy, each acknowledged against the emulator.
+
 One further Dredger scenario connects advisory compilation to revocation. Pilot compiles the `v1`
 corpus through the product image and uploads it to the emulated advisory store. The proxy syncs it,
 and `npm` installs both versions of the corpus fixture the `v2` delta condemns, which the worker

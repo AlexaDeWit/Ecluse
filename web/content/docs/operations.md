@@ -384,9 +384,24 @@ Use the same intended configuration across roles. When tightening policy, update
 writer roles before Dredger. When relaxing a deny, update Dredger before writers can rely on the
 new permission. These are ordering recommendations, not an atomic cutover requirement.
 
-Dredger reconciles eligible late copies in both configured stores through later sweeps. If an old Dredger deletes the only bytes
-during a rollout, later policy agreement cannot restore them. The
-[threat model](@/docs/threat-model.md) records that accepted residual.
+Old writes outlive the role that queued them. A mirror worker still on the old policy decides a
+queued job by its own rules, so it can publish a version a newly started proxy denies. That proxy
+then serves the version on a private hit, because a private read applies no rules. A second
+deployment writing into one shared mirror has the same effect.
+
+Convergence is eventual, not immediate. Once every participating role runs the intended policy and
+the outstanding old writes finish, repeated sweeps of actual mirror and cache state find and remove
+every eligible denied copy. Consent, first-party protection, backend availability and the per-cycle
+cap still bound what one cycle removes. Roles left on permanently conflicting policies never
+converge, which is a deployment fault rather than a Dredger limit.
+
+Read each cycle's per-target results rather than assume a clean sweep. A refused or unavailable
+backend leaves its copy in place and the run says so. A later cycle rediscovers that residual, and
+anything an old writer added after an earlier scan reported the name clean.
+
+If an old Dredger deletes the only bytes during a rollout, later policy agreement cannot restore
+them. A removed version returns only when a usable source still holds its bytes and something
+admits it again. The [threat model](@/docs/threat-model.md) records that accepted residual.
 
 ## Mirror receipts and their visibility
 

@@ -13,6 +13,7 @@ module Ecluse.Test.Worker (
     npmPolicyWith,
     admitAllPolicies,
     admitAllPoliciesCapped,
+    mirrorPoliciesUnder,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -23,7 +24,6 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Artifact (artFilename, artHashes), Hash, PackageDetails (pkgArtifacts), PackageName, unscopedName)
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Rules.Types (RuleVerdict (Allow))
 import Ecluse.Core.Version (Version, renderVersion)
 
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact))
@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Publish (MirrorPublish)
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
-import Ecluse.Test.Rules (constRule)
+import Ecluse.Test.Rules (admitRule)
 
 {- | One npm re-evaluation bundle at the caller's clock, artifact byte cap, publish capability,
 version resolver, and rules.
@@ -65,21 +65,28 @@ npmPolicyWith clock artifactMaxBytes publish resolve rules =
 or a mismatching set to drive the tamper refusal.
 -}
 admitAllPolicies :: MirrorPublish -> NonEmpty Hash -> WorkerPolicies
-admitAllPolicies = admitAllPoliciesCapped (512 * 1024 * 1024)
+admitAllPolicies = mirrorPoliciesUnder [admitRule]
 
 {- | 'admitAllPolicies' with an explicit byte cap for the artifact fetch. A body past the cap is
 a terminal 'Ecluse.Core.Registry.FetchBoundExceeded' the worker dead-letters.
 -}
 admitAllPoliciesCapped :: Int -> MirrorPublish -> NonEmpty Hash -> WorkerPolicies
-admitAllPoliciesCapped artifactMaxBytes publish currentDigests =
+admitAllPoliciesCapped = mirrorPoliciesCapped [admitRule]
+
+{- | 'admitAllPolicies' under the caller's own rules, for a case where one queued job meets workers
+that booted different policies.
+-}
+mirrorPoliciesUnder :: [PreparedRule] -> MirrorPublish -> NonEmpty Hash -> WorkerPolicies
+mirrorPoliciesUnder rules = mirrorPoliciesCapped rules (512 * 1024 * 1024)
+
+-- The npm bundle every fixture policy shares, at the caller's rules and artifact byte cap.
+mirrorPoliciesCapped :: [PreparedRule] -> Int -> MirrorPublish -> NonEmpty Hash -> WorkerPolicies
+mirrorPoliciesCapped rules artifactMaxBytes publish currentDigests =
     Map.singleton
         Npm
-        (npmPolicyWith getCurrentTime artifactMaxBytes publish resolve [allowAll])
+        (npmPolicyWith getCurrentTime artifactMaxBytes publish resolve rules)
   where
     resolve name version = pure (VersionPresent (mirrorableDetails name version) Nothing)
-
-    allowAll :: PreparedRule
-    allowAll = constRule "test-allow-all" (Allow "admitted for test")
 
     -- The sample snapshot renamed to the conventional @{name}-{version}.tgz@ and given the caller's
     -- digest set, so file selection passes and the tamper gate verifies against exactly this set.
