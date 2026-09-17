@@ -34,6 +34,7 @@ import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Lens.Micro ((^.))
 import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
+import UnliftIO (tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
@@ -58,7 +59,8 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (
     UndecidabilityReason (NetworkFailure),
-    UpstreamSafety (Undecidable),
+    UnsafeReason (InsufficientPermissions),
+    UpstreamSafety (Undecidable, Unsafe),
     walkUpstreamChain,
  )
 import Ecluse.Core.Version (Version)
@@ -76,6 +78,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     cursorUntagRequest,
     deleteCeiling,
     deleteRequest,
+    describeRepositoryGrant,
     describeRepositoryRequest,
     describeUpstreamRefusal,
     describeUpstreamRequest,
@@ -125,7 +128,7 @@ newCodeArtifactObservation limit alphabet readManifest store =
 that holds no maintenance handle for the repository it serves private content from.
 -}
 newCodeArtifactUpstreamProbe :: CodeArtifactStore -> IO UpstreamSafety
-newCodeArtifactUpstreamProbe store = do
+newCodeArtifactUpstreamProbe store = withReadableIdentity $ do
     env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
     probeUpstreamSafety (readPlaneFor env) store
 
@@ -224,7 +227,8 @@ observationFor alphabet readManifest store observer =
 the ambient role's own, so no caller's credential reaches this call.
 -}
 probeUpstreamSafety :: ReadPlane -> CodeArtifactStore -> IO UpstreamSafety
-probeUpstreamSafety observer store = walkUpstreamChain linksOf (repositoryOfStore store)
+probeUpstreamSafety observer store =
+    withReadableIdentity (walkUpstreamChain linksOf (repositoryOfStore store))
   where
     linksOf repository =
         describedLinks <$> rpDescribeUpstream observer (describeUpstreamRequest store repository)
@@ -233,6 +237,12 @@ probeUpstreamSafety observer store = walkUpstreamChain linksOf (repositoryOfStor
     describedLinks response = do
         described <- response
         maybe (Left (Undecidable NetworkFailure)) (Right . upstreamLinksOf) (described ^. CAL.describeRepositoryResponse_repository)
+
+{- A service refusal comes back as a value, so a throw here is the identity itself: none was
+discovered, or the one discovered could not be renewed. An identity that cannot ask fails closed. -}
+withReadableIdentity :: IO UpstreamSafety -> IO UpstreamSafety
+withReadableIdentity =
+    fmap (fromRight (Unsafe (InsufficientPermissions describeRepositoryGrant))) . tryAny
 
 -- | Build observation with version pagination bounded before another page is requested.
 boundedObservationFor :: Int -> NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ReadPlane -> StoreObservation

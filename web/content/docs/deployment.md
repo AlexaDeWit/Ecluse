@@ -180,11 +180,14 @@ exception, described under [Edge authentication](#edge-authentication-and-client
 Both proxy roles do read the private upstream's own configuration once at boot, under their role
 identity. Écluse asks the backend whether that repository, or one in its upstream chain, connects
 to a public registry, and refuses to serve the mount when it does: such a connection would let raw
-public packages reach clients as trusted private content. An identity refused
-`codeartifact:DescribeRepository` refuses the role as well, because an identity that cannot ask
-cannot clear the store. A `registry` or `verdaccio` private upstream reports no such configuration,
-so the boot warns once and that topology stays yours to verify. `ecluse check-config` makes no
-cloud call, so it prints that the check runs at boot rather than running it.
+public packages reach clients as trusted private content. An identity that cannot ask cannot clear
+the store, so a refused `codeartifact:DescribeRepository`, and an environment that resolves no AWS
+identity at all, refuse the role too. A serve-only proxy in front of a CodeArtifact private
+upstream therefore needs that identity and that grant, even though its package reads carry the
+caller's own credential. A `registry` or `verdaccio` private upstream reports no such
+configuration, so the boot warns once and that topology stays yours to verify. `ecluse
+check-config` makes no cloud call, so it prints that the check runs at boot rather than running
+it.
 
 ## Splitting the proxy from the mirror worker
 

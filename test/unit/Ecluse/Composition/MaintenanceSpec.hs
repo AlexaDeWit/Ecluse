@@ -370,7 +370,7 @@ probeSpec = describe "the private upstream's answer" $ do
         upstreamFindings [(Npm, Unsafe evidence), (PyPI, Undecidable NetworkFailure)]
             `shouldBe` ([PrivateUpstreamUndecided PyPI NetworkFailure], Left [PrivateUpstreamUnsafe Npm evidence])
 
-    it "leaves a probe whose client could not be built undecided, rather than refusing the role" $
+    it "ends the line, not the boot, for a throw no backend read into an answer" $
         readUpstreamSafety [(Npm, throwIO NoStoreClient)]
             `shouldReturn` ([PrivateUpstreamUndecided Npm NetworkFailure], Right ())
 

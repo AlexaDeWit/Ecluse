@@ -109,7 +109,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     mkQuotaScope,
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (
-    ExternalConnection (ExternalConnection),
+    ExternalConnection (ExternalConnection, externalConnectionText),
     PermissionName (PermissionName),
     RepositoryLinks (RepositoryLinks, rlConnections, rlUpstreams),
     RepositoryName (RepositoryName, repositoryNameText),

@@ -9,6 +9,7 @@ import Data.Text qualified as T
 import Lens.Micro ((.~), (?~), (^.))
 import Network.HTTP.Types (Status, status403, status503)
 import Test.Hspec
+import UnliftIO.Exception (throwIO)
 
 import Amazonka qualified as AWS
 import Amazonka.Auth (fromKeys)
@@ -360,6 +361,12 @@ upstreamCases store = describe "the handle's private upstream probe" $ do
     it "leaves a faulted call undecided" $
         probeRefusing store (serviceError status503 "ServiceUnavailable") `shouldReturn` Undecidable NetworkFailure
 
+    it "reads an identity that could not ask at all as unsafe, which fails closed" $
+        -- A service refusal comes back as a value, so a throw is the identity: none was discovered,
+        -- or the one discovered could not be renewed.
+        probeUpstreamSafety inertReader{rpDescribeUpstream = \_ -> throwIO NoIdentity} store
+            `shouldReturn` Unsafe (InsufficientPermissions describeRepositoryGrant)
+
     it "leaves an answer that described no repository undecided" $
         probeOver store [] `shouldReturn` Undecidable NetworkFailure
 
@@ -384,6 +391,12 @@ probeRefusing store err =
 serviceError :: Status -> Text -> AWS.Error
 serviceError status code =
     AWS.ServiceError (AWS.ServiceError' "CodeArtifact" status [] (AWS.newErrorCode code) Nothing Nothing)
+
+-- | The typed stand-in for a client whose identity could not be discovered or renewed.
+data NoIdentity = NoIdentity
+    deriving stock (Show)
+
+instance Exception NoIdentity
 
 connectedTo :: Text -> CA.RepositoryDescription
 connectedTo connection =

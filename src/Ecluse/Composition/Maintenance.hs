@@ -357,8 +357,8 @@ buildUpstreamProbe eco endpoint = case tgtTag target of
   where
     target = preTarget endpoint
 
-{- | Read every probe's answer. A client this environment could not build settles nothing, so it
-leaves the question open rather than refusing a role whose private reads carry a caller's own token.
+{- | Read every probe's answer. A backend reads its own identity and its own faults, so a throw
+that reaches here is one no backend read, and it ends this boot's line rather than the boot.
 -}
 readUpstreamSafety :: [(Ecosystem, IO UpstreamSafety)] -> IO ([Advisory], Either [BootError] ())
 readUpstreamSafety probes = upstreamFindings <$> traverse answer probes
