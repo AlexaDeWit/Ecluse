@@ -296,27 +296,41 @@ spec = describe "planExecutable" $ do
         it ("advises " <> show role <> ", and boots it, where the backend settled nothing") $ do
             (advisories, outcome) <- probedPlan role (Undecidable NoMechanism)
             advisories `shouldBe` [PrivateUpstreamUndecided Npm NoMechanism]
-            outcome `shouldSatisfy` isRight
+            isRight outcome `shouldBe` True
 
         it ("says nothing to " <> show role <> " about a private upstream that aggregates nothing") $ do
             (advisories, outcome) <- probedPlan role Safe
             advisories `shouldBe` []
-            outcome `shouldSatisfy` isRight
+            isRight outcome `shouldBe` True
 
     it "reads no private upstream on the mirror worker or the pilot, which serve no client from one" $
         for_ [BootMirrorPipeline MirrorOnly, BootWithoutPipeline] $ \role -> do
             (advisories, outcome) <- reportWith staticEnvVars role mountBindingFor inertQueue (neverProbing inertStore)
             advisories `shouldBe` []
-            outcome `shouldSatisfy` isRight
+            isRight outcome `shouldBe` True
 
-    it "refuses the preview through the private handle it already holds" $ do
-        -- The preview builds an observation for the private cache, so it asks that handle rather
-        -- than building a second client for the same repository.
-        (_, outcome) <-
-            reportWith (withObservablePrivate codeArtifactEnvVars) BootStorePreview (\_ _ _ -> Nothing) refusingQueue (privateAnswering (Unsafe publicConnection))
-        case outcome of
-            Right _ -> expectationFailure "expected the private upstream to refuse the preview"
-            Left errs -> errs `shouldBe` [PrivateUpstreamUnsafe Npm publicConnection]
+    for_ [(BootStorePruner, privateDeleting), (BootStorePreview, privateObserving)] $ \(role, buildsAnswering) -> do
+        it ("refuses " <> show role <> " through the private handle it already holds") $ do
+            -- Each store role already built a handle for the private cache, so it asks that one
+            -- rather than building a second client for the same repository.
+            (_, outcome) <- storePlan role (buildsAnswering (Unsafe publicConnection))
+            case outcome of
+                Right _ -> expectationFailure "expected the private upstream to refuse the store role"
+                Left errs -> errs `shouldBe` [PrivateUpstreamUnsafe Npm publicConnection]
+
+        it ("advises " <> show role <> ", and boots it, where the backend settled nothing") $ do
+            (advisories, outcome) <- storePlan role (buildsAnswering (Undecidable NoMechanism))
+            advisories `shouldBe` [PrivateUpstreamUndecided Npm NoMechanism]
+            isRight outcome `shouldBe` True
+
+        it ("says nothing to " <> show role <> " about a private upstream that aggregates nothing") $ do
+            (advisories, outcome) <- storePlan role (buildsAnswering Safe)
+            advisories `shouldBe` []
+            isRight outcome `shouldBe` True
+
+-- | Plan a store role over the CodeArtifact fixture, whose private cache the case's builds answer for.
+storePlan :: BootRole -> StoreBuilds -> IO ([Advisory], Either [BootError] ExecutablePlan)
+storePlan role = reportWith codeArtifactEnvVars role (\_ _ _ -> Nothing) refusingQueue
 
 -- | Plan a mirror-pipeline role over a probe that answers the same way for every mount.
 probedPlan :: MirrorRole -> UpstreamSafety -> IO ([Advisory], Either [BootError] ExecutablePlan)
@@ -372,15 +386,20 @@ neverProbing :: StoreBuilds -> StoreBuilds
 neverProbing builds = builds{sbProbing = \_ _ -> fail "this role must not read the private upstream"}
 
 -- | Observing builds whose private cache answers the given verdict about what it aggregates.
-privateAnswering :: UpstreamSafety -> StoreBuilds
-privateAnswering answer =
-    observingOnly
-        { sbObserving = \_ _ backend ->
-            fakeObservation
-                <$> newFakeStore
-                    defaultFakeStoreConfig
-                        { fakeUpstream = if registryUrlText (cbUrl backend) == privateUpstreamUrl then answer else Safe
-                        }
+privateObserving :: UpstreamSafety -> StoreBuilds
+privateObserving answer =
+    observingOnly{sbObserving = \_ _ backend -> fakeObservation <$> newFakeStore (answering answer backend)}
+
+-- | Deleting builds whose private cache answers the given verdict, as the deleting role holds it.
+privateDeleting :: UpstreamSafety -> StoreBuilds
+privateDeleting answer =
+    inertStore{sbDeleting = \_ _ backend -> fakeMaintenance <$> newFakeStore (answering answer backend)}
+
+-- The private cache answers the case's verdict, and every other store answers for itself.
+answering :: UpstreamSafety -> ClearedBackend -> FakeStoreConfig
+answering answer backend =
+    defaultFakeStoreConfig
+        { fakeUpstream = if registryUrlText (cbUrl backend) == privateUpstreamUrl then answer else Safe
         }
 
 -- | The private upstream the composition fixtures declare.

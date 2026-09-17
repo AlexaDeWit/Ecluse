@@ -389,9 +389,10 @@ protection. The proxy cannot detect this from a request, because it trusts the p
 construction.
 
 It asks the backend at boot instead. Where a store's control plane reports what a repository
-aggregates, both proxy roles walk the private upstream's upstream chain once and refuse to serve
-when any repository in it carries an external connection to a public registry. The refusal names
-the mount, the repository and the connection. On CodeArtifact the walk is `DescribeRepository`
+aggregates, every role that reads the private upstream walks its upstream chain once and refuses
+when any repository in it carries an external connection to a public registry: both proxy roles,
+and both Dredger modes through the store handle they already hold. The mirror worker and Pilot read
+no private upstream and never ask. The refusal names the mount, the repository and the connection. On CodeArtifact the walk is `DescribeRepository`
 under the role identity, bounded to 10 hops and 25 calls. An identity that cannot ask cannot clear
 the store, so a refused grant and an environment with no AWS identity both refuse the mount.
 A `registry` or `verdaccio` store reports no such configuration, so the boot warns once and the

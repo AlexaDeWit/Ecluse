@@ -162,7 +162,7 @@ holds on any backend, and the AWS column shows one way to grant it:
 | `ecluse proxy --no-worker` | Send mirror jobs, read advisory artifacts, read what the private upstream aggregates | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `s3:GetObject`, `codeartifact:DescribeRepository` on the private upstream repository and every repository in its upstream chain |
 | `ecluse mirror` | Consume mirror jobs, publish to the mirror store, read advisory artifacts | SQS receive, delete, change visibility, and get attributes. CodeArtifact token mint, reads, and publish on the mirror repository. `s3:GetObject` |
 | `ecluse pilot` | Publish advisory artifacts | `s3:PutObject` on the advisory prefix |
-| `ecluse dredger` | Read and delete in the mirror store, read advisory artifacts | CodeArtifact token mint, reads, and delete on the mirror repository ([full list](@/docs/dredger.md#permissions)). `s3:GetObject` |
+| `ecluse dredger` | Read and delete in the mirror store, read advisory artifacts, read what the private upstream aggregates | CodeArtifact token mint, reads, and delete on the mirror repository ([full list](@/docs/dredger.md#permissions)). `codeartifact:DescribeRepository` on the private upstream repository and every repository in its upstream chain. `s3:GetObject` |
 
 `ecluse proxy` without `--no-worker` runs the mirror worker in the same process, so its identity
 needs the proxy row and the mirror row together. Split the proxy from the worker when the serving
@@ -178,16 +178,17 @@ client, because those requests carry the caller credential. A static publication
 exception, described under [Edge authentication](#edge-authentication-and-client-credentials).
 
 Both proxy roles do read the private upstream's own configuration once at boot, under their role
-identity. Écluse asks the backend whether that repository, or one in its upstream chain, connects
-to a public registry, and refuses to serve the mount when it does: such a connection would let raw
-public packages reach clients as trusted private content. An identity that cannot ask cannot clear
-the store, so a refused `codeartifact:DescribeRepository`, and an environment that resolves no AWS
-identity at all, refuse the role too. A serve-only proxy in front of a CodeArtifact private
-upstream therefore needs that identity and that grant, even though its package reads carry the
-caller's own credential. A `registry` or `verdaccio` private upstream reports no such
-configuration, so the boot warns once and that topology stays yours to verify.
-`ecluse check-config` makes no cloud call, so it prints that the check runs at boot rather than
-running it.
+identity, and so does `ecluse dredger`, in both its modes, through the store handle it already
+holds. Écluse asks the backend whether that repository, or one in its upstream chain, connects to a
+public registry, and refuses the role when it does: such a connection would let raw public packages
+reach clients as trusted private content. An identity that cannot ask cannot clear the store, so a
+refused `codeartifact:DescribeRepository`, and an environment that resolves no AWS identity at all,
+refuse the role too. A serve-only proxy in front of a CodeArtifact private upstream therefore needs
+that identity and that grant, even though its package reads carry the caller's own credential. The
+mirror worker and Pilot read no private upstream and never ask. A `registry` or `verdaccio` private
+upstream reports no such configuration, so the boot warns once and that topology stays yours to
+verify. `ecluse check-config` makes no cloud call, so it prints that the check runs at boot rather
+than running it.
 
 ## Splitting the proxy from the mirror worker
 

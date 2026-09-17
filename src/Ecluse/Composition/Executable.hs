@@ -164,10 +164,6 @@ type BuildMirrorQueue = LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue
 through the one arm below and differ only in which of 'StoreBuilds' they ran. -}
 type BuildSweepCache = StorePorts -> Limits -> ClearedBackend -> IO SweepCache
 
-{- Whether this store role asks the private caches it built what they aggregate. The preview does,
-through the handles it already holds, and the deleting role reads its stores' own classification. -}
-type ProbeHeldCaches = Map Ecosystem SweepCache -> IO ([Advisory], Either [BootError] ())
-
 {- | Plan the runtime the cleared plan's role starts, or report every refusal only a live
 environment can settle. Each role has one arm here, and a refusal is spent once for all of them.
 -}
@@ -185,15 +181,15 @@ planExecutable logEnv tracing resolveAdapter buildQueue buildCredentials builds 
         (advisories, probed) <- probeServedUpstreams (sbProbing builds) role bootPlan
         wiring <- planMirrorWiring logEnv resolveAdapter buildQueue buildCredentials role bootPlan
         pure (advisories, accumulate probed (executablePlan . MirrorPipelineWiring <$> wiring))
-    BootStorePruner -> prunerArm skipUpstreamProbe (deleting (sbDeleting builds))
-    BootStorePreview -> prunerArm probeHeldCaches (previewing (sbObserving builds))
+    BootStorePruner -> prunerArm (deleting (sbDeleting builds))
+    BootStorePreview -> prunerArm (previewing (sbObserving builds))
     BootWithoutPipeline -> pure ([], executablePlan . PilotWiring <$> pilotExportPlan (bpValidated bootPlan))
   where
     executablePlan wiring = ExecutablePlan{epBootPlan = bootPlan, epRoleWiring = wiring}
 
-    prunerArm probe build =
+    prunerArm build =
         second (fmap (executablePlan . StorePrunerWiring))
-            <$> planPrunerWiring logEnv tracing buildCredentials probe build bootPlan
+            <$> planPrunerWiring logEnv tracing buildCredentials build bootPlan
 
     deleting build ports limits cleared = deletingCache <$> build ports limits cleared
     previewing build ports limits cleared = previewCache <$> build ports limits cleared
@@ -224,18 +220,16 @@ privateUpstreams bootPlan =
     , Just endpoint <- [mntPrivateUpstream (vmConfig vetted)]
     ]
 
--- The preview asks the private handles it holds, rather than building a second client for each.
-probeHeldCaches :: ProbeHeldCaches
+{- Both store roles ask the private handles they hold, rather than building a second client for
+each, and both read the answer the way a serving role does. -}
+probeHeldCaches :: Map Ecosystem SweepCache -> IO ([Advisory], Either [BootError] ())
 probeHeldCaches caches =
     readUpstreamSafety [(eco, obProbeUpstream (scObserve cache)) | (eco, cache) <- Map.toAscList caches]
 
-skipUpstreamProbe :: ProbeHeldCaches
-skipUpstreamProbe _ = pure ([], Right ())
-
 {- The store roles' shared arm: the advisory sync their rules read, the credential their stores
 answer to, and one store per cleared target. All three refusable steps accumulate. -}
-planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> ProbeHeldCaches -> BuildSweepCache -> BootPlan -> IO ([Advisory], Either [BootError] PrunerWiring)
-planPrunerWiring logEnv tracing buildCredentials probeCaches buildStore bootPlan = do
+planPrunerWiring :: LogEnv -> TracingPort -> BuildCredentials -> BuildSweepCache -> BootPlan -> IO ([Advisory], Either [BootError] PrunerWiring)
+planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     credentials <- buildCredentials (credentialReportersOver deferredMetrics) credentialBackends
@@ -272,7 +266,7 @@ planPrunerWiring logEnv tracing buildCredentials probeCaches buildStore bootPlan
                 (deferredBreakerReporter deferredMetrics EffectfulRule)
                 (katipFaultReporter logEnv)
     policies <- Map.fromList <$> traverse (sweepPolicyFor ruleDepsFor) (vpMounts validated)
-    (advisories, probed) <- probeCaches (fromRight mempty caches)
+    (advisories, probed) <- probeHeldCaches (fromRight mempty caches)
     pure . (advisories,) . validationToEither $
         prunerWiringFrom deferredMetrics budgetPort policies
             <$> eitherToValidation cveSync
