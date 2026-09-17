@@ -561,6 +561,17 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
         let result = privateCaches adapterFor MirrorPreviewer config
         fmap Map.null result `shouldBe` Right True
 
+    it "refuses a private CodeArtifact endpoint that addresses no repository of this mount's own" $ do
+        -- The loader refuses this endpoint now ('vetPrivateRepository'), so the pass is driven
+        -- over a mount config built here rather than one a configuration could carry.
+        config <- expectConfig codeArtifactEnvVars Nothing
+        let unaddressable = Map.map (\mcfg -> mcfg{mntPrivateUpstream = Just unaddressablePrivateUpstream}) (cfgMounts (configApp config))
+            result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor unaddressable (configMounts config)))
+        case result of
+            Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable detail)] ->
+                detail `shouldSatisfy` T.isInfixOf "CodeArtifactRepositoryMissing"
+            other -> expectationFailure ("expected the private cache refusal, got " <> show (void other))
+
     it "clears the private CodeArtifact cache on the repository its own endpoint addresses" $ do
         let env =
                 ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", retainedEndpoint)
@@ -573,14 +584,6 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
                     privateRepository backend `shouldBe` Just "retained"
                 _ -> expectationFailure "expected one cleared private CodeArtifact cache"
             Left errors -> expectationFailure (show errors)
-
-    it "refuses a private CodeArtifact endpoint for a different package format" $ do
-        let env =
-                ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", "https://cache-999900001111.d.codeartifact.us-west-2.amazonaws.com/pypi/retained/")
-                    : withoutPrivateUpstreamUrl codeArtifactEnvVars
-        config <- expectConfig env Nothing
-        let result = privateCaches adapterFor MirrorPreviewer config
-        void result `shouldSatisfy` isLeft
 
 withoutPrivateAuthority :: [(String, String)] -> [(String, String)]
 withoutPrivateAuthority = filter (\(key, _) -> key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN" && key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION")

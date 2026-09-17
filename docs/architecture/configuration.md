@@ -205,9 +205,10 @@ error, not a silent skip:
   require one. Écluse still rejects a CodeArtifact identity that cannot mint an initial token, on
   the roles that hold one.
 - A `codeArtifact` endpoint's URL must match its tag. Écluse rejects a host that is not a
-  CodeArtifact endpoint on any endpoint, and on a mirror target it also rejects a path that is not
-  the repository endpoint for the mount's own ecosystem (`/npm/{repository}/` for an npm mount) and
-  an ecosystem CodeArtifact carries no package format for. Each refusal names the key path.
+  CodeArtifact endpoint on any endpoint, and on a mirror target or a private upstream it also
+  rejects a path that is not the repository endpoint for the mount's own ecosystem
+  (`/npm/{repository}/` for an npm mount) and an ecosystem CodeArtifact carries no package format
+  for. Each refusal names the key path it was written at.
 - A static publish credential requires a verifiable edge. A `token` under a `publicationTarget`
   tag without `ECLUSE_SERVER__AUTH_TOKEN` is refused as
   `PublishStaticCredentialNeedsEdge`. That pairing would let any unauthenticated client publish

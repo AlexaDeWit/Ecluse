@@ -66,8 +66,8 @@ resolveStoreBackend eco endpoint = case meWrite endpoint of
     WriteRegistry token -> Right (BackendRegistry token)
     WriteVerdaccio token consent -> Right (BackendVerdaccio token consent)
     WriteCodeArtifact mDuration -> do
-        (domain, owner, region) <- codeArtifactHost eco "mirrorTarget" (meUrl endpoint)
-        store <- codeArtifactStore eco (registryUrlText (meUrl endpoint)) domain owner region
+        (domain, owner, region) <- codeArtifactHost eco mirrorTargetKey (meUrl endpoint)
+        store <- codeArtifactStore eco mirrorTargetKey (registryUrlText (meUrl endpoint)) domain owner region
         Right (BackendCodeArtifact (mintIdentity domain owner region mDuration) store)
 
 {- | Resolve a private target already classified as CodeArtifact, using the default token lifetime.
@@ -76,7 +76,7 @@ The repository is returned beside the backend, so a caller needs no second read 
 resolvePrivateBackend :: Ecosystem -> Target -> Either ConfigError (StoreBackend, CodeArtifactStore)
 resolvePrivateBackend eco target = do
     (domain, owner, region) <- codeArtifactHost eco privateUpstreamKey (tgtUrl target)
-    store <- codeArtifactStore eco (registryUrlText (tgtUrl target)) domain owner region
+    store <- codeArtifactStore eco privateUpstreamKey (registryUrlText (tgtUrl target)) domain owner region
     pure (BackendCodeArtifact (mintIdentity domain owner region Nothing) store, store)
 
 {- | Vet a read or publish endpoint's URL against its declared tag. Only @codeArtifact@ constrains
@@ -97,9 +97,13 @@ vetPrivateRepository eco target = case tgtTag target of
     TagCodeArtifact | isRight (codeArtifactHost eco privateUpstreamKey (tgtUrl target)) -> void (resolvePrivateBackend eco target)
     _ -> Right ()
 
--- | The key a private upstream is declared under, which both of its refusals are reported at.
+-- | The key a private upstream is declared under, which every refusal of one is reported at.
 privateUpstreamKey :: Text
 privateUpstreamKey = "privateUpstream"
+
+-- | The key a mirror target is declared under, which every refusal of one is reported at.
+mirrorTargetKey :: Text
+mirrorTargetKey = "mirrorTarget"
 
 -- The mint identity a CodeArtifact host carries, with the lifetime the operator asked for.
 mintIdentity :: Text -> Text -> Text -> Maybe Natural -> CodeArtifactConfig
@@ -118,13 +122,13 @@ codeArtifactHost eco key url =
         (CodeArtifactHostMismatch eco (key <> ".codeArtifact.url"))
         (parseCodeArtifactHost (hostAddress (registryUrlText url)))
 
--- The repository a mirror target addresses, under the format token its mount's ecosystem maps to.
-codeArtifactStore :: Ecosystem -> Text -> Text -> Text -> Text -> Either ConfigError CodeArtifactStore
-codeArtifactStore eco raw domain owner region = do
-    format <- maybeToRight (CodeArtifactFormatUnsupported eco) (codeArtifactFormat eco)
+-- The repository an endpoint addresses, under the format token its mount's ecosystem maps to.
+codeArtifactStore :: Ecosystem -> Text -> Text -> Text -> Text -> Text -> Either ConfigError CodeArtifactStore
+codeArtifactStore eco key raw domain owner region = do
+    format <- maybeToRight (CodeArtifactFormatUnsupported eco urlPath) (codeArtifactFormat eco)
     repository <-
         maybeToRight
-            (CodeArtifactRepositoryMissing eco (formatToken format))
+            (CodeArtifactRepositoryMissing eco urlPath (formatToken format))
             (repositoryOfPath (formatToken format) raw)
     pure
         CodeArtifactStore
@@ -134,6 +138,8 @@ codeArtifactStore eco raw domain owner region = do
             , casRepository = repository
             , casFormat = format
             }
+  where
+    urlPath = key <> ".codeArtifact.url"
 
 -- The repository a CodeArtifact endpoint path names, under the expected format segment.
 repositoryOfPath :: Text -> Text -> Maybe Text
