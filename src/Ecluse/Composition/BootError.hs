@@ -304,11 +304,11 @@ renderBootError = \case
             <> " has no usable store maintenance backend: "
             <> renderStoreMaintenanceReason eco reason
             <> " (the Dredger deletes from every mount's mirror target, so it refuses rather than starting against a store it cannot sweep)"
-    DredgerQuotaScopeConflict scope first second ->
+    DredgerQuotaScopeConflict scope oneKey otherKey ->
         "dredger.quotaOverrides: "
-            <> authorityLabel first
+            <> authorityLabel oneKey
             <> " and "
-            <> authorityLabel second
+            <> authorityLabel otherKey
             <> " both define the capacity pool \""
             <> scopeLabel scope
             <> "\" and define it differently: one pool takes one definition, so give the two entries the same quotas and weights or separate scopes"
