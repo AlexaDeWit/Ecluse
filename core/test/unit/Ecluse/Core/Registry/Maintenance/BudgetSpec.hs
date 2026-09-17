@@ -14,13 +14,14 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     BudgetPort (budgetClose, budgetOpen, budgetPaced),
     CycleCost (ccRequests, ccWorkSeconds),
     QuotaDimension (AccountReads, AccountWrites, StoreRequests),
-    QuotaOrigin (QuotaUndeclared),
+    QuotaOrigin (QuotaDeclared, QuotaDerived, QuotaUndeclared),
     QuotaScope,
     RequestGate (gateSpend),
     RequestKind (DeleteBatch, ListingPage, ManifestRead),
-    StoreBudget (bgOrigin, bgQuotas),
+    StoreBudget (bgCosts, bgOrigin, bgQuotas),
     budgetDeclared,
     mkQuotaScope,
+    narrowestBudget,
     newBudgetMeter,
     oneRequest,
     paceOf,
@@ -60,6 +61,15 @@ vocabularySpec = describe "the budget vocabulary" $ do
 
     it "takes the tightest declared quota as the pool's own" $
         smallestQuota declaredBudget `shouldBe` Just 100
+
+    it "combines two descriptions of one pool by the tightest quota and the dearest cost" $ do
+        let combined = narrowestBudget declaredBudget tighter
+        bgQuotas combined
+            `shouldBe` Map.fromList [(AccountReads, 400), (AccountWrites, 100), (StoreRequests, 200)]
+        Map.lookup DeleteBatch (bgCosts combined) `shouldBe` Just (Map.singleton AccountWrites 4)
+
+    it "labels a combined pool by the better-founded of the two origins" $
+        bgOrigin (narrowestBudget (declaredBudget{bgOrigin = QuotaDerived}) tighter) `shouldBe` QuotaDeclared
 
 tallySpec :: Spec
 tallySpec = describe "the request tally" $ do
@@ -119,6 +129,16 @@ declaredBudget :: StoreBudget
 declaredBudget =
     undeclaredBudget
         { bgQuotas = Map.fromList [(AccountReads, 800), (AccountWrites, 100), (StoreRequests, 200)]
+        , bgCosts = Map.singleton DeleteBatch (Map.singleton AccountWrites 1)
+        }
+
+-- The same pool as a second store claims it: a smaller read quota and a dearer delete.
+tighter :: StoreBudget
+tighter =
+    undeclaredBudget
+        { bgQuotas = Map.fromList [(AccountReads, 400), (AccountWrites, 250)]
+        , bgOrigin = QuotaDeclared
+        , bgCosts = Map.singleton DeleteBatch (Map.singleton AccountWrites 4)
         }
 
 mirror :: QuotaScope

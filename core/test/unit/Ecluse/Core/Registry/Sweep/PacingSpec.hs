@@ -30,7 +30,10 @@ import Ecluse.Core.Registry.Sweep.Pacing (
     cycleDemand,
     decidePace,
     defaultCycleWindow,
+    derivedCapacity,
+    nominalPackagePace,
     renderPaceDecision,
+    renderScopeBudget,
  )
 import Ecluse.Core.Registry.Sweep.Types (
     SweepPacing (SweepPacing, swpBudgetFraction, swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
@@ -160,6 +163,27 @@ warningSpec = describe "the warning an unattainable window earns" $ do
             (T.isInfixOf "no request budget reaches the window")
             (renderPaceDecision shipped (decidePace shipped codeArtifact (Just (sampleCycle, 4000))))
             `shouldBe` Just True
+
+{- The boot line every store gets: where its capacity came from, the share in force and where that
+came from, and the ceilings the share yields. -}
+bootLineSpec :: Spec
+bootLineSpec = describe "the capacity line a boot records per store" $ do
+    it "names the derived inputs, the computed share, and the ceilings" $ do
+        let line = renderScopeBudget shipped (derivedCapacity (nominalPackagePace 50 2) undeclaredBudget)
+        line `shouldSatisfy` T.isInfixOf "capacity derived from dredger.chunkSize 50 every 2s"
+        line `shouldSatisfy` T.isInfixOf "storeRequests 25.0/s"
+        line `shouldSatisfy` T.isInfixOf "fraction 0.5 (computed)"
+        line `shouldSatisfy` T.isInfixOf "ceilings storeRequests 12.5/s"
+
+    it "names the backend's documented quotas and the share they imply" $ do
+        let line = renderScopeBudget shipped codeArtifact
+        line `shouldSatisfy` T.isInfixOf "the backend's documented quotas"
+        line `shouldSatisfy` T.isInfixOf "fraction 0.25 (computed)"
+        line `shouldSatisfy` T.isInfixOf "accountWrites 25.0/s"
+
+    it "says when the share came from the configuration rather than the derivation" $
+        renderScopeBudget shipped{swpBudgetFraction = Just (1 % 10)} codeArtifact
+            `shouldSatisfy` T.isInfixOf "fraction 0.1 (from configuration)"
 
 -- The shipped dredger defaults: a chunk of 50 every two seconds, an hour between cycles.
 shipped :: SweepPacing

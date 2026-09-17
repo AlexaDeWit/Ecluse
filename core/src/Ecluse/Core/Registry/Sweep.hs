@@ -34,6 +34,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     BudgetPort (budgetClose, budgetOpen, budgetPaced),
     CycleCost (ccRequests, ccWorkSeconds),
     StoreBudget (bgScope),
+    narrowestBudget,
     renderQuotaScope,
     renderRequestTally,
  )
@@ -123,12 +124,12 @@ paceNextCycle pacing ports mounts outcome = do
     renderMeasured (scope, tally) =
         "this cycle asked " <> renderQuotaScope scope <> " for " <> renderRequestTally tally
 
-{- | Each distinct capacity pool the cycle's stores share, so two stores in one pool are paced once
-and a mount's cache is paced with the mirror target it is swept beside.
+{- | Each distinct capacity pool the cycle's stores share. Two stores that landed in one pool are
+paced by the narrower of what each claims, never by whichever the fold read last.
 -}
 storeBudgets :: [SweepMount] -> [StoreBudget]
 storeBudgets mounts =
-    Map.elems (Map.fromList [(bgScope budget, budget) | mount <- mounts, budget <- budgetsOf mount])
+    Map.elems (Map.fromListWith narrowestBudget [(bgScope budget, budget) | mount <- mounts, budget <- budgetsOf mount])
   where
     budgetsOf mount =
         [ factBudget (obFacts (ssObserve store))

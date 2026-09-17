@@ -223,25 +223,25 @@ parseQuotaOverrides km = Map.fromList <$> traverse parseQuotaOverrideEntry (KeyM
 
 parseQuotaOverrideEntry :: (Key.Key, Value) -> Parser (Text, QuotaOverride)
 parseQuotaOverrideEntry (k, v) =
-    (Key.toText k,) <$> withObject "QuotaOverride" (decodeBareGroup group (quotaOverrideDecoder group)) v
+    (Key.toText k,) <$> withObject "QuotaOverride" (decodeBareGroup entryPath (quotaOverrideDecoder entryPath)) v
   where
-    group = "dredger.quotaOverrides." <> Key.toString k
+    entryPath = "dredger.quotaOverrides." <> Key.toString k
 
 quotaOverrideDecoder :: String -> GroupDecoder QuotaOverride
-quotaOverrideDecoder group =
+quotaOverrideDecoder entryPath =
     QuotaOverride
         <$> optionalKey "scope" (`expectString` pure)
-        <*> nestedKey "quotas" (parseRates group parseQuotaDimension "quota dimension")
-        <*> nestedKey "requestWeights" (parseRates group parseRequestKind "request kind")
+        <*> nestedKey "quotas" (parseRates entryPath parseQuotaDimension "quota dimension")
+        <*> nestedKey "requestWeights" (parseRates entryPath parseRequestKind "request kind")
 
 {- Every entry under one map of positive rates, keyed by a name this build meters under. An
 unknown name fails the load, because a rate nothing reads would silently pace nothing. -}
 parseRates :: (Ord key) => String -> (Text -> Maybe key) -> String -> KeyMap.KeyMap Value -> Parser (Map.Map key Rational)
-parseRates group readKey subject km = Map.fromList <$> traverse entry (KeyMap.toList km)
+parseRates entryPath readKey subject km = Map.fromList <$> traverse rate (KeyMap.toList km)
   where
-    entry (k, v) = case readKey (Key.toText k) of
-        Nothing -> fail (group <> ": " <> Key.toString k <> " is not a " <> subject <> " this build meters")
-        Just key -> (key,) <$> parsePositiveRate (group <> "." <> Key.toString k) v
+    rate (k, v) = case readKey (Key.toText k) of
+        Nothing -> fail (entryPath <> ": " <> Key.toString k <> " is not a " <> subject <> " this build meters")
+        Just metered -> (metered,) <$> parsePositiveRate (entryPath <> "." <> Key.toString k) v
 
 {- | Parse the per-ecosystem quiet-time thresholds. The key is the ecosystem, spelled as a
 mounts key is, so an unknown one fails the load rather than configuring nothing.

@@ -78,10 +78,10 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Registry.Maintenance.Budget (
     QuotaDimension (StoreRequests),
-    QuotaOrigin (QuotaDeclared),
+    QuotaOrigin (QuotaDeclared, QuotaDerived),
     RequestGate (RequestGate, gateSpend),
-    StoreBudget (bgOrigin, bgQuotas, bgScope),
-    budgetDeclared,
+    RequestKind (CursorWrite, DeleteBatch, ListingPage),
+    StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope),
     mkQuotaScope,
     undeclaredBudget,
  )

@@ -46,7 +46,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     tallyCounts,
     undeclaredBudget,
  )
-import Ecluse.Core.Registry.Sweep (paceAtCeiling, sweepCycle, withStoreRetry)
+import Ecluse.Core.Registry.Sweep (paceAtCeiling, storeBudgets, sweepCycle, withStoreRetry)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltConsentWithheld, HaltDeletionCap, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
@@ -58,6 +58,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepShape (SweepCandidates, SweepEverything),
     SweepTally (tallyDeleted, tallyExamined, tallyGuardSkipped, tallyKept),
     TargetPrerequisites (tpClassification, tpConsent),
+    deletingCache,
     outcomeComplete,
     prerequisitesMet,
  )
@@ -82,6 +83,7 @@ import Ecluse.Test.Sweep (
     recordingPortsUnder,
     testMount,
     testPacing,
+    withPrivateCache,
  )
 
 spec :: Spec
@@ -456,6 +458,12 @@ budgetSpec = describe "the cycle request budget" $ do
         tallyDeleted (outcomeTally outcome) `shouldBe` 0
         map storedVersion (Map.findWithDefault [] (packageName "left-pad") contents) `shouldBe` [version "1.0.0"]
         gapManifests (outcomeEvidence outcome) `shouldSatisfy` (> 0)
+
+    it "paces two stores that landed in one pool by the narrower of what each claims" $ do
+        store <- newFakeStore seededConfig{fakeFacts = pacedFacts}
+        cache <- newFakeStore seededConfig{fakeFacts = pacedFacts{factBudget = pacedBudget{bgQuotas = Map.singleton StoreRequests 4}}}
+        let mount = withPrivateCache (deletingCache (fakeMaintenance cache)) (testMount (fakeMaintenance store) [denyRule] [])
+        map bgQuotas (storeBudgets [mount]) `shouldBe` [Map.singleton StoreRequests 4]
 
     it "holds the first cycle to its ceiling before anything has measured one" $ do
         store <- newFakeStore seededConfig{fakeFacts = pacedFacts}

@@ -124,6 +124,12 @@ the backend charges nothing for scales nothing. An entry naming a store no mount
 boot and paces nothing, and two entries that give one `scope` different quotas or weights refuse the
 boot, naming both.
 
+Stores can also share a pool without you saying so: a `mirrorTarget` and a `privateUpstream` on one
+Verdaccio host land in that host's pool together. Where two stores in one pool describe it
+differently, the sweep takes the tightest quota on each dimension and the dearest cost for each
+kind, so a shared pool is paced by the narrower of what the two claim rather than by whichever the
+boot read last.
+
 Each store's boot line records the pool it runs in, where its capacity came from (derived, the
 backend's documented quotas, or your configuration), the share in force and where that came from,
 and the per-dimension ceilings the share yields.

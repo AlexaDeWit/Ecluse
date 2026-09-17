@@ -18,6 +18,7 @@ module Ecluse.Core.Registry.Maintenance.Budget (
     StoreBudget (..),
     undeclaredBudget,
     budgetDeclared,
+    narrowestBudget,
     smallestQuota,
     renderStoreBudget,
     toHundredths,
@@ -132,6 +133,25 @@ undeclaredBudget =
 -- | Whether anything bounds this store's request rate.
 budgetDeclared :: StoreBudget -> Bool
 budgetDeclared = not . Map.null . bgQuotas
+
+{- | Combine two descriptions of one pool: the tightest quota per dimension and the dearest cost
+per request kind, so two stores sharing a pool are paced by the narrower of what each claims.
+-}
+narrowestBudget :: StoreBudget -> StoreBudget -> StoreBudget
+narrowestBudget left right =
+    left
+        { bgQuotas = Map.unionWith min (bgQuotas left) (bgQuotas right)
+        , bgCosts = Map.unionWith (Map.unionWith max) (bgCosts left) (bgCosts right)
+        , bgOrigin = if originRank (bgOrigin left) >= originRank (bgOrigin right) then bgOrigin left else bgOrigin right
+        }
+
+-- How well a description accounts for a pool, so the better-founded of two labels the line.
+originRank :: QuotaOrigin -> Int
+originRank = \case
+    QuotaDeclared -> 3
+    QuotaDocumented -> 2
+    QuotaDerived -> 1
+    QuotaUndeclared -> 0
 
 -- | The tightest quota in the pool, which the default budget fraction is derived from.
 smallestQuota :: StoreBudget -> Maybe Rational

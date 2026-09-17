@@ -28,7 +28,7 @@ import Ecluse.Config (
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Security.Authority (authorityLabel)
+import Ecluse.Core.Security (authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (displayExceptionT)
 
@@ -310,7 +310,7 @@ renderBootError = \case
             <> " and "
             <> authorityLabel second
             <> " both define the capacity pool \""
-            <> scope
+            <> scopeLabel scope
             <> "\" and define it differently: one pool takes one definition, so give the two entries the same quotas and weights or separate scopes"
     DredgerChunkPauseBeneathFloor configured floorPause ->
         "ECLUSE_DREDGER__CHUNK_PAUSE (dredger.chunkPause) is "
@@ -369,6 +369,13 @@ mirrorCollapseLine eco otherRef url =
         <> " resolve to the same registry ("
         <> registryUrlText url
         <> "); the Dredger refuses this configuration, so pruning this mirror stays manual"
+
+{- A pool as a line names it: the operator's own label, reduced to its authority where they spelled
+a URL, so a credential written into a scope never reaches a log line. -}
+scopeLabel :: Text -> Text
+scopeLabel raw
+    | "://" `T.isInfixOf` raw = authorityLabel raw
+    | otherwise = raw
 
 -- A neighbouring mount's endpoint is named by its mount. The subject's own is not.
 endpointRef :: Ecosystem -> Ecosystem -> Text -> Text
