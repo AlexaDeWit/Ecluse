@@ -130,7 +130,7 @@ renderBootErrorSpec = describe "renderBootError" $
         renderBootError (DredgerChunkPauseBeneathFloor 1 2)
             `shouldSatisfy` infixed "may be raised and never lowered"
         renderBootError (DredgerQuotaScopeConflict "shared" "https://one.example.test/" "https://two.example.test/")
-            `shouldSatisfy` infixed "one.example.test and two.example.test both define the capacity pool \"shared\""
+            `shouldSatisfy` infixed "one.example.test:443 and two.example.test:443 both define the capacity pool \"shared\""
         renderBootError (DredgerQuotaScopeConflict "shared" "https://one.example.test/" "https://two.example.test/")
             `shouldSatisfy` infixed "give the two entries the same quotas and weights or separate scopes"
         renderBootError PilotWithoutEcosystem
@@ -164,8 +164,8 @@ renderAdvisorySpec = describe "renderAdvisory" $ do
         advisoryBytes (MirrorTargetOnOwnPublicationTarget Npm (unsafeRegistryUrl "https://store.example.test/npm/mirror/"))
             `shouldBe` "mount \"npm\": mirrorTarget and publicationTarget resolve to the same registry (https://store.example.test/npm/mirror/); the Dredger refuses this configuration, so pruning this mirror stays manual"
 
-    it "reduces a declared capacity that names no store to its authority, and says it paces nothing" $
+    it "reduces a declared capacity that names no store to its dialled authority, and says it paces nothing" $
         advisoryBytes (DredgerQuotaOverrideUnmatched "https://deploy:hunter2@gone.example.test/npm/")
-            `shouldBe` "dredger.quotaOverrides: gone.example.test names no store this deployment declares, so it paces nothing"
+            `shouldBe` "dredger.quotaOverrides: gone.example.test:443 names no store this deployment declares, so it paces nothing"
   where
     advisoryBytes = TE.encodeUtf8 . renderAdvisory

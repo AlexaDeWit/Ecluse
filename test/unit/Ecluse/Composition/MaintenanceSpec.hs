@@ -527,7 +527,7 @@ budgetSpec = describe "the request capacity a boot resolves for a store" $ do
         let resolved = resolvedBudget unpacedBudget verdaccio undeclaredBudget
         bgQuotas resolved `shouldBe` Map.singleton StoreRequests testNominalPace
         bgOrigin resolved `shouldBe` QuotaDerived
-        bgScope resolved `shouldBe` mkQuotaScope "verdaccio.example.com"
+        bgScope resolved `shouldBe` mkQuotaScope "verdaccio.example.com:443"
 
     it "takes an operator's declared capacity, matching the URL past case and a trailing slash" $ do
         let resolved = resolvedBudget (overriding "HTTPS://Verdaccio.Example.com" capacity) verdaccio undeclaredBudget
