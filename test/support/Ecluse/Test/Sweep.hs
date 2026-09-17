@@ -21,7 +21,7 @@ module Ecluse.Test.Sweep (
     withPrivateCache,
 ) where
 
-import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Data.Time (NominalDiffTime, UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -31,13 +31,21 @@ import Ecluse.Core.Registry.Maintenance (
     StoreMaintenance,
     StoreObservation (obEnumerateVersions, obFacts, obListPackagesIn),
  )
+import Ecluse.Core.Registry.Maintenance.Budget (
+    BudgetPort (budgetClose),
+    CycleCost (ccRequests),
+    QuotaScope,
+    RequestGate,
+    RequestTally,
+    newBudgetMeter,
+ )
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Sweep.Types (
     SweepAudit (SweepAudit, auditError, auditInfo, auditWarn),
     SweepCache (scObserve),
     SweepMount (..),
-    SweepPacing (SweepPacing, swpChunkPause, swpChunkSize, swpCyclePause, swpDeletionCap, swpShape),
-    SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepMetrics, sweepNow, sweepReport, sweepTarget),
+    SweepPacing (SweepPacing, swpBudgetFraction, swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
+    SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepBudget, sweepDelay, sweepMetrics, sweepNow, sweepReport, sweepTarget),
     SweepReport (SweepReport, reportCapHalts, reportOpening, reportRemoval),
     SweepShape (SweepCandidates),
     SweepStore (ssPrivate),
@@ -66,6 +74,12 @@ data RecordedSweep = RecordedSweep
     -- ^ The lines that may clear on their own, oldest first.
     , recDelays :: IO Int
     -- ^ How many times the sweep paused. The pause itself returns at once.
+    , recGateFor :: QuotaScope -> RequestGate
+    -- ^ The gate a case wraps a fake store's handle in, so its requests are counted.
+    , recRequests :: IO (Map QuotaScope RequestTally)
+    -- ^ What each capacity pool was asked for, read after the cycle closed its measurement.
+    , recBudgetWaits :: IO [NominalDiffTime]
+    -- ^ Every wait the request budget imposed, oldest first. The wait itself returns at once.
     }
 
 {- | Ports that record instead of waiting: the delay returns immediately, the clock stands still,
@@ -77,6 +91,8 @@ recordingPorts = recordingPortsUnder deletingReport
 -- | 'recordingPorts' over a chosen report, for a case about a preview's own counters.
 recordingPortsUnder :: SweepReport -> Maybe DbEtag -> IO RecordedSweep
 recordingPortsUnder report etag = do
+    budgetWaits <- newIORef []
+    (budget, gateFor) <- newBudgetMeter (\seconds -> modifyIORef' budgetWaits (seconds :))
     info <- newIORef []
     warnings <- newIORef []
     errors <- newIORef []
@@ -96,6 +112,7 @@ recordingPortsUnder report etag = do
                     , sweepAudit =
                         SweepAudit{auditInfo = push info, auditWarn = push warnings, auditError = push errors}
                     , sweepReport = report
+                    , sweepBudget = budget
                     }
             , recInfo = reverse <$> readIORef info
             , recTargetResults = reverse <$> readIORef targetResults
@@ -103,6 +120,9 @@ recordingPortsUnder report etag = do
             , recErrors = reverse <$> readIORef errors
             , recResults = reverse <$> readIORef results
             , recDelays = readIORef delays
+            , recGateFor = gateFor
+            , recRequests = ccRequests <$> budgetClose budget
+            , recBudgetWaits = reverse <$> readIORef budgetWaits
             }
   where
     -- A fixed instant: no rule a sweep case runs reads the clock for its verdict.
@@ -117,6 +137,8 @@ testPacing =
         { swpChunkSize = 100
         , swpChunkPause = 1
         , swpCyclePause = 60
+        , swpCycleWindow = 180
+        , swpBudgetFraction = Nothing
         , swpDeletionCap = 1000
         , swpShape = SweepCandidates
         }

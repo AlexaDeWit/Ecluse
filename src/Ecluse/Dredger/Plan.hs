@@ -25,13 +25,14 @@ import Ecluse.Composition.Sizing (resolveSized)
 import Ecluse.Composition.Types (BootRole (BootStorePreview, BootStorePruner))
 import Ecluse.Config (
     AppConfig (cfgDredger),
-    DredgerSettings (drgChunkPause, drgChunkSize, drgCyclePause, drgDeletionCap, drgFullWalk),
+    DredgerSettings (drgChunkPause, drgChunkSize, drgCyclePause, drgDeletionCap, drgFullWalk, drgRequestBudgetFraction, drgTargetCycleWindow),
  )
+import Ecluse.Core.Registry.Sweep.Pacing (defaultCycleWindow)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt,
     CycleOutcome (outcomeEvidence, outcomeHalt),
     SweepMount (smConfigured),
-    SweepPacing (SweepPacing, swpChunkPause, swpChunkSize, swpCyclePause, swpDeletionCap, swpShape),
+    SweepPacing (SweepPacing, swpBudgetFraction, swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
     SweepReport (SweepReport, reportCapHalts, reportOpening, reportRemoval),
     SweepShape (SweepCandidates, SweepEverything),
     deletionCapPerStore,
@@ -78,18 +79,20 @@ data DredgerOptions = DredgerOptions
     deriving stock (Eq, Show)
 
 {- | The pacing, the per-cycle cap, and the shape the @dredger@ group settled over the stores a
-cycle sweeps, beside the boot line naming where the cap came from.
+cycle sweeps, beside the boot lines naming where each resolved bound came from.
 -}
-sweepPacingFor :: AppConfig -> Int -> (SweepPacing, Text)
+sweepPacingFor :: AppConfig -> Int -> (SweepPacing, [Text])
 sweepPacingFor appConfig stores =
     ( SweepPacing
         { swpChunkSize = drgChunkSize dredger
         , swpChunkPause = drgChunkPause dredger
         , swpCyclePause = drgCyclePause dredger
+        , swpCycleWindow = window
+        , swpBudgetFraction = drgRequestBudgetFraction dredger
         , swpDeletionCap = cap
         , swpShape = if drgFullWalk dredger then SweepEverything else SweepCandidates
         }
-    , capLine
+    , [capLine, windowLine]
     )
   where
     dredger = cfgDredger appConfig
@@ -99,6 +102,12 @@ sweepPacingFor appConfig stores =
             (drgDeletionCap dredger)
             (deletionCapPerStore * stores)
             ("computed as " <> show deletionCapPerStore <> " per sweepable mirror store")
+    (window, windowLine) =
+        resolveSized
+            "dredger: target cycle window"
+            (drgTargetCycleWindow dredger)
+            (defaultCycleWindow (drgCyclePause dredger))
+            "computed as three cycle pauses"
 
 {- | The detail a halted one-shot run reports as its own non-zero ending, so a scheduler reads
 the outcome from the status and the reason from the same line.

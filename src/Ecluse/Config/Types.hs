@@ -54,6 +54,7 @@ module Ecluse.Config.Types (
     RuntimeSettings (..),
     ObservabilitySettings (..),
     DredgerSettings (..),
+    QuotaOverride (..),
     MountRegistries (..),
     MountMode (..),
     MirroredLegs (..),
@@ -84,6 +85,7 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
+import Ecluse.Core.Registry.Maintenance.Budget (QuotaDimension, RequestKind)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security (hostPortAddress, refuseCredentialMaterial)
@@ -448,6 +450,16 @@ data DredgerSettings = DredgerSettings
     -- ^ Seconds between chunks, which is also the wait a fault advising no delay of its own takes.
     , drgCyclePause :: NominalDiffTime
     -- ^ Seconds between the end of one cycle and the start of the next.
+    , drgTargetCycleWindow :: Maybe NominalDiffTime
+    {- ^ Seconds within which an advisory is paced to reach every affected mirrored version.
+    Computed from the cycle pause when unset.
+    -}
+    , drgRequestBudgetFraction :: Maybe Rational
+    {- ^ The share of a store's request capacity one sweep may take. Computed per capacity pool
+    when unset, so a sweep cannot starve the proxy's own calls.
+    -}
+    , drgQuotaOverrides :: Map Text QuotaOverride
+    -- ^ Declared request capacity, keyed by the store URL it describes.
     , drgDeletionCap :: Maybe Int
     {- ^ Versions one cycle may hand over for deletion, computed per sweepable store when unset.
     Reaching it halts the sweep for the life of the process, so a poisoned generation stops there.
@@ -456,6 +468,19 @@ data DredgerSettings = DredgerSettings
     {- ^ Walk every package each cycle rather than the advisory and identity-deny candidates. It
     covers a rule-configuration change, and it writes one resumption marker to the store.
     -}
+    }
+    deriving stock (Eq, Show)
+
+{- | One store's declared request capacity. It supplies the capacity a backend publishes none of,
+and a shared scope joins two endpoints of one pool so the sweep paces them together.
+-}
+data QuotaOverride = QuotaOverride
+    { qoScope :: Maybe Text
+    -- ^ The capacity pool this store shares, which defaults to the store's own authority.
+    , qoQuotas :: Map QuotaDimension Rational
+    -- ^ Requests per second the pool admits, replacing the backend's own number per dimension.
+    , qoWeights :: Map RequestKind Rational
+    -- ^ What one request of a kind costs relative to the backend's own cost for it.
     }
     deriving stock (Eq, Show)
 

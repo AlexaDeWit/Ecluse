@@ -34,10 +34,10 @@ import Control.Retry (retrying)
 import Katip (KatipContext, Severity (WarningS), logFM, ls)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Async (waitSTM, withAsync)
-import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (finally, tryAny)
 import UnliftIO.MVar qualified as MVar
 
+import Ecluse.Core.Clock (waitUntilMonotonic)
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), TransportFault, tfCause, tfDetail, transportFault, transportRetryable)
 import Ecluse.Core.Queue (MirrorQueue (extendVisibility), QueueMessage (msgLease, msgReceipt), ReceiptHandle)
 import Ecluse.Core.Queue.Lease (
@@ -78,13 +78,6 @@ queueLeaseOps queue =
         , loWaitUntil = waitUntilMonotonic
         , loRetryDelays = leaseRetryDelays
         }
-
--- Re-read the clock rather than trust the caller's, so a wait can only ever be short.
-waitUntilMonotonic :: MonoTime -> IO ()
-waitUntilMonotonic target = do
-    now <- monotonicNow
-    let pause = monoSecondsBetween now target
-    when (pause > 0) (threadDelay (round (pause * 1_000_000)))
 
 {- | The renewal retry pacing: three further attempts inside about two seconds. Each delay is
 spent after the margin check, so the budget fits the fixed thirty-second SQS window alone.

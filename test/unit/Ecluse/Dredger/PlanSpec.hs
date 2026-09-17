@@ -4,6 +4,7 @@
 
 module Ecluse.Dredger.PlanSpec (spec) where
 
+import Data.Ratio ((%))
 import Data.Text qualified as T
 import Test.Hspec
 
@@ -15,7 +16,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltDeletionCap, HaltStoreFault),
     CycleOutcome (CycleOutcome, outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
     PrerequisiteStatus (PrerequisiteMet, PrerequisiteUnmet),
-    SweepPacing (swpChunkPause, swpChunkSize, swpCyclePause, swpDeletionCap, swpShape),
+    SweepPacing (swpBudgetFraction, swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
     SweepShape (SweepCandidates, SweepEverything),
     TargetPrerequisites (TargetPrerequisites),
     deletionCapPerStore,
@@ -33,6 +34,7 @@ spec :: Spec
 spec = do
     pacingSpec
     capSpec
+    windowSpec
     shapeSpec
     haltSpec
     roleSpec
@@ -61,6 +63,26 @@ capSpec = describe "the per-cycle deletion cap" $ do
         (pacing, line) <- resolvedOver 3 [("ECLUSE_DREDGER__DELETION_CAP", "10")]
         swpDeletionCap pacing `shouldBe` 10
         line `shouldSatisfy` T.isInfixOf "from config"
+
+{- The window bounds how long an advisory takes to reach every affected version. It covers the
+running cycle, the pause, and the next cycle, so its computed default is three cycle pauses. -}
+windowSpec :: Spec
+windowSpec = describe "the target cycle window" $ do
+    it "computes its default from the cycle pause" $ do
+        (pacing, lines') <- resolvedOver 1 []
+        swpCycleWindow pacing `shouldBe` 3 * swpCyclePause pacing
+        lines' `shouldSatisfy` T.isInfixOf "computed as three cycle pauses"
+
+    it "takes an operator's own window over the computed one" $ do
+        (pacing, lines') <- resolvedOver 1 [("ECLUSE_DREDGER__TARGET_CYCLE_WINDOW", "5000")]
+        swpCycleWindow pacing `shouldBe` 5000
+        lines' `shouldSatisfy` T.isInfixOf "from config"
+
+    it "leaves the budget fraction computed per capacity pool unless the operator names one" $ do
+        unset <- pacingUnder []
+        swpBudgetFraction unset `shouldBe` Nothing
+        named <- pacingUnder [("ECLUSE_DREDGER__REQUEST_BUDGET_FRACTION", "0.1")]
+        swpBudgetFraction named `shouldBe` Just (1 % 10)
 
 {- The full walk is opt-in, and while it is on it replaces the candidate cycle rather than running
 beside it, because a walk is a superset of a candidate cycle. -}
@@ -131,7 +153,7 @@ completePreview =
 pacingUnder :: [(String, String)] -> IO SweepPacing
 pacingUnder = fmap fst . resolvedOver 1
 
--- The pacing and the boot line naming where the cap came from, over a chosen store count.
+-- The pacing and the boot lines naming where each resolved bound came from, over a store count.
 resolvedOver :: Int -> [(String, String)] -> IO (SweepPacing, Text)
 resolvedOver stores overrides =
-    flip sweepPacingFor stores . configApp <$> expectConfig (staticEnvVars <> overrides) Nothing
+    second T.unlines . flip sweepPacingFor stores . configApp <$> expectConfig (staticEnvVars <> overrides) Nothing

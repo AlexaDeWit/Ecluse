@@ -24,6 +24,10 @@ module Ecluse.Core.Registry.Maintenance (
     RefillPosture (..),
     CompletionNotion (..),
 
+    -- * Counting and pacing what a handle asks of the backend
+    meteredObservation,
+    meteredMaintenance,
+
     -- * Enumeration
     StoredVersion (..),
     VersionPresence (..),
@@ -75,7 +79,7 @@ module Ecluse.Core.Registry.Maintenance (
     RetryAdvice (..),
 ) where
 
-import Data.Conduit (ConduitT, await, fuseBoth, fuseBothMaybe, runConduit, yield)
+import Data.Conduit (ConduitT, await, fuseBoth, fuseBothMaybe, fuseUpstream, runConduit, yield)
 import Data.Conduit.List qualified as CL
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -95,6 +99,11 @@ import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     UrlFormationError,
     renderUrlFormationError,
+ )
+import Ecluse.Core.Registry.Maintenance.Budget (
+    RequestGate (gateSpend),
+    RequestKind (CursorRead, CursorWrite, DeleteBatch, ListingPage, ManifestRead, PermissionRead, VersionPage),
+    StoreBudget,
  )
 import Ecluse.Core.Registry.Metadata (
     Manifest,
@@ -178,6 +187,51 @@ observationOf store =
 deletionOf :: StoreMaintenance -> StoreDeletion
 deletionOf store = StoreDeletion{dlDeleteVersions = deleteVersions store, dlCursor = storeCursor store}
 
+{- | Count and pace every request the observing calls make. A version enumeration counts as one
+request however many pages it takes, so a large package costs the backend more than was counted.
+-}
+meteredObservation :: RequestGate -> StoreObservation -> StoreObservation
+meteredObservation gate observed =
+    observed
+        { obListPackagesIn = \prefix -> obListPackagesIn observed prefix `fuseUpstream` CL.mapM counted
+        , obEnumerateVersions = \name -> spend VersionPage >> obEnumerateVersions observed name
+        , obReadManifest = \name -> spend ManifestRead >> obReadManifest observed name
+        , obVerifyConsent = spend PermissionRead >> obVerifyConsent observed
+        , obClassifyStore = spend PermissionRead >> obClassifyStore observed
+        }
+  where
+    spend = gateSpend gate
+    -- The page is counted once it arrives, so the wait falls between it and the next request.
+    counted page = spend ListingPage $> page
+
+{- | The same metering over a whole handle. A delete counts one request per batch the backend's own
+ceiling divides the versions into, whatever the batch then reports per version.
+-}
+meteredMaintenance :: RequestGate -> StoreMaintenance -> StoreMaintenance
+meteredMaintenance gate handle =
+    handle
+        { listPackagesIn = obListPackagesIn observed
+        , enumerateVersions = obEnumerateVersions observed
+        , readStoreManifest = obReadManifest observed
+        , verifyConsent = obVerifyConsent observed
+        , classifyStore = obClassifyStore observed
+        , deleteVersions = \checks name versions -> do
+            traverse_ (const (gateSpend gate DeleteBatch)) (chunksOfCeiling (factDeleteCeiling (storeFacts handle)) versions)
+            deleteVersions handle checks name versions
+        , storeCursor = meteredCursor gate <$> storeCursor handle
+        }
+  where
+    observed = meteredObservation gate (observationOf handle)
+
+-- The marker reads and writes a full walk makes, each counted as its own request.
+meteredCursor :: RequestGate -> StoreCursor -> StoreCursor
+meteredCursor gate cursor =
+    StoreCursor
+        { readCursor = gateSpend gate CursorRead >> readCursor cursor
+        , writeCursor = \prefix -> gateSpend gate CursorWrite >> writeCursor cursor prefix
+        , clearCursor = gateSpend gate CursorWrite >> clearCursor cursor
+        }
+
 -- | Backend capabilities and limits fixed for this handle's lifetime.
 data StoreFacts = StoreFacts
     { factBackend :: Text
@@ -190,6 +244,8 @@ data StoreFacts = StoreFacts
     -- ^ When a delete is finished relative to the call that asked for it.
     , factNameAlphabet :: NameAlphabet
     -- ^ The characters this store's name space is partitioned into buckets by.
+    , factBudget :: StoreBudget
+    -- ^ The request capacity this store runs under, which the sweep paces its next cycle by.
     }
     deriving stock (Eq, Show)
 

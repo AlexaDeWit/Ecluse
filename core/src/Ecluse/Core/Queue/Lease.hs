@@ -7,8 +7,8 @@ controller reads ("Ecluse.Core.Worker.Lease").
 
 A backend that hides a received message stamps each delivery with the window it granted,
 when that window lapses, and the ceiling its own protocol puts on one receipt. The
-instants are monotonic, so a wall-clock adjustment can never read as a longer lease. A
-backend that never expires a delivery supplies no lease at all.
+instants come from "Ecluse.Core.Clock" and are re-exported here, because a lease is where
+most callers meet them. A backend that never expires a delivery supplies no lease at all.
 -}
 module Ecluse.Core.Queue.Lease (
     -- * Durations
@@ -25,31 +25,13 @@ module Ecluse.Core.Queue.Lease (
     receiptLease,
 ) where
 
-import GHC.Clock (getMonotonicTime)
+import Ecluse.Core.Clock (MonoTime (MonoTime), monoAfter, monoSecondsBetween, monotonicNow)
 
 {- | A duration in whole seconds, for 'Ecluse.Core.Queue.extendVisibility'. A 'newtype', so a
 raw @Int@ of seconds cannot pass for some other count.
 -}
 newtype Seconds = Seconds Int
     deriving stock (Eq, Ord, Show)
-
-{- | A reading of the monotonic clock, in seconds from an arbitrary origin. Lease deadlines
-are measured on it, because a wall-clock step must never appear to extend one.
--}
-newtype MonoTime = MonoTime Double
-    deriving stock (Eq, Ord, Show)
-
--- | Read the monotonic clock, for a backend stamping a delivery it is about to hand over.
-monotonicNow :: IO MonoTime
-monotonicNow = MonoTime <$> getMonotonicTime
-
--- | The instant this many seconds after the given one. A negative offset reads backwards.
-monoAfter :: MonoTime -> Double -> MonoTime
-monoAfter (MonoTime at) offset = MonoTime (at + offset)
-
--- | The seconds from the first instant to the second, negative once the second has passed.
-monoSecondsBetween :: MonoTime -> MonoTime -> Double
-monoSecondsBetween (MonoTime from') (MonoTime to') = to' - from'
 
 {- | What one delivery's lease grants: the window it stays hidden for, when that window
 lapses, and the ceiling the backend holds the whole receipt under.

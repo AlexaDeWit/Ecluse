@@ -8,10 +8,13 @@ full walk resumes from the stored bucket cursor.
 -}
 module Ecluse.Core.Registry.Sweep (
     sweepCycle,
+    paceAtCeiling,
+    storeBudgets,
     withStoreRetry,
 ) where
 
 import Data.List (lookup)
+import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))
@@ -22,13 +25,22 @@ import Ecluse.Core.Registry.Maintenance (
     RetryAdvice (RetryDelayed, RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
     StoreCursor (clearCursor, readCursor, writeCursor),
-    StoreFacts (factBackend, factNameAlphabet),
+    StoreFacts (factBackend, factBudget, factNameAlphabet),
     StoreFault (faultRetry),
     StoreObservation (obClassifyStore, obEnumerateVersions, obFacts, obVerifyConsent),
     renderNamePrefix,
  )
+import Ecluse.Core.Registry.Maintenance.Budget (
+    BudgetPort (budgetClose, budgetOpen, budgetPaced),
+    CycleCost (ccRequests, ccWorkSeconds),
+    StoreBudget (bgScope),
+    narrowestBudget,
+    renderQuotaScope,
+    renderRequestTally,
+ )
 import Ecluse.Core.Registry.Sweep.Candidates (CandidateSet, candidateSet, inCandidates)
 import Ecluse.Core.Registry.Sweep.Group (boundedVersions, collectGroupBucket, groupAlphabet)
+import Ecluse.Core.Registry.Sweep.Pacing (PaceDecision (pdPace, pdScope), decidePace, renderPaceDecision)
 import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltBucketUnsplittable, HaltConsentWithheld, HaltStoreFault, HaltStorePreserved),
@@ -38,7 +50,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepExecution (SweepCounts, SweepRemoves),
     SweepMount (smConfigured, smEcosystem, smProjectName, smRuleDeps, smStore),
     SweepPacing (swpChunkPause, swpChunkSize, swpShape),
-    SweepPorts (sweepAudit, sweepDelay, sweepNow),
+    SweepPorts (sweepAudit, sweepBudget, sweepDelay, sweepNow),
     SweepShape (SweepEverything),
     SweepState,
     SweepStore (ssExecute, ssObserve, ssVersionLimit),
@@ -76,6 +88,7 @@ for one is a fact about the deployment rather than about one package.
 -}
 sweepCycle :: SweepPacing -> SweepPorts -> [SweepMount] -> IO CycleOutcome
 sweepCycle pacing ports mounts = do
+    budgetOpen (sweepBudget ports)
     counters <- newSweepState
     halt <- stepUntilHalt (sweepMount pacing ports counters) mounts
     outcome <-
@@ -84,7 +97,44 @@ sweepCycle pacing ports mounts = do
             <*> (reverse <$> readIORef (stPrerequisites counters))
             <*> readIORef (stEvidence counters)
     reportCycle ports outcome
+    paceNextCycle pacing ports mounts outcome
     pure outcome
+
+{- | Hold every scope to its ceiling before any cycle has measured one. A Dredger whose every
+cycle halts never reaches the measured decision, so this is where its rate comes from.
+-}
+paceAtCeiling :: SweepPacing -> SweepPorts -> [SweepMount] -> IO ()
+paceAtCeiling pacing ports mounts =
+    budgetPaced (sweepBudget ports) (Map.fromList [(pdScope decision, pdPace decision) | decision <- decisions])
+  where
+    decisions = [decidePace pacing budget Nothing | budget <- storeBudgets mounts]
+
+{- Pace the next cycle from what this one measured. A halted cycle read part of the store, so its
+counts are discarded rather than allowed to replace a complete sample's pace. -}
+paceNextCycle :: SweepPacing -> SweepPorts -> [SweepMount] -> CycleOutcome -> IO ()
+paceNextCycle pacing ports mounts outcome = do
+    cost <- budgetClose (sweepBudget ports)
+    unless (isJust (outcomeHalt outcome)) $ do
+        traverse_ (auditInfo (sweepAudit ports) . renderMeasured) (Map.toAscList (ccRequests cost))
+        let decisions = [decidePace pacing budget (sampleOf cost budget) | budget <- storeBudgets mounts]
+        traverse_ (traverse_ (auditWarn (sweepAudit ports)) . renderPaceDecision pacing) decisions
+        budgetPaced (sweepBudget ports) (Map.fromList [(pdScope decision, pdPace decision) | decision <- decisions])
+  where
+    sampleOf cost budget = (,ccWorkSeconds cost) <$> Map.lookup (bgScope budget) (ccRequests cost)
+    renderMeasured (scope, tally) =
+        "this cycle asked " <> renderQuotaScope scope <> " for " <> renderRequestTally tally
+
+{- | Each distinct capacity pool the cycle's stores share. Two stores that landed in one pool are
+paced by the narrower of what each claims, never by whichever the fold read last.
+-}
+storeBudgets :: [SweepMount] -> [StoreBudget]
+storeBudgets mounts =
+    Map.elems (Map.fromListWith narrowestBudget [(bgScope budget, budget) | mount <- mounts, budget <- budgetsOf mount])
+  where
+    budgetsOf mount =
+        [ factBudget (obFacts (ssObserve store))
+        | store <- [smStore mount, privateStore (smStore mount)]
+        ]
 
 {- What a real sweep of each target still needs, above the counts, then what the cycle did and what
 it could not read. The two never merge: a complete count is not a permission to delete. -}

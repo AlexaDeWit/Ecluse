@@ -14,6 +14,7 @@ module Ecluse.Core.Registry.Maintenance.Protocol (
 ) where
 
 import Data.Conduit (ConduitT, yield)
+import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
@@ -60,6 +61,12 @@ import Ecluse.Core.Registry.Maintenance (
     storeFaultOfFetch,
     storeRefusal,
     unformableFault,
+ )
+import Ecluse.Core.Registry.Maintenance.Budget (
+    QuotaDimension (StoreRequests),
+    StoreBudget (bgCosts),
+    requestKinds,
+    undeclaredBudget,
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Registry.Publish (PublishCodec (pcParseVersionList, pcProbeRequest))
@@ -132,7 +139,14 @@ protocolFacts backend =
         , factRefill = RefillPermitted
         , factCompletion = CompletesOnCall
         , factNameAlphabet = noNameAlphabet
+        , factBudget = protocolBudget
         }
+
+{- A protocol-only store publishes no account quota, so its capacity stays undeclared until an
+operator declares one. Every call it makes debits the one undivided request dimension. -}
+protocolBudget :: StoreBudget
+protocolBudget =
+    undeclaredBudget{bgCosts = Map.fromList [(kind, Map.singleton StoreRequests 1) | kind <- requestKinds]}
 
 {- The delete edit addresses the document revision it was formed from, and applying one changes
 that revision, so a batch of two would send the second against a revision that no longer exists. -}

@@ -28,6 +28,7 @@ import Ecluse.Config (
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Security (authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (displayExceptionT)
 
@@ -125,6 +126,10 @@ data BootError
       with, carrying why.
       -}
       StoreMaintenanceUnavailable Ecosystem StoreMaintenanceReason
+    | {- | Two @dredger.quotaOverrides@ entries declare the same capacity pool differently,
+      carried as the pool and the two keys that define it.
+      -}
+      DredgerQuotaScopeConflict Text Text Text
     | {- | The configured pause between sweep chunks is beneath its floor, carried beside it.
       Only the deleting role reads the @dredger@ group, so only that role refuses.
       -}
@@ -165,6 +170,10 @@ data Advisory
       MirrorTargetOnPrivateUpstream Ecosystem Ecosystem RegistryUrl
     | -- | A mount's mirror target is also its own publication target, at the carried registry.
       MirrorTargetOnOwnPublicationTarget Ecosystem RegistryUrl
+    | {- | A @dredger.quotaOverrides@ entry names a store no mount declares, carried as the key it
+      was written under.
+      -}
+      DredgerQuotaOverrideUnmatched Text
     deriving stock (Eq, Show)
 
 {- | Fold a thrown fault into the boot error the caller names, so a phase that dials a live
@@ -295,6 +304,14 @@ renderBootError = \case
             <> " has no usable store maintenance backend: "
             <> renderStoreMaintenanceReason eco reason
             <> " (the Dredger deletes from every mount's mirror target, so it refuses rather than starting against a store it cannot sweep)"
+    DredgerQuotaScopeConflict scope oneKey otherKey ->
+        "dredger.quotaOverrides: "
+            <> authorityLabel oneKey
+            <> " and "
+            <> authorityLabel otherKey
+            <> " both define the capacity pool \""
+            <> scopeLabel scope
+            <> "\" and define it differently: one pool takes one definition, so give the two entries the same quotas and weights or separate scopes"
     DredgerChunkPauseBeneathFloor configured floorPause ->
         "ECLUSE_DREDGER__CHUNK_PAUSE (dredger.chunkPause) is "
             <> show configured
@@ -336,6 +353,10 @@ renderAdvisory = \case
         mirrorCollapseLine eco (endpointRef eco other "privateUpstream") url
     MirrorTargetOnOwnPublicationTarget eco url ->
         mirrorCollapseLine eco "publicationTarget" url
+    DredgerQuotaOverrideUnmatched key ->
+        "dredger.quotaOverrides: "
+            <> authorityLabel key
+            <> " names no store this deployment declares, so it paces nothing"
 
 -- The line both mirror collapses take: the collapsed pair, the registry they share, and the
 -- consequence of keeping the configuration.
@@ -348,6 +369,13 @@ mirrorCollapseLine eco otherRef url =
         <> " resolve to the same registry ("
         <> registryUrlText url
         <> "); the Dredger refuses this configuration, so pruning this mirror stays manual"
+
+{- A pool as a line names it: the operator's own label, reduced to its authority where they spelled
+a URL, so a credential written into a scope never reaches a log line. -}
+scopeLabel :: Text -> Text
+scopeLabel raw
+    | "://" `T.isInfixOf` raw = authorityLabel raw
+    | otherwise = raw
 
 -- A neighbouring mount's endpoint is named by its mount. The subject's own is not.
 endpointRef :: Ecosystem -> Ecosystem -> Text -> Text

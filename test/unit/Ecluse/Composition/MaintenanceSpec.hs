@@ -17,12 +17,15 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Maintenance (
+    BudgetPorts (BudgetPorts, bpGateFor, bpNominalPace, bpOverrides),
     ClearedBackend (cbAlphabet, cbFetchManifest),
     ResolveMaintenanceAdapter,
     StorePorts (..),
     buildStoreMaintenance,
     buildStoreObservation,
     planStoreMaintenance,
+    resolvedBudget,
+    storeScope,
     vetPrivateCaches,
     vetStoreBackends,
  )
@@ -47,6 +50,7 @@ import Ecluse.Config (
     Config (configApp, configMounts),
     ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
     MountMap,
+    QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights),
     StoreBackend,
     StoreTag (TagVerdaccio),
     sbControl,
@@ -72,6 +76,16 @@ import Ecluse.Core.Registry.Maintenance (
     StoreObservation (obFacts, obVerifyConsent),
     noNameAlphabet,
  )
+import Ecluse.Core.Registry.Maintenance.Budget (
+    QuotaDimension (StoreRequests),
+    QuotaOrigin (QuotaDeclared, QuotaDerived),
+    RequestGate (RequestGate, gateSpend),
+    RequestKind (CursorWrite, DeleteBatch, ListingPage),
+    StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope),
+    mkQuotaScope,
+    requestKinds,
+    undeclaredBudget,
+ )
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Security (defaultLimits)
@@ -89,6 +103,7 @@ spec = do
     buildSpec
     planSpec
     previewCachesSpec
+    budgetSpec
 
 {- Both issuers at the boundary their refusals draw: a store a pass refused reaches no handle at
 all, because every cleared value in the map below came from the pass that returned it. -}
@@ -250,7 +265,21 @@ protocolHandleFor role permitDeletion = do
 {- The ports a handle is built over when no live process supplies them: a passthrough tracing
 port, and no credential, which the store's origin then presents none of. -}
 anonymousPorts :: StorePorts
-anonymousPorts = StorePorts{spTracing = passthroughTracingPort, spCredential = Nothing}
+anonymousPorts =
+    StorePorts
+        { spTracing = passthroughTracingPort
+        , spCredential = Nothing
+        , spBudget = unpacedBudget
+        }
+
+{- Ports that count nothing and wait for nothing, for the cases about the handles a boot builds
+rather than the rate they run at. -}
+unpacedBudget :: BudgetPorts
+unpacedBudget =
+    BudgetPorts{bpGateFor = const ungatedRequests, bpOverrides = Map.empty, bpNominalPace = testNominalPace}
+
+ungatedRequests :: RequestGate
+ungatedRequests = RequestGate{gateSpend = const pass}
 
 aPackage :: PackageName
 aPackage = unscopedNpm "leftpad"
@@ -278,6 +307,7 @@ planSpec = describe "planStoreMaintenance" $ do
             planStoreMaintenance
                 (\_ _ _ -> fakeMaintenance <$> newFakeStore defaultFakeStoreConfig)
                 passthroughTracingPort
+                unpacedBudget
                 noCredentialProviders
                 defaultLimits
                 backends
@@ -290,6 +320,7 @@ planSpec = describe "planStoreMaintenance" $ do
             planStoreMaintenance
                 (\_ _ _ -> throwIO NoStoreClient)
                 passthroughTracingPort
+                unpacedBudget
                 noCredentialProviders
                 defaultLimits
                 backends
@@ -483,3 +514,49 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
 
 withoutPrivateAuthority :: [(String, String)] -> [(String, String)]
 withoutPrivateAuthority = filter (\(key, _) -> key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN" && key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION")
+
+{- A store's capacity pool is its own authority, and a CodeArtifact repository's is the account
+and Region that meters it. A backend publishing no quota is derived one from the sweep's own pace. -}
+budgetSpec :: Spec
+budgetSpec = describe "the request capacity a boot resolves for a store" $ do
+    it "puts two paths on one host in the same pool" $
+        storeScope (unsafeRegistryUrl "https://verdaccio.example.com/one/")
+            `shouldBe` storeScope (unsafeRegistryUrl "https://verdaccio.example.com/two/")
+
+    it "derives a backend that publishes no quota from the sweep's own package pace" $ do
+        let resolved = resolvedBudget unpacedBudget verdaccio undeclaredBudget
+        bgQuotas resolved `shouldBe` Map.singleton StoreRequests testNominalPace
+        bgOrigin resolved `shouldBe` QuotaDerived
+        bgScope resolved `shouldBe` mkQuotaScope "verdaccio.example.com:443"
+
+    it "takes an operator's declared capacity, matching the URL past case and a trailing slash" $ do
+        let resolved = resolvedBudget (overriding "HTTPS://Verdaccio.Example.com" capacity) verdaccio undeclaredBudget
+        bgQuotas resolved `shouldBe` Map.singleton StoreRequests 100
+        bgOrigin resolved `shouldBe` QuotaDeclared
+
+    it "joins two endpoints of one pool under the scope the operator declared" $
+        bgScope (resolvedBudget (overriding key capacity{qoScope = Just "shared"}) verdaccio undeclaredBudget)
+            `shouldBe` mkQuotaScope "shared"
+
+    it "scales a request kind the backend costs by the weight the operator gave it" $ do
+        let weighted = capacity{qoWeights = Map.singleton DeleteBatch 3}
+            resolved = resolvedBudget (overriding key weighted) verdaccio protocolCosts
+        Map.lookup DeleteBatch (bgCosts resolved) `shouldBe` Just (Map.singleton StoreRequests 3)
+        Map.lookup ListingPage (bgCosts resolved) `shouldBe` Just (Map.singleton StoreRequests 1)
+
+    it "leaves a weight naming a kind the backend costs nothing under with nothing to scale" $ do
+        let weighted = capacity{qoWeights = Map.singleton CursorWrite 5}
+            resolved = resolvedBudget (overriding key weighted) verdaccio noCursorCost
+        Map.lookup CursorWrite (bgCosts resolved) `shouldBe` Nothing
+        bgCosts resolved `shouldBe` bgCosts noCursorCost
+  where
+    key = "https://verdaccio.example.com/"
+    verdaccio = unsafeRegistryUrl key
+    overriding declaredKey override = unpacedBudget{bpOverrides = Map.singleton declaredKey override}
+    capacity = QuotaOverride{qoScope = Nothing, qoQuotas = Map.singleton StoreRequests 100, qoWeights = Map.empty}
+    protocolCosts = undeclaredBudget{bgCosts = Map.fromList [(kind, Map.singleton StoreRequests 1) | kind <- requestKinds]}
+    noCursorCost = undeclaredBudget{bgCosts = Map.singleton ListingPage (Map.singleton StoreRequests 1)}
+
+-- Twenty-five requests a second: the shipped chunk of fifty every two seconds.
+testNominalPace :: Rational
+testNominalPace = 25

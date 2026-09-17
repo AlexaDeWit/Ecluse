@@ -13,7 +13,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
 import Data.IP (IPRange)
 import Data.Map.Strict qualified as Map
-import Data.Scientific (toBoundedInteger)
+import Data.Scientific (Scientific, base10Exponent, toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 
@@ -25,6 +25,7 @@ import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName, parseEcosystem)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
+import Ecluse.Core.Registry.Maintenance.Budget (parseQuotaDimension, parseRequestKind)
 import Ecluse.Core.Registry.Npm.Project (projectScope)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty, projectFirstPartyEntry)
 import Ecluse.Core.Security (parseBlockedRange)
@@ -208,8 +209,39 @@ dredgerDecoder =
         <$> requiredKey "chunkSize" parsePositiveInt
         <*> requiredKey "chunkPause" parseDelaySeconds
         <*> requiredKey "cyclePause" parseDelaySeconds
+        <*> optionalKey "targetCycleWindow" parseDelaySeconds
+        <*> optionalKey "requestBudgetFraction" parseUnitFraction
+        <*> nestedKey "quotaOverrides" parseQuotaOverrides
         <*> optionalKey "deletionCap" parsePositiveInt
         <*> plainKey "fullWalk"
+
+{- | Parse each declared store capacity. The key is the store URL the entry describes, kept as
+written so the boot can match it against the endpoints the mounts declare.
+-}
+parseQuotaOverrides :: KeyMap.KeyMap Value -> Parser (Map.Map Text QuotaOverride)
+parseQuotaOverrides km = Map.fromList <$> traverse parseQuotaOverrideEntry (KeyMap.toList km)
+
+parseQuotaOverrideEntry :: (Key.Key, Value) -> Parser (Text, QuotaOverride)
+parseQuotaOverrideEntry (k, v) =
+    (Key.toText k,) <$> withObject "QuotaOverride" (decodeBareGroup entryPath (quotaOverrideDecoder entryPath)) v
+  where
+    entryPath = "dredger.quotaOverrides." <> Key.toString k
+
+quotaOverrideDecoder :: String -> GroupDecoder QuotaOverride
+quotaOverrideDecoder entryPath =
+    QuotaOverride
+        <$> optionalKey "scope" (`expectString` pure)
+        <*> nestedKey "quotas" (parseRates entryPath parseQuotaDimension "quota dimension")
+        <*> nestedKey "requestWeights" (parseRates entryPath parseRequestKind "request kind")
+
+{- Every entry under one map of positive rates, keyed by a name this build meters under. An
+unknown name fails the load, because a rate nothing reads would silently pace nothing. -}
+parseRates :: (Ord key) => String -> (Text -> Maybe key) -> String -> KeyMap.KeyMap Value -> Parser (Map.Map key Rational)
+parseRates entryPath readKey subject km = Map.fromList <$> traverse rate (KeyMap.toList km)
+  where
+    rate (k, v) = case readKey (Key.toText k) of
+        Nothing -> fail (entryPath <> ": " <> Key.toString k <> " is not a " <> subject <> " this build meters")
+        Just metered -> (metered,) <$> parsePositiveRate (entryPath <> "." <> Key.toString k) v
 
 {- | Parse the per-ecosystem quiet-time thresholds. The key is the ecosystem, spelled as a
 mounts key is, so an unknown one fails the load rather than configuring nothing.
@@ -281,6 +313,32 @@ parseBlockedRangeEntry entry =
     case parseBlockedRange entry of
         Just range -> pure range
         Nothing -> fail ("invalid CIDR range in additionalBlockedRanges: " <> T.unpack entry)
+
+{- | Parse a rate as a positive rational. A rate of zero admits no request at all, so it is
+refused rather than read as a store that may never be swept.
+-}
+parsePositiveRate :: String -> Value -> Parser Rational
+parsePositiveRate field value = case value of
+    Number n | Just rate <- boundedRational n, rate > 0 -> pure rate
+    _ -> fail (field <> " must be a positive number written within nine decimal places")
+
+{- | Parse a share of a capacity: a number above zero and below one. Neither end is a share, so
+both are refused rather than read as a sweep that stops or one that takes the whole store.
+-}
+parseUnitFraction :: String -> Value -> Parser Rational
+parseUnitFraction field value = case value of
+    Number n | Just share <- boundedRational n, share > 0, share < 1 -> pure share
+    _ -> fail (field <> " must be a number above 0 and below 1")
+
+-- The exponent is bounded before the rational is realised, so a 1e999999999 is refused rather
+-- than expanded.
+boundedRational :: Scientific -> Maybe Rational
+boundedRational n
+    | base10Exponent n > rationalExponentBound || base10Exponent n < negate rationalExponentBound = Nothing
+    | otherwise = Just (toRational n)
+
+rationalExponentBound :: Int
+rationalExponentBound = 9
 
 parseSeconds :: String -> Value -> Parser NominalDiffTime
 parseSeconds field = \case

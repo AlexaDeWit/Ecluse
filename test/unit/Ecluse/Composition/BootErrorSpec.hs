@@ -9,7 +9,7 @@ import Data.Text.Encoding qualified as TE
 import Test.Hspec
 
 import Ecluse.Composition.BootError (
-    Advisory (MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream),
+    Advisory (DredgerQuotaOverrideUnmatched, MirrorTargetOnOwnPublicationTarget, MirrorTargetOnPrivateUpstream),
     BootError (..),
     StoreMaintenanceReason (ClientBuildFailed, NoControlPlane),
     renderAdvisory,
@@ -129,6 +129,10 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "ECLUSE_DREDGER__CHUNK_PAUSE (dredger.chunkPause) is 1s, beneath the floor of 2s"
         renderBootError (DredgerChunkPauseBeneathFloor 1 2)
             `shouldSatisfy` infixed "may be raised and never lowered"
+        renderBootError (DredgerQuotaScopeConflict "shared" "https://one.example.test/" "https://two.example.test/")
+            `shouldSatisfy` infixed "one.example.test:443 and two.example.test:443 both define the capacity pool \"shared\""
+        renderBootError (DredgerQuotaScopeConflict "shared" "https://one.example.test/" "https://two.example.test/")
+            `shouldSatisfy` infixed "give the two entries the same quotas and weights or separate scopes"
         renderBootError PilotWithoutEcosystem
             `shouldSatisfy` infixed "ECLUSE_ADVISORIES__URL is set but no mount is declared"
         renderBootError PilotWithoutEcosystem
@@ -159,5 +163,9 @@ renderAdvisorySpec = describe "renderAdvisory" $ do
     it "quotes the mirror target as configured, trailing slash included" $
         advisoryBytes (MirrorTargetOnOwnPublicationTarget Npm (unsafeRegistryUrl "https://store.example.test/npm/mirror/"))
             `shouldBe` "mount \"npm\": mirrorTarget and publicationTarget resolve to the same registry (https://store.example.test/npm/mirror/); the Dredger refuses this configuration, so pruning this mirror stays manual"
+
+    it "reduces a declared capacity that names no store to its dialled authority, and says it paces nothing" $
+        advisoryBytes (DredgerQuotaOverrideUnmatched "https://deploy:hunter2@gone.example.test/npm/")
+            `shouldBe` "dredger.quotaOverrides: gone.example.test:443 names no store this deployment declares, so it paces nothing"
   where
     advisoryBytes = TE.encodeUtf8 . renderAdvisory

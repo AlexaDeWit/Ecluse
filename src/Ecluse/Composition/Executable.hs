@@ -14,7 +14,7 @@ module Ecluse.Composition.Executable (
     ExecutablePlan (epBootPlan, epRoleWiring),
     RoleWiring (..),
     MirrorWiring (mwRole, mwBootWiring, mwCveSync, mwQueue, mwDeferredMetrics),
-    PrunerWiring (pwMounts, pwCveSync, pwDeferredMetrics),
+    PrunerWiring (pwBudget, pwCveSync, pwDeferredMetrics, pwMounts),
     BuildMirrorQueue,
     BuildCredentials,
     planExecutable,
@@ -41,6 +41,7 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Credential (BuildCredentials, CredentialTarget (..), mirrorBackends, noCredentialProviders, providerLabel)
 import Ecluse.Composition.Maintenance (
+    BudgetPorts (BudgetPorts, bpGateFor, bpNominalPace, bpOverrides),
     ClearedBackend (cbUrl),
     StoreBuilds (sbDeleting, sbObserving),
     StorePorts,
@@ -67,13 +68,16 @@ import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPrivateCaches, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
  )
-import Ecluse.Config (AppConfig (cfgAdvisories), Mount (mountPolicy), MountConfig (mntFirstParty), StoreTag, mountAdvisoryAge, mountDatabaseRequirement, mountEpssRequirement)
+import Ecluse.Config (AppConfig (cfgAdvisories, cfgDredger), DredgerSettings (drgChunkPause, drgChunkSize, drgQuotaOverrides), Mount (mountPolicy), MountConfig (mntFirstParty), StoreTag, mountAdvisoryAge, mountDatabaseRequirement, mountEpssRequirement)
+import Ecluse.Core.Clock (waitSeconds)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Registry.Adapter (ProjectName, adapterProjectName)
 import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend), StoreObservation (obFacts))
+import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort, newBudgetMeter)
+import Ecluse.Core.Registry.Sweep.Pacing (nominalPackagePace)
 import Ecluse.Core.Registry.Sweep.Types (SweepCache (..), SweepMount (..), SweepStore, deletingCache, pairedStore, previewCache)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule)
@@ -142,6 +146,10 @@ data PrunerWiring = PrunerWiring
     {- ^ The metric handle the credential providers and the sweep's rule breakers already record
     through. The role makes those recordings live once the instruments exist.
     -}
+    , pwBudget :: BudgetPort
+    {- ^ The cycle's end of the request budget every store handle above was built against, so the
+    sweep reads what a cycle cost and installs the next one's rate.
+    -}
     }
 
 {- | How a boot builds the selected mirror-queue backend. Injected, as the adapter resolver is,
@@ -189,10 +197,19 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     credentials <- buildCredentials (credentialReportersOver deferredMetrics) credentialBackends
+    -- 'waitSeconds' keeps the sub-second part: every pace this budget produces is well under one.
+    (budgetPort, gateFor) <- newBudgetMeter waitSeconds
+    let budget =
+            BudgetPorts
+                { bpGateFor = gateFor
+                , bpOverrides = drgQuotaOverrides dredger
+                , bpNominalPace = nominalPackagePace (drgChunkSize dredger) (drgChunkPause dredger)
+                }
     stores <-
         planStoreMaintenance
             buildStore
             tracing
+            budget
             (fromRight noCredentialProviders credentials)
             (bpLimits bootPlan)
             (vpMirrorStores validated)
@@ -201,6 +218,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
             PrivateCacheCredential
             buildStore
             tracing
+            budget
             (fromRight noCredentialProviders credentials)
             (bpLimits bootPlan)
             (Map.map snd (vpPrivateCaches validated))
@@ -213,13 +231,14 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
                 (katipFaultReporter logEnv)
     policies <- Map.fromList <$> traverse (sweepPolicyFor ruleDepsFor) (vpMounts validated)
     pure . validationToEither $
-        prunerWiringFrom deferredMetrics policies
+        prunerWiringFrom deferredMetrics budgetPort policies
             <$> eitherToValidation cveSync
             <* eitherToValidation credentials
             <*> eitherToValidation (stores >>= pairEach (fromRight mempty caches))
             <* eitherToValidation caches
   where
     validated = bpValidated bootPlan
+    dredger = cfgDredger (vpSettings validated)
     prunerMounts = map vmMount (vpMounts validated)
     credentialBackends =
         [((eco, MirrorCredential), backend) | (eco, backend) <- mirrorBackends prunerMounts]
@@ -278,11 +297,12 @@ data SweepPolicy = SweepPolicy
 target reaches the store map, so a store with no policy cannot arise. -}
 prunerWiringFrom ::
     DeferredMetrics ->
+    BudgetPort ->
     Map Ecosystem SweepPolicy ->
     Map Ecosystem CveSyncHandle ->
     Map Ecosystem SweepStore ->
     PrunerWiring
-prunerWiringFrom deferredMetrics policies cveSync stores =
+prunerWiringFrom deferredMetrics budgetPort policies cveSync stores =
     PrunerWiring
         { pwMounts =
             [ SweepMount
@@ -299,6 +319,7 @@ prunerWiringFrom deferredMetrics policies cveSync stores =
             ]
         , pwCveSync = cveSync
         , pwDeferredMetrics = deferredMetrics
+        , pwBudget = budgetPort
         }
 
 {- The Pilot publishes one artifact per vetted mount, so a configured store with no mount leaves

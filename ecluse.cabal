@@ -86,6 +86,7 @@ library ecluse-core
   exposed-modules:
     Ecluse.Core.Breaker
     Ecluse.Core.BuildIdentity
+    Ecluse.Core.Clock
     Ecluse.Core.Credential
     Ecluse.Core.Credential.Refresh
     Ecluse.Core.Credential.Refresh.Internal
@@ -127,6 +128,7 @@ library ecluse-core
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Maintenance
+    Ecluse.Core.Registry.Maintenance.Budget
     Ecluse.Core.Registry.Maintenance.Protocol
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Metadata.Projection
@@ -149,6 +151,7 @@ library ecluse-core
     Ecluse.Core.Registry.Sweep.Candidates
     Ecluse.Core.Registry.Sweep.Deletion
     Ecluse.Core.Registry.Sweep.Group
+    Ecluse.Core.Registry.Sweep.Pacing
     Ecluse.Core.Registry.Sweep.Package
     Ecluse.Core.Registry.Sweep.Types
     Ecluse.Core.Registry.Sweep.Walk
@@ -688,6 +691,7 @@ test-suite ecluse-core-unit
   other-modules:
     Ecluse.Core.BreakerSpec
     Ecluse.Core.BuildIdentitySpec
+    Ecluse.Core.ClockSpec
     Ecluse.Core.Credential.Refresh.InternalSpec
     Ecluse.Core.CredentialSpec
     Ecluse.Core.Cve.AcceptanceSpec
@@ -720,11 +724,13 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.AdapterSpec
     Ecluse.Core.Registry.CachedDocumentSpec
     Ecluse.Core.Registry.ExchangeSpec
+    Ecluse.Core.Registry.Maintenance.BudgetSpec
     Ecluse.Core.Registry.Maintenance.ProtocolSpec
     Ecluse.Core.Registry.MaintenanceSpec
     Ecluse.Core.Registry.Sweep.CandidatesSpec
     Ecluse.Core.Registry.Sweep.DeletionSpec
     Ecluse.Core.Registry.Sweep.GroupSpec
+    Ecluse.Core.Registry.Sweep.PacingSpec
     Ecluse.Core.Registry.Sweep.PackageSpec
     Ecluse.Core.Registry.Sweep.TypesSpec
     Ecluse.Core.Registry.Sweep.WalkSpec

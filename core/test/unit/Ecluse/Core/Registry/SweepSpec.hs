@@ -21,35 +21,50 @@ import Ecluse.Core.Registry.Maintenance (
     RetryAdvice (RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
     StoreCursor (writeCursor),
-    StoreFacts (factNameAlphabet),
+    StoreFacts (factBudget, factNameAlphabet),
     StoreFault (StoreFault, faultRetry, faultTransport),
     StoreMaintenance (classifyStore, enumerateVersions, listPackagesIn, readStoreManifest, storeCursor, verifyConsent),
     StoreObservation (obVerifyConsent),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
     inBucket,
+    meteredMaintenance,
     mkNameAlphabet,
     protocolFault,
     renderNamePrefix,
     storedVersion,
  )
-import Ecluse.Core.Registry.Sweep (sweepCycle, withStoreRetry)
+import Ecluse.Core.Registry.Maintenance.Budget (
+    QuotaDimension (StoreRequests),
+    QuotaOrigin (QuotaDeclared),
+    QuotaScope,
+    RequestGate (gateSpend),
+    RequestKind (ListingPage, PermissionRead),
+    RequestTally,
+    StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope),
+    mkQuotaScope,
+    requestKinds,
+    tallyCounts,
+    undeclaredBudget,
+ )
+import Ecluse.Core.Registry.Sweep (paceAtCeiling, storeBudgets, sweepCycle, withStoreRetry)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltConsentWithheld, HaltDeletionCap, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
-    EvidenceGaps (gapAdvisoryGeneration),
+    EvidenceGaps (gapAdvisoryGeneration, gapManifests),
     PrerequisiteStatus (PrerequisiteMet, PrerequisiteUnmet, PrerequisiteUnread),
     SweepMount (smConfigured, smFirstParty, smRuleDeps),
-    SweepPacing (swpChunkPause, swpChunkSize, swpDeletionCap, swpShape),
+    SweepPacing (swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
     SweepPorts (sweepDelay),
     SweepShape (SweepCandidates, SweepEverything),
     SweepTally (tallyDeleted, tallyExamined, tallyGuardSkipped, tallyKept),
     TargetPrerequisites (tpClassification, tpConsent),
+    deletingCache,
     outcomeComplete,
     prerequisitesMet,
  )
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup), prepare)
-import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny), Rule (AllowIfRemediatesCve, DenyByIdentity, DenyIfCve, DenyIfEpss))
+import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny, FailNoDecision), Rule (AllowIfRemediatesCve, DenyByIdentity, DenyIfCve, DenyIfEpss))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
 import Ecluse.Test.Maintenance (
@@ -69,6 +84,7 @@ import Ecluse.Test.Sweep (
     recordingPortsUnder,
     testMount,
     testPacing,
+    withPrivateCache,
  )
 
 spec :: Spec
@@ -78,6 +94,7 @@ spec = do
     retrySpec
     candidateCycleSpec
     fullWalkSpec
+    budgetSpec
     epssSpec
     pacingSpec
     generationSpec
@@ -416,6 +433,97 @@ recordingCursor handle = do
     let recorded cursor =
             cursor{writeCursor = \prefix -> modifyIORef' written (prefix :) >> writeCursor cursor prefix}
     pure (reverse <$> readIORef written, handle{storeCursor = recorded <$> storeCursor handle})
+
+{- The cycle measures what it asked of each store, and paces the next one to land inside the target
+window. A window the measurement cannot reach warns and leaves the sweep at its ceiling. -}
+budgetSpec :: Spec
+budgetSpec = describe "the cycle request budget" $ do
+    it "counts what the cycle asked of the store it swept" $ do
+        (rec', _) <- meteredCycle testPacing
+        counted <- Map.lookup pacedScope <$> recRequests rec'
+        fmap (`kinds` ListingPage) counted `shouldBe` Just 1
+        -- Consent and classification are read again per target, so the grouped pair costs four.
+        fmap (`kinds` PermissionRead) counted `shouldBe` Just 4
+
+    it "says nothing about a window the measured cycle fits" $ do
+        (rec', _) <- meteredCycle testPacing
+        filter (T.isInfixOf "target cycle window") <$> recWarnings rec' `shouldReturn` []
+
+    it "keeps a package whose metadata read faulted, now that no replay repairs it below" $ do
+        store <- newFakeStore seededConfig
+        rec' <- recordingPorts generation
+        prepared <- prepare inertRuleDeps [atDefaultPrecedence needsManifest]
+        let faulting handle = handle{readStoreManifest = const (pure (Left unansweredRead))}
+        outcome <- sweepCycle testPacing (recPorts rec') [testMount (faulting (fakeMaintenance store)) prepared [pinsName]]
+        contents <- readFakeContents store
+        tallyDeleted (outcomeTally outcome) `shouldBe` 0
+        map storedVersion (Map.findWithDefault [] (packageName "left-pad") contents) `shouldBe` [version "1.0.0"]
+        gapManifests (outcomeEvidence outcome) `shouldSatisfy` (> 0)
+
+    it "paces two stores that landed in one pool by the narrower of what each claims" $ do
+        store <- newFakeStore seededConfig{fakeFacts = pacedFacts}
+        cache <- newFakeStore seededConfig{fakeFacts = pacedFacts{factBudget = pacedBudget{bgQuotas = Map.singleton StoreRequests 4}}}
+        let mount = withPrivateCache (deletingCache (fakeMaintenance cache)) (testMount (fakeMaintenance store) [denyRule] [])
+        map bgQuotas (storeBudgets [mount]) `shouldBe` [Map.singleton StoreRequests 4]
+
+    it "holds the first cycle to its ceiling before anything has measured one" $ do
+        store <- newFakeStore seededConfig{fakeFacts = pacedFacts}
+        rec' <- recordingPorts generation
+        paceAtCeiling testPacing (recPorts rec') [testMount (fakeMaintenance store) [denyRule] []]
+        gateSpend (recGateFor rec' pacedScope) ListingPage
+        -- Ten requests a second at half the pool: one fifth of a second each.
+        recBudgetWaits rec' `shouldReturn` [0.2]
+
+    it "warns and stays at its ceiling when the window cannot be reached" $ do
+        (rec', _) <- meteredCycle testPacing{swpCycleWindow = swpCyclePause testPacing}
+        warned <- filter (T.isInfixOf "target cycle window") <$> recWarnings rec'
+        warned `shouldSatisfy` any (T.isInfixOf "runs on at that ceiling")
+
+{- One cycle over a store whose capacity the operator declared, with every request it makes passing
+through the meter the ports read back. -}
+meteredCycle :: SweepPacing -> IO (RecordedSweep, CycleOutcome)
+meteredCycle pacing = do
+    store <- newFakeStore seededConfig{fakeFacts = pacedFacts}
+    rec' <- recordingPorts generation
+    let handle = meteredMaintenance (recGateFor rec' pacedScope) (fakeMaintenance store)
+    outcome <- sweepCycle pacing (recPorts rec') [testMount handle [denyRule] []]
+    pure (rec', outcome)
+
+{- A retryable transport fault on the store's own metadata read. A single-attempt maintenance
+manager no longer repairs one below the sweep, so it reaches the store-fault policy as a value. -}
+unansweredRead :: StoreFault
+unansweredRead =
+    StoreFault
+        { faultTransport = transportFault TransportTimeout "the store did not answer the metadata read"
+        , faultRetry = RetryWorthwhile
+        }
+
+-- An identity deny on the package alone, which pins its name into the candidate set.
+pinsName :: Rule
+pinsName = DenyByIdentity "left-pad"
+
+-- A rule that decides on more than identity, so a metadata read it never gets leaves it abstaining.
+needsManifest :: Rule
+needsManifest = DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)
+
+pacedFacts :: StoreFacts
+pacedFacts = (fakeFacts defaultFakeStoreConfig){factBudget = pacedBudget}
+
+-- A store whose operator declared ten requests a second, which is capacity enough to pace against.
+pacedBudget :: StoreBudget
+pacedBudget =
+    undeclaredBudget
+        { bgScope = pacedScope
+        , bgQuotas = Map.singleton StoreRequests 10
+        , bgOrigin = QuotaDeclared
+        , bgCosts = Map.fromList [(kind, Map.singleton StoreRequests 1) | kind <- requestKinds]
+        }
+
+pacedScope :: QuotaScope
+pacedScope = mkQuotaScope "store.example.test"
+
+kinds :: RequestTally -> RequestKind -> Int
+kinds tally kind = sum [count | (counted, count) <- tallyCounts tally, counted == kind]
 
 pacingSpec :: Spec
 pacingSpec = describe "cycle chunk pacing" $ do

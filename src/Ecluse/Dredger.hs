@@ -20,7 +20,7 @@ import UnliftIO.Async (link, mapConcurrently_, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Boot (BootEnv (..), probeServerConfig)
-import Ecluse.Composition.Executable (PrunerWiring (pwCveSync, pwDeferredMetrics, pwMounts))
+import Ecluse.Composition.Executable (PrunerWiring (pwBudget, pwCveSync, pwDeferredMetrics, pwMounts))
 import Ecluse.Config (AppConfig, Config (configApp))
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
@@ -29,7 +29,9 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factBackend, factNameAlphabet, factRefill),
     StoreObservation (obFacts),
  )
-import Ecluse.Core.Registry.Sweep (sweepCycle)
+import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort)
+import Ecluse.Core.Registry.Sweep (paceAtCeiling, storeBudgets, sweepCycle)
+import Ecluse.Core.Registry.Sweep.Pacing (renderScopeBudget)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt,
     CycleOutcome (outcomeHalt),
@@ -37,7 +39,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepCache (scObserve),
     SweepMount (smEcosystem, smStore),
     SweepPacing (swpCyclePause, swpShape),
-    SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepDelay, sweepMetrics, sweepNow, sweepReport, sweepTarget),
+    SweepPorts (SweepPorts, sweepAdvisoryEtag, sweepAudit, sweepBudget, sweepDelay, sweepMetrics, sweepNow, sweepReport, sweepTarget),
     SweepReport,
     SweepShape (SweepCandidates, SweepEverything),
     SweepStore (ssObserve, ssPrivate),
@@ -98,10 +100,13 @@ runDredger bootEnv opts pruner = do
     installMetrics (pwDeferredMetrics pruner) metrics
     registerAdvisoryAges metrics (pwCveSync pruner)
     status <- newSweepStatus
-    moduleLog logEnv dredgerModule InfoS capLine
+    traverse_ (moduleLog logEnv dredgerModule InfoS) bootLines
     when (doMode opts == SweepDeletes) $
         moduleLog logEnv dredgerModule InfoS "this command deletes permitted mirrorTarget and privateUpstream versions under independent target consent"
     traverse_ (logMountStores logEnv opts pacing) mounts
+    traverse_ (moduleLog logEnv dredgerModule InfoS . renderScopeBudget pacing) (storeBudgets mounts)
+    -- Nothing has measured a cycle yet, so every pool starts at the ceiling its capacity allows.
+    paceAtCeiling pacing (portsOver metrics) mounts
     moduleLog logEnv dredgerModule InfoS ("Dredger starting up, health probes on port " <> show (scPort (cfg status)))
     raceServerAgainstLoop
         (runWarp (cfg status) probeOnlyApplication)
@@ -111,13 +116,13 @@ runDredger bootEnv opts pruner = do
     logEnv = beLogEnv bootEnv
     telemetry = beTelemetry bootEnv
     appConfig = configApp (beConfig bootEnv)
-    (pacing, capLine) = sweepPacingFor appConfig (length (pwMounts pruner))
+    (pacing, bootLines) = sweepPacingFor appConfig (length (pwMounts pruner))
     -- The boot built each mount's own execution, so the loop never asks which run it is in.
     mounts = pwMounts pruner
     syncReady = cveSyncReadiness (pwCveSync pruner)
     cfg status = dredgerServerConfig appConfig (dredgerReady syncReady (readIORef (stLatched status)))
     syncTasks metrics = cveSyncTasks logEnv metrics telemetry (cveSyncScheduleFor appConfig) (pwCveSync pruner)
-    portsOver metrics = sweepPortsFor logEnv metrics (sweepReportFor (doMode opts)) (pwCveSync pruner)
+    portsOver metrics = sweepPortsFor logEnv metrics (pwBudget pruner) (sweepReportFor (doMode opts)) (pwCveSync pruner)
 
 {- | The Dredger's health surface: the shared @server.port@, and a readiness the advisory sync
 opens and a latched halt closes for good. A latch never fails liveness, so nothing restarts it.
@@ -180,8 +185,8 @@ reportLatched :: SweepPorts -> CycleHalt -> IO ()
 reportLatched ports halt =
     auditError (sweepAudit ports) ("the mirror sweep is halted and runs no cycle: " <> renderCycleHalt halt)
 
-sweepPortsFor :: LogEnv -> Metrics -> SweepReport -> Map Ecosystem CveSyncHandle -> SweepPorts
-sweepPortsFor logEnv metrics report cveSync =
+sweepPortsFor :: LogEnv -> Metrics -> BudgetPort -> SweepReport -> Map Ecosystem CveSyncHandle -> SweepPorts
+sweepPortsFor logEnv metrics budget report cveSync =
     SweepPorts
         { sweepNow = getCurrentTime
         , sweepAdvisoryEtag = \eco ->
@@ -196,6 +201,7 @@ sweepPortsFor logEnv metrics report cveSync =
                 , auditError = moduleLog logEnv dredgerModule ErrorS
                 }
         , sweepReport = report
+        , sweepBudget = budget
         }
 
 -- Both of a mount's stores, each on its own line under the role that mount gives it.

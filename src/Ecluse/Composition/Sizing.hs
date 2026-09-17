@@ -35,7 +35,7 @@ import System.Posix.Resource (Resource (ResourceOpenFiles), ResourceLimit (Resou
 {- | A resolved bound and its boot-log line: an explicit config value wins, else the
 computed default. Every sizing and every memory-plan bound resolves through this.
 -}
-resolveSized :: Text -> Maybe Int -> Int -> Text -> (Int, Text)
+resolveSized :: (Show a) => Text -> Maybe a -> a -> Text -> (a, Text)
 resolveSized subject explicit computed computedClause =
     (value, renderSized subject value explicit computedClause)
   where
@@ -44,7 +44,7 @@ resolveSized subject explicit computed computedClause =
 {- | The boot-log line for a bound already resolved elsewhere. The explicit config value
 decides the provenance clause, and the caller supplies the computed alternative.
 -}
-renderSized :: Text -> Int -> Maybe Int -> Text -> Text
+renderSized :: (Show a) => Text -> a -> Maybe a -> Text -> Text
 renderSized subject value explicit computedClause =
     subject <> " " <> show value <> " (" <> provenance <> ")"
   where
