@@ -161,11 +161,15 @@ renderBootErrorSpec = describe "renderBootError" $
         renderBootError (PrivateUpstreamUnsafe Npm (InsufficientPermissions (PermissionName "codeartifact:DescribeRepository")))
             `shouldSatisfy` infixed "refused codeartifact:DescribeRepository"
         renderBootError (PrivateUpstreamUnsafe Npm (InsufficientPermissions (PermissionName "codeartifact:DescribeRepository")))
-            `shouldSatisfy` infixed "or resolved no identity to ask with"
+            `shouldSatisfy` infixed "Or this role resolved no identity at all."
         renderBootError (PrivateUpstreamUnsafe Npm (InsufficientPermissions (PermissionName "codeartifact:DescribeRepository")))
             `shouldSatisfy` infixed "give this role an AWS identity carrying that grant"
         renderBootError (PrivateUpstreamUnsafe Npm (InsufficientPermissions (PermissionName "codeartifact:DescribeRepository")))
             `shouldSatisfy` infixed "An identity that cannot ask cannot clear the repository"
+        -- A probe that threw settled nothing, and it is the proxy's failure as much as a store
+        -- role's, so it says what was being checked rather than borrowing a store's vocabulary.
+        renderBootError (PrivateUpstreamProbeFailed Npm "NoCredentials")
+            `shouldSatisfy` infixed "the check for a connection to a public registry on ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM threw: NoCredentials"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay

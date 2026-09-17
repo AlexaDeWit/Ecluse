@@ -11,7 +11,7 @@ import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition.BootError (
     Advisory (PrivateUpstreamUndecided),
-    BootError (PrivateUpstreamUnsafe, StoreMaintenanceUnavailable),
+    BootError (PrivateUpstreamProbeFailed, PrivateUpstreamUnsafe, StoreMaintenanceUnavailable),
     StoreMaintenanceReason (ClientBuildFailed, DeletionNotPermitted, NoProtocolMaintenance, PrivateCacheUnavailable),
     renderBootError,
  )
@@ -377,9 +377,8 @@ probeSpec = describe "the private upstream's answer" $ do
         advisories `shouldBe` []
         case outcome of
             Right _ -> expectationFailure "expected an unread probe exception to refuse the mount"
-            Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable detail)] ->
-                detail `shouldSatisfy` T.isPrefixOf "the check for a connection to a public registry threw: NoStoreClient"
-            Left errs -> expectationFailure ("expected the mount's own refusal, got: " <> show errs)
+            Left [PrivateUpstreamProbeFailed Npm detail] -> detail `shouldSatisfy` T.isPrefixOf "NoStoreClient"
+            Left errs -> expectationFailure ("expected the probe's own refusal, got: " <> show errs)
 
     it "answers undecided for a private upstream whose backend does not report its aggregation" $
         for_ [staticEnvVars, withObservablePrivate staticEnvVars] $ \envVars -> do

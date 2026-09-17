@@ -109,6 +109,10 @@ data BootError
       be trusted as private. Carries what the backend reported.
       -}
       PrivateUpstreamUnsafe Ecosystem UnsafeReason
+    | {- | Asking the mount's private upstream what it aggregates threw rather than answering, so
+      nothing was settled about it. Carries the rendered exception.
+      -}
+      PrivateUpstreamProbeFailed Ecosystem Text
     | {- | Two endpoints, each carried as its mount and its tagged key path, name the carried
       registry under different tags, so the two declarations disagree about what serves that store.
       -}
@@ -301,7 +305,12 @@ renderBootError = \case
         mountKeyRef eco "privateUpstream"
             <> " could not be read: this role's identity is refused "
             <> permissionNameText permission
-            <> " on that repository or one in its upstream chain, or resolved no identity to ask with. An identity that cannot ask cannot clear the repository, so give this role an AWS identity carrying that grant, or point privateUpstream at a repository this role may read"
+            <> " on that repository or one in its upstream chain. Or this role resolved no identity at all. An identity that cannot ask cannot clear the repository, so give this role an AWS identity carrying that grant, or point privateUpstream at a repository this role may read"
+    PrivateUpstreamProbeFailed eco detail ->
+        "the check for a connection to a public registry on "
+            <> mountKeyRef eco "privateUpstream"
+            <> " threw: "
+            <> detail
     StoreTagConflict eco key other otherKey url ->
         mountKeyRef eco key
             <> " and "

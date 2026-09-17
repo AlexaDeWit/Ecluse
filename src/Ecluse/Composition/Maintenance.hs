@@ -44,7 +44,7 @@ import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Composition.BootError (
     Advisory (PrivateUpstreamUndecided),
-    BootError (PrivateUpstreamUnsafe, StoreMaintenanceUnavailable),
+    BootError (PrivateUpstreamProbeFailed, PrivateUpstreamUnsafe, StoreMaintenanceUnavailable),
     StoreMaintenanceReason (ClientBuildFailed, DeletionNotPermitted, NoControlPlane, NoProtocolMaintenance, PrivateCacheUnavailable),
     refuseOnThrow,
  )
@@ -362,16 +362,11 @@ answer, so a throw that reaches here refuses the mount rather than passing for a
 readUpstreamSafety :: [(Ecosystem, IO UpstreamSafety)] -> IO ([Advisory], Either [BootError] ())
 readUpstreamSafety probes = settled . partitionEithers <$> traverse answer probes
   where
-    answer (eco, probe) = fmap (eco,) <$> refuseOnThrow (unreadableProbe eco) probe
+    answer (eco, probe) = fmap (eco,) <$> refuseOnThrow (PrivateUpstreamProbeFailed eco) probe
 
     settled (thrown, answers) =
         let (advisories, refused) = upstreamFindings answers
          in (advisories, refusals (concat thrown <> fromLeft [] refused))
-
-    unreadableProbe eco =
-        StoreMaintenanceUnavailable eco
-            . PrivateCacheUnavailable
-            . ("the check for a connection to a public registry threw: " <>)
 
 {- | What a boot does about the answers it read: an unsafe repository refuses the role, an open
 question advises, and a safe one says nothing.
