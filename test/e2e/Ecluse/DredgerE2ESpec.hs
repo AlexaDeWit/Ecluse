@@ -24,6 +24,7 @@ import Ecluse.E2E.Fixtures.Npm (
     dredgerDryRunPkg,
     dredgerKeepPkg,
     dredgerPkg,
+    mirrorPkg,
     psName,
     psVersion,
     psVersions,
@@ -554,11 +555,14 @@ rolloutScenarios = describe "eventual cleanup after out-of-order role updates" $
         withServeOnlyProxy plane queueUrl (strictEnv target) $ \strict -> do
             assertRefusedNext strict target version
             withMirrorRole plane (mirrorRoleEnv queueUrl permissiveRules) $ \worker ->
-                for_ [target <> "@" <> version, unaffected <> "@" <> psVersion dredgerKeepPkg] $ \published -> do
-                    mirrored <- awaitContainerLog worker (T.isInfixOf ("mirrored artifact published: " <> published)) 480
-                    unless mirrored (failWithLog worker ("the old worker never published " <> published))
+                for_ [target <> "@" <> version, unaffected <> "@" <> psVersion dredgerKeepPkg] (awaitPublication worker)
             -- The worker container is gone, so the rollout has no outstanding old write left.
             verdaccioAwaitVersions strict target [version] `shouldReturn` [version]
+            verdaccioVersions cache target `shouldReturn` [version]
+            -- A private read applies no rules, so the stricter proxy installs what it would deny.
+            withNpmProject strict $ \project -> do
+                void $ npmInstallIn project (target <> "@" <> version) >>= shouldSucceed
+                installedVersion project target `shouldReturn` Just version
             served <- proxyGet strict (npmTarballPath target version)
             second LBS.length served `shouldSatisfy` servedBytes
             let denied = identityRules [target, publishDredgerName <> "@" <> publishVersion]
@@ -568,6 +572,7 @@ rolloutScenarios = describe "eventual cleanup after out-of-order role updates" $
             verdaccioVersions strict unaffected `shouldReturn` [psVersion dredgerKeepPkg]
             verdaccioVersions strict publishDredgerName `shouldReturn` [publishVersion]
             assertRefusedNext strict target version
+            assertNothingQueued plane queueUrl strict (target <> "@" <> version)
             rescanned <- runDredgerOnce plane ["--once"] (rolloutSweepEnv denied)
             roleExit rescanned `shouldBe` ExitSuccess
             assertRolloutRemoved strict cache target
@@ -678,6 +683,26 @@ permissiveRules = renderRules [minAgeRule]
 -- | 'permissiveRules' plus one identity deny per named package or version.
 denyingRules :: [Text] -> Text
 denyingRules denied = renderRules (minAgeRule : zipWith identityEntry [1 :: Int ..] denied)
+
+{- Prove the refused reads enqueued nothing, by admitting a sentinel afterwards and draining the
+queue with a permissive worker: it publishes the sentinel and never the denied version. -}
+assertNothingQueued :: GlobalDataPlane -> Text -> E2E -> Text -> IO ()
+assertNothingQueued plane queueUrl proxy denied = do
+    void $ npmInstall proxy (psName mirrorPkg) >>= shouldSucceed
+    withMirrorRole plane (mirrorRoleEnv queueUrl permissiveRules) $ \drain -> do
+        awaitPublication drain (psName mirrorPkg <> "@" <> psVersion mirrorPkg)
+        logs <- containerLogs drain
+        logs `shouldSatisfy` (not . T.isInfixOf (publishedLine denied))
+
+-- Wait for one version's mirror write, failing with the worker's own log when it never lands.
+awaitPublication :: String -> Text -> IO ()
+awaitPublication worker published = do
+    mirrored <- awaitContainerLog worker (T.isInfixOf (publishedLine published)) 240
+    unless mirrored (failWithLog worker ("the worker never published " <> published))
+
+-- The worker's own line for a completed mirror write, as its JSONL record carries it.
+publishedLine :: Text -> Text
+publishedLine published = "mirrored artifact published: " <> published
 
 -- Fail with the container's own log tail, because a role's reason for not acting lives only there.
 failWithLog :: String -> Text -> IO ()

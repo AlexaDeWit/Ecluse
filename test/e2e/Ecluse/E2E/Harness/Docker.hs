@@ -382,6 +382,10 @@ data DockerRun = DockerRun
     -- ^ The image reference, already rendered to the string @docker@ receives.
     , drCmd :: [String]
     -- ^ Arguments after the image, overriding the default CMD. Usually empty.
+    , drAutoRemove :: Bool
+    {- ^ Pass @--rm@. A container whose logs a case reads after it exits sets this 'False', so
+    docker keeps them until the bracket force-removes it.
+    -}
     }
 
 {- | Unwrap a validated pin into an 'ImageRef', failing the suite at harness startup rather
@@ -405,10 +409,11 @@ dockerRun name net image =
         , drEnv = []
         , drImage = toString (renderImageRef image)
         , drCmd = []
+        , drAutoRemove = True
         }
 
-{- | Render and run a 'DockerRun' detached (@docker run --rm -d@), stamped with the reaping
-labels. It fails the test loudly on a non-zero exit.
+{- | Render and run a 'DockerRun' detached (@docker run -d@), stamped with the reaping labels. It
+fails the test loudly on a non-zero exit.
 -}
 runDetached :: [String] -> DockerRun -> IO ()
 runDetached labelArgs = dockerOk . runArgs ["-d"] labelArgs
@@ -418,7 +423,7 @@ A detached run passes @-d@ and a run waited on passes none, so both render the s
 -}
 runArgs :: [String] -> [String] -> DockerRun -> [String]
 runArgs extra labelArgs spec =
-    ["run", "--rm"]
+    ("run" : ["--rm" | drAutoRemove spec])
         <> extra
         <> ["--name", drName spec, "--network", drNetwork spec]
         <> concatMap (\a -> ["--network-alias", a]) (drAliases spec)
@@ -594,7 +599,8 @@ withMirrorRole :: GlobalDataPlane -> [(Text, Text)] -> (String -> IO a) -> IO a
 withMirrorRole gdp env action = do
     run <- roleRun gdp env ["mirror"]
     labelArgs <- dockerLabelArgs "e2e"
-    withDockerContainer labelArgs run action
+    -- A role that refuses to boot exits at once, and @--rm@ would take its reason with it.
+    withDockerContainer labelArgs run{drAutoRemove = False} action
 
 {- | Run the product image as @ecluse dredger --once@ against the shared data plane, layering
 @extraEnv@ over 'dredgerEnv'. It deletes from the store the proxy mirrors into.

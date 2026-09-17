@@ -396,8 +396,8 @@ cap still bound what one cycle removes. Roles left on permanently conflicting po
 converge, which is a deployment fault rather than a Dredger limit.
 
 Read each cycle's per-target results rather than assume a clean sweep. A refused or unavailable
-backend leaves its copy in place and the run says so. A later cycle rediscovers that residual, and
-anything an old writer added after an earlier scan reported the name clean.
+backend leaves its copy in place and the run says so. A later cycle rediscovers that residual. It
+also finds anything an old writer added after an earlier scan reported the name clean.
 
 If an old Dredger deletes the only bytes during a rollout, later policy agreement cannot restore
 them. A removed version returns only when a usable source still holds its bytes and something
