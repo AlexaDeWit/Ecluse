@@ -38,6 +38,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     QuotaDimension (StoreRequests),
     QuotaOrigin (QuotaDeclared),
     QuotaScope,
+    RequestGate (gateSpend),
     RequestKind (ListingPage, PermissionRead),
     RequestTally,
     StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope),
@@ -45,11 +46,11 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     tallyCounts,
     undeclaredBudget,
  )
-import Ecluse.Core.Registry.Sweep (sweepCycle, withStoreRetry)
+import Ecluse.Core.Registry.Sweep (paceAtCeiling, sweepCycle, withStoreRetry)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltConsentWithheld, HaltDeletionCap, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
-    EvidenceGaps (gapAdvisoryGeneration),
+    EvidenceGaps (gapAdvisoryGeneration, gapManifests),
     PrerequisiteStatus (PrerequisiteMet, PrerequisiteUnmet, PrerequisiteUnread),
     SweepMount (smConfigured, smFirstParty, smRuleDeps),
     SweepPacing (swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
@@ -61,7 +62,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     prerequisitesMet,
  )
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup), prepare)
-import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny), Rule (AllowIfRemediatesCve, DenyByIdentity, DenyIfCve, DenyIfEpss))
+import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny, FailNoDecision), Rule (AllowIfRemediatesCve, DenyByIdentity, DenyIfCve, DenyIfEpss))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
 import Ecluse.Test.Maintenance (
@@ -445,6 +446,25 @@ budgetSpec = describe "the cycle request budget" $ do
         (rec', _) <- meteredCycle testPacing
         filter (T.isInfixOf "target cycle window") <$> recWarnings rec' `shouldReturn` []
 
+    it "keeps a package whose metadata read faulted, now that no replay repairs it below" $ do
+        store <- newFakeStore seededConfig
+        rec' <- recordingPorts generation
+        prepared <- prepare inertRuleDeps [atDefaultPrecedence needsManifest]
+        let faulting handle = handle{readStoreManifest = const (pure (Left unansweredRead))}
+        outcome <- sweepCycle testPacing (recPorts rec') [testMount (faulting (fakeMaintenance store)) prepared [pinsName]]
+        contents <- readFakeContents store
+        tallyDeleted (outcomeTally outcome) `shouldBe` 0
+        map storedVersion (Map.findWithDefault [] (packageName "left-pad") contents) `shouldBe` [version "1.0.0"]
+        gapManifests (outcomeEvidence outcome) `shouldSatisfy` (> 0)
+
+    it "holds the first cycle to its ceiling before anything has measured one" $ do
+        store <- newFakeStore seededConfig{fakeFacts = pacedFacts}
+        rec' <- recordingPorts generation
+        paceAtCeiling testPacing (recPorts rec') [testMount (fakeMaintenance store) [denyRule] []]
+        gateSpend (recGateFor rec' pacedScope) ListingPage
+        -- Ten requests a second at half the pool: one fifth of a second each.
+        recBudgetWaits rec' `shouldReturn` [0.2]
+
     it "warns and stays at its ceiling when the window cannot be reached" $ do
         (rec', _) <- meteredCycle testPacing{swpCycleWindow = swpCyclePause testPacing}
         warned <- filter (T.isInfixOf "target cycle window") <$> recWarnings rec'
@@ -459,6 +479,23 @@ meteredCycle pacing = do
     let handle = meteredMaintenance (recGateFor rec' pacedScope) (fakeMaintenance store)
     outcome <- sweepCycle pacing (recPorts rec') [testMount handle [denyRule] []]
     pure (rec', outcome)
+
+{- A retryable transport fault on the store's own metadata read. A single-attempt maintenance
+manager no longer repairs one below the sweep, so it reaches the store-fault policy as a value. -}
+unansweredRead :: StoreFault
+unansweredRead =
+    StoreFault
+        { faultTransport = transportFault TransportTimeout "the store did not answer the metadata read"
+        , faultRetry = RetryWorthwhile
+        }
+
+-- An identity deny on the package alone, which pins its name into the candidate set.
+pinsName :: Rule
+pinsName = DenyByIdentity "left-pad"
+
+-- A rule that decides on more than identity, so a metadata read it never gets leaves it abstaining.
+needsManifest :: Rule
+needsManifest = DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)
 
 pacedFacts :: StoreFacts
 pacedFacts = (fakeFacts defaultFakeStoreConfig){factBudget = pacedBudget}

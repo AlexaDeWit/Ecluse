@@ -26,11 +26,12 @@ import Ecluse.Core.Cve.Slot (currentAdvisoryEtag)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Registry.Maintenance (
     RefillPosture (RefillPermitted, RefillRefused),
-    StoreFacts (factBackend, factBudget, factNameAlphabet, factRefill),
+    StoreFacts (factBackend, factNameAlphabet, factRefill),
     StoreObservation (obFacts),
  )
-import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort, renderStoreBudget)
-import Ecluse.Core.Registry.Sweep (sweepCycle)
+import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort)
+import Ecluse.Core.Registry.Sweep (paceAtCeiling, storeBudgets, sweepCycle)
+import Ecluse.Core.Registry.Sweep.Pacing (renderScopeBudget)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt,
     CycleOutcome (outcomeHalt),
@@ -103,6 +104,9 @@ runDredger bootEnv opts pruner = do
     when (doMode opts == SweepDeletes) $
         moduleLog logEnv dredgerModule InfoS "this command deletes permitted mirrorTarget and privateUpstream versions under independent target consent"
     traverse_ (logMountStores logEnv opts pacing) mounts
+    traverse_ (moduleLog logEnv dredgerModule InfoS . renderScopeBudget pacing) (storeBudgets mounts)
+    -- Nothing has measured a cycle yet, so every pool starts at the ceiling its capacity allows.
+    paceAtCeiling pacing (portsOver metrics) mounts
     moduleLog logEnv dredgerModule InfoS ("Dredger starting up, health probes on port " <> show (scPort (cfg status)))
     raceServerAgainstLoop
         (runWarp (cfg status) probeOnlyApplication)
@@ -223,8 +227,6 @@ logBlastRadius logEnv opts pacing subject mount =
             <> ", "
             <> disposition
             <> resumption
-            <> ", paced against "
-            <> renderStoreBudget (factBudget facts)
   where
     facts = obFacts (ssObserve (smStore mount))
     refill = case factRefill facts of

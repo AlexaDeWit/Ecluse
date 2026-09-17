@@ -239,16 +239,21 @@ dredger:
   # shipped values against a CodeArtifact account that works out at 0.25. Set this to
   # hold every pool to a share of your own choosing.
   # requestBudgetFraction: 0.25
-  # Declared request capacity, keyed by the store URL it describes. A codeArtifact store
-  # needs none: its account and Region quotas are the AWS documented defaults. A
-  # verdaccio store publishes no quota at all, so it is paced by chunkSize and chunkPause
-  # alone until you declare one here. The value is yours to choose for your deployment,
-  # not a Verdaccio default. `scope` joins two endpoints of one capacity pool, and
-  # defaults to the store's own host and port. `quotas` are requests per second, keyed by
-  # nameListing, versionListing, accountReads, accountWrites, tokenReads, or
-  # storeRequests. `requestWeights` scale what one request costs, keyed by listingPage,
-  # versionPage, manifestRead, deleteBatch, permissionRead, cursorRead, or cursorWrite.
-  # An entry naming a store no mount declares warns at boot and paces nothing.
+  # Declared request capacity, keyed by the store URL it describes. Nothing here is
+  # required. A codeArtifact store is paced against the AWS documented account and
+  # Region quotas. A store whose backend publishes no quota (verdaccio) is paced against
+  # a capacity derived from chunkSize / chunkPause, the sweep's own package pace, which
+  # is 25 requests a second at the defaults and yields a ceiling of 12.5. Raising
+  # chunkPause lowers it. Declare a capacity here when you know the real one.
+  # `scope` joins two endpoints of one capacity pool, and defaults to the store's own
+  # host and port (a codeArtifact store pools by the owning account and Region instead).
+  # `quotas` are requests per second, keyed by nameListing, versionListing, accountReads,
+  # accountWrites, tokenReads, or storeRequests. `requestWeights` scale what one request
+  # costs, keyed by listingPage, versionPage, manifestRead, deleteBatch, permissionRead,
+  # cursorRead, or cursorWrite; a weight naming a kind the backend charges nothing for
+  # scales nothing. An entry naming a store no mount declares warns at boot and paces
+  # nothing. Two entries that give one `scope` different quotas or weights refuse the
+  # boot, naming both.
   # quotaOverrides:
   #   https://verdaccio.example.com/:
   #     quotas:

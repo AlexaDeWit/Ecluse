@@ -21,7 +21,7 @@ module Ecluse.Test.Sweep (
     withPrivateCache,
 ) where
 
-import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Data.Time (NominalDiffTime, UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -78,6 +78,8 @@ data RecordedSweep = RecordedSweep
     -- ^ The gate a case wraps a fake store's handle in, so its requests are counted.
     , recRequests :: IO (Map QuotaScope RequestTally)
     -- ^ What each capacity pool was asked for, read after the cycle closed its measurement.
+    , recBudgetWaits :: IO [NominalDiffTime]
+    -- ^ Every wait the request budget imposed, oldest first. The wait itself returns at once.
     }
 
 {- | Ports that record instead of waiting: the delay returns immediately, the clock stands still,
@@ -89,7 +91,8 @@ recordingPorts = recordingPortsUnder deletingReport
 -- | 'recordingPorts' over a chosen report, for a case about a preview's own counters.
 recordingPortsUnder :: SweepReport -> Maybe DbEtag -> IO RecordedSweep
 recordingPortsUnder report etag = do
-    (budget, gateFor) <- newBudgetMeter (const pass)
+    budgetWaits <- newIORef []
+    (budget, gateFor) <- newBudgetMeter (\seconds -> modifyIORef' budgetWaits (seconds :))
     info <- newIORef []
     warnings <- newIORef []
     errors <- newIORef []
@@ -119,6 +122,7 @@ recordingPortsUnder report etag = do
             , recDelays = readIORef delays
             , recGateFor = gateFor
             , recRequests = ccRequests <$> budgetClose budget
+            , recBudgetWaits = reverse <$> readIORef budgetWaits
             }
   where
     -- A fixed instant: no rule a sweep case runs reads the clock for its verdict.

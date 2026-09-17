@@ -96,13 +96,18 @@ upstream is never read by a sweep.
 
 A `codeArtifact` store needs no declaration. Its capacity is taken from the per-Region service
 quotas AWS publishes, read from that documentation rather than discovered from your account, and
-the account and Region are read from the repository endpoint you declared. Charging a listing call
-to its named quota and an account read or write dimension is a conservative reading: AWS publishes
-no exhaustive operation-to-quota map.
+the account and Region come from the repository endpoint you declared. Every repository of one
+account and Region shares one pool. Charging a listing call to its named quota and an account read
+or write dimension is a conservative reading: AWS publishes no exhaustive operation-to-quota map.
 
-A `verdaccio` store publishes no quota at all. Until you declare one, nothing bounds its request
-rate and `chunkSize` and `chunkPause` are all that pace it. Declare one under `quotaOverrides`,
-keyed by the store URL:
+A `verdaccio` store publishes no quota at all. Its capacity is **derived** from the sweep's own
+package pace, `chunkSize / chunkPause` requests per second, and the same share rule then applies.
+At the shipped `chunkSize: 50` and `chunkPause: 2` that is 25 requests a second, a share of one
+half, and a ceiling of 12.5 requests a second. Raising `chunkPause` lowers the derived ceiling, so
+the keys you already have stay the dial. Nothing is required of you.
+
+Declare a capacity under `quotaOverrides` when you know the store's real one, keyed by the store
+URL:
 
 ```yaml
 dredger:
@@ -112,14 +117,16 @@ dredger:
         storeRequests: 100
 ```
 
-100 requests per second is an example, not a Verdaccio default and not a measured guarantee. The
-number is yours to choose for your deployment. An entry can also carry a `scope`, which joins two
-endpoints of one capacity pool so the sweep paces them together, and `requestWeights`, which scale
-what one kind of request costs. An entry naming a store no mount declares warns at boot and paces
-nothing.
+100 requests a second is an example, not a Verdaccio default and not a measured guarantee. An entry
+can also carry a `scope`, which joins two endpoints of one capacity pool so the sweep paces them
+together, and `requestWeights`, which scale what one kind of request costs. A weight naming a kind
+the backend charges nothing for scales nothing. An entry naming a store no mount declares warns at
+boot and paces nothing, and two entries that give one `scope` different quotas or weights refuse the
+boot, naming both.
 
-Each cycle's boot line records the pool each store runs under, where its numbers came from, and the
-quotas in force.
+Each store's boot line records the pool it runs in, where its capacity came from (derived, the
+backend's documented quotas, or your configuration), the share in force and where that came from,
+and the per-dimension ceilings the share yields.
 
 **An unattainable window warns and carries on.** When the measured cycle needs more of the store's
 capacity than the share allows, the Dredger logs a warning naming the share the window would need

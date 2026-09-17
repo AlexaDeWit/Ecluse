@@ -14,7 +14,7 @@ module Ecluse.Composition.Executable (
     ExecutablePlan (epBootPlan, epRoleWiring),
     RoleWiring (..),
     MirrorWiring (mwRole, mwBootWiring, mwCveSync, mwQueue, mwDeferredMetrics),
-    PrunerWiring (pwMounts, pwCveSync, pwDeferredMetrics),
+    PrunerWiring (pwBudget, pwCveSync, pwDeferredMetrics, pwMounts),
     BuildMirrorQueue,
     BuildCredentials,
     planExecutable,
@@ -22,7 +22,6 @@ module Ecluse.Composition.Executable (
 
 import Data.Time (getCurrentTime)
 import Katip (LogEnv)
-import UnliftIO.Concurrent (threadDelay)
 import Validation (Validation (Failure), eitherToValidation, validationToEither)
 
 import Data.Map.Strict qualified as Map
@@ -42,7 +41,7 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Credential (BuildCredentials, CredentialTarget (..), mirrorBackends, noCredentialProviders, providerLabel)
 import Ecluse.Composition.Maintenance (
-    BudgetPorts (BudgetPorts, bpGateFor, bpOverrides),
+    BudgetPorts (BudgetPorts, bpGateFor, bpNominalPace, bpOverrides),
     ClearedBackend (cbUrl),
     StoreBuilds (sbDeleting, sbObserving),
     StorePorts,
@@ -69,7 +68,8 @@ import Ecluse.Composition.Validate (
     ValidatedPlan (vpMirrorStores, vpMounts, vpPrivateCaches, vpSettings),
     VettedMount (vmAdapter, vmConfig, vmEcosystem, vmMount),
  )
-import Ecluse.Config (AppConfig (cfgAdvisories, cfgDredger), DredgerSettings (drgQuotaOverrides), Mount (mountPolicy), MountConfig (mntFirstParty), StoreTag, mountAdvisoryAge, mountDatabaseRequirement, mountEpssRequirement)
+import Ecluse.Config (AppConfig (cfgAdvisories, cfgDredger), DredgerSettings (drgChunkPause, drgChunkSize, drgQuotaOverrides), Mount (mountPolicy), MountConfig (mntFirstParty), StoreTag, mountAdvisoryAge, mountDatabaseRequirement, mountEpssRequirement)
+import Ecluse.Core.Clock (waitSeconds)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
@@ -77,13 +77,13 @@ import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Registry.Adapter (ProjectName, adapterProjectName)
 import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend), StoreObservation (obFacts))
 import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort, newBudgetMeter)
+import Ecluse.Core.Registry.Sweep.Pacing (nominalPackagePace)
 import Ecluse.Core.Registry.Sweep.Types (SweepCache (..), SweepMount (..), SweepStore, deletingCache, pairedStore, previewCache)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule (prRule), Rule)
 import Ecluse.Core.Security (Limits (maxVersionCount))
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
-import Ecluse.Core.Supervision (secondsToMicros)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule))
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Cve.Sync (AdvisoryNeed (AdvisoryNeed, anDatabase, anEcosystem, anEpss, anMaxAge), CveSyncHandle, cveRuleDepsFor, katipFaultReporter, planCveSync)
@@ -197,8 +197,14 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     deferredMetrics <- newDeferredMetrics getCurrentTime
     cveSync <- planAdvisorySync logEnv bootPlan
     credentials <- buildCredentials (credentialReportersOver deferredMetrics) credentialBackends
-    (budgetPort, gateFor) <- newBudgetMeter (threadDelay . secondsToMicros)
-    let budget = BudgetPorts{bpGateFor = gateFor, bpOverrides = drgQuotaOverrides (cfgDredger (vpSettings validated))}
+    -- 'waitSeconds' keeps the sub-second part: every pace this budget produces is well under one.
+    (budgetPort, gateFor) <- newBudgetMeter waitSeconds
+    let budget =
+            BudgetPorts
+                { bpGateFor = gateFor
+                , bpOverrides = drgQuotaOverrides dredger
+                , bpNominalPace = nominalPackagePace (drgChunkSize dredger) (drgChunkPause dredger)
+                }
     stores <-
         planStoreMaintenance
             buildStore
@@ -232,6 +238,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
             <* eitherToValidation caches
   where
     validated = bpValidated bootPlan
+    dredger = cfgDredger (vpSettings validated)
     prunerMounts = map vmMount (vpMounts validated)
     credentialBackends =
         [((eco, MirrorCredential), backend) | (eco, backend) <- mirrorBackends prunerMounts]

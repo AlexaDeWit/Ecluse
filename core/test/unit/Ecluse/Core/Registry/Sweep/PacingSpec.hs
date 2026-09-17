@@ -11,7 +11,7 @@ import Test.Hspec
 
 import Ecluse.Core.Registry.Maintenance.Budget (
     QuotaDimension (AccountReads, AccountWrites, NameListing, StoreRequests, TokenReads, VersionListing),
-    QuotaOrigin (QuotaDeclared, QuotaDocumented),
+    QuotaOrigin (QuotaDeclared, QuotaDerived, QuotaDocumented),
     RequestKind (DeleteBatch, ListingPage, ManifestRead, VersionPage),
     RequestTally,
     StoreBudget (StoreBudget, bgCosts, bgOrigin, bgQuotas, bgScope),
@@ -40,10 +40,12 @@ import Ecluse.Core.Registry.Sweep.Types (
 spec :: Spec
 spec = do
     windowSpec
+    derivedSpec
     fractionSpec
     demandSpec
     decisionSpec
     warningSpec
+    bootLineSpec
 
 {- The window covers the rest of the running cycle, the pause, and the next cycle, so a complete
 cycle gets half of what the pause leaves. -}
@@ -55,6 +57,33 @@ windowSpec = describe "the target cycle window" $ do
 
     it "leaves a window no wider than the cycle pause with nothing to spend" $
         cycleAllowance shipped{swpCycleWindow = 3600} `shouldBe` 0
+
+{- A backend that publishes no quota is paced at the sweep's own package pace, so the chunk keys
+stay the one dial an operator has over how hard a cycle leans on such a store. -}
+derivedSpec :: Spec
+derivedSpec = describe "the capacity a backend publishing no quota is derived" $ do
+    it "reads the nominal package pace off the chunk keys, under the chunk-pause floor" $ do
+        nominalPackagePace 50 2 `shouldBe` 25
+        nominalPackagePace 50 10 `shouldBe` 5
+        nominalPackagePace 50 1 `shouldBe` 25
+
+    it "gives an undeclared store that pace on the one request dimension" $ do
+        let derived = derivedCapacity 25 undeclaredBudget
+        bgQuotas derived `shouldBe` Map.singleton StoreRequests 25
+        bgOrigin derived `shouldBe` QuotaDerived
+
+    it "leaves a store that declares its own capacity alone" $
+        derivedCapacity 25 (declaredAt 10) `shouldBe` declaredAt 10
+
+    it "yields half the derived capacity as the ceiling, so 12.5 a second at the defaults" $ do
+        let derived = derivedCapacity (nominalPackagePace 50 2) undeclaredBudget
+        budgetFraction shipped derived `shouldBe` 1 % 2
+        ceilingsFor (budgetFraction shipped derived) derived `shouldBe` Map.singleton StoreRequests (25 % 2)
+
+    it "lowers the derived ceiling when the operator raises the chunk pause" $ do
+        let slower = derivedCapacity (nominalPackagePace 50 10) undeclaredBudget
+        ceilingsFor (budgetFraction shipped{swpChunkPause = 10} slower) slower
+            `shouldBe` Map.singleton StoreRequests (5 % 2)
 
 fractionSpec :: Spec
 fractionSpec = describe "the request budget fraction" $ do
@@ -114,6 +143,10 @@ warningSpec = describe "the warning an unattainable window earns" $ do
     it "says nothing about a cycle the window fits" $
         renderPaceDecision shipped (decidePace shipped codeArtifact (Just (sampleCycle, 600)))
             `shouldBe` Nothing
+
+    it "holds no one request longer than a whole cycle's allowance" $ do
+        let tiny = decidePace shipped (declaredAt 1) (Just (oneRequest ListingPage, 0))
+        paceSeconds (pdPace tiny) ListingPage `shouldSatisfy` (<= fromRational (cycleAllowance shipped))
 
     it "names the share the window would need and the one in force" $ do
         let tight = shipped{swpCycleWindow = 5000}

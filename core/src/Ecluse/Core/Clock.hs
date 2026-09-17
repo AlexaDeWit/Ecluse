@@ -11,8 +11,10 @@ module Ecluse.Core.Clock (
     monoAfter,
     monoSecondsBetween,
     waitUntilMonotonic,
+    waitSeconds,
 ) where
 
+import Data.Time (NominalDiffTime)
 import GHC.Clock (getMonotonicTime)
 import UnliftIO.Concurrent (threadDelay)
 
@@ -38,3 +40,12 @@ waitUntilMonotonic target = do
     now <- monotonicNow
     let pause = monoSecondsBetween now target
     when (pause > 0) (threadDelay (round (pause * 1_000_000)))
+
+{- | Wait a duration, keeping its sub-second part. The microseconds saturate rather than wrap, so
+an absurd duration waits a very long time instead of returning at once.
+-}
+waitSeconds :: NominalDiffTime -> IO ()
+waitSeconds seconds = when (micros > 0) (threadDelay (fromInteger (min ceilingMicros micros)))
+  where
+    micros = round (toRational seconds * 1_000_000)
+    ceilingMicros = toInteger (maxBound :: Int)

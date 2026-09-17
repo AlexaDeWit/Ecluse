@@ -9,9 +9,12 @@ module Ecluse.Core.Registry.Sweep.Pacing (
     -- * The window and the share of capacity it may use
     defaultCycleWindow,
     cycleAllowance,
+    nominalPackagePace,
+    derivedCapacity,
     budgetFraction,
     fractionCeiling,
     ceilingsFor,
+    renderScopeBudget,
 
     -- * What a cycle's own requests demand
     cycleDemand,
@@ -25,19 +28,22 @@ module Ecluse.Core.Registry.Sweep.Pacing (
 
 import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
+import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 
 import Ecluse.Core.Registry.Maintenance.Budget (
     CyclePace,
-    QuotaDimension,
+    QuotaDimension (StoreRequests),
+    QuotaOrigin (QuotaDerived),
     QuotaScope,
-    RequestKind,
     RequestTally,
-    StoreBudget (bgCosts, bgQuotas, bgScope),
+    StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope),
     budgetDeclared,
     oneRequest,
     paceOf,
+    quotaDimensionName,
     renderQuotaScope,
+    renderStoreBudget,
     smallestQuota,
     tallyCounts,
     toHundredths,
@@ -59,8 +65,23 @@ cycle's selection, so the window must cover that cycle, the pause, and the next 
 cycleAllowance :: SweepPacing -> Rational
 cycleAllowance pacing = (toRational (swpCycleWindow pacing) - toRational (swpCyclePause pacing)) / 2
 
+{- | The sweep's own nominal package pace, in requests per second. It is the one dial an operator
+already has over how hard a cycle leans on a store, so both the derived capacity and the share use it.
+-}
+nominalPackagePace :: Int -> NominalDiffTime -> Rational
+nominalPackagePace chunkSize chunkPause =
+    toRational (max 1 chunkSize) / toRational (max minimumChunkPause chunkPause)
+
+{- | The capacity a backend that publishes no quota is taken to have: the nominal package pace, on
+the one request dimension. Raising the chunk pause lowers it, and a declared capacity replaces it.
+-}
+derivedCapacity :: Rational -> StoreBudget -> StoreBudget
+derivedCapacity pace budget
+    | budgetDeclared budget = budget
+    | otherwise = budget{bgQuotas = Map.singleton StoreRequests pace, bgOrigin = QuotaDerived}
+
 {- | The share of a scope's capacity the sweep may take: the configured fraction, else the smaller
-of half the capacity and the share the existing per-package pace already implies.
+of half the capacity and the share the nominal package pace already implies.
 -}
 budgetFraction :: SweepPacing -> StoreBudget -> Rational
 budgetFraction pacing budget = fromMaybe computed (swpBudgetFraction pacing)
@@ -68,8 +89,11 @@ budgetFraction pacing budget = fromMaybe computed (swpBudgetFraction pacing)
     computed = maybe fractionCeiling implied (smallestQuota budget)
     implied smallest
         | smallest <= 0 = fractionCeiling
-        | otherwise = min fractionCeiling (nominalRate / smallest)
-    nominalRate = toRational (max 1 (swpChunkSize pacing)) / toRational (max minimumChunkPause (swpChunkPause pacing))
+        | otherwise = min fractionCeiling (pacingPace pacing / smallest)
+
+-- The nominal pace of this pacing's own chunk keys.
+pacingPace :: SweepPacing -> Rational
+pacingPace pacing = nominalPackagePace (swpChunkSize pacing) (swpChunkPause pacing)
 
 -- | The largest share of a store's capacity a sweep takes, leaving the rest to the proxy's calls.
 fractionCeiling :: Rational
@@ -144,8 +168,15 @@ decidePace pacing budget sample
 
     -- A share below one stretches every request's own cost by the same factor.
     paceAt share =
-        paceOf (Map.fromList [(kind, seconds kind / share) | kind <- [minBound .. maxBound], seconds kind > 0])
+        paceOf (Map.fromList [(kind, held (seconds kind / share)) | kind <- [minBound .. maxBound], seconds kind > 0])
+    held = min (paceBound pacing)
     seconds kind = cycleDemand ceilings budget (oneRequest kind)
+
+{- | The longest one request is ever held. A wait past a whole cycle's allowance cannot land that
+cycle inside the window, and an unbounded one would overrun the thread delay.
+-}
+paceBound :: SweepPacing -> Rational
+paceBound pacing = max 1 (cycleAllowance pacing)
 
 {- | The warning an unattainable window earns, naming the budget it would need. The sweep runs on
 at its ceiling, because a refused cycle leaves the denied version served.
@@ -175,3 +206,42 @@ renderPaceDecision pacing decision = shortfall <$> pdShortfall decision
                 <> ceilingClause
                 <> closing
     share value = show (toHundredths value)
+
+{- | What one store's capacity resolved to, for the boot line: where each figure came from, the
+share in force, and the per-second ceilings that share yields.
+-}
+renderScopeBudget :: SweepPacing -> StoreBudget -> Text
+renderScopeBudget pacing budget =
+    "paced against "
+        <> renderQuotaScope (bgScope budget)
+        <> ": "
+        <> capacity
+        <> ", fraction "
+        <> show (toHundredths fraction)
+        <> " ("
+        <> fractionOrigin
+        <> "), ceilings "
+        <> ceilings
+  where
+    fraction = budgetFraction pacing budget
+    fractionOrigin = if isJust (swpBudgetFraction pacing) then "from configuration" else "computed"
+    capacity = case bgOrigin budget of
+        QuotaDerived ->
+            "capacity derived from dredger.chunkSize "
+                <> show (swpChunkSize pacing)
+                <> " every "
+                <> show (swpChunkPause pacing)
+                <> " ("
+                <> renderRates (bgQuotas budget)
+                <> ")"
+        _ -> renderStoreBudget budget
+    ceilings
+        | Map.null resolved = "none"
+        | otherwise = renderRates resolved
+    resolved = ceilingsFor fraction budget
+
+renderRates :: Map QuotaDimension Rational -> Text
+renderRates rates =
+    T.intercalate
+        ", "
+        [quotaDimensionName dimension <> " " <> show (toHundredths rate) <> "/s" | (dimension, rate) <- Map.toAscList rates]

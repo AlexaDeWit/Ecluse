@@ -6,7 +6,7 @@ module Ecluse.Core.ClockSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Core.Clock (MonoTime (MonoTime), monoAfter, monoSecondsBetween, monotonicNow, waitUntilMonotonic)
+import Ecluse.Core.Clock (MonoTime (MonoTime), monoAfter, monoSecondsBetween, monotonicNow, waitSeconds, waitUntilMonotonic)
 
 spec :: Spec
 spec = describe "the monotonic clock" $ do
@@ -17,6 +17,18 @@ spec = describe "the monotonic clock" $ do
     it "reads the seconds to an instant as negative once it has passed" $ do
         monoSecondsBetween (MonoTime 10) (MonoTime 12) `shouldBe` 2
         monoSecondsBetween (MonoTime 12) (MonoTime 10) `shouldBe` (-2)
+
+    it "waits a sub-second duration rather than rounding it away" $ do
+        before <- monotonicNow
+        waitSeconds 0.05
+        served <- monoSecondsBetween before <$> monotonicNow
+        served `shouldSatisfy` (> 0.02)
+
+    it "returns at once for a duration beneath a microsecond" $ do
+        before <- monotonicNow
+        waitSeconds 0
+        served <- monoSecondsBetween before <$> monotonicNow
+        served `shouldSatisfy` (< 1)
 
     it "advances over a wait and returns at once for an instant already passed" $ do
         before <- monotonicNow

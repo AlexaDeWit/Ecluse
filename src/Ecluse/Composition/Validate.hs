@@ -22,6 +22,7 @@ import Ecluse.Composition.BootError (
     BootError (
         AdvisoryDenyWithoutStore,
         DredgerChunkPauseBeneathFloor,
+        DredgerQuotaScopeConflict,
         FirstPartyMissing,
         FirstPartyWithoutPrivateUpstream,
         MirrorTargetWithoutPublish,
@@ -49,6 +50,7 @@ import Ecluse.Config (
     MountConfig (mntFirstParty, mntPrivateUpstream, mntPublicationTarget),
     PrivateEndpoint (preTarget),
     PublicationEndpoint (peTarget, peToken),
+    QuotaOverride (qoQuotas, qoScope, qoWeights),
     ServerSettings (srvAuthToken),
     StoreBackend,
     StoreTag,
@@ -112,6 +114,7 @@ vetBoot config =
         <* vetSweepPacing app
         <* vetAdvisoryStore config
         <* vetQuotaOverrides config
+        <* vetQuotaScopes app
   where
     app = configApp config
 
@@ -163,6 +166,32 @@ vetQuotaOverrides config = traverse_ (rule severity unmatched) declaredKeys
     declaredKeys = Map.keys (drgQuotaOverrides (cfgDredger (configApp config)))
     unmatched key = key <$ guard (overrideKey key `notElem` storeKeys)
     storeKeys = map overrideKey (declaredStoreUrls config)
+
+{- One capacity pool takes one definition. Two entries that name the same scope and describe it
+differently refuse, because whichever the boot read last would silently set the other's rate. -}
+vetQuotaScopes :: AppConfig -> Vet ()
+vetQuotaScopes app = traverse_ (rule severity conflicting) (pairsBy declaredScope entries)
+  where
+    severity = \case
+        MirrorPruner -> Refuse (\(scope, first', second') -> DredgerQuotaScopeConflict scope first' second')
+        MirrorPreviewer -> Refuse (\(scope, first', second') -> DredgerQuotaScopeConflict scope first' second')
+        MirrorWriter -> Ignore
+    entries = Map.toAscList (drgQuotaOverrides (cfgDredger app))
+    declaredScope (_, override) = qoScope override
+    conflicting (scope, (leftKey, left), (rightKey, right))
+        | describes left == describes right = Nothing
+        | otherwise = Just (scope, leftKey, rightKey)
+    describes override = (qoQuotas override, qoWeights override)
+
+-- Every pair of entries sharing one declared key, so a rule reads two definitions at once.
+pairsBy :: (Ord key) => (entry -> Maybe key) -> [entry] -> [(key, entry, entry)]
+pairsBy keyOf entries =
+    [ (key, left, right)
+    | (key, grouped) <- Map.toAscList (Map.fromListWith (<>) [(key, [entry]) | entry <- entries, Just key <- [keyOf entry]])
+    , (left, right) <- adjacent (reverse grouped)
+    ]
+  where
+    adjacent values = zip values (drop 1 values)
 
 -- Every store URL a mount declares as a sweep target: its mirror target and its private cache.
 declaredStoreUrls :: Config -> [Text]

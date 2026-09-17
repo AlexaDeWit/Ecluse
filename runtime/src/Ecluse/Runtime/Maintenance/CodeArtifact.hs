@@ -190,7 +190,7 @@ maintenanceFor alphabet readManifest store plane =
 observationFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ReadPlane -> StoreObservation
 observationFor alphabet readManifest store observer =
     StoreObservation
-        { obFacts = codeArtifactFacts alphabet
+        { obFacts = codeArtifactFacts alphabet store
         , obListPackagesIn = pageSource . packagePage observer store
         , obEnumerateVersions = pageAll . versionPage observer store
         , obReadManifest = readManifest

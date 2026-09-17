@@ -8,6 +8,8 @@ full walk resumes from the stored bucket cursor.
 -}
 module Ecluse.Core.Registry.Sweep (
     sweepCycle,
+    paceAtCeiling,
+    storeBudgets,
     withStoreRetry,
 ) where
 
@@ -97,6 +99,15 @@ sweepCycle pacing ports mounts = do
     paceNextCycle pacing ports mounts outcome
     pure outcome
 
+{- | Hold every scope to its ceiling before any cycle has measured one. A Dredger whose every
+cycle halts never reaches the measured decision, so this is where its rate comes from.
+-}
+paceAtCeiling :: SweepPacing -> SweepPorts -> [SweepMount] -> IO ()
+paceAtCeiling pacing ports mounts =
+    budgetPaced (sweepBudget ports) (Map.fromList [(pdScope decision, pdPace decision) | decision <- decisions])
+  where
+    decisions = [decidePace pacing budget Nothing | budget <- storeBudgets mounts]
+
 {- Pace the next cycle from what this one measured. A halted cycle read part of the store, so its
 counts are discarded rather than allowed to replace a complete sample's pace. -}
 paceNextCycle :: SweepPacing -> SweepPorts -> [SweepMount] -> CycleOutcome -> IO ()
@@ -112,8 +123,9 @@ paceNextCycle pacing ports mounts outcome = do
     renderMeasured (scope, tally) =
         "this cycle asked " <> renderQuotaScope scope <> " for " <> renderRequestTally tally
 
-{- Each distinct capacity pool the cycle's stores share, so two stores in one pool are paced once
-and a mount's cache is paced with the mirror target it is swept beside. -}
+{- | Each distinct capacity pool the cycle's stores share, so two stores in one pool are paced once
+and a mount's cache is paced with the mirror target it is swept beside.
+-}
 storeBudgets :: [SweepMount] -> [StoreBudget]
 storeBudgets mounts =
     Map.elems (Map.fromList [(bgScope budget, budget) | mount <- mounts, budget <- budgetsOf mount])

@@ -17,7 +17,7 @@ import Ecluse.Composition.BootError (
  )
 import Ecluse.Composition.Credential (noCredentialProviders)
 import Ecluse.Composition.Maintenance (
-    BudgetPorts (BudgetPorts, bpGateFor, bpOverrides),
+    BudgetPorts (BudgetPorts, bpGateFor, bpNominalPace, bpOverrides),
     ClearedBackend (cbAlphabet, cbFetchManifest),
     ResolveMaintenanceAdapter,
     StorePorts (..),
@@ -268,13 +268,14 @@ anonymousPorts =
     StorePorts
         { spTracing = passthroughTracingPort
         , spCredential = Nothing
-        , spBudget = ungatedRequests
-        , spQuotaOverrides = Map.empty
+        , spBudget = unpacedBudget
         }
 
--- Ports that pace nothing, for the cases about the handles a boot builds rather than their rate.
+{- Ports that count nothing and wait for nothing, for the cases about the handles a boot builds
+rather than the rate they run at. -}
 unpacedBudget :: BudgetPorts
-unpacedBudget = BudgetPorts{bpGateFor = const ungatedRequests, bpOverrides = Map.empty}
+unpacedBudget =
+    BudgetPorts{bpGateFor = const ungatedRequests, bpOverrides = Map.empty, bpNominalPace = testNominalPace}
 
 ungatedRequests :: RequestGate
 ungatedRequests = RequestGate{gateSpend = const pass}
@@ -513,29 +514,48 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
 withoutPrivateAuthority :: [(String, String)] -> [(String, String)]
 withoutPrivateAuthority = filter (\(key, _) -> key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN" && key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION")
 
-{- A store's capacity pool is its own authority, so two repositories of one CodeArtifact account
-land in one pool. A backend that publishes no quota runs unpaced until an operator declares one. -}
+{- A store's capacity pool is its own authority, and a CodeArtifact repository's is the account
+and Region that meters it. A backend publishing no quota is derived one from the sweep's own pace. -}
 budgetSpec :: Spec
 budgetSpec = describe "the request capacity a boot resolves for a store" $ do
-    it "puts two repositories of one account and Region in the same pool" $
-        storeScope (unsafeRegistryUrl (repository <> "mirror/"))
-            `shouldBe` storeScope (unsafeRegistryUrl (repository <> "internal/"))
+    it "puts two paths on one host in the same pool" $
+        storeScope (unsafeRegistryUrl "https://verdaccio.example.com/one/")
+            `shouldBe` storeScope (unsafeRegistryUrl "https://verdaccio.example.com/two/")
 
-    it "leaves a backend that publishes no quota undeclared" $ do
-        let resolved = resolvedBudget Map.empty verdaccio undeclaredBudget
-        budgetDeclared resolved `shouldBe` False
+    it "derives a backend that publishes no quota from the sweep's own package pace" $ do
+        let resolved = resolvedBudget unpacedBudget verdaccio undeclaredBudget
+        bgQuotas resolved `shouldBe` Map.singleton StoreRequests testNominalPace
+        bgOrigin resolved `shouldBe` QuotaDerived
         bgScope resolved `shouldBe` mkQuotaScope "verdaccio.example.com"
 
     it "takes an operator's declared capacity, matching the URL past case and a trailing slash" $ do
-        let declared = Map.singleton "HTTPS://Verdaccio.Example.com" capacity
-            resolved = resolvedBudget declared verdaccio undeclaredBudget
+        let resolved = resolvedBudget (overriding "HTTPS://Verdaccio.Example.com" capacity) verdaccio undeclaredBudget
         bgQuotas resolved `shouldBe` Map.singleton StoreRequests 100
         bgOrigin resolved `shouldBe` QuotaDeclared
 
     it "joins two endpoints of one pool under the scope the operator declared" $
-        bgScope (resolvedBudget (Map.singleton "https://verdaccio.example.com/" capacity{qoScope = Just "shared"}) verdaccio undeclaredBudget)
+        bgScope (resolvedBudget (overriding key capacity{qoScope = Just "shared"}) verdaccio undeclaredBudget)
             `shouldBe` mkQuotaScope "shared"
+
+    it "scales a request kind the backend costs by the weight the operator gave it" $ do
+        let weighted = capacity{qoWeights = Map.singleton DeleteBatch 3}
+            resolved = resolvedBudget (overriding key weighted) verdaccio protocolCosts
+        Map.lookup DeleteBatch (bgCosts resolved) `shouldBe` Just (Map.singleton StoreRequests 3)
+        Map.lookup ListingPage (bgCosts resolved) `shouldBe` Just (Map.singleton StoreRequests 1)
+
+    it "leaves a weight naming a kind the backend costs nothing under with nothing to scale" $ do
+        let weighted = capacity{qoWeights = Map.singleton CursorWrite 5}
+            resolved = resolvedBudget (overriding key weighted) verdaccio noCursorCost
+        Map.lookup CursorWrite (bgCosts resolved) `shouldBe` Nothing
+        bgCosts resolved `shouldBe` bgCosts noCursorCost
   where
-    repository = "https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/"
-    verdaccio = unsafeRegistryUrl "https://verdaccio.example.com/"
+    key = "https://verdaccio.example.com/"
+    verdaccio = unsafeRegistryUrl key
+    overriding declaredKey override = unpacedBudget{bpOverrides = Map.singleton declaredKey override}
     capacity = QuotaOverride{qoScope = Nothing, qoQuotas = Map.singleton StoreRequests 100, qoWeights = Map.empty}
+    protocolCosts = undeclaredBudget{bgCosts = Map.fromList [(kind, Map.singleton StoreRequests 1) | kind <- [minBound .. maxBound]]}
+    noCursorCost = undeclaredBudget{bgCosts = Map.singleton ListingPage (Map.singleton StoreRequests 1)}
+
+-- Twenty-five requests a second: the shipped chunk of fifty every two seconds.
+testNominalPace :: Rational
+testNominalPace = 25

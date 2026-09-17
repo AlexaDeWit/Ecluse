@@ -9,6 +9,7 @@ import Data.Ratio ((%))
 import Data.Time (NominalDiffTime)
 import Test.Hspec
 
+import Ecluse.Core.Clock (monoSecondsBetween, monotonicNow, waitSeconds)
 import Ecluse.Core.Registry.Maintenance.Budget (
     BudgetPort (budgetClose, budgetOpen, budgetPaced),
     CycleCost (ccRequests, ccWorkSeconds),
@@ -96,6 +97,14 @@ meterSpec = describe "the cycle meter" $ do
         gateSpend (gateFor mirror) ManifestRead
         gateSpend (gateFor cache) ListingPage
         readIORef waits `shouldReturn` [0.5]
+
+    it "serves a sub-second pace through the wait the boot wires in" $ do
+        (port, gateFor) <- newBudgetMeter waitSeconds
+        budgetPaced port (Map.fromList [(mirror, paceOf (Map.fromList [(ListingPage, 1 % 20)]))])
+        before <- monotonicNow
+        gateSpend (gateFor mirror) ListingPage
+        served <- monoSecondsBetween before <$> monotonicNow
+        served `shouldSatisfy` (> 0.02)
 
     it "counts the waits it imposed out of the work it measured" $ do
         waits <- newIORef []

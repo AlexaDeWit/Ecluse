@@ -28,6 +28,7 @@ import Ecluse.Config (
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (displayExceptionT)
 
@@ -125,6 +126,10 @@ data BootError
       with, carrying why.
       -}
       StoreMaintenanceUnavailable Ecosystem StoreMaintenanceReason
+    | {- | Two @dredger.quotaOverrides@ entries declare the same capacity pool differently,
+      carried as the pool and the two keys that define it.
+      -}
+      DredgerQuotaScopeConflict Text Text Text
     | {- | The configured pause between sweep chunks is beneath its floor, carried beside it.
       Only the deleting role reads the @dredger@ group, so only that role refuses.
       -}
@@ -299,6 +304,14 @@ renderBootError = \case
             <> " has no usable store maintenance backend: "
             <> renderStoreMaintenanceReason eco reason
             <> " (the Dredger deletes from every mount's mirror target, so it refuses rather than starting against a store it cannot sweep)"
+    DredgerQuotaScopeConflict scope first second ->
+        "dredger.quotaOverrides: "
+            <> authorityLabel first
+            <> " and "
+            <> authorityLabel second
+            <> " both define the capacity pool \""
+            <> scope
+            <> "\" and define it differently: one pool takes one definition, so give the two entries the same quotas and weights or separate scopes"
     DredgerChunkPauseBeneathFloor configured floorPause ->
         "ECLUSE_DREDGER__CHUNK_PAUSE (dredger.chunkPause) is "
             <> show configured
@@ -341,9 +354,9 @@ renderAdvisory = \case
     MirrorTargetOnOwnPublicationTarget eco url ->
         mirrorCollapseLine eco "publicationTarget" url
     DredgerQuotaOverrideUnmatched key ->
-        "dredger.quotaOverrides: \""
-            <> key
-            <> "\" names no store this deployment declares, so it paces nothing"
+        "dredger.quotaOverrides: "
+            <> authorityLabel key
+            <> " names no store this deployment declares, so it paces nothing"
 
 -- The line both mirror collapses take: the collapsed pair, the registry they share, and the
 -- consequence of keeping the configuration.

@@ -18,7 +18,6 @@ module Ecluse.Composition.Maintenance (
     StorePorts (..),
     BudgetPorts (..),
     storeScope,
-    scopeFor,
     overrideKey,
     resolvedBudget,
     BuildStoreMaintenance,
@@ -111,6 +110,7 @@ import Ecluse.Core.Registry.Maintenance.Protocol (
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
+import Ecluse.Core.Registry.Sweep.Pacing (derivedCapacity)
 import Ecluse.Core.Security (Limits (maxVersionCount), authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -285,10 +285,8 @@ data StorePorts = StorePorts
     -- ^ The tracing port the manifest read is bracketed by.
     , spCredential :: Maybe CredentialProvider
     -- ^ The credential for this exact target. An anonymous protocol observation holds none.
-    , spBudget :: RequestGate
-    -- ^ The gate this store's own requests are counted and paced through.
-    , spQuotaOverrides :: Map Text QuotaOverride
-    -- ^ What the operator declared about store capacity, keyed by the store URL.
+    , spBudget :: BudgetPorts
+    -- ^ What this store's requests are counted and paced through.
     }
 
 {- | What the boot knows about request capacity before any store is built: the gate for each
@@ -297,6 +295,8 @@ capacity pool, and what the operator declared about those pools.
 data BudgetPorts = BudgetPorts
     { bpGateFor :: QuotaScope -> RequestGate
     , bpOverrides :: Map Text QuotaOverride
+    , bpNominalPace :: Rational
+    -- ^ The sweep's own package pace, which a backend publishing no quota is taken to run at.
     }
 
 {- | How a boot builds one store's maintenance handle, under the response bound the plan resolved.
@@ -336,10 +336,13 @@ buildStoreMaintenance ports limits cleared = budgeted ports cleared <$> built
                 deletionManager <- newPooledManager storeConnections (singleAttemptSettings tlsManagerSettings)
                 pure (newProtocolMaintenance (protocolStore limits cleared store readManifest manager deletionManager))
 
--- The handle under this store's resolved capacity, with every request it makes counted and paced.
+{- The handle under this store's resolved capacity, with every request it makes counted and paced.
+The capacity resolves first, because the pool it names is the pool the gate meters in. -}
 budgeted :: StorePorts -> ClearedBackend -> StoreMaintenance -> StoreMaintenance
 budgeted ports cleared handle =
-    (meteredMaintenance (spBudget ports) handle){storeFacts = resolvedFacts ports cleared (storeFacts handle)}
+    (meteredMaintenance (gateOver ports facts) handle){storeFacts = facts}
+  where
+    facts = resolvedFacts ports cleared (storeFacts handle)
 
 {- | The observing calls for a cleared store, built from the backend's own read capability rather
 than from a handle with its writes taken away.
@@ -348,7 +351,8 @@ buildStoreObservation :: BuildStoreObservation
 buildStoreObservation ports limits cleared = observed <$> built
   where
     observed handle =
-        (meteredObservation (spBudget ports) handle){obFacts = resolvedFacts ports cleared (obFacts handle)}
+        let facts = resolvedFacts ports cleared (obFacts handle)
+         in (meteredObservation (gateOver ports facts) handle){obFacts = facts}
     built = do
         (readManifest, manager) <- storeAccess ports limits cleared
         case cbControl cleared of
@@ -359,10 +363,14 @@ buildStoreObservation ports limits cleared = observed <$> built
 
 resolvedFacts :: StorePorts -> ClearedBackend -> StoreFacts -> StoreFacts
 resolvedFacts ports cleared facts =
-    facts{factBudget = resolvedBudget (spQuotaOverrides ports) (cbUrl cleared) (factBudget facts)}
+    facts{factBudget = resolvedBudget (spBudget ports) (cbUrl cleared) (factBudget facts)}
 
-{- | The capacity pool a store shares: its own authority. Two repositories of one CodeArtifact
-account and Region, and two paths on one host, therefore land in the same pool.
+-- The gate for the pool this store's resolved capacity landed in.
+gateOver :: StorePorts -> StoreFacts -> RequestGate
+gateOver ports facts = bpGateFor (spBudget ports) (bgScope (factBudget facts))
+
+{- | The pool a store falls in when its backend names none of its own: the store's own authority,
+so two paths on one host share it.
 -}
 storeScope :: RegistryUrl -> QuotaScope
 storeScope = mkQuotaScope . authorityLabel . registryUrlText
@@ -379,18 +387,19 @@ matchingOverride overrides url = Map.lookup (overrideKey (registryUrlText url)) 
   where
     keyed = Map.fromList [(overrideKey key, override) | (key, override) <- Map.toList overrides]
 
--- | The pool this store's requests are metered in, which a declared scope can join to another's.
-scopeFor :: Map Text QuotaOverride -> RegistryUrl -> QuotaScope
-scopeFor overrides url = maybe (storeScope url) mkQuotaScope (qoScope =<< matchingOverride overrides url)
-
-{- | The store's capacity as this boot resolves it: the backend's own description under the
-store's scope, with the operator's declaration replacing the scope, quotas, and weights it names.
+{- | The store's capacity as this boot resolves it: the backend's own description, the operator's
+declaration where there is one, else the pace a backend publishing no quota is derived to run at.
 -}
-resolvedBudget :: Map Text QuotaOverride -> RegistryUrl -> StoreBudget -> StoreBudget
-resolvedBudget overrides url budget =
-    maybe located (declared located) (matchingOverride overrides url)
+resolvedBudget :: BudgetPorts -> RegistryUrl -> StoreBudget -> StoreBudget
+resolvedBudget ports url budget =
+    -- The derivation runs last and only bites where nothing else declared a quota, so an entry
+    -- naming a scope or a weight alone still leaves the store a capacity.
+    derivedCapacity (bpNominalPace ports) (maybe located (declared located) (matchingOverride (bpOverrides ports) url))
   where
-    located = budget{bgScope = storeScope url}
+    -- A backend that names its own pool keeps it. One that names none is pooled by its authority.
+    located
+        | bgScope budget == mkQuotaScope "" = budget{bgScope = storeScope url}
+        | otherwise = budget
 
 -- A declared capacity wins per dimension, and a declared weight scales that kind's own costs.
 declared :: StoreBudget -> QuotaOverride -> StoreBudget
@@ -486,14 +495,13 @@ planStoreMaintenanceFor target build tracing budget credentials limits backends 
     validationToEither . traverse eitherToValidation <$> Map.traverseWithKey planOne backends
   where
     planOne eco backend =
-        refuseOnThrow (StoreMaintenanceUnavailable eco . reason) (build (portsFor eco backend) limits backend)
+        refuseOnThrow (StoreMaintenanceUnavailable eco . reason) (build (portsFor eco) limits backend)
     reason = case target of
         MirrorCredential -> ClientBuildFailed
         PrivateCacheCredential -> PrivateCacheUnavailable . ("client build failed: " <>)
-    portsFor eco backend =
+    portsFor eco =
         StorePorts
             { spTracing = tracing
             , spCredential = lookupTargetProvider target eco credentials
-            , spBudget = bpGateFor budget (scopeFor (bpOverrides budget) (cbUrl backend))
-            , spQuotaOverrides = bpOverrides budget
+            , spBudget = budget
             }

@@ -129,6 +129,10 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "ECLUSE_DREDGER__CHUNK_PAUSE (dredger.chunkPause) is 1s, beneath the floor of 2s"
         renderBootError (DredgerChunkPauseBeneathFloor 1 2)
             `shouldSatisfy` infixed "may be raised and never lowered"
+        renderBootError (DredgerQuotaScopeConflict "shared" "https://one.example.test/" "https://two.example.test/")
+            `shouldSatisfy` infixed "one.example.test and two.example.test both define the capacity pool \"shared\""
+        renderBootError (DredgerQuotaScopeConflict "shared" "https://one.example.test/" "https://two.example.test/")
+            `shouldSatisfy` infixed "give the two entries the same quotas and weights or separate scopes"
         renderBootError PilotWithoutEcosystem
             `shouldSatisfy` infixed "ECLUSE_ADVISORIES__URL is set but no mount is declared"
         renderBootError PilotWithoutEcosystem
@@ -160,8 +164,8 @@ renderAdvisorySpec = describe "renderAdvisory" $ do
         advisoryBytes (MirrorTargetOnOwnPublicationTarget Npm (unsafeRegistryUrl "https://store.example.test/npm/mirror/"))
             `shouldBe` "mount \"npm\": mirrorTarget and publicationTarget resolve to the same registry (https://store.example.test/npm/mirror/); the Dredger refuses this configuration, so pruning this mirror stays manual"
 
-    it "quotes a declared capacity that names no store, and says it paces nothing" $
-        advisoryBytes (DredgerQuotaOverrideUnmatched "https://gone.example.test/")
-            `shouldBe` "dredger.quotaOverrides: \"https://gone.example.test/\" names no store this deployment declares, so it paces nothing"
+    it "reduces a declared capacity that names no store to its authority, and says it paces nothing" $
+        advisoryBytes (DredgerQuotaOverrideUnmatched "https://deploy:hunter2@gone.example.test/npm/")
+            `shouldBe` "dredger.quotaOverrides: gone.example.test names no store this deployment declares, so it paces nothing"
   where
     advisoryBytes = TE.encodeUtf8 . renderAdvisory

@@ -19,6 +19,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     -- * What the backend does
     codeArtifactFacts,
     codeArtifactBudget,
+    codeArtifactScope,
     deleteCeiling,
 
     -- * The npm codec
@@ -97,6 +98,7 @@ import Ecluse.Core.Registry.Maintenance (
 import Ecluse.Core.Registry.Maintenance.Budget (
     QuotaDimension (AccountReads, AccountWrites, NameListing, TokenReads, VersionListing),
     QuotaOrigin (QuotaDocumented),
+    QuotaScope,
     RequestKind (CursorRead, CursorWrite, DeleteBatch, ListingPage, ManifestRead, PermissionRead, VersionPage),
     StoreBudget (StoreBudget, bgCosts, bgOrigin, bgQuotas, bgScope),
     mkQuotaScope,
@@ -149,16 +151,22 @@ storePackageFormat store = case casFormat store of
 {- | What CodeArtifact does: it re-admits a version published again after a delete, and has applied
 it by the time it answers. The alphabet is the mount ecosystem's, whose grammar spells the names.
 -}
-codeArtifactFacts :: NameAlphabet -> StoreFacts
-codeArtifactFacts alphabet =
+codeArtifactFacts :: NameAlphabet -> CodeArtifactStore -> StoreFacts
+codeArtifactFacts alphabet store =
     StoreFacts
         { factBackend = "codeArtifact"
         , factDeleteCeiling = deleteCeiling
         , factRefill = RefillPermitted
         , factCompletion = CompletesOnCall
         , factNameAlphabet = alphabet
-        , factBudget = codeArtifactBudget
+        , factBudget = codeArtifactBudget{bgScope = codeArtifactScope store}
         }
+
+{- | The pool a repository's requests debit: the account that owns the domain, in the Region the
+repository answers in. Every repository of that account and Region shares one set of quotas.
+-}
+codeArtifactScope :: CodeArtifactStore -> QuotaScope
+codeArtifactScope store = mkQuotaScope (casDomainOwner store <> "." <> casRegion store)
 
 {- | The capacity a CodeArtifact account and Region is taken to have: the per-Region defaults AWS
 publishes, which this build reads from its documentation rather than discovering.

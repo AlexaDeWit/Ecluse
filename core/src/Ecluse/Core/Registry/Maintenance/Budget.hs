@@ -100,7 +100,9 @@ data QuotaOrigin
       QuotaDocumented
     | -- | The operator declared them, for a backend that publishes none.
       QuotaDeclared
-    | -- | Neither, so nothing bounds this store's request rate.
+    | -- | Derived from the sweep's own package pace, for a backend that publishes none.
+      QuotaDerived
+    | -- | Neither, as the backend leaf hands the budget over before the boot resolves it.
       QuotaUndeclared
     deriving stock (Eq, Show)
 
@@ -137,13 +139,13 @@ smallestQuota = foldr (\rate held -> Just (maybe rate (min rate) held)) Nothing 
 
 -- | The resolved capacity as the boot line records it, naming where each number came from.
 renderStoreBudget :: StoreBudget -> Text
-renderStoreBudget budget =
-    renderQuotaScope (bgScope budget) <> " " <> origin <> ": " <> quotas
+renderStoreBudget budget = origin <> " (" <> quotas <> ")"
   where
     origin = case bgOrigin budget of
-        QuotaDocumented -> "at the backend's documented quotas"
-        QuotaDeclared -> "at the operator-declared capacity"
-        QuotaUndeclared -> "with no declared capacity, so no request budget paces it"
+        QuotaDocumented -> "the backend's documented quotas"
+        QuotaDeclared -> "the capacity you declared"
+        QuotaDerived -> "capacity derived from the sweep's own package pace"
+        QuotaUndeclared -> "no capacity at all"
     quotas
         | Map.null (bgQuotas budget) = "none"
         | otherwise =
@@ -274,12 +276,16 @@ newBudgetMeter wait = do
         gateFor scope =
             RequestGate
                 { gateSpend = \kind -> do
-                    modifyIORef' tallies (Map.insertWith (<>) scope (oneRequest kind))
+                    atomicModifyIORef' tallies (\held -> (Map.insertWith (<>) scope (oneRequest kind) held, ()))
                     pace <- Map.findWithDefault freePace scope <$> readIORef paces
                     let seconds = paceSeconds pace kind
                     when (seconds > 0) $ do
-                        modifyIORef' waited (+ toRational seconds)
+                        -- The wait served, not the wait asked for, so the work time it comes out
+                        -- of stays right however the injected wait behaves.
+                        before <- monotonicNow
                         wait seconds
+                        served <- monoSecondsBetween before <$> monotonicNow
+                        atomicModifyIORef' waited (\held -> (held + toRational (max 0 served), ()))
                 }
     pure (port, gateFor)
 
