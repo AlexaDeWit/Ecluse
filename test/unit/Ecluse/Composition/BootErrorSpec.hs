@@ -156,8 +156,14 @@ renderBootErrorSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM admits public content: repository shared carries the external connection public:npmjs"
         renderBootError (PrivateUpstreamUnsafe Npm (ConfigurationEvidence (RepositoryName "shared") (ExternalConnection "public:npmjs")))
             `shouldSatisfy` infixed "point privateUpstream at a repository that has none"
+        -- One constructor carries both a refused grant and an identity that never resolved, so
+        -- the line names each, and the remedy the second operator needs.
         renderBootError (PrivateUpstreamUnsafe Npm (InsufficientPermissions (PermissionName "codeartifact:DescribeRepository")))
             `shouldSatisfy` infixed "refused codeartifact:DescribeRepository"
+        renderBootError (PrivateUpstreamUnsafe Npm (InsufficientPermissions (PermissionName "codeartifact:DescribeRepository")))
+            `shouldSatisfy` infixed "or resolved no identity to ask with"
+        renderBootError (PrivateUpstreamUnsafe Npm (InsufficientPermissions (PermissionName "codeartifact:DescribeRepository")))
+            `shouldSatisfy` infixed "give this role an AWS identity carrying that grant"
         renderBootError (PrivateUpstreamUnsafe Npm (InsufficientPermissions (PermissionName "codeartifact:DescribeRepository")))
             `shouldSatisfy` infixed "An identity that cannot ask cannot clear the repository"
   where

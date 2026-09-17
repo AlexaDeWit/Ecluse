@@ -40,7 +40,6 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
-import UnliftIO (tryAny)
 import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Composition.BootError (
@@ -116,7 +115,6 @@ import Ecluse.Core.Registry.Maintenance.Protocol (
     newProtocolObservation,
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (
-    UndecidabilityReason (NetworkFailure),
     UpstreamSafety (Undecidable, Unsafe),
     noUpstreamMechanism,
  )
@@ -350,29 +348,43 @@ identity, so no caller's credential reaches the call.
 -}
 buildUpstreamProbe :: BuildUpstreamProbe
 buildUpstreamProbe eco endpoint = case tgtTag target of
-    -- A URL naming no repository this build can address leaves it nothing to ask about.
+    -- 'vetPrivateRepository' refuses an endpoint addressing no repository, so this resolution
+    -- fails only for a value no loaded configuration carries, and there is nothing to ask about.
     TagCodeArtifact -> either (const noUpstreamMechanism) (newCodeArtifactUpstreamProbe . snd) (resolvePrivateBackend eco target)
     TagRegistry -> noUpstreamMechanism
     TagVerdaccio -> noUpstreamMechanism
   where
     target = preTarget endpoint
 
-{- | Read every probe's answer. A backend reads its own identity and its own faults, so a throw
-that reaches here is one no backend read, and it ends this boot's line rather than the boot.
+{- | Read every probe's answer. A backend reads its own identity and its own faults into an
+answer, so a throw that reaches here refuses the mount rather than passing for an open question.
 -}
 readUpstreamSafety :: [(Ecosystem, IO UpstreamSafety)] -> IO ([Advisory], Either [BootError] ())
-readUpstreamSafety probes = upstreamFindings <$> traverse answer probes
+readUpstreamSafety probes = settled . partitionEithers <$> traverse answer probes
   where
-    answer (eco, probe) = (eco,) . fromRight (Undecidable NetworkFailure) <$> tryAny probe
+    answer (eco, probe) = fmap (eco,) <$> refuseOnThrow (unreadableProbe eco) probe
+
+    settled (thrown, answers) =
+        let (advisories, refused) = upstreamFindings answers
+         in (advisories, refusals (concat thrown <> fromLeft [] refused))
+
+    unreadableProbe eco =
+        StoreMaintenanceUnavailable eco
+            . PrivateCacheUnavailable
+            . ("the check for a connection to a public registry threw: " <>)
 
 {- | What a boot does about the answers it read: an unsafe repository refuses the role, an open
 question advises, and a safe one says nothing.
 -}
 upstreamFindings :: [(Ecosystem, UpstreamSafety)] -> ([Advisory], Either [BootError] ())
-upstreamFindings answers = (advisories, if null refusals then Right () else Left refusals)
+upstreamFindings answers = (advisories, refusals unsafeMounts)
   where
     advisories = [PrivateUpstreamUndecided eco reason | (eco, Undecidable reason) <- answers]
-    refusals = [PrivateUpstreamUnsafe eco reason | (eco, Unsafe reason) <- answers]
+    unsafeMounts = [PrivateUpstreamUnsafe eco reason | (eco, Unsafe reason) <- answers]
+
+-- Nothing found is nothing refused, which is what lets a whole pass report at once.
+refusals :: [BootError] -> Either [BootError] ()
+refusals found = if null found then Right () else Left found
 
 {- | The live handle for a cleared store. CodeArtifact discovers its credentials the standard AWS
 way, and both arms read and dial over one manager of the store's own.

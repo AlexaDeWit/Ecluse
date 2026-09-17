@@ -92,7 +92,7 @@ import Ecluse.Config.Aeson ()
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Resolve (buildEnvAst, deepMerge, secretLeafKeys)
 import Ecluse.Config.Rule
-import Ecluse.Config.Target (resolveStoreBackend, vetTargetTag)
+import Ecluse.Config.Target (resolveStoreBackend, vetPrivateRepository, vetTargetTag)
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
@@ -189,9 +189,16 @@ resolveMounts globalPolicy appConfig =
         ([], mounts) -> Right (Map.fromList mounts)
         (errs, _) -> Left (concat errs)
   where
-    resolveOne (eco, mcfg) = case lefts (map (uncurry (vetTargetTag eco)) (readAndPublishTargets mcfg)) of
+    resolveOne (eco, mcfg) = case lefts (declarationErrors eco mcfg) of
         [] -> (eco,) <$> resolveMode globalPolicy eco mcfg
         tagErrs -> Left tagErrs
+
+{- Every endpoint checked against the tag it was declared under, and the private upstream checked
+once more for the repository the boot addresses its aggregation question to. -}
+declarationErrors :: Ecosystem -> MountConfig -> [Either ConfigError ()]
+declarationErrors eco mcfg =
+    map (uncurry (vetTargetTag eco)) (readAndPublishTargets mcfg)
+        <> [vetPrivateRepository eco (preTarget endpoint) | Just endpoint <- [mntPrivateUpstream mcfg]]
 
 {- Each read or publish endpoint a mount declares, with the key it is written under. The mirror
 target is absent because 'resolveStoreBackend' vets it while resolving its backend. -}

@@ -5,6 +5,7 @@
 -- | CodeArtifact maintenance requests and their sweep callers over a recording control plane.
 module Ecluse.Runtime.Maintenance.CodeArtifactSpec (spec) where
 
+import Data.List (lookup)
 import Data.Text qualified as T
 import Lens.Micro ((.~), (?~), (^.))
 import Network.HTTP.Types (Status, status403, status503)

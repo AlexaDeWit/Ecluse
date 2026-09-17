@@ -129,6 +129,8 @@ that holds no maintenance handle for the repository it serves private content fr
 -}
 newCodeArtifactUpstreamProbe :: CodeArtifactStore -> IO UpstreamSafety
 newCodeArtifactUpstreamProbe store = withReadableIdentity $ do
+    -- This wrap covers the environment build. The walk below carries its own, for a caller
+    -- holding a plane this never built.
     env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
     probeUpstreamSafety (readPlaneFor env) store
 

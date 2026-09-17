@@ -25,6 +25,7 @@ module Ecluse.Config.Target (
     resolveStoreBackend,
     resolvePrivateBackend,
     vetTargetTag,
+    vetPrivateRepository,
     parseCodeArtifactHost,
     isAccountId,
 ) where
@@ -74,7 +75,7 @@ The repository is returned beside the backend, so a caller needs no second read 
 -}
 resolvePrivateBackend :: Ecosystem -> Target -> Either ConfigError (StoreBackend, CodeArtifactStore)
 resolvePrivateBackend eco target = do
-    (domain, owner, region) <- codeArtifactHost eco "privateUpstream" (tgtUrl target)
+    (domain, owner, region) <- codeArtifactHost eco privateUpstreamKey (tgtUrl target)
     store <- codeArtifactStore eco (registryUrlText (tgtUrl target)) domain owner region
     pure (BackendCodeArtifact (mintIdentity domain owner region Nothing) store, store)
 
@@ -86,6 +87,19 @@ vetTargetTag eco key target = case tgtTag target of
     TagCodeArtifact -> void (codeArtifactHost eco key (tgtUrl target))
     TagRegistry -> Right ()
     TagVerdaccio -> Right ()
+
+{- | Vet a declared private upstream past its tag. A @codeArtifact@ one must address a repository
+under the mount's own format, because the boot asks that repository what content it aggregates.
+-}
+vetPrivateRepository :: Ecosystem -> Target -> Either ConfigError ()
+vetPrivateRepository eco target = case tgtTag target of
+    -- The host is 'vetTargetTag''s to report, so a bad one is left to it rather than named twice.
+    TagCodeArtifact | isRight (codeArtifactHost eco privateUpstreamKey (tgtUrl target)) -> void (resolvePrivateBackend eco target)
+    _ -> Right ()
+
+-- | The key a private upstream is declared under, which both of its refusals are reported at.
+privateUpstreamKey :: Text
+privateUpstreamKey = "privateUpstream"
 
 -- The mint identity a CodeArtifact host carries, with the lifetime the operator asked for.
 mintIdentity :: Text -> Text -> Text -> Maybe Natural -> CodeArtifactConfig

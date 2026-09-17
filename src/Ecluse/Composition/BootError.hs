@@ -301,7 +301,7 @@ renderBootError = \case
         mountKeyRef eco "privateUpstream"
             <> " could not be read: this role's identity is refused "
             <> permissionNameText permission
-            <> " on that repository or one in its upstream chain. An identity that cannot ask cannot clear the repository, so grant that permission, or point privateUpstream at a repository this role may read"
+            <> " on that repository or one in its upstream chain, or resolved no identity to ask with. An identity that cannot ask cannot clear the repository, so give this role an AWS identity carrying that grant, or point privateUpstream at a repository this role may read"
     StoreTagConflict eco key other otherKey url ->
         mountKeyRef eco key
             <> " and "

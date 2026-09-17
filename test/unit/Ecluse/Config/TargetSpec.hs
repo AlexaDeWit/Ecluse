@@ -195,6 +195,20 @@ hostValidationSpec = describe "the URL a tag admits" $ do
         loadMount (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactBare]])
             `shouldSatisfy` refusalMentions "its path must be /npm/{repository}/"
 
+    it "refuses a codeArtifact private upstream naming no repository at all" $
+        -- The boot asks that repository what it aggregates, so one the URL does not name is
+        -- refused here rather than left unasked.
+        loadMount [decl "privateUpstream" "codeArtifact" [url codeArtifactBare]]
+            `shouldSatisfy` refusalMentions "its path must be /npm/{repository}/"
+
+    it "refuses a codeArtifact private upstream addressing another format's endpoint" $
+        loadMount [decl "privateUpstream" "codeArtifact" [url codeArtifactPyPI]]
+            `shouldSatisfy` refusalMentions "its path must be /npm/{repository}/"
+
+    it "admits a codeArtifact private upstream that addresses a repository under its own format" $
+        loadMount [decl "privateUpstream" "codeArtifact" [url codeArtifactInternal]]
+            `shouldSatisfy` isRight
+
     it "refuses a codeArtifact mirror target on an ecosystem CodeArtifact has no format for" $
         loadConfig pubUrlEnv (Just rubygemsDoc)
             `shouldSatisfy` refusalMentions "CodeArtifact carries no package format for the rubygems ecosystem"

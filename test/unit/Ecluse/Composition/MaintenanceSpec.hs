@@ -52,12 +52,14 @@ import Ecluse.Config (
     AppConfig (cfgMounts),
     Config (configApp, configMounts),
     ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
+    DeletionConsent (DeletionWithheld),
     MountConfig (mntPrivateUpstream),
     MountMap,
+    PrivateEndpoint (PrivateEndpoint, preConsent, preTarget, preToken),
     QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights),
-    PrivateEndpoint,
     StoreBackend,
-    StoreTag (TagVerdaccio),
+    StoreTag (TagCodeArtifact, TagVerdaccio),
+    Target (Target),
     sbControl,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -370,16 +372,35 @@ probeSpec = describe "the private upstream's answer" $ do
         upstreamFindings [(Npm, Unsafe evidence), (PyPI, Undecidable NetworkFailure)]
             `shouldBe` ([PrivateUpstreamUndecided PyPI NetworkFailure], Left [PrivateUpstreamUnsafe Npm evidence])
 
-    it "ends the line, not the boot, for a throw no backend read into an answer" $
-        readUpstreamSafety [(Npm, throwIO NoStoreClient)]
-            `shouldReturn` ([PrivateUpstreamUndecided Npm NetworkFailure], Right ())
+    it "refuses the mount for a throw no backend read into an answer, rather than passing it off as an open question" $ do
+        (advisories, outcome) <- readUpstreamSafety [(Npm, throwIO NoStoreClient)]
+        advisories `shouldBe` []
+        case outcome of
+            Right _ -> expectationFailure "expected an unread probe exception to refuse the mount"
+            Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable detail)] ->
+                detail `shouldSatisfy` T.isPrefixOf "the check for a connection to a public registry threw: NoStoreClient"
+            Left errs -> expectationFailure ("expected the mount's own refusal, got: " <> show errs)
 
     it "answers undecided for a private upstream whose backend does not report its aggregation" $
         for_ [staticEnvVars, withObservablePrivate staticEnvVars] $ \envVars -> do
             endpoint <- privateEndpointFor envVars
             buildUpstreamProbe Npm endpoint `shouldReturn` Undecidable NoMechanism
+
+    it "answers undecided for a codeArtifact endpoint addressing no repository, which no loaded configuration carries" $
+        -- 'vetPrivateRepository' refuses this URL at load, so the value is built here rather
+        -- than read from a configuration, and the arm stays covered.
+        buildUpstreamProbe Npm unaddressablePrivateUpstream `shouldReturn` Undecidable NoMechanism
   where
     evidence = ConfigurationEvidence (RepositoryName "shared") (ExternalConnection "public:npmjs")
+
+-- A CodeArtifact host whose path names no repository, which leaves the probe nothing to ask about.
+unaddressablePrivateUpstream :: PrivateEndpoint
+unaddressablePrivateUpstream =
+    PrivateEndpoint
+        { preTarget = Target TagCodeArtifact (unsafeRegistryUrl "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/")
+        , preToken = Nothing
+        , preConsent = DeletionWithheld
+        }
 
 -- The npm mount's declared private upstream, failing the case where the fixture declares none.
 privateEndpointFor :: [(String, String)] -> IO PrivateEndpoint

@@ -5,6 +5,7 @@
 -- | The bounded chain walk every backend that reports its aggregation answers through.
 module Ecluse.Core.Registry.Maintenance.UpstreamSpec (spec) where
 
+import Data.List (lookup)
 import Test.Hspec
 
 import Ecluse.Core.Registry.Maintenance.Upstream (

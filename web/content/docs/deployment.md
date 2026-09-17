@@ -185,9 +185,9 @@ the store, so a refused `codeartifact:DescribeRepository`, and an environment th
 identity at all, refuse the role too. A serve-only proxy in front of a CodeArtifact private
 upstream therefore needs that identity and that grant, even though its package reads carry the
 caller's own credential. A `registry` or `verdaccio` private upstream reports no such
-configuration, so the boot warns once and that topology stays yours to verify. `ecluse
-check-config` makes no cloud call, so it prints that the check runs at boot rather than running
-it.
+configuration, so the boot warns once and that topology stays yours to verify.
+`ecluse check-config` makes no cloud call, so it prints that the check runs at boot rather than
+running it.
 
 ## Splitting the proxy from the mirror worker
 

@@ -191,7 +191,7 @@ spec = describe "planExecutable" $ do
                     { sbObserving = \_ _ backend -> do
                         let url = registryUrlText (cbUrl backend)
                         modifyIORef' builds (url :)
-                        pure (fakeObservation (if url == "https://private.example.test" then cache else mirror))
+                        pure (fakeObservation (if url == privateUpstreamUrl then cache else mirror))
                     }
         executable <- expectExecutableWith env BootStorePreview (\_ _ _ -> Nothing) refusingQueue onlyReads
         beforeMirror <- readFakeContents mirror
@@ -224,7 +224,7 @@ spec = describe "planExecutable" $ do
             let builds =
                     observingOnly
                         { sbObserving = \ports limits backend ->
-                            if mirrorFails || registryUrlText (cbUrl backend) == "https://private.example.test"
+                            if mirrorFails || registryUrlText (cbUrl backend) == privateUpstreamUrl
                                 then sbObserving refusingStore ports limits backend
                                 else sbObserving observingOnly ports limits backend
                         }

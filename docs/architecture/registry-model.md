@@ -393,10 +393,9 @@ aggregates, both proxy roles walk the private upstream's upstream chain once and
 when any repository in it carries an external connection to a public registry. The refusal names
 the mount, the repository and the connection. On CodeArtifact the walk is `DescribeRepository`
 under the role identity, bounded to 10 hops and 25 calls. An identity that cannot ask cannot clear
-the store, so a refused grant and an environment with no AWS identity both refuse the mount. A
-`registry` or
-`verdaccio` store reports no such configuration, so the boot warns once and the topology stays an
-operator-architecture invariant, catalogued in the
+the store, so a refused grant and an environment with no AWS identity both refuse the mount.
+A `registry` or `verdaccio` store reports no such configuration, so the boot warns once and the
+topology stays an operator-architecture invariant, catalogued in the
 [threat model](https://ecluse-proxy.com/docs/threat-model/).
 
 ## The internal domain model
