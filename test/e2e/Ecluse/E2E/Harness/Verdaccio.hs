@@ -12,6 +12,7 @@ module Ecluse.E2E.Harness.Verdaccio (
     verdaccioVersions,
     verdaccioAwaitVersions,
     verdaccioArtifact,
+    verdaccioArtifactBytes,
     verdaccioLatest,
     verdaccioSnapshot,
 ) where
@@ -144,14 +145,19 @@ verdaccioAwaitVersions :: E2E -> Text -> [Text] -> IO [Text]
 verdaccioAwaitVersions e2e name wanted =
     pollUntil 40 500000 (== wanted) (handleAny (\_ -> pure []) (verdaccioVersions e2e name))
 
-{- | Read one version's artifact straight from the store, returning the status and the body size.
+-- | 'verdaccioArtifactBytes' reduced to the status and the body size.
+verdaccioArtifact :: E2E -> Text -> Text -> IO (Int, Int64)
+verdaccioArtifact e2e name version =
+    second LBS.length <$> verdaccioArtifactBytes e2e name version
+
+{- | Read one version's artifact straight from the store, returning the status and the body bytes.
 It bypasses the proxy, so a case can tell a stored artifact from a public-leg fallback.
 -}
-verdaccioArtifact :: E2E -> Text -> Text -> IO (Int, Int64)
-verdaccioArtifact e2e name version = do
+verdaccioArtifactBytes :: E2E -> Text -> Text -> IO (Int, LByteString)
+verdaccioArtifactBytes e2e name version = do
     req <- parseRequest (toString (e2eVerdaccio e2e <> "/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz"))
     resp <- httpLbs req (e2eManager e2e)
-    pure (statusCode (responseStatus resp), LBS.length (responseBody resp))
+    pure (statusCode (responseStatus resp), responseBody resp)
 
 {- | The store's own @dist-tags.latest@ target. 'Nothing' for an absent package or an absent tag,
 and a failure for an unreadable packument.

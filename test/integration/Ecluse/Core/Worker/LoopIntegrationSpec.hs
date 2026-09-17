@@ -6,18 +6,20 @@ module Ecluse.Core.Worker.LoopIntegrationSpec (spec) where
 
 import Network.HTTP.Types (status200, status201, status409, status503)
 import Test.Hspec
+import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (HashAlg (SRI), mkPackageName)
 import Ecluse.Core.Queue (
     MirrorJob (..),
     MirrorQueue (enqueue, receive),
+    Seconds (Seconds),
  )
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (WorkerPolicies)
 import Ecluse.Integration.Ministack (
-    QueueOptions (qoWaitSeconds),
+    QueueOptions (qoVisibilityTimeout, qoWaitSeconds),
     defaultQueueOptions,
     freshQueue,
     unwrapQ,
@@ -25,6 +27,7 @@ import Ecluse.Integration.Ministack (
  )
 import Ecluse.Integration.WorkerLoop (
     mirrorPoliciesAt,
+    mirrorPoliciesUnderAt,
     newQueueEnv,
     publishedAtLeast,
     runLoopFor,
@@ -33,11 +36,11 @@ import Ecluse.Integration.WorkerLoop (
  )
 import Ecluse.Runtime.Env (envWorkerHeartbeat, lastPoll)
 import Ecluse.Test.Package (sriSha512Of, unsafeFilename, unsafeHash)
+import Ecluse.Test.Rules (admitRule, denyRule)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 
-{- | The mirror worker end to end against real SQS (a @ministack@ container) and WAI
-stubs. It covers the queue semantics the in-memory double cannot reproduce: visibility
-timeouts, redelivery, and held messages. Needs a Docker daemon and no real AWS.
+{- | The mirror worker end to end against real SQS (a @ministack@ container) and WAI stubs: the
+visibility, redelivery, and boot-policy semantics the in-memory double cannot reproduce.
 -}
 spec :: Spec
 spec =
@@ -114,6 +117,32 @@ spec =
                         published <- readIORef publishLog
                         published `shouldBe` []
 
+            it "refuses a queued job under the stricter policy the consuming worker booted" $ \container ->
+                withUpstream $ \upstreamUrl ->
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                        queue <- freshQueue container "worker-rollout-strict" rolloutQueueOptions
+                        env <- newQueueEnv queue
+                        -- A permissive role queued this job. The queue carries no policy, so the
+                        -- worker's own boot rules decide, and a deny is terminal rather than retried.
+                        strict <- mirrorPoliciesUnderAt [denyRule] mirrorUrl (unsafeHash SRI trueSri :| [])
+                        unwrapQ (enqueue queue (job upstreamUrl))
+                        runLoopFor strict env rolloutLoopWindow
+                        readIORef publishLog `shouldReturn` []
+                        assertQueueDrained queue
+
+            it "publishes that same queued job under the older policy the consuming worker booted" $ \container ->
+                withUpstream $ \upstreamUrl ->
+                    withMirrorTarget status201 $ \mirrorUrl publishLog -> do
+                        queue <- freshQueue container "worker-rollout-old" rolloutQueueOptions
+                        env <- newQueueEnv queue
+                        old <- mirrorPoliciesUnderAt [admitRule] mirrorUrl (unsafeHash SRI trueSri :| [])
+                        unwrapQ (enqueue queue (job upstreamUrl))
+                        -- A fixed window rather than a stop at the first publish, so the ack lands
+                        -- inside the run and a missing one shows up as a second delivery.
+                        runLoopFor old env rolloutLoopWindow
+                        readIORef publishLog `shouldReturn` [npmPublishPath]
+                        assertQueueDrained queue
+
             it "advances the heartbeat as the loop polls a real queue" $ \container ->
                 withUpstream $ \_upstreamUrl ->
                     withMirrorTarget status201 $ \mirrorUrl _publishLog -> do
@@ -127,6 +156,24 @@ spec =
                         runLoopFor policies env 3_000_000
                         pollAfter <- lastPoll (envWorkerHeartbeat env)
                         pollAfter `shouldSatisfy` isJust
+
+{- A visibility window short enough that the ack assertions can outwait it. The shipped 30s default
+would hide an un-acked message behind its lease, so the read after the loop could never fail. -}
+rolloutQueueOptions :: QueueOptions
+rolloutQueueOptions = defaultQueueOptions{qoVisibilityTimeout = Seconds 2}
+
+-- Well past a loopback publish and its ack, and past several redeliveries had that ack not run.
+rolloutLoopWindow :: Int
+rolloutLoopWindow = 8_000_000
+
+{- | The queue holds nothing, read past 'rolloutQueueOptions' visibility window so a message the
+worker left un-acked is visible again rather than hidden behind its lease.
+-}
+assertQueueDrained :: MirrorQueue -> IO ()
+assertQueueDrained queue = do
+    threadDelay 2_500_000
+    leftover <- unwrapQ (receive queue)
+    leftover `shouldBe` []
 
 -- The artifact bytes the upstream stub serves.
 tarballBytes :: LByteString

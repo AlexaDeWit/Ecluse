@@ -134,7 +134,7 @@ telemetryScenarios = do
     -- Real healthy OTLP publication: with telemetry on and an OTLP endpoint, a real npm
     -- request's ecluse.* metrics and its span actually reach a collector.
     describe "telemetry -- OTLP healthy publication (#324) and domain-span emission (#307)" $
-        aroundAllWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $ do
+        aroundAllWith (withE2EWith defaultE2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $ do
             it "exports ecluse.* metrics and a span to the collector on a real npm request" $ \e2e -> do
                 void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
                 -- The assertion keys on the catalogue metric name and the exporter's per-span
@@ -169,7 +169,7 @@ telemetryScenarios = do
     -- OTLP absent and telemetry off: the real image still boots, serves a real install,
     -- and logs JSONL to stdout/stderr, with no collector anywhere.
     describe "telemetry -- OTLP off, no collector (#325)" $
-        aroundAllWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("ECLUSE_OBSERVABILITY__TELEMETRY", "off")]}) $
+        aroundAllWith (withE2EWith defaultE2EConfig{ecExtraEnv = [("ECLUSE_OBSERVABILITY__TELEMETRY", "off")]}) $
             it "starts, serves a real install, and logs JSONL to stdout -- no collector needed" $ \e2e -> do
                 void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
                 -- This awaits any log object, keyed on the message field every JSONL line
@@ -178,7 +178,7 @@ telemetryScenarios = do
                 logged `shouldBe` True
 
     describe "telemetry -- OTLP on but the collector unreachable (#325)" $
-        aroundAllWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = otlpCollectorEnv}) $
+        aroundAllWith (withE2EWith defaultE2EConfig{ecExtraEnv = otlpCollectorEnv}) $
             it "surfaces a throttled export-failure warning yet keeps serving -- an absent collector degrades visibly, no crash" $ \e2e -> do
                 void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
                 logged <- awaitProxyLog e2e (T.isInfixOf "\"message\":") 80
@@ -196,7 +196,7 @@ telemetryScenarios = do
     -- DD_SERVICE, DD_ENV, DD_VERSION and DD_AGENT_HOST flow through the self-aligning resolver.
     -- They become unified-service-tag resource attributes and the dd object on the JSONL logs.
     describe "telemetry -- Datadog pattern (#323)" $
-        aroundAllWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = datadogCollectorEnv}) $
+        aroundAllWith (withE2EWith defaultE2EConfig{ecCollector = True, ecExtraEnv = datadogCollectorEnv}) $
             it "carries the Datadog unified-service tags to the collector and the dd object onto the logs" $ \e2e -> do
                 -- A mirror round-trip drives request spans plus a worker job span, the
                 -- span-scoped path whose log line carries a populated dd.trace_id.
@@ -237,7 +237,7 @@ telemetryScenarios = do
 publishScenarios :: SpecWith GlobalDataPlane
 publishScenarios = do
     describe "first-party publish -- publication target enabled" $
-        aroundAllWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = publishTargetEnv}) $ do
+        aroundAllWith (withE2EWith defaultE2EConfig{ecExtraEnv = publishTargetEnv}) $ do
             it "publishes an in-scope package, then installs it back through the private leg" $ \e2e -> do
                 let name = publishInScopeName
                     ver = publishVersion

@@ -19,6 +19,7 @@ module Ecluse.Integration.WorkerLoop (
     -- * Fixtures the loop runs against
     withMirrorTarget,
     mirrorPoliciesAt,
+    mirrorPoliciesUnderAt,
     newQueueEnv,
 ) where
 
@@ -33,7 +34,8 @@ import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (Hash)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
-import Ecluse.Core.Registry.Publish (MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
+import Ecluse.Core.Registry.Publish (MirrorPublish, MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken), newMirrorPublish)
+import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Worker (WorkerPolicies)
@@ -41,7 +43,7 @@ import Ecluse.Runtime.Env (Env)
 import Ecluse.Server.Pipeline.TestSupport (newTestEnvWithQueue)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Wai (localhost)
-import Ecluse.Test.Worker (admitAllPolicies, admitAllPoliciesCapped)
+import Ecluse.Test.Worker (admitAllPolicies, admitAllPoliciesCapped, mirrorPoliciesUnder)
 
 {- | Run the supervised worker against the queue until @done@ holds, then cancel it with
 'race_'. A hard timeout bounds the run, so a failing test cannot hang.
@@ -90,6 +92,20 @@ the shared transport) at @mirrorUrl@. A 'Just' caps the fetch: an artifact past 
 -}
 mirrorPoliciesAt :: Maybe Int -> Text -> NonEmpty Hash -> IO WorkerPolicies
 mirrorPoliciesAt cap mirrorUrl digests = do
+    publish <- newPublishAt mirrorUrl
+    pure (maybe admitAllPolicies admitAllPoliciesCapped cap publish digests)
+
+{- | 'mirrorPoliciesAt' under the caller's own rules and no fetch cap, for a case whose workers boot
+different policies over one queue.
+-}
+mirrorPoliciesUnderAt :: [PreparedRule] -> Text -> NonEmpty Hash -> IO WorkerPolicies
+mirrorPoliciesUnderAt rules mirrorUrl digests = do
+    publish <- newPublishAt mirrorUrl
+    pure (mirrorPoliciesUnder rules publish digests)
+
+-- The production publish marriage every fixture policy writes through, aimed at a stub target.
+newPublishAt :: Text -> IO MirrorPublish
+newPublishAt mirrorUrl = do
     manager <- newManager defaultManagerSettings
     let transport =
             MirrorTransport
@@ -99,7 +115,7 @@ mirrorPoliciesAt cap mirrorUrl digests = do
                   -- threads 'pdLimits'). The default here, since no override is set.
                   ptLimits = defaultLimits
                 }
-    pure (maybe admitAllPolicies admitAllPoliciesCapped cap (newMirrorPublish transport (loopbackRegistryUrl mirrorUrl) npmPublishCodec) digests)
+    pure (newMirrorPublish transport (loopbackRegistryUrl mirrorUrl) npmPublishCodec)
 
 -- | An 'Env' over handle doubles and a real (no-TLS) manager, carrying only the given queue.
 newQueueEnv :: MirrorQueue -> IO Env

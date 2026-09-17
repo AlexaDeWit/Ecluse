@@ -4,8 +4,8 @@
 
 {- | Dredger lifecycle evidence from a real Verdaccio store.
 Complete version snapshots connect store contents with each cycle's audit records. One group decides
-by operator identity alone, one by the advisory generation Pilot compiles, and one follows what the
-next private read sees once a cleanup has run.
+by operator identity alone, one by the advisory generation Pilot compiles, one follows what the next
+private read sees once a cleanup has run, and one rolls policy out across roles in the wrong order.
 -}
 module Ecluse.DredgerE2ESpec (spec) where
 
@@ -24,6 +24,7 @@ import Ecluse.E2E.Fixtures.Npm (
     dredgerDryRunPkg,
     dredgerKeepPkg,
     dredgerPkg,
+    mirrorPkg,
     psName,
     psVersion,
     psVersions,
@@ -36,6 +37,7 @@ import Ecluse.E2E.Fixtures.Npm (
 import Ecluse.E2E.Harness
 import Ecluse.Test.Log (lineMessage)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1, CorpusV2))
+import Ecluse.Test.Package (sriSha512Of)
 
 -- | Verify store contents and audit records under operator identity denies and advisory denials.
 spec :: Spec
@@ -47,6 +49,7 @@ spec = do
             aroundAll withGlobalDataPlane (aroundAllWith withSeededStore identityScenarios)
             aroundAll withGlobalDataPlane revocationScenario
             aroundAll withGlobalDataPlane (aroundAllWith withRecoveryStores recoveryScenarios)
+            aroundAll withGlobalDataPlane (aroundAllWith withRolloutStores rolloutScenarios)
 
 identityScenarios :: SpecWith (GlobalDataPlane, E2E, E2E)
 identityScenarios = describe "identity denies with no advisory database" $ do
@@ -164,7 +167,15 @@ sweepEnv pkg =
     ]
 
 identityRule :: Text -> Text
-identityRule name = renderRules ["revoke-swept" .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= name]]
+identityRule name = identityRules [name]
+
+-- | A Dredger policy of named identity denies and nothing else, one entry per condemned identity.
+identityRules :: [Text] -> Text
+identityRules = renderRules . zipWith identityEntry [1 :: Int ..]
+
+identityEntry :: Int -> Text -> Pair
+identityEntry position revoked =
+    fromString ("revoke-" <> show position) .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= revoked]
 
 assertFullSweep :: Text -> PkgSpec -> Map Text [Text] -> RoleRun -> Expectation
 assertFullSweep opening pkg initial run = do
@@ -262,9 +273,7 @@ loadSecondGeneration :: GlobalDataPlane -> E2E -> IO ()
 loadSecondGeneration plane e2e = do
     compileGeneration plane CorpusV2
     swapped <- awaitProxyLog e2e ((> 1) . length . T.breakOnAll swapMessage) 240
-    unless swapped $ do
-        logs <- proxyContainerLogs e2e
-        expectationFailure (toString ("the proxy never swapped in the second generation. Its last lines:\n" <> T.takeEnd 4000 logs))
+    unless swapped (failWithLog (e2eProxyContainer e2e) "the proxy never swapped in the second generation")
 
 -- The sync's own line for a generation taking effect, so a second one means G2 replaced G1.
 swapMessage :: Text
@@ -479,7 +488,7 @@ recoveryProxyEnv = privateCacheEnv <> [("ECLUSE_RULES", recoveryRules)]
 
 -- The same topology once the deny is lifted, which is what a re-admission is decided under.
 relaxedProxyEnv :: [(Text, Text)]
-relaxedProxyEnv = privateCacheEnv <> [("ECLUSE_RULES", renderRules [minAgeRule])]
+relaxedProxyEnv = privateCacheEnv <> [("ECLUSE_RULES", permissiveRules)]
 
 privateCacheEnv :: [(Text, Text)]
 privateCacheEnv =
@@ -492,11 +501,7 @@ withRelaxedProxy :: GlobalDataPlane -> (E2E -> IO ()) -> IO ()
 withRelaxedProxy plane action = withE2EWith defaultE2EConfig{ecExtraEnv = relaxedProxyEnv} action plane
 
 recoveryRules :: Text
-recoveryRules = renderRules (minAgeRule : zipWith identityEntry [1 :: Int ..] recoveryDenials)
-  where
-    identityEntry position revoked =
-        fromString ("revoke-" <> show position)
-            .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= revoked]
+recoveryRules = denyingRules recoveryDenials
 
 -- Every fixture version predates the shipped quarantine, but a copy the publisher wrote does not.
 minAgeRule :: Pair
@@ -534,6 +539,176 @@ awaitListed e2e names =
     for_ names $ \name -> do
         unlisted <- verdaccioAwaitListed e2e name
         whenJust unlisted (expectationFailure . toString)
+
+rolloutScenarios :: SpecWith (GlobalDataPlane, E2E, E2E)
+rolloutScenarios = describe "eventual cleanup after out-of-order role updates" $ do
+    it "removes the copies an old worker mirrored after a stricter proxy started" $ \(plane, _, cache) -> do
+        queueUrl <- sharedMirrorQueue plane
+        let target = psName dredgerPkg
+            version = psVersion dredgerPkg
+            unaffected = psName dredgerKeepPkg
+        withServeOnlyProxy plane queueUrl (permissiveEnv <> publishTargetEnv) $ \old -> do
+            for_ [target, unaffected] $ \name -> void (npmInstall old name >>= shouldSucceed)
+            void $ withPublishProject old publishDredgerName publishVersion npmPublishIn >>= shouldSucceed
+            -- No worker has run yet, so the admitted versions wait on the durable queue.
+            verdaccioVersions old target `shouldReturn` []
+        withServeOnlyProxy plane queueUrl (strictEnv target) $ \strict -> do
+            assertRefusedNext strict target version
+            withMirrorRole plane (mirrorRoleEnv queueUrl permissiveRules) $ \worker ->
+                for_ [target <> "@" <> version, unaffected <> "@" <> psVersion dredgerKeepPkg] (awaitPublication worker)
+            -- The worker container is gone, so the rollout has no outstanding old write left.
+            verdaccioAwaitVersions strict target [version] `shouldReturn` [version]
+            verdaccioVersions cache target `shouldReturn` [version]
+            -- A private read applies no rules, so the stricter proxy installs what it would deny.
+            withNpmProject strict $ \project -> do
+                void $ npmInstallIn project (target <> "@" <> version) >>= shouldSucceed
+                installedVersion project target `shouldReturn` Just version
+            served <- proxyGet strict (npmTarballPath target version)
+            second LBS.length served `shouldSatisfy` servedBytes
+            let denied = identityRules [target, publishDredgerName <> "@" <> publishVersion]
+            swept <- runDredgerOnce plane ["--once"] (rolloutSweepEnv denied)
+            roleExit swept `shouldBe` ExitSuccess
+            assertRolloutRemoved strict cache target
+            verdaccioVersions strict unaffected `shouldReturn` [psVersion dredgerKeepPkg]
+            verdaccioVersions strict publishDredgerName `shouldReturn` [publishVersion]
+            assertRefusedNext strict target version
+            assertNothingQueued plane queueUrl strict (target <> "@" <> version)
+            rescanned <- runDredgerOnce plane ["--once"] (rolloutSweepEnv denied)
+            roleExit rescanned `shouldBe` ExitSuccess
+            assertRolloutRemoved strict cache target
+            verdaccioVersions strict publishDredgerName `shouldReturn` [publishVersion]
+
+    it "restores a version an old Dredger removed while the newer roles permitted it" $ \(plane, proxy, cache) -> do
+        let name = psName recoveryReadmitPkg
+            version = psVersion recoveryReadmitPkg
+        verdaccioArtifact cache name version >>= (`shouldSatisfy` servedBytes)
+        (retainedStatus, retained) <- verdaccioArtifactBytes proxy name version
+        retainedStatus `shouldBe` 200
+        removed <- runDredgerOnce plane ["--once"] (rolloutSweepEnv (identityRules [name]))
+        roleExit removed `shouldBe` ExitSuccess
+        assertRolloutRemoved proxy cache name
+        -- Dredger only deletes, so a completed scan under the intended policy restores nothing.
+        converged <- runDredgerOnce plane ["--once"] (rolloutSweepEnv permissiveRules)
+        roleExit converged `shouldBe` ExitSuccess
+        assertRolloutRemoved proxy cache name
+        withNpmProject proxy $ \project -> do
+            void $ npmInstallIn project name >>= shouldSucceed
+            installedVersion project name `shouldReturn` Just version
+        verdaccioAwaitVersions proxy name [version] `shouldReturn` [version]
+        (restoredStatus, restored) <- verdaccioArtifactBytes proxy name version
+        (restoredStatus, sriSha512Of (toStrict restored)) `shouldBe` (200, sriSha512Of (toStrict retained))
+        (fst <$> proxyGet proxy (npmTarballPath name version)) `shouldReturn` 200
+
+    it "leaves the version lost when an old Dredger removed the only remaining bytes" $ \(plane, proxy, cache) -> do
+        let name = psName recoveryLostPkg
+            version = psVersion recoveryLostPkg
+        withPublicArtifactWithheld plane name version $ do
+            -- The public source can no longer supply bytes, so this 200 is the retained copy.
+            (fst <$> proxyGet proxy (npmTarballPath name version)) `shouldReturn` 200
+            removed <- runDredgerOnce plane ["--once"] (rolloutSweepEnv (identityRules [name]))
+            roleExit removed `shouldBe` ExitSuccess
+            assertRolloutRemoved proxy cache name
+            converged <- runDredgerOnce plane ["--once"] (rolloutSweepEnv permissiveRules)
+            roleExit converged `shouldBe` ExitSuccess
+            assertRolloutRemoved proxy cache name
+            -- Threat 109's accepted outcome: agreeing on the permissive policy cannot recreate
+            -- bytes, so the request fails for want of a source rather than by a policy refusal.
+            (fst <$> proxyGet proxy (npmTarballPath name version)) `shouldReturn` 404
+            withNpmProject proxy (\project -> void (npmInstallIn project name >>= shouldFail))
+            -- Give the worker a 1.5s window to mirror bytes it never obtained, then read both stores.
+            threadDelay 1500000
+            assertRolloutRemoved proxy cache name
+
+{- The rollout group's stores: the shared mirror the newer roles fill through a real install, and a
+private cache the fixture publisher seeds. The group's proxy boots the intended permissive policy. -}
+withRolloutStores :: ((GlobalDataPlane, E2E, E2E) -> IO ()) -> GlobalDataPlane -> IO ()
+withRolloutStores action plane =
+    withE2EWith defaultE2EConfig{ecExtraEnv = relaxedProxyEnv} boot plane
+  where
+    boot proxy = withDredgerPrivateCache plane proxy $ \cache -> do
+        -- The mirror fills first, because a seeded cache copy would answer privately and
+        -- enqueue nothing.
+        for_ looserPackages $ \pkg -> do
+            void $ npmInstall proxy (psName pkg) >>= shouldSucceed
+            verdaccioAwaitVersions proxy (psName pkg) [psVersion pkg] `shouldReturn` [psVersion pkg]
+        for_ retainedCachePackages $ \pkg ->
+            void $ withPublishProject cache (psName pkg) (psVersion pkg) npmPublishIn >>= shouldSucceed
+        awaitListed proxy (map psName looserPackages)
+        awaitListed cache (map psName retainedCachePackages)
+        action (plane, proxy, cache)
+
+-- The packages the looser-rollout cases start from, retained in both stores before any role moves.
+looserPackages :: [PkgSpec]
+looserPackages = [recoveryReadmitPkg, recoveryLostPkg]
+
+{- Every package the private cache holds at the start. The stricter case's target is cache-only
+here, because its mirror copy arrives later from the old worker it starts itself. -}
+retainedCachePackages :: [PkgSpec]
+retainedCachePackages = dredgerPkg : looserPackages
+
+-- Both inventories after a rollout cycle, read by name so the group's other packages stay out of it.
+assertRolloutRemoved :: E2E -> E2E -> Text -> Expectation
+assertRolloutRemoved mirror cache name = do
+    verdaccioVersions mirror name `shouldReturn` []
+    verdaccioVersions cache name `shouldReturn` []
+
+{- Run a proxy with no embedded worker on the caller's queue, so its admissions wait for a worker
+the case starts on its own schedule. -}
+withServeOnlyProxy :: GlobalDataPlane -> Text -> [(Text, Text)] -> (E2E -> IO ()) -> IO ()
+withServeOnlyProxy plane queueUrl extraEnv action = withE2EWith config action plane
+  where
+    config =
+        defaultE2EConfig
+            { ecExtraEnv = extraEnv
+            , ecQueueUrl = Just queueUrl
+            , ecArgs = ["proxy", "--no-worker"]
+            }
+
+{- The older roles' policy, and the stricter one that names a single identity. Each proxy's packument
+cache turns over in a second, so a read after another role's write sees current state. -}
+permissiveEnv :: [(Text, Text)]
+permissiveEnv = [("ECLUSE_RULES", permissiveRules), ("ECLUSE_CACHE__TTL", "1")]
+
+strictEnv :: Text -> [(Text, Text)]
+strictEnv denied = [("ECLUSE_RULES", denyingRules [denied]), ("ECLUSE_CACHE__TTL", "1")]
+
+-- The Dredger's configuration for a rollout case: its own policy, and the first-party namespace.
+rolloutSweepEnv :: Text -> [(Text, Text)]
+rolloutSweepEnv rules = [("ECLUSE_RULES", rules), ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", publishScope)]
+
+-- | The intended permissive policy: the quarantine every fixture version predates, and no deny.
+permissiveRules :: Text
+permissiveRules = renderRules [minAgeRule]
+
+-- | 'permissiveRules' plus one identity deny per named package or version.
+denyingRules :: [Text] -> Text
+denyingRules denied = renderRules (minAgeRule : zipWith identityEntry [1 :: Int ..] denied)
+
+{- Prove the refused reads enqueued nothing, by admitting a sentinel afterwards and draining the
+queue with a permissive worker: it publishes the sentinel and never the denied version. -}
+assertNothingQueued :: GlobalDataPlane -> Text -> E2E -> Text -> IO ()
+assertNothingQueued plane queueUrl proxy denied = do
+    void $ npmInstall proxy (psName mirrorPkg) >>= shouldSucceed
+    withMirrorRole plane (mirrorRoleEnv queueUrl permissiveRules) $ \drain -> do
+        awaitPublication drain (psName mirrorPkg <> "@" <> psVersion mirrorPkg)
+        logs <- containerLogs drain
+        logs `shouldSatisfy` (not . T.isInfixOf (publishedLine denied))
+
+-- Wait for one version's mirror write, failing with the worker's own log when it never lands.
+awaitPublication :: String -> Text -> IO ()
+awaitPublication worker published = do
+    mirrored <- awaitContainerLog worker (T.isInfixOf (publishedLine published)) 240
+    unless mirrored (failWithLog worker ("the worker never published " <> published))
+
+-- The worker's own line for a completed mirror write, as its JSONL record carries it.
+publishedLine :: Text -> Text
+publishedLine published = "mirrored artifact published: " <> published
+
+-- Fail with the container's own log tail, because a role's reason for not acting lives only there.
+failWithLog :: String -> Text -> IO ()
+failWithLog container reason = do
+    logs <- containerLogs container
+    expectationFailure (toString (reason <> ". Its last lines:\n" <> logTail logTailLines logs))
 
 -- The rule policy as ECLUSE_RULES carries it: one JSON object of named rule entries.
 renderRules :: [Pair] -> Text
