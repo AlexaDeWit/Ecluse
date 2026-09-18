@@ -29,28 +29,30 @@ import Ecluse.Core.Cve (CveDbRejected (CveDbEpssNotEstablished), DbEtag (..))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
-import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness, rdWithCveLookup))
+import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), mkPackageName)
+import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness, rdWithCveLookup), evalRules, prepare)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryAge (AdvisoryAge),
     AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated),
     MaxAdvisoryAge,
     maxAdvisoryAgeFor,
  )
-import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan))
+import Ecluse.Core.Rules.Outage (OutageReport (..), OutageState (Healthy))
+import Ecluse.Core.Rules.Types (Decision (Admitted), DenyIfCveParams (DenyIfCveParams), EvalContext (EvalContext), FailureAlignment (FailNoDecision), PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyIfCve), RuleEvidence, SkippedCheck (SkippedUnavailable), completeEvidence, defaultPrecedence)
 import Ecluse.Core.Server.Readiness (
     DatabaseRequirement (DatabaseOptional, DatabaseRequired),
     MountReadiness (MountAwaitingFirstSync, MountReady),
     Readiness (AwaitingMounts, Routable),
  )
 import Ecluse.Core.Supervision (delayListPolicy)
-import Ecluse.Cve.Sync (AdvisoryNeed (..), CveSyncHandle (..), advisoryFreshnessFor, cveRuleDepsFor, cveSyncReadiness, cveSyncScheduleFor, planCveSync, reportPushAge, sweepStaleTemps, sweepStep)
+import Ecluse.Cve.Sync (AdvisoryNeed (..), CveSyncHandle (..), advisoryFreshnessFor, cveRuleDepsFor, cveSyncReadiness, cveSyncScheduleFor, katipOutageReporter, outageReportPeriod, planCveSync, reportPushAge, sweepStaleTemps, sweepStep)
 import Ecluse.Runtime.Cve.Sync (FetchedObject (..), SyncEnv (..), SyncHooks (..), SyncOutcome (..), SyncSchedule (..), absentReportInterval, bootBackoffDelays, runCveSync, syncStep)
 import Ecluse.Runtime.Test.Cve (fetchServingAt, headOnlyFetch, refusingFetch)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv, runQuietKatip)
 import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
+import Ecluse.Test.Package (sampleDetails, v1_0_0)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, recordingAdvisorySyncTracingPort)
-import Ecluse.Test.Rules (noFaultReporter)
 
 spec :: Spec
 spec = do
@@ -123,14 +125,82 @@ spec = do
         it "borrows through the mount ecosystem's own slot" $ do
             handle <- stubSyncHandle
             swapIn (syncSlot (csEnv handle)) (DbEtag "e1") Nothing (fakeCveDb [])
-            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
+            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noOutageReport
             rdWithCveLookup (deps Npm) (pure . isJust) `shouldReturn` True
 
         it "abstains for an ecosystem the plan does not carry" $ do
             handle <- stubSyncHandle
             swapIn (syncSlot (csEnv handle)) (DbEtag "e1") Nothing (fakeCveDb [])
-            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
+            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noOutageReport
             rdWithCveLookup (deps PyPI) (pure . isJust) `shouldReturn` False
+
+    describe "cveRuleDepsFor -- bounded outage reporting for the rules" $ do
+        it "reports an absent database once as an outage, not once per evaluation, and its recovery" $ do
+            clock <- newIORef alarmNow
+            handle <- stubHandleAt sixDayLimit (readIORef clock)
+            captured <- newIORef []
+            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter (\eco r -> modifyIORef' captured ((eco, r) :))
+            rules <- prepare (deps Npm) skipPolicy
+            decisions <- replicateM 20 (evalRules evalCtx rules oldVersion)
+            -- Every admission carries the evidence, and the outage reports once.
+            forM_ decisions $ \case
+                Admitted "AllowIfOlderThan" _ skipped -> skipped `shouldBe` [SkippedUnavailable "DenyIfCve" "no advisory database loaded"]
+                other -> expectationFailure ("expected the quarantine allow, got " <> show other)
+            reverse <$> readIORef captured `shouldReturn` [(Npm, OutageBegan "DenyIfCve" "no advisory database loaded")]
+            -- Past the reminder gap the outage reports again, still once.
+            writeIORef clock (addUTCTime outageReportPeriod alarmNow)
+            replicateM_ 5 (evalRules evalCtx rules oldVersion)
+            reverse <$> readIORef captured
+                `shouldReturn` [ (Npm, OutageBegan "DenyIfCve" "no advisory database loaded")
+                               , (Npm, OutageContinues alarmNow (Map.singleton "DenyIfCve" "no advisory database loaded"))
+                               ]
+            -- A synced database ends it: one recovery, and clean admissions after.
+            install handle (agoDays 1)
+            evalRules evalCtx rules oldVersion >>= \case
+                Admitted _ _ skipped -> skipped `shouldBe` []
+                other -> expectationFailure ("expected an admission, got " <> show other)
+            replicateM_ 5 (evalRules evalCtx rules oldVersion)
+            reverse <$> readIORef captured
+                `shouldReturn` [ (Npm, OutageBegan "DenyIfCve" "no advisory database loaded")
+                               , (Npm, OutageContinues alarmNow (Map.singleton "DenyIfCve" "no advisory database loaded"))
+                               , (Npm, OutageRecovered alarmNow)
+                               ]
+
+        it "paces the reminder on the unloaded-database report's own gap" $
+            outageReportPeriod `shouldBe` fromIntegral absentReportInterval / 1_000_000
+
+        it "reports nowhere for an ecosystem the plan does not carry" $ do
+            handle <- stubSyncHandle
+            captured <- newIORef []
+            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter (\eco r -> modifyIORef' captured ((eco, r) :))
+            rules <- prepare (deps PyPI) skipPolicy
+            void (evalRules evalCtx rules oldVersion)
+            readIORef captured `shouldReturn` []
+
+    describe "katipOutageReporter -- the outage lines" $ do
+        it "logs the start and the reminder at Error, naming the ecosystem, the rule, and the cause" $ do
+            logEnv <- jsonLogEnv
+            logged <- captureStdout $ do
+                katipOutageReporter logEnv Npm (OutageBegan "DenyIfCve" "no advisory database loaded")
+                katipOutageReporter logEnv Npm (OutageContinues alarmNow (Map.fromList [("DenyIfCve", "the rule source circuit breaker is open"), ("DenyIfEpss", "the rule threw: boom")]))
+                void (closeScribes logEnv)
+            length (filter (T.isInfixOf "\"sev\":\"Error\"") (lines logged)) `shouldBe` 2
+            logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Core.Rules\""
+            logged `shouldSatisfy` T.isInfixOf "\"ecosystem\":\"npm\""
+            logged `shouldSatisfy` T.isInfixOf "\"rule\":\"DenyIfCve\""
+            logged `shouldSatisfy` T.isInfixOf "\"cause\":\"no advisory database loaded\""
+            logged `shouldSatisfy` T.isInfixOf "outage began"
+            logged `shouldSatisfy` T.isInfixOf "outage continues"
+            logged `shouldSatisfy` T.isInfixOf "DenyIfCve: the rule source circuit breaker is open; DenyIfEpss: the rule threw: boom"
+
+        it "logs the recovery at Info, so the paging level carries only the outage" $ do
+            logEnv <- jsonLogEnv
+            logged <- captureStdout $ do
+                katipOutageReporter logEnv Npm (OutageRecovered alarmNow)
+                void (closeScribes logEnv)
+            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Info\""
+            logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
+            logged `shouldSatisfy` T.isInfixOf "outage recovered"
 
     describe "advisoryFreshnessFor -- the push-age reading the rules gate on" $ do
         it "is fresh before the first sync, leaving the absent-database path to decide" $ do
@@ -185,7 +255,7 @@ spec = do
         it "carries that reading onto the mount's rule capabilities" $ do
             handle <- stubHandleAt sixDayLimit (pure alarmNow)
             install handle (agoDays 9)
-            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noFaultReporter
+            let deps = cveRuleDepsFor (Map.singleton Npm handle) noBreakerReporter noOutageReport
             rdAdvisoryFreshness (deps Npm) >>= (`shouldSatisfy` isStale)
 
     describe "reportPushAge -- the consumer's early warning" $
@@ -301,6 +371,7 @@ stubHandleAt maxAge clock = do
     slot <- newCveSlot
     ready <- newTVarIO False
     alarmed <- newTVarIO False
+    outage <- newTVarIO Healthy
     pure
         CveSyncHandle
             { csReady = ready
@@ -316,8 +387,24 @@ stubHandleAt maxAge clock = do
             , csMaxAge = maxAge
             , csClock = clock
             , csAgeAlarmed = alarmed
+            , csOutage = outage
             , csDatabase = DatabaseRequired
             }
+
+-- | Discard outage reports, for a case about the capabilities rather than the outage line.
+noOutageReport :: Ecosystem -> OutageReport -> IO ()
+noOutageReport _ _ = pass
+
+-- | The issue's reproduction: the shipped quarantine beside an opt-in advisory deny set to skip.
+skipPolicy :: [PrecededRule]
+skipPolicy = [PrecededRule (defaultPrecedence r) r | r <- [AllowIfOlderThan (7 * nominalDay), DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)]]
+
+-- | An old public version the quarantine admits, evaluated at 'alarmNow'.
+oldVersion :: RuleEvidence
+oldVersion = completeEvidence (sampleDetails (mkPackageName Npm Nothing "acme") v1_0_0){pkgPublishedAt = Just (agoDays 30)}
+
+evalCtx :: EvalContext
+evalCtx = EvalContext alarmNow Nothing
 
 -- | The maximum a mount deriving from the shipped seven-day quarantine gets: six days.
 sixDayLimit :: MaxAdvisoryAge

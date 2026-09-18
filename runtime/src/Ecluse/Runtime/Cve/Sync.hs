@@ -37,7 +37,7 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
-import Katip (KatipContext, Severity (DebugS, ErrorS, InfoS, WarningS), logFM, ls)
+import Katip (KatipContext, Severity (DebugS, ErrorS, InfoS), logFM, ls)
 import Network.HTTP.Types.Status (statusCode)
 import System.Directory (removeFile, renameFile)
 import UnliftIO (MonadUnliftIO, withRunInIO)
@@ -213,7 +213,8 @@ bootBackoffDelays :: [Int]
 bootBackoffDelays = [1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000]
 
 {- | The shipped gap between repeats of the unloaded-database report, in microseconds. A stuck
-rollout keeps saying so without filling the log at the poll interval.
+rollout keeps saying so without filling the log at the poll interval. The rules' outage reminder
+paces on the same gap.
 -}
 absentReportInterval :: Int
 absentReportInterval = 900_000_000
@@ -327,8 +328,10 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
         liftIO (syncStep env lastSeen) >>= \case
             SyncFetchFaulted fault -> do
                 -- The step learned nothing about the remote artifact, so the last seen ETag and
-                -- the last good database both stand and the next poll retries.
-                logFM WarningS (ls ("cve-sync[" <> eco <> "]: sync fetch failed: " <> show fault))
+                -- the last good database both stand and the next poll retries. One line per poll,
+                -- at the level an operator pages on, because a store that keeps failing ages the
+                -- serving artifact towards its maximum.
+                logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync fetch failed: " <> show fault))
                 pure (AdvisoryFetchFailed, (False, lastSeen))
             SyncSwapped etag meta -> do
                 logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show (metadataSummary meta)))

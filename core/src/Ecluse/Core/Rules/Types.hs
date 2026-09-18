@@ -40,6 +40,8 @@ module Ecluse.Core.Rules.Types (
     RuleEvaluation (..),
     FailureAlignment (..),
     Decision (..),
+    SkippedCheck (..),
+    skippedChecks,
 
     -- * Unavailability
     Transience (..),
@@ -343,8 +345,10 @@ data FailureAlignment
 deciding rule by __name__ (see 'ruleName'), independent of how the engine evaluates it.
 -}
 data Decision
-    = -- | Admitted by the named rule, with its reason.
-      Admitted Text Reason
+    = {- | Admitted by the named rule, with its reason and the configured checks the admission did
+      not benefit from, so a copy this decision makes trusted can say what it passed without.
+      -}
+      Admitted Text Reason [SkippedCheck]
     | -- | Blocked by the named rule, with the advisory ETag that supplied its evidence and its reason.
       Blocked Text (Maybe DbEtag) Reason
     | {- | No rule was decisive. Deny-by-default; carries every non-decisive reason,
@@ -356,6 +360,24 @@ data Decision
       -}
       Undecidable Transience Reason
     deriving stock (Eq, Show)
+
+{- | A configured check the winning allow did not benefit from. The two kinds stay apart so no
+consumer reads a check the engine never ran as one that passed.
+-}
+data SkippedCheck
+    = -- | The check ran, could not vet the version, and its fail-open alignment let the fold move on.
+      SkippedUnavailable Text Reason
+    | -- | An earlier allow in the boot order decided, so the engine never ran the check.
+      Unreached Text
+    deriving stock (Eq, Show)
+
+-- | The skipped-check evidence a decision carries: an admission's, and none for any other outcome.
+skippedChecks :: Decision -> [SkippedCheck]
+skippedChecks = \case
+    Admitted _ _ skipped -> skipped
+    Blocked{} -> []
+    BlockedByDefault{} -> []
+    Undecidable{} -> []
 
 {- | Serve transient outages, rate limits, timeouts, and open breakers as @503@.
 Serve internal or parse faults as @500@. 'WillResolve' and 'WontResolve' encode that distinction.

@@ -9,7 +9,9 @@ effectful rule, and the pure built-ins never enter this module.
 Any 'RuleVerdict' the rule returns, 'CannotVet' included, resets the breaker and comes back
 'Decided' unretried. Only a harness-observed fault advances it, resolving to 'Unavailable' under
 the rule's own alignment. 'runResilient' never throws. The breaker reads 'resClock' fresh at each
-decision, never the request snapshot, so its cooldown starts at the failure commit.
+decision, never the request snapshot, so its cooldown starts at the failure commit. The harness
+reports its own faults to the rule's 'SourceReporter' with their detail, and the engine classifies
+every decided verdict, so the two never report the same evaluation.
 -}
 module Ecluse.Core.Rules.Effectful (
     -- * The resilience policy
@@ -17,9 +19,6 @@ module Ecluse.Core.Rules.Effectful (
     EffectfulConfig (..),
     defaultEffectfulConfig,
     newBreaker,
-
-    -- * Effectful-fault observation
-    FaultReporter (..),
 
     -- * Running an evaluation through it
     runResilient,
@@ -38,6 +37,7 @@ import Ecluse.Core.Breaker (
     recordSuccess,
     reportBreakerChange,
  )
+import Ecluse.Core.Rules.Outage (SourceHealth (SourceUnavailable), SourceReporter, reportSource)
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Text (displayExceptionT)
@@ -60,20 +60,11 @@ data Resilience = Resilience
     {- ^ The wall clock the breaker reads for admission and cooldown, separate from the request
     snapshot 'ctxNow'. A fresh read at failure commit starts the cooldown at the failure.
     -}
-    , resFaultReporter :: FaultReporter
-    {- ^ The observer an exhausted evaluation reports its fault detail to. Inert
-    ('noFaultReporter') when unobserved. The detail never reaches the client-facing message.
+    , resSourceReporter :: SourceReporter
+    {- ^ The observer an exhausted evaluation and an open-breaker fast-fail report to, with the
+    fault detail that never reaches the client-facing message.
     -}
     }
-
-{- | The observer that receives an exhausted evaluation's rule name and rendered fault.
-It fires once per exhausted evaluation, never on a verdict or a still-cooling breaker.
--}
-newtype FaultReporter = FaultReporter (Text -> Text -> IO ())
-
--- Report one exhausted evaluation's fault: the rule name and the rendered detail.
-reportFault :: FaultReporter -> Text -> Text -> IO ()
-reportFault (FaultReporter report) = report
 
 {- | Run one effectful rule evaluation under its 'Resilience' policy. The evaluator is the
 rule's per-version IO with the evaluation context applied, and the name tags the audit reason.
@@ -82,16 +73,19 @@ runResilient :: Resilience -> Text -> (RuleEvidence -> IO RuleVerdict) -> RuleEv
 runResilient res name evalAt ev = do
     admitted <- admitProbe res =<< resClock res
     if not admitted
-        then -- Breaker open and still cooling down: fast-fail without running the
-        -- rule's IO, the cheap path a sustained outage stays on. An open breaker is an
-        -- infrastructural outage, so it is transient.
-            pure (exhausted res name (transientCause (resConfig res)) "the rule source circuit breaker is open")
+        then do
+            -- Breaker open and still cooling down: fast-fail without running the rule's IO, the
+            -- cheap path a sustained outage stays on. Reported, so the outage stays observed.
+            reportSource (resSourceReporter res) (SourceUnavailable name breakerOpen)
+            pure (exhausted res name (transientCause (resConfig res)) breakerOpen)
         else do
             result <- attemptWithRetry res evalAt ev
             -- Read the clock again after the retry run. An exhausted result then starts its
             -- cooldown at the failure commit, not at the start of the run.
             settledNow <- resClock res
             settleOutcome res name settledNow result
+  where
+    breakerOpen = "the rule source circuit breaker is open"
 
 {- Settle a finished retry run against the breaker. A verdict resets it, an exhausted run
 trips it. -}
@@ -104,7 +98,7 @@ settleOutcome res name now = \case
         commitBreaker res (tripOnFailure (resConfig res) now)
         -- Surface the fault detail before it collapses to the generic client-facing reason,
         -- which would otherwise hide the cause of a live-database query fault.
-        reportFault (resFaultReporter res) name detail
+        reportSource (resSourceReporter res) (SourceUnavailable name detail)
         pure (exhausted res name transience "the rule could not be evaluated")
 
 {- Attempt the rule's IO under the per-attempt timeout until the retry budget is spent.

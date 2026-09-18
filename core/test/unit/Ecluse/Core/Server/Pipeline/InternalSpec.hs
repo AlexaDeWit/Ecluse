@@ -27,6 +27,7 @@ import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Rules (
     PreparedRule (..),
     Resilience (Resilience),
+    noSourceReporter,
     prepare,
  )
 import Ecluse.Core.Rules.Effectful (defaultEffectfulConfig, newBreaker)
@@ -35,6 +36,7 @@ import Ecluse.Core.Rules.Types (
     FailureAlignment (FailDeny),
     Rule (AllowIfOlderThan),
     RuleVerdict (NoDecision),
+    SkippedCheck (SkippedUnavailable, Unreached),
  )
 import Ecluse.Core.Server.Pipeline.Internal (
     DenialAudit (..),
@@ -47,6 +49,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
     logDecodeFailure,
     logDenials,
     logNameMismatch,
+    logSkippedChecks,
     logUpstreamUnformable,
     packumentServeDecision,
     recordDenials,
@@ -66,7 +69,7 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv)
 import Ecluse.Test.Package (defaultMinIntegrity, detailsWith, unsafeHash, unscopedNpm, validSha1, validSha256)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps, noFaultReporter)
+import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 
 spec :: Spec
 spec = do
@@ -172,7 +175,7 @@ spec = do
                     PreparedRule
                         { prepName = "EffRule"
                         , prepPrecedence = 300
-                        , prepResilience = Just (Resilience defaultEffectfulConfig FailDeny breaker noBreakerReporter getCurrentTime noFaultReporter)
+                        , prepResilience = Just (Resilience defaultEffectfulConfig FailDeny breaker noBreakerReporter getCurrentTime noSourceReporter)
                         , prepAdvisoryGate = Nothing
                         , prepEval = \_ _ -> pure (NoDecision "noop")
                         }
@@ -216,6 +219,31 @@ spec = do
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
             logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
+
+    describe "logSkippedChecks" $ do
+        it "records a check skipped for unavailability once, at WARNING, with the package, version, rule, and cause" $ do
+            logged <- captureStdout $ do
+                logEnv <- jsonLogEnv
+                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty $
+                    logSkippedChecks (unscopedNpm "is-odd") "1.0.0" (Just (DbEtag "etag-xyz")) [SkippedUnavailable "DenyIfCve" "no advisory database loaded", Unreached "DenyIfEpss"]
+                void (closeScribes logEnv)
+            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+            logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
+            logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
+            logged `shouldSatisfy` T.isInfixOf "\"version\":\"1.0.0\""
+            logged `shouldSatisfy` T.isInfixOf "\"rule\":\"DenyIfCve\""
+            logged `shouldSatisfy` T.isInfixOf "\"cause\":\"no advisory database loaded\""
+            logged `shouldSatisfy` T.isInfixOf "\"active_advisory_db_etag\":\"etag-xyz\""
+            -- An unreached check is the operator's precedence choice, not degradation: no line.
+            logged `shouldSatisfy` (not . T.isInfixOf "DenyIfEpss")
+            length (filter (T.isInfixOf "skipped for unavailability") (lines logged)) `shouldBe` 1
+
+        it "records nothing for an admission that skipped no check" $ do
+            logged <- captureStdout $ do
+                logEnv <- jsonLogEnv
+                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logSkippedChecks (unscopedNpm "is-odd") "1.0.0" Nothing [])
+                void (closeScribes logEnv)
+            logged `shouldBe` ""
 
     describe "denialAuditPayload" $ do
         let audit etag extra =

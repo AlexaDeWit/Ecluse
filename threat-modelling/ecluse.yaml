@@ -1193,8 +1193,8 @@ mitigations:
       - b74d9df0-8947-4e67-bf50-1c5e688a09f1
   - id: mit-outage-evidence-reporting
     title: Outage reporting and skipped-check evidence
-    prose: "Planned in #1230. Écluse will keep evidence when an admission skipped an unavailable check, and report advisory outages at ERROR without a log line on every serve."
-    status: proposed
+    prose: "Each admission carries the configured checks it did not benefit from: a check that ran and could not vet under `onUnavailable: skip`, kept apart from a check a higher-precedence allow pre-empted, so no consumer reads an unreached check as passed. The public artifact gate logs a skipped check once, at the admission, with the package, version, rule, and cause, and a trusted read of a mirrored copy runs no rules, so it never repeats the line. The evidence lives in the decision and the log only, never in registry metadata. Apart from that, each ecosystem's advisory source has an outage monitor: the first evaluation that cannot consult the database (none loaded, an expired push, a lookup fault, or an open breaker) logs at ERROR, a continuing outage logs at ERROR again at most every 15 minutes, and recovery logs at INFO. A failed poll of the advisory store logs at ERROR once per poll. A request never adds an outage line."
+    status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-00000000010d
       - 6a368fa6-e4c8-446e-8e24-0685bb0980ef
@@ -1340,7 +1340,7 @@ threats:
       methodology: STRIDE
       category: tampering
     severity: medium
-    status: open
+    status: mitigated
     description: "Private reads trust previously mirrored versions without repeating public admission. Later advisory changes, removal of an allow, or an upstream yank do not themselves remove those copies. An advisory rule set to `onUnavailable: skip` can let another allow mirror a version during an advisory outage, and recovery alone does not revoke that copy. CodeArtifact can retain a serving copy in the private read repository (C) after the version leaves the mirror (B). Without working, authorised pruning, retained content can stay served indefinitely, and a serve-only mount can still read trusted private copies without a mirror target of its own."
     elements:
       - 0ec10e5e-0000-4000-8000-000000000034
@@ -1560,7 +1560,7 @@ threats:
       methodology: STRIDE
       category: denial-of-service
     severity: medium
-    status: open
+    status: mitigated
     description: A proxy configured to sync advisories from S3 starts without a loaded advisory generation. An S3 outage, a missing object, or a denied read can prevent its first sync. A replaced Kubernetes Pod loses its emptyDir data. A container restart within the same Pod can retain that data, but the proxy does not load a retained database at boot. Readiness alone does not block direct requests.
     elements:
       - c8455307-cef2-4843-a821-ff90db9643d2

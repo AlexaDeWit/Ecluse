@@ -31,7 +31,6 @@ import Ecluse.Test.Rules (
     blockedBy,
     inertRuleDeps,
     isUndecidable,
-    noFaultReporter,
     withInstallScripts,
  )
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
@@ -105,7 +104,7 @@ depsWith rows =
         { rdWithCveLookup = \use -> use (Just (DbEtag "etag-1", fakeCveLookup rows))
         , rdCurrentAdvisoryEtag = pure Nothing
         , rdBreakerReporter = noBreakerReporter
-        , rdFaultReporter = noFaultReporter
+        , rdSourceReporter = noSourceReporter
         , rdAdvisoryFreshness = pure AdvisoryFresh
         }
 
@@ -262,9 +261,127 @@ expirySpec = describe "an expired advisory push" $ do
             Undecidable _ reason -> reason `shouldSatisfy` T.isInfixOf "past the maximum"
             other -> expectationFailure ("expected a refusal, got " <> show other)
 
+-- | Capabilities whose source reports collect in the returned ref, newest first.
+observedDeps :: RuleDeps -> IO (RuleDeps, IORef [SourceHealth])
+observedDeps deps = do
+    captured <- newIORef []
+    pure (deps{rdSourceReporter = SourceReporter (\h -> modifyIORef' captured (h :))}, captured)
+
+-- | The reports so far, oldest first.
+reported :: IORef [SourceHealth] -> IO [SourceHealth]
+reported = fmap reverse . readIORef
+
+-- | The issue's reproduction: the shipped quarantine beside an opt-in advisory deny set to skip.
+skipPolicy :: [PrecededRule]
+skipPolicy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)]
+
+evidenceSpec :: Spec
+evidenceSpec = describe "skipped-check evidence on an admission" $ do
+    it "keeps the deny check the admission skipped for want of an advisory database" $ do
+        -- The age rule admits an old version while DenyIfCve, set to skip, could not vet it. The
+        -- admission says so, rather than reading as if every configured check passed.
+        decision <- decideWith inertRuleDeps skipPolicy (pkg Nothing 30)
+        admittedBy decision `shouldBe` Just "AllowIfOlderThan"
+        skippedChecks decision `shouldBe` [SkippedUnavailable "DenyIfCve" "no advisory database loaded"]
+        renderDecision (pkg Nothing 30) decision
+            `shouldSatisfy` T.isSuffixOf "(skipped for unavailability: DenyIfCve (no advisory database loaded))"
+
+    it "keeps a skipped lookup fault, with the generic reason the client also sees" $ do
+        let broken = inertRuleDeps{rdWithCveLookup = \_ -> throwIO (TestContractEscape "advisory database exploded")}
+        decision <- decideWith broken skipPolicy (pkg Nothing 30)
+        skippedChecks decision `shouldBe` [SkippedUnavailable "DenyIfCve" "the rule could not be evaluated"]
+
+    it "keeps a skip behind an open breaker" $ do
+        prepared <- prepare inertRuleDeps{rdWithCveLookup = \_ -> throwIO (TestContractEscape "down")} skipPolicy
+        opened <- traverse openBreakerOn prepared
+        decision <- evalRules ctx opened (pkg Nothing 30)
+        skippedChecks decision `shouldBe` [SkippedUnavailable "DenyIfCve" "the rule source circuit breaker is open"]
+
+    it "keeps the remediation allow an expired push abstained, since a deny refuses on expiry instead" $ do
+        decision <- decideWith (expired (depsWith fixRows)) (map atDefaultPrecedence [AllowIfRemediatesCve, AllowIfOlderThan (7 * nominalDay)]) (pkg Nothing 30)
+        admittedBy decision `shouldBe` Just "AllowIfOlderThan"
+        case skippedChecks decision of
+            [SkippedUnavailable "AllowIfRemediatesCve" cause] -> cause `shouldSatisfy` T.isInfixOf "past the maximum"
+            other -> expectationFailure ("expected one skipped check, got " <> show other)
+
+    it "carries no evidence once the database answers, so a later allow reads clean" $ do
+        decision <- decideWith (depsWith []) skipPolicy (pkg Nothing 30)
+        admittedBy decision `shouldBe` Just "AllowIfOlderThan"
+        skippedChecks decision `shouldBe` []
+
+    it "records a check the winning allow pre-empted as unreached, never as passed or skipped" $ do
+        -- An operator ranking the deny below the quarantine allow made the choice, so the record
+        -- says the check never ran rather than claiming an unavailability.
+        decision <- decideWith inertRuleDeps [at 50 (DenyIfCve (DenyIfCveParams 8.0 FailNoDecision)), atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))] (pkg Nothing 30)
+        skippedChecks decision `shouldBe` [Unreached "DenyIfCve"]
+
+    it "lists skipped checks in boot order ahead of the unreached ones" $ do
+        decision <-
+            decideWith
+                inertRuleDeps
+                (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), DenyIfEpss (DenyIfEpssParams 0.5 FailNoDecision), AllowScope (mkScope "myorg"), DenyIfCve (DenyIfCveParams 8.0 FailNoDecision), AllowIfRemediatesCve])
+                (pkg (Just "myorg") 30)
+        admittedBy decision `shouldBe` Just "AllowScope"
+        skippedChecks decision
+            `shouldBe` [ SkippedUnavailable "DenyIfCve" "no advisory database loaded"
+                       , SkippedUnavailable "DenyIfEpss" "no advisory database loaded"
+                       , Unreached "AllowIfRemediatesCve"
+                       , Unreached "AllowIfOlderThan"
+                       ]
+
+    it "attaches no evidence to a refusal: a fail-closed inability is decisive, not skipped" $ do
+        decision <- decideWith inertRuleDeps (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), denyCveAt 8.0]) (pkg Nothing 30)
+        decision `shouldSatisfy` isUndecidable
+        skippedChecks decision `shouldBe` []
+
+    it "does not turn an unavailable check into an admission by itself" $
+        -- Nothing else admits a young version, so the skipped deny leaves deny-by-default standing.
+        decideWith inertRuleDeps skipPolicy (pkg Nothing 1) >>= (`shouldSatisfy` isBlockedByDefault)
+
+sourceHealthSpec :: Spec
+sourceHealthSpec = describe "advisory source health reporting" $ do
+    it "reports an absent database as unavailable, and a loaded one as answered, once per advisory rule" $ do
+        (absent, absentReports) <- observedDeps inertRuleDeps
+        void (decideWith absent skipPolicy (pkg Nothing 30))
+        reported absentReports `shouldReturn` [SourceUnavailable "DenyIfCve" "no advisory database loaded"]
+        (loaded, loadedReports) <- observedDeps (depsWith [])
+        void (decideWith loaded skipPolicy (pkg Nothing 30))
+        reported loadedReports `shouldReturn` [SourceAnswered "DenyIfCve"]
+
+    it "reports under a fail-closed alignment too, so a refusing outage is observed" $ do
+        (deps, reports) <- observedDeps inertRuleDeps
+        void (decideWith deps [atDefaultPrecedence (denyCveAt 8.0)] (pkg Nothing 30))
+        reported reports `shouldReturn` [SourceUnavailable "DenyIfCve" "no advisory database loaded"]
+
+    it "reports an expired push as unavailable with its cause" $ do
+        (deps, reports) <- observedDeps (expired (depsWith []))
+        void (decideWith deps [atDefaultPrecedence (denyCveAt 8.0)] (pkg Nothing 30))
+        reported reports >>= \case
+            [SourceUnavailable "DenyIfCve" cause] -> cause `shouldSatisfy` T.isInfixOf "past the maximum"
+            other -> expectationFailure ("expected one unavailability, got " <> show other)
+
+    it "reports a lookup fault once, with its detail, and nothing again for the decided verdict" $ do
+        (deps, reports) <- observedDeps inertRuleDeps{rdWithCveLookup = \_ -> throwIO (TestContractEscape "advisory database exploded")}
+        void (decideWith deps skipPolicy (pkg Nothing 30))
+        reported reports >>= \case
+            [SourceUnavailable "DenyIfCve" detail] -> detail `shouldSatisfy` T.isInfixOf "advisory database exploded"
+            other -> expectationFailure ("expected one unavailability, got " <> show other)
+
+    it "reports nothing for a pure rule, which reads no source" $ do
+        (deps, reports) <- observedDeps inertRuleDeps
+        void (decideWith deps (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), DenyInstallTimeExecution]) (pkg Nothing 30))
+        reported reports `shouldReturn` []
+
+    it "reports the remediation allow as answered without a database, because abstaining is its verdict" $ do
+        (deps, reports) <- observedDeps inertRuleDeps
+        void (decideWith deps [atDefaultPrecedence AllowIfRemediatesCve] (pkg Nothing 30))
+        reported reports `shouldReturn` [SourceAnswered "AllowIfRemediatesCve"]
+
 spec :: Spec
 spec = do
     expirySpec
+    evidenceSpec
+    sourceHealthSpec
     describe "advisory package identity" $ do
         for_ [denyCveAt 0, denyEpssAt 0] $ \rule ->
             it (toString (ruleName rule <> " queries the canonical PyPI name")) $ do
@@ -654,7 +771,7 @@ spec = do
                         { rdWithCveLookup = \_ -> throwIO (TestContractEscape "advisory database exploded")
                         , rdCurrentAdvisoryEtag = pure Nothing
                         , rdBreakerReporter = noBreakerReporter
-                        , rdFaultReporter = noFaultReporter
+                        , rdSourceReporter = noSourceReporter
                         , rdAdvisoryFreshness = pure AdvisoryFresh
                         }
                 policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
@@ -806,7 +923,7 @@ spec = do
     describe "renderDecision" $ do
         let pd = pkg (Just "myorg") 0
         it "renders an admission naming the rule and its reason" $
-            renderDecision pd (Admitted "AllowScope" "scope @myorg is allow-listed")
+            renderDecision pd (Admitted "AllowScope" "scope @myorg is allow-listed" [])
                 `shouldSatisfy` (\t -> T.isInfixOf "AllowScope" t && T.isInfixOf "approved" t)
         it "renders a block naming the rule and its reason" $
             renderDecision pd (Blocked "DenyAdvisory" Nothing "affected by an advisory")

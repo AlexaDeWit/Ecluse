@@ -39,7 +39,7 @@ import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Package (validSha256, validSha256Sri)
 import Ecluse.Test.Registry.Npm (VersionSpec (vsIntegrity), packumentValue, publishedDaysAgo, versionSpec, versionValue)
-import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
+import Ecluse.Test.Rules (atDefaultPrecedence)
 import Ecluse.Test.Server.Mount (inertPackumentDeps, npmServeDeps, pypiServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders, capPath), stubLocalhostUrl, withRoutedStub)
 import Ecluse.Test.Wai (selfBaseUrlOf, servedVersions, status)
@@ -113,7 +113,7 @@ partialAdvisoryApp upstreamBase policy = do
     advisoriesLanded handles Npm
     for_ (Map.lookup PyPI handles) $ \handle ->
         atomically (writeTVar (csReady handle) False)
-    let depsFor = cveRuleDepsFor handles noBreakerReporter noFaultReporter
+    let depsFor = cveRuleDepsFor handles noBreakerReporter (\_ _ -> pass)
     npmRules <- prepare (depsFor Npm) policy
     pypiRules <- prepare (depsFor PyPI) policy
     env <- newTestEnv

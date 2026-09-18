@@ -212,7 +212,7 @@ spec = do
 
         it "an effectful approval admits, like a pure approval" $ do
             let pd = pkg "public" 30 NoCodeOnInstall
-            serveDecisionOf pd (Admitted "AllowAdvisory" "remediates") `shouldBe` Admit
+            serveDecisionOf pd (Admitted "AllowAdvisory" "remediates" []) `shouldBe` Admit
 
         it "an effectful denial rejects ByPolicy, naming the effectful rule" $ do
             let pd = pkg "public" 30 NoCodeOnInstall

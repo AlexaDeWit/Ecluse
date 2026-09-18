@@ -29,7 +29,7 @@ import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
-import Ecluse.Core.Rules (RuleDeps (..), prepare)
+import Ecluse.Core.Rules (RuleDeps (..), noSourceReporter, prepare)
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
 import Ecluse.Core.Rules.Types (Rule (AllowIfOlderThan, AllowIfRemediatesCve))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -50,7 +50,7 @@ import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (noopAdvisorySyncMetricsPort, passthroughAdvisorySyncTracingPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
-import Ecluse.Test.Rules (atDefaultPrecedence, noFaultReporter)
+import Ecluse.Test.Rules (atDefaultPrecedence)
 import Ecluse.Test.Server.Mount (npmServeDeps)
 import Ecluse.Test.Stub (Captured (capHeaders), stubBaseUrl, stubLocalhostUrl, withRoutedStub, withStub)
 import Ecluse.Test.Wai (rebaseAuthority, selfBaseUrlOf, status)
@@ -85,7 +85,7 @@ spec =
                                         { rdWithCveLookup = withSlotGeneration slot
                                         , rdCurrentAdvisoryEtag = currentAdvisoryEtag slot
                                         , rdBreakerReporter = noBreakerReporter
-                                        , rdFaultReporter = noFaultReporter
+                                        , rdSourceReporter = noSourceReporter
                                         , rdAdvisoryFreshness = pure AdvisoryFresh
                                         }
                                 syncEnv =

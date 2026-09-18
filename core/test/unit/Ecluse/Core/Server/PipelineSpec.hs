@@ -85,6 +85,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     admissionLifetimeSpec
     cacheRetentionSpec
     divergenceEvidenceSpec
+    skippedCheckAuditSpec
     distTagSpec
     sharedCacheSpec
 
@@ -314,6 +315,43 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
                 statusCode (responseStatus resp) `shouldBe` 403
                 divergences `shouldReturn` 0
                 readIORef publicHits `shouldReturn` 1
+
+skippedCheckAuditSpec :: Spec
+skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact gate" $ do
+    it "logs the skipped check once, at the artifact admission, and not for the packument that listed it" $
+        testWithApplication (pure upstreamApp) $ \port -> do
+            (metricsPort, _decisions) <- recordingMetricsPort
+            rt <- mkRuntime metricsPort
+            deps <- skippingDeps port
+            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
+                packument <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
+                statusCode (responseStatus packument) `shouldBe` 200
+                tarball <- captureServeWithLog logEnv npmTarballContract rt (mountWith deps) (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                statusCode (responseStatus tarball) `shouldBe` 200
+            let evidence = filter (T.isInfixOf "skipped for unavailability") (lines logged)
+            length evidence `shouldBe` 1
+            for_ ["\"sev\":\"Warning\"", "\"package\":\"leftpad\"", "\"version\":\"1.0.0\"", "\"rule\":\"DenyIfCve\"", "\"cause\":\"no advisory database loaded\""] $ \field ->
+                logged `shouldSatisfy` T.isInfixOf field
+
+    it "logs nothing for a trusted private serve, which runs no rules" $
+        testWithApplication (pure upstreamApp) $ \port -> do
+            (metricsPort, _decisions) <- recordingMetricsPort
+            rt <- mkRuntime metricsPort
+            -- The public upstream sits on a closed port, so only the private copy can serve.
+            deps <- withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) <$> skippingDeps 1
+            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv ->
+                replicateM_ 3 $ do
+                    tarball <- captureServeWithLog logEnv npmTarballContract rt (mountWith deps) (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                    statusCode (responseStatus tarball) `shouldBe` 200
+            logged `shouldSatisfy` (not . T.isInfixOf "skipped for unavailability")
+
+-- The issue's reproduction over the fixtures: the quarantine allow beside an advisory deny set to
+-- skip, with no advisory database loaded.
+skippingDeps :: Int -> IO PackumentDeps
+skippingDeps publicPort = do
+    base <- depsFor publicPort
+    skipping <- prepare inertRuleDeps (atDefaultPrecedence (Rules.DenyIfCve (Rules.DenyIfCveParams 8.0 Rules.FailNoDecision)) : allowPolicy)
+    pure base{pdRules = skipping}
 
 distTagSpec :: Spec
 distTagSpec = describe "served dist-tags.latest" $ do

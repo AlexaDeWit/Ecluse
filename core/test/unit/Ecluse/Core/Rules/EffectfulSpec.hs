@@ -25,13 +25,15 @@ import Ecluse.Core.Package
 import Ecluse.Core.Rules (
     PreparedRule (..),
     RuleDeps (rdWithCveLookup),
+    SourceHealth (..),
+    SourceReporter (..),
     evalRule,
     evalRules,
+    noSourceReporter,
     runEffectfulRule,
  )
 import Ecluse.Core.Rules.Effectful (
     EffectfulConfig (..),
-    FaultReporter (..),
     Resilience (..),
     defaultEffectfulConfig,
     newBreaker,
@@ -43,7 +45,6 @@ import Ecluse.Test.Rules (
     blockedBy,
     inertRuleDeps,
     isUndecidable,
-    noFaultReporter,
     withInstallScripts,
  )
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape), newTestClock)
@@ -104,7 +105,7 @@ mkRuleClocked clock reporter name prec cfg align eval = do
         PreparedRule
             { prepName = name
             , prepPrecedence = prec
-            , prepResilience = Just (Resilience cfg align breaker reporter clock noFaultReporter)
+            , prepResilience = Just (Resilience cfg align breaker reporter clock noSourceReporter)
             , prepAdvisoryGate = Nothing
             , prepEval = \_ ev -> eval ev
             }
@@ -116,6 +117,25 @@ mkRuleClock clock = mkRuleClocked clock noBreakerReporter
 -- | As 'mkRuleR', through the inert default reporter.
 mkRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (RuleEvidence -> IO RuleVerdict) -> IO PreparedRule
 mkRule = mkRuleR noBreakerReporter
+
+{- | A fail-closed resilient rule whose source reports collect in the returned ref, newest first.
+It carries no advisory gate, so only the harness's own reports reach it.
+-}
+observedRule :: EffectfulConfig -> IO RuleVerdict -> IO (PreparedRule, IORef [SourceHealth])
+observedRule cfg eval = do
+    captured <- newIORef []
+    breaker <- newBreaker
+    let reporter = SourceReporter (\h -> modifyIORef' captured (h :))
+    pure
+        ( PreparedRule
+            { prepName = "DenyCve"
+            , prepPrecedence = 1
+            , prepResilience = Just (Resilience cfg FailDeny breaker noBreakerReporter (pure now) reporter)
+            , prepAdvisoryGate = Nothing
+            , prepEval = \_ _ -> eval
+            }
+        , captured
+        )
 
 -- | An effectful rule that always returns the given verdict (no IO failure).
 constRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> RuleVerdict -> IO PreparedRule
@@ -373,25 +393,33 @@ spec = do
             fastFail `shouldBe` Unavailable (WillResolve Nothing) FailDeny "DenyCve: the rule source circuit breaker is open"
             readIORef attempts `shouldReturn` 2
 
-        it "reports an exhausted evaluation's fault detail to the fault reporter" $ do
-            -- The 'CveQueryFault' detail reaches the fault reporter, so a live-database
+        it "reports an exhausted evaluation's fault detail to the source reporter" $ do
+            -- The 'CveQueryFault' detail reaches the source reporter, so a live-database
             -- query fault is diagnosable. The client-facing decision message stays generic.
-            captured <- newIORef []
-            breaker <- newBreaker
-            let reporter = FaultReporter (\name detail -> modifyIORef' captured ((name, detail) :))
-                rule =
-                    PreparedRule
-                        { prepName = "DenyCve"
-                        , prepPrecedence = 1
-                        , prepResilience = Just (Resilience fastConfig{ecBackoff = []} FailDeny breaker noBreakerReporter (pure now) reporter)
-                        , prepAdvisoryGate = Nothing
-                        , prepEval = \_ _ -> throwIO (CveQueryFault "advisories-for" "SQLite3 returned ErrorNotADatabase")
-                        }
+            (rule, captured) <- observedRule fastConfig{ecBackoff = []} (throwIO (CveQueryFault "advisories-for" "SQLite3 returned ErrorNotADatabase"))
             outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
             outcome `shouldSatisfy` isUnavailable
-            reports <- readIORef captured
-            map fst reports `shouldBe` ["DenyCve"] -- a single attempt (empty backoff), one report
-            any (\(_, detail) -> "SQLite3 returned ErrorNotADatabase" `T.isInfixOf` detail) reports `shouldBe` True
+            readIORef captured >>= \case
+                -- A single attempt (empty backoff), one report.
+                [SourceUnavailable "DenyCve" detail] -> detail `shouldSatisfy` T.isInfixOf "SQLite3 returned ErrorNotADatabase"
+                other -> expectationFailure ("expected one unavailability report, got " <> show other)
+
+        it "reports an open-breaker fast-fail too, so a sustained outage stays observed while nothing runs" $ do
+            (rule, captured) <- observedRule fastConfig{ecBackoff = [], ecBreakerThreshold = 1, ecBreakerCooldown = 30} (throwIO TestSourceUnavailable)
+            _ <- runEffectfulRule ctx rule (pkg Nothing 0)
+            fastFail <- runEffectfulRule ctx rule (pkg Nothing 0)
+            fastFail `shouldSatisfy` isUnavailable
+            reports <- reverse <$> readIORef captured
+            case reports of
+                [SourceUnavailable "DenyCve" detail, fastFailed] -> do
+                    detail `shouldSatisfy` T.isInfixOf "the rule threw"
+                    fastFailed `shouldBe` SourceUnavailable "DenyCve" "the rule source circuit breaker is open"
+                other -> expectationFailure ("expected the fault and the fast-fail, got " <> show other)
+
+        it "reports no verdict itself: the engine classifies decided verdicts" $ do
+            (rule, captured) <- observedRule fastConfig (pure (CannotVet FailDeny "no advisory database loaded"))
+            _ <- runEffectfulRule ctx rule (pkg Nothing 0)
+            readIORef captured `shouldReturn` []
 
         it "a deterministic CannotVet is taken at face value -- never retried, never trips the breaker" $ do
             -- An absent database must not trip the breaker before the first sync.

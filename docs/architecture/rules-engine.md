@@ -53,7 +53,12 @@ Under its resilience harness a rule either returns a decided verdict, taken at f
 the harness synthesises `Unavailable`. That means no verdict at all: the IO faulted, it timed
 out, or the breaker is open. The engine walks the boot order and credits the winning rule by
 name. With nothing decisive it collects each non-decisive reason, in boot order, so the denial
-can explain what the engine considered. The
+can explain what the engine considered. An admission also carries the configured checks it did
+not benefit from, as `SkippedCheck` evidence: a check that ran and could not vet under a fail-open
+alignment, kept apart from a check an earlier allow pre-empted, so nothing downstream reads an
+unreached check as passed. The public artifact gate logs the skipped ones once, at the admission,
+and a trusted read of a mirrored copy runs no rules, so it never repeats them. The evidence lives
+in the decision and the log only. The
 [`Ecluse.Core.Rules`](../../core/src/Ecluse/Core/Rules.hs) Haddock holds the full verdict and
 harness vocabulary. The proxy logs the boot order at start-up (see
 [Configuration → rule policy](configuration.md#rule-policy)).
@@ -84,6 +89,15 @@ out like a denied one, with no error unless nothing survives. On a concrete arti
 surfaces through the [error model](web-layer.md#error-model) as `503` with `Retry-After` when
 transient, and `500` when not. A fail-closed undecidable result logs at WARNING with the denial
 audit fields. A breaker trip logs nothing and moves the `ecluse.rule.breaker.state` gauge instead.
+
+The advisory source's availability is reported apart from any request. Each advisory-reading
+evaluation reports to a per-ecosystem outage monitor
+([`Ecluse.Core.Rules.Outage`](../../core/src/Ecluse/Core/Rules/Outage.hs)): the harness reports a
+fault or an open breaker with its detail, and the engine classifies every decided verdict, so an
+absent database and an expired push count too. The monitor logs `error` when an outage begins,
+`error` again at most every 15 minutes while it continues, and `info` on recovery. A sustained
+outage therefore costs the log one line per period whatever the traffic, and the reminder keeps a
+deduplicated outage from going quiet.
 
 ### Applying verdicts to a packument
 
@@ -185,10 +199,9 @@ every threshold**, so the rule always denies malware while `minCvss` governs the
 - **`NoDecision`** when no affecting advisory clears it.
 - **`CannotVet`** when no advisory database is loaded, and the harness's **`Unavailable`** when a
   loaded-database lookup faults. Both align by `onUnavailable`. **`FailDeny`** (the default)
-  refuses the version with a retryable `503`. **`FailNoDecision`** skips the rule. Only a
-  lookup fault that exhausts its retries logs, at `warn`. A skip with no database loaded, or behind
-  an open breaker, logs nothing per package, and #1230 plans ERROR-level outage reporting. This is the inverse of `AllowIfRemediatesCve`: neither an allow nor a deny that cannot
-  confirm safety may admit.
+  refuses the version with a retryable `503`. **`FailNoDecision`** skips the rule, and the
+  admission that follows carries the skipped check as evidence. This is the inverse of
+  `AllowIfRemediatesCve`: neither an allow nor a deny that cannot confirm safety may admit.
 - **`CannotVet FailDeny`** when the serving artifact's push is older than the mount's maximum,
   whatever `onUnavailable` says. Expiry is unavailability the operator cannot waive, so the
   alignment is fixed here rather than configured. The gate runs before breaker admission, which
