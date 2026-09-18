@@ -12,7 +12,6 @@ module Ecluse.Core.Registry.Sweep.Pacing (
     nominalPackagePace,
     derivedCapacity,
     budgetFraction,
-    fractionCeiling,
     ceilingsFor,
     renderScopeBudget,
 

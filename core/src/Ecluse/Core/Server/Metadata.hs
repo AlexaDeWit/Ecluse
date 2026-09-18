@@ -19,7 +19,6 @@ module Ecluse.Core.Server.Metadata (
 
     -- * Projecting one version
     selectVersion,
-    readOfEntry,
 ) where
 
 import Data.Map.Strict qualified as Map
