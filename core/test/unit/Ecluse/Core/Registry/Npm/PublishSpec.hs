@@ -3,11 +3,13 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Exercise npm mirror publication through a recording transport stub.
-Integrity cases connect worker verification to the published document and attachment.
+Integrity cases connect worker verification to the published document and attachment, and the
+field-rewrite cases pin what the published version object keeps, replaces, and strips.
 -}
 module Ecluse.Core.Registry.Npm.PublishSpec (spec) where
 
-import Data.Aeson (Object, Value (String), toJSON, (.:), (.:?))
+import Data.Aeson (Object, Value (Bool, Number, Object, String), object, toJSON, (.:), (.:?), (.=))
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.ByteArray.Encoding (Base (Base64), convertFromBase)
@@ -24,13 +26,14 @@ import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
     MirrorArtifact (maHashes, maSize),
     PublishError (publishErrorMessage),
-    PublishFault (PublishFetch, PublishRejected),
+    PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
  )
+import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpPublishArtifact),
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
-    PublishPlan (PublishPlan, ppLatest, ppVersion),
+    PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
     newMirrorPublish,
  )
 import Ecluse.Core.Security (defaultLimits)
@@ -38,11 +41,12 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (hexSha1Of, sriSha256Of, sriSha512Of, unsafeHash, v1_0_0, validSha1)
-import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd)
+import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
 import Ecluse.Test.Stub (
     Stub,
+    allCaptured,
     capBody,
     capMethod,
     capPath,
@@ -57,6 +61,7 @@ spec :: Spec
 spec = do
     publishSpec
     integritySpec
+    fieldRewriteSpec
 
 publishSpec :: Spec
 publishSpec = describe "the npm mirror write (codec over the shared transport)" $ do
@@ -67,12 +72,12 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
             cap <- lastCaptured stub
             capMethod cap `shouldBe` "PUT"
             capPath cap `shouldBe` "/is-odd"
-            capBody cap `shouldBe` publishDoc
+            publishDoc `shouldReturn` capBody cap
             headerValue "content-type" cap `shouldBe` Just "application/json"
 
     it "declares the plan's latest, not the version it publishes" $ do
-        let plan = PublishPlan{ppVersion = v1_0_0, ppLatest = mkVersion Npm "2.0.0"}
-        document <- decodeJsonOrFail (npmPublishDocument isOdd plan "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes) :: IO Object
+        let plan = planV1{ppLatest = mkVersion Npm "2.0.0"}
+        document <- decodeJsonOrFail =<< expectRight (npmPublishDocument isOdd plan "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes) :: IO Object
         tags <- expectRight (parseEither (.: "dist-tags") document)
         versions <- expectRight (parseEither (.: "versions") document) :: IO Object
         KeyMap.lookup "latest" tags `shouldBe` Just (String "2.0.0")
@@ -158,6 +163,104 @@ assertPublishedIntegrity tokens expectedIntegrity =
                 publishedHash <- expectRight (mkHash SHA1 raw)
                 verifyIntegrity (publishedHash :| []) bytes `shouldBe` IntegrityVerified
 
+fieldRewriteSpec :: Spec
+fieldRewriteSpec = describe "the field-rewrite contract on the published version object" $ do
+    it "keeps what the author wrote: dependencies, executables, policy inputs, and an unknown field" $ do
+        manifest <- publishedManifest
+        forM_ ["dependencies", "bin", "scripts", "engines", "license", "gitHead"] $ \field ->
+            KeyMap.lookup field manifest `shouldBe` KeyMap.lookup field sourceObject
+
+    it "keeps a deprecation notice verbatim" $ do
+        manifest <- publishedManifest
+        KeyMap.lookup "deprecated" manifest `shouldBe` Just (String "use is-even instead")
+
+    it "rewrites only the validated name and version under local authority" $ do
+        manifest <- publishedManifest
+        KeyMap.lookup "name" manifest `shouldBe` Just (String "is-odd")
+        KeyMap.lookup "version" manifest `shouldBe` Just (String "1.0.0")
+
+    it "replaces the dist location and digests with the verified ones and keeps the rest of dist" $ do
+        dist <- distOf <$> publishedManifest
+        KeyMap.lookup "tarball" dist `shouldBe` Just (String "is-odd-1.0.0.tgz")
+        KeyMap.lookup "integrity" dist `shouldBe` Just (String verifiedSri)
+        KeyMap.lookup "shasum" dist `shouldBe` Just (String validSha1)
+        KeyMap.lookup "unpackedSize" dist `shouldBe` Just (Number 4096)
+        KeyMap.lookup "fileCount" dist `shouldBe` Just (Number 3)
+
+    it "strips dist.signatures and dist.attestations, which reference the public registry's own keys" $ do
+        dist <- distOf <$> publishedManifest
+        KeyMap.lookup "signatures" dist `shouldBe` Nothing
+        KeyMap.lookup "attestations" dist `shouldBe` Nothing
+
+    it "strips every underscore-prefixed registry bookkeeping field" $ do
+        manifest <- publishedManifest
+        filter (T.isPrefixOf "_" . Key.toText) (KeyMap.keys manifest) `shouldBe` []
+
+    it "never lets an unverified source digest survive the absence of a verified one" $ do
+        document <- decodeJsonOrFail =<< expectRight (npmPublishDocument isOdd (planWith (fst npmCached sourceVersion)) "is-odd-1.0.0.tgz" Nothing Nothing dummyTarballBytes) :: IO Object
+        dist <- distOf <$> (expectRight (parseEither (\o -> o .: "versions" >>= (.: "1.0.0")) document) :: IO Object)
+        KeyMap.lookup "integrity" dist `shouldBe` Nothing
+        KeyMap.lookup "shasum" dist `shouldBe` Nothing
+        KeyMap.lookup "tarball" dist `shouldBe` Just (String "is-odd-1.0.0.tgz")
+
+    it "refuses, as a value, a version object another ecosystem injected" $
+        documentOf (fst pypiSimpleCached sourceVersion) `shouldSatisfy` isSourceRefusal
+
+    it "refuses, as a value, a carried version object that is not a JSON object" $
+        documentOf (fst npmCached (String "not an object")) `shouldSatisfy` isSourceRefusal
+
+    it "writes nothing to the mirror target for a refused version object" $
+        withStub status200 "{}" $ \stub -> do
+            publish <- stubPublish stub
+            outcome <- mpPublishArtifact publish isOdd (planWith (fst npmCached (String "not an object"))) sizedArtifact dummyTarballBytes
+            outcome `shouldSatisfy` isSourceRefusal
+            allCaptured stub `shouldReturn` []
+  where
+    publishedManifest :: IO Object
+    publishedManifest = do
+        document <- decodeJsonOrFail =<< expectRight (documentOf (fst npmCached sourceVersion)) :: IO Object
+        expectRight (parseEither (\o -> o .: "versions" >>= (.: "1.0.0")) document)
+    documentOf raw = npmPublishDocument isOdd (planWith raw) "is-odd-1.0.0.tgz" (Just verifiedSri) (Just validSha1) dummyTarballBytes
+    planWith raw = planV1{ppMetadata = raw}
+    distOf :: Object -> Object
+    distOf manifest = case KeyMap.lookup "dist" manifest of
+        Just (Object dist) -> dist
+        _ -> mempty
+    verifiedSri = sriSha512Of dummyTarballBytes
+
+-- The version object as the public registry serves it: author fields, registry bookkeeping, and a
+-- name, version, and dist that must not reach the mirror as written.
+sourceVersion :: Value
+sourceVersion = Object sourceObject
+
+sourceObject :: Object
+sourceObject =
+    KeyMap.fromList
+        [ "name" .= ("shadowed-name" :: Text)
+        , "version" .= ("9.9.9" :: Text)
+        , "dist"
+            .= object
+                [ "tarball" .= ("https://registry.npmjs.org/is-odd/-/is-odd-1.0.0.tgz" :: Text)
+                , "integrity" .= ("sha512-forged" :: Text)
+                , "shasum" .= ("0000000000000000000000000000000000000000" :: Text)
+                , "signatures" .= [object ["keyid" .= ("SHA256:npm" :: Text), "sig" .= ("MEUC" :: Text)]]
+                , "attestations" .= object ["url" .= ("https://registry.npmjs.org/-/npm/v1/attestations/is-odd@1.0.0" :: Text)]
+                , "unpackedSize" .= (4096 :: Int)
+                , "fileCount" .= (3 :: Int)
+                ]
+        , "dependencies" .= object ["is-number" .= ("^6.0.0" :: Text)]
+        , "bin" .= object ["is-odd" .= ("cli.js" :: Text)]
+        , "scripts" .= object ["test" .= ("jest" :: Text)]
+        , "engines" .= object ["node" .= (">=18" :: Text)]
+        , "license" .= ("MIT" :: Text)
+        , "deprecated" .= ("use is-even instead" :: Text)
+        , "gitHead" .= ("0123456789abcdef0123456789abcdef01234567" :: Text)
+        , "_id" .= ("is-odd@1.0.0" :: Text)
+        , "_npmUser" .= object ["name" .= ("publisher" :: Text)]
+        , "_nodeVersion" .= ("20.11.0" :: Text)
+        , "_hasShrinkwrap" .= Bool False
+        ]
+
 stubPublish :: Stub -> IO MirrorPublish
 stubPublish stub = publishAt (stubBaseUrl stub)
 
@@ -175,16 +278,22 @@ dummyTarballBytes = "tarball-bytes"
 
 -- A write of @1.0.0@ that also declares it latest, the shape most cases here do not vary.
 planV1 :: PublishPlan
-planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0}
+planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0, ppMetadata = isOddVersionDoc}
 
-publishDoc :: ByteString
-publishDoc = npmPublishDocument isOdd planV1 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes
+publishDoc :: IO ByteString
+publishDoc = expectRight (npmPublishDocument isOdd planV1 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes)
+
+isSourceRefusal :: Either PublishFault a -> Bool
+isSourceRefusal = \case
+    Left (PublishSourceUnavailable _) -> True
+    _ -> False
 
 leftMessage :: Either PublishFault a -> Maybe Text
 leftMessage outcome = case outcome of
     Left (PublishRejected err) -> Just (publishErrorMessage err)
     Left (PublishFetch (FetchTransport fault)) -> Just (tfDetail fault)
     Left (PublishFetch _) -> Nothing
+    Left (PublishSourceUnavailable detail) -> Just detail
     Right _ -> Nothing
 
 isTransport :: Either PublishFault a -> Bool

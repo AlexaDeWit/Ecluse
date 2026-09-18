@@ -23,9 +23,9 @@ here before any public request. Otherwise, through that bundle the loop:
    re-evaluation re-admitted. That is the floor-checked, current-metadata set, since
    the queue payload carries no digest at all.
 5. assembles the ecosystem's publish document from the re-admitted artifact's
-   descriptor and publishes it to the mirror target. That is the bundle's married
-   publish capability, resolved at the composition root with the bearer from the
-   "Ecluse.Core.Credential" provider.
+   descriptor and the version object the re-evaluation read, and publishes it to the
+   mirror target. That is the bundle's married publish capability, resolved at the
+   composition root with the bearer from the "Ecluse.Core.Credential" provider.
 6. acknowledges the job.
 
 See individual modules for detailed behaviour:

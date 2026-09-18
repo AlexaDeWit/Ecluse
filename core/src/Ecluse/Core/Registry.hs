@@ -116,4 +116,6 @@ data PublishFault
       PublishFetch FetchFault
     | -- | The registry answered and rejected the write (a non-2xx, non-@409@ status). Retryable.
       PublishRejected PublishError
+    | -- | The writer had no usable source version object, so it formed no request. Not retryable.
+      PublishSourceUnavailable Text
     deriving stock (Eq, Show)

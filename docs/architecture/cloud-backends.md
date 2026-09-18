@@ -26,7 +26,10 @@ A separate worker receives jobs and, for each one:
 3. Fetches the artifact from the public upstream.
 4. **Verifies its bytes against the re-admitted artifact's integrity digest**: npm
    `dist.integrity`, read from the current metadata. The queue payload carries no digest at all.
-5. Publishes to the mirror target and acknowledges the job.
+5. Publishes to the mirror target and acknowledges the job. The publish document carries the
+   version object the re-evaluation read, so the metadata is admission-time metadata and the
+   queue payload contributes nothing to it. The operator manual states which fields the write
+   keeps, rewrites, and strips.
 
 A hash mismatch fails the job. The worker publishes nothing, writes an ERROR log, and acknowledges
 the message so it stops cycling. The job is never retried and never dead-lettered, because no

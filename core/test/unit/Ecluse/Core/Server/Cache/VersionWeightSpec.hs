@@ -7,6 +7,8 @@ Cache integration checks live in the parent cache spec.
 -}
 module Ecluse.Core.Server.Cache.VersionWeightSpec (spec) where
 
+import Data.Aeson (Value, object, toJSON, (.=))
+import Data.Aeson.Key qualified as Key
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (Day (ModifiedJulianDay), UTCTime (..))
@@ -15,16 +17,31 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (..))
-import Ecluse.Core.Registry.Metadata (VersionRead (VersionRead, vrDetails, vrUpstreamLatest))
+import Ecluse.Core.Registry.CachedDocument (npmCached)
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdRaw), VersionRead (vrUpstreamLatest, vrVersion))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
+import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Version (mkVersion, versionKey)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName, unsafeHash, v1_0_0, validSha256)
+import Ecluse.Test.Snapshot (versionReadOf)
 
 spec :: Spec
 spec = describe "selected-release accounting" $ do
     it "keeps a cached absence smaller than a present release" $ do
         weighVersion (untagged Nothing) `shouldBe` 1024
         weighVersion (untagged (Just baseline)) `shouldSatisfy` (> weighVersion (untagged Nothing))
+
+    it "charges a retained raw version object on top of the release" $
+        weighVersion (carrying (toJSON (T.replicate 4096 "x"))) `shouldSatisfy` (> weighVersion (untagged (Just baseline)) + 4096)
+
+    it "weighs the raw object by one walk of its structure, never by encoding it" $ do
+        -- Each added key costs exactly its structural allowance under the shared expansion, so
+        -- the weight is a function of the tree's shape rather than of any rendered bytes.
+        let withKeys n = carrying (object [Key.fromText ("dep-" <> show i) .= ("^1.0.0" :: Text) | i <- [100 .. 99 + n :: Int]])
+            wireOf n = 2 + n * (4 + T.length "dep-100" + 2 + T.length "^1.0.0")
+        weighVersion (withKeys 100) - weighVersion (withKeys 0) `shouldBe` expandWireBytes (wireOf 100) - expandWireBytes (wireOf 0)
+        weighVersion (withKeys 1000) `shouldSatisfy` (> weighVersion (withKeys 100))
+        weighVersion (withKeys 0) `shouldSatisfy` (> weighVersion (untagged (Just baseline)))
 
     it "charges the retained upstream release tag on top of the release" $ do
         let tagged = (untagged (Just baseline)){vrUpstreamLatest = Just (mkVersion Npm "1.0.0")}
@@ -74,8 +91,12 @@ spec = describe "selected-release accounting" $ do
 weight :: PackageDetails -> Int
 weight = weighVersion . untagged . Just
 
+-- The baseline release read carrying the given raw version object.
+carrying :: Value -> VersionRead
+carrying raw = (untagged (Just baseline)){vrVersion = (\doc -> doc{vdRaw = Just (fst npmCached raw)}) <$> vrVersion (untagged (Just baseline))}
+
 untagged :: Maybe PackageDetails -> VersionRead
-untagged details = VersionRead{vrDetails = details, vrUpstreamLatest = Nothing}
+untagged details = versionReadOf details Nothing
 
 oneArtifact :: Artifact
 oneArtifact = sampleArtifact{artHashes = [], artInterpreter = Nothing, artProvenance = Nothing}

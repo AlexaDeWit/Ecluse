@@ -35,7 +35,8 @@ import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
-    VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
+    VersionDoc (VersionDoc, vdDetails, vdRaw),
+    VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
     digestOf,
     fetchThenProject,
  )
@@ -78,7 +79,8 @@ newPyPIMetadataReads ::
     OriginFor posture ->
     MetadataReads posture
 newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
-    newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
+    -- No per-release raw object yet: the mirror write for PyPI is not built.
+    newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing) (\_ _ -> Nothing)
 
 fetchSimpleIndex :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
 fetchSimpleIndex origin name =
@@ -105,7 +107,7 @@ fetchPyPIManifest tracing origin name =
 projectPyPIIndex :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
 projectPyPIIndex limits name = projectMetadata (projectSimpleIndexFromValue name) limits
 
-{- A 'vrDetails' of 'Nothing' is a release genuinely absent from a sound index, a forwarded miss.
+{- A 'vrVersion' of 'Nothing' is a release genuinely absent from a sound index, a forwarded miss.
 A Simple index declares no release tag, so 'vrUpstreamLatest' is always 'Nothing' here. -}
 fetchPyPIVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchPyPIVersion tracing origin name version =
@@ -114,7 +116,9 @@ fetchPyPIVersion tracing origin name version =
   where
     untagged details =
         VersionRead
-            { vrDetails = details >>= enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin)
+            { vrVersion = do
+                located <- details >>= enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin)
+                pure VersionDoc{vdDetails = located, vdRaw = Nothing}
             , vrUpstreamLatest = Nothing
             }
 

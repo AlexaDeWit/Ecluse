@@ -5,9 +5,13 @@
 
 {- | Conservative accounting for selectively decoded releases.
 The cache charges backing allocations and repeated structures without deduplicating sharing.
+A retained raw version object is charged on the shared wire-to-resident model, without encoding it.
 -}
 module Ecluse.Core.Server.Cache.VersionWeight (weighVersion, weighEntryKey) where
 
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String))
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Array.Byte (ByteArray (..))
 import Data.Text.Internal qualified as Text
 import Data.Text.Short qualified as TS
@@ -16,16 +20,39 @@ import GHC.Exts (Int (I#), sizeofByteArray#)
 
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (..))
-import Ecluse.Core.Registry.Metadata (VersionRead (vrDetails, vrUpstreamLatest))
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, foldCachedDoc)
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw), VersionRead (vrUpstreamLatest, vrVersion))
+import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Version (renderVersion)
 
 -- | Estimate retained release bytes. 'maxBound' marks an uncacheable saturated estimate.
 weighVersion :: VersionRead -> Int
 weighVersion versionRead =
-    fromInteger (min (toInteger (maxBound :: Int)) (detailsPart + latestPart))
+    fromInteger (min (toInteger (maxBound :: Int)) (versionPart + latestPart))
   where
-    detailsPart = maybe 1024 detailsWeight (vrDetails versionRead)
+    versionPart = maybe 1024 pairWeight (vrVersion versionRead)
     latestPart = maybe 0 (textWeight . renderVersion) (vrUpstreamLatest versionRead)
+
+pairWeight :: VersionDoc -> Integer
+pairWeight doc = detailsWeight (vdDetails doc) + maybe 0 rawWeight (vdRaw doc)
+
+{- The raw object on the full store's measure, its compact-encoded size scaled by the shared
+expansion, estimated by one walk of the tree so the serve path never encodes it. -}
+rawWeight :: CachedDoc -> Integer
+rawWeight = toInteger . expandWireBytes . foldCachedDoc wireBytes
+
+-- A number is charged a fixed render allowance rather than rendered to measure it.
+wireBytes :: Value -> Int
+wireBytes = \case
+    Object o -> 2 + sum [4 + utf8Length (Key.toText key) + wireBytes value | (key, value) <- KeyMap.toList o]
+    Array items -> 2 + sum [1 + wireBytes value | value <- toList items]
+    String s -> 2 + utf8Length s
+    Number _ -> 24
+    Bool _ -> 5
+    Null -> 4
+
+utf8Length :: Text -> Int
+utf8Length (Text.Text _ _ len) = len
 
 detailsWeight :: PackageDetails -> Integer
 detailsWeight details =
@@ -46,7 +73,7 @@ detailsWeight details =
     -- The opaque parsed version has flat token lists and bounded numeric components.
     -- The per-byte allowance also covers RubyGems hyphen expansion and copied parser text.
     rawVersion = renderVersion (pkgVersion details)
-    Text.Text _ _ rawLength = rawVersion
+    rawLength = utf8Length rawVersion
 
 nameWeight :: PackageName -> Integer
 nameWeight name =

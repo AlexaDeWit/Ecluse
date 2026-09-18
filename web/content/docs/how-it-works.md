@@ -95,9 +95,26 @@ Listings omit files whose URLs lack a filename, name `.` or `..`, or have a back
 The check also applies after one percent decode and refuses encoded separators or invalid UTF-8.
 A release disappears when no file survives.
 
-The current npm mirror writer omits dependency and executable fields from its published manifest.
-[#1205](https://github.com/AlexaDeWit/Ecluse/issues/1205) tracks that defect. Until corrected,
-do not assume a fresh install from the mirror reproduces the public package's dependency metadata.
+The mirror write republishes the version object the public registry served when the worker
+admitted the version, so an install from the mirror resolves the same dependencies, executable
+mappings, engines, scripts, and deprecation notice as an install from the public registry. The
+worker reads that object at admission time, never from the queued job.
+
+- Écluse keeps every field the author wrote, including fields it does not model.
+- Écluse rewrites only what it verified itself: the name, the version, the attachment, and the
+  `dist` location and digests. A digest the public registry declared but the worker did not verify
+  is dropped rather than republished.
+- Écluse strips `dist.signatures`, `dist.attestations`, and every underscore-prefixed field,
+  because they describe the public registry's own keys, bundles, and bookkeeping.
+- A version whose source object is unavailable is not mirrored: the worker publishes nothing,
+  retires the job, and logs why, apart from a policy denial.
+
+Écluse never edits a version the mirror already holds, so a copy that an earlier release mirrored
+with the shorter manifest keeps it. To repair one, delete that version from the mirror target with
+the store's own tooling (`DeletePackageVersions` on CodeArtifact, an unpublish on Verdaccio), then
+request the version through the proxy again. The next tarball request enqueues a fresh mirror job,
+which republishes the version with its full metadata. A separate private cache that retained the
+old copy keeps serving it until you remove that copy too.
 
 Each mirror write sets `dist-tags.latest` on the mirror target. Écluse reads the public
 registry's own `latest` and the versions the mirror holds after the write, then names the public

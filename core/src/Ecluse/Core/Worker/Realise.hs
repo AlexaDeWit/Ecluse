@@ -31,7 +31,7 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..))
 import Ecluse.Core.Worker.Job (
-    JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
+    JobOutcome (DeadLettered, Dropped, Retried, SourceUnavailable, Succeeded),
     RetryLeg (AfterPublish, BeforePublish),
     processJob,
  )
@@ -88,6 +88,8 @@ decideDelivery message = do
         Dropped reason ->
             -- Non-retryable, and not worth a dead-letter forensic trail, so retire it instead.
             DisposeAck <$ logFM ErrorS (ls ("dropping unrecoverable mirror job: " <> reason))
+        SourceUnavailable reason ->
+            DisposeAck <$ logFM ErrorS (ls ("refusing to mirror without the source version object: " <> reason))
         DeadLettered reason ->
             -- Alarm first: on the in-memory backend the log and metric are the only record.
             DisposeDeadLetter <$ logFM ErrorS (ls ("dead-lettering unmirrorable mirror job (rides the backend's dead-letter terminus): " <> reason))
@@ -126,6 +128,7 @@ jobResultMetric :: JobOutcome -> Metric.MirrorResult
 jobResultMetric = \case
     Succeeded -> Metric.Published
     Dropped _ -> Metric.Failed
+    SourceUnavailable _ -> Metric.Failed
     DeadLettered _ -> Metric.Failed
     Retried _ _ -> Metric.Failed
 

@@ -4,7 +4,7 @@
 
 module Ecluse.Core.Worker.JobSpec (spec) where
 
-import Data.Aeson (Value, eitherDecodeStrict')
+import Data.Aeson (Value (String), eitherDecodeStrict', object, (.=))
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -16,7 +16,8 @@ import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
     HashAlg (Blake2b, SHA1, SHA256, SRI),
-    PackageDetails,
+    PackageDetails (pkgArtifacts),
+    PackageName,
  )
 import Ecluse.Core.Package.Admission (ArtifactAdmission (AdmissionUndecidable))
 import Ecluse.Core.Registry (
@@ -27,16 +28,23 @@ import Ecluse.Core.Registry (
     UrlFormationError (EmptyBaseUrl),
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataFetch, MetadataUndecodable),
+    VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
-    VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
     fetchVersionDetails,
  )
-import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
-import Ecluse.Core.Registry.Publish (PublishPlan (PublishPlan, ppLatest, ppVersion))
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument)
+import Ecluse.Core.Registry.Publish (
+    MirrorPublish,
+    MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
+    PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
+    newMirrorPublish,
+ )
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
-import Ecluse.Core.Security (LimitError (BodyTooLarge))
+import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
@@ -49,7 +57,11 @@ import Ecluse.Test.Package (unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admitRule, cannotVetRule, denyRule)
+import Ecluse.Test.Snapshot (versionDocOf, versionReadOf)
+import Ecluse.Test.Stub (allCaptured, capMethod, stubBaseUrl, withStub)
 import Ecluse.Worker.Support
+import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Network.HTTP.Types.Status (status404)
 
 spec :: Spec
 spec = do
@@ -93,9 +105,9 @@ spec = do
     describe "npmPublishDocument" $ do
         it "assembles a PUT document with the version, dist integrity, and base64 attachment" $ do
             let document =
-                    npmPublishDocument pkg (PublishPlan{ppVersion = ver, ppLatest = ver}) "thing-1.0.0.tgz" (Just trueSri) (Just trueSha1) tarballBytes
+                    npmPublishDocument pkg (PublishPlan{ppVersion = ver, ppLatest = ver, ppMetadata = admissionObject}) "thing-1.0.0.tgz" (Just trueSri) (Just trueSha1) tarballBytes
                 decoded :: Either String Value
-                decoded = eitherDecodeStrict' document
+                decoded = first show document >>= eitherDecodeStrict'
             case decoded of
                 Left err -> expectationFailure ("publish document is not valid JSON: " <> err)
                 Right value -> do
@@ -251,6 +263,56 @@ spec = do
                 outcome `shouldSatisfy` isDropped
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
+
+        it "hands the publish step the version object current metadata carried at admission, never the enqueue-time one" $
+            withUpstream $ \url ->
+                withRuntimePolicies (npmPolicies (resolverCarrying admissionObject) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue (jobWith url)
+                    runWM runtime (processJob job) `shouldReturn` Succeeded
+                    plans <- plPlans <$> readIORef logRef
+                    map ppMetadata plans `shouldBe` [admissionObject]
+
+        it "refuses, apart from a policy deny, a job whose re-admission carries no source version object, without publishing" $
+            withUpstream $ \url ->
+                withRuntimePolicies (npmPolicies (\name version -> pure (VersionPresent (versionDocOf (sampleDetails name version)) Nothing)) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
+                    outcome `shouldSatisfy` isSourceUnavailable
+                    outcome `shouldSatisfy` (not . isDropped)
+                    plans <- plPlans <$> readIORef logRef
+                    plans `shouldBe` []
+
+        it "reports the codec's own refusal of a carried document that is not an npm object as source-unavailable, not dropped" $
+            -- The type admits a document the npm codec cannot read, so its refusal is folded onto
+            -- the same outcome as the pre-plan one, and the write never leaves the codec.
+            withUpstream $ \url ->
+                withStub status404 "" $ \mirror -> do
+                    publish <- codecPublishAt (stubBaseUrl mirror)
+                    withRuntimeRegistry (const publish) (npmPolicies (resolverCarrying (fst npmCached (String "not an object"))) [admitRule]) noopWorkerMetricsPort $ \runtime queue _logRef -> do
+                        job <- enqueueAndReceive queue (jobWith url)
+                        outcome <- runWM runtime (processJob job)
+                        outcome `shouldSatisfy` isSourceUnavailable
+                        outcome `shouldSatisfy` (not . isDropped)
+                        -- The inventory probe reached the target; the write never did.
+                        written <- filter (== "PUT") . map capMethod <$> allCaptured mirror
+                        written `shouldBe` []
+
+        it "lets no carried version object reach the publish step once current policy denies the version" $
+            withRuntimePolicies (npmPolicies (resolverCarrying admissionObject) [denyRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                outcome <- runWM runtime (processJob job)
+                outcome `shouldSatisfy` isDropped
+                plans <- plPlans <$> readIORef logRef
+                plans `shouldBe` []
+
+        it "lets no carried version object reach the publish step once the bytes fail the integrity gate" $
+            withUpstream $ \url ->
+                withRuntimePolicies (npmPolicies (resolverCarryingWith sampleArtifact{artHashes = [unsafeHash SRI falseSri]} admissionObject) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
+                    outcome `shouldSatisfy` isDropped
+                    plans <- plPlans <$> readIORef logRef
+                    plans `shouldBe` []
 
         it "publishes a job whose version current policy admits (happy path unregressed)" $
             withUpstream $ \url ->
@@ -564,11 +626,11 @@ spec = do
         -- function, so these cases pin its classification directly.
         it "classifies a resolved version as present" $
             fetchVersionDetails (versionClient (Right (versionReadOf (Just (sampleDetails pkg ver)) (Just otherVer)))) pkg ver
-                `shouldReturn` VersionPresent (sampleDetails pkg ver) (Just otherVer)
+                `shouldReturn` VersionPresent (versionDocOf (sampleDetails pkg ver)) (Just otherVer)
 
         it "carries the document's own latest onto the present verdict" $
             fetchVersionDetails (versionClient (Right (versionReadOf (Just (sampleDetails pkg ver)) Nothing))) pkg ver
-                `shouldReturn` VersionPresent (sampleDetails pkg ver) Nothing
+                `shouldReturn` VersionPresent (versionDocOf (sampleDetails pkg ver)) Nothing
 
         it "classifies an absent version (resolved, but no such version) as missing" $
             fetchVersionDetails (versionClient (Right (versionReadOf Nothing Nothing))) pkg ver
@@ -589,12 +651,28 @@ spec = do
             outcome <- try (fetchVersionDetails throwingVersionClient pkg ver) :: IO (Either SomeException VersionEvaluation)
             outcome `shouldSatisfy` isLeft
 
--- A version read carrying the given release and the document's own latest.
-versionReadOf :: Maybe PackageDetails -> Maybe Version -> VersionRead
-versionReadOf details upstreamLatest = VersionRead{vrDetails = details, vrUpstreamLatest = upstreamLatest}
-
 npmVer :: Text -> Version
 npmVer = mkVersion Npm
+
+-- The version object current metadata carries, marked so a case can tell it from any other.
+admissionObject :: CachedDoc
+admissionObject = fst npmCached (object ["marker" .= ("admission-time" :: Text)])
+
+-- The real npm codec over the shared transport against a stub mirror target, so the codec's own
+-- refusal is the one under test rather than a recording double's.
+codecPublishAt :: Text -> IO MirrorPublish
+codecPublishAt targetUrl = do
+    manager <- newManager defaultManagerSettings
+    let transport = MirrorTransport{ptManager = manager, ptMintToken = pure Nothing, ptLimits = defaultLimits}
+    pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) npmPublishCodec)
+
+-- A resolver whose present verdict carries the given raw object beside the sample details.
+resolverCarrying :: CachedDoc -> PackageName -> Version -> IO VersionEvaluation
+resolverCarrying = resolverCarryingWith sampleArtifact
+
+resolverCarryingWith :: Artifact -> CachedDoc -> PackageName -> Version -> IO VersionEvaluation
+resolverCarryingWith artifact raw name version =
+    pure (VersionPresent VersionDoc{vdDetails = (sampleDetails name version){pkgArtifacts = artifact :| []}, vdRaw = Just raw} Nothing)
 
 -- An admission verdict no rule could decide, with the given transience.
 undecided :: Transience -> Text -> ArtifactAdmission

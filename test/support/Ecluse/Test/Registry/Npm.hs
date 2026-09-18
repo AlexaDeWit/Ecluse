@@ -21,6 +21,8 @@ module Ecluse.Test.Registry.Npm (
     -- * Mirror-write fixtures
     isOdd,
     dummyArtifact,
+    isOddVersionDoc,
+    sourceVersionDoc,
 
     -- * The npm name grammar, as a shared table
     npmNameVerdicts,
@@ -46,11 +48,14 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Network.HTTP.Client (Manager)
 
-import Ecluse.Core.Package (HashAlg (SHA1), PackageName)
+import Ecluse.Core.Package (Artifact (artHashes, artUrl), Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageName, renderPackageName)
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize))
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
+import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc, vdDetails, vdRaw))
 import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Package (unsafeFilename, unsafeHash, unscopedNpm, validSha1)
 import Ecluse.Test.Server.Route (genPathSegmentFrom, genSegmentName)
 
@@ -109,6 +114,25 @@ dummyArtifact =
         , maSize = Nothing
         }
 
+-- | The version object a mirror write of @is-odd\@1.0.0@ republishes.
+isOddVersionDoc :: CachedDoc
+isOddVersionDoc = fst npmCached (versionValue (versionSpec "is-odd" "1.0.0" "https://registry.npmjs.org/is-odd/-/is-odd-1.0.0.tgz"))
+
+{- | The pair a resolver hands the worker: the details beside the npm version object they
+project from, so the mirror write has a source object to republish.
+-}
+sourceVersionDoc :: PackageDetails -> VersionDoc
+sourceVersionDoc details =
+    VersionDoc{vdDetails = details, vdRaw = Just (fst npmCached (versionValue spec))}
+  where
+    artifact = NE.head (pkgArtifacts details)
+    digestOf alg = hashValue <$> find ((== alg) . hashAlg) (artHashes artifact)
+    spec =
+        (versionSpec (renderPackageName (pkgName details)) (renderVersion (pkgVersion details)) (artUrl artifact))
+            { vsIntegrity = digestOf SRI
+            , vsShasum = digestOf SHA1
+            }
+
 {- | The common fields of an npm version object. An extra pair in 'vsExtraPairs' overrides the
 common field with the same key.
 -}
@@ -127,6 +151,8 @@ data VersionSpec = VersionSpec
     -- ^ Whether to include a representative @scripts.postinstall@ entry.
     , vsExtraPairs :: [Pair]
     -- ^ Site-specific version fields, applied after the common fields.
+    , vsDistPairs :: [Pair]
+    -- ^ Further @dist@ fields beside the location and digests, applied after them.
     }
     deriving stock (Eq, Show)
 
@@ -143,6 +169,7 @@ versionSpec name version tarballUrl =
         , vsShasum = Nothing
         , vsHasInstallScript = False
         , vsExtraPairs = []
+        , vsDistPairs = []
         }
 
 {- | Build the npm version-object shape the test suites share. An unspecified digest
@@ -154,11 +181,12 @@ versionValue spec =
         [ "name" .= vsName spec
         , "version" .= vsVersion spec
         , "dist"
-            .= object
+            .= objectWithExtraPairs
                 ( ["tarball" .= vsTarballUrl spec]
                     <> maybe [] (pure . ("integrity" .=)) (vsIntegrity spec)
                     <> maybe [] (pure . ("shasum" .=)) (vsShasum spec)
                 )
+                (vsDistPairs spec)
         ]
         ( ["scripts" .= object ["postinstall" .= ("node build.js" :: Text)] | vsHasInstallScript spec]
             <> vsExtraPairs spec

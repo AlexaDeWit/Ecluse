@@ -4,7 +4,8 @@
 
 {- | npm metadata reads for full manifests and selected versions.
 Both fetch the full packument because publish-age rules need its @time@ map.
-Selective reads materialise only the requested version and timestamp.
+Selective reads materialise only the requested version and timestamp. A version read pairs the
+typed projection with the selected version object, which the mirror write republishes.
 -}
 module Ecluse.Core.Registry.Npm.Metadata (
     -- * Per-request read handle
@@ -16,9 +17,12 @@ module Ecluse.Core.Registry.Npm.Metadata (
     -- * Pure projection
     projectNpmManifest,
     projectNpmVersion,
+    selectNpmVersionDoc,
 ) where
 
-import Data.Aeson (Value (String), parseJSON)
+import Data.Aeson (Value (Object, String), parseJSON)
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseMaybe)
 import Data.Time (UTCTime)
 
@@ -30,11 +34,12 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
 import Ecluse.Core.Registry (FetchFault, RegistryResponse)
-import Ecluse.Core.Registry.CachedDocument (npmCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataError (MetadataBoundExceeded),
-    VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
+    VersionDoc (VersionDoc, vdDetails, vdRaw),
+    VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
     digestOf,
     fetchThenProject,
  )
@@ -76,7 +81,7 @@ newNpmMetadataReads ::
     OriginFor posture ->
     MetadataReads posture
 newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
-    newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing)
+    newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing) selectNpmVersionDoc
 
 fetchNpmPackument :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
 fetchNpmPackument origin = fetchMetadataFormBounded origin Full noValidators
@@ -100,7 +105,9 @@ fetchNpmVersion tracing origin name version =
         fmap locationChecked . projectNpmVersion (ocLimits origin) name version
   where
     locationChecked versionRead =
-        versionRead{vrDetails = vrDetails versionRead >>= enforceArtifactLocationsOf npmArtifactAuthorities (originBaseUrl origin)}
+        versionRead{vrVersion = vrVersion versionRead >>= locationCheckedDoc}
+    locationCheckedDoc doc =
+        (\details -> doc{vdDetails = details}) <$> enforceArtifactLocationsOf npmArtifactAuthorities (originBaseUrl origin) (vdDetails doc)
 
 -- npm artifacts must use the authority that served the packument.
 npmArtifactAuthorities :: AllowedHostPorts
@@ -109,7 +116,9 @@ npmArtifactAuthorities = ecosystemArtifactAuthorities npmArtifactHosts
 originBaseUrl :: OriginClient -> Text
 originBaseUrl = registryUrlText . ocBaseUrl
 
--- | Project one version without decoding its siblings. Absent or unprojectable versions yield 'Nothing'.
+{- | Project one version without decoding its siblings. Absent or unprojectable versions yield
+'Nothing'. The pair carries the selected object as decoded, never a re-rendering of the typed view.
+-}
 projectNpmVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError VersionRead
 projectNpmVersion limits name version body = do
     decoded <- first (selectiveError limits) (selectVersionFromPackument (maxNestingDepth limits) version body)
@@ -119,10 +128,22 @@ projectNpmVersion limits name version body = do
     publishedAt <- parsePublishTime (svTime selected)
     pure
         VersionRead
-            { -- Use the same rendered version key as the full-document projection.
-              vrDetails = svVersion selected >>= projectVersionEntry name (mkVersion Npm (renderVersion version)) publishedAt
+            { vrVersion = do
+                raw <- svVersion selected
+                -- Use the same rendered version key as the full-document projection.
+                details <- projectVersionEntry name (mkVersion Npm (renderVersion version)) publishedAt raw
+                pure VersionDoc{vdDetails = details, vdRaw = Just (fst npmCached raw)}
             , vrUpstreamLatest = latestTarget (svDistTagLatest selected)
             }
+
+{- | Select one version's object out of a held packument, for a warm full-document read. The
+lookup uses the same rendered key the projection used, so the pair cannot name a sibling.
+-}
+selectNpmVersionDoc :: Version -> CachedDoc -> Maybe CachedDoc
+selectNpmVersionDoc version doc = do
+    Object packument <- snd npmCached doc
+    Object versions <- KeyMap.lookup "versions" packument
+    fst npmCached <$> KeyMap.lookup (Key.fromText (renderVersion version)) versions
 
 -- A non-string @latest@ is no known tag, matching the whole-document projection's per-entry drop.
 latestTarget :: Maybe Value -> Maybe Version

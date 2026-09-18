@@ -20,7 +20,6 @@ import Ecluse.Core.Package (infoVersions)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
-import Ecluse.Core.Registry.Metadata (VersionRead (vrDetails))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Core.Registry.Npm.Project (parseVersionList)
@@ -38,6 +37,7 @@ import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Corpus.PyPI (benchProject, syntheticIndexBytes)
 import Ecluse.Test.EcosystemBench.Types
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
+import Ecluse.Test.Snapshot (readDetails)
 
 -- | Load every registered corpus, failing on missing, malformed, or empty metadata.
 ecosystemBenches :: IO [EcosystemBench]
@@ -66,7 +66,7 @@ npmBench =
         , ebSyntheticName = benchPackageName
         , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionList . RegistryResponse 200
         , ebProject = \name -> fmap (second (fst npmCached)) . projectNpmManifest defaultLimits name
-        , ebSelective = \name version -> fmap vrDetails . projectNpmVersion defaultLimits name version
+        , ebSelective = \name version -> fmap readDetails . projectNpmVersion defaultLimits name version
         , ebReadDocument = readDocument (fst npmCached)
         , ebNestingDepth = nestingDepth (snd npmCached)
         , ebMetadata = adapterMetadata npmAdapter

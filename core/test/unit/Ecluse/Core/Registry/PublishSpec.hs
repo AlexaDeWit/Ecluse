@@ -24,13 +24,13 @@ import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeMetadata, mpPublishArtifact),
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
     PublishCodec (..),
-    PublishPlan (PublishPlan, ppLatest, ppVersion),
+    PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
     newMirrorPublish,
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Package (v1_0_0)
-import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd)
+import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc)
 import Ecluse.Test.Stub (
     Captured (capPath),
     Stub,
@@ -158,7 +158,7 @@ unsealedCodec =
         { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
         , pcParseVersionList = const (Right [])
         , pcPublishRequest = \targetUrl _token _name _plan _artifact _bytes ->
-            unsealed (targetUrl <> "/write")
+            first (PublishFetch . FetchUrlUnformable) (unsealed (targetUrl <> "/write"))
         , pcPublishOutcome = const (Right ())
         }
   where
@@ -166,7 +166,7 @@ unsealedCodec =
 
 -- One write of @1.0.0@ declaring itself latest, the shape these transport cases do not vary.
 planV1 :: PublishPlan
-planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0}
+planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0, ppMetadata = isOddVersionDoc}
 
 unsealedPublishAt :: Stub -> IO MirrorPublish
 unsealedPublishAt stub = publishWith unsealedCodec (stubBaseUrl stub)
