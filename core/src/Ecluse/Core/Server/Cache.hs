@@ -209,6 +209,6 @@ resolveAssembled metrics cache key render =
 cachedMetadata :: MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
 cachedMetadata cache source name = lookupStore (mcFull cache) (cacheKey source name)
 
--- | Read and refresh recency. A read whose 'vrDetails' is 'Nothing' is a cached absence.
+-- | Read and refresh recency. A read whose 'vrVersion' is 'Nothing' is a cached absence.
 cachedVersion :: MetadataCache -> Source -> PackageName -> Version -> IO (Maybe VersionRead)
 cachedVersion cache source name version = lookupStoreTouching (mcVersion cache) (versionKey source name version)

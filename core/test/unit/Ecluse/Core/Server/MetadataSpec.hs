@@ -83,7 +83,7 @@ spec = do
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
             found <- fetchVersionMetadata client name (ver "1.0.0")
-            fmap (fmap vdRaw . pairOf) found `shouldBe` Right (Just (Just (markedObject "1.0.0")))
+            fmap (fmap vdRaw . vrVersion) found `shouldBe` Right (Just (Just (markedObject "1.0.0")))
             readIORef calls `shouldReturn` 1
 
         it "keys a warm pair by version: a sibling select pairs its own raw object, never a neighbour's" $ do
@@ -94,9 +94,9 @@ spec = do
             _ <- fetchFullManifest client name
             older <- fetchVersionMetadata client name (ver "1.0.0")
             newer <- fetchVersionMetadata client name (ver "2.0.0")
-            fmap (fmap vdRaw . pairOf) older `shouldBe` Right (Just (Just (markedObject "1.0.0")))
-            fmap (fmap vdRaw . pairOf) newer `shouldBe` Right (Just (Just (markedObject "2.0.0")))
-            fmap (fmap (pkgVersion . vdDetails) . pairOf) newer `shouldBe` Right (Just (ver "2.0.0"))
+            fmap (fmap vdRaw . vrVersion) older `shouldBe` Right (Just (Just (markedObject "1.0.0")))
+            fmap (fmap vdRaw . vrVersion) newer `shouldBe` Right (Just (Just (markedObject "2.0.0")))
+            fmap (fmap (pkgVersion . vdDetails) . vrVersion) newer `shouldBe` Right (Just (ver "2.0.0"))
             readIORef calls `shouldReturn` 1
 
         it "cold: leads a selective single-version fetch, caches it, and a repeat hits the version cache" $ do
@@ -121,7 +121,7 @@ spec = do
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             cold <- fetchVersionMetadata client name (ver "1.0.0")
             warmHit <- fetchVersionMetadata client name (ver "1.0.0")
-            fmap (fmap vdRaw . pairOf) cold `shouldBe` Right (Just (Just (markedObject "cold")))
+            fmap (fmap vdRaw . vrVersion) cold `shouldBe` Right (Just (Just (markedObject "cold")))
             warmHit `shouldBe` cold
             readIORef calls `shouldReturn` 1
 
@@ -135,8 +135,7 @@ spec = do
             _ <- fetchVersionMetadata client name (ver "1.0.0")
             _ <- fetchFullManifest client name
             again <- fetchVersionMetadata client name (ver "1.0.0")
-            fmap (fmap vdRaw . pairOf) again `shouldBe` Right (Just (Just (markedObject "cold")))
-            fmap (fmap (pkgVersion . vdDetails) . pairOf) again `shouldBe` Right (Just (ver "1.0.0"))
+            fmap (fmap vdRaw . vrVersion) again `shouldBe` Right (Just (Just (markedObject "cold")))
             readIORef calls `shouldReturn` 2
 
         it "partitions pairs by source: another origin's warm entry never pairs this origin's select" $ do
@@ -147,7 +146,7 @@ spec = do
                 elsewhere = publicClientAt (Source "https://other.example") anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest here name
             found <- fetchVersionMetadata elsewhere name (ver "1.0.0")
-            fmap (fmap vdRaw . pairOf) found `shouldBe` Right (Just (Just (markedObject "cold")))
+            fmap (fmap vdRaw . vrVersion) found `shouldBe` Right (Just (Just (markedObject "cold")))
             readIORef calls `shouldReturn` 2
 
         it "carries the document's own latest on both the cold read and the warm select" $ do
@@ -306,11 +305,7 @@ publicClientAt ::
 publicClientAt at origin cache full version =
     publicMetadataClient cache at (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (const full) (const version) selectNpmVersionDoc origin)
 
--- The pair a read carries, for the cases that assert on both of its sides.
-pairOf :: VersionRead -> Maybe VersionDoc
-pairOf = vrVersion
-
--- The raw object the fixtures mark each version with, so a case can tell which snapshot it came from.
+-- The raw object the fixtures mark each version with, so a case can tell which body it came from.
 markedObject :: Text -> CachedDoc
 markedObject marker = fst npmCached (object ["marker" .= marker])
 
