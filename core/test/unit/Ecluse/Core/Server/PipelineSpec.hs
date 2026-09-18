@@ -11,6 +11,7 @@ module Ecluse.Core.Server.PipelineSpec (spec) where
 import Data.Aeson (Value (Object, String), eitherDecode, eitherDecodeStrict, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (lookup)
@@ -37,7 +38,8 @@ import Ecluse.Core.Registry.Npm.Route (
 import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Types (CycleOutcome (outcomeTally), SweepMount (smFirstParty), SweepPacing (swpShape), SweepShape (SweepCandidates, SweepEverything), SweepTally (tallyDeleted, tallyExamined), deletingCache)
-import Ecluse.Core.Rules (PreparedRule, evalRules, prepare)
+import Ecluse.Core.Rules (PreparedRule, RuleDeps (rdSourceReporter), evalRules, prepare)
+import Ecluse.Core.Rules.Outage (OutageState (Healthy), SourceHealth (SourceAnswered), SourceReporter (noteAdmission, reportSource), sourceReporter, tvarOutageStore)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan))
 import Ecluse.Core.Rules.Types qualified as Rules
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
@@ -85,6 +87,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     admissionLifetimeSpec
     cacheRetentionSpec
     divergenceEvidenceSpec
+    skippedCheckAuditSpec
     distTagSpec
     sharedCacheSpec
 
@@ -314,6 +317,99 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
                 statusCode (responseStatus resp) `shouldBe` 403
                 divergences `shouldReturn` 0
                 readIORef publicHits `shouldReturn` 1
+
+skippedCheckAuditSpec :: Spec
+skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact gate" $ do
+    it "logs the skipped check once, at the artifact admission, and not for the packument that listed it" $
+        testWithApplication (pure upstreamApp) $ \port -> do
+            (metricsPort, _decisions) <- recordingMetricsPort
+            rt <- mkRuntime metricsPort
+            deps <- skippingDeps port
+            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
+                packument <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
+                statusCode (responseStatus packument) `shouldBe` 200
+                tarball <- captureServeWithLog logEnv npmTarballContract rt (mountWith deps) (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                statusCode (responseStatus tarball) `shouldBe` 200
+            let evidence = filter (T.isInfixOf "skipped for unavailability") (lines logged)
+            length evidence `shouldBe` 1
+            for_ ["\"sev\":\"Warning\"", "\"package\":\"leftpad\"", "\"version\":\"1.0.0\"", "\"rule\":\"DenyIfCve\"", "\"cause\":\"no advisory database loaded\""] $ \field ->
+                logged `shouldSatisfy` T.isInfixOf field
+
+    it "logs the line once per admission identity for the life of the outage, and again after recovery" $
+        testWithApplication (pure twoVersionUpstream) $ \port -> do
+            (metricsPort, _decisions) <- recordingMetricsPort
+            rt <- mkRuntime metricsPort
+            (reporter, deps) <- observedSkippingDeps port
+            twoSkips <- prepare (ruleDepsOf reporter) (atDefaultPrecedence (Rules.DenyIfEpss (Rules.DenyIfEpssParams 0.5 Rules.FailNoDecision)) : skipPolicy)
+            let serve logEnv d ver = do
+                    tarball <- captureServeWithLog logEnv npmTarballContract rt (mountWith d) (serveTarball npmTarballReplies leftpad (mkVersion Npm ver) (unsafeFilename ("leftpad-" <> ver <> ".tgz")) defaultRequest)
+                    statusCode (responseStatus tarball) `shouldBe` 200
+                evidenceLines = length . filter (T.isInfixOf "skipped for unavailability") . lines
+            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
+                -- Five public serves of one version during one outage: one line.
+                replicateM_ 5 (serve logEnv deps "1.0.0")
+                -- Another version is its own identity.
+                serve logEnv deps "2.0.0"
+                -- The same version with another skipped rule set is its own identity too.
+                serve logEnv deps{pdRules = twoSkips} "1.0.0"
+                replicateM_ 3 (serve logEnv deps "1.0.0")
+                -- Recovery, once every rule answers, clears the record, so the next admission
+                -- with a skip logs again.
+                for_ ["DenyIfCve", "DenyIfEpss"] (reportSource reporter . SourceAnswered)
+                serve logEnv deps "1.0.0"
+            -- Two skipped rules on one admission are two lines, so the third identity adds two.
+            evidenceLines logged `shouldBe` 5
+            length (filter (T.isInfixOf "\"version\":\"2.0.0\"") (lines logged)) `shouldBe` 1
+            length (filter (T.isInfixOf "\"rule\":\"DenyIfEpss\"") (lines logged)) `shouldBe` 1
+
+    it "logs nothing for a trusted private serve, which runs no rules" $
+        testWithApplication (pure upstreamApp) $ \port -> do
+            (metricsPort, _decisions) <- recordingMetricsPort
+            rt <- mkRuntime metricsPort
+            -- The public upstream sits on a closed port, so only the private copy can serve.
+            deps <- withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) <$> skippingDeps 1
+            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv ->
+                replicateM_ 3 $ do
+                    tarball <- captureServeWithLog logEnv npmTarballContract rt (mountWith deps) (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                    statusCode (responseStatus tarball) `shouldBe` 200
+            logged `shouldSatisfy` (not . T.isInfixOf "skipped for unavailability")
+
+-- The issue's reproduction over the fixtures: the quarantine allow beside an advisory deny set to
+-- skip, with no advisory database loaded.
+skippingDeps :: Int -> IO PackumentDeps
+skippingDeps publicPort = do
+    base <- depsFor publicPort
+    skipping <- prepare inertRuleDeps skipPolicy
+    pure base{pdRules = skipping}
+
+skipPolicy :: [PrecededRule]
+skipPolicy = atDefaultPrecedence (Rules.DenyIfCve (Rules.DenyIfCveParams 8.0 Rules.FailNoDecision)) : allowPolicy
+
+-- 'skippingDeps' over a live outage reporter, so the gate's evidence line is bounded as the
+-- composition root bounds it, with the reporter handed back so a case can recover the source.
+observedSkippingDeps :: Int -> IO (SourceReporter, PackumentDeps)
+observedSkippingDeps publicPort = do
+    base <- depsFor publicPort
+    shared <- newTVarIO Healthy
+    let reporter = sourceReporter 900 (pure fixedNow) (tvarOutageStore shared) (const pass)
+    skipping <- prepare (ruleDepsOf reporter) skipPolicy
+    pure (reporter, base{pdRules = skipping, pdNoteAdmission = noteAdmission reporter})
+
+ruleDepsOf :: SourceReporter -> RuleDeps
+ruleDepsOf reporter = inertRuleDeps{rdSourceReporter = reporter}
+
+-- 'upstreamApp' over two old versions, so a case can admit each.
+twoVersionUpstream :: Application
+twoVersionUpstream req respond =
+    case rawPathInfo req of
+        "/leftpad" ->
+            respond (responseLBS status200 [(hContentType, "application/json")] (encode (privatePackumentOver host (sha512Integrity artifactBytes) ["1.0.0", "2.0.0"] "2.0.0")))
+        path
+            | "/leftpad/-/leftpad-" `BS.isPrefixOf` path ->
+                respond (responseLBS status200 [(hContentType, "application/octet-stream")] (LBS.fromStrict artifactBytes))
+        _ -> respond (responseLBS status404 [] "")
+  where
+    host = maybe "localhost" snd (find ((== hHost) . fst) (requestHeaders req))
 
 distTagSpec :: Spec
 distTagSpec = describe "served dist-tags.latest" $ do

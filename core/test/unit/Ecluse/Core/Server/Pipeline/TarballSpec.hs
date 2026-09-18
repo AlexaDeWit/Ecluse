@@ -50,8 +50,8 @@ details = sampleDetails (mkPackageName Npm Nothing "thing") (mkVersion Npm "1.0.
 
 -- The status a gated verdict renders, or 'Nothing' where the gate admitted it.
 statusOf :: ArtifactAdmission -> Maybe ArtifactStatus
-statusOf admission = case publicArtifactGate details admission of
-    Admitted _ -> Nothing
+statusOf admission = case publicArtifactGate details admission [] of
+    Admitted{} -> Nothing
     Refused decision -> Just (artifactOutcomeStatus decision)
 
 spec :: Spec

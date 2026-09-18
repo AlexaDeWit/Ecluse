@@ -49,9 +49,12 @@ module Ecluse.Core.Server.Pipeline.Internal (
     DenialAudit (..),
     denialAuditPayload,
     logDenials,
+    logSkippedChecks,
+    logSkippedChecksOnce,
 ) where
 
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Katip (KatipContext, Severity (WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
 
@@ -70,7 +73,8 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Registry (UrlFormationError, renderUrlFormationError)
 import Ecluse.Core.Rules (PreparedRule (prepResilience), cveIdsInReason)
-import Ecluse.Core.Rules.Types (Decision (Undecidable))
+import Ecluse.Core.Rules.Outage (AdmissionIdentity (AdmissionIdentity))
+import Ecluse.Core.Rules.Types (Decision (Undecidable), SkippedCheck (SkippedUnavailable, Unreached))
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentForbidden, PackumentOk),
@@ -302,15 +306,21 @@ data DenialAudit = DenialAudit
 -- | Render a 'DenialAudit' to the structured payload katip folds into the line's @data@ object.
 denialAuditPayload :: DenialAudit -> SimpleLogPayload
 denialAuditPayload da =
-    sl "module" pipelineInternalModule
-        <> sl "package" (renderPackageName (daPackage da))
-        <> sl "version" (daVersion da)
+    versionAuditPayload (daPackage da) (daVersion da) (daAdvisoryEtag da)
         <> maybe mempty (sl "rule") (daRule da)
         <> sl "reason_class" (show (daReasonClass da) :: Text)
-        <> maybe mempty (\(DbEtag e) -> sl "active_advisory_db_etag" e) (daAdvisoryEtag da)
         <> metadataPayload (daExtra da)
   where
     metadataPayload (Metadata m) = Map.foldrWithKey (\k v acc -> sl k v <> acc) mempty m
+
+-- The fields every per-version audit line carries, so the denial and the skipped-check lines
+-- are queried by the same names.
+versionAuditPayload :: PackageName -> Text -> Maybe DbEtag -> SimpleLogPayload
+versionAuditPayload pkg version etag =
+    sl "module" pipelineInternalModule
+        <> sl "package" (renderPackageName pkg)
+        <> sl "version" version
+        <> maybe mempty (\(DbEtag e) -> sl "active_advisory_db_etag" e) etag
 
 {- | The advisory ids a denial named, recovered from its rendered message into a comma-joined
 @cve@ field. Empty for a non-CVE denial, so the field appears only when an advisory drove
@@ -334,3 +344,26 @@ logDenials pkg etag = traverse_ logOne
                 audit = DenialAudit pkg (vvVersion vv) rule reasonClass etag (cveMetadata message)
              in katipAddContext (denialAuditPayload audit) $
                     logFM WarningS (ls ("denied" :: Text))
+
+{- | 'logSkippedChecks' once per admission identity (package, version, skipped rule set) for the
+life of the advisory source's outage, so a public serve that admits again repeats no line.
+-}
+logSkippedChecksOnce :: (KatipContext m) => (AdmissionIdentity -> IO Bool) -> PackageName -> Text -> Maybe DbEtag -> [SkippedCheck] -> m ()
+logSkippedChecksOnce note pkg version etag skipped =
+    unless (Set.null rules) $ do
+        logIt <- liftIO (note (AdmissionIdentity (renderPackageName pkg) version rules))
+        when logIt (logSkippedChecks pkg version etag skipped)
+  where
+    rules = Set.fromList [rule | SkippedUnavailable rule _ <- skipped]
+
+{- | Emit one audit line per check the admission skipped for unavailability. An unreached check
+gets no line, and a trusted serve runs no rules, so it never reaches here.
+-}
+logSkippedChecks :: (KatipContext m) => PackageName -> Text -> Maybe DbEtag -> [SkippedCheck] -> m ()
+logSkippedChecks pkg version etag = traverse_ logOne
+  where
+    logOne = \case
+        Unreached _ -> pass
+        SkippedUnavailable rule cause ->
+            katipAddContext (versionAuditPayload pkg version etag <> sl "rule" rule <> sl "cause" cause) $
+                logFM WarningS (ls ("admitted with a check skipped for unavailability" :: Text))

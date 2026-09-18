@@ -83,7 +83,8 @@ import Ecluse.Core.Registry.Adapter (
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
-import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag)
+import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag, rdSourceReporter)
+import Ecluse.Core.Rules.Outage (SourceReporter (noteAdmission))
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
@@ -234,6 +235,7 @@ planMounts resolveAdapter clock ruleDepsFor mintPlan providers limits publishBud
                 , pdInboundToken = srvAuthToken (cfgServer app)
                 , pdNow = clock
                 , pdAdvisoryEtag = rdCurrentAdvisoryEtag ruleDeps
+                , pdNoteAdmission = noteAdmission (rdSourceReporter ruleDeps)
                 , pdHelp = helpMessage
                 , -- The global public-integrity admission floor, validated at config
                   -- load, carried onto every mount's deps so the public gate refuses

@@ -89,7 +89,7 @@ import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule))
 import Ecluse.Core.Telemetry.Span (TracingPort)
-import Ecluse.Cve.Sync (AdvisoryNeed (AdvisoryNeed, anDatabase, anEcosystem, anEpss, anMaxAge), CveSyncHandle, cveRuleDepsFor, katipFaultReporter, planCveSync)
+import Ecluse.Cve.Sync (AdvisoryNeed (AdvisoryNeed, anDatabase, anEcosystem, anEpss, anMaxAge), CveSyncHandle, cveRuleDepsFor, katipOutageReporter, planCveSync)
 import Ecluse.Pilot.Plan (ExportLoopPlan, exportLoopPlan)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
@@ -264,7 +264,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
             cveRuleDepsFor
                 (fromRight mempty cveSync)
                 (deferredBreakerReporter deferredMetrics EffectfulRule)
-                (katipFaultReporter logEnv)
+                (katipOutageReporter logEnv)
     policies <- Map.fromList <$> traverse (sweepPolicyFor ruleDepsFor) (vpMounts validated)
     (advisories, probed) <- probeHeldCaches (fromRight mempty caches)
     pure . (advisories,) . validationToEither $
@@ -384,7 +384,7 @@ planMirrorWiring logEnv resolveAdapter buildQueue buildCredentials role bootPlan
             cveRuleDepsFor
                 (fromRight mempty cveSync)
                 (deferredBreakerReporter deferredMetrics EffectfulRule)
-                (katipFaultReporter logEnv)
+                (katipOutageReporter logEnv)
         ports =
             WiringPorts
                 { wpReporters = credentialReportersOver deferredMetrics

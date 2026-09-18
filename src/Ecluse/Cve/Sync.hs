@@ -17,7 +17,8 @@ module Ecluse.Cve.Sync (
     cveRuleDepsFor,
     advisoryFreshnessFor,
     reportPushAge,
-    katipFaultReporter,
+    katipOutageReporter,
+    outageReportPeriod,
     cveSyncReadiness,
     cveSyncScheduleFor,
     cveSyncTasks,
@@ -26,8 +27,9 @@ module Ecluse.Cve.Sync (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Data.Time (UTCTime, getCurrentTime)
-import Katip (LogEnv, Severity (ErrorS, WarningS), SimpleLogPayload, runKatipContextT, sl)
+import Data.Text qualified as T
+import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
+import Katip (LogEnv, Severity (ErrorS, InfoS, WarningS), SimpleLogPayload, runKatipContextT, sl)
 import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
 import System.FilePath (isExtensionOf, (</>))
 import System.IO.Error (IOError, catchIOError)
@@ -45,7 +47,7 @@ import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (EpssRequirement, osvDbFileName)
-import Ecluse.Core.Rules (FaultReporter (..), RuleDeps (..))
+import Ecluse.Core.Rules (RuleDeps (..), SourceReporter, noSourceReporter)
 import Ecluse.Core.Rules.Freshness (
     AdvisoryAge (advisoryAge, advisoryMaxAge, advisoryPushedAt),
     AdvisoryFreshness (AdvisoryFresh),
@@ -54,6 +56,7 @@ import Ecluse.Core.Rules.Freshness (
     ageAlarmStep,
     assessAdvisoryAge,
  )
+import Ecluse.Core.Rules.Outage (OutageReport (..), OutageState (Healthy), sourceReporter, tvarOutageStore)
 import Ecluse.Core.Server.Readiness (
     DatabaseRequirement,
     MountReadiness,
@@ -76,17 +79,28 @@ import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisorySyncMetricsPortOf,
 import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf)
 
 {- | The rules' boot-bound capabilities for one mount ecosystem. A mount's rules read only their own
-ecosystem's advisory database, and abstain when the sync plan carries no slot for it.
+ecosystem's advisory database, and abstain when the sync plan carries no slot for it. An ecosystem
+with no handle has no source to observe, so its rules report outages nowhere.
 -}
-cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> FaultReporter -> Ecosystem -> RuleDeps
-cveRuleDepsFor plan reporter faultReporter eco =
+cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> (Ecosystem -> OutageReport -> IO ()) -> Ecosystem -> RuleDeps
+cveRuleDepsFor plan reporter reportOutage eco =
     RuleDeps
         { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotGeneration . syncSlot . csEnv) (Map.lookup eco plan)
         , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . syncSlot . csEnv) (Map.lookup eco plan)
         , rdBreakerReporter = reporter
-        , rdFaultReporter = faultReporter
+        , rdSourceReporter = maybe noSourceReporter (sourceReporterOf (reportOutage eco)) (Map.lookup eco plan)
         , rdAdvisoryFreshness = advisoryFreshnessFor plan eco
         }
+
+-- One handle's reporter, over the outage state every mount of the ecosystem shares.
+sourceReporterOf :: (OutageReport -> IO ()) -> CveSyncHandle -> SourceReporter
+sourceReporterOf emit handle = sourceReporter outageReportPeriod (csClock handle) (tvarOutageStore (csOutage handle)) emit
+
+{- | How often a continuing outage reminds the operator: the unloaded-database report's own gap, so
+an outage costs the log one line per interval on either path.
+-}
+outageReportPeriod :: NominalDiffTime
+outageReportPeriod = fromIntegral absentReportInterval / 1_000_000
 
 {- | How old one mount's serving artifact's push is. An ecosystem the plan carries no handle for
 has no advisory stack at all, so nothing ages and the absent-database path decides instead.
@@ -138,17 +152,20 @@ logPushAge logEnv eco observed =
 advisoryPushTime :: CveSyncHandle -> IO (Maybe UTCTime)
 advisoryPushTime handle = (asPushedAt =<<) <$> currentAdvisorySource (syncSlot (csEnv handle))
 
-{- | A 'FaultReporter' logging an exhausted rule's fault detail, so a fault stays diagnosable
-rather than a bare @Unavailable@. The detail is bounded, carries no secret, and reaches no client.
+{- | Log one ecosystem's advisory-source outage reports: the start and each reminder at ERROR, the
+level an operator pages on, and the recovery at INFO. A fault's detail rides along and reaches no client.
 -}
-katipFaultReporter :: LogEnv -> FaultReporter
-katipFaultReporter logEnv =
-    FaultReporter $ \ruleName detail ->
-        logLine
-            logEnv
-            (moduleField "Ecluse.Core.Rules" <> sl "rule" ruleName <> sl "fault" detail)
-            WarningS
-            "effectful rule evaluation faulted"
+katipOutageReporter :: LogEnv -> Ecosystem -> OutageReport -> IO ()
+katipOutageReporter logEnv eco = \case
+    OutageBegan rule cause ->
+        logLine logEnv (payload <> sl "rule" rule <> sl "cause" cause) ErrorS "advisory source outage began: a rule cannot consult it"
+    OutageContinues since rules ->
+        logLine logEnv (payload <> sl "since" (renderIso8601Utc since) <> sl "rules" (renderCauses rules)) ErrorS "advisory source outage continues"
+    OutageRecovered since ->
+        logLine logEnv (payload <> sl "since" (renderIso8601Utc since)) InfoS "advisory source outage recovered: every rule consults it again"
+  where
+    payload = moduleField "Ecluse.Core.Rules" <> sl "ecosystem" (ecosystemName eco)
+    renderCauses = T.intercalate "; " . map (\(rule, cause) -> rule <> ": " <> cause) . Map.toList
 
 {- | The readiness verdict over the sync plan. Only a mount whose rules deny on the database waits
 for its first sync, and one ecosystem's missing artifact leaves the others routable.
@@ -218,6 +235,8 @@ data CveSyncHandle = CveSyncHandle
     -- ^ The wall clock the push age is read on, injected so a suite can fix it.
     , csAgeAlarmed :: TVar Bool
     -- ^ Whether the half-maximum crossing has already been reported for the current push.
+    , csOutage :: TVar OutageState
+    -- ^ The rules-side outage state every mount of this ecosystem reports through.
     , csDatabase :: DatabaseRequirement
     -- ^ Whether this mount's own rules deny on the database, which is what its readiness turns on.
     }
@@ -250,6 +269,7 @@ cveSyncHandleFor appCfg cveSource store need = do
     slot <- newCveSlot
     ready <- newTVarIO False
     alarmed <- newTVarIO False
+    outage <- newTVarIO Healthy
     let eco = anEcosystem need
         fileName = osvDbFileName (ecosystemName eco)
         maxBytes = limMaxAdvisoryDatabaseBytes (cfgLimits appCfg)
@@ -275,6 +295,7 @@ cveSyncHandleFor appCfg cveSource store need = do
             , csMaxAge = anMaxAge need
             , csClock = getCurrentTime
             , csAgeAlarmed = alarmed
+            , csOutage = outage
             , csDatabase = anDatabase need
             }
         )

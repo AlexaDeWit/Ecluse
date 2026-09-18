@@ -396,10 +396,17 @@ precede an admission that remains trusted after the lookup recovers. Removing th
 does not revoke that copy unless a named deny becomes decisive. See
 [Revoking a mirrored version](@/docs/operations.md#revoking-a-mirrored-version-internal-yank).
 
-Do not rely on a per-package warning for every skipped check. Some unavailable results do not
-reach the fault logger. [Operational monitoring](@/docs/operations.md#alerting-on-error) describes
-the current signals and their limits. Admission evidence and ERROR-level outage reporting are
-tracked in [#1230](https://github.com/AlexaDeWit/Ecluse/issues/1230).
+A skipped check leaves evidence with the admission. The decision names the rule and the cause, and
+the public artifact gate logs one `warn` line per skipped check, carrying the package, the version,
+the rule, and the cause. The line is bounded: once per package, version, and skipped rule set for
+the life of the advisory outage, cleared when the source recovers, so repeated public serves of one
+version during an outage log it once. A trusted read of a mirrored version runs no rules and logs
+nothing. A check the winning allow pre-empted is recorded as not reached, never as passed, and
+logs no line. The mirror worker's own re-admission
+of a queued version emits no evidence line, so the serve that queued the job is the admission you
+see in the log. The evidence lives in that decision and in the log only: Écluse writes no metadata
+to the mirror, and the log's retention is yours. The outage itself is reported apart from any
+request, at `error`, as [Advisory outages](@/docs/operations.md#advisory-outages) describes.
 
 `onUnavailable: skip` does not waive the maximum push age. Once the serving artifact is older
 than that maximum, both advisory denies refuse, and `AllowIfRemediatesCve` abstains. See

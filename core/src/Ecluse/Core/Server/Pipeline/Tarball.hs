@@ -48,7 +48,7 @@ import Ecluse.Core.Package.Admission (
         AdmissionUndecidable
     ),
     admissionTransience,
-    admitArtifact,
+    admitArtifactWithEvidence,
  )
 import Ecluse.Core.Queue (
     MirrorJob (MirrorJob, jobArtifactFilename, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion),
@@ -71,7 +71,7 @@ import Ecluse.Core.Registry.Metadata (
     versionTransience,
  )
 import Ecluse.Core.Rules (renderDecision)
-import Ecluse.Core.Rules.Types (EvalContext, completeEvidence, mkEvalContext)
+import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkEvalContext)
 import Ecluse.Core.Security (
     Origin (TrustedOrigin, UntrustedOrigin),
     artifactAuthorityHonoured,
@@ -103,6 +103,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
     evalTier,
     logDenials,
+    logSkippedChecksOnce,
     recordDenials,
     serveDecisionClass,
  )
@@ -347,8 +348,9 @@ servePublicArtifact mode replies rt deps validators name version file respond = 
         (liftIO (respond (tarballError replies shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage))))
         (gatePublicVersion rt deps name version file advisoryEtag)
         $ \case
-            Admitted artifact -> do
+            Admitted artifact skipped -> do
                 liftIO (mpServeDecision metrics Metric.Admit)
+                logSkippedChecksOnce (pdNoteAdmission deps) name (renderVersion version) advisoryEtag skipped
                 withRunInIO $ \runInIO ->
                     streamPublicArtifact mode replies rt deps validators name version file artifact (runInIO . observeRelayAnomaly metrics name version) respond
             Refused decision -> do
@@ -359,8 +361,8 @@ servePublicArtifact mode replies rt deps validators name version file respond = 
 
 -- | Preserve the admitted artifact's authoritative location through the public gate.
 data PublicArtifactGate
-    = -- | The gate admitted the version. Carries the artifact selected by filename.
-      Admitted Artifact
+    = -- | The gate admitted the version: the artifact selected by filename, and the checks the admission skipped.
+      Admitted Artifact [SkippedCheck]
     | -- | The gate refused the version: a policy denial, an upstream outage, or absence.
       Refused ServeDecision
 
@@ -385,21 +387,21 @@ gatePublicVersion rt deps name version file advisoryEtag = do
 -- The serve verdict a gate outcome carries, for the rule-eval span.
 gateVerdict :: PublicArtifactGate -> ServeDecision
 gateVerdict = \case
-    Admitted _ -> Admit
+    Admitted{} -> Admit
     Refused decision -> decision
 
 {- Gate one requested artifact through the shared admission oracle the worker's ingest
 re-evaluation also runs. The trusted private leg never reaches this gate. -}
 gateVersion :: EvalContext -> PackumentDeps -> Filename -> PackageDetails -> IO PublicArtifactGate
 gateVersion ctx deps file details =
-    publicArtifactGate details <$> admitArtifact ctx (pdRules deps) (pdMinIntegrity deps) file details
+    uncurry (publicArtifactGate details) <$> admitArtifactWithEvidence ctx (pdRules deps) (pdMinIntegrity deps) file details
 
 -- | Render the shared admission verdict on the serve surface. Pure and total.
-publicArtifactGate :: PackageDetails -> ArtifactAdmission -> PublicArtifactGate
-publicArtifactGate details admission = case admission of
+publicArtifactGate :: PackageDetails -> ArtifactAdmission -> [SkippedCheck] -> PublicArtifactGate
+publicArtifactGate details admission skipped = case admission of
     -- The carried floor-checked digest set is the worker's ingest concern. The serve path
     -- streams without rehashing, so it has no consumer for the set.
-    AdmissionAdmit _ artifact _ -> Admitted artifact
+    AdmissionAdmit _ artifact _ -> Admitted artifact skipped
     AdmissionDenied decision -> Refused (serveDecisionOf details decision)
     AdmissionUndecidable decision -> Refused (rejectUnavailable transience (renderDecision (completeEvidence details) decision))
     AdmissionFileAbsent -> Refused versionAbsent

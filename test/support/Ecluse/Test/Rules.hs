@@ -8,7 +8,6 @@ performance harnesses so neither wires the boot-bound capabilities the live comp
 module Ecluse.Test.Rules (
     -- * Boot-bound capability fixtures
     inertRuleDeps,
-    noFaultReporter,
 
     -- * Precedence pairing
     atDefaultPrecedence,
@@ -39,10 +38,10 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Filter (FilterPlan, filterPlanFromDecisions)
 import Ecluse.Core.Rules (
-    FaultReporter (..),
     PreparedRule (PreparedRule, prepAdvisoryGate, prepEval, prepName, prepPrecedence, prepResilience),
     RuleDeps (..),
     evalRules,
+    noSourceReporter,
     prepare,
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
@@ -68,15 +67,9 @@ inertRuleDeps =
         { rdWithCveLookup = \use -> use Nothing
         , rdCurrentAdvisoryEtag = pure Nothing
         , rdBreakerReporter = noBreakerReporter
-        , rdFaultReporter = noFaultReporter
+        , rdSourceReporter = noSourceReporter
         , rdAdvisoryFreshness = pure AdvisoryFresh
         }
-
-{- | The inert 'FaultReporter': it records nothing. It lives here rather than in the library
-because no library or executable code path uses it.
--}
-noFaultReporter :: FaultReporter
-noFaultReporter = FaultReporter (\_ _ -> pass)
 
 {- | Pair a rule with its type's 'defaultPrecedence'. The live policy instead assigns each rule its
 configured precedence ("Ecluse.Config.Rule").
@@ -108,7 +101,7 @@ cannotVetRule = constRule "test-cannot-vet" (CannotVet FailDeny "no advisory dat
 -- | The rule name credited for an admission or a block, if any (the engine credits by name).
 admittedBy, blockedBy :: Decision -> Maybe Text
 admittedBy = \case
-    Admitted ruleName _ -> Just ruleName
+    Admitted ruleName _ _ -> Just ruleName
     _ -> Nothing
 blockedBy = \case
     Blocked ruleName _ _ -> Just ruleName

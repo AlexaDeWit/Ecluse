@@ -19,7 +19,7 @@ import UnliftIO.Exception (impureThrow, throwIO)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (CveQueryFault (CveQueryFault))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble))
-import Ecluse.Core.Rules (PreparedRule (..), Resilience (..))
+import Ecluse.Core.Rules (PreparedRule (..), Resilience (..), noSourceReporter)
 import Ecluse.Core.Rules.Effectful (EffectfulConfig (..), defaultEffectfulConfig, newBreaker)
 import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleEvidence, RuleVerdict (..))
 import Ecluse.Core.Security (Limits (..), defaultLimits)
@@ -27,7 +27,6 @@ import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
 import Ecluse.Test.Log (captureStdout)
 import Ecluse.Test.Queue (newTestMemoryQueue)
-import Ecluse.Test.Rules (noFaultReporter)
 import Katip (Environment (Environment), closeScribes)
 
 spec :: Spec
@@ -44,7 +43,7 @@ mkEffectful name prec cfg align eval = do
         PreparedRule
             { prepName = name
             , prepPrecedence = prec
-            , prepResilience = Just (Resilience cfg align breaker noBreakerReporter getCurrentTime noFaultReporter)
+            , prepResilience = Just (Resilience cfg align breaker noBreakerReporter getCurrentTime noSourceReporter)
             , prepAdvisoryGate = Nothing
             , prepEval = \_ ev -> eval ev
             }

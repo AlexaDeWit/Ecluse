@@ -31,7 +31,11 @@ module Ecluse.Core.Rules (
 
     -- * The resilience harness
     runEffectfulRule,
-    FaultReporter (..),
+
+    -- * Observing the advisory source
+    SourceHealth (..),
+    SourceReporter (..),
+    noSourceReporter,
 ) where
 
 import Data.Text qualified as T
@@ -47,13 +51,13 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Effectful (
-    FaultReporter (..),
     Resilience (..),
     defaultEffectfulConfig,
     newBreaker,
     runResilient,
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryAge (..), AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated))
+import Ecluse.Core.Rules.Outage (SourceHealth (..), SourceReporter (..), noSourceReporter)
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Text (displayExceptionT, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
@@ -70,8 +74,10 @@ data RuleDeps = RuleDeps
     {- ^ The observer that effectful rules report their breaker transitions to, as
     @ecluse.rule.breaker.state@. 'Ecluse.Core.Breaker.noBreakerReporter' when unobserved.
     -}
-    , rdFaultReporter :: FaultReporter
-    -- ^ Reports exhausted faults to the operator log without exposing them to clients.
+    , rdSourceReporter :: SourceReporter
+    {- ^ Where every advisory-reading evaluation reports whether it could consult the source, so an
+    outage is observed as a transition rather than once per request.
+    -}
     , rdAdvisoryFreshness :: IO AdvisoryFreshness
     {- ^ How old the serving artifact's push is, read again at every evaluation. The wall clock
     alone ages it, so an unchanged artifact expires in a warm process.
@@ -247,6 +253,8 @@ data AdvisoryGate = AdvisoryGate
     -- ^ The alignment an expired push resolves under, which configuration cannot change.
     , agFreshness :: IO AdvisoryFreshness
     -- ^ The push-age reading, taken fresh for every evaluation.
+    , agReporter :: SourceReporter
+    -- ^ Where the rule's decided verdicts report the source's health.
     }
 
 -- | Allocate each effectful rule's breaker once. Unconfirmed remediation claims abstain.
@@ -278,7 +286,7 @@ advisoryGateFor deps = \case
     DenyByIdentity{} -> Nothing
     AllowByIdentity{} -> Nothing
   where
-    gate alignment = Just AdvisoryGate{agAlignment = alignment, agFreshness = rdAdvisoryFreshness deps}
+    gate alignment = Just AdvisoryGate{agAlignment = alignment, agFreshness = rdAdvisoryFreshness deps, agReporter = rdSourceReporter deps}
 
 -- The resilience a rule needs. The effectful CVE rule carries the fail-open policy,
 -- allocating its per-source breaker. The pure rules carry none.
@@ -300,7 +308,7 @@ resilienceFor deps = \case
                     , resAlignment = alignment
                     , resBreaker = breaker
                     , resBreakerReporter = rdBreakerReporter deps
-                    , resFaultReporter = rdFaultReporter deps
+                    , resSourceReporter = rdSourceReporter deps
                     , resClock = getCurrentTime
                     }
 
@@ -332,11 +340,11 @@ renderBootOrder rules = zipWith line [1 :: Int ..] (bootOrder rules)
 evalRules :: EvalContext -> [PreparedRule] -> RuleEvidence -> IO Decision
 evalRules ctx rules ev = step (bootOrder rules) []
   where
-    -- 'reasons' accumulates non-decisive reasons in reverse boot order. The final
-    -- deny-by-default list reverses them back into boot order.
-    step :: [PreparedRule] -> [Reason] -> IO Decision
-    step [] reasons = pure (BlockedByDefault (reverse reasons))
-    step (r : rs) reasons
+    -- 'passed' holds each non-decisive evaluation in reverse boot order. The deny-by-default
+    -- trail and an admission's skipped-check evidence both read it back.
+    step :: [PreparedRule] -> [Passed] -> IO Decision
+    step [] passed = pure (BlockedByDefault (map passedReason (reverse passed)))
+    step (r : rs) passed
         | isNothing (prepResilience r) = do
             -- A direct rule is zero-cost, so run it in place; reaching it moots no speculated
             -- IO. It still goes through the one runner, so no rule can skip its own gate.
@@ -347,19 +355,52 @@ evalRules ctx rules ev = step (bootOrder rules) []
                     pure (Undecidable (WillResolve Nothing) (prepName r <> ": the rule threw: " <> displayExceptionT escape))
                 Right res ->
                     case decisive (prepName r) res of
-                        Just d -> pure d
-                        Nothing -> step rs (reasonOf res : reasons)
+                        Just d -> pure (withEvidence passed rs d)
+                        Nothing -> step rs (Passed (prepName r) res : passed)
         | otherwise =
             -- Stopping the block at the next direct rule keeps the "no mooted IO" guarantee: that
             -- rule runs, and may decide, before the engine launches any resilient rule beyond it.
             let (block, rest) = span (isJust . prepResilience) (r : rs)
              in evalBlock ctx ev block >>= \case
-                    Left d -> pure d
-                    Right blockReasons -> step rest (reverse blockReasons <> reasons)
+                    BlockDecided d inBlock unreached -> pure (withEvidence (inBlock <> passed) (unreached <> rest) d)
+                    BlockPassed inBlock -> step rest (inBlock <> passed)
 
--- Launch a contiguous resilient block concurrently, then await in boot order. 'Left' is
--- the earliest decisive winner, 'Right' the block's non-decisive reasons in boot order.
-evalBlock :: EvalContext -> RuleEvidence -> [PreparedRule] -> IO (Either Decision [Reason])
+-- One non-decisive evaluation as the fold keeps it, so the trail and the evidence read one record.
+data Passed = Passed Text RuleEvaluation
+
+passedReason :: Passed -> Reason
+passedReason (Passed _ res) = reasonOf res
+
+-- The evidence a fail-open inability leaves. A fail-closed one is decisive, so it never passes.
+skippedOf :: Passed -> Maybe SkippedCheck
+skippedOf (Passed name res) = case res of
+    Decided (CannotVet alignment reason) -> skipped alignment reason
+    Unavailable _ alignment reason -> skipped alignment reason
+    Decided _ -> Nothing
+  where
+    skipped FailNoDecision reason = Just (SkippedUnavailable name (bareCause name reason))
+    skipped FailDeny _ = Nothing
+
+-- Only an admission carries evidence: the checks that could not vet ahead of it, in boot order,
+-- then the ones it pre-empted.
+withEvidence :: [Passed] -> [PreparedRule] -> Decision -> Decision
+withEvidence passed unreached = \case
+    Admitted name reason _ -> Admitted name reason (reverse (mapMaybe skippedOf passed) <> map (Unreached . prepName) unreached)
+    other -> other
+
+-- A verdict's reason names its rule for the audit trail. A record that names the rule in its own
+-- field carries the cause alone.
+bareCause :: Text -> Reason -> Reason
+bareCause name reason = fromMaybe reason (T.stripPrefix (name <> ": ") reason)
+
+-- A resilient block's result: the earliest decisive winner, what the block evaluated ahead of it
+-- (reverse boot order), and the rules it pre-empted (boot order); or every evaluation when nothing decided.
+data BlockOutcome
+    = BlockDecided Decision [Passed] [PreparedRule]
+    | BlockPassed [Passed]
+
+-- Launch a contiguous resilient block concurrently, then await in boot order.
+evalBlock :: EvalContext -> RuleEvidence -> [PreparedRule] -> IO BlockOutcome
 evalBlock ctx ev block =
     bracket
         (traverse (\r -> async (runEffectfulRule ctx r ev)) block)
@@ -368,20 +409,21 @@ evalBlock ctx ev block =
 
 -- Await a launched block's evaluations in boot order. A decisive winner cancels
 -- every strictly-later one.
-awaitInOrder :: [(PreparedRule, Async RuleEvaluation)] -> [Reason] -> IO (Either Decision [Reason])
-awaitInOrder [] reasons = pure (Right (reverse reasons))
-awaitInOrder ((r, a) : rest) reasons = do
+awaitInOrder :: [(PreparedRule, Async RuleEvaluation)] -> [Passed] -> IO BlockOutcome
+awaitInOrder [] passed = pure (BlockPassed passed)
+awaitInOrder ((r, a) : rest) passed = do
     res <- wait a
     case decisive (prepName r) res of
         Just d -> do
             traverse_ (cancel . snd) rest
-            pure (Left d)
-        Nothing -> awaitInOrder rest (reasonOf res : reasons)
+            pure (BlockDecided d passed (map fst rest))
+        Nothing -> awaitInOrder rest (Passed (prepName r) res : passed)
 
--- 'CannotVet' has no transience evidence, so it produces a plain retryable refusal.
+-- 'CannotVet' has no transience evidence, so it produces a plain retryable refusal. An admission's
+-- evidence is attached by the fold, which alone knows what it passed and pre-empted.
 decisive :: Text -> RuleEvaluation -> Maybe Decision
 decisive name = \case
-    Decided (Allow reason) -> Just (Admitted name reason)
+    Decided (Allow reason) -> Just (Admitted name reason [])
     Decided (Deny etag reason) -> Just (Blocked name etag reason)
     Decided (NoDecision _) -> Nothing
     Decided (CannotVet FailDeny reason) -> Just (Undecidable (WillResolve Nothing) reason)
@@ -404,10 +446,18 @@ open breaker would otherwise skip past. Direct-rule exceptions remain the caller
 runEffectfulRule :: EvalContext -> PreparedRule -> RuleEvidence -> IO RuleEvaluation
 runEffectfulRule ctx rule ev =
     expiredEvidence rule >>= \case
-        Just verdict -> pure (Decided verdict)
+        Just verdict -> observed (Decided verdict)
         Nothing -> case prepResilience rule of
-            Nothing -> Decided <$> prepEval rule ctx ev
-            Just res -> runResilient res (prepName rule) (prepEval rule ctx) ev
+            Nothing -> observed . Decided =<< prepEval rule ctx ev
+            Just res -> observed =<< runResilient res (prepName rule) (prepEval rule ctx) ev
+  where
+    -- The harness reports its own faults with their detail, so only a decided verdict is
+    -- classified here, and only for a rule that reads the advisory source.
+    observed res = res <$ whenJust (prepAdvisoryGate rule) (whenJust (healthOf res) . reportSource . agReporter)
+    healthOf = \case
+        Decided (CannotVet _ reason) -> Just (SourceUnavailable (prepName rule) (bareCause (prepName rule) reason))
+        Decided _ -> Just (SourceAnswered (prepName rule))
+        Unavailable{} -> Nothing
 
 -- The verdict an ineligible push resolves a gated rule to, or nothing while its evidence holds.
 expiredEvidence :: PreparedRule -> IO (Maybe RuleVerdict)
@@ -446,8 +496,8 @@ renderDecision :: RuleEvidence -> Decision -> Text
 renderDecision ev decision =
     let subject = renderPackageName (evName ev) <> "@" <> renderVersion (evVersion ev)
      in case decision of
-            Admitted name reason ->
-                subject <> " was approved by " <> name <> ": " <> reason
+            Admitted name reason skipped ->
+                subject <> " was approved by " <> name <> ": " <> reason <> renderSkippedChecks skipped
             Blocked name _ reason ->
                 subject <> " was denied by " <> name <> ": " <> reason
             BlockedByDefault reasons ->
@@ -458,6 +508,15 @@ renderDecision ev decision =
                         else ": " <> T.intercalate "; " reasons
             Undecidable _ reason ->
                 subject <> " could not be evaluated: " <> reason
+
+-- The evidence as a parenthetical, so an admission's line never reads as if every check passed.
+renderSkippedChecks :: [SkippedCheck] -> Text
+renderSkippedChecks [] = ""
+renderSkippedChecks checks = " (" <> T.intercalate "; " (map render checks) <> ")"
+  where
+    render = \case
+        SkippedUnavailable rule cause -> "skipped for unavailability: " <> rule <> " (" <> cause <> ")"
+        Unreached rule -> "not reached: " <> rule
 
 -- | Keep two non-zero units to distinguish near-threshold durations. Negative values render as zero.
 renderDuration :: NominalDiffTime -> Text

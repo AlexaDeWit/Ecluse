@@ -15,6 +15,7 @@ module Ecluse.Core.Package.Admission (
     ArtifactAdmission (..),
     admissionTransience,
     admitArtifact,
+    admitArtifactWithEvidence,
 ) where
 
 import Ecluse.Core.Package (Artifact, Hash, PackageDetails, artFilename, artHashes, pkgArtifacts)
@@ -27,8 +28,10 @@ import Ecluse.Core.Rules (PreparedRule, evalRules)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext,
+    SkippedCheck,
     Transience (WontResolve),
     completeEvidence,
+    skippedChecks,
  )
 import Ecluse.Core.Server.Path (Filename, unFilename)
 
@@ -73,9 +76,27 @@ admitArtifact ::
     Filename ->
     PackageDetails ->
     IO ArtifactAdmission
-admitArtifact ctx rules minIntegrity file details = do
+admitArtifact ctx rules minIntegrity file details =
+    fst <$> admitArtifactWithEvidence ctx rules minIntegrity file details
+
+{- | 'admitArtifact' beside the skipped-check evidence its decision carried, empty unless the
+version was admitted, for the audit line the gate emits once.
+-}
+admitArtifactWithEvidence ::
+    EvalContext ->
+    [PreparedRule] ->
+    MinIntegrity ->
+    Filename ->
+    PackageDetails ->
+    IO (ArtifactAdmission, [SkippedCheck])
+admitArtifactWithEvidence ctx rules minIntegrity file details = do
     decision <- evalRules ctx rules (completeEvidence details)
-    pure $ case decision of
+    pure (admissionOf minIntegrity file details decision, skippedChecks decision)
+
+-- The filename and integrity steps over a settled rules decision.
+admissionOf :: MinIntegrity -> Filename -> PackageDetails -> Decision -> ArtifactAdmission
+admissionOf minIntegrity file details decision =
+    case decision of
         Admitted{} -> case artifactFor file details of
             Nothing -> AdmissionFileAbsent
             Just artifact -> case classifyArtifacts minIntegrity (artifact :| []) of

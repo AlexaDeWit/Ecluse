@@ -34,6 +34,7 @@ import Ecluse.Core.Package.Admission (
     ),
     admissionTransience,
     admitArtifact,
+    admitArtifactWithEvidence,
  )
 import Ecluse.Core.Package.Integrity (
     VersionIntegrity (MeetsFloor),
@@ -41,9 +42,13 @@ import Ecluse.Core.Package.Integrity (
     authoritativeDigest,
     classifyArtifacts,
  )
+import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Rules.Types (
     Decision (Blocked, Undecidable),
     EvalContext (EvalContext),
+    FailureAlignment (FailNoDecision),
+    RuleVerdict (CannotVet),
+    SkippedCheck (SkippedUnavailable),
     Transience (WillResolve, WontResolve),
  )
 import Ecluse.Core.Server.Path (unFilename)
@@ -58,7 +63,7 @@ import Ecluse.Test.Package (
     v1_0_0,
  )
 import Ecluse.Test.Package qualified as Package
-import Ecluse.Test.Rules (admitRule, cannotVetRule, denyRule)
+import Ecluse.Test.Rules (admitRule, cannotVetRule, constRule, denyRule)
 
 -- The sanctioned splitter, as the plain list the artifact fixtures take.
 sriHashesOf :: Text -> [Hash]
@@ -115,9 +120,31 @@ hashOfKind bs = \case
     HexOf alg hexOf -> unsafeHash alg (hexOf bs)
     SriOf _ sriOf -> unsafeHash SRI (sriOf bs)
 
+{- | A fail-open advisory deny that could not vet, as an absent database leaves it. Its name sorts
+ahead of the fixed-verdict rules, so the boot order runs it first.
+-}
+skippedCveRule :: PreparedRule
+skippedCveRule = constRule "DenyIfCve" (CannotVet FailNoDecision "DenyIfCve: no advisory database loaded")
+
 spec :: Spec
 spec = do
     describe "admitArtifact -- the shared serve/worker admission oracle" $ do
+        it "carries the skipped-check evidence beside an admit, so the gate can record it once" $ do
+            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
+            (admission, skipped) <- admitArtifactWithEvidence ctx [skippedCveRule, admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
+            skipped `shouldBe` [SkippedUnavailable "DenyIfCve" "no advisory database loaded"]
+            case admission of
+                AdmissionAdmit{} -> pass
+                other -> expectationFailure ("expected an admit, got " <> show other)
+
+        it "carries no evidence beside a refusal" $ do
+            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
+            (admission, skipped) <- admitArtifactWithEvidence ctx [skippedCveRule, denyRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
+            skipped `shouldBe` []
+            case admission of
+                AdmissionDenied{} -> pass
+                other -> expectationFailure ("expected a denial, got " <> show other)
+
         it "admits a rule-admitted, floor-clearing artifact, selecting it by filename" $ do
             let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
             admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
