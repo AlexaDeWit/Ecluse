@@ -5,9 +5,10 @@ function design. For where code lives (module layout, the `Ecluse.<Area>` namesp
 split), see [`docs/getting-started.md`](getting-started.md) → "Codebase layout". For why the stack
 is what it is (relude, raw WAI, the effect style), see [`docs/architecture.md`](architecture.md).
 
-> When in doubt, match the nearest existing module.
-> `core/src/Ecluse/Core/Package.hs` and `core/src/Ecluse/Core/Rules.hs` are the reference
-> implementations. Read one before adding code beside it.
+> This guide outranks the nearest existing module. A neighbour that breaks a rule here is a file to
+> fix, not a pattern to copy. Where the guide is silent, `core/src/Ecluse/Core/Package.hs` and
+> `core/src/Ecluse/Core/Rules.hs` are the reference implementations. Read one before adding code
+> beside it.
 
 ## Two principles that outrank taste
 
@@ -138,6 +139,13 @@ the damage. Dead code has no caller and no intended future caller. "We might nee
 one. The compiler won't always catch it. An exported unused definition, a dead record field, and a
 field bound only to refusing test stubs all compile clean under `-Werror`. Judge reachability from
 the live composition root.
+
+**4.9 One definition per job.** Before you write a helper, search for one that does the same job:
+grep the domain nouns, and query the type shape in Hoogle or HLS. On a hit, call it, extend it, or
+hoist it. Two near-identical definitions drift apart, and a fix then lands in only one of them. A
+hoisted helper moves to the module that owns its main type. When no module owns that type, it moves
+to the nearest common parent area of its callers. Never add a `Utils` or `Common` module to hold it
+(§4.3). Write a second definition only when the existing one does not fit, and say why in the PR.
 
 ---
 
@@ -283,6 +291,12 @@ ruleName = \case
 Match every constructor explicitly, with no wildcard, when you want the compiler to flag you the day
 someone adds a constructor.
 
+**9.5 Measure before you trade clarity for speed.** A change that makes the code both simpler and
+faster needs no number. A change that makes the code harder to read for speed needs a before and
+after result from `task bench`, quoted in the commit body. Without that result, keep the readable
+form. The standing hot-path rules (§2 string types, §6.5 conversions) are exempt: they are already
+decided.
+
 ---
 
 ## 10. Totality: no partial functions
@@ -343,7 +357,9 @@ leaf throws the typed `Unconfigured`, because there is nothing to decide.
 `stringException`, `throwString`, and `userError`. They erase the type, so nothing downstream can
 catch by category, and a `try` decays into grepping a message. Give the condition a type with an
 `Exception` instance: a nullary marker, or a small sum like `CredentialError`, as the codebase does
-for `BootAborted`. `.hlint.yaml` permits `throwString` only in the listed test modules.
+for `BootAborted`. The rule holds in test code too: a test that simulates a failure throws a nullary
+typed exception. The `throwString` allowlist of test modules in `.hlint.yaml` is a backlog to drain,
+never a list to extend.
 
 **11.3 Surface errors as values, and don't thread `ExceptT` through the base monad.** The effectful
 shell runs in `ReaderT Env IO` over `unliftio`. `MonadUnliftIO` has no instance for `ExceptT`, nor
