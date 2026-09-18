@@ -57,6 +57,7 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact, AdapterMetadata, AdapterPublish, ProjectName)
 import Ecluse.Core.Registry.Request (CredentialMapping)
 import Ecluse.Core.Rules (PreparedRule)
+import Ecluse.Core.Rules.Outage (AdmissionIdentity)
 import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballHostAllowed, thgAllowlist, thgEcosystemHosts)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
@@ -129,6 +130,10 @@ data PackumentDeps = PackumentDeps
     -}
     , pdAdvisoryEtag :: IO (Maybe DbEtag)
     -- ^ Non-pinning read of the active advisory etag. 'Nothing' means no database is loaded.
+    , pdNoteAdmission :: AdmissionIdentity -> IO Bool
+    {- ^ Whether the gate logs an admission's skipped-check evidence, once per identity for the
+    life of the advisory source's outage ('Ecluse.Core.Rules.Outage.noteAdmission').
+    -}
     , pdHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to every denial body, if configured.
     , pdMinIntegrity :: MinIntegrity

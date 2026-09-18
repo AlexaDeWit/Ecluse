@@ -265,7 +265,7 @@ expirySpec = describe "an expired advisory push" $ do
 observedDeps :: RuleDeps -> IO (RuleDeps, IORef [SourceHealth])
 observedDeps deps = do
     captured <- newIORef []
-    pure (deps{rdSourceReporter = SourceReporter (\h -> modifyIORef' captured (h :))}, captured)
+    pure (deps{rdSourceReporter = noSourceReporter{reportSource = \h -> modifyIORef' captured (h :)}}, captured)
 
 -- | The reports so far, oldest first.
 reported :: IORef [SourceHealth] -> IO [SourceHealth]

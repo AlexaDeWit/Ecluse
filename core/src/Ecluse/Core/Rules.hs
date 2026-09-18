@@ -57,7 +57,7 @@ import Ecluse.Core.Rules.Effectful (
     runResilient,
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryAge (..), AdvisoryFreshness (AdvisoryAging, AdvisoryFresh, AdvisoryStale, AdvisoryUndated))
-import Ecluse.Core.Rules.Outage (SourceHealth (..), SourceReporter (..), noSourceReporter, reportSource)
+import Ecluse.Core.Rules.Outage (SourceHealth (..), SourceReporter (..), noSourceReporter)
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Text (displayExceptionT, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)

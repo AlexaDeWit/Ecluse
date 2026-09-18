@@ -35,7 +35,7 @@ import Ecluse.Core.Breaker (
     recordSuccess,
     reportBreakerChange,
  )
-import Ecluse.Core.Rules.Outage (SourceHealth (SourceUnavailable), SourceReporter, reportSource)
+import Ecluse.Core.Rules.Outage (SourceHealth (SourceUnavailable), SourceReporter (..))
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Text (displayExceptionT)

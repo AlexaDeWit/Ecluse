@@ -8,6 +8,7 @@ period, and a request never reports on its own.
 module Ecluse.Core.Rules.OutageSpec (spec) where
 
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Test.Hspec
 
@@ -37,6 +38,9 @@ down rule = SourceUnavailable rule "no advisory database loaded"
 
 up :: Text -> SourceHealth
 up = SourceAnswered
+
+ident :: Text -> Text -> [Text] -> AdmissionIdentity
+ident package version rules = AdmissionIdentity package version (Set.fromList rules)
 
 spec :: Spec
 spec = do
@@ -73,7 +77,7 @@ spec = do
             -- other is still cooling. The outage is over only when both answer.
             let (final, reports) = run [(0, down "DenyIfCve"), (1, down "DenyIfEpss"), (2, up "DenyIfEpss"), (3, down "DenyIfCve")]
             reports `shouldBe` [OutageBegan "DenyIfCve" "no advisory database loaded"]
-            final `shouldBe` Outage (OngoingOutage t0 t0 (Map.singleton "DenyIfCve" "no advisory database loaded"))
+            final `shouldBe` Outage (OngoingOutage t0 t0 (Map.singleton "DenyIfCve" "no advisory database loaded") noLoggedAdmissions)
 
         it "reports a later outage as a fresh beginning" $ do
             let (_, reports) = run [(0, down "DenyIfCve"), (1, up "DenyIfCve"), (2, down "DenyIfCve")]
@@ -82,6 +86,39 @@ spec = do
                            , OutageRecovered t0
                            , OutageBegan "DenyIfCve" "no advisory database loaded"
                            ]
+
+    describe "noteLogged" $ do
+        it "logs a new identity once and skips its repeats" $ do
+            let (once, logged) = noteLogged 8 (ident "a" "1.0.0" ["DenyIfCve"]) noLoggedAdmissions
+                (again, repeated) = noteLogged 8 (ident "a" "1.0.0" ["DenyIfCve"]) once
+            (logged, repeated) `shouldBe` (True, False)
+            again `shouldBe` once
+
+        it "treats another version, or another skipped rule set, as its own line" $ do
+            let (logged, _) = noteLogged 8 (ident "a" "1.0.0" ["DenyIfCve"]) noLoggedAdmissions
+            snd (noteLogged 8 (ident "a" "2.0.0" ["DenyIfCve"]) logged) `shouldBe` True
+            snd (noteLogged 8 (ident "a" "1.0.0" ["DenyIfCve", "DenyIfEpss"]) logged) `shouldBe` True
+
+        it "evicts the oldest identity first once the record holds the cap" $ do
+            let filled = foldl' (\acc v -> fst (noteLogged 3 (ident "a" v ["DenyIfCve"]) acc)) noLoggedAdmissions ["1", "2", "3"]
+                (evicted, logged) = noteLogged 3 (ident "a" "4" ["DenyIfCve"]) filled
+            logged `shouldBe` True
+            snd (noteLogged 3 (ident "a" "1" ["DenyIfCve"]) evicted) `shouldBe` True
+            snd (noteLogged 3 (ident "a" "2" ["DenyIfCve"]) evicted) `shouldBe` False
+
+    describe "admissionLogged" $ do
+        it "logs every admission on a healthy source and records nothing" $
+            admissionLogged 8 (ident "a" "1.0.0" ["DenyIfCve"]) Healthy `shouldBe` (Healthy, True)
+
+        it "empties the record on recovery, so the next outage logs the identity again" $ do
+            let (during, _) = stepAt 0 (down "DenyIfCve") Healthy
+                (noted, logged) = admissionLogged 8 (ident "a" "1.0.0" ["DenyIfCve"]) during
+                (recovered, _) = stepAt 1 (up "DenyIfCve") noted
+                (relapsed, _) = stepAt 2 (down "DenyIfCve") recovered
+            logged `shouldBe` True
+            snd (admissionLogged 8 (ident "a" "1.0.0" ["DenyIfCve"]) noted) `shouldBe` False
+            recovered `shouldBe` Healthy
+            snd (admissionLogged 8 (ident "a" "1.0.0" ["DenyIfCve"]) relapsed) `shouldBe` True
 
     describe "sourceReporter" $ do
         it "emits each report through the shared state, and nothing per healthy evaluation" $ do
@@ -125,6 +162,16 @@ spec = do
             reportSource reporter (up "DenyIfCve")
             reportSource reporter (up "DenyIfEpss")
             readIORef commits `shouldReturn` 5
+
+        it "commits an admission identity once, and decides its repeats on the read alone" $ do
+            (store, commits, _) <- countingStore
+            let reporter = sourceReporter period (pure t0) store (const pass)
+            noteAdmission reporter (ident "a" "1.0.0" ["DenyIfCve"]) `shouldReturn` True
+            readIORef commits `shouldReturn` 0 -- healthy: logged, nothing to record
+            reportSource reporter (down "DenyIfCve")
+            noteAdmission reporter (ident "a" "1.0.0" ["DenyIfCve"]) `shouldReturn` True
+            replicateM_ 100 (noteAdmission reporter (ident "a" "1.0.0" ["DenyIfCve"]) `shouldReturn` False)
+            readIORef commits `shouldReturn` 2
 
 -- | The live store wrapped so the spec can count how many folds it committed.
 countingStore :: IO (OutageStore, IORef Int, TVar OutageState)

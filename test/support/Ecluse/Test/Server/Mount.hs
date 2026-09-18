@@ -69,6 +69,8 @@ serveDepsFor adapter privateBaseUrl publicBaseUrl mirror rules clock =
         , pdInboundToken = Nothing
         , pdNow = clock
         , pdAdvisoryEtag = pure Nothing
+        , -- No outage to remember an admission under, so every admission with evidence logs.
+          pdNoteAdmission = const (pure True)
         , pdHelp = Nothing
         , pdMinIntegrity = defaultMinIntegrity
         , pdMinTrustedIntegrity = defaultMinTrustedIntegrity

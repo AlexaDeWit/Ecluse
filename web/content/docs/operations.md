@@ -208,11 +208,12 @@ The outage line says the checks are degraded. Which admissions went through with
 separate record. A version admitted while an advisory deny set to `onUnavailable: skip` could not
 vet it carries that check in its decision, and the public artifact gate logs one `warn` line per
 skipped check, `admitted with a check skipped for unavailability`, with the package, the version,
-the rule, and the cause. The line is per public admission: a mount with a `mirrorTarget` admits a
-version once and then serves the trusted copy without rules, so the line does not repeat, while a
-mount with no mirror admits on every public serve and logs on each. A trusted read never logs it.
-The evidence lives in that decision and in the log only, never in registry metadata, so its
-retention is the log's.
+the rule, and the cause. The line is bounded: once per package, version, and skipped rule set for
+the life of the outage, cleared when the source recovers, so a mount with no mirror that admits the
+same version on every public serve logs it once per outage. The record behind that bound holds
+4096 identities per ecosystem and forgets the oldest past that. A trusted read never logs it. The
+evidence lives in that decision and in the log only, never in registry metadata, so its retention
+is the log's.
 
 A one-shot `ecluse pilot compile` using the same Prometheus port as a live Pilot can log a bind
 failure and still complete its compilation. This applies only when the Prometheus exporter is selected

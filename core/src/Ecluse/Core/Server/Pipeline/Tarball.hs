@@ -103,7 +103,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
     VersionVerdict (..),
     evalTier,
     logDenials,
-    logSkippedChecks,
+    logSkippedChecksOnce,
     recordDenials,
     serveDecisionClass,
  )
@@ -350,7 +350,7 @@ servePublicArtifact mode replies rt deps validators name version file respond = 
         $ \case
             Admitted artifact skipped -> do
                 liftIO (mpServeDecision metrics Metric.Admit)
-                logSkippedChecks name (renderVersion version) advisoryEtag skipped
+                logSkippedChecksOnce (pdNoteAdmission deps) name (renderVersion version) advisoryEtag skipped
                 withRunInIO $ \runInIO ->
                     streamPublicArtifact mode replies rt deps validators name version file artifact (runInIO . observeRelayAnomaly metrics name version) respond
             Refused decision -> do

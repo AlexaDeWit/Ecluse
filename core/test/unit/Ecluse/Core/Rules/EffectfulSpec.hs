@@ -125,7 +125,7 @@ observedRule :: EffectfulConfig -> IO RuleVerdict -> IO (PreparedRule, IORef [So
 observedRule cfg eval = do
     captured <- newIORef []
     breaker <- newBreaker
-    let reporter = SourceReporter (\h -> modifyIORef' captured (h :))
+    let reporter = noSourceReporter{reportSource = \h -> modifyIORef' captured (h :)}
     pure
         ( PreparedRule
             { prepName = "DenyCve"

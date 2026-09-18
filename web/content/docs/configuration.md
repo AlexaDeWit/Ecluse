@@ -397,11 +397,12 @@ does not revoke that copy unless a named deny becomes decisive. See
 [Revoking a mirrored version](@/docs/operations.md#revoking-a-mirrored-version-internal-yank).
 
 A skipped check leaves evidence with the admission. The decision names the rule and the cause, and
-the public artifact gate logs one `warn` line per skipped check at each public admission, carrying
-the package, the version, the rule, and the cause. A trusted read of a mirrored version runs no
-rules and logs nothing, so a mount with a `mirrorTarget` logs the line once per version, and a
-mount with no mirror logs it on every public serve. A check the winning allow pre-empted is
-recorded as not reached, never as passed, and logs no line. The mirror worker's own re-admission
+the public artifact gate logs one `warn` line per skipped check, carrying the package, the version,
+the rule, and the cause. The line is bounded: once per package, version, and skipped rule set for
+the life of the advisory outage, cleared when the source recovers, so repeated public serves of one
+version during an outage log it once. A trusted read of a mirrored version runs no rules and logs
+nothing. A check the winning allow pre-empted is recorded as not reached, never as passed, and
+logs no line. The mirror worker's own re-admission
 of a queued version emits no evidence line, so the serve that queued the job is the admission you
 see in the log. The evidence lives in that decision and in the log only: Écluse writes no metadata
 to the mirror, and the log's retention is yours. The outage itself is reported apart from any

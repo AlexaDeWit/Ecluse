@@ -50,9 +50,11 @@ module Ecluse.Core.Server.Pipeline.Internal (
     denialAuditPayload,
     logDenials,
     logSkippedChecks,
+    logSkippedChecksOnce,
 ) where
 
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Katip (KatipContext, Severity (WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
 
@@ -71,6 +73,7 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Registry (UrlFormationError, renderUrlFormationError)
 import Ecluse.Core.Rules (PreparedRule (prepResilience), cveIdsInReason)
+import Ecluse.Core.Rules.Outage (AdmissionIdentity (AdmissionIdentity))
 import Ecluse.Core.Rules.Types (Decision (Undecidable), SkippedCheck (SkippedUnavailable, Unreached))
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Server.Response (
@@ -342,8 +345,19 @@ logDenials pkg etag = traverse_ logOne
              in katipAddContext (denialAuditPayload audit) $
                     logFM WarningS (ls ("denied" :: Text))
 
-{- | Emit one audit line per check the admission skipped for unavailability, at the gate, so the
-evidence lands once and a trusted serve never replays it. An unreached check gets no line.
+{- | 'logSkippedChecks' once per admission identity (package, version, skipped rule set) for the
+life of the advisory source's outage, so a public serve that admits again repeats no line.
+-}
+logSkippedChecksOnce :: (KatipContext m) => (AdmissionIdentity -> IO Bool) -> PackageName -> Text -> Maybe DbEtag -> [SkippedCheck] -> m ()
+logSkippedChecksOnce note pkg version etag skipped =
+    unless (Set.null rules) $ do
+        logIt <- liftIO (note (AdmissionIdentity (renderPackageName pkg) version rules))
+        when logIt (logSkippedChecks pkg version etag skipped)
+  where
+    rules = Set.fromList [rule | SkippedUnavailable rule _ <- skipped]
+
+{- | Emit one audit line per check the admission skipped for unavailability. An unreached check
+gets no line, and a trusted serve runs no rules, so it never reaches here.
 -}
 logSkippedChecks :: (KatipContext m) => PackageName -> Text -> Maybe DbEtag -> [SkippedCheck] -> m ()
 logSkippedChecks pkg version etag = traverse_ logOne

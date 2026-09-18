@@ -4,14 +4,14 @@
 
 {- | Bounded reporting of an advisory source the rules cannot consult. Each advisory-reading
 evaluation reports what it saw, and the state machine turns that stream into three reports: the
-outage began, it continues (at most once per period), and it recovered. A request never produces
-a report of its own, so a sustained outage costs the log one line per period, whatever the traffic.
+outage began, it continues (at most once per period), and it recovered. The outage also records
+which admissions the gate has logged evidence for, once per identity, so a request never produces
+a line of its own beyond the first for its identity, whatever the traffic.
 -}
 module Ecluse.Core.Rules.Outage (
     -- * What one evaluation saw
     SourceHealth (..),
     SourceReporter (..),
-    reportSource,
     noSourceReporter,
 
     -- * The transition machine
@@ -20,6 +20,14 @@ module Ecluse.Core.Rules.Outage (
     OutageReport (..),
     stepOutage,
 
+    -- * Evidence logged during an outage
+    AdmissionIdentity (..),
+    LoggedAdmissions,
+    noLoggedAdmissions,
+    loggedAdmissionCap,
+    noteLogged,
+    admissionLogged,
+
     -- * A reporter over shared state
     OutageStore (..),
     tvarOutageStore,
@@ -27,6 +35,9 @@ module Ecluse.Core.Rules.Outage (
 ) where
 
 import Data.Map.Strict qualified as Map
+import Data.Sequence (Seq ((:<|)), (|>))
+import Data.Sequence qualified as Seq
+import Data.Set qualified as Set
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime)
 
 import Ecluse.Core.Rules.Types (Reason)
@@ -40,15 +51,16 @@ data SourceHealth
     deriving stock (Eq, Show)
 
 -- | The observer every advisory-reading evaluation reports to. The composition root installs the live one.
-newtype SourceReporter = SourceReporter (SourceHealth -> IO ())
+data SourceReporter = SourceReporter
+    { reportSource :: SourceHealth -> IO ()
+    -- ^ Report one evaluation's reading.
+    , noteAdmission :: AdmissionIdentity -> IO Bool
+    -- ^ Whether the gate logs this admission's evidence: once per identity for the life of the outage.
+    }
 
--- | Report one evaluation's reading.
-reportSource :: SourceReporter -> SourceHealth -> IO ()
-reportSource (SourceReporter report) = report
-
--- | The inert reporter, for an ecosystem with no advisory source to observe.
+-- | The inert reporter, for an ecosystem with no advisory source to observe. It logs every admission.
 noSourceReporter :: SourceReporter
-noSourceReporter = SourceReporter (const pass)
+noSourceReporter = SourceReporter{reportSource = const pass, noteAdmission = const (pure True)}
 
 -- | One source's outage state.
 data OutageState
@@ -65,8 +77,61 @@ data OngoingOutage = OngoingOutage
     -- ^ When the last report went out, which paces the reminder.
     , ooRules :: Map Text Reason
     -- ^ Each rule still unable to consult the source, with its latest cause. Never empty.
+    , ooLogged :: LoggedAdmissions
+    -- ^ The admissions the gate has logged evidence for during this outage.
     }
     deriving stock (Eq, Show)
+
+-- | What identifies one admission's evidence line: the version, and the checks it skipped.
+data AdmissionIdentity = AdmissionIdentity
+    { aiPackage :: Text
+    , aiVersion :: Text
+    , aiSkipped :: Set Text
+    -- ^ The rules skipped for unavailability. A different set is a different line.
+    }
+    deriving stock (Eq, Ord, Show)
+
+{- | The admissions logged during one outage, oldest first, so the record can evict in arrival
+order once it reaches its cap.
+-}
+data LoggedAdmissions = LoggedAdmissions
+    { laOrder :: Seq AdmissionIdentity
+    , laMembers :: Set AdmissionIdentity
+    }
+    deriving stock (Eq, Show)
+
+-- | An outage that has logged nothing yet.
+noLoggedAdmissions :: LoggedAdmissions
+noLoggedAdmissions = LoggedAdmissions Seq.empty Set.empty
+
+{- | How many identities one outage remembers. An identity is a few hundred bytes, so the record
+per ecosystem stays around a megabyte at worst, and an outage over a large mirror repeats a line
+only once its oldest identities age out.
+-}
+loggedAdmissionCap :: Int
+loggedAdmissionCap = 4096
+
+{- | Decide whether the gate logs this admission, and the record after it. A repeat is skipped, a
+new identity is recorded, and the oldest identity is evicted once the record holds @cap@.
+-}
+noteLogged :: Int -> AdmissionIdentity -> LoggedAdmissions -> (LoggedAdmissions, Bool)
+noteLogged cap ident logged
+    | Set.member ident (laMembers logged) = (logged, False)
+    | otherwise = (LoggedAdmissions (order |> ident) (Set.insert ident members), True)
+  where
+    (order, members) = case laOrder logged of
+        oldest :<| rest | Seq.length (laOrder logged) >= cap -> (rest, Set.delete oldest (laMembers logged))
+        _ -> (laOrder logged, laMembers logged)
+
+{- | 'noteLogged' over the source's state. A healthy source has no outage to remember the admission
+under, so the gate logs it.
+-}
+admissionLogged :: Int -> AdmissionIdentity -> OutageState -> (OutageState, Bool)
+admissionLogged cap ident = \case
+    Healthy -> (Healthy, True)
+    Outage ongoing ->
+        let (logged, logIt) = noteLogged cap ident (ooLogged ongoing)
+         in (Outage ongoing{ooLogged = logged}, logIt)
 
 -- | The three reports an outage produces, each carrying what an operator line needs.
 data OutageReport
@@ -85,7 +150,7 @@ stepOutage :: NominalDiffTime -> UTCTime -> SourceHealth -> OutageState -> (Outa
 stepOutage period now health current = case (current, health) of
     (Healthy, SourceAnswered _) -> (Healthy, Nothing)
     (Healthy, SourceUnavailable rule cause) ->
-        (Outage (OngoingOutage now now (Map.singleton rule cause)), Just (OutageBegan rule cause))
+        (Outage (OngoingOutage now now (Map.singleton rule cause) noLoggedAdmissions), Just (OutageBegan rule cause))
     (Outage ongoing, SourceAnswered rule)
         | Map.null rules -> (Healthy, Just (OutageRecovered (ooSince ongoing)))
         | otherwise -> (Outage ongoing{ooRules = rules}, Nothing)
@@ -101,8 +166,8 @@ stepOutage period now health current = case (current, health) of
 -- | Where one source's outage state lives: a plain read, and a fold committed as one unit.
 data OutageStore = OutageStore
     { readOutage :: IO OutageState
-    , commitOutage :: (OutageState -> (OutageState, Maybe OutageReport)) -> IO (Maybe OutageReport)
-    -- ^ Fold the state in place and hand back the report the fold produced.
+    , commitOutage :: forall a. (OutageState -> (OutageState, a)) -> IO a
+    -- ^ Fold the state in place and hand back what the fold produced.
     }
 
 -- | The live store: one 'TVar' shared by every mount of an ecosystem.
@@ -121,13 +186,22 @@ an outage that changes nothing (the same rule, still failing, inside the period)
 one clock reading, so only a transition or a due reminder commits.
 -}
 sourceReporter :: NominalDiffTime -> IO UTCTime -> OutageStore -> (OutageReport -> IO ()) -> SourceReporter
-sourceReporter period clock store emit = SourceReporter $ \health ->
-    readOutage store >>= \case
-        Healthy | SourceAnswered _ <- health -> pass
-        current -> do
-            now <- clock
-            let advance = stepOutage period now health
-                (next, report) = advance current
-            -- The commit folds again over the fresh state, so a concurrent change is never lost.
-            when (next /= current || isJust report) $
-                commitOutage store advance >>= traverse_ emit
+sourceReporter period clock store emit = SourceReporter{reportSource = report, noteAdmission = note}
+  where
+    report health =
+        readOutage store >>= \case
+            Healthy | SourceAnswered _ <- health -> pass
+            current -> do
+                now <- clock
+                let advance = stepOutage period now health
+                    (next, produced) = advance current
+                -- The commit folds again over the fresh state, so a concurrent change is never lost.
+                when (next /= current || isJust produced) $
+                    commitOutage store advance >>= traverse_ emit
+
+    -- A repeat inside an outage is decided on the read alone, so only a new identity commits.
+    note ident =
+        readOutage store >>= \current ->
+            let advance = admissionLogged loggedAdmissionCap ident
+                (next, logIt) = advance current
+             in if next == current then pure logIt else commitOutage store advance
