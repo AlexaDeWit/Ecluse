@@ -131,7 +131,7 @@ newCodeArtifactUpstreamProbe :: CodeArtifactStore -> IO UpstreamSafety
 newCodeArtifactUpstreamProbe store = withReadableIdentity $ do
     -- This wrap covers the environment build. The walk below carries its own, for a caller
     -- holding a plane this never built.
-    env <- newAwsEnv (Just (casRegion store)) Nothing CA.defaultService
+    env <- newMaintenanceEnv store
     probeUpstreamSafety (readPlaneFor env) store
 
 -- | Build cache deletion with target-local reads and consent, allowing its declared refill role.

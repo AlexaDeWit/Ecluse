@@ -34,7 +34,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFault (faultRetry, faultTransport),
     StoreMaintenance (..),
     StoreManifestRead,
-    StoreObservation (obClassifyStore, obListPackagesIn, obVerifyConsent),
+    StoreObservation (obClassifyStore, obListPackagesIn, obProbeUpstream, obVerifyConsent),
     StoredVersion (storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionUncertain, VersionUnreached),
     VersionPresence (VersionServed),
@@ -50,6 +50,7 @@ import Ecluse.Core.Registry.Maintenance.Protocol (
     newProtocolMaintenance,
     newProtocolObservation,
  )
+import Ecluse.Core.Registry.Maintenance.Upstream (UndecidabilityReason (NoMechanism), UpstreamSafety (Undecidable))
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
@@ -95,6 +96,10 @@ factsSpec = describe "what the backend supplies without a call" $ do
     it "keeps no walk cursor, because the protocol writes nothing but a publish" $
         withStore True answerNothing $ \handle _ ->
             isNothing (storeCursor handle) `shouldBe` True
+
+    it "leaves its uplinks undecided, because the protocol carries them in a file it does not serve" $
+        withObservation True answerNothing $ \observed _ ->
+            obProbeUpstream observed `shouldReturn` Undecidable NoMechanism
 
     it "reads a store whose consent is withheld through the observing calls alone" $
         withObservation False answerStore $ \observed stub -> do
