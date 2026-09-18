@@ -360,7 +360,7 @@ itself. The CodeArtifact role needs these permissions for a default candidate cy
 | `sts:GetServiceBearerToken` | `*` in the role's identity policy, restricted by `sts:AWSServiceName = codeartifact.amazonaws.com` | Permit token minting |
 | `codeartifact:ListPackages` | Each approved repository ARN | Enumerate package names |
 | `codeartifact:ListPackageVersions` | Package ARNs within each approved target | Enumerate versions |
-| `codeartifact:DescribeRepository` | Each approved repository ARN | Read store classification |
+| `codeartifact:DescribeRepository` | Each approved repository ARN, and every repository in the private upstream's chain | Read store classification, and what the private upstream aggregates |
 | `codeartifact:ListTagsForResource` | Each approved repository ARN | Read consent and cursor tags |
 | `codeartifact:ReadFromRepository` | Each approved repository ARN | Read package metadata for rule evaluation |
 | `codeartifact:DeletePackageVersions` | Package ARNs within each approved target | Delete selected versions |

@@ -241,6 +241,7 @@ an ecosystem fact reads it off the `Ecosystem` value, as the CodeArtifact format
 | Package store | Store, per mount | CodeArtifact under the `codeArtifact` tag, any host that speaks the ecosystem's protocol under `registry`, and Verdaccio, the development store, under `verdaccio` |
 | Store maintenance | Store, per mount | The CodeArtifact control plane, or, for a `verdaccio` store, the ecosystem protocol's own listing and unpublish requests. A `registry` store carries none, so `ecluse dredger` refuses a mirror target under that tag and names it |
 | Walk cursor | Store, per mount | One CodeArtifact repository tag per ecosystem. A `verdaccio` store keeps none, so a full walk over it does not resume |
+| Private upstream aggregation | Store, per mount | CodeArtifact's `DescribeRepository`, walked over the upstream chain. A `registry` or `verdaccio` store reports none, which the boot warns about once |
 
 ### Onboarding a backend
 

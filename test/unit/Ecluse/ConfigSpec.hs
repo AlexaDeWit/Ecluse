@@ -129,14 +129,23 @@ spec = do
             verdaccio <- configFor (verdaccioMountDoc "")
             forM_ [codeArtifact, verdaccio] $ \cfg ->
                 drop 1 (mountPostureLines cfg)
-                    `shouldBe` ["mount \"npm\": the store maintenance client is built at boot against the live environment. check-config does not attempt this build."]
+                    `shouldBe` [ "mount \"npm\": the store maintenance client is built at boot against the live environment. check-config does not attempt this build."
+                               , upstreamProbeNotice
+                               ]
 
-        it "adds no notice for registry targets or serve-only mounts" $ do
+        it "adds no maintenance notice for registry targets or serve-only mounts" $ do
             registry <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://mirror.example.test")])
             private <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test")])
             public <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
-            forM_ [registry, private, public] $ \cfg ->
-                length (mountPostureLines cfg) `shouldBe` 1
+            forM_ [registry, private] $ \cfg ->
+                drop 1 (mountPostureLines cfg) `shouldBe` [upstreamProbeNotice]
+            length (mountPostureLines public) `shouldBe` 1
+
+        it "names the private-upstream check a boot makes and a checker does not" $ do
+            private <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test")])
+            public <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
+            mountPostureLines private `shouldSatisfy` elem upstreamProbeNotice
+            mountPostureLines public `shouldSatisfy` notElem upstreamProbeNotice
 
     describe "the advisory push-age limit reported at boot" $ do
         it "derives six days from the shipped seven-day quarantine, naming the rule" $ do
@@ -222,6 +231,11 @@ configFor doc = expectConfig pubUrlEnv (Just doc)
 -- | The serve-only npm mount the advisory-age cases load, which carries the shipped rule policy.
 privateMountDoc :: ByteString
 privateMountDoc = npmMountDoc [("privateUpstream", "https://priv.example.test")]
+
+-- | The line a mount with a private upstream carries, which both entry points report.
+upstreamProbeNotice :: Text
+upstreamProbeNotice =
+    "mount \"npm\": the private upstream is asked at boot whether it, or a repository in its upstream chain, connects to a public registry. check-config does not make that call."
 
 -- | An npm mount document declaring each named endpoint at its URL under the @registry@ tag.
 npmMountDoc :: [(Text, Text)] -> ByteString

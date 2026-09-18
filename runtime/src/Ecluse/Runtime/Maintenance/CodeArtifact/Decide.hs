@@ -32,6 +32,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     listVersionsResult,
     deleteRequest,
     describeRepositoryRequest,
+    describeUpstreamRequest,
     listTagsRequest,
 
     -- * The walk cursor
@@ -45,6 +46,8 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     presenceOf,
     foldDeleteResponse,
     classifyRepository,
+    repositoryOfStore,
+    upstreamLinksOf,
     consentOfTags,
     repositoryOfResponse,
     arnOfDescription,
@@ -56,6 +59,8 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
 
     -- * Faults
     classifyStoreFault,
+    describeUpstreamRefusal,
+    describeRepositoryGrant,
 ) where
 
 import Amazonka qualified as AWS
@@ -102,6 +107,15 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     RequestKind (CursorRead, CursorWrite, DeleteBatch, ListingPage, ManifestRead, PermissionRead, VersionPage),
     StoreBudget (StoreBudget, bgCosts, bgOrigin, bgQuotas, bgScope),
     mkQuotaScope,
+ )
+import Ecluse.Core.Registry.Maintenance.Upstream (
+    ExternalConnection (ExternalConnection, externalConnectionText),
+    PermissionName (PermissionName),
+    RepositoryLinks (RepositoryLinks, rlConnections, rlUpstreams),
+    RepositoryName (RepositoryName, repositoryNameText),
+    UndecidabilityReason (NetworkFailure),
+    UnsafeReason (InsufficientPermissions),
+    UpstreamSafety (Undecidable, Unsafe),
  )
 import Ecluse.Core.Text (nonBlank, readDecimalText)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -264,6 +278,15 @@ describeRepositoryRequest store =
     CA.newDescribeRepository (casDomain store) (casRepository store)
         & (CAL.describeRepository_domainOwner ?~ casDomainOwner store)
 
+-- | Describe another repository in the same domain, which is how the probe walks a chain.
+describeUpstreamRequest :: CodeArtifactStore -> RepositoryName -> CA.DescribeRepository
+describeUpstreamRequest store repository =
+    describeRepositoryRequest store{casRepository = repositoryNameText repository}
+
+-- | The repository a store's coordinates name, where a probe of its chain starts.
+repositoryOfStore :: CodeArtifactStore -> RepositoryName
+repositoryOfStore = RepositoryName . casRepository
+
 -- | Read a repository's tags, which is where CodeArtifact carries the consent marker.
 listTagsRequest :: Text -> CA.ListTagsForResource
 listTagsRequest = CA.newListTagsForResource
@@ -384,14 +407,23 @@ classifyRepository description
             )
     | otherwise = StoreDestroyable
   where
-    connections =
-        mapMaybe
-            (^. CAL.repositoryExternalConnectionInfo_externalConnectionName)
-            (fromMaybe [] (description ^. CAL.repositoryDescription_externalConnections))
-    upstreams =
-        mapMaybe
-            (^. CAL.upstreamRepositoryInfo_repositoryName)
-            (fromMaybe [] (description ^. CAL.repositoryDescription_upstreams))
+    links = upstreamLinksOf description
+    connections = map externalConnectionText (rlConnections links)
+    upstreams = map repositoryNameText (rlUpstreams links)
+
+{- | What one description says about the content it admits: the public registries it connects to,
+and the repositories it forwards a miss to. An entry the store named nothing in carries no name.
+-}
+upstreamLinksOf :: CA.RepositoryDescription -> RepositoryLinks
+upstreamLinksOf description =
+    RepositoryLinks
+        { rlConnections =
+            map ExternalConnection . mapMaybe (^. CAL.repositoryExternalConnectionInfo_externalConnectionName) $
+                fromMaybe [] (description ^. CAL.repositoryDescription_externalConnections)
+        , rlUpstreams =
+            map RepositoryName . mapMaybe (^. CAL.upstreamRepositoryInfo_repositoryName) $
+                fromMaybe [] (description ^. CAL.repositoryDescription_upstreams)
+        }
 
 -- | The tag key that carries the operator's consent on CodeArtifact.
 consentTagKey :: Text
@@ -432,6 +464,33 @@ classifyStoreFault err =
         _ | transportRetryable (tfCause fault) -> RetryWorthwhile
         _ -> RetryFutile
 
+{- | Read a failed probe read. An identity that may not ask cannot clear the repository, so its
+refusal is an unsafe answer rather than a fault, and every other failure leaves the question open.
+-}
+describeUpstreamRefusal :: AWS.Error -> UpstreamSafety
+describeUpstreamRefusal = \case
+    AWS.ServiceError service
+        | isAccessDeniedCode (service ^. AWS.serviceError_code) ->
+            Unsafe (InsufficientPermissions describeRepositoryGrant)
+    _ -> Undecidable NetworkFailure
+
+-- | The grant the probe needs on the private upstream and on every repository in its chain.
+describeRepositoryGrant :: PermissionName
+describeRepositoryGrant = PermissionName "codeartifact:DescribeRepository"
+
+-- A refusal of the identity itself, rather than of the request it carried.
+isAccessDeniedCode :: AWS.ErrorCode -> Bool
+isAccessDeniedCode code = errorCodeText code `elem` accessDeniedCodes
+
+accessDeniedCodes :: [Text]
+accessDeniedCodes =
+    [ "accessdenied"
+    , "unauthorized"
+    , "unrecognizedclient"
+    , "invalidclienttokenid"
+    , "missingauthenticationtoken"
+    ]
+
 {- A throttle and a server-side failure clear on their own. Every other refusal (a denied
 permission, a missing repository, a malformed request) fails the same way next time. -}
 serviceRetryAdvice :: AWS.ServiceError -> RetryAdvice
@@ -447,7 +506,11 @@ serviceRetryAdvice service
 {- @amazonka@ strips the @Exception@ suffix from a service's error code, so
 @ThrottlingException@ arrives as @Throttling@. -}
 isThrottlingCode :: AWS.ErrorCode -> Bool
-isThrottlingCode (AWS.ErrorCode code) = T.toLower code `elem` throttlingCodes
+isThrottlingCode code = errorCodeText code `elem` throttlingCodes
+
+-- Lowercased, so no comparison here turns on a service's own casing.
+errorCodeText :: AWS.ErrorCode -> Text
+errorCodeText (AWS.ErrorCode code) = T.toLower code
 
 throttlingCodes :: [Text]
 throttlingCodes =

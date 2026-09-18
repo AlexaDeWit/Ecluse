@@ -68,6 +68,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     requestKinds,
     undeclaredBudget,
  )
+import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Registry.Publish (PublishCodec (pcParseVersionList, pcProbeRequest))
 import Ecluse.Core.Security.Egress (registryUrlText)
@@ -110,6 +111,8 @@ newProtocolObservation store =
         , obReadManifest = prReadManifest store
         , obVerifyConsent = pure (Right (consentVerdict store))
         , obClassifyStore = pure (Right (storeClass store))
+        , -- A protocol store carries its uplinks in a configuration file it does not serve.
+          obProbeUpstream = noUpstreamMechanism
         }
 
 -- | Delete versions individually because each edit changes the document revision needed by the next.
@@ -123,6 +126,7 @@ newProtocolMaintenance store =
         , deleteVersions = deleteStoredVersions store
         , verifyConsent = obVerifyConsent observed
         , classifyStore = obClassifyStore observed
+        , probeUpstream = obProbeUpstream observed
         , -- The protocol writes nothing but a publish, so a walk over this store keeps no cursor.
           storeCursor = Nothing
         }

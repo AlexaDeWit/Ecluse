@@ -195,9 +195,31 @@ hostValidationSpec = describe "the URL a tag admits" $ do
         loadMount (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactBare]])
             `shouldSatisfy` refusalMentions "its path must be /npm/{repository}/"
 
-    it "refuses a codeArtifact mirror target on an ecosystem CodeArtifact has no format for" $
-        loadConfig pubUrlEnv (Just rubygemsDoc)
-            `shouldSatisfy` refusalMentions "CodeArtifact carries no package format for the rubygems ecosystem"
+    it "refuses a codeArtifact private upstream naming no repository at all, under its own key" $ do
+        -- The boot asks that repository what it aggregates, so one the URL does not name is
+        -- refused here rather than left unasked.
+        let outcome = loadMount [decl "privateUpstream" "codeArtifact" [url codeArtifactBare]]
+        outcome `shouldSatisfy` refusalMentions "its path must be /npm/{repository}/"
+        outcome `shouldSatisfy` refusalMentions "mounts.npm.privateUpstream.codeArtifact.url"
+        outcome `shouldSatisfy` refusalMentions "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL"
+        outcome `shouldNotSatisfy` refusalMentions "mirrorTarget"
+
+    it "refuses a codeArtifact private upstream addressing another format's endpoint, under its own key" $ do
+        -- A repository's per-format endpoints are separate stores, so the npm mount would ask the
+        -- aggregation question of a repository it never reads from.
+        let outcome = loadMount [decl "privateUpstream" "codeArtifact" [url codeArtifactPyPI]]
+        outcome `shouldSatisfy` refusalMentions "its path must be /npm/{repository}/"
+        outcome `shouldSatisfy` refusalMentions "mounts.npm.privateUpstream.codeArtifact.url"
+        outcome `shouldNotSatisfy` refusalMentions "mirrorTarget"
+
+    it "admits a codeArtifact private upstream that addresses a repository under its own format" $
+        loadMount [decl "privateUpstream" "codeArtifact" [url codeArtifactInternal]]
+            `shouldSatisfy` isRight
+
+    it "refuses a codeArtifact mirror target on an ecosystem CodeArtifact has no format for" $ do
+        let outcome = loadConfig pubUrlEnv (Just rubygemsDoc)
+        outcome `shouldSatisfy` refusalMentions "CodeArtifact carries no package format for the rubygems ecosystem"
+        outcome `shouldSatisfy` refusalMentions "mounts.rubygems.mirrorTarget.codeArtifact.url"
 
 -- The tag the operator declared is the backend every role reads, with no host shape consulted.
 backendSpec :: Spec

@@ -37,6 +37,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoredVersion (..),
     VersionPresence,
  )
+import Ecluse.Core.Registry.Maintenance.Upstream (UpstreamSafety)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
@@ -50,6 +51,10 @@ data ReadPlane = ReadPlane
     { rpListPackages :: CA.ListPackages -> IO (Either StoreFault CA.ListPackagesResponse)
     , rpListVersions :: CA.ListPackageVersions -> IO (Either StoreFault CA.ListPackageVersionsResponse)
     , rpDescribeRepository :: CA.DescribeRepository -> IO (Either StoreFault CA.DescribeRepositoryResponse)
+    , rpDescribeUpstream :: CA.DescribeRepository -> IO (Either UpstreamSafety CA.DescribeRepositoryResponse)
+    {- ^ The same call as 'rpDescribeRepository', under the probe's own reading of a refusal:
+    an identity that may not ask answers unsafe rather than faulting.
+    -}
     , rpListTags :: CA.ListTagsForResource -> IO (Either StoreFault CA.ListTagsForResourceResponse)
     }
 

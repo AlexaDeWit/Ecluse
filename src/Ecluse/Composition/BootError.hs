@@ -28,6 +28,13 @@ import Ecluse.Config (
 import Ecluse.Config.Resolve (mountKeyRef)
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Registry.Maintenance.Upstream (
+    ExternalConnection (externalConnectionText),
+    PermissionName (permissionNameText),
+    RepositoryName (repositoryNameText),
+    UndecidabilityReason (ChainBoundExceeded, NetworkFailure, NoMechanism),
+    UnsafeReason (ConfigurationEvidence, InsufficientPermissions),
+ )
 import Ecluse.Core.Security (authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Text (displayExceptionT)
@@ -98,6 +105,14 @@ data BootError
       MirrorTargetOnMountEndpoint Ecosystem Ecosystem Text Text
     | -- | One repository receives caller credentials and bypasses the public rules through the private leg.
       PrivateUpstreamOnPublicUpstream Ecosystem Text
+    | {- | The mount's private upstream can serve public content, so every version it holds would
+      be trusted as private. Carries what the backend reported.
+      -}
+      PrivateUpstreamUnsafe Ecosystem UnsafeReason
+    | {- | Asking the mount's private upstream what it aggregates threw rather than answering, so
+      nothing was settled about it. Carries the rendered exception.
+      -}
+      PrivateUpstreamProbeFailed Ecosystem Text
     | {- | Two endpoints, each carried as its mount and its tagged key path, name the carried
       registry under different tags, so the two declarations disagree about what serves that store.
       -}
@@ -160,8 +175,8 @@ data StoreMaintenanceReason
       ClientBuildFailed Text
     deriving stock (Eq, Show)
 
-{- | A collapsed configuration a writing role boots on and warns about. The deleting role
-refuses the same collapses, so no advisory here reaches it.
+{- | A finding a role boots on and warns about. The deleting role refuses the collapses below,
+so no advisory naming one reaches it.
 -}
 data Advisory
     = {- | A mount's mirror target is also the named mount's private upstream, at the carried
@@ -174,6 +189,10 @@ data Advisory
       was written under.
       -}
       DredgerQuotaOverrideUnmatched Text
+    | {- | Whether the mount's private upstream serves public content stayed open, so that
+      topology stays the operator's to verify. Carries why it stayed open.
+      -}
+      PrivateUpstreamUndecided Ecosystem UndecidabilityReason
     deriving stock (Eq, Show)
 
 {- | Fold a thrown fault into the boot error the caller names, so a phase that dials a live
@@ -275,6 +294,23 @@ renderBootError = \case
             <> " resolve to the same registry ("
             <> url
             <> "): the private leg forwards caller credentials and admits versions without the public rules. Configure distinct repositories."
+    PrivateUpstreamUnsafe eco (ConfigurationEvidence repository connection) ->
+        mountKeyRef eco "privateUpstream"
+            <> " admits public content: repository "
+            <> repositoryNameText repository
+            <> " carries the external connection "
+            <> externalConnectionText connection
+            <> ", so public packages reach clients as trusted private content, past the public rules, the integrity floor and the quarantine. Remove that connection from the repository and its upstream chain, or point privateUpstream at a repository that has none"
+    PrivateUpstreamUnsafe eco (InsufficientPermissions permission) ->
+        mountKeyRef eco "privateUpstream"
+            <> " could not be read: this role's identity is refused "
+            <> permissionNameText permission
+            <> " on that repository or one in its upstream chain. Or this role resolved no identity at all. An identity that cannot ask cannot clear the repository, so give this role an AWS identity carrying that grant, or point privateUpstream at a repository this role may read"
+    PrivateUpstreamProbeFailed eco detail ->
+        "the check for a connection to a public registry on "
+            <> mountKeyRef eco "privateUpstream"
+            <> " threw: "
+            <> detail
     StoreTagConflict eco key other otherKey url ->
         mountKeyRef eco key
             <> " and "
@@ -357,6 +393,18 @@ renderAdvisory = \case
         "dredger.quotaOverrides: "
             <> authorityLabel key
             <> " names no store this deployment declares, so it paces nothing"
+    PrivateUpstreamUndecided eco reason ->
+        mountKeyRef eco "privateUpstream"
+            <> " was not checked for a connection to a public registry: "
+            <> renderUndecidability reason
+            <> ". A repository that aggregates a public registry serves public packages as trusted private content, so confirming that this one does not stays yours"
+
+-- Why the backend settled nothing, in the words an operator acts on.
+renderUndecidability :: UndecidabilityReason -> Text
+renderUndecidability = \case
+    NoMechanism -> "its backend does not report the repositories and registries it aggregates"
+    NetworkFailure -> "its backend did not answer"
+    ChainBoundExceeded -> "its upstream chain crossed this walk's bounds before it was read whole"
 
 -- The line both mirror collapses take: the collapsed pair, the registry they share, and the
 -- consequence of keeping the configuration.

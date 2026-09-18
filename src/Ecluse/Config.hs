@@ -92,7 +92,7 @@ import Ecluse.Config.Aeson ()
 import Ecluse.Config.DefaultConfig (defaultConfigBytes)
 import Ecluse.Config.Resolve (buildEnvAst, deepMerge, secretLeafKeys)
 import Ecluse.Config.Rule
-import Ecluse.Config.Target (resolveStoreBackend, vetTargetTag)
+import Ecluse.Config.Target (resolveStoreBackend, vetPrivateRepository, vetTargetTag)
 import Ecluse.Config.Types
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
@@ -189,9 +189,16 @@ resolveMounts globalPolicy appConfig =
         ([], mounts) -> Right (Map.fromList mounts)
         (errs, _) -> Left (concat errs)
   where
-    resolveOne (eco, mcfg) = case lefts (map (uncurry (vetTargetTag eco)) (readAndPublishTargets mcfg)) of
+    resolveOne (eco, mcfg) = case lefts (declarationErrors eco mcfg) of
         [] -> (eco,) <$> resolveMode globalPolicy eco mcfg
         tagErrs -> Left tagErrs
+
+{- Every endpoint checked against the tag it was declared under, and the private upstream checked
+once more for the repository the boot addresses its aggregation question to. -}
+declarationErrors :: Ecosystem -> MountConfig -> [Either ConfigError ()]
+declarationErrors eco mcfg =
+    map (uncurry (vetTargetTag eco)) (readAndPublishTargets mcfg)
+        <> [vetPrivateRepository eco (preTarget endpoint) | Just endpoint <- [mntPrivateUpstream mcfg]]
 
 {- Each read or publish endpoint a mount declares, with the key it is written under. The mirror
 target is absent because 'resolveStoreBackend' vets it while resolving its backend. -}
@@ -301,9 +308,21 @@ renderLeafValue path v
 
 -- | Mount modes followed by the live-environment limits of @check-config@, shared with boot.
 mountPostureLines :: Config -> [Text]
-mountPostureLines config = map postureLine mounts <> mapMaybe maintenanceClientLine mounts
+mountPostureLines config =
+    map postureLine mounts <> mapMaybe maintenanceClientLine mounts <> mapMaybe upstreamProbeLine mounts
   where
     mounts = Map.toAscList (configMounts config)
+
+{- Asking a backend what its private upstream aggregates is a call against the live control plane,
+which a checker makes none of. -}
+upstreamProbeLine :: (Ecosystem, Mount) -> Maybe Text
+upstreamProbeLine (eco, mount) =
+    notice <$ regPrivateUpstream (mountRegistries mount)
+  where
+    notice =
+        "mount \""
+            <> ecosystemName eco
+            <> "\": the private upstream is asked at boot whether it, or a repository in its upstream chain, connects to a public registry. check-config does not make that call."
 
 maintenanceClientLine :: (Ecosystem, Mount) -> Maybe Text
 maintenanceClientLine (eco, mount) = do

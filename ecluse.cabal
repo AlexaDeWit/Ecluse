@@ -130,6 +130,7 @@ library ecluse-core
     Ecluse.Core.Registry.Maintenance
     Ecluse.Core.Registry.Maintenance.Budget
     Ecluse.Core.Registry.Maintenance.Protocol
+    Ecluse.Core.Registry.Maintenance.Upstream
     Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Metadata.Projection
     Ecluse.Core.Registry.Npm
@@ -726,6 +727,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.ExchangeSpec
     Ecluse.Core.Registry.Maintenance.BudgetSpec
     Ecluse.Core.Registry.Maintenance.ProtocolSpec
+    Ecluse.Core.Registry.Maintenance.UpstreamSpec
     Ecluse.Core.Registry.MaintenanceSpec
     Ecluse.Core.Registry.Sweep.CandidatesSpec
     Ecluse.Core.Registry.Sweep.DeletionSpec

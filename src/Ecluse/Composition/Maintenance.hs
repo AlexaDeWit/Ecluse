@@ -22,12 +22,18 @@ module Ecluse.Composition.Maintenance (
     resolvedBudget,
     BuildStoreMaintenance,
     BuildStoreObservation,
+    BuildUpstreamProbe,
     StoreBuilds (..),
     storeBuilds,
     buildStoreMaintenance,
     buildStoreObservation,
+    buildUpstreamProbe,
     planStoreMaintenance,
     planStoreMaintenanceFor,
+
+    -- * What the private upstream answers about public content
+    readUpstreamSafety,
+    upstreamFindings,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -37,7 +43,8 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Composition.BootError (
-    BootError (StoreMaintenanceUnavailable),
+    Advisory (PrivateUpstreamUndecided),
+    BootError (PrivateUpstreamProbeFailed, PrivateUpstreamUnsafe, StoreMaintenanceUnavailable),
     StoreMaintenanceReason (ClientBuildFailed, DeletionNotPermitted, NoControlPlane, NoProtocolMaintenance, PrivateCacheUnavailable),
     refuseOnThrow,
  )
@@ -107,6 +114,10 @@ import Ecluse.Core.Registry.Maintenance.Protocol (
     newProtocolMaintenance,
     newProtocolObservation,
  )
+import Ecluse.Core.Registry.Maintenance.Upstream (
+    UpstreamSafety (Undecidable, Unsafe),
+    noUpstreamMechanism,
+ )
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Registry.Publish (PublishCodec)
@@ -114,7 +125,7 @@ import Ecluse.Core.Registry.Sweep.Pacing (derivedCapacity)
 import Ecluse.Core.Security (Limits (maxVersionCount), authorityLabel)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Telemetry.Span (TracingPort)
-import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactCacheMaintenance, newCodeArtifactCacheObservation, newCodeArtifactMaintenance, newCodeArtifactObservation)
+import Ecluse.Runtime.Maintenance.CodeArtifact (newCodeArtifactCacheMaintenance, newCodeArtifactCacheObservation, newCodeArtifactMaintenance, newCodeArtifactObservation, newCodeArtifactUpstreamProbe)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore)
 
 {- | A store a deleting role's pass cleared, one arm per backend kind. Only 'vetStoreBackends' and
@@ -309,17 +320,66 @@ builds can delete, write a marker, or publish.
 -}
 type BuildStoreObservation = StorePorts -> Limits -> ClearedBackend -> IO StoreObservation
 
-{- | The two builds a boot chooses between, one per authority a Dredger role holds. The role picks
-its own, so a preview's boot never runs the build that holds a delete.
+{- | The builds a boot chooses between: one per Dredger authority, and the serving role's probe.
+The role picks its own, so a preview's boot never runs the build that holds a delete.
 -}
 data StoreBuilds = StoreBuilds
     { sbDeleting :: BuildStoreMaintenance
     , sbObserving :: BuildStoreObservation
+    , sbProbing :: BuildUpstreamProbe
     }
 
--- | The shipped pair.
+-- | The shipped builds.
 storeBuilds :: StoreBuilds
-storeBuilds = StoreBuilds{sbDeleting = buildStoreMaintenance, sbObserving = buildStoreObservation}
+storeBuilds =
+    StoreBuilds
+        { sbDeleting = buildStoreMaintenance
+        , sbObserving = buildStoreObservation
+        , sbProbing = buildUpstreamProbe
+        }
+
+{- | How a boot builds the probe for one mount's private upstream. Injected, as the store builds
+are, so a spec drives what a boot does with an answer without an AWS identity.
+-}
+type BuildUpstreamProbe = Ecosystem -> PrivateEndpoint -> IO UpstreamSafety
+
+{- | The shipped build. It asks the backend the mount declared, over the role's own ambient
+identity, so no caller's credential reaches the call.
+-}
+buildUpstreamProbe :: BuildUpstreamProbe
+buildUpstreamProbe eco endpoint = case tgtTag target of
+    -- 'vetPrivateRepository' refuses an endpoint addressing no repository, so this resolution
+    -- fails only for a value no loaded configuration carries, and there is nothing to ask about.
+    TagCodeArtifact -> either (const noUpstreamMechanism) (newCodeArtifactUpstreamProbe . snd) (resolvePrivateBackend eco target)
+    TagRegistry -> noUpstreamMechanism
+    TagVerdaccio -> noUpstreamMechanism
+  where
+    target = preTarget endpoint
+
+{- | Read every probe's answer. A backend reads its own identity and its own faults into an
+answer, so a throw that reaches here refuses the mount rather than passing for an open question.
+-}
+readUpstreamSafety :: [(Ecosystem, IO UpstreamSafety)] -> IO ([Advisory], Either [BootError] ())
+readUpstreamSafety probes = settled . partitionEithers <$> traverse answer probes
+  where
+    answer (eco, probe) = fmap (eco,) <$> refuseOnThrow (PrivateUpstreamProbeFailed eco) probe
+
+    settled (thrown, answers) =
+        let (advisories, refused) = upstreamFindings answers
+         in (advisories, refusals (concat thrown <> fromLeft [] refused))
+
+{- | What a boot does about the answers it read: an unsafe repository refuses the role, an open
+question advises, and a safe one says nothing.
+-}
+upstreamFindings :: [(Ecosystem, UpstreamSafety)] -> ([Advisory], Either [BootError] ())
+upstreamFindings answers = (advisories, refusals unsafeMounts)
+  where
+    advisories = [PrivateUpstreamUndecided eco reason | (eco, Undecidable reason) <- answers]
+    unsafeMounts = [PrivateUpstreamUnsafe eco reason | (eco, Unsafe reason) <- answers]
+
+-- Nothing found is nothing refused, which is what lets a whole pass report at once.
+refusals :: [BootError] -> Either [BootError] ()
+refusals found = if null found then Right () else Left found
 
 {- | The live handle for a cleared store. CodeArtifact discovers its credentials the standard AWS
 way, and both arms read and dial over one manager of the store's own.

@@ -563,14 +563,14 @@ data ConfigError
       endpoint. The tag names the store, so a URL contradicting it is a misdirected write or read.
       -}
       CodeArtifactHostMismatch Ecosystem Text
-    | {- | A @codeArtifact@ mirror target on a mount whose ecosystem CodeArtifact carries no
-      package format for, so no repository under it could hold the mirror.
+    | {- | A @codeArtifact@ endpoint on a mount whose ecosystem CodeArtifact carries no package
+      format for, so no repository under it could serve the mount. Carries the key it was written at.
       -}
-      CodeArtifactFormatUnsupported Ecosystem
-    | {- | A @codeArtifact@ mirror target whose path addresses no repository under the mount's own
-      format, whose per-format endpoints are separate stores. Carries the expected format token.
+      CodeArtifactFormatUnsupported Ecosystem Text
+    | {- | A @codeArtifact@ endpoint whose path addresses no repository under the mount's own
+      format, whose per-format endpoints are separate stores. Carries its key, then the format token.
       -}
-      CodeArtifactRepositoryMissing Ecosystem Text
+      CodeArtifactRepositoryMissing Ecosystem Text Text
     deriving stock (Eq, Show)
 
 renderConfigError :: ConfigError -> Text
@@ -594,13 +594,13 @@ renderConfigError (CodeArtifactHostMismatch eco path) =
         <> " is declared under the codeArtifact tag, but its host is not a CodeArtifact endpoint "
         <> "({domain}-{account}.d.codeartifact.{region}.amazonaws.com): correct the URL, or declare this "
         <> "endpoint under the tag that names its store"
-renderConfigError (CodeArtifactFormatUnsupported eco) =
-    keyRef eco "mirrorTarget.codeArtifact.url"
+renderConfigError (CodeArtifactFormatUnsupported eco path) =
+    keyRef eco path
         <> " names a CodeArtifact store, but CodeArtifact carries no package format for the "
         <> ecosystemName eco
-        <> " ecosystem: mirror this mount to a store CodeArtifact serves"
-renderConfigError (CodeArtifactRepositoryMissing eco format) =
-    keyRef eco "mirrorTarget.codeArtifact.url"
+        <> " ecosystem: point this endpoint at a store CodeArtifact serves"
+renderConfigError (CodeArtifactRepositoryMissing eco path format) =
+    keyRef eco path
         <> " is not a CodeArtifact repository endpoint for this mount: its path must be /"
         <> format
         <> "/{repository}/"

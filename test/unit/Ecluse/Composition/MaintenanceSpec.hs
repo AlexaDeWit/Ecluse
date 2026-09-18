@@ -10,8 +10,8 @@ import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition.BootError (
-    Advisory,
-    BootError (StoreMaintenanceUnavailable),
+    Advisory (PrivateUpstreamUndecided),
+    BootError (PrivateUpstreamProbeFailed, PrivateUpstreamUnsafe, StoreMaintenanceUnavailable),
     StoreMaintenanceReason (ClientBuildFailed, DeletionNotPermitted, NoProtocolMaintenance, PrivateCacheUnavailable),
     renderBootError,
  )
@@ -23,9 +23,12 @@ import Ecluse.Composition.Maintenance (
     StorePorts (..),
     buildStoreMaintenance,
     buildStoreObservation,
+    buildUpstreamProbe,
     planStoreMaintenance,
+    readUpstreamSafety,
     resolvedBudget,
     storeScope,
+    upstreamFindings,
     vetPrivateCaches,
     vetStoreBackends,
  )
@@ -49,10 +52,14 @@ import Ecluse.Config (
     AppConfig (cfgMounts),
     Config (configApp, configMounts),
     ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
+    DeletionConsent (DeletionWithheld),
+    MountConfig (mntPrivateUpstream),
     MountMap,
+    PrivateEndpoint (PrivateEndpoint, preConsent, preTarget, preToken),
     QuotaOverride (QuotaOverride, qoQuotas, qoScope, qoWeights),
     StoreBackend,
-    StoreTag (TagVerdaccio),
+    StoreTag (TagCodeArtifact, TagVerdaccio),
+    Target (Target),
     sbControl,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
@@ -86,6 +93,13 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     requestKinds,
     undeclaredBudget,
  )
+import Ecluse.Core.Registry.Maintenance.Upstream (
+    ExternalConnection (ExternalConnection),
+    RepositoryName (RepositoryName),
+    UndecidabilityReason (NetworkFailure, NoMechanism),
+    UnsafeReason (ConfigurationEvidence),
+    UpstreamSafety (Safe, Undecidable, Unsafe),
+ )
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataFetch))
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
 import Ecluse.Core.Security (defaultLimits)
@@ -102,6 +116,7 @@ spec = do
     protocolSpec
     buildSpec
     planSpec
+    probeSpec
     previewCachesSpec
     budgetSpec
 
@@ -338,6 +353,61 @@ planSpec = describe "planStoreMaintenance" $ do
             StoreMaintenanceUnavailable eco (ClientBuildFailed (T.takeWhile (/= '\n') detail))
         err -> err
 
+{- What a boot does with each backend's answer about its private upstream, and which backends
+answer at all. The severity is the same for every role that asks. -}
+probeSpec :: Spec
+probeSpec = describe "the private upstream's answer" $ do
+    it "refuses on an unsafe repository and says which connection it carries" $
+        upstreamFindings [(Npm, Unsafe evidence)]
+            `shouldBe` ([], Left [PrivateUpstreamUnsafe Npm evidence])
+
+    it "advises on an open question and boots" $
+        upstreamFindings [(Npm, Undecidable NoMechanism)]
+            `shouldBe` ([PrivateUpstreamUndecided Npm NoMechanism], Right ())
+
+    it "says nothing at all about a safe repository" $
+        upstreamFindings [(Npm, Safe)] `shouldBe` ([], Right ())
+
+    it "reports every mount's answer from one boot, refusals and advisories together" $
+        upstreamFindings [(Npm, Unsafe evidence), (PyPI, Undecidable NetworkFailure)]
+            `shouldBe` ([PrivateUpstreamUndecided PyPI NetworkFailure], Left [PrivateUpstreamUnsafe Npm evidence])
+
+    it "refuses the mount for a throw no backend read into an answer, rather than passing it off as an open question" $ do
+        (advisories, outcome) <- readUpstreamSafety [(Npm, throwIO NoStoreClient)]
+        advisories `shouldBe` []
+        case outcome of
+            Right _ -> expectationFailure "expected an unread probe exception to refuse the mount"
+            Left [PrivateUpstreamProbeFailed Npm detail] -> detail `shouldSatisfy` T.isPrefixOf "NoStoreClient"
+            Left errs -> expectationFailure ("expected the probe's own refusal, got: " <> show errs)
+
+    it "answers undecided for a private upstream whose backend does not report its aggregation" $
+        for_ [staticEnvVars, withObservablePrivate staticEnvVars] $ \envVars -> do
+            endpoint <- privateEndpointFor envVars
+            buildUpstreamProbe Npm endpoint `shouldReturn` Undecidable NoMechanism
+
+    it "answers undecided for a codeArtifact endpoint addressing no repository, which no loaded configuration carries" $
+        -- 'vetPrivateRepository' refuses this URL at load, so the value is built here rather
+        -- than read from a configuration, and the arm stays covered.
+        buildUpstreamProbe Npm unaddressablePrivateUpstream `shouldReturn` Undecidable NoMechanism
+  where
+    evidence = ConfigurationEvidence (RepositoryName "shared") (ExternalConnection "public:npmjs")
+
+-- A CodeArtifact host whose path names no repository, which leaves the probe nothing to ask about.
+unaddressablePrivateUpstream :: PrivateEndpoint
+unaddressablePrivateUpstream =
+    PrivateEndpoint
+        { preTarget = Target TagCodeArtifact (unsafeRegistryUrl "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/")
+        , preToken = Nothing
+        , preConsent = DeletionWithheld
+        }
+
+-- The npm mount's declared private upstream, failing the case where the fixture declares none.
+privateEndpointFor :: [(String, String)] -> IO PrivateEndpoint
+privateEndpointFor envVars = do
+    config <- expectConfig envVars Nothing
+    maybe (fail "the fixture declares no private upstream") pure $
+        mntPrivateUpstream =<< Map.lookup Npm (cfgMounts (configApp config))
+
 -- | The typed stand-in for amazonka's credential-discovery failure.
 data NoStoreClient = NoStoreClient
     deriving stock (Show)
@@ -491,6 +561,17 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
         let result = privateCaches adapterFor MirrorPreviewer config
         fmap Map.null result `shouldBe` Right True
 
+    it "refuses a private CodeArtifact endpoint that addresses no repository of this mount's own" $ do
+        -- The loader refuses this endpoint now ('vetPrivateRepository'), so the pass is driven
+        -- over a mount config built here rather than one a configuration could carry.
+        config <- expectConfig codeArtifactEnvVars Nothing
+        let unaddressable = Map.map (\mcfg -> mcfg{mntPrivateUpstream = Just unaddressablePrivateUpstream}) (cfgMounts (configApp config))
+            result = snd (runVet MirrorPreviewer (vetPrivateCaches adapterFor unaddressable (configMounts config)))
+        case result of
+            Left [StoreMaintenanceUnavailable Npm (PrivateCacheUnavailable detail)] ->
+                detail `shouldSatisfy` T.isInfixOf "CodeArtifactRepositoryMissing"
+            other -> expectationFailure ("expected the private cache refusal, got " <> show (void other))
+
     it "clears the private CodeArtifact cache on the repository its own endpoint addresses" $ do
         let env =
                 ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", retainedEndpoint)
@@ -503,14 +584,6 @@ previewCachesSpec = describe "vetPrivateCaches" $ do
                     privateRepository backend `shouldBe` Just "retained"
                 _ -> expectationFailure "expected one cleared private CodeArtifact cache"
             Left errors -> expectationFailure (show errors)
-
-    it "refuses a private CodeArtifact endpoint for a different package format" $ do
-        let env =
-                ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__CODE_ARTIFACT__URL", "https://cache-999900001111.d.codeartifact.us-west-2.amazonaws.com/pypi/retained/")
-                    : withoutPrivateUpstreamUrl codeArtifactEnvVars
-        config <- expectConfig env Nothing
-        let result = privateCaches adapterFor MirrorPreviewer config
-        void result `shouldSatisfy` isLeft
 
 withoutPrivateAuthority :: [(String, String)] -> [(String, String)]
 withoutPrivateAuthority = filter (\(key, _) -> key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__TOKEN" && key /= "ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__VERDACCIO__PERMIT_DELETION")

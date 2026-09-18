@@ -22,7 +22,7 @@ import Ecluse.Composition.Executable (
     RoleWiring (StorePrunerWiring),
     planExecutable,
  )
-import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving))
+import Ecluse.Composition.Maintenance (StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing))
 import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, withObservablePrivate)
 import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootStorePreview, BootStorePruner))
@@ -37,6 +37,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
  )
+import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt,
@@ -177,7 +178,7 @@ plannedPruner role builds =
     bracket newTestLogEnv (void . closeScribes) $ \logEnv -> do
         config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
         bootPlan <- expectPlanFor role (withObservablePrivate codeArtifactEnvVars) Nothing config noCeiling
-        planned <-
+        (_, planned) <-
             planExecutable
                 logEnv
                 passthroughTracingPort
@@ -196,6 +197,7 @@ observingOver store =
     StoreBuilds
         { sbDeleting = \_ _ _ -> fail "a preview must not build the deleting handle"
         , sbObserving = \_ _ _ -> pure (fakeObservation store)
+        , sbProbing = \_ _ -> noUpstreamMechanism
         }
 
 advisoryAgeSpec :: Spec
@@ -224,7 +226,7 @@ withDredgerAges use = withRoleTelemetry $ \logEnv telemetry meterEnv -> do
     config <- expectConfig (withObservablePrivate codeArtifactEnvVars) Nothing
     bootPlan <- expectPlanFor BootStorePruner codeArtifactEnvVars Nothing config noCeiling
     store <- newFakeStore defaultFakeStoreConfig
-    planned <-
+    (_, planned) <-
         planExecutable
             logEnv
             passthroughTracingPort
@@ -234,6 +236,7 @@ withDredgerAges use = withRoleTelemetry $ \logEnv telemetry meterEnv -> do
             StoreBuilds
                 { sbDeleting = \_ _ _ -> pure (fakeMaintenance store)
                 , sbObserving = \_ _ _ -> pure (fakeObservation store)
+                , sbProbing = \_ _ -> noUpstreamMechanism
                 }
             bootPlan
     case epRoleWiring <$> planned of

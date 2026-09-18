@@ -127,8 +127,8 @@ planFromWith mintPlan limits envVars mDocBytes = do
             toBoot (ParseError err) = [PolicyBootError (UnknownRuleType "parse" err)]
             toBoot missing@(MountMissingPrivateUpstream _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@(CodeArtifactHostMismatch _ _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
-            toBoot missing@(CodeArtifactFormatUnsupported _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
-            toBoot missing@(CodeArtifactRepositoryMissing _ _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
+            toBoot missing@(CodeArtifactFormatUnsupported _ _) = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
+            toBoot missing@CodeArtifactRepositoryMissing{} = [PolicyBootError (UnknownRuleType "mount" (renderConfigError missing))]
             toBoot missing@PublicUrlRequired = [PolicyBootError (UnknownRuleType "server" (renderConfigError missing))]
         Right cfg -> case snd (runVet MirrorWriter (vetBoot cfg)) of
             -- The pass refuses before anything is built, which is what the composition root sees.
