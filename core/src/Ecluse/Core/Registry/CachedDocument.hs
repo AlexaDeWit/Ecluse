@@ -8,6 +8,7 @@ The pipeline carries source snapshot scope separately and delegates wire access 
 module Ecluse.Core.Registry.CachedDocument (
     CachedDoc,
     weighCachedDoc,
+    foldCachedDoc,
     npmCached,
     pypiSimpleCached,
 ) where
@@ -27,9 +28,15 @@ data CachedDoc
 figure the metadata cache weighs an entry by.
 -}
 weighCachedDoc :: CachedDoc -> Int64
-weighCachedDoc = \case
-    CachedNpm v -> BSL.length (encode v)
-    CachedPyPISimple v -> BSL.length (encode v)
+weighCachedDoc = foldCachedDoc (BSL.length . encode)
+
+{- | Read a held document blind to its ecosystem, for accounting only. Projection goes through
+the ecosystem's own pair below, so no adapter reads another's document through this.
+-}
+foldCachedDoc :: (Value -> a) -> CachedDoc -> a
+foldCachedDoc f = \case
+    CachedNpm v -> f v
+    CachedPyPISimple v -> f v
 
 -- | npm's boundary pair. A document another ecosystem injected projects as 'Nothing'.
 npmCached :: (Value -> CachedDoc, CachedDoc -> Maybe Value)
