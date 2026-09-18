@@ -13,6 +13,7 @@ import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Test.Hspec
 
 import Ecluse.Core.Rules.Outage
+import Ecluse.Core.Rules.Types (Reason)
 
 t0 :: UTCTime
 t0 = UTCTime (fromGregorian 2026 6 20) 0
@@ -23,7 +24,7 @@ period = 900
 
 -- | 'stepOutage' under the test period, at @t0@ plus the given seconds.
 stepAt :: Integer -> SourceHealth -> OutageState -> (OutageState, Maybe OutageReport)
-stepAt secs = stepOutage period (addUTCTime (fromInteger secs) t0)
+stepAt secs health current = let stepped = stepOutage period (addUTCTime (fromInteger secs) t0) health current in (osState stepped, osReport stepped)
 
 -- | Fold a timed sequence of readings, collecting every report in order.
 run :: [(Integer, SourceHealth)] -> (OutageState, [OutageReport])
@@ -32,6 +33,17 @@ run = foldl' step (Healthy, [])
     step (current, reports) (secs, health) =
         let (next, report) = stepAt secs health current
          in (next, reports <> maybeToList report)
+
+{- | The state's observable shape: nothing for a healthy source, else when the outage began, when it
+last reported, the rules still unable, and the identities logged in order.
+-}
+shape :: OutageState -> Maybe (UTCTime, UTCTime, Map Text Reason, LoggedAdmissions)
+shape = \case
+    Healthy -> Nothing
+    Outage ongoing -> Just (ooSince ongoing, ooReportedAt ongoing, ooRules ongoing, ooLogged ongoing)
+
+isHealthy :: OutageState -> Bool
+isHealthy = isNothing . shape
 
 down :: Text -> SourceHealth
 down rule = SourceUnavailable rule "no advisory database loaded"
@@ -46,7 +58,7 @@ spec :: Spec
 spec = do
     describe "stepOutage" $ do
         it "stays silent while the source answers" $
-            run [(0, up "DenyIfCve"), (1, up "DenyIfCve"), (2, up "DenyIfEpss")] `shouldBe` (Healthy, [])
+            first shape (run [(0, up "DenyIfCve"), (1, up "DenyIfCve"), (2, up "DenyIfEpss")]) `shouldBe` (Nothing, [])
 
         it "reports the first unavailable evaluation once, not the repeats within the period" $
             snd (run [(0, down "DenyIfCve"), (1, down "DenyIfCve"), (period - 1, down "DenyIfCve")])
@@ -69,7 +81,7 @@ spec = do
 
         it "recovers only once every rule consults the source again, naming when the outage began" $ do
             let (final, reports) = run [(0, down "DenyIfCve"), (1, down "DenyIfEpss"), (2, up "DenyIfCve"), (3, up "DenyIfEpss")]
-            final `shouldBe` Healthy
+            final `shouldSatisfy` isHealthy
             reports `shouldBe` [OutageBegan "DenyIfCve" "no advisory database loaded", OutageRecovered t0]
 
         it "keeps the outage open on a sibling's answer while one rule's breaker still fast-fails" $ do
@@ -77,7 +89,18 @@ spec = do
             -- other is still cooling. The outage is over only when both answer.
             let (final, reports) = run [(0, down "DenyIfCve"), (1, down "DenyIfEpss"), (2, up "DenyIfEpss"), (3, down "DenyIfCve")]
             reports `shouldBe` [OutageBegan "DenyIfCve" "no advisory database loaded"]
-            final `shouldBe` Outage (OngoingOutage t0 t0 (Map.singleton "DenyIfCve" "no advisory database loaded") noLoggedAdmissions)
+            shape final `shouldBe` Just (t0, t0, Map.singleton "DenyIfCve" "no advisory database loaded", noLoggedAdmissions)
+
+        it "flags a reading that changes nothing, and every one that does" $ do
+            let began = osState (stepOutage period t0 (down "DenyIfCve") Healthy)
+                changedBy secs health = osChanged (stepOutage period (addUTCTime secs t0) health began)
+            osChanged (stepOutage period t0 (up "DenyIfCve") Healthy) `shouldBe` False
+            changedBy 1 (down "DenyIfCve") `shouldBe` False -- the same rule, the same cause, inside the period
+            changedBy 1 (up "DenyIfEpss") `shouldBe` False -- a rule that was never unable
+            changedBy 1 (SourceUnavailable "DenyIfCve" "the rule source circuit breaker is open") `shouldBe` True
+            changedBy 1 (down "DenyIfEpss") `shouldBe` True
+            changedBy period (down "DenyIfCve") `shouldBe` True
+            changedBy 1 (up "DenyIfCve") `shouldBe` True
 
         it "reports a later outage as a fresh beginning" $ do
             let (_, reports) = run [(0, down "DenyIfCve"), (1, up "DenyIfCve"), (2, down "DenyIfCve")]
@@ -108,7 +131,7 @@ spec = do
 
     describe "admissionLogged" $ do
         it "logs every admission on a healthy source and records nothing" $
-            admissionLogged 8 (ident "a" "1.0.0" ["DenyIfCve"]) Healthy `shouldBe` (Healthy, True)
+            first shape (admissionLogged 8 (ident "a" "1.0.0" ["DenyIfCve"]) Healthy) `shouldBe` (Nothing, True)
 
         it "empties the record on recovery, so the next outage logs the identity again" $ do
             let (during, _) = stepAt 0 (down "DenyIfCve") Healthy
@@ -117,7 +140,7 @@ spec = do
                 (relapsed, _) = stepAt 2 (down "DenyIfCve") recovered
             logged `shouldBe` True
             snd (admissionLogged 8 (ident "a" "1.0.0" ["DenyIfCve"]) noted) `shouldBe` False
-            recovered `shouldBe` Healthy
+            recovered `shouldSatisfy` isHealthy
             snd (admissionLogged 8 (ident "a" "1.0.0" ["DenyIfCve"]) relapsed) `shouldBe` True
 
     describe "sourceReporter" $ do
@@ -137,7 +160,7 @@ spec = do
                                , OutageContinues t0 (Map.singleton "DenyIfCve" "no advisory database loaded")
                                , OutageRecovered t0
                                ]
-            readTVarIO shared `shouldReturn` Healthy
+            readTVarIO shared >>= (`shouldSatisfy` isHealthy)
 
         it "commits only on a transition or a due reminder, never per evaluation inside the period" $ do
             -- The serve leg keeps evaluating through an outage, so the common path must stay a
@@ -172,6 +195,19 @@ spec = do
             noteAdmission reporter (ident "a" "1.0.0" ["DenyIfCve"]) `shouldReturn` True
             replicateM_ 100 (noteAdmission reporter (ident "a" "1.0.0" ["DenyIfCve"]) `shouldReturn` False)
             readIORef commits `shouldReturn` 2
+
+        it "performs no commit for a repeat identity or an unchanged reading over a record at the cap" $ do
+            -- The record holds thousands of identities here, so a decision that compared states
+            -- would walk them all on the serve path. The count pins that nothing is written.
+            (store, commits, _) <- countingStore
+            let reporter = sourceReporter period (pure t0) store (const pass)
+            reportSource reporter (down "DenyIfCve")
+            forM_ [1 .. loggedAdmissionCap] $ \n ->
+                noteAdmission reporter (ident "a" (show n) ["DenyIfCve"]) `shouldReturn` True
+            readIORef commits `shouldReturn` loggedAdmissionCap + 1
+            replicateM_ 50 (noteAdmission reporter (ident "a" (show loggedAdmissionCap) ["DenyIfCve"]) `shouldReturn` False)
+            replicateM_ 50 (reportSource reporter (down "DenyIfCve"))
+            readIORef commits `shouldReturn` loggedAdmissionCap + 1
 
 -- | The live store wrapped so the spec can count how many folds it committed.
 countingStore :: IO (OutageStore, IORef Int, TVar OutageState)
