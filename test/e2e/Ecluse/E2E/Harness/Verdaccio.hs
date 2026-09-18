@@ -10,6 +10,7 @@ module Ecluse.E2E.Harness.Verdaccio (
     verdaccioAwaitListed,
     verdaccioNamesUnder,
     verdaccioVersions,
+    verdaccioVersionObject,
     verdaccioAwaitVersions,
     verdaccioArtifact,
     verdaccioArtifactBytes,
@@ -17,7 +18,7 @@ module Ecluse.E2E.Harness.Verdaccio (
     verdaccioSnapshot,
 ) where
 
-import Data.Aeson (Object, Value (String), decodeStrict, eitherDecodeStrict, (.:))
+import Data.Aeson (Object, Value (Object, String), decodeStrict, eitherDecodeStrict, (.:))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
@@ -128,15 +129,30 @@ verdaccioNamesUnder e2e raw = do
 Only HTTP 404 means the package is absent.
 -}
 verdaccioVersions :: E2E -> Text -> IO [Text]
-verdaccioVersions e2e name = do
+verdaccioVersions e2e name = maybe [] (sort . map Key.toText . KeyMap.keys) <$> storedObject "versions" e2e name
+
+-- | One stored version's object as the store serves it. 'Nothing' for an absent package or version.
+verdaccioVersionObject :: E2E -> Text -> Text -> IO (Maybe Object)
+verdaccioVersionObject e2e name version = do
+    versions <- storedObject "versions" e2e name
+    pure (versions >>= KeyMap.lookup (Key.fromText version) >>= objectOf)
+  where
+    objectOf = \case
+        Object o -> Just o
+        _ -> Nothing
+
+{- Read one top-level object field of the stored packument, rejecting an unreadable or malformed
+document. Only HTTP 404 means the package is absent. -}
+storedObject :: Key.Key -> E2E -> Text -> IO (Maybe Object)
+storedObject field e2e name = do
     resp <- fetchPackument e2e name
     let status = statusCode (responseStatus resp)
         body = LBS.toStrict (responseBody resp)
-        versions = eitherDecodeStrict body >>= parseEither (.: "versions") :: Either String Object
+        decoded = eitherDecodeStrict body >>= parseEither (.: field) :: Either String Object
     case status of
-        404 -> pure []
-        200 -> sort . map Key.toText . KeyMap.keys <$> expectRight (first (\err -> name <> ": " <> toText err) versions)
-        _ -> expectRight (Left (name <> ": packument returned HTTP " <> show status) :: Either Text [Text])
+        404 -> pure Nothing
+        200 -> Just <$> expectRight (first (\err -> name <> ": " <> toText err) decoded)
+        _ -> expectRight (Left (name <> ": packument returned HTTP " <> show status) :: Either Text (Maybe Object))
 
 {- | Poll until the store serves exactly the wanted versions, sorted as 'verdaccioVersions' returns
 them. It yields what it last read, so a failure names the versions the store actually held.
@@ -164,16 +180,8 @@ and a failure for an unreadable packument.
 -}
 verdaccioLatest :: E2E -> Text -> IO (Maybe Text)
 verdaccioLatest e2e name = do
-    resp <- fetchPackument e2e name
-    let status = statusCode (responseStatus resp)
-        body = LBS.toStrict (responseBody resp)
-        tags = eitherDecodeStrict body >>= parseEither (.: "dist-tags") :: Either String Object
-    case status of
-        404 -> pure Nothing
-        200 -> do
-            decoded <- expectRight (first (\err -> name <> ": " <> toText err) tags)
-            pure (KeyMap.lookup "latest" decoded >>= textOf)
-        _ -> expectRight (Left (name <> ": packument returned HTTP " <> show status) :: Either Text (Maybe Text))
+    tags <- storedObject "dist-tags" e2e name
+    pure (tags >>= KeyMap.lookup "latest" >>= textOf)
   where
     textOf = \case
         String raw -> Just raw

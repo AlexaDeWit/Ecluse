@@ -7,6 +7,8 @@ product image. Each scenario group boots its own proxy. Missing prerequisites re
 -}
 module Ecluse.E2ESpec (spec) where
 
+import Data.Aeson (Value (Object, String))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 
 import Test.Hspec
@@ -17,7 +19,10 @@ import Ecluse.E2E.Fixtures.Npm (
     denyPkg,
     headPkg,
     latestPkg,
+    mirrorAuthorFields,
     mirrorPkg,
+    mirrorRegistryDistFields,
+    mirrorRegistryFields,
     psName,
     psVersion,
     tamperPkg,
@@ -105,7 +110,30 @@ scenarios = do
                     void $ npmInstallIn proj name >>= shouldSucceed -- (2,3) served from public, writes the lockfile
                     mirrored <- verdaccioHasVersion e2e name ver -- (4) the worker mirrors it to private
                     mirrored `shouldBe` True
+                    -- The lockfile pins its dependency too, so that mirror must land before public goes down.
+                    verdaccioHasVersion e2e (psName allowPkg) (psVersion allowPkg) `shouldReturn` True
                     void $ withUpstreamPaused e2e (npmCiIn proj) >>= shouldSucceed -- (5) public down → from the mirror
+            it "republishes the author's version metadata to the mirror and strips the public registry's own" $ \e2e -> do
+                let name = psName mirrorPkg
+                    ver = psVersion mirrorPkg
+                -- The mirror lifecycle case above seeds the store. This reads the version object
+                -- back straight from the store, so the assertion sees what the mirror holds.
+                verdaccioHasVersion e2e name ver `shouldReturn` True
+                stored <- verdaccioVersionObject e2e name ver
+                stored `shouldSatisfy` isJust
+                forM_ stored $ \version -> do
+                    forM_ mirrorAuthorFields $ \(field, value) ->
+                        (field, KeyMap.lookup field version) `shouldBe` (field, Just value)
+                    forM_ mirrorRegistryFields $ \(field, _) ->
+                        (field, KeyMap.lookup field version) `shouldBe` (field, Nothing)
+                    KeyMap.lookup "name" version `shouldBe` Just (String name)
+                    KeyMap.lookup "version" version `shouldBe` Just (String ver)
+                    let dist = case KeyMap.lookup "dist" version of
+                            Just (Object o) -> o
+                            _ -> mempty
+                    forM_ mirrorRegistryDistFields $ \(field, _) ->
+                        (field, KeyMap.lookup field dist) `shouldBe` (field, Nothing)
+                    KeyMap.member "integrity" dist `shouldBe` True
             it "keeps the upstream latest on the mirror when an older version is mirrored after it" $ \e2e -> do
                 let name = psName latestPkg
                 withNpmProject e2e $ \proj -> do

@@ -127,6 +127,8 @@ data VersionSpec = VersionSpec
     -- ^ Whether to include a representative @scripts.postinstall@ entry.
     , vsExtraPairs :: [Pair]
     -- ^ Site-specific version fields, applied after the common fields.
+    , vsDistPairs :: [Pair]
+    -- ^ Further @dist@ fields beside the location and digests, applied after them.
     }
     deriving stock (Eq, Show)
 
@@ -143,6 +145,7 @@ versionSpec name version tarballUrl =
         , vsShasum = Nothing
         , vsHasInstallScript = False
         , vsExtraPairs = []
+        , vsDistPairs = []
         }
 
 {- | Build the npm version-object shape the test suites share. An unspecified digest
@@ -154,11 +157,12 @@ versionValue spec =
         [ "name" .= vsName spec
         , "version" .= vsVersion spec
         , "dist"
-            .= object
+            .= objectWithExtraPairs
                 ( ["tarball" .= vsTarballUrl spec]
                     <> maybe [] (pure . ("integrity" .=)) (vsIntegrity spec)
                     <> maybe [] (pure . ("shasum" .=)) (vsShasum spec)
                 )
+                (vsDistPairs spec)
         ]
         ( ["scripts" .= object ["postinstall" .= ("node build.js" :: Text)] | vsHasInstallScript spec]
             <> vsExtraPairs spec

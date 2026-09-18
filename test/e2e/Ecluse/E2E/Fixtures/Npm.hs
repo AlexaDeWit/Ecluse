@@ -13,6 +13,9 @@ module Ecluse.E2E.Fixtures.Npm (
     allowPkg,
     denyPkg,
     mirrorPkg,
+    mirrorAuthorFields,
+    mirrorRegistryFields,
+    mirrorRegistryDistFields,
     latestPkg,
     dredgerPkg,
     dredgerKeepPkg,
@@ -34,8 +37,10 @@ module Ecluse.E2E.Fixtures.Npm (
 
 import Data.Aeson (Value, object, (.=))
 import Data.Aeson qualified as Aeson
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (Pair)
 import Data.ByteString qualified as BS
+import Data.Text qualified as T
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.Process.Typed (proc, runProcess_)
@@ -55,13 +60,25 @@ data PkgSpec = PkgSpec
     -- ^ Declare an install script: the @DenyInstallTimeExecution@ trigger.
     , psTamper :: Bool
     -- ^ Corrupt the served bytes after computing their declared integrity.
+    , psVersionFields :: [Pair]
+    -- ^ Further fields on every version object, beside the identity, @dist@, and script fields.
+    , psDistFields :: [Pair]
+    -- ^ Further @dist@ fields on every version object, beside the location and integrity.
     }
     deriving stock (Eq, Show)
 
 -- | One backdated version with no install script or altered artifact bytes.
 defaultPkgSpec :: Text -> PkgSpec
 defaultPkgSpec name =
-    PkgSpec{psName = name, psVersion = "1.0.0", psOlderVersions = [], psInstallScript = False, psTamper = False}
+    PkgSpec
+        { psName = name
+        , psVersion = "1.0.0"
+        , psOlderVersions = []
+        , psInstallScript = False
+        , psTamper = False
+        , psVersionFields = []
+        , psDistFields = []
+        }
 
 -- | Every version the packument publishes, newest first.
 psVersions :: PkgSpec -> [Text]
@@ -75,9 +92,42 @@ allowPkg = defaultPkgSpec "e2e-allow"
 denyPkg :: PkgSpec
 denyPkg = (defaultPkgSpec "e2e-deny"){psInstallScript = True}
 
--- | A package used to exercise the mirror round-trip (served, then mirrored).
+{- | A package used to exercise the mirror round-trip (served, then mirrored). Its version object
+carries the author fields the mirror write keeps and the registry fields it strips.
+-}
 mirrorPkg :: PkgSpec
-mirrorPkg = defaultPkgSpec "e2e-mirror"
+mirrorPkg =
+    (defaultPkgSpec "e2e-mirror")
+        { psVersionFields = mirrorAuthorFields <> mirrorRegistryFields
+        , psDistFields = mirrorRegistryDistFields
+        }
+
+-- | What the author of 'mirrorPkg' wrote: every field must reach the mirror verbatim.
+mirrorAuthorFields :: [Pair]
+mirrorAuthorFields =
+    [ "dependencies" .= object [Key.fromText (psName allowPkg) .= psVersion allowPkg]
+    , "bin" .= object ["e2e-mirror" .= ("index.js" :: Text)]
+    , "engines" .= object ["node" .= (">=18" :: Text)]
+    , "license" .= ("MIT" :: Text)
+    , "scripts" .= object ["test" .= ("node -e \"\"" :: Text)]
+    , "deprecated" .= ("superseded by a later release" :: Text)
+    , "gitHead" .= ("0123456789abcdef0123456789abcdef01234567" :: Text)
+    ]
+
+-- | What the public registry wrote about itself on 'mirrorPkg': none of it reaches the mirror.
+mirrorRegistryFields :: [Pair]
+mirrorRegistryFields =
+    [ "_npmUser" .= object ["name" .= ("fixture-publisher" :: Text)]
+    , "_nodeVersion" .= ("20.11.0" :: Text)
+    , "_npmVersion" .= ("10.2.4" :: Text)
+    ]
+
+-- | The public registry's own signatures and attestations on 'mirrorPkg', stripped at the mirror.
+mirrorRegistryDistFields :: [Pair]
+mirrorRegistryDistFields =
+    [ "signatures" .= [object ["keyid" .= ("SHA256:fixture" :: Text), "sig" .= ("MEUCIQ" :: Text)]]
+    , "attestations" .= object ["url" .= ("https://upstream/-/npm/v1/attestations/e2e-mirror@1.0.0" :: Text)]
+    ]
 
 {- | A two-version package whose upstream @latest@ is @2.0.0@. Mirroring @1.0.0@ after @2.0.0@
 must not retag the store.
@@ -217,6 +267,7 @@ buildArtifact root spec version = do
         BS.appendFile tgzPath "tampered"
     pure (version, sriSha512Of bytes)
 
+-- The archived package.json carries the author fields too, so the tree matches its manifest.
 tarballPackageJson :: PkgSpec -> Text -> Value
 tarballPackageJson spec version =
     object $
@@ -224,6 +275,7 @@ tarballPackageJson spec version =
         , "version" .= version
         ]
             <> ["scripts" .= object ["install" .= ("node -e \"\"" :: Text)] | psInstallScript spec]
+            <> filter (not . T.isPrefixOf "_" . Key.toText . fst) (psVersionFields spec)
 
 packument :: PkgSpec -> [(Text, Text)] -> Value
 packument spec digests =
@@ -245,7 +297,8 @@ packument spec digests =
             ( (versionSpec (psName spec) version (tarballUrl version))
                 { vsIntegrity = Just sri
                 , vsHasInstallScript = psInstallScript spec
-                , vsExtraPairs = installScriptFields
+                , vsExtraPairs = psVersionFields spec <> installScriptFields
+                , vsDistPairs = psDistFields spec
                 }
             )
 
