@@ -21,9 +21,6 @@ module Ecluse.Runtime.Telemetry.Instruments (
     advisorySyncMetricsPortOf,
     advisoryCompileMetricsPortOf,
 
-    -- * Timing
-    timedSeconds,
-
     -- * Serve decision
     recordServeDecision,
 
@@ -46,9 +43,6 @@ module Ecluse.Runtime.Telemetry.Instruments (
     recordMirrorEnqueueFailure,
     recordMirrorJobProcessed,
     recordMirrorPublishDuration,
-
-    -- * Mirror sweep
-    recordSweptVersion,
 
     -- * Credentials
     recordCredentialRefresh,
@@ -118,7 +112,7 @@ import Ecluse.Core.Telemetry.Metrics (
     metricAttributes,
     metricName,
  )
-import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (..), AdvisorySyncMetricsPort (..), DredgerMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (..), AdvisorySyncMetricsPort (..), DredgerMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..))
 import Ecluse.Core.Telemetry.Span (ecluseScope)
 import Ecluse.Runtime.Telemetry (Telemetry, telemetryMeterProvider)
 

@@ -18,8 +18,6 @@ module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
 
     -- * What the backend does
     codeArtifactFacts,
-    codeArtifactBudget,
-    codeArtifactScope,
     deleteCeiling,
 
     -- * The npm codec
