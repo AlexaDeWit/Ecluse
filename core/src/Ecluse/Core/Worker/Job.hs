@@ -43,7 +43,7 @@ import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     ParseError (ParseError),
-    PublishFault (PublishFetch, PublishRejected),
+    PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
     RegistryResponse (responseStatusCode),
     isSuccessStatus,
     renderUrlFormationError,
@@ -83,6 +83,10 @@ data JobOutcome
       Redelivery cannot help, so the job is acked to retire it after alarming.
       -}
       Dropped Text
+    | {- | The source's own version object was unavailable, so no mirror write can reflect the
+      package. Retired like 'Dropped', but reported apart from a policy deny.
+      -}
+      SourceUnavailable Text
     | {- | A __terminal__ fault handed to 'Ecluse.Core.Queue.deadLetter' rather than acked,
       because a plain delete would silently discard it on a durable queue.
       -}
@@ -125,6 +129,7 @@ processJob job = katipAddNamespace "job" $ do
     jobSpanOutcome = \case
         Succeeded -> JobSpanOutcome "succeeded" Nothing
         Dropped reason -> JobSpanOutcome "dropped" (Just reason)
+        SourceUnavailable reason -> JobSpanOutcome "source-unavailable" (Just reason)
         DeadLettered reason -> JobSpanOutcome "dead-lettered" (Just reason)
         Retried _ reason -> JobSpanOutcome "retried" (Just reason)
 
@@ -207,7 +212,7 @@ release tag, and the version object current metadata carried, all read from the 
 data Readmitted = Readmitted
     { raArtifact :: MirrorArtifact
     , raUpstreamLatest :: Maybe Version
-    , raMetadata :: Maybe CachedDoc
+    , raMetadata :: CachedDoc
     }
 
 {- Re-check the fetch URL against the mount's tarball-host gate, because the queue payload is a
@@ -240,10 +245,21 @@ admitEvaluation policy job evaluation = case evaluation of
         -- is not resolved for its context.
         ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
         admission <- liftIO (admitArtifact ctx (wpRules policy) (wpMinIntegrity policy) (jobArtifactFilename job) (vdDetails doc))
-        pure (readmitted upstreamLatest (vdRaw doc) <$> outcomeOfAdmission job admission)
+        pure $ do
+            artifact <- outcomeOfAdmission job admission
+            -- Decided after admission, so a policy deny still reports as one.
+            raw <- maybeToRight (SourceUnavailable (sourceUnavailableReason job "the resolver carried none")) (vdRaw doc)
+            pure Readmitted{raArtifact = artifact, raUpstreamLatest = upstreamLatest, raMetadata = raw}
   where
     unresolved = retryOrDrop (versionTransience evaluation)
-    readmitted upstreamLatest raw artifact = Readmitted{raArtifact = artifact, raUpstreamLatest = upstreamLatest, raMetadata = raw}
+
+sourceUnavailableReason :: MirrorJob -> Text -> Text
+sourceUnavailableReason job detail =
+    "the source version object for "
+        <> renderJob job
+        <> " was unavailable ("
+        <> detail
+        <> "); refusing to mirror a reduced manifest"
 
 {- | Render the shared 'ArtifactAdmission' as the descriptor to publish, or the outcome the queue
 realises. 'admissionTransience' alone splits retry from drop, so no path can diverge from the gate.
@@ -360,6 +376,7 @@ outcomeOfPublish :: MirrorJob -> Either PublishFault () -> WorkerM JobOutcome
 outcomeOfPublish job = \case
     Right () -> Succeeded <$ logFM InfoS (ls ("mirrored artifact published: " <> renderJob job))
     Left (PublishRejected err) -> pure (Retried AfterPublish ("registry rejected publish: " <> show err))
+    Left (PublishSourceUnavailable detail) -> pure (SourceUnavailable (sourceUnavailableReason job detail))
     Left (PublishFetch fault) -> pure (outcomeOfFetchFault AfterPublish publishFaultReason fault)
 
 -- The mirror target is operator-configured, so its rendered transport detail is diagnosable

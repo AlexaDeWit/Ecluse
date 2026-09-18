@@ -5,7 +5,8 @@
 {- | npm mirror publication through "Ecluse.Core.Registry.Publish", plus identity
 extraction for the first-party publish guard. Published SRI retains all alternatives
 at its strongest algorithm, matching the worker's verification contract. The published version
-object keeps what the author wrote and strips what the public registry issued about itself.
+object keeps what the author wrote and strips what the public registry issued about itself, and
+a plan whose version object is not an npm object is refused rather than reduced.
 -}
 module Ecluse.Core.Registry.Npm.Publish (
     npmPublishCodec,
@@ -33,14 +34,15 @@ import Ecluse.Core.Credential (ClientCredential, bareCredential)
 import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, Scope, hashAlg, hashValue, pkgNamespace, renderPackageName)
 import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (
+    FetchFault (FetchUrlUnformable),
     MirrorArtifact (maFilename, maHashes),
     PublishError (PublishError),
-    PublishFault (PublishRejected),
+    PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
     UrlFormationError,
     firstHashValue,
     isSuccessStatus,
  )
-import Ecluse.Core.Registry.CachedDocument (npmCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest, packageUrl, parseRequestEither, withToken)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest, ppMetadata, ppVersion))
@@ -54,12 +56,9 @@ npmPublishCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated noValidators
         , pcParseVersionList = Project.parseVersionList
-        , pcPublishRequest = \targetUrl token name plan artifact bytes ->
-            publishRequest
-                targetUrl
-                (bareCredential <$> token)
-                name
-                (npmPublishDocument name plan (unFilename (maFilename artifact)) (strongestSriValue artifact) (firstHashValue SHA1 artifact) bytes)
+        , pcPublishRequest = \targetUrl token name plan artifact bytes -> do
+            document <- npmPublishDocument name plan (unFilename (maFilename artifact)) (strongestSriValue artifact) (firstHashValue SHA1 artifact) bytes
+            first (PublishFetch . FetchUrlUnformable) (publishRequest targetUrl (bareCredential <$> token) name document)
         , pcPublishOutcome = classifyPublish
         }
 
@@ -112,9 +111,11 @@ npmPublishDocument ::
     Maybe Text ->
     -- | The verified tarball bytes.
     ByteString ->
-    ByteString
-npmPublishDocument name plan filename integrity shasum tarball =
-    toStrict . Aeson.encode $
+    Either PublishFault ByteString
+npmPublishDocument name plan filename integrity shasum tarball = do
+    authored <- authoredFields (ppMetadata plan)
+    let manifest = versionManifestObject rendered versionText (distObject filename integrity shasum (objectAt "dist" authored)) authored
+    pure . toStrict . Aeson.encode $
         object
             [ "_id" .= rendered
             , "name" .= rendered
@@ -125,15 +126,14 @@ npmPublishDocument name plan filename integrity shasum tarball =
   where
     versionText = renderVersion (ppVersion plan)
     rendered = renderPackageName name
-    authored = authoredFields (ppMetadata plan >>= snd npmCached)
-    manifest = versionManifestObject rendered versionText (distObject filename integrity shasum (objectAt "dist" authored)) authored
 
 {- The fields the author wrote on the source version object. An underscore-prefixed key is the
 public registry's bookkeeping about itself, so none reaches the mirror. -}
-authoredFields :: Maybe Value -> KeyMap Value
-authoredFields = \case
-    Just (Object o) -> KeyMap.filterWithKey (\k _ -> not (T.isPrefixOf "_" (Key.toText k))) o
-    _ -> mempty
+authoredFields :: CachedDoc -> Either PublishFault (KeyMap Value)
+authoredFields doc = case snd npmCached doc of
+    Just (Object o) -> Right (KeyMap.filterWithKey (\k _ -> not (T.isPrefixOf "_" (Key.toText k))) o)
+    Just _ -> Left (PublishSourceUnavailable "the carried version object is not a JSON object")
+    Nothing -> Left (PublishSourceUnavailable "the carried version object is not an npm document")
 
 objectAt :: Key.Key -> KeyMap Value -> KeyMap Value
 objectAt slot o = case KeyMap.lookup slot o of

@@ -97,9 +97,9 @@ spec = do
     describe "npmPublishDocument" $ do
         it "assembles a PUT document with the version, dist integrity, and base64 attachment" $ do
             let document =
-                    npmPublishDocument pkg (PublishPlan{ppVersion = ver, ppLatest = ver, ppMetadata = Nothing}) "thing-1.0.0.tgz" (Just trueSri) (Just trueSha1) tarballBytes
+                    npmPublishDocument pkg (PublishPlan{ppVersion = ver, ppLatest = ver, ppMetadata = admissionObject}) "thing-1.0.0.tgz" (Just trueSri) (Just trueSha1) tarballBytes
                 decoded :: Either String Value
-                decoded = eitherDecodeStrict' document
+                decoded = first show document >>= eitherDecodeStrict'
             case decoded of
                 Left err -> expectationFailure ("publish document is not valid JSON: " <> err)
                 Right value -> do
@@ -262,7 +262,17 @@ spec = do
                     job <- enqueueAndReceive queue (jobWith url)
                     runWM runtime (processJob job) `shouldReturn` Succeeded
                     plans <- plPlans <$> readIORef logRef
-                    map ppMetadata plans `shouldBe` [Just admissionObject]
+                    map ppMetadata plans `shouldBe` [admissionObject]
+
+        it "refuses, apart from a policy deny, a job whose re-admission carries no source version object, without publishing" $
+            withUpstream $ \url ->
+                withRuntimePolicies (npmPolicies (\name version -> pure (VersionPresent (versionDocOf (sampleDetails name version)) Nothing)) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
+                    outcome `shouldSatisfy` isSourceUnavailable
+                    outcome `shouldSatisfy` (not . isDropped)
+                    plans <- plPlans <$> readIORef logRef
+                    plans `shouldBe` []
 
         it "lets no carried version object reach the publish step once current policy denies the version" $
             withRuntimePolicies (npmPolicies (resolverCarrying admissionObject) [denyRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
@@ -623,7 +633,7 @@ npmVer = mkVersion Npm
 
 -- The version object current metadata carries, marked so a case can tell it from any other.
 admissionObject :: CachedDoc
-admissionObject = fst npmCached (object ["marker" .= ("admission-time" :: Text)])
+admissionObject = fst npmCached (object ["marker" .= ("admission-time" :: Text), "name" .= ("thing" :: Text)])
 
 -- A resolver whose present verdict carries the given raw object beside the sample details.
 resolverCarrying :: CachedDoc -> PackageName -> Version -> IO VersionEvaluation

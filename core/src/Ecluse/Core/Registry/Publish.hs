@@ -53,9 +53,9 @@ data PublishPlan = PublishPlan
     {- ^ The @latest@ target to declare, always a version the store holds after this write. It is
     the published version itself when nothing else is mirrored.
     -}
-    , ppMetadata :: Maybe CachedDoc
+    , ppMetadata :: CachedDoc
     {- ^ The version object the public registry served at admission, republished under the codec's
-    field-rewrite contract. 'Nothing' when the adapter retains none: the codec then declares the minimum.
+    field-rewrite contract. A write without one is refused before the plan exists.
     -}
     }
     deriving stock (Eq, Show)
@@ -69,8 +69,10 @@ data PublishCodec = PublishCodec
     -- ^ Form the metadata read the presence probe makes against the mirror target.
     , pcParseVersionList :: RegistryResponse -> Either ParseError [Version]
     -- ^ Project a probed metadata response onto the versions the mirror holds.
-    , pcPublishRequest :: Text -> Maybe Secret -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> Either UrlFormationError Request
-    -- ^ Form the complete publish request for one verified artifact, document assembly included.
+    , pcPublishRequest :: Text -> Maybe Secret -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> Either PublishFault Request
+    {- ^ Form the complete publish request for one verified artifact, document assembly included.
+    A plan whose version object the codec cannot read refuses as a 'PublishFault' value.
+    -}
     , pcPublishOutcome :: Int -> Either PublishFault ()
     {- ^ Classify the registry's status answer, counting an idempotent already-present as
     success. Registries disagree on how an immutable re-publish answers, so the codec decides.
@@ -136,10 +138,10 @@ probeMetadata transport targetUrl codec name = do
 publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
 publishArtifact transport targetUrl codec name plan artifact bytes = do
     token <- ptMintToken transport
-    formThen
-        (PublishFetch . FetchUrlUnformable)
-        (writeArtifact transport codec)
-        (sealRequest <$> pcPublishRequest codec targetUrl token name plan artifact bytes)
+    either
+        (pure . Left)
+        (writeArtifact transport codec . sealRequest)
+        (pcPublishRequest codec targetUrl token name plan artifact bytes)
 
 -- Read the codec's verdict from the answered status. The 'const' projection drops the
 -- target's body, which the write has no use for, and the exchange bounds it either way.

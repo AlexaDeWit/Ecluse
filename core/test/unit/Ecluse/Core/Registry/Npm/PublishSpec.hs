@@ -26,9 +26,9 @@ import Ecluse.Core.Registry (
     FetchFault (FetchTransport),
     MirrorArtifact (maHashes, maSize),
     PublishError (publishErrorMessage),
-    PublishFault (PublishFetch, PublishRejected),
+    PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
  )
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpPublishArtifact),
@@ -41,11 +41,12 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (hexSha1Of, sriSha256Of, sriSha512Of, unsafeHash, v1_0_0, validSha1)
-import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd)
+import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
 import Ecluse.Test.Stub (
     Stub,
+    allCaptured,
     capBody,
     capMethod,
     capPath,
@@ -76,7 +77,7 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
 
     it "declares the plan's latest, not the version it publishes" $ do
         let plan = planV1{ppLatest = mkVersion Npm "2.0.0"}
-        document <- decodeJsonOrFail (npmPublishDocument isOdd plan "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes) :: IO Object
+        document <- decodeJsonOrFail =<< expectRight (npmPublishDocument isOdd plan "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes) :: IO Object
         tags <- expectRight (parseEither (.: "dist-tags") document)
         versions <- expectRight (parseEither (.: "versions") document) :: IO Object
         KeyMap.lookup "latest" tags `shouldBe` Just (String "2.0.0")
@@ -196,28 +197,30 @@ fieldRewriteSpec = describe "the field-rewrite contract on the published version
         filter (T.isPrefixOf "_" . Key.toText) (KeyMap.keys manifest) `shouldBe` []
 
     it "never lets an unverified source digest survive the absence of a verified one" $ do
-        document <- decodeJsonOrFail (npmPublishDocument isOdd (planWith (Just (fst npmCached sourceVersion))) "is-odd-1.0.0.tgz" Nothing Nothing dummyTarballBytes) :: IO Object
+        document <- decodeJsonOrFail =<< expectRight (npmPublishDocument isOdd (planWith (fst npmCached sourceVersion)) "is-odd-1.0.0.tgz" Nothing Nothing dummyTarballBytes) :: IO Object
         dist <- distOf <$> (expectRight (parseEither (\o -> o .: "versions" >>= (.: "1.0.0")) document) :: IO Object)
         KeyMap.lookup "integrity" dist `shouldBe` Nothing
         KeyMap.lookup "shasum" dist `shouldBe` Nothing
         KeyMap.lookup "tarball" dist `shouldBe` Just (String "is-odd-1.0.0.tgz")
 
-    it "declares the minimum when no version object was carried" $ do
-        manifest <- publishedManifest Nothing
-        sort (KeyMap.keys manifest) `shouldBe` ["dist", "name", "version"]
+    it "refuses, as a value, a version object another ecosystem injected" $
+        documentOf (fst pypiSimpleCached sourceVersion) `shouldSatisfy` isSourceRefusal
 
-    it "declares the minimum for a document another ecosystem injected, or one that is not an object" $ do
-        injected <- publishedManifestOf (Just (fst pypiSimpleCached sourceVersion))
-        scalar <- publishedManifestOf (Just (fst npmCached (String "not an object")))
-        sort (KeyMap.keys injected) `shouldBe` ["dist", "name", "version"]
-        sort (KeyMap.keys scalar) `shouldBe` ["dist", "name", "version"]
+    it "refuses, as a value, a carried version object that is not a JSON object" $
+        documentOf (fst npmCached (String "not an object")) `shouldSatisfy` isSourceRefusal
+
+    it "writes nothing to the mirror target for a refused version object" $
+        withStub status200 "{}" $ \stub -> do
+            publish <- stubPublish stub
+            outcome <- mpPublishArtifact publish isOdd (planWith (fst npmCached (String "not an object"))) sizedArtifact dummyTarballBytes
+            outcome `shouldSatisfy` isSourceRefusal
+            allCaptured stub `shouldReturn` []
   where
     publishedManifest :: Maybe Value -> IO Object
-    publishedManifest = publishedManifestOf . fmap (fst npmCached)
-    publishedManifestOf :: Maybe CachedDoc -> IO Object
-    publishedManifestOf raw = do
-        document <- decodeJsonOrFail (npmPublishDocument isOdd (planWith raw) "is-odd-1.0.0.tgz" (Just verifiedSri) (Just validSha1) dummyTarballBytes) :: IO Object
+    publishedManifest raw = do
+        document <- decodeJsonOrFail =<< expectRight (documentOf (fst npmCached (fromMaybe sourceVersion raw))) :: IO Object
         expectRight (parseEither (\o -> o .: "versions" >>= (.: "1.0.0")) document)
+    documentOf raw = npmPublishDocument isOdd (planWith raw) "is-odd-1.0.0.tgz" (Just verifiedSri) (Just validSha1) dummyTarballBytes
     planWith raw = planV1{ppMetadata = raw}
     distOf :: Object -> Object
     distOf manifest = case KeyMap.lookup "dist" manifest of
@@ -275,16 +278,22 @@ dummyTarballBytes = "tarball-bytes"
 
 -- A write of @1.0.0@ that also declares it latest, the shape most cases here do not vary.
 planV1 :: PublishPlan
-planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0, ppMetadata = Nothing}
+planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0, ppMetadata = isOddVersionDoc}
 
 publishDoc :: ByteString
-publishDoc = npmPublishDocument isOdd planV1 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes
+publishDoc = fromRight "" (npmPublishDocument isOdd planV1 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes)
+
+isSourceRefusal :: Either PublishFault a -> Bool
+isSourceRefusal = \case
+    Left (PublishSourceUnavailable _) -> True
+    _ -> False
 
 leftMessage :: Either PublishFault a -> Maybe Text
 leftMessage outcome = case outcome of
     Left (PublishRejected err) -> Just (publishErrorMessage err)
     Left (PublishFetch (FetchTransport fault)) -> Just (tfDetail fault)
     Left (PublishFetch _) -> Nothing
+    Left (PublishSourceUnavailable detail) -> Just detail
     Right _ -> Nothing
 
 isTransport :: Either PublishFault a -> Bool

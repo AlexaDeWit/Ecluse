@@ -106,6 +106,8 @@ worker reads that object at admission time, never from the queued job.
   is dropped rather than republished.
 - Écluse strips `dist.signatures`, `dist.attestations`, and every underscore-prefixed field,
   because they describe the public registry's own keys, bundles, and bookkeeping.
+- A version whose source object is unavailable is not mirrored: the worker publishes nothing,
+  retires the job, and logs why, apart from a policy denial.
 
 Écluse never edits a version the mirror already holds, so a copy that an earlier release mirrored
 with the shorter manifest keeps it. To repair one, delete that version from the mirror target with

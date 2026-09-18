@@ -332,7 +332,7 @@ Adapters must establish these contracts before their metadata reaches assembly:
 - Assign each artifact an explicit key before lenient parsing drops any entry. PyPI uses raw array positions, including malformed gaps.
 - Use an equivalent key for other shapes. npm uses its version-map key. A singleton key is valid only for a source with one artifact entry.
 - Carry the same fetch digest with the typed and raw views. The digest covers exact upstream bytes, with one pass at fetch and none at serve.
-- Pair a single-version read with the source's own version object under that digest, on the cold selective read and on both warm cache paths. The mirror write republishes that object, so the worker never rebuilds a version from the typed view. npm carries the pair, and PyPI carries none until its mirror write exists.
+- Pair a single-version read with the source's own version object under that digest, on the cold selective read and on both warm cache paths. The mirror write republishes that object, and a write without one is refused as a value rather than rebuilt from the typed view. npm carries the pair, and PyPI carries none until its mirror write exists.
 - Preserve keys through admission and use the shared selector before rendering. Selective reads must retain the full decoder's entry keys.
 
 Snapshot scope is transient and content-addressed. It changes no stored schema or epoch.

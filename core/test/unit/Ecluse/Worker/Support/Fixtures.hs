@@ -67,6 +67,7 @@ module Ecluse.Worker.Support.Fixtures (
     isMismatch,
     mismatchDetail,
     isDropped,
+    isSourceUnavailable,
     isRetried,
     isDeadLettered,
 ) where
@@ -104,7 +105,7 @@ import Ecluse.Core.Supervision (
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
-    JobOutcome (DeadLettered, Dropped, Retried),
+    JobOutcome (DeadLettered, Dropped, Retried, SourceUnavailable),
     WorkerPolicies,
     WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpFirstParty, wpPublish),
  )
@@ -118,8 +119,8 @@ import Ecluse.Test.Package (
     validSha256Sri,
  )
 import Ecluse.Test.Package qualified as Package
+import Ecluse.Test.Registry.Npm (sourceVersionDoc)
 import Ecluse.Test.Rules (admitRule)
-import Ecluse.Test.Snapshot (versionDocOf)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Worker (npmPolicyWith)
 
@@ -254,7 +255,7 @@ presentResolver = taggedResolver Nothing
 -- | 'presentResolver' whose snapshot also carries the upstream's own @latest@ target.
 taggedResolver :: Maybe Version -> PackageName -> Version -> IO VersionEvaluation
 taggedResolver upstreamLatest name version =
-    pure (VersionPresent (versionDocOf (sampleDetails name version)) upstreamLatest)
+    pure (VersionPresent (sourceVersionDoc (sampleDetails name version)) upstreamLatest)
 
 {- | A resolver that throws if it is consulted, so a case proving a job was decided ahead of
 the public leg cannot hide a metadata request behind a passing assertion.
@@ -267,7 +268,7 @@ current metadata changed shape after the job was enqueued.
 -}
 resolverWithArtifact :: Artifact -> PackageName -> Version -> IO VersionEvaluation
 resolverWithArtifact art rName rVersion =
-    pure (VersionPresent (versionDocOf ((sampleDetails rName rVersion){pkgArtifacts = art :| []})) Nothing)
+    pure (VersionPresent (sourceVersionDoc ((sampleDetails rName rVersion){pkgArtifacts = art :| []})) Nothing)
 
 {- | Worker policies for npm, clocked at the fixed 'epoch'. The injected rules are not
 time-sensitive.
@@ -381,6 +382,11 @@ mismatchDetail = \case
 isDropped :: JobOutcome -> Bool
 isDropped = \case
     Dropped _ -> True
+    _ -> False
+
+isSourceUnavailable :: JobOutcome -> Bool
+isSourceUnavailable = \case
+    SourceUnavailable _ -> True
     _ -> False
 
 isRetried :: JobOutcome -> Bool
