@@ -4,7 +4,7 @@
 
 module Ecluse.Core.Worker.JobSpec (spec) where
 
-import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
+import Data.Aeson (Value (String), eitherDecodeStrict', object, (.=))
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -35,10 +35,16 @@ import Ecluse.Core.Registry.Metadata (
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     fetchVersionDetails,
  )
-import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
-import Ecluse.Core.Registry.Publish (PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion))
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument)
+import Ecluse.Core.Registry.Publish (
+    MirrorPublish,
+    MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
+    PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
+    newMirrorPublish,
+ )
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
-import Ecluse.Core.Security (LimitError (BodyTooLarge))
+import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
+import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Snapshot (Snapshot (Snapshot), digestOf)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
@@ -53,7 +59,10 @@ import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admitRule, cannotVetRule, denyRule)
 import Ecluse.Test.Snapshot (versionDocOf, versionReadOf)
+import Ecluse.Test.Stub (allCaptured, capMethod, stubBaseUrl, withStub)
 import Ecluse.Worker.Support
+import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Network.HTTP.Types.Status (status404)
 
 spec :: Spec
 spec = do
@@ -273,6 +282,21 @@ spec = do
                     outcome `shouldSatisfy` (not . isDropped)
                     plans <- plPlans <$> readIORef logRef
                     plans `shouldBe` []
+
+        it "reports the codec's own refusal of a carried document that is not an npm object as source-unavailable, not dropped" $
+            -- The type admits a document the npm codec cannot read, so its refusal is folded onto
+            -- the same outcome as the pre-plan one, and the write never leaves the codec.
+            withUpstream $ \url ->
+                withStub status404 "" $ \mirror -> do
+                    publish <- codecPublishAt (stubBaseUrl mirror)
+                    withRuntimeRegistry (const publish) (npmPolicies (resolverCarrying (fst npmCached (String "not an object"))) [admitRule]) noopWorkerMetricsPort $ \runtime queue _logRef -> do
+                        job <- enqueueAndReceive queue (jobWith url)
+                        outcome <- runWM runtime (processJob job)
+                        outcome `shouldSatisfy` isSourceUnavailable
+                        outcome `shouldSatisfy` (not . isDropped)
+                        -- The inventory probe reached the target; the write never did.
+                        written <- filter (== "PUT") . map capMethod <$> allCaptured mirror
+                        written `shouldBe` []
 
         it "lets no carried version object reach the publish step once current policy denies the version" $
             withRuntimePolicies (npmPolicies (resolverCarrying admissionObject) [denyRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
@@ -633,7 +657,15 @@ npmVer = mkVersion Npm
 
 -- The version object current metadata carries, marked so a case can tell it from any other.
 admissionObject :: CachedDoc
-admissionObject = fst npmCached (object ["marker" .= ("admission-time" :: Text), "name" .= ("thing" :: Text)])
+admissionObject = fst npmCached (object ["marker" .= ("admission-time" :: Text)])
+
+-- The real npm codec over the shared transport against a stub mirror target, so the codec's own
+-- refusal is the one under test rather than a recording double's.
+codecPublishAt :: Text -> IO MirrorPublish
+codecPublishAt targetUrl = do
+    manager <- newManager defaultManagerSettings
+    let transport = MirrorTransport{ptManager = manager, ptMintToken = pure Nothing, ptLimits = defaultLimits}
+    pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) npmPublishCodec)
 
 -- A resolver whose present verdict carries the given raw object beside the sample details.
 resolverCarrying :: CachedDoc -> PackageName -> Version -> IO VersionEvaluation

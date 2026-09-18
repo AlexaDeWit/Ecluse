@@ -13,15 +13,18 @@ import Data.Text qualified as T
 import Katip (closeScribes)
 import Test.Hspec
 
-import Ecluse.Core.Package (HashAlg (SRI))
+import Ecluse.Core.Package (HashAlg (SRI), PackageName)
 import Ecluse.Core.Queue (DeliveryBudget (DeliveryBudget), MirrorQueue (deliveryBudget), QueueMessage (msgReceipt, msgReceiveCount), Seconds (Seconds))
 import Ecluse.Core.Registry (PublishError (PublishError), PublishFault (PublishRejected))
+import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Discarded, Failed, Published))
+import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker (processBatch)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv)
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, recordingWorkerMetricsPort)
-import Ecluse.Test.Rules (denyRule)
+import Ecluse.Test.Rules (admitRule, denyRule)
+import Ecluse.Test.Snapshot (versionDocOf)
 import Ecluse.Worker.Support
 
 spec :: Spec
@@ -127,6 +130,30 @@ spec = do
                     -- ...and it acked the job: retired at the handle.
                     acked <- ackedReceipts
                     acked `shouldBe` map msgReceipt messages
+        it "acks a SOURCE-UNAVAILABLE job, logging the refusal at Error with its identity and counting it failed" $
+            -- No redelivery can supply a version object the resolver does not carry, so the job is
+            -- retired like a drop, under its own line so an operator can tell it from a deny.
+            withUpstream $ \url -> do
+                (queue, ackedReceipts) <- recordingAckQueue
+                (metricsPort, recordedMetrics) <- recordingWorkerMetricsPort
+                withRuntimeQueue queue (`recordingPublish` Right ()) (npmPolicies rawlessResolver [admitRule]) metricsPort $ \runtime logRef -> do
+                    enqueue_ queue (jobWith url)
+                    messages <- receive_ queue
+                    logged <- captureStdout $ do
+                        logEnv <- jsonLogEnv
+                        runWMWith logEnv runtime (processBatch messages)
+                        void (closeScribes logEnv)
+                    published <- plDocuments <$> readIORef logRef
+                    published `shouldBe` []
+                    acked <- ackedReceipts
+                    acked `shouldBe` map msgReceipt messages
+                    logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
+                    logged `shouldSatisfy` T.isInfixOf "refusing to mirror without the source version object"
+                    logged `shouldSatisfy` T.isInfixOf "thing@1.0.0"
+                    logged `shouldSatisfy` (not . T.isInfixOf "dropping unrecoverable mirror job")
+                    metered <- recordedMetrics
+                    metered `shouldBe` [Failed]
+
     describe "processBatch -- which leg a retry releases the message's visibility for" $ do
         it "releases a transiently-rejected publish, so its redelivery does not wait out the lease" $
             -- The publish already moved the bytes, so an immediate retry costs the same work
@@ -210,3 +237,7 @@ spec = do
                     messages <- receive_ queue
                     runWM runtime (processBatch messages)
                     readResults >>= (`shouldBe` [Failed])
+
+-- A resolver whose present verdict carries the details alone, with no source version object.
+rawlessResolver :: PackageName -> Version -> IO VersionEvaluation
+rawlessResolver name version = pure (VersionPresent (versionDocOf (sampleDetails name version)) Nothing)

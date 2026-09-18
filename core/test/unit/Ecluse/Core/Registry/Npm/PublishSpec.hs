@@ -72,7 +72,7 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
             cap <- lastCaptured stub
             capMethod cap `shouldBe` "PUT"
             capPath cap `shouldBe` "/is-odd"
-            capBody cap `shouldBe` publishDoc
+            publishDoc `shouldReturn` capBody cap
             headerValue "content-type" cap `shouldBe` Just "application/json"
 
     it "declares the plan's latest, not the version it publishes" $ do
@@ -166,21 +166,21 @@ assertPublishedIntegrity tokens expectedIntegrity =
 fieldRewriteSpec :: Spec
 fieldRewriteSpec = describe "the field-rewrite contract on the published version object" $ do
     it "keeps what the author wrote: dependencies, executables, policy inputs, and an unknown field" $ do
-        manifest <- publishedManifest (Just sourceVersion)
+        manifest <- publishedManifest
         forM_ ["dependencies", "bin", "scripts", "engines", "license", "gitHead"] $ \field ->
             KeyMap.lookup field manifest `shouldBe` KeyMap.lookup field sourceObject
 
     it "keeps a deprecation notice verbatim" $ do
-        manifest <- publishedManifest (Just sourceVersion)
+        manifest <- publishedManifest
         KeyMap.lookup "deprecated" manifest `shouldBe` Just (String "use is-even instead")
 
     it "rewrites only the validated name and version under local authority" $ do
-        manifest <- publishedManifest (Just sourceVersion)
+        manifest <- publishedManifest
         KeyMap.lookup "name" manifest `shouldBe` Just (String "is-odd")
         KeyMap.lookup "version" manifest `shouldBe` Just (String "1.0.0")
 
     it "replaces the dist location and digests with the verified ones and keeps the rest of dist" $ do
-        dist <- distOf <$> publishedManifest (Just sourceVersion)
+        dist <- distOf <$> publishedManifest
         KeyMap.lookup "tarball" dist `shouldBe` Just (String "is-odd-1.0.0.tgz")
         KeyMap.lookup "integrity" dist `shouldBe` Just (String verifiedSri)
         KeyMap.lookup "shasum" dist `shouldBe` Just (String validSha1)
@@ -188,12 +188,12 @@ fieldRewriteSpec = describe "the field-rewrite contract on the published version
         KeyMap.lookup "fileCount" dist `shouldBe` Just (Number 3)
 
     it "strips dist.signatures and dist.attestations, which reference the public registry's own keys" $ do
-        dist <- distOf <$> publishedManifest (Just sourceVersion)
+        dist <- distOf <$> publishedManifest
         KeyMap.lookup "signatures" dist `shouldBe` Nothing
         KeyMap.lookup "attestations" dist `shouldBe` Nothing
 
     it "strips every underscore-prefixed registry bookkeeping field" $ do
-        manifest <- publishedManifest (Just sourceVersion)
+        manifest <- publishedManifest
         filter (T.isPrefixOf "_" . Key.toText) (KeyMap.keys manifest) `shouldBe` []
 
     it "never lets an unverified source digest survive the absence of a verified one" $ do
@@ -216,9 +216,9 @@ fieldRewriteSpec = describe "the field-rewrite contract on the published version
             outcome `shouldSatisfy` isSourceRefusal
             allCaptured stub `shouldReturn` []
   where
-    publishedManifest :: Maybe Value -> IO Object
-    publishedManifest raw = do
-        document <- decodeJsonOrFail =<< expectRight (documentOf (fst npmCached (fromMaybe sourceVersion raw))) :: IO Object
+    publishedManifest :: IO Object
+    publishedManifest = do
+        document <- decodeJsonOrFail =<< expectRight (documentOf (fst npmCached sourceVersion)) :: IO Object
         expectRight (parseEither (\o -> o .: "versions" >>= (.: "1.0.0")) document)
     documentOf raw = npmPublishDocument isOdd (planWith raw) "is-odd-1.0.0.tgz" (Just verifiedSri) (Just validSha1) dummyTarballBytes
     planWith raw = planV1{ppMetadata = raw}
@@ -280,8 +280,8 @@ dummyTarballBytes = "tarball-bytes"
 planV1 :: PublishPlan
 planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0, ppMetadata = isOddVersionDoc}
 
-publishDoc :: ByteString
-publishDoc = fromRight "" (npmPublishDocument isOdd planV1 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes)
+publishDoc :: IO ByteString
+publishDoc = expectRight (npmPublishDocument isOdd planV1 "is-odd-1.0.0.tgz" Nothing (Just validSha1) dummyTarballBytes)
 
 isSourceRefusal :: Either PublishFault a -> Bool
 isSourceRefusal = \case
