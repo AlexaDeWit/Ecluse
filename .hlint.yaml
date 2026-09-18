@@ -41,15 +41,15 @@
 # Prefer a domain value, an Either or a purpose-built sum, or for a genuine fault a
 # typed Exception with its own instance.
 #
-# Banned in production. `throwString` stays permitted in the test suite. There it
-# simulates an upstream failure to exercise a catch path. The `within:` list names
-# every test module with a live use, so a re-introduction anywhere else is caught.
+# Banned everywhere. The `within:` list names the test modules that still simulate an
+# upstream failure with `throwString`. It is a backlog to drain with nullary typed
+# exceptions, never a list to extend (docs/style.md section 11.2).
 # hlint matches the name as imported, so the `UnliftIO` re-export is restricted too,
 # with no allowlist: a test imports it from the defining module.
 - functions:
     - {name: System.IO.Error.userError, within: [], message: "Stringly IOError: throw a typed Exception (e.g. a nullary type with an Exception instance), or return a domain value. See STYLE.md section 11."}
     - {name: UnliftIO.Exception.stringException, within: [], message: "Stringly exception: throw a typed Exception or return a domain value. See STYLE.md section 11."}
-    - {name: UnliftIO.Exception.throwString, within: [Ecluse.Core.InFlightSpec, Ecluse.Core.Registry.NpmSmokeSpec, Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec, Ecluse.Runtime.EnvSpec], message: "Stringly exception: in production, throw a typed Exception or return a domain value (docs/style.md section 11). Permitted in tests to simulate an upstream failure."}
+    - {name: UnliftIO.Exception.throwString, within: [Ecluse.Core.InFlightSpec, Ecluse.Core.Registry.NpmSmokeSpec, Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec, Ecluse.Runtime.EnvSpec], message: "Stringly exception: throw a typed Exception or return a domain value (docs/style.md section 11). In a test, simulate a failure with a nullary typed exception."}
     - {name: UnliftIO.throwString, within: [], message: "Stringly exception: import throwString from UnliftIO.Exception, which the test allowlist names."}
 
 # --- Debugging leftovers: banned in committed code --------------------------
