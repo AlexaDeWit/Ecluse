@@ -24,7 +24,6 @@ import Ecluse.Core.Package.Filter (fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), SourceId, mergePackuments)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
-import Ecluse.Core.Registry.Metadata (VersionRead (vrDetails))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmVersion)
 import Ecluse.Core.Rules.Types (EvalContext)
@@ -33,6 +32,7 @@ import Ecluse.Core.Snapshot (Snapshot (snapshotValue))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (permissiveAgeRules, syntheticProxyBase)
 import Ecluse.Test.Rules (filterPlan, inertRuleDeps)
+import Ecluse.Test.Snapshot (readDetails)
 
 -- | Measure the npm transform against the original fetch snapshot, excluding its digest cost.
 serveTransformSize :: EvalContext -> (Snapshot Value, PackageInfo) -> IO Int
@@ -78,7 +78,7 @@ selectiveDepth :: PackageName -> (ByteString, Version) -> SelectedDepth
 selectiveDepth pkg (raw, version) =
     case projectNpmVersion defaultLimits pkg version raw of
         Left _ -> DecodeFailed
-        Right versionRead -> detailsDepth (vrDetails versionRead)
+        Right versionRead -> detailsDepth (readDetails versionRead)
 
 -- | Force a selected snapshot through a deep field, its artifact digests.
 detailsDepth :: Maybe PackageDetails -> SelectedDepth

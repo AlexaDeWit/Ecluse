@@ -35,7 +35,8 @@ import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
-    VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
+    VersionDoc (VersionDoc, vdDetails, vdRaw),
+    VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
     digestOf,
     fetchThenProject,
  )
@@ -64,6 +65,7 @@ import Ecluse.Core.Security (
  )
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -78,7 +80,8 @@ newPyPIMetadataReads ::
     OriginFor posture ->
     MetadataReads posture
 newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
-    newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
+    -- No per-release raw object yet: the mirror write for PyPI is not built.
+    newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing) (\_ _ -> Nothing)
 
 fetchSimpleIndex :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
 fetchSimpleIndex origin name =
@@ -109,12 +112,14 @@ projectPyPIIndex limits name = projectMetadata (projectSimpleIndexFromValue name
 A Simple index declares no release tag, so 'vrUpstreamLatest' is always 'Nothing' here. -}
 fetchPyPIVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchPyPIVersion tracing origin name version =
-    fetchThenProject tracing (fetchSimpleIndex origin) name $
-        fmap untagged . projectPyPIVersion (ocLimits origin) name version
+    fetchThenProject tracing (fetchSimpleIndex origin) name $ \body ->
+        untagged (digestOf body) <$> projectPyPIVersion (ocLimits origin) name version body
   where
-    untagged details =
+    untagged digest details =
         VersionRead
-            { vrDetails = details >>= enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin)
+            { vrVersion = do
+                located <- details >>= enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin)
+                pure (Snapshot digest (VersionDoc{vdDetails = located, vdRaw = Nothing}))
             , vrUpstreamLatest = Nothing
             }
 

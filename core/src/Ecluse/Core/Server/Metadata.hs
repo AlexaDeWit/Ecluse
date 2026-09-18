@@ -19,18 +19,20 @@ module Ecluse.Core.Server.Metadata (
 
     -- * Projecting one version
     selectVersion,
-    readOfInfo,
+    readOfEntry,
 ) where
 
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoDistTags, infoInvalidEntries, infoVersions), PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable))
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (..),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
-    VersionRead (VersionRead, vrDetails, vrUpstreamLatest),
+    VersionDoc (VersionDoc, vdDetails, vdRaw),
+    VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
  )
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, originClientOf)
 
@@ -43,6 +45,7 @@ import Ecluse.Core.Server.Cache (
     resolveMetadata,
     resolveVersion,
  )
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -63,7 +66,7 @@ newtype MetadataReads (posture :: Type) = MetadataReads (Metric.Upstream -> Mani
 type role MetadataReads nominal
 
 {- | Bind one origin's raw reads to the metrics port and the failure, invalid-entry, and fetch logs.
-The origin is applied to the fetch pair the caller supplies, and its posture tags the result.
+The selector pairs a warm full-cache hit with one version's raw object, as a selective read does.
 -}
 newMetadataReads ::
     MetricsPort ->
@@ -72,11 +75,12 @@ newMetadataReads ::
     (PackageName -> IO ()) ->
     (OriginClient -> PackageName -> IO (Either MetadataError Manifest)) ->
     (OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
+    (Version -> CachedDoc -> Maybe CachedDoc) ->
     OriginFor posture ->
     MetadataReads posture
-newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion origin =
+newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion selectRaw origin =
     MetadataReads $ \upstream caching ->
-        newMetadataClient metrics upstream caching logFailure logInvalid logFetch (rawFetch client) (rawFetchVersion client)
+        newMetadataClient metrics upstream caching logFailure logInvalid logFetch (rawFetch client) (rawFetchVersion client) selectRaw
   where
     client = originClientOf origin
 
@@ -97,8 +101,9 @@ newMetadataClient ::
     (PackageName -> IO ()) ->
     (PackageName -> IO (Either MetadataError Manifest)) ->
     (PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
+    (Version -> CachedDoc -> Maybe CachedDoc) ->
     MetadataClient
-newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFetch rawFetchVersion =
+newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFetch rawFetchVersion selectRaw =
     MetadataClient
         { fetchFullManifest = fmap (fmap entryToManifest) . resolveEntry
         , fetchVersionMetadata = resolveVersionHybrid
@@ -132,7 +137,7 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
                 Nothing -> do
                     warm <- cachedMetadata cache source name
                     case warm of
-                        Just entry -> pure (Right (readOfInfo version (entryInfo entry)))
+                        Just entry -> pure (Right (readOfEntry selectRaw version entry))
                         Nothing -> resolveVersion metrics cache source name version (versionLeader name version)
 
     versionLeader :: PackageName -> Version -> IO (Either MetadataError VersionRead)
@@ -147,13 +152,17 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
 selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
 selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
 
--- | Project a snapshot onto one version's read, so a warm full-cache hit answers as a selective read would.
-readOfInfo :: Version -> PackageInfo -> VersionRead
-readOfInfo version info =
+{- | Project a held entry onto one version's read, so a warm full-cache hit answers as a selective
+read would: the pair's two sides and its digest all come from the one entry.
+-}
+readOfEntry :: (Version -> CachedDoc -> Maybe CachedDoc) -> Version -> CacheEntry -> VersionRead
+readOfEntry selectRaw version entry =
     VersionRead
-        { vrDetails = selectVersion version info
-        , vrUpstreamLatest = Map.lookup "latest" (infoDistTags info)
+        { vrVersion = pairOf <$> selectVersion version (entryInfo entry)
+        , vrUpstreamLatest = Map.lookup "latest" (infoDistTags (entryInfo entry))
         }
+  where
+    pairOf details = Snapshot (entryDigest entry) (VersionDoc{vdDetails = details, vdRaw = selectRaw version (entryRaw entry)})
 
 entryToManifest :: CacheEntry -> Manifest
 entryToManifest entry =

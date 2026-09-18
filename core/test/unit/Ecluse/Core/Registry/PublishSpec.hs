@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpProbeMetadata, mpPublishArtifact),
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
     PublishCodec (..),
-    PublishPlan (PublishPlan, ppLatest, ppVersion),
+    PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
     newMirrorPublish,
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
@@ -166,7 +166,7 @@ unsealedCodec =
 
 -- One write of @1.0.0@ declaring itself latest, the shape these transport cases do not vary.
 planV1 :: PublishPlan
-planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0}
+planV1 = PublishPlan{ppVersion = v1_0_0, ppLatest = v1_0_0, ppMetadata = Nothing}
 
 unsealedPublishAt :: Stub -> IO MirrorPublish
 unsealedPublishAt stub = publishWith unsealedCodec (stubBaseUrl stub)

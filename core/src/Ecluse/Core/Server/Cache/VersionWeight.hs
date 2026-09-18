@@ -5,6 +5,7 @@
 
 {- | Conservative accounting for selectively decoded releases.
 The cache charges backing allocations and repeated structures without deduplicating sharing.
+A retained raw version object is charged on the shared wire-to-resident model.
 -}
 module Ecluse.Core.Server.Cache.VersionWeight (weighVersion, weighEntryKey) where
 
@@ -16,16 +17,24 @@ import GHC.Exts (Int (I#), sizeofByteArray#)
 
 import Ecluse.Core.Package
 import Ecluse.Core.Package.Entry (EntryKey (..))
-import Ecluse.Core.Registry.Metadata (VersionRead (vrDetails, vrUpstreamLatest))
+import Ecluse.Core.Registry.CachedDocument (weighCachedDoc)
+import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw), VersionRead (vrUpstreamLatest, vrVersion))
+import Ecluse.Core.Server.MemoryModel (expandWireBytes)
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (renderVersion)
 
 -- | Estimate retained release bytes. 'maxBound' marks an uncacheable saturated estimate.
 weighVersion :: VersionRead -> Int
 weighVersion versionRead =
-    fromInteger (min (toInteger (maxBound :: Int)) (detailsPart + latestPart))
+    fromInteger (min (toInteger (maxBound :: Int)) (versionPart + latestPart))
   where
-    detailsPart = maybe 1024 detailsWeight (vrDetails versionRead)
+    versionPart = maybe 1024 pairWeight (vrVersion versionRead)
     latestPart = maybe 0 (textWeight . renderVersion) (vrUpstreamLatest versionRead)
+
+-- The digest is 32 bytes plus its wrapper. The raw object is weighed as the full store weighs it.
+pairWeight :: Snapshot VersionDoc -> Integer
+pairWeight (Snapshot _ doc) =
+    64 + detailsWeight (vdDetails doc) + maybe 0 (toInteger . expandWireBytes . fromIntegral . weighCachedDoc) (vdRaw doc)
 
 detailsWeight :: PackageDetails -> Integer
 detailsWeight details =

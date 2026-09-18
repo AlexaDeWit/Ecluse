@@ -119,6 +119,7 @@ import Ecluse.Test.Package (
  )
 import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.Rules (admitRule)
+import Ecluse.Test.Snapshot (versionDocOf)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Test.Worker (npmPolicyWith)
 
@@ -253,7 +254,7 @@ presentResolver = taggedResolver Nothing
 -- | 'presentResolver' whose snapshot also carries the upstream's own @latest@ target.
 taggedResolver :: Maybe Version -> PackageName -> Version -> IO VersionEvaluation
 taggedResolver upstreamLatest name version =
-    pure (VersionPresent (sampleDetails name version) upstreamLatest)
+    pure (VersionPresent (versionDocOf (sampleDetails name version)) upstreamLatest)
 
 {- | A resolver that throws if it is consulted, so a case proving a job was decided ahead of
 the public leg cannot hide a metadata request behind a passing assertion.
@@ -266,7 +267,7 @@ current metadata changed shape after the job was enqueued.
 -}
 resolverWithArtifact :: Artifact -> PackageName -> Version -> IO VersionEvaluation
 resolverWithArtifact art rName rVersion =
-    pure (VersionPresent ((sampleDetails rName rVersion){pkgArtifacts = art :| []}) Nothing)
+    pure (VersionPresent (versionDocOf ((sampleDetails rName rVersion){pkgArtifacts = art :| []})) Nothing)
 
 {- | Worker policies for npm, clocked at the fixed 'epoch'. The injected rules are not
 time-sensitive.

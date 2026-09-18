@@ -4,7 +4,8 @@
 
 {- | npm mirror publication through "Ecluse.Core.Registry.Publish", plus identity
 extraction for the first-party publish guard. Published SRI retains all alternatives
-at its strongest algorithm, matching the worker's verification contract.
+at its strongest algorithm, matching the worker's verification contract. The published version
+object keeps what the author wrote and strips what the public registry issued about itself.
 -}
 module Ecluse.Core.Registry.Npm.Publish (
     npmPublishCodec,
@@ -14,9 +15,10 @@ module Ecluse.Core.Registry.Npm.Publish (
     npmPublishAllowed,
 ) where
 
-import Data.Aeson (Value (String), object, (.=))
+import Data.Aeson (Value (Object, String), object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
@@ -38,9 +40,10 @@ import Ecluse.Core.Registry (
     firstHashValue,
     isSuccessStatus,
  )
+import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest, packageUrl, parseRequestEither, withToken)
-import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest, ppVersion))
+import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest, ppMetadata, ppVersion))
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (renderVersion)
@@ -95,8 +98,8 @@ publishRequest baseUrl credential name document = do
                     : requestHeaders base
             }
 
-{- | Assemble one version with caller-verified digests and bytes. The declared @latest@ is the
-plan's: a registry left to choose one can retag on completion order.
+{- | Assemble one version from the plan's metadata, under local authority for the name, version,
+and verified @dist@ fields. The declared @latest@ is the plan's: a registry left to choose can retag.
 -}
 npmPublishDocument ::
     PackageName ->
@@ -122,23 +125,41 @@ npmPublishDocument name plan filename integrity shasum tarball =
   where
     versionText = renderVersion (ppVersion plan)
     rendered = renderPackageName name
-    manifest = versionManifestObject rendered versionText (distObject filename integrity shasum)
+    authored = authoredFields (ppMetadata plan >>= snd npmCached)
+    manifest = versionManifestObject rendered versionText (distObject filename integrity shasum (objectAt "dist" authored)) authored
 
-versionManifestObject :: Text -> Text -> Aeson.Value -> Aeson.Value
-versionManifestObject rendered versionText dist =
-    object
-        [ "name" .= rendered
-        , "version" .= versionText
-        , "dist" .= dist
-        ]
+{- The fields the author wrote on the source version object. An underscore-prefixed key is the
+public registry's bookkeeping about itself, so none reaches the mirror. -}
+authoredFields :: Maybe Value -> KeyMap Value
+authoredFields = \case
+    Just (Object o) -> KeyMap.filterWithKey (\k _ -> not (T.isPrefixOf "_" (Key.toText k))) o
+    _ -> mempty
 
-distObject :: Text -> Maybe Text -> Maybe Text -> Aeson.Value
-distObject filename integrity shasum =
-    object
-        ( ["tarball" .= filename]
-            <> maybe [] (\i -> ["integrity" .= i]) integrity
-            <> maybe [] (\s -> ["shasum" .= s]) shasum
-        )
+objectAt :: Key.Key -> KeyMap Value -> KeyMap Value
+objectAt slot o = case KeyMap.lookup slot o of
+    Just (Object inner) -> inner
+    _ -> mempty
+
+-- 'KeyMap.union' is left-biased, so the local authority fields win over the authored ones.
+versionManifestObject :: Text -> Text -> Aeson.Value -> KeyMap Value -> Aeson.Value
+versionManifestObject rendered versionText dist authored =
+    Object (KeyMap.fromList [("name", String rendered), ("version", String versionText), ("dist", dist)] `KeyMap.union` authored)
+
+{- The verified location and digests replace the source's, and an unverified source digest never
+survives their absence. Signatures and attestations reference the public registry's own keys. -}
+distObject :: Text -> Maybe Text -> Maybe Text -> KeyMap Value -> Aeson.Value
+distObject filename integrity shasum authored =
+    Object (verified `KeyMap.union` KeyMap.filterWithKey (\k _ -> k `notElem` registryDistKeys) authored)
+  where
+    verified =
+        KeyMap.fromList
+            ( ("tarball", String filename)
+                : maybe [] (\i -> [("integrity", String i)]) integrity
+                    <> maybe [] (\s -> [("shasum", String s)]) shasum
+            )
+
+registryDistKeys :: [Key.Key]
+registryDistKeys = ["tarball", "integrity", "shasum", "signatures", "attestations"]
 
 attachmentObject :: ByteString -> Aeson.Value
 attachmentObject tarball =

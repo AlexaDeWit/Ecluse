@@ -49,15 +49,21 @@ import Ecluse.Core.Registry (
     renderUrlFormationError,
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
-import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent), versionTransience)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
+import Ecluse.Core.Registry.Metadata (
+    VersionDoc (vdDetails, vdRaw),
+    VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
+    versionTransience,
+ )
 import Ecluse.Core.Registry.Publish (
     MirrorPublish (mpParseVersionList, mpProbeMetadata, mpPublishArtifact),
-    PublishPlan (PublishPlan, ppLatest, ppVersion),
+    PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
  )
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
 import Ecluse.Core.Security (authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Path (Filename)
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
 import Ecluse.Core.Version (Version, selectLatest)
@@ -196,9 +202,17 @@ probeParseReason job detail =
         <> detail
         <> "); refusing to publish a release tag chosen without it"
 
+{- What re-evaluation settled for one job: the descriptor the gate re-admitted, the upstream's own
+release tag, and the version object current metadata carried, all read from the one fetch. -}
+data Readmitted = Readmitted
+    { raArtifact :: MirrorArtifact
+    , raUpstreamLatest :: Maybe Version
+    , raMetadata :: Maybe CachedDoc
+    }
+
 {- Re-check the fetch URL against the mount's tarball-host gate, because the queue payload is a
 trust boundary. Then re-run current policy through 'Ecluse.Core.Package.Admission.admitArtifact'. -}
-reevaluatePolicy :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome (MirrorArtifact, Maybe Version))
+reevaluatePolicy :: WorkerPolicy -> MirrorJob -> WorkerM (Either JobOutcome Readmitted)
 reevaluatePolicy policy job
     | not (wpArtifactHostHonoured policy (hostPortAddress (registryUrlText (jobArtifactUrl job)))) =
         pure (Left (Dropped (artifactHostReason job)))
@@ -215,20 +229,21 @@ artifactHostReason job =
 
 {- A version the upstream no longer offers, or cannot describe, never reaches the rules. A present
 version also carries the upstream's own @latest@, read from the same metadata. -}
-admitEvaluation :: WorkerPolicy -> MirrorJob -> VersionEvaluation -> WorkerM (Either JobOutcome (MirrorArtifact, Maybe Version))
+admitEvaluation :: WorkerPolicy -> MirrorJob -> VersionEvaluation -> WorkerM (Either JobOutcome Readmitted)
 admitEvaluation policy job evaluation = case evaluation of
     VersionMetadataUnavailable ->
         pure (Left (unresolved ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job)))
     VersionMissing ->
         pure (Left (unresolved ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version")))
-    VersionPresent details upstreamLatest -> do
+    VersionPresent (Snapshot _ doc) upstreamLatest -> do
         -- The back-fill path emits no per-decision audit line, so the audit-only advisory ETag
         -- is not resolved for its context.
         ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))
-        admission <- liftIO (admitArtifact ctx (wpRules policy) (wpMinIntegrity policy) (jobArtifactFilename job) details)
-        pure ((,upstreamLatest) <$> outcomeOfAdmission job admission)
+        admission <- liftIO (admitArtifact ctx (wpRules policy) (wpMinIntegrity policy) (jobArtifactFilename job) (vdDetails doc))
+        pure (readmitted upstreamLatest (vdRaw doc) <$> outcomeOfAdmission job admission)
   where
     unresolved = retryOrDrop (versionTransience evaluation)
+    readmitted upstreamLatest raw artifact = Readmitted{raArtifact = artifact, raUpstreamLatest = upstreamLatest, raMetadata = raw}
 
 {- | Render the shared 'ArtifactAdmission' as the descriptor to publish, or the outcome the queue
 realises. 'admissionTransience' alone splits retry from drop, so no path can diverge from the gate.
@@ -292,14 +307,15 @@ mirrorLatest upstreamLatest inventory published =
 
 {- Fix the release tag before the write, over the post-write inventory, so no job makes its own
 version latest merely by finishing last. -}
-publishAdmitted :: WorkerPolicy -> MirrorJob -> [Version] -> (MirrorArtifact, Maybe Version) -> WorkerM JobOutcome
-publishAdmitted policy job inventory (admitted, upstreamLatest) =
-    mirrorArtifact policy job plan admitted
+publishAdmitted :: WorkerPolicy -> MirrorJob -> [Version] -> Readmitted -> WorkerM JobOutcome
+publishAdmitted policy job inventory readmitted =
+    mirrorArtifact policy job plan (raArtifact readmitted)
   where
     plan =
         PublishPlan
             { ppVersion = jobVersion job
-            , ppLatest = mirrorLatest upstreamLatest inventory (jobVersion job)
+            , ppLatest = mirrorLatest (raUpstreamLatest readmitted) inventory (jobVersion job)
+            , ppMetadata = raMetadata readmitted
             }
 
 mirrorArtifact :: WorkerPolicy -> MirrorJob -> PublishPlan -> MirrorArtifact -> WorkerM JobOutcome

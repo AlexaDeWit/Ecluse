@@ -22,7 +22,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (..), PackageName, mkPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead (VersionRead, vrDetails, vrUpstreamLatest), digestOf)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead, digestOf)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIVersion)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (
@@ -42,6 +42,7 @@ import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName, unscopedNpm, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
+import Ecluse.Test.Snapshot (readDetails, versionReadOf)
 
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
 resolveMetadata c source name fetch =
@@ -52,7 +53,7 @@ unwrapResolved = either (throwIO . UnexpectedFault) pure
 
 -- A version read from an ecosystem that declares no release tag.
 untagged :: Maybe PackageDetails -> VersionRead
-untagged details = VersionRead{vrDetails = details, vrUpstreamLatest = Nothing}
+untagged details = versionReadOf details Nothing
 
 newtype UnexpectedFault = UnexpectedFault MetadataError
     deriving stock (Show)
@@ -162,7 +163,7 @@ spec = do
         for_ [(1, 16), (100, 16), (100, 2048), (1000, 16)] $ \(files, urlLength) ->
             it ("reports retained bytes for " <> show files <> " files with URL padding " <> show urlLength) $ do
                 release <- unwrapResolved (selectedRelease files urlLength)
-                (length . pkgArtifacts <$> vrDetails release) `shouldBe` Just files
+                (length . pkgArtifacts <$> readDetails release) `shouldBe` Just files
                 let accounted = weighVersion release
                 accounted `shouldSatisfy` (> files * urlLength)
                 seen <- newIORef 0

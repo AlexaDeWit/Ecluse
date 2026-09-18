@@ -33,6 +33,7 @@ import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
 import Ecluse.Test.Rules (admitRule)
+import Ecluse.Test.Snapshot (versionDocOf)
 
 {- | One npm re-evaluation bundle at the caller's clock, artifact byte cap, publish capability,
 version resolver, and rules.
@@ -86,7 +87,7 @@ mirrorPoliciesCapped rules artifactMaxBytes publish currentDigests =
         Npm
         (npmPolicyWith getCurrentTime artifactMaxBytes publish resolve rules)
   where
-    resolve name version = pure (VersionPresent (mirrorableDetails name version) Nothing)
+    resolve name version = pure (VersionPresent (versionDocOf (mirrorableDetails name version)) Nothing)
 
     -- The sample snapshot renamed to the conventional @{name}-{version}.tgz@ and given the caller's
     -- digest set, so file selection passes and the tamper gate verifies against exactly this set.

@@ -19,6 +19,7 @@ module Ecluse.Core.Registry.Metadata (
     fetchThenProject,
 
     -- * One version's read
+    VersionDoc (..),
     VersionRead (..),
 
     -- * Errors
@@ -35,7 +36,7 @@ import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, respons
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError)
-import Ecluse.Core.Snapshot (ContentDigest, digestBytes, digestOf)
+import Ecluse.Core.Snapshot (ContentDigest, Snapshot, digestBytes, digestOf)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version)
 
@@ -57,12 +58,23 @@ data MetadataClient = MetadataClient
     -- ^ One version's projection with the document's own @latest@. Errors retain the upstream failure.
     }
 
+{- | One version's typed projection paired with the object the source declared it with, built
+once per read and never re-paired, so the mirror write republishes what the rules admitted.
+-}
+data VersionDoc = VersionDoc
+    { vdDetails :: PackageDetails
+    -- ^ The typed view the rules engine decides on.
+    , vdRaw :: Maybe CachedDoc
+    -- ^ The version object as the source served it. 'Nothing' for an adapter that retains none.
+    }
+    deriving stock (Eq, Show)
+
 {- | The requested version and the @latest@ tag the same document declared. Both come from one
 bounded read, so a caller needing the tag adds no second fetch.
 -}
 data VersionRead = VersionRead
-    { vrDetails :: Maybe PackageDetails
-    -- ^ 'Nothing' means the package resolved without this version.
+    { vrVersion :: Maybe (Snapshot VersionDoc)
+    -- ^ The pair, scoped to the fetch it was read from. 'Nothing': the package resolved without this version.
     , vrUpstreamLatest :: Maybe Version
     {- ^ The document's @latest@ target, whether or not it is the requested version. 'Nothing'
     when the document declares none, or the ecosystem has no such tag.
@@ -110,7 +122,7 @@ data VersionEvaluation
     = {- | The version resolved and projected, ready for the rules engine. The second field is
       the same document's 'vrUpstreamLatest'.
       -}
-      VersionPresent PackageDetails (Maybe Version)
+      VersionPresent (Snapshot VersionDoc) (Maybe Version)
     | -- | The package exists but does not supply the requested version.
       VersionMissing
     | -- | Metadata was unavailable. Public admission and workers retain their retry policy.
@@ -122,9 +134,9 @@ fetchVersionDetails :: MetadataClient -> PackageName -> Version -> IO VersionEva
 fetchVersionDetails client name version =
     fetchVersionMetadata client name version <&> \case
         Left _ -> VersionMetadataUnavailable
-        Right versionRead -> case vrDetails versionRead of
+        Right versionRead -> case vrVersion versionRead of
             Nothing -> VersionMissing
-            Just details -> VersionPresent details (vrUpstreamLatest versionRead)
+            Just present -> VersionPresent present (vrUpstreamLatest versionRead)
 
 -- | Classify unsuccessful lookups for retry. A resolved version has no transience.
 versionTransience :: VersionEvaluation -> Maybe Transience

@@ -36,14 +36,15 @@ import Ecluse.Core.Registry (
     RegistryResponse,
     UrlFormationError,
  )
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Exchange (boundedExchange, boundedFetch, formThen)
 import Ecluse.Core.Registry.Request (sealRequest)
 import Ecluse.Core.Security (Limits)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (Version)
 
-{- | The version one mirror write adds, and the release tag the store must carry once it lands.
-The caller decides the tag, so no codec derives one from the version in hand.
+{- | What one mirror write declares: the version, the release tag the store must carry once it
+lands, and the version's own metadata. The caller decides the tag, so no codec derives one.
 -}
 data PublishPlan = PublishPlan
     { ppVersion :: Version
@@ -51,6 +52,10 @@ data PublishPlan = PublishPlan
     , ppLatest :: Version
     {- ^ The @latest@ target to declare, always a version the store holds after this write. It is
     the published version itself when nothing else is mirrored.
+    -}
+    , ppMetadata :: Maybe CachedDoc
+    {- ^ The version object the public registry served at admission, republished under the codec's
+    field-rewrite contract. 'Nothing' when the adapter retains none: the codec then declares the minimum.
     -}
     }
     deriving stock (Eq, Show)
