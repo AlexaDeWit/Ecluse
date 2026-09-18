@@ -99,10 +99,6 @@ module Ecluse (
 
     -- * npm front door
     mountBindingFor,
-
-    -- * Composition glue (exposed for direct testing)
-    orExit,
-    BootAborted (..),
 ) where
 
 import Control.Exception (AsyncException (ThreadKilled, UserInterrupt), SomeAsyncException)
