@@ -31,7 +31,6 @@ module Ecluse.Runtime.Cve.Sync (
 ) where
 
 import Conduit (ConduitT, runResourceT, (.|))
-import Control.Retry (retrying)
 import Data.Conduit.Combinators qualified as C
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -57,7 +56,6 @@ import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apEpssScoreDate, apOsvNew
 import Ecluse.Core.Osv.Schema (EpssRequirement, MetaKey (MetaBuiltAt, MetaRowCount), renderMetaKey)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Stream (boundBytes)
-import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
  )
@@ -203,7 +201,7 @@ data SyncSchedule = SyncSchedule
     , schedPollDelay :: Int
     -- ^ The steady ETag-poll interval.
     , schedAbsentReport :: Int
-    -- ^ How long between repeats of the unloaded-database report, once the burst has conceded.
+    -- ^ How long between repeats of the unloaded-database and fetch-failure reports.
     }
 
 {- | The shipped boot-burst backoff: an immediate first attempt, then a retry after each delay,
@@ -212,9 +210,9 @@ then the burst concedes to the steady poll. The poll interval, not this, is the 
 bootBackoffDelays :: [Int]
 bootBackoffDelays = [1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000]
 
-{- | The shipped gap between repeats of the unloaded-database report, in microseconds. A stuck
-rollout keeps saying so without filling the log at the poll interval. The rules' outage reminder
-paces on the same gap.
+{- | The shipped gap between repeats of the unloaded-database and fetch-failure reports, in
+microseconds. A stuck rollout keeps saying so without filling the log at the poll interval. The
+rules' outage reminder paces on the same gap.
 -}
 absentReportInterval :: Int
 absentReportInterval = 900_000_000
@@ -240,31 +238,32 @@ runCveSync ::
     SyncSchedule ->
     SyncHooks ->
     m ()
-runCveSync metrics tracing env schedule hooks = burst >>= poll 0
+runCveSync metrics tracing env schedule hooks = burst initialPacing 0 (schedBootBackoff schedule) >>= uncurry poll
   where
     eco = show (syncEcosystem env) :: Text
+    interval = schedAbsentReport schedule
 
     step lastSeen = do
-        outcome <- observedStep metrics tracing env eco (hookFirstSync hooks) lastSeen
+        stepped <- observedStep metrics tracing env eco (hookFirstSync hooks) lastSeen
         liftIO (hookPushAge hooks)
-        pure outcome
+        pure stepped
 
-    -- 'lastSeen' is fixed at 'Nothing' because the only not-settled outcomes ('SyncAbsent',
-    -- 'SyncFetchFaulted') return it untouched, so it never changes across the burst.
-    burst = do
-        (result, (settled, seen')) <-
-            retrying
-                (delayListPolicy (schedBootBackoff schedule))
-                (\_ (_, (done, _)) -> pure (not done))
-                (\_ -> step Nothing)
-        unless settled (reportUnloaded eco (syncStoreRef env) result)
-        pure seen'
+    -- Each attempt reads 'Nothing' as last seen, because a not-settled outcome never advances it.
+    -- The burst concedes to the steady poll once its delays are spent.
+    burst pacing delta delays = do
+        stepped <- step Nothing
+        pacing' <- reportFetch delta stepped pacing
+        case delays of
+            _ | stSettled stepped -> pure (pacing', stSeen stepped)
+            [] -> (pacing', stSeen stepped) <$ reportUnloaded eco (syncStoreRef env) (stResult stepped)
+            delay : rest -> threadDelay delay >> burst pacing' delay rest
 
-    poll sinceReport lastSeen = do
+    poll pacing lastSeen = do
         threadDelay (schedPollDelay schedule)
-        (result, (_, seen')) <- step lastSeen
-        waited <- repeatUnloaded result (sinceReport + schedPollDelay schedule)
-        poll waited seen'
+        stepped <- step lastSeen
+        pacing' <- reportFetch (schedPollDelay schedule) stepped pacing
+        unloaded <- repeatUnloaded (stResult stepped) (pacUnloaded pacing' + schedPollDelay schedule)
+        poll pacing'{pacUnloaded = unloaded} (stSeen stepped)
 
     -- The report repeats only while the slot has never been filled, so the first swap ends it
     -- and a later outage starts the interval again.
@@ -272,8 +271,48 @@ runCveSync metrics tracing env schedule hooks = burst >>= poll 0
         liftIO (currentAdvisoryEtag (syncSlot env)) >>= \case
             Just _ -> pure 0
             Nothing
-                | elapsed < schedAbsentReport schedule -> pure elapsed
+                | elapsed < interval -> pure elapsed
                 | otherwise -> 0 <$ reportUnloaded eco (syncStoreRef env) result
+
+    reportFetch delta stepped pacing = do
+        let (fetching, report) = paceFetchFailure interval delta (stFault stepped) (pacFetchFailure pacing)
+        traverse_ (reportFetchHealth eco) report
+        pure pacing{pacFetchFailure = fetching}
+
+{- The loop's pacing of its two repeating reports, both on 'schedAbsentReport': the time since the
+unloaded-database report, and the time since the fetch-failure report while fetches keep failing. -}
+data Pacing = Pacing
+    { pacUnloaded :: Int
+    , pacFetchFailure :: Maybe Int
+    }
+
+initialPacing :: Pacing
+initialPacing = Pacing{pacUnloaded = 0, pacFetchFailure = Nothing}
+
+-- What one paced fetch outcome reports, if anything.
+data FetchHealth
+    = FetchFailing OsvDbFetchFault
+    | FetchStillFailing OsvDbFetchFault
+    | FetchRecovered
+
+{- Pace the fetch-failure report: the first failure reports at once, a later one only after
+@interval@, and the first fetch that succeeds after a failure reports the recovery. -}
+paceFetchFailure :: Int -> Int -> Maybe OsvDbFetchFault -> Maybe Int -> (Maybe Int, Maybe FetchHealth)
+paceFetchFailure interval delta fault failing = case (fault, failing) of
+    (Nothing, Nothing) -> (Nothing, Nothing)
+    (Nothing, Just _) -> (Nothing, Just FetchRecovered)
+    (Just f, Nothing) -> (Just 0, Just (FetchFailing f))
+    (Just f, Just elapsed)
+        | elapsed + delta >= interval -> (Just 0, Just (FetchStillFailing f))
+        | otherwise -> (Just (elapsed + delta), Nothing)
+
+{- The store that keeps failing ages the serving artifact towards its maximum, so the failure logs at
+the level an operator pages on. The fault names the transport cause, never a credential. -}
+reportFetchHealth :: (KatipContext m) => Text -> FetchHealth -> m ()
+reportFetchHealth eco = \case
+    FetchFailing fault -> logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync fetch failed: " <> show fault))
+    FetchStillFailing fault -> logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync fetch still failing: " <> show fault))
+    FetchRecovered -> logFM InfoS (ls ("cve-sync[" <> eco <> "]: sync fetch recovered"))
 
 {- The line an operator alerts on while nothing is loaded. Its cause separates an artifact never
 published from one verification refused and from an access that keeps failing. -}
@@ -297,8 +336,18 @@ unloadedCause store = \case
     refusedArtifact =
         "the advisory artifact at " <> store <> " was refused by verification, so nothing is loaded and this ecosystem stays not-ready. The refusal line names what failed, and ecluse pilot must publish an artifact that verifies."
 
-{- One observed step, yielding its classification beside (the burst may stop, the ETag now last
-seen). Residue propagates to supervision, and the span closes after the two records, so it reads longer.
+-- One observed step as the loop reads it. A fetch fault rides along for the loop's paced report.
+data Stepped = Stepped
+    { stResult :: AdvisorySyncResult
+    , stSettled :: Bool
+    -- ^ Whether the boot burst may stop.
+    , stSeen :: Maybe DbEtag
+    -- ^ The ETag now last seen.
+    , stFault :: Maybe OsvDbFetchFault
+    }
+
+{- One observed step. Residue propagates to supervision, and the span closes after the two records,
+so it reads longer.
 -}
 observedStep ::
     (MonadUnliftIO m, KatipContext m) =>
@@ -308,49 +357,48 @@ observedStep ::
     Text ->
     IO () ->
     Maybe DbEtag ->
-    m (AdvisorySyncResult, (Bool, Maybe DbEtag))
+    m Stepped
 observedStep metrics tracing env eco notifyFirstSync lastSeen =
     withRunInIO $ \runInIO ->
-        astpSyncAttemptSpan tracing ecosystem fst (metered (runInIO attempt))
+        astpSyncAttemptSpan tracing ecosystem stResult (metered (runInIO attempt))
   where
     ecosystem = syncEcosystem env
 
     -- Residue escaping the attempt bypasses these records. An attempt that never
     -- concluded has no result to label, and the supervision above reports it.
-    metered :: IO (AdvisorySyncResult, (Bool, Maybe DbEtag)) -> IO (AdvisorySyncResult, (Bool, Maybe DbEtag))
+    metered :: IO Stepped -> IO Stepped
     metered act = do
         (attempted, seconds) <- timedSeconds act
-        asmpSyncAttempt metrics ecosystem (fst attempted)
-        asmpSyncDuration metrics ecosystem (fst attempted) seconds
+        asmpSyncAttempt metrics ecosystem (stResult attempted)
+        asmpSyncDuration metrics ecosystem (stResult attempted) seconds
         pure attempted
+
+    stepped result settled seen = Stepped{stResult = result, stSettled = settled, stSeen = seen, stFault = Nothing}
 
     attempt =
         liftIO (syncStep env lastSeen) >>= \case
-            SyncFetchFaulted fault -> do
+            SyncFetchFaulted fault ->
                 -- The step learned nothing about the remote artifact, so the last seen ETag and
-                -- the last good database both stand and the next poll retries. One line per poll,
-                -- at the level an operator pages on, because a store that keeps failing ages the
-                -- serving artifact towards its maximum.
-                logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync fetch failed: " <> show fault))
-                pure (AdvisoryFetchFailed, (False, lastSeen))
+                -- the last good database both stand and the next poll retries.
+                pure (stepped AdvisoryFetchFailed False lastSeen){stFault = Just fault}
             SyncSwapped etag meta -> do
                 logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show (metadataSummary meta)))
                 source <- liftIO (currentAdvisorySource (syncSlot env))
                 logFM InfoS (ls ("cve-sync[" <> eco <> "]: serving artifact source: " <> maybe unrecordedValue renderAdvisorySource source))
                 whenNothing_ (asPushedAt =<< source) (undatedArtifact eco etag)
                 liftIO notifyFirstSync
-                pure (AdvisorySwapped, (True, Just etag))
+                pure (stepped AdvisorySwapped True (Just etag))
             SyncUnchanged -> do
                 logFM DebugS (ls ("cve-sync[" <> eco <> "]: advisory database unchanged"))
-                pure (AdvisoryUnchanged, (True, lastSeen))
+                pure (stepped AdvisoryUnchanged True lastSeen)
             SyncAbsent -> do
                 logFM DebugS (ls ("cve-sync[" <> eco <> "]: no advisory database published yet"))
-                pure (AdvisoryNonePublished, (False, lastSeen))
+                pure (stepped AdvisoryNonePublished False lastSeen)
             SyncRejected etag rejection -> do
                 logFM ErrorS (ls ("cve-sync[" <> eco <> "]: downloaded artifact refused (keeping last good): " <> show rejection))
                 -- Remember the ETag so the same refused artifact is not re-downloaded.
                 -- A fixed re-publish carries a new one. Identical bytes cannot end differently.
-                pure (AdvisoryRefused, (True, Just etag))
+                pure (stepped AdvisoryRefused True (Just etag))
 
 {- An artifact the object store gave no publication time for: its age cannot be established, so
 CVE-based denial refuses on it. One line per swap, because only a swap can install one. -}

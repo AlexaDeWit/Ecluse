@@ -117,6 +117,10 @@ captureSwapLog env = do
 unloadedReports :: Text -> Int
 unloadedReports = T.count "no advisory artifact has ever been published"
 
+-- How many first-failure fetch reports a captured log holds, at the paging level.
+fetchFailureReports :: Text -> Int
+fetchFailureReports logged = length (filter (\l -> T.isInfixOf "sync fetch failed" l && T.isInfixOf "\"sev\":\"Error\"" l) (lines logged))
+
 installedSource :: CveSlot -> IO AdvisorySource
 installedSource slot =
     currentAdvisorySource slot >>= maybe (throwIO (TestContractEscape "no generation installed")) pure
@@ -753,6 +757,52 @@ spec = do
                         SyncHooks{hookFirstSync = pass, hookPushAge = onStep}
                         (awaitCount "three polls past the boot burst" steps 4)
                 unloadedReports logged `shouldSatisfy` (>= 2)
+
+        it "reports a failing fetch at Error once, not on every poll inside the interval" $
+            withSyncEnv $ \_ _ envWith -> do
+                (steps, onStep) <- newSwapCounter
+                logged <-
+                    captureSyncLog
+                        (envWith (headOnlyFetch (Left transportDown)))
+                        (scheduleOf [] 10_000)
+                        SyncHooks{hookFirstSync = pass, hookPushAge = onStep}
+                        (awaitCount "five polls past the boot attempt" steps 6)
+                fetchFailureReports logged `shouldBe` 1
+                logged `shouldSatisfy` T.isInfixOf "transport down"
+                T.count "sync fetch still failing" logged `shouldBe` 0
+
+        it "reports the failure again once the interval has passed, with the latest fault" $
+            withSyncEnv $ \_ _ envWith -> do
+                (steps, onStep) <- newSwapCounter
+                logged <-
+                    captureSyncLog
+                        (envWith (headOnlyFetch (Left transportDown)))
+                        reportingEveryPoll
+                        SyncHooks{hookFirstSync = pass, hookPushAge = onStep}
+                        (awaitCount "three polls past the boot attempt" steps 4)
+                fetchFailureReports logged `shouldBe` 1
+                length (filter (\l -> T.isInfixOf "sync fetch still failing" l && T.isInfixOf "\"sev\":\"Error\"" l) (lines logged)) `shouldSatisfy` (>= 2)
+
+        it "reports the recovery at Info on the first poll that fetches again" $
+            withSyncEnv $ \_ _ envWith -> do
+                (steps, onStep) <- newSwapCounter
+                failing <- newIORef True
+                let flaky =
+                        CveFetch
+                            { fetchHead =
+                                readIORef failing <&> \case
+                                    True -> Left transportDown
+                                    False -> Right Nothing
+                            , fetchDownload = \_ -> pure (Left transportDown)
+                            }
+                logged <-
+                    captureSyncLog
+                        (envWith flaky)
+                        (scheduleOf [] 10_000)
+                        SyncHooks{hookFirstSync = pass, hookPushAge = onStep}
+                        (awaitCount "two failing polls" steps 3 >> writeIORef failing False >> awaitCount "two polls after recovery" steps 6)
+                fetchFailureReports logged `shouldBe` 1
+                length (filter (\l -> T.isInfixOf "sync fetch recovered" l && T.isInfixOf "\"sev\":\"Info\"" l) (lines logged)) `shouldBe` 1
 
         it "writes no such report once an artifact has loaded" $
             withSyncEnv $ \_ _ envWith -> do

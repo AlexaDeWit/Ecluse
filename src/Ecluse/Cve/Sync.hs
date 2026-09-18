@@ -56,7 +56,7 @@ import Ecluse.Core.Rules.Freshness (
     ageAlarmStep,
     assessAdvisoryAge,
  )
-import Ecluse.Core.Rules.Outage (OutageReport (..), OutageState (Healthy), sourceReporter)
+import Ecluse.Core.Rules.Outage (OutageReport (..), OutageState (Healthy), sourceReporter, tvarOutageStore)
 import Ecluse.Core.Server.Readiness (
     DatabaseRequirement,
     MountReadiness,
@@ -94,7 +94,7 @@ cveRuleDepsFor plan reporter reportOutage eco =
 
 -- One handle's reporter, over the outage state every mount of the ecosystem shares.
 sourceReporterOf :: (OutageReport -> IO ()) -> CveSyncHandle -> SourceReporter
-sourceReporterOf emit handle = sourceReporter outageReportPeriod (csClock handle) (csOutage handle) emit
+sourceReporterOf emit handle = sourceReporter outageReportPeriod (csClock handle) (tvarOutageStore (csOutage handle)) emit
 
 {- | How often a continuing outage reminds the operator: the unloaded-database report's own gap, so
 an outage costs the log one line per interval on either path.

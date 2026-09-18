@@ -21,6 +21,8 @@ module Ecluse.Core.Rules.Outage (
     stepOutage,
 
     -- * A reporter over shared state
+    OutageStore (..),
+    tvarOutageStore,
     sourceReporter,
 ) where
 
@@ -96,18 +98,36 @@ stepOutage period now health current = case (current, health) of
       where
         rules = Map.insert rule cause (ooRules ongoing)
 
-{- | A reporter folding into one source's shared state. Off the steady state it reads no clock and
-runs no transaction, so a healthy source costs an evaluation one memory read.
+-- | Where one source's outage state lives: a plain read, and a fold committed as one unit.
+data OutageStore = OutageStore
+    { readOutage :: IO OutageState
+    , commitOutage :: (OutageState -> (OutageState, Maybe OutageReport)) -> IO (Maybe OutageReport)
+    -- ^ Fold the state in place and hand back the report the fold produced.
+    }
+
+-- | The live store: one 'TVar' shared by every mount of an ecosystem.
+tvarOutageStore :: TVar OutageState -> OutageStore
+tvarOutageStore shared =
+    OutageStore
+        { readOutage = readTVarIO shared
+        , commitOutage = \advance -> atomically $ do
+            (next, report) <- advance <$> readTVar shared
+            writeTVar shared next
+            pure report
+        }
+
+{- | A reporter folding into one source's store. A healthy source costs an evaluation one read, and
+an outage that changes nothing (the same rule, still failing, inside the period) costs one read and
+one clock reading, so only a transition or a due reminder commits.
 -}
-sourceReporter :: NominalDiffTime -> IO UTCTime -> TVar OutageState -> (OutageReport -> IO ()) -> SourceReporter
-sourceReporter period clock shared emit = SourceReporter $ \health ->
-    readTVarIO shared >>= \case
+sourceReporter :: NominalDiffTime -> IO UTCTime -> OutageStore -> (OutageReport -> IO ()) -> SourceReporter
+sourceReporter period clock store emit = SourceReporter $ \health ->
+    readOutage store >>= \case
         Healthy | SourceAnswered _ <- health -> pass
-        _ -> do
+        current -> do
             now <- clock
-            report <- atomically $ do
-                current <- readTVar shared
-                let (next, report) = stepOutage period now health current
-                writeTVar shared next
-                pure report
-            traverse_ emit report
+            let advance = stepOutage period now health
+                (next, report) = advance current
+            -- The commit folds again over the fresh state, so a concurrent change is never lost.
+            when (next /= current || isJust report) $
+                commitOutage store advance >>= traverse_ emit

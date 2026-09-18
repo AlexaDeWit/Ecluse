@@ -85,10 +85,10 @@ spec = do
 
     describe "sourceReporter" $ do
         it "emits each report through the shared state, and nothing per healthy evaluation" $ do
-            shared <- newTVarIO Healthy
+            (store, _, shared) <- countingStore
             clock <- newIORef t0
             emitted <- newIORef []
-            let reporter = sourceReporter period (readIORef clock) shared (\r -> modifyIORef' emitted (r :))
+            let reporter = sourceReporter period (readIORef clock) store (\r -> modifyIORef' emitted (r :))
             replicateM_ 3 (reportSource reporter (up "DenyIfCve"))
             reportSource reporter (down "DenyIfCve")
             replicateM_ 50 (reportSource reporter (down "DenyIfCve"))
@@ -101,3 +101,35 @@ spec = do
                                , OutageRecovered t0
                                ]
             readTVarIO shared `shouldReturn` Healthy
+
+        it "commits only on a transition or a due reminder, never per evaluation inside the period" $ do
+            -- The serve leg keeps evaluating through an outage, so the common path must stay a
+            -- read and a pure check rather than a transaction on the shared state.
+            (store, commits, _) <- countingStore
+            clock <- newIORef t0
+            let reporter = sourceReporter period (readIORef clock) store (const pass)
+            replicateM_ 10 (reportSource reporter (up "DenyIfCve"))
+            readIORef commits `shouldReturn` 0
+            reportSource reporter (down "DenyIfCve")
+            readIORef commits `shouldReturn` 1
+            forM_ [1 .. 200 :: Integer] $ \secs -> do
+                writeIORef clock (addUTCTime (fromInteger secs) t0)
+                reportSource reporter (down "DenyIfCve")
+            readIORef commits `shouldReturn` 1
+            -- A second rule joining the outage changes the state, so it commits without a report.
+            reportSource reporter (down "DenyIfEpss")
+            readIORef commits `shouldReturn` 2
+            writeIORef clock (addUTCTime period t0)
+            reportSource reporter (down "DenyIfCve")
+            readIORef commits `shouldReturn` 3
+            reportSource reporter (up "DenyIfCve")
+            reportSource reporter (up "DenyIfEpss")
+            readIORef commits `shouldReturn` 5
+
+-- | The live store wrapped so the spec can count how many folds it committed.
+countingStore :: IO (OutageStore, IORef Int, TVar OutageState)
+countingStore = do
+    shared <- newTVarIO Healthy
+    commits <- newIORef (0 :: Int)
+    let live = tvarOutageStore shared
+    pure (live{commitOutage = \advance -> modifyIORef' commits (+ 1) >> commitOutage live advance}, commits, shared)
