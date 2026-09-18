@@ -93,7 +93,7 @@ weight = weighVersion . untagged . Just
 
 -- The baseline release read carrying the given raw version object.
 carrying :: Value -> VersionRead
-carrying raw = (untagged (Just baseline)){vrVersion = fmap (fmap (\doc -> doc{vdRaw = Just (fst npmCached raw)})) (vrVersion (untagged (Just baseline)))}
+carrying raw = (untagged (Just baseline)){vrVersion = (\doc -> doc{vdRaw = Just (fst npmCached raw)}) <$> vrVersion (untagged (Just baseline))}
 
 untagged :: Maybe PackageDetails -> VersionRead
 untagged details = versionReadOf details Nothing

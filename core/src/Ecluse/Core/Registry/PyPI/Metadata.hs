@@ -65,7 +65,6 @@ import Ecluse.Core.Security (
  )
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
-import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -112,14 +111,14 @@ projectPyPIIndex limits name = projectMetadata (projectSimpleIndexFromValue name
 A Simple index declares no release tag, so 'vrUpstreamLatest' is always 'Nothing' here. -}
 fetchPyPIVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchPyPIVersion tracing origin name version =
-    fetchThenProject tracing (fetchSimpleIndex origin) name $ \body ->
-        untagged (digestOf body) <$> projectPyPIVersion (ocLimits origin) name version body
+    fetchThenProject tracing (fetchSimpleIndex origin) name $
+        fmap untagged . projectPyPIVersion (ocLimits origin) name version
   where
-    untagged digest details =
+    untagged details =
         VersionRead
             { vrVersion = do
                 located <- details >>= enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin)
-                pure (Snapshot digest (VersionDoc{vdDetails = located, vdRaw = Nothing}))
+                pure VersionDoc{vdDetails = located, vdRaw = Nothing}
             , vrUpstreamLatest = Nothing
             }
 

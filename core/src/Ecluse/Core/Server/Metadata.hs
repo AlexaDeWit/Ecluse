@@ -45,7 +45,6 @@ import Ecluse.Core.Server.Cache (
     resolveMetadata,
     resolveVersion,
  )
-import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -153,7 +152,7 @@ selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
 selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
 
 {- | Project a held entry onto one version's read, so a warm full-cache hit answers as a selective
-read would: the pair's two sides and its digest all come from the one entry.
+read would: the pair's two sides both come from the one entry.
 -}
 readOfEntry :: (Version -> CachedDoc -> Maybe CachedDoc) -> Version -> CacheEntry -> VersionRead
 readOfEntry selectRaw version entry =
@@ -162,7 +161,7 @@ readOfEntry selectRaw version entry =
         , vrUpstreamLatest = Map.lookup "latest" (infoDistTags (entryInfo entry))
         }
   where
-    pairOf details = Snapshot (entryDigest entry) (VersionDoc{vdDetails = details, vdRaw = selectRaw version (entryRaw entry)})
+    pairOf details = VersionDoc{vdDetails = details, vdRaw = selectRaw version (entryRaw entry)}
 
 entryToManifest :: CacheEntry -> Manifest
 entryToManifest entry =

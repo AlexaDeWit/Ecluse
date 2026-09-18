@@ -4,7 +4,7 @@
 
 {- | Metadata caching and failure observations across full and selective reads.
 Failures remain uncached and retain their typed cause. A version read pairs its typed view with
-the raw object of the one snapshot it came from, on every path of the hybrid.
+the raw object of the one body it came from, on every path of the hybrid.
 -}
 module Ecluse.Core.Server.MetadataSpec (spec) where
 
@@ -47,7 +47,6 @@ import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache)
 import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, selectVersion)
-import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot, snapshotDigest, snapshotValue))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamFetchError))
 import Ecluse.Core.Version (Version, mkVersion)
@@ -77,7 +76,7 @@ spec = do
             fmap (fmap pkgVersion . readDetails) found `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 1
 
-        it "pairs a warm full-cache select with that entry's own raw object and digest, with no upstream call" $ do
+        it "pairs a warm full-cache select with that entry's own raw object, with no upstream call" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0", "2.0.0"]
@@ -85,7 +84,6 @@ spec = do
             _ <- fetchFullManifest client name
             found <- fetchVersionMetadata client name (ver "1.0.0")
             fmap (fmap vdRaw . pairOf) found `shouldBe` Right (Just (Just (markedObject "1.0.0")))
-            fmap (fmap snapshotDigest . vrVersion) found `shouldBe` Right (Just fullDigest)
             readIORef calls `shouldReturn` 1
 
         it "keys a warm pair by version: a sibling select pairs its own raw object, never a neighbour's" $ do
@@ -116,7 +114,7 @@ spec = do
             -- shared full-packument cache (only the version cache).
             cachedMetadata cache source name `shouldReturn` Nothing
 
-        it "re-serves the cold pair whole from the version cache: the selected raw object and its digest, no re-fetch" $ do
+        it "re-serves the cold pair whole from the version cache: the selected raw object, no re-fetch" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
@@ -124,13 +122,12 @@ spec = do
             cold <- fetchVersionMetadata client name (ver "1.0.0")
             warmHit <- fetchVersionMetadata client name (ver "1.0.0")
             fmap (fmap vdRaw . pairOf) cold `shouldBe` Right (Just (Just (markedObject "cold")))
-            fmap (fmap snapshotDigest . vrVersion) cold `shouldBe` Right (Just coldDigest)
             warmHit `shouldBe` cold
             readIORef calls `shouldReturn` 1
 
-        it "keeps a cached pair on its own snapshot: a later full fetch never re-pairs it" $ do
+        it "keeps a cached pair as built: a later full fetch never re-pairs it" $ do
             -- A pair's two sides always come from one fetch, so the version-cache hit wins over
-            -- a full entry that arrived later, rather than mixing the two snapshots.
+            -- a full entry that arrived later, rather than mixing the two bodies.
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
@@ -139,7 +136,7 @@ spec = do
             _ <- fetchFullManifest client name
             again <- fetchVersionMetadata client name (ver "1.0.0")
             fmap (fmap vdRaw . pairOf) again `shouldBe` Right (Just (Just (markedObject "cold")))
-            fmap (fmap snapshotDigest . vrVersion) again `shouldBe` Right (Just coldDigest)
+            fmap (fmap (pkgVersion . vdDetails) . pairOf) again `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 2
 
         it "partitions pairs by source: another origin's warm entry never pairs this origin's select" $ do
@@ -311,17 +308,11 @@ publicClientAt at origin cache full version =
 
 -- The pair a read carries, for the cases that assert on both of its sides.
 pairOf :: VersionRead -> Maybe VersionDoc
-pairOf = fmap snapshotValue . vrVersion
+pairOf = vrVersion
 
 -- The raw object the fixtures mark each version with, so a case can tell which snapshot it came from.
 markedObject :: Text -> CachedDoc
 markedObject marker = fst npmCached (object ["marker" .= marker])
-
-fullDigest :: ContentDigest
-fullDigest = digestOf "raw-bytes"
-
-coldDigest :: ContentDigest
-coldDigest = digestOf "cold-bytes"
 
 -- A never-dialled loopback origin, so no fixture here reaches the network.
 stubUrl :: RegistryUrl
@@ -331,18 +322,18 @@ stubUrl = loopbackRegistryUrl "http://localhost:1"
 countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError Manifest)
 countingFull calls info _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
-    pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached packument, manifestDigest = fullDigest})
+    pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached packument, manifestDigest = digestOf "raw-bytes"})
   where
     packument :: Value
     packument = object ["versions" .= object [Key.fromText v .= object ["marker" .= v] | v <- Map.keys (infoVersions info)]]
 
--- The selective fetch marks its raw object as the cold path's, under its own digest.
+-- The selective fetch marks its raw object as the cold path's.
 countingVersion :: IORef Int -> PackageInfo -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 countingVersion calls info _name version = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
     pure . Right $
         VersionRead
-            { vrVersion = (\selected -> Snapshot coldDigest VersionDoc{vdDetails = selected, vdRaw = Just (markedObject "cold")}) <$> selectVersion version info
+            { vrVersion = (\selected -> VersionDoc{vdDetails = selected, vdRaw = Just (markedObject "cold")}) <$> selectVersion version info
             , vrUpstreamLatest = Map.lookup "latest" (infoDistTags info)
             }
 

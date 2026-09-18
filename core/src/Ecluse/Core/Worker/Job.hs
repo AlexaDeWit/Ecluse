@@ -63,7 +63,6 @@ import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (Wil
 import Ecluse.Core.Security (authorityLabel, hostPortAddress)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Path (Filename)
-import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
 import Ecluse.Core.Version (Version, selectLatest)
@@ -240,7 +239,7 @@ admitEvaluation policy job evaluation = case evaluation of
         pure (Left (unresolved ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job)))
     VersionMissing ->
         pure (Left (unresolved ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version")))
-    VersionPresent (Snapshot _ doc) upstreamLatest -> do
+    VersionPresent doc upstreamLatest -> do
         -- The back-fill path emits no per-decision audit line, so the audit-only advisory ETag
         -- is not resolved for its context.
         ctx <- liftIO (mkEvalContext (wpNow policy) (pure Nothing))

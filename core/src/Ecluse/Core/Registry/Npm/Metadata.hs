@@ -67,7 +67,6 @@ import Ecluse.Core.Security (
  )
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
-import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
@@ -106,7 +105,7 @@ fetchNpmVersion tracing origin name version =
         fmap locationChecked . projectNpmVersion (ocLimits origin) name version
   where
     locationChecked versionRead =
-        versionRead{vrVersion = vrVersion versionRead >>= traverse locationCheckedDoc}
+        versionRead{vrVersion = vrVersion versionRead >>= locationCheckedDoc}
     locationCheckedDoc doc =
         (\details -> doc{vdDetails = details}) <$> enforceArtifactLocationsOf npmArtifactAuthorities (originBaseUrl origin) (vdDetails doc)
 
@@ -133,7 +132,7 @@ projectNpmVersion limits name version body = do
                 raw <- svVersion selected
                 -- Use the same rendered version key as the full-document projection.
                 details <- projectVersionEntry name (mkVersion Npm (renderVersion version)) publishedAt raw
-                pure (Snapshot (digestOf body) (VersionDoc{vdDetails = details, vdRaw = Just (fst npmCached raw)}))
+                pure VersionDoc{vdDetails = details, vdRaw = Just (fst npmCached raw)}
             , vrUpstreamLatest = latestTarget (svDistTagLatest selected)
             }
 

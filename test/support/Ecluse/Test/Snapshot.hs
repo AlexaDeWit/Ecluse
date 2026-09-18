@@ -36,9 +36,9 @@ projectJsonSnapshot project value = do
 syntheticSnapshot :: (Show a) => a -> Snapshot a
 syntheticSnapshot value = Snapshot (digestOf (encodeUtf8 (show value :: Text))) value
 
--- | A synthetic pair with no raw object, for a case that decides on the typed view alone.
-versionDocOf :: PackageDetails -> Snapshot VersionDoc
-versionDocOf details = syntheticSnapshot VersionDoc{vdDetails = details, vdRaw = Nothing}
+-- | A pair with no raw object, for a case that decides on the typed view alone.
+versionDocOf :: PackageDetails -> VersionDoc
+versionDocOf details = VersionDoc{vdDetails = details, vdRaw = Nothing}
 
 -- | A version read carrying the given release and the document's own latest.
 versionReadOf :: Maybe PackageDetails -> Maybe Version -> VersionRead
@@ -46,4 +46,4 @@ versionReadOf details upstreamLatest = VersionRead{vrVersion = versionDocOf <$> 
 
 -- | The typed side of a read, for parity against the whole-document projection.
 readDetails :: VersionRead -> Maybe PackageDetails
-readDetails = fmap (vdDetails . snapshotValue) . vrVersion
+readDetails = fmap vdDetails . vrVersion

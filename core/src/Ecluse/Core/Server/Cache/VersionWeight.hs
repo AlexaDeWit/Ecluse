@@ -23,7 +23,6 @@ import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, foldCachedDoc)
 import Ecluse.Core.Registry.Metadata (VersionDoc (vdDetails, vdRaw), VersionRead (vrUpstreamLatest, vrVersion))
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (renderVersion)
 
 -- | Estimate retained release bytes. 'maxBound' marks an uncacheable saturated estimate.
@@ -34,10 +33,8 @@ weighVersion versionRead =
     versionPart = maybe 1024 pairWeight (vrVersion versionRead)
     latestPart = maybe 0 (textWeight . renderVersion) (vrUpstreamLatest versionRead)
 
--- The digest is 32 bytes plus its wrapper.
-pairWeight :: Snapshot VersionDoc -> Integer
-pairWeight (Snapshot _ doc) =
-    64 + detailsWeight (vdDetails doc) + maybe 0 rawWeight (vdRaw doc)
+pairWeight :: VersionDoc -> Integer
+pairWeight doc = detailsWeight (vdDetails doc) + maybe 0 rawWeight (vdRaw doc)
 
 {- The raw object on the full store's measure, its compact-encoded size scaled by the shared
 expansion, estimated by one walk of the tree so the serve path never encodes it. -}

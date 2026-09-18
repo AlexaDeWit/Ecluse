@@ -36,7 +36,7 @@ import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, respons
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError)
-import Ecluse.Core.Snapshot (ContentDigest, Snapshot, digestBytes, digestOf)
+import Ecluse.Core.Snapshot (ContentDigest, digestBytes, digestOf)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version)
 
@@ -59,7 +59,7 @@ data MetadataClient = MetadataClient
     }
 
 {- | One version's typed projection paired with the object the source declared it with, built
-once per read and never re-paired, so the mirror write republishes what the rules admitted.
+once from one body and never re-paired, so the mirror write republishes what the rules admitted.
 -}
 data VersionDoc = VersionDoc
     { vdDetails :: PackageDetails
@@ -73,8 +73,8 @@ data VersionDoc = VersionDoc
 bounded read, so a caller needing the tag adds no second fetch.
 -}
 data VersionRead = VersionRead
-    { vrVersion :: Maybe (Snapshot VersionDoc)
-    -- ^ The pair, scoped to the fetch it was read from. 'Nothing': the package resolved without this version.
+    { vrVersion :: Maybe VersionDoc
+    -- ^ The pair. 'Nothing' means the package resolved without this version.
     , vrUpstreamLatest :: Maybe Version
     {- ^ The document's @latest@ target, whether or not it is the requested version. 'Nothing'
     when the document declares none, or the ecosystem has no such tag.
@@ -122,7 +122,7 @@ data VersionEvaluation
     = {- | The version resolved and projected, ready for the rules engine. The second field is
       the same document's 'vrUpstreamLatest'.
       -}
-      VersionPresent (Snapshot VersionDoc) (Maybe Version)
+      VersionPresent VersionDoc (Maybe Version)
     | -- | The package exists but does not supply the requested version.
       VersionMissing
     | -- | Metadata was unavailable. Public admission and workers retain their retry policy.

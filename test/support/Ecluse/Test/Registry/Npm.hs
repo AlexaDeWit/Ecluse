@@ -55,11 +55,9 @@ import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc, vdDetails, vdRaw))
 import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
-import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Package (unsafeFilename, unsafeHash, unscopedNpm, validSha1)
 import Ecluse.Test.Server.Route (genPathSegmentFrom, genSegmentName)
-import Ecluse.Test.Snapshot (syntheticSnapshot)
 
 {- | Each npm name a splitter must agree on, paired with whether it names a package. A bare
 @\@foo@ is a malformed scoped name, not an unscoped one, so it is refused everywhere.
@@ -123,9 +121,9 @@ isOddVersionDoc = fst npmCached (versionValue (versionSpec "is-odd" "1.0.0" "htt
 {- | The pair a resolver hands the worker: the details beside the npm version object they
 project from, so the mirror write has a source object to republish.
 -}
-sourceVersionDoc :: PackageDetails -> Snapshot VersionDoc
+sourceVersionDoc :: PackageDetails -> VersionDoc
 sourceVersionDoc details =
-    syntheticSnapshot VersionDoc{vdDetails = details, vdRaw = Just (fst npmCached (versionValue spec))}
+    VersionDoc{vdDetails = details, vdRaw = Just (fst npmCached (versionValue spec))}
   where
     artifact = NE.head (pkgArtifacts details)
     digestOf alg = hashValue <$> find ((== alg) . hashAlg) (artHashes artifact)

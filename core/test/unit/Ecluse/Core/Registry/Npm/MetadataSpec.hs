@@ -24,7 +24,6 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
     VersionRead (vrUpstreamLatest, vrVersion),
-    digestOf,
  )
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion, selectNpmVersionDoc)
 import Ecluse.Core.Security (
@@ -32,7 +31,6 @@ import Ecluse.Core.Security (
     Limits (maxNestingDepth, maxVersionCount),
     defaultLimits,
  )
-import Ecluse.Core.Snapshot (Snapshot (snapshotDigest, snapshotValue))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Snapshot (readDetails)
@@ -102,13 +100,12 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
                         `shouldBe` Right (Map.lookup v (infoVersions info))
             Left err -> expectationFailure ("the rich fixture did not project: " <> show err)
 
-    it "pairs the selected version object as decoded, under the digest of the whole body" $ do
+    it "pairs the selected version object as decoded beside the projected details" $ do
         let versions = ["1.0.0", "2.1.3"]
             body = richPackumentBytes "is-odd" versions
         forM_ versions $ \v -> do
             selected <- expectRight (projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm v) body)
-            fmap (vdRaw . snapshotValue) (vrVersion selected) `shouldBe` Just (Just (fst npmCached (richVersionObject "is-odd" v)))
-            fmap snapshotDigest (vrVersion selected) `shouldBe` Just (digestOf body)
+            fmap vdRaw (vrVersion selected) `shouldBe` Just (Just (fst npmCached (richVersionObject "is-odd" v)))
 
     it "selects the same version object out of the full projection's raw document (the warm-path pair)" $ do
         let versions = ["1.0.0", "2.1.3", "10.0.0-beta.1"]
@@ -116,7 +113,7 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
         (_info, raw) <- expectRight (projectNpmManifest defaultLimits (unscopedNpm "is-odd") body)
         forM_ versions $ \v -> do
             selected <- expectRight (projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm v) body)
-            selectNpmVersionDoc (mkVersion Npm v) (fst npmCached raw) `shouldBe` (vdRaw . snapshotValue =<< vrVersion selected)
+            selectNpmVersionDoc (mkVersion Npm v) (fst npmCached raw) `shouldBe` (vdRaw =<< vrVersion selected)
         selectNpmVersionDoc (mkVersion Npm "9.9.9") (fst npmCached raw) `shouldBe` Nothing
 
     it "reports a version absent from a sound packument as a forwarded miss (Right Nothing)" $

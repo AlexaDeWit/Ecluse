@@ -45,7 +45,6 @@ import Ecluse.Core.Registry.Publish (
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Snapshot (Snapshot (Snapshot), digestOf)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
@@ -673,7 +672,7 @@ resolverCarrying = resolverCarryingWith sampleArtifact
 
 resolverCarryingWith :: Artifact -> CachedDoc -> PackageName -> Version -> IO VersionEvaluation
 resolverCarryingWith artifact raw name version =
-    pure (VersionPresent (Snapshot (digestOf "admission-bytes") VersionDoc{vdDetails = (sampleDetails name version){pkgArtifacts = artifact :| []}, vdRaw = Just raw}) Nothing)
+    pure (VersionPresent VersionDoc{vdDetails = (sampleDetails name version){pkgArtifacts = artifact :| []}, vdRaw = Just raw} Nothing)
 
 -- An admission verdict no rule could decide, with the given transience.
 undecided :: Transience -> Text -> ArtifactAdmission

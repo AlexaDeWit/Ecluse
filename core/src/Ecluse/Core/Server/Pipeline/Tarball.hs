@@ -140,7 +140,6 @@ import Ecluse.Core.Server.Response (
  )
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
-import Ecluse.Core.Snapshot (Snapshot (Snapshot, snapshotValue))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
@@ -305,7 +304,7 @@ privateArtifactRequest rt deps token name version file = case pdPrivateBaseUrl d
         pure $ case resolved of
             Left _ -> PrivateMissing MissUnresolved
             Right (Left err) -> maybe PrivateRefused PrivateMissing (privateMetadataMiss err)
-            Right (Right versionRead) -> maybe (PrivateMissing MissAbsent) PrivateRequest (vrVersion versionRead >>= requestForDetails . vdDetails . snapshotValue)
+            Right (Right versionRead) -> maybe (PrivateMissing MissAbsent) PrivateRequest (vrVersion versionRead >>= requestForDetails . vdDetails)
       where
         requestForDetails details = do
             artifact <- find ((== unFilename file) . artFilename) (pkgArtifacts details)
@@ -377,7 +376,7 @@ gatePublicVersion rt deps name version file advisoryEtag = do
     case eval of
         VersionMetadataUnavailable -> pure (Refused upstreamUnavailable)
         VersionMissing -> pure (Refused versionAbsent)
-        VersionPresent (Snapshot _ doc) _ ->
+        VersionPresent doc _ ->
             liftIO $
                 spanRuleEval (srTracing rt) name version $ do
                     (gate, seconds) <- timedSeconds (gateVersion evalCtx deps file (vdDetails doc))
