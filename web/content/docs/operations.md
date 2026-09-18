@@ -192,17 +192,27 @@ ways:
 | `advisory source outage recovered` | `info` | Once every rule consults the database again. |
 
 The causes are no database loaded, a push past its maximum age, a lookup fault with its detail, and
-an open circuit breaker. A request never adds a line, so an outage costs the log the same whatever
-the traffic. The report fires only on traffic that reaches an advisory rule, so an idle mount
-reports nothing, and the sync task's own `error` line covers a database that never loads. A failed
-poll of the advisory store also logs `error`, once per poll, whether or not a database is loaded.
+an open circuit breaker. The report covers the rules that deny on advisories, `DenyIfCve` and
+`DenyIfEpss`, which are also the rules that make the store mandatory at boot: a mount whose only
+advisory rule is `AllowIfRemediatesCve` abstains without a database and reports no outage. A
+request never adds a line, so an outage costs the log the same whatever the traffic. The report
+fires only on traffic that reaches an advisory rule, so an idle mount reports nothing, and the sync
+task's own `error` line covers a database that never loads. The recovery line follows the next
+evaluation that finds the database answering, so a source no rule asks again reports no recovery.
+
+A failed poll of the advisory store logs `error` on the same pacing, whether or not a database is
+loaded: `sync fetch failed` at the first failure, `sync fetch still failing` at most every 15
+minutes after it, and `sync fetch recovered` at `info` on the first poll that succeeds again.
 
 The outage line says the checks are degraded. Which admissions went through without them is a
 separate record. A version admitted while an advisory deny set to `onUnavailable: skip` could not
 vet it carries that check in its decision, and the public artifact gate logs one `warn` line per
 skipped check, `admitted with a check skipped for unavailability`, with the package, the version,
-the rule, and the cause. A trusted read never repeats it. The evidence lives in that decision and
-in the log only, never in registry metadata, so its retention is the log's.
+the rule, and the cause. The line is per public admission: a mount with a `mirrorTarget` admits a
+version once and then serves the trusted copy without rules, so the line does not repeat, while a
+mount with no mirror admits on every public serve and logs on each. A trusted read never logs it.
+The evidence lives in that decision and in the log only, never in registry metadata, so its
+retention is the log's.
 
 A one-shot `ecluse pilot compile` using the same Prometheus port as a live Pilot can log a bind
 failure and still complete its compilation. This applies only when the Prometheus exporter is selected

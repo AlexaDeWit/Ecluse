@@ -397,12 +397,15 @@ does not revoke that copy unless a named deny becomes decisive. See
 [Revoking a mirrored version](@/docs/operations.md#revoking-a-mirrored-version-internal-yank).
 
 A skipped check leaves evidence with the admission. The decision names the rule and the cause, and
-the public artifact gate logs one `warn` line per skipped check, carrying the package, the version,
-the rule, and the cause. A check the winning allow pre-empted is recorded as not reached, never as
-passed, and logs no line. A trusted read of a mirrored version runs no rules, so it never repeats
-the line. The evidence lives in that decision and in the log only: Écluse writes no metadata to the
-mirror, and the log's retention is yours. The outage itself is reported apart from any request, at
-`error`, as [Advisory outages](@/docs/operations.md#advisory-outages) describes.
+the public artifact gate logs one `warn` line per skipped check at each public admission, carrying
+the package, the version, the rule, and the cause. A trusted read of a mirrored version runs no
+rules and logs nothing, so a mount with a `mirrorTarget` logs the line once per version, and a
+mount with no mirror logs it on every public serve. A check the winning allow pre-empted is
+recorded as not reached, never as passed, and logs no line. The mirror worker's own re-admission
+of a queued version emits no evidence line, so the serve that queued the job is the admission you
+see in the log. The evidence lives in that decision and in the log only: Écluse writes no metadata
+to the mirror, and the log's retention is yours. The outage itself is reported apart from any
+request, at `error`, as [Advisory outages](@/docs/operations.md#advisory-outages) describes.
 
 `onUnavailable: skip` does not waive the maximum push age. Once the serving artifact is older
 than that maximum, both advisory denies refuse, and `AllowIfRemediatesCve` abstains. See

@@ -3,15 +3,13 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The resilience harness around an effectful rule's IO: a per-attempt timeout, bounded retry
-with backoff, and a per-source circuit breaker. 'Ecluse.Core.Rules.prepare' attaches one to each
-effectful rule, and the pure built-ins never enter this module.
+with backoff, and a per-source circuit breaker, attached by 'Ecluse.Core.Rules.prepare'.
 
 Any 'RuleVerdict' the rule returns, 'CannotVet' included, resets the breaker and comes back
 'Decided' unretried. Only a harness-observed fault advances it, resolving to 'Unavailable' under
-the rule's own alignment. 'runResilient' never throws. The breaker reads 'resClock' fresh at each
-decision, never the request snapshot, so its cooldown starts at the failure commit. The harness
-reports its own faults to the rule's 'SourceReporter' with their detail, and the engine classifies
-every decided verdict, so the two never report the same evaluation.
+the rule's own alignment. 'runResilient' never throws, and the breaker reads 'resClock' fresh at
+each decision, so its cooldown starts at the failure commit. The harness reports its own faults
+to the rule's 'SourceReporter' with their detail, and the engine classifies every decided verdict.
 -}
 module Ecluse.Core.Rules.Effectful (
     -- * The resilience policy
