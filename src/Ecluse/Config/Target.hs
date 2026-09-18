@@ -5,10 +5,10 @@
 {- | Resolve a mount's declared endpoints against the store tag each one names.
 
 The tag is the declaration, and the URL is checked against it. A @codeArtifact@ endpoint must carry
-the CodeArtifact host shape, and a @codeArtifact@ mirror target must address a repository under the
-mount's own package format, because a repository's per-format endpoints are separate stores. Every
-other tag admits any https registry the egress boundary cleared. Each refusal names the key, so a
-store this build cannot address is refused at load rather than at the first write.
+the CodeArtifact host shape and, as mirror target or private upstream, address a repository under
+the mount's own package format, because a repository's per-format endpoints are separate stores.
+Every other tag admits any https registry the egress boundary cleared. Each refusal names the key,
+so a store this build cannot address is refused at load rather than at the first write.
 -}
 module Ecluse.Config.Target (
     -- * The resolved value
@@ -97,11 +97,11 @@ vetPrivateRepository eco target = case tgtTag target of
     TagCodeArtifact | isRight (codeArtifactHost eco privateUpstreamKey (tgtUrl target)) -> void (resolvePrivateBackend eco target)
     _ -> Right ()
 
--- | The key a private upstream is declared under, which every refusal of one is reported at.
+-- The key a private upstream is declared under, which every refusal of one is reported at.
 privateUpstreamKey :: Text
 privateUpstreamKey = "privateUpstream"
 
--- | The key a mirror target is declared under, which every refusal of one is reported at.
+-- The key a mirror target is declared under, which every refusal of one is reported at.
 mirrorTargetKey :: Text
 mirrorTargetKey = "mirrorTarget"
 

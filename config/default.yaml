@@ -303,9 +303,17 @@ mounts:
     # CodeArtifact mints a maintenance token and checks the repository's consent tag.
     # Verdaccio accepts an optional token and permitDeletion (default false) for maintenance.
     # Deletion requires both. Preview permits anonymous reads and needs no deletion consent.
-    # permitDeletion also declares the Verdaccio store standalone. Boot cannot inspect uplinks.
+    # permitDeletion also declares the Verdaccio store standalone.
+    # At boot, both proxy roles and both Dredger modes ask the backend whether this
+    # repository connects to a public registry. An unsafe answer refuses the role, an
+    # undecided one warns once, and a safe one is silent. `registry` and `verdaccio`
+    # report no uplinks, so they are always undecided. A `codeArtifact` upstream needs an
+    # AWS identity with codeartifact:DescribeRepository on the repository and on every
+    # repository in its chain.
     # privateUpstream:
     #   codeArtifact:
+    #     # The path must address the repository endpoint for this mount's format
+    #     # (/npm/{repository}/ for npm), and the load refuses anything else.
     #     url: https://acme-123456789012.d.codeartifact.us-east-1.amazonaws.com/npm/internal/
     # privateUpstream:
     #   verdaccio:
