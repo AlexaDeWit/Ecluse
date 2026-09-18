@@ -12,7 +12,6 @@ module Ecluse.Core.Json.Selective (
     -- * Bounded selection
     findInRecord,
     collectFromArray,
-    selectFromArray,
     selectIndexedFromArray,
     materialiseWithinBudget,
 
@@ -69,12 +68,12 @@ are skipped unallocated. The scan runs to the end, so a malformed unpicked item 
 collectFromArray :: Int -> (Int -> Bool) -> TkArray k String -> Either SelectiveError ([Value], Int, k)
 collectFromArray budget pick = selectFromArray budget (\position _ -> Right (pick position))
 
-{- | Collect the items a probe accepts, deciding from an item's own lazy tokens so reading one
+{- Collect the items a probe accepts, deciding from an item's own lazy tokens so reading one
 discriminating member costs no materialised value. The scan still runs to the array's end.
 -}
 selectFromArray ::
     Int ->
-    -- | The probe: an item's position and its own tokens, which continue into the rest of the array.
+    -- The probe: an item's position and its own tokens, which continue into the rest of the array.
     (Int -> Tokens (TkArray k String) String -> Either SelectiveError Bool) ->
     TkArray k String ->
     Either SelectiveError ([Value], Int, k)
