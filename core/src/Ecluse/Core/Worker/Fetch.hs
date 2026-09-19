@@ -2,11 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror worker's artifact download: fetch the bytes named on a job under the worker's
-own byte cap. It runs through the shared bounded exchange ("Ecluse.Core.Registry.Exchange"),
-so it reports the same 'FetchFault' vocabulary the serve path reads under the same response
-bound. The retry-versus-drop decision over that vocabulary lives with the outcome type in
-"Ecluse.Core.Worker.Job".
+{- | The mirror worker's artifact download, over the shared bounded exchange
+("Ecluse.Core.Registry.Exchange"), so it reports the 'FetchFault' vocabulary the serve path
+reads under the same response bound. The retry-versus-drop decision over that vocabulary lives
+with the outcome type in "Ecluse.Core.Worker.Job".
 -}
 module Ecluse.Core.Worker.Fetch (
     fetchArtifactBytes,

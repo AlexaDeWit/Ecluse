@@ -2,14 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Failure handling and supervision for the worker's consume loop. A single bad iteration
-cannot kill the loop: a failed @receive@ arrives as the queue handle's typed fault value, which
-the step logs and backs off from at its own pacing. Residue, an exception escaping a dependency's
-typed contract, is 'Ecluse.Core.Supervision.superviseLoop''s concern under the caller's policy,
-which retries transient residue and fails the process up on a wiring fault the policy names
-'Ecluse.Core.Supervision.Permanent'. Each poll and each completed job advances the
-'WorkerHeartbeat'. Shutdown cancels the loop thread, and an un-acked in-flight message simply
-redelivers, which is safe because publishing is idempotent.
+{- | Supervision for the worker's consume loop. A failed @receive@ arrives as the queue
+handle's typed fault value, which the step logs and backs off from at its own pacing. Residue,
+an exception escaping a dependency's typed contract, is 'superviseLoop''s concern under the
+caller's policy.
+
+Shutdown cancels the loop thread, and an un-acked in-flight message simply redelivers, which
+is safe because publishing is idempotent.
 -}
 module Ecluse.Core.Worker.Loop (
     workerLoop,

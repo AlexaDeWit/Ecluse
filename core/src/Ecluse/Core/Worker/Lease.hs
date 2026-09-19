@@ -5,11 +5,10 @@
 {- | Holding every received receipt for as long as the worker needs it.
 
 A backend hides a delivery for one window ("Ecluse.Core.Queue.Lease"). A batch runs
-sequentially, so a receipt waiting its turn and a receipt whose job runs long both outlive
-that window and would be redelivered to a second consumer. The controller renews each one
-continually, from receipt until its disposition, and a renewal and a disposition never
-overlap on the same receipt. A receipt whose lease cannot be kept is dropped alone: its job
-is cancelled while running and skipped while waiting, and it is left unacknowledged.
+sequentially, so a receipt waiting its turn and a receipt whose job runs long both outlive that
+window and would be redelivered to a second consumer. The controller renews each one from
+receipt until its disposition, and a renewal and a disposition never overlap on the same
+receipt. A receipt whose lease cannot be kept is dropped alone and left unacknowledged.
 -}
 module Ecluse.Core.Worker.Lease (
     -- * The controller

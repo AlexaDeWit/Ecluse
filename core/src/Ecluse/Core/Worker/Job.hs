@@ -110,8 +110,8 @@ data RetryLeg
       AfterPublish
     deriving stock (Eq, Show)
 
-{- | Re-check policy before publishing because the queue wait is unbounded and mirrored bytes bypass later rules.
-The outcome determines whether the worker acknowledges the message or permits redelivery.
+{- | Decide one job, re-checking current policy before publishing, because the queue wait is
+unbounded and mirrored bytes bypass every later rule.
 -}
 processJob :: MirrorJob -> WorkerM JobOutcome
 processJob job = katipAddNamespace "job" $ do
