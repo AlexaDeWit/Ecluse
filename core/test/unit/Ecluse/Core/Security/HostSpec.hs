@@ -78,9 +78,8 @@ hostAllowlistSpec = describe "isAllowedUpstreamHost" $ do
             isAllowedUpstreamHost (allowedHostPorts (Set.singleton (hpAt "0:0:0:0:0:0:0:1" 8443))) (hpAt "::1" 8443)
                 `shouldBe` True
 
-{- | The operator's own additional ranges, the one dimension the classification corpus below
-does not reach: every corpus row runs against the fixed set alone.
--}
+-- The one dimension the classification corpus does not reach: every row there runs against
+-- the fixed range set alone.
 additionalRangesSpec :: Spec
 additionalRangesSpec = describe "isBlockedTarget (operator-configured additional ranges)" $ do
     let testNet3 = ["203.0.113.0/24"] :: [IPRange]
@@ -98,11 +97,8 @@ additionalRangesSpec = describe "isBlockedTarget (operator-configured additional
     it "does not block a DNS name even when it lexically resembles a blocked range" $
         isBlockedTarget testNet3 "203.0.113.example.com" `shouldBe` False
 
-{- | Every blocked-vs-allowed classification 'isBlockedTarget' owes under the fixed range set,
-pinned against an explicit expected table rather than any prior implementation. A leading-zero
-octet coerces as octal, as a libc resolver does: @0012.0.0.1@ is @10.0.0.1@ and blocks, while
-@010.0.0.1@ (@8.0.0.1@) and @0127.0.0.1@ (@87.0.0.1@) are public and do not. A @0x@ octet is
-hexadecimal. @fe80::1ffff@ overflows 16 bits, so it stays a name the allowlist constrains.
+{- | Every classification 'isBlockedTarget' owes under the fixed range set, expected value
+written out rather than derived from any implementation.
 -}
 classificationCorpusSpec :: Spec
 classificationCorpusSpec =

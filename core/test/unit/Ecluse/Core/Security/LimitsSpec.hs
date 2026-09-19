@@ -64,9 +64,8 @@ spec = do
     realPackumentSpec
     propertiesSpec
 
-{- | The shipped budget an operator inherits. Every case below that names a ceiling
-overrides one field of it, so the values it starts from are pinned once here.
--}
+-- Every case below that names a ceiling overrides one field of this budget, so the values
+-- it starts from are pinned once here.
 defaultLimitsSpec :: Spec
 defaultLimitsSpec =
     describe "defaultLimits" $
