@@ -17,6 +17,7 @@ module Ecluse.Core.Registry.Maintenance (
     DeletePhase (..),
     observationOf,
     deletionOf,
+    maintenanceOf,
 
     -- * What the backend does
     StoreFacts (..),
@@ -192,6 +193,21 @@ observationOf store =
 -- | The changing half of a whole handle.
 deletionOf :: StoreMaintenance -> StoreDeletion
 deletionOf store = StoreDeletion{dlDeleteVersions = deleteVersions store, dlCursor = storeCursor store}
+
+-- | The two halves joined into a whole handle, which every backend builds its own through.
+maintenanceOf :: StoreObservation -> StoreDeletion -> StoreMaintenance
+maintenanceOf observed deletion =
+    StoreMaintenance
+        { storeFacts = obFacts observed
+        , listPackagesIn = obListPackagesIn observed
+        , enumerateVersions = obEnumerateVersions observed
+        , readStoreManifest = obReadManifest observed
+        , deleteVersions = dlDeleteVersions deletion
+        , verifyConsent = obVerifyConsent observed
+        , classifyStore = obClassifyStore observed
+        , probeUpstream = obProbeUpstream observed
+        , storeCursor = dlCursor deletion
+        }
 
 {- | Count and pace every request the observing calls make. A version enumeration counts as one
 request however many pages it takes, so a large package costs the backend more than was counted.

@@ -45,6 +45,7 @@ import Ecluse.Core.Registry.Maintenance (
     NamePrefix,
     StoreClass (StoreDestroyable),
     StoreCursor (..),
+    StoreDeletion (..),
     StoreFault,
     StoreMaintenance (..),
     StoreManifestRead,
@@ -54,6 +55,7 @@ import Ecluse.Core.Registry.Maintenance (
     chunksOfCeiling,
     collectPagesBounded,
     deleteAll,
+    maintenanceOf,
     pageAll,
     pageSource,
  )
@@ -198,19 +200,12 @@ assembled, which together are every effect it has.
 -}
 maintenanceFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
 maintenanceFor alphabet readManifest store plane =
-    StoreMaintenance
-        { storeFacts = obFacts observed
-        , listPackagesIn = obListPackagesIn observed
-        , enumerateVersions = obEnumerateVersions observed
-        , readStoreManifest = obReadManifest observed
-        , deleteVersions = deleteChunks plane store
-        , verifyConsent = obVerifyConsent observed
-        , classifyStore = obClassifyStore observed
-        , probeUpstream = obProbeUpstream observed
-        , storeCursor = Just (walkCursor alphabet plane store)
-        }
-  where
-    observed = observationFor alphabet readManifest store (cpRead plane)
+    maintenanceOf
+        (observationFor alphabet readManifest store (cpRead plane))
+        StoreDeletion
+            { dlDeleteVersions = deleteChunks plane store
+            , dlCursor = Just (walkCursor alphabet plane store)
+            }
 
 -- | The observing calls over one 'ReadPlane', which is every effect they have.
 observationFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ReadPlane -> StoreObservation

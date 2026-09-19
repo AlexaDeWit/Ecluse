@@ -44,9 +44,10 @@ import Ecluse.Core.Registry.Maintenance (
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
+    StoreDeletion (..),
     StoreFacts (..),
     StoreFault (..),
-    StoreMaintenance (..),
+    StoreMaintenance,
     StoreManifestRead,
     StoreObservation (..),
     StoreRefusal,
@@ -56,6 +57,7 @@ import Ecluse.Core.Registry.Maintenance (
     chunksOfCeiling,
     deleteAll,
     inBucket,
+    maintenanceOf,
     noNameAlphabet,
     protocolFault,
     storeFaultOfFetch,
@@ -118,20 +120,13 @@ newProtocolObservation store =
 -- | Delete versions individually because each edit changes the document revision needed by the next.
 newProtocolMaintenance :: ProtocolStore -> StoreMaintenance
 newProtocolMaintenance store =
-    StoreMaintenance
-        { storeFacts = obFacts observed
-        , listPackagesIn = obListPackagesIn observed
-        , enumerateVersions = obEnumerateVersions observed
-        , readStoreManifest = obReadManifest observed
-        , deleteVersions = deleteStoredVersions store
-        , verifyConsent = obVerifyConsent observed
-        , classifyStore = obClassifyStore observed
-        , probeUpstream = obProbeUpstream observed
-        , -- The protocol writes nothing but a publish, so a walk over this store keeps no cursor.
-          storeCursor = Nothing
-        }
-  where
-    observed = newProtocolObservation (psRead store)
+    maintenanceOf
+        (newProtocolObservation (psRead store))
+        StoreDeletion
+            { dlDeleteVersions = deleteStoredVersions store
+            , -- The protocol writes nothing but a publish, so a walk over this store keeps no cursor.
+              dlCursor = Nothing
+            }
 
 {- The store re-admits a version published again after a delete, and has applied it by the time it
 answers. It reports no alphabet: the listing below reads one document whole, bucket or no bucket. -}
