@@ -41,6 +41,7 @@ import Ecluse.Config (
     advisoryStoreUrlText,
  )
 import Ecluse.Core.Breaker (BreakerReporter)
+import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (EpssRequirement, osvDbFileName)
@@ -63,7 +64,6 @@ import Ecluse.Core.Server.Readiness (
  )
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
-    secondsToMicros,
     superviseLoop,
     transientPolicy,
  )

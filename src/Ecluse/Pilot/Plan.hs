@@ -38,12 +38,12 @@ import Ecluse.Config (
     advisoryStoreBucket,
     unUrl,
  )
+import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (CompileSources (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory), osvEcosystemNamed)
 import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
-import Ecluse.Core.Supervision (secondsToMicros)
 
 -- | What the scheduled export loop does with the advisory settings and the mounted ecosystems.
 data ExportLoopPlan

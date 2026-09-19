@@ -13,7 +13,6 @@ policy classifies 'Permanent'.
 module Ecluse.Core.Supervision (
     -- * The combinator
     superviseLoop,
-    secondsToMicros,
     SupervisionPolicy (..),
     transientPolicy,
     FaultDisposition (..),
@@ -27,7 +26,6 @@ module Ecluse.Core.Supervision (
 ) where
 
 import Control.Retry (RetryPolicyM, RetryStatus (rsIterNumber), retryPolicy)
-import Data.Time (NominalDiffTime)
 import Katip (KatipContext, Severity (ErrorS, WarningS), logFM, ls)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Concurrent (threadDelay)
@@ -120,9 +118,3 @@ so the list's length is the retry budget. It paces a bounded run, not an endless
 -}
 delayListPolicy :: (Monad m) => [Int] -> RetryPolicyM m
 delayListPolicy delays = retryPolicy (\rs -> delays !!? rsIterNumber rs)
-
-{- | A delay in seconds as the microseconds a delay primitive takes. Every config decoder that
-spells a pause bounds it below @maxBound `div` 1_000_000@, so the conversion cannot wrap.
--}
-secondsToMicros :: NominalDiffTime -> Int
-secondsToMicros seconds = round seconds * 1_000_000

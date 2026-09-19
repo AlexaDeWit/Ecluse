@@ -27,6 +27,7 @@ import Ecluse.Config (
     AppConfig (cfgDredger),
     DredgerSettings (drgChunkPause, drgChunkSize, drgCyclePause, drgDeletionCap, drgFullWalk, drgRequestBudgetFraction, drgTargetCycleWindow),
  )
+import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Registry.Sweep.Pacing (defaultCycleWindow)
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt,
@@ -42,7 +43,6 @@ import Ecluse.Core.Registry.Sweep.Types (
     renderEvidenceGaps,
  )
 import Ecluse.Core.Rules.Types (readsAdvisories)
-import Ecluse.Core.Supervision (secondsToMicros)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepWouldDelete))
 
 -- | Whether the run deletes, or previews what a run that deletes would reach.

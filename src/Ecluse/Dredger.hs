@@ -22,6 +22,7 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse.Boot (BootEnv (..), probeServerConfig)
 import Ecluse.Composition.Executable (PrunerWiring (pwBudget, pwCveSync, pwDeferredMetrics, pwMounts))
 import Ecluse.Config (AppConfig, Config (configApp))
+import Ecluse.Core.Clock (secondsToMicros)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Registry.Maintenance (
@@ -49,7 +50,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     walkMarkerOf,
  )
 import Ecluse.Core.Server.Readiness (Readiness (Latched), allMountsReady)
-import Ecluse.Core.Supervision (secondsToMicros, superviseLoop, transientPolicy)
+import Ecluse.Core.Supervision (superviseLoop, transientPolicy)
 import Ecluse.Core.Telemetry.Metrics (SweepTarget (SweepMirror))
 import Ecluse.Cve.Sync (
     CveSyncHandle (csEnv),
