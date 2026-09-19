@@ -41,7 +41,7 @@ import Ecluse.Composition.Executable (
  )
 import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl), StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, staticEnvVars, withObservablePrivate)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, staticEnvVars, withObservablePrivate)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
@@ -49,7 +49,6 @@ import Ecluse.Composition.Types (
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Queue (noMirrorQueue)
-import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
 import Ecluse.Core.Registry.Maintenance.Upstream (
     ExternalConnection (ExternalConnection),
     RepositoryName (RepositoryName),
@@ -69,8 +68,8 @@ import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEpssRequirement))
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeContents, fakeManifests, fakeUpstream), defaultFakeStoreConfig, newFakeStore)
-import Ecluse.Test.Package (sampleManifest, unscopedNpm)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeUpstream), defaultFakeStoreConfig, newFakeStore, seededStoreConfig)
+import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), previewingReport, recordingPortsUnder, testPacing)
 
@@ -403,10 +402,6 @@ answering answer backend =
         { fakeUpstream = if registryUrlText (cbUrl backend) == privateUpstreamUrl then answer else Safe
         }
 
--- | The private upstream the composition fixtures declare.
-privateUpstreamUrl :: Text
-privateUpstreamUrl = "https://private.example.test"
-
 -- | The evidence a backend reports when a repository in the chain connects to a public registry.
 publicConnection :: UnsafeReason
 publicConnection = ConfigurationEvidence (RepositoryName "shared") (ExternalConnection "public:npmjs")
@@ -521,11 +516,4 @@ expectMirrorWiring plan = case epRoleWiring plan of
 
 previewFixture :: [Text] -> IO FakeStore
 previewFixture rawVersions =
-    newFakeStore
-        defaultFakeStoreConfig
-            { fakeContents = Map.singleton name [StoredVersion version VersionServed Nothing | version <- versions]
-            , fakeManifests = Map.singleton name (sampleManifest name versions)
-            }
-  where
-    name = unscopedNpm "left-pad"
-    versions = map (mkVersion Npm) rawVersions
+    newFakeStore (seededStoreConfig [(unscopedNpm "left-pad", map (mkVersion Npm) rawVersions)])

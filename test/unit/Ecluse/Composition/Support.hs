@@ -9,9 +9,14 @@ module Ecluse.Composition.Support (
     fixedNow,
     testLimits,
     fdLimit,
+    mib,
+    gib,
     noCeiling,
     staticEnvVars,
     pubUrlEnv,
+    privateUpstreamUrl,
+    collapsingMirrorTarget,
+    collapsedMirrorRefusal,
     scopedName,
     mountDocFor,
     npmMountDoc,
@@ -43,7 +48,7 @@ module Ecluse.Composition.Support (
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
-import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
+import Ecluse.Composition.BootError (BootError (MirrorTargetOnMountEndpoint, StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
 import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl))
 import Ecluse.Composition.Plan (
@@ -75,6 +80,12 @@ testLimits = Limits{maxBodyBytes = 12582912, maxVersionCount = 100000, maxArtifa
 fdLimit :: Int
 fdLimit = 1024
 
+mib :: Int
+mib = 1024 * 1024
+
+gib :: Int
+gib = 1024 * mib
+
 {- | A posture with no heap-ceiling datapoint, so the memory plan renders its shipped
 fallbacks and every number a golden pins is fixed.
 -}
@@ -94,7 +105,7 @@ static write token, so the mount's mirror credential derives to a static provide
 staticEnvVars :: [(String, String)]
 staticEnvVars =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", privateUpstreamUrl)
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://public.example.test")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
@@ -104,6 +115,20 @@ staticEnvVars =
 -- | The one environment entry every document fixture needs: the public URL a mount derives from.
 pubUrlEnv :: [(String, String)]
 pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
+
+-- | The private upstream the composition fixtures declare.
+privateUpstreamUrl :: (IsString s) => s
+privateUpstreamUrl = "https://private.example.test"
+
+{- | Point the npm mount's registry mirror target at its own private upstream. A writing role
+advises on the collapse and the deleting role refuses it.
+-}
+collapsingMirrorTarget :: [(String, String)] -> [(String, String)]
+collapsingMirrorTarget = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL" privateUpstreamUrl
+
+-- | The deleting role's refusal of 'collapsingMirrorTarget'.
+collapsedMirrorRefusal :: BootError
+collapsedMirrorRefusal = MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" privateUpstreamUrl
 
 -- | A one-mount configuration document for the given ecosystem, carrying exactly these keys.
 mountDocFor :: Text -> [Text] -> ByteString

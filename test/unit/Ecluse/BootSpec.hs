@@ -18,10 +18,10 @@ import UnliftIO (bracket_, throwIO, timeout, try)
 import Ecluse (run)
 import Ecluse.Boot (BootAborted (..), BootEnv (beLogEnv), applySecretFileIndirection, applyServerSettings, logBootInfo, orExit, probeServerConfig, readConfigDocument, withBootEnv)
 import Ecluse.Composition.BootError (
-    BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, MirrorTargetOnMountEndpoint, PrivateUpstreamOnPublicUpstream, SplitRoleNeedsDurableQueue),
+    BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
-import Ecluse.Composition.Support (expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, withoutQueueUrl)
+import Ecluse.Composition.Support (collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, withoutQueueUrl)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
@@ -43,7 +43,7 @@ import Ecluse.Test.Log (captureStderr, captureStdout)
 runEnv :: [(String, String)]
 runEnv =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", privateUpstreamUrl)
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "mirror-write-token")
@@ -498,10 +498,7 @@ cveDenyRule :: String
 cveDenyRule = "{\"gate\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}"
 
 collapsedMirrorEnv :: [(String, String)]
-collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL" "https://private.example.test" runEnv
-
-collapsedMirrorRefusal :: BootError
-collapsedMirrorRefusal = MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" "https://private.example.test"
+collapsedMirrorEnv = collapsingMirrorTarget runEnv
 
 -- The advisory 'collapsedMirrorEnv' earns, as check-config prints it: its 'warn' prefix included.
 collapsedMirrorAdvisory :: Text
