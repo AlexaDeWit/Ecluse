@@ -44,7 +44,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (SHA1, SHA512), PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkScope)
 import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
@@ -70,7 +70,7 @@ import Ecluse.Core.Server.Upstream (
  )
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Credential (noCredentialReporters)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, thingName)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, thingName, unscopedPyPI)
 import Ecluse.Test.Rules (inertRuleDeps)
 
 {- | Tests the composition root's boot-time wiring. Every boot problem is a fail-fast,
@@ -460,7 +460,7 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
     it "dispatches the PyPI arm to PyPI's own predicate" $
         -- The arm's matching rules are pinned in "Ecluse.Core.Registry.PyPI.FirstPartySpec". This row
         -- proves the root hands the declaration to it rather than deciding anything itself.
-        map (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . pypiName) ["acme-tools", "beta"]
+        map (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . unscopedPyPI) ["acme-tools", "beta"]
             `shouldBe` [True, False]
 
     it "wires the same predicate onto the mount's serve deps, deny by default" $ do
@@ -481,10 +481,6 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
                     `shouldBe` [False, False]
             _ -> expectationFailure "expected a single wired binding"
 
--- A PyPI name, in the ecosystem whose canonical form is PEP 503's.
-pypiName :: Text -> PackageName
-pypiName = mkPackageName PyPI Nothing
-
 -- A PyPI declaration of exact names.
 pypiFirstParty :: NonEmpty Text -> FirstParty
-pypiFirstParty = FirstPartyPyPI . fmap (PyPIOwnedName . pypiName)
+pypiFirstParty = FirstPartyPyPI . fmap (PyPIOwnedName . unscopedPyPI)
