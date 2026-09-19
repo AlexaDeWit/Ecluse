@@ -2,40 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror worker: the supervised consume loop that turns enqueued jobs into
-mirrored packages.
+{- | The mirror worker's public surface over the supervised loop that turns enqueued jobs
+into mirrored packages.
 
-The worker is the consumer end of the demand-driven mirror queue (see
-"Ecluse.Core.Queue"). The consume loop long-polls the queue and resolves each received
-job's __ecosystem bundle__ ('WorkerPolicy', keyed by the job's own ecosystem). A job
-whose ecosystem carries no bundle is fail-closed, and so is one for a name the deployment
-owns ('wpFirstParty'): the queue outlives a namespace declaration, so the privilege is read
-here before any public request. Otherwise, through that bundle the loop:
-
-1. __probes__ the mirror target for the job's version and acks a confirmed-present
-   duplicate outright. Demand-driven enqueue means a fleet-wide install of a novel
-   version enqueues many jobs for it, and only the first has work to do.
-2. __re-evaluates current policy__ for the version through the same rules and
-   single-version fetch the serve path gates with. It drops a version denied since
-   its serve-time admit rather than mirroring it.
-3. fetches the artifact bytes from the public upstream named on the job.
-4. __verifies__ those bytes against the integrity digests of the artifact the
-   re-evaluation re-admitted. That is the floor-checked, current-metadata set, since
-   the queue payload carries no digest at all.
-5. assembles the ecosystem's publish document from the re-admitted artifact's
-   descriptor and the version object the re-evaluation read, and publishes it to the
-   mirror target. That is the bundle's married publish capability, resolved at the
-   composition root with the bearer from the "Ecluse.Core.Credential" provider.
-6. acknowledges the job.
-
-See individual modules for detailed behaviour:
-* "Ecluse.Core.Worker.Integrity" for the security gate on artifact digests.
-* "Ecluse.Core.Worker.Loop" for supervision and graceful shutdown.
-* "Ecluse.Core.Worker.Job" for the per-job decision.
-* "Ecluse.Core.Worker.Lease" for keeping every received receipt hidden until its disposition.
-* "Ecluse.Core.Worker.Realise" for realising each verdict at the queue handle.
-
-See @docs\/architecture\/cloud-backends.md@ → "Mirror Queue" and "Process model".
+The loop long-polls the demand-driven mirror queue ("Ecluse.Core.Queue") and resolves each
+job's ecosystem bundle ('WorkerPolicy'). A job is fail-closed when its ecosystem carries no
+bundle, and when its name is one the deployment owns: the queue outlives a namespace
+declaration, so that privilege is read here before any public request. The per-job decision,
+the digest gate, the receipt lease, verdict realisation and supervision live in the child
+modules re-exported below. See @docs\/architecture\/cloud-backends.md@.
 -}
 module Ecluse.Core.Worker (
     -- * Worker runtime
