@@ -96,31 +96,9 @@ noTraceContextBody =
 spec :: Spec
 spec = do
     describe "encodeJob / decodeJob round-trip" $ do
-        it "round-trips an unscoped npm job" $
-            decodeJob mirrorJobPackage mkRegistryUrl (encodeJob npmJob) `shouldBe` Right npmJob
-
-        it "round-trips a scoped npm job (namespace and bare name both recovered)" $
-            decodeJob mirrorJobPackage mkRegistryUrl (encodeJob scopedJob) `shouldBe` Right scopedJob
-
-        it "round-trips a PyPI job (ecosystem carried through)" $
-            decodeJob mirrorJobPackage mkRegistryUrl (encodeJob pypiJob) `shouldBe` Right pypiJob
-
-        it "round-trips a namespaced non-npm job, so the namespace is not npm's alone" $
-            -- The identity rides as two fields rather than one rendered name, so an ecosystem
-            -- that grows namespaced names inherits a codec that already carries them.
-            decodeJob mirrorJobPackage mkRegistryUrl (encodeJob namespacedPypiJob) `shouldBe` Right namespacedPypiJob
-
-        it "carries every field through unchanged" $ do
-            -- Field-by-field so a single mangled field is pinpointed, not lost in
-            -- a whole-record comparison.
-            case decodeJob mirrorJobPackage mkRegistryUrl (encodeJob npmJob) of
-                Left err -> expectationFailure (toString err)
-                Right job -> do
-                    jobPackage job `shouldBe` jobPackage npmJob
-                    jobVersion job `shouldBe` jobVersion npmJob
-                    jobArtifactUrl job `shouldBe` jobArtifactUrl npmJob
-                    jobArtifactFilename job `shouldBe` jobArtifactFilename npmJob
-                    jobTraceContext job `shouldBe` jobTraceContext npmJob
+        for_ roundTripJobs $ \(label, job) ->
+            it (toString label) $
+                decodeJob mirrorJobPackage mkRegistryUrl (encodeJob job) `shouldBe` Right job
 
         it "decodes a job body with no traceContext key to a Nothing carrier" $
             -- A job enqueued with tracing off carries no "traceContext" key, not even a null. It
@@ -223,57 +201,23 @@ spec = do
                 \\"traceContext\":\"just-a-string\"}"
                 `shouldSatisfy` isLeft
 
-    describe "defaultSqsConfig" $ do
-        let cfg = defaultSqsConfig "https://sqs.example/q" "us-east-1"
-        it "carries the queue URL and region through" $ do
+    describe "defaultSqsConfig" $
+        it "carries the queue URL and region through, and ships every other knob defaulted" $ do
+            -- The floor an unconfigured backend runs on. A configured deployment overrides
+            -- the receive count with the operator's ECLUSE_QUEUE__MAX_RECEIVE_COUNT.
+            let cfg = defaultSqsConfig "https://sqs.example/q" "us-east-1"
             sqsQueueUrl cfg `shouldBe` "https://sqs.example/q"
             sqsRegion cfg `shouldBe` "us-east-1"
-        it "defaults to no endpoint override (real AWS / ambient credentials)" $
             sqsEndpoint cfg `shouldBe` Nothing
-        it "defaults the batch size to a full SQS batch of 10" $
             sqsBatchSize cfg `shouldBe` 10
-        it "defaults the long-poll window to the SQS maximum of 20 seconds" $
             sqsWaitSeconds cfg `shouldBe` 20
-        it "defaults the visibility timeout to 30 seconds" $
             sqsVisibilityTimeout cfg `shouldBe` Seconds 30
-        it "defaults the redelivery budget to the shared shipped value" $
-            -- The floor an unconfigured backend runs on. A configured deployment gets
-            -- the operator's ECLUSE_QUEUE__MAX_RECEIVE_COUNT here instead.
             sqsMaxReceiveCount cfg `shouldBe` defaultDeliveryBudget
 
-    describe "deadLetterTerminusOf -- reading the queue's redrive policy (issue #935)" $ do
-        it "reports no terminus when the queue carries no redrive policy" $
-            -- SQS omits an unset attribute entirely, so an absent value is the
-            -- no-dead-letter-queue case the boot warning exists for.
-            deadLetterTerminusOf Nothing `shouldBe` TerminusAbsent
-
-        it "reports no terminus for a blank policy value" $
-            deadLetterTerminusOf (Just "   ") `shouldBe` TerminusAbsent
-
-        it "reads the capture count from a policy that states it as a string" $
-            -- The spelling AWS itself returns: the embedded JSON quotes the count.
-            deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\",\"maxReceiveCount\":\"10\"}")
-                `shouldBe` TerminusAttached (Just (DeliveryBudget 10))
-
-        it "reads the capture count from a policy that states it as a number" $
-            -- Emulators and some SDK paths render it unquoted. Both spell one policy.
-            deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\",\"maxReceiveCount\":4}")
-                `shouldBe` TerminusAttached (Just (DeliveryBudget 4))
-
-        it "refuses a hex or padded capture count rather than reading a number nobody wrote" $ do
-            -- AWS renders the count as a bare decimal run. Anything else loses only the
-            -- count, and the configured floor stands.
-            deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\",\"maxReceiveCount\":\"0x10\"}")
-                `shouldBe` TerminusAttached Nothing
-            deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\",\"maxReceiveCount\":\" 10\"}")
-                `shouldBe` TerminusAttached Nothing
-
-        it "still reports a terminus when the policy's count cannot be read" $ do
-            -- The boot warning must never fire for an operator who has a dead-letter
-            -- queue. Only the capture count is lost, so the configured floor stands.
-            deadLetterTerminusOf (Just "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\"}")
-                `shouldBe` TerminusAttached Nothing
-            deadLetterTerminusOf (Just "not json at all") `shouldBe` TerminusAttached Nothing
+    describe "deadLetterTerminusOf -- reading the queue's redrive policy" $
+        for_ redrivePolicies $ \(label, policy, expected) ->
+            it (toString label) $
+                deadLetterTerminusOf policy `shouldBe` expected
 
     describe "liftReceivedMessages -- delivering a batch and logging poison drops" $ do
         it "delivers the well-formed sibling and drops each poison message in the batch" $ do
@@ -318,6 +262,39 @@ spec = do
             logEnv <- newTestLogEnv
             delivered <- liftReceivedMessages logEnv mkRegistryUrl testLease (map deliveredWithCount [Nothing, Just "", Just "not-a-number", Just "0", Just "-4"])
             map msgReceiveCount delivered `shouldBe` [1, 1, 1, 1, 1]
+
+{- | One job per arm of the wire mapping: the two npm shapes, a second ecosystem, and a
+namespaced non-npm name no ecosystem ships today.
+-}
+roundTripJobs :: [(Text, MirrorJob)]
+roundTripJobs =
+    [ ("round-trips an unscoped npm job", npmJob)
+    , ("round-trips a scoped npm job (namespace and bare name both recovered)", scopedJob)
+    , ("round-trips a PyPI job (ecosystem carried through)", pypiJob)
+    , ("round-trips a namespaced non-npm job, so the namespace is not npm's alone", namespacedPypiJob)
+    ]
+
+{- | What each redrive-policy spelling says about the terminus. A policy the reader cannot
+parse still reports a terminus, so the boot warning never fires for an operator who has one.
+-}
+redrivePolicies :: [(Text, Maybe Text, DeadLetterTerminus)]
+redrivePolicies =
+    [ ("reports no terminus when the queue carries no redrive policy", Nothing, TerminusAbsent)
+    , ("reports no terminus for a blank policy value", Just "   ", TerminusAbsent)
+    , ("reads the capture count from a policy that states it as a string", policyWith "\"10\"", TerminusAttached (Just (DeliveryBudget 10)))
+    , ("reads the capture count from a policy that states it as a number", policyWith "4", TerminusAttached (Just (DeliveryBudget 4)))
+    , ("refuses a hex capture count rather than read a number nobody wrote", policyWith "\"0x10\"", TerminusAttached Nothing)
+    , ("refuses a padded capture count rather than read a number nobody wrote", policyWith "\" 10\"", TerminusAttached Nothing)
+    , ("still reports a terminus when the policy states no count", Just ("{" <> targetArn <> "}"), TerminusAttached Nothing)
+    , ("still reports a terminus when the policy is not JSON at all", Just "not json at all", TerminusAttached Nothing)
+    ]
+
+-- A redrive policy naming a dead-letter queue and stating the capture count verbatim.
+policyWith :: Text -> Maybe Text
+policyWith count = Just ("{" <> targetArn <> ",\"maxReceiveCount\":" <> count <> "}")
+
+targetArn :: Text
+targetArn = "\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:123456789012:dlq\""
 
 {- | The lease one poll's batch is delivered under: a thirty-second window from a fixed origin,
 with SQS's twelve-hour ceiling on the receipt.
