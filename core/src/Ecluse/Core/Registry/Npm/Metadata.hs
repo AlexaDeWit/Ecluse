@@ -105,12 +105,17 @@ projectNpmManifest limits name = projectMetadata (parsePackageInfoFromValue name
 fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchNpmVersion tracing origin name version =
     fetchThenProject tracing (fetchNpmPackument origin) name $
-        fmap locationChecked . projectNpmVersion (ocLimits origin) name version
-  where
-    locationChecked versionRead =
-        versionRead{vrVersion = vrVersion versionRead >>= locationCheckedDoc}
-    locationCheckedDoc doc =
-        (\details -> doc{vdDetails = details}) <$> enforceArtifactLocationsOf npmArtifactAuthorities (originBaseUrl origin) (vdDetails doc)
+        fmap (locationChecked (originBaseUrl origin)) . projectNpmVersion (ocLimits origin) name version
+
+-- A version whose artifact sits off the serving authority drops, as it does on the whole document.
+locationChecked :: Text -> VersionRead -> VersionRead
+locationChecked upstreamBaseUrl versionRead =
+    versionRead{vrVersion = vrVersion versionRead >>= locationCheckedDoc upstreamBaseUrl}
+
+locationCheckedDoc :: Text -> VersionDoc -> Maybe VersionDoc
+locationCheckedDoc upstreamBaseUrl doc =
+    (\details -> doc{vdDetails = details})
+        <$> enforceArtifactLocationsOf npmArtifactAuthorities upstreamBaseUrl (vdDetails doc)
 
 -- npm artifacts must use the authority that served the packument.
 npmArtifactAuthorities :: AllowedHostPorts
@@ -125,7 +130,7 @@ projectNpmVersion limits name version body = do
     reported <- validateReportedName projectName (svName decoded)
     selected <- projectionResult (checkNameAgreement name reported decoded)
     first MetadataBoundExceeded (checkVersionCountOf limits (svVersionCount selected))
-    publishedAt <- parsePublishTime (svTime selected)
+    let publishedAt = parsePublishTime (svTime selected)
     pure
         VersionRead
             { vrVersion = do
@@ -153,7 +158,5 @@ latestTarget = \case
 
 -- An absent or undecodable stamp means no known publish time, never a document failure.
 -- The whole-document path drops a malformed @time@ entry the same way.
-parsePublishTime :: Maybe Value -> Either MetadataError (Maybe UTCTime)
-parsePublishTime = \case
-    Nothing -> Right Nothing
-    Just timeValue -> Right (parseMaybe parseJSON timeValue)
+parsePublishTime :: Maybe Value -> Maybe UTCTime
+parsePublishTime = (>>= parseMaybe parseJSON)
