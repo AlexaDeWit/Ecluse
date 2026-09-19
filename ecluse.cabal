@@ -631,6 +631,7 @@ library ecluse-test-support
     Ecluse.Test.Poll
     Ecluse.Test.Port
     Ecluse.Test.Queue
+    Ecluse.Test.Registry
     Ecluse.Test.Registry.Npm
     Ecluse.Test.Registry.PyPI
     Ecluse.Test.Registry.PyPI.Wire
