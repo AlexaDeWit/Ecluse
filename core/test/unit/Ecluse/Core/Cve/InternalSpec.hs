@@ -20,8 +20,8 @@ import Ecluse.Test.OsvDb (withFixtureOsvDb)
 -- fixture is a loud test failure. The connection closes on the body's normal exit.
 withHardenedConnection :: (Connection -> IO ()) -> IO ()
 withHardenedConnection body =
-    withFixtureOsvDb CorpusV1 $ \dbFile ->
-        openHardenedConnection Npm EpssOptional dbFile >>= \case
+    withFixtureOsvDb CorpusV1 $
+        openHardenedConnection Npm EpssOptional >=> \case
             Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
             Right conn -> body conn >> close conn
 
