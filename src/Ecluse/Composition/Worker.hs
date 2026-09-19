@@ -18,8 +18,8 @@ import Data.Map.Strict qualified as Map
 import Ecluse.Composition (PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl))
 import Ecluse.Core.Credential (mintSecret)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
-import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish, publishCodec)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewReads))
+import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewReads), AdapterPublish (publishCodec))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Origin (anonymousOrigin)
 import Ecluse.Core.Registry.Publish (

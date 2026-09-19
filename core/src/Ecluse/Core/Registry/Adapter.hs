@@ -10,24 +10,12 @@ module Ecluse.Core.Registry.Adapter (
     -- * The capability record
     RegistryAdapter (..),
     AdapterServe (..),
-    AdapterMetadata (..),
-    AdapterArtifact (..),
-    AdapterPublish (..),
-    AdapterMaintenance (..),
-    ProjectName,
 
     -- * Registration
     adapterFor,
 ) where
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
-import Ecluse.Core.Registry.Adapter.Capability (
-    AdapterArtifact (..),
-    AdapterMaintenance (..),
-    AdapterMetadata (..),
-    AdapterPublish (..),
-    ProjectName,
- )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)

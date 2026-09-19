@@ -78,8 +78,8 @@ import Ecluse.Core.Registry.Adapter (
     adapterMetadata,
     adapterProjectName,
     adapterPublish,
-    artifactHosts,
  )
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag, rdSourceReporter)

@@ -8,10 +8,12 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Registry.Adapter (
-    AdapterArtifact (artifactHosts),
-    AdapterMaintenance (maintenanceListing, maintenanceVersionDelete),
     RegistryAdapter (adapterArtifact, adapterEcosystem, adapterMaintenance, adapterPublish),
     adapterFor,
+ )
+import Ecluse.Core.Registry.Adapter.Capability (
+    AdapterArtifact (artifactHosts),
+    AdapterMaintenance (maintenanceListing, maintenanceVersionDelete),
  )
 
 spec :: Spec

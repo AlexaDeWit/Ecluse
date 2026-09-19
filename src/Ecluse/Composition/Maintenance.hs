@@ -78,11 +78,11 @@ import Ecluse.Core.Registry.Adapter (
     adapterMaintenance,
     adapterMetadata,
     adapterPublish,
-    publishCodec,
  )
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (maintenanceAlphabet, maintenanceListing, maintenanceVersionDelete),
     AdapterMetadata (metadataFetchManifest),
+    AdapterPublish (publishCodec),
     ManifestFetch,
     StoreListing,
     VersionDelete,
