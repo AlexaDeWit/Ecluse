@@ -4,7 +4,7 @@
 
 module Ecluse.Core.Registry.PyPI.WireSpec (spec) where
 
-import Data.Aeson (Value, eitherDecodeStrict, encode, object, (.=))
+import Data.Aeson (Value, eitherDecodeStrict, object, (.=))
 import Data.Aeson.Key (Key)
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
@@ -19,6 +19,8 @@ import Ecluse.Core.Registry.PyPI.Wire (
     SimpleIndex (..),
     YankState (FileOffered, FileWithdrawn),
  )
+import Ecluse.Test.Json (encodeStrict)
+import Ecluse.Test.Registry.PyPI (simpleIndex)
 
 spec :: Spec
 spec = do
@@ -30,7 +32,7 @@ spec = do
 indexSpec :: Spec
 indexSpec = describe "SimpleIndex" $ do
     it "decodes the project name and its files" $ do
-        index <- shouldDecode (indexWith [wheelEntry])
+        index <- shouldDecode (simpleIndex "requests" [wheelEntry])
         siName index `shouldBe` "requests"
         map ifFilename (siFiles index) `shouldBe` ["requests-2.34.2-py3-none-any.whl"]
 
@@ -39,13 +41,13 @@ indexSpec = describe "SimpleIndex" $ do
         siName index `shouldBe` ""
 
     it "drops a malformed file entry and records it under its declared name" $ do
-        index <- shouldDecode (indexWith [wheelEntry, namedButLocationless])
+        index <- shouldDecode (simpleIndex "requests" [wheelEntry, namedButLocationless])
         map ifFilename (siFiles index) `shouldBe` ["requests-2.34.2-py3-none-any.whl"]
         map invalidKind (siInvalidEntries index) `shouldBe` [InvalidIndexFile]
         map invalidKey (siInvalidEntries index) `shouldBe` ["broken-1.0.tar.gz"]
 
     it "records a file entry that declares no name under its position in the array" $ do
-        index <- shouldDecode (indexWith [object []])
+        index <- shouldDecode (simpleIndex "requests" [object []])
         map invalidKey (siInvalidEntries index) `shouldBe` ["0"]
 
     it "drops a versions-listing entry that is not a version string" $ do
@@ -81,7 +83,7 @@ fileSpec = describe "IndexFile" $ do
         ifFilename file `shouldBe` "requests-2.34.2-py3-none-any.whl"
 
     it "refuses a file that names no location, which could be neither gated nor served" $
-        (eitherDecodeStrict (encodeValue namedButLocationless) :: Either String IndexFile)
+        (eitherDecodeStrict (encodeStrict namedButLocationless) :: Either String IndexFile)
             `shouldSatisfy` isLeft
 
 yankSpec :: Spec
@@ -111,24 +113,16 @@ apiVersionSpec = describe "meta.api-version" $ do
         shouldDecode (object []) `shouldReturn` emptyIndex
 
     it "refuses a major version it does not speak, as PEP 691 requires of a client" $
-        (eitherDecodeStrict (encodeValue (metaIndex "2.0")) :: Either String SimpleIndex)
+        (eitherDecodeStrict (encodeStrict (metaIndex "2.0")) :: Either String SimpleIndex)
             `shouldSatisfy` isLeft
 
 -- | Decode a value as the type under test, failing the example with the decoder's own message.
 shouldDecode :: Value -> IO SimpleIndex
-shouldDecode = either fail pure . eitherDecodeStrict . encodeValue
+shouldDecode = either fail pure . eitherDecodeStrict . encodeStrict
 
 -- | 'shouldDecode' for one file entry.
 shouldDecodeFile :: Value -> IO IndexFile
-shouldDecodeFile = either fail pure . eitherDecodeStrict . encodeValue
-
--- | Re-encode a built value as the bytes a decoder reads.
-encodeValue :: Value -> ByteString
-encodeValue = toStrict . encode
-
--- | An index carrying the given file entries under a fixed project name.
-indexWith :: [Value] -> Value
-indexWith files = object ["name" .= ("requests" :: Text), "files" .= files]
+shouldDecodeFile = either fail pure . eitherDecodeStrict . encodeStrict
 
 -- | An index that declares only the given @meta.api-version@.
 metaIndex :: Text -> Value

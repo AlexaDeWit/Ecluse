@@ -21,8 +21,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factBackend, factNameAlphabet),
     StoreFault (..),
     StoreObservation (..),
-    StoredVersion (StoredVersion),
-    VersionPresence (VersionServed),
+    StoredVersion,
     protocolFault,
  )
 import Ecluse.Core.Registry.Maintenance.NameSpace (
@@ -54,9 +53,8 @@ import Ecluse.Core.Registry.Sweep.Types (
 import Ecluse.Core.Registry.Sweep.Walk (bucketNameBudget)
 import Ecluse.Core.Rules (PreparedRule (prepEval), prepare)
 import Ecluse.Core.Rules.Types (PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyByIdentity), RuleVerdict (Deny))
-import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
-import Ecluse.Test.Package (sampleManifest)
+import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore, seededStoreConfig, servedVersion, servedVersions)
+import Ecluse.Test.Package (npmVersion)
 import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPortsUnder, testPacing)
 
@@ -237,7 +235,7 @@ spec = describe "grouped preview" $ do
     it "accepts a full version union while deduplicating each target's observations" $ do
         mirror <- seeded "mirrorTarget" []
         cache <- seeded "privateUpstream" []
-        let version = StoredVersion (mkVersion Npm "1.0.0") VersionServed Nothing
+        let version = servedVersion (npmVersion "1.0.0")
             locations = [(fakeObservation mirror, [version, version]), (fakeObservation cache, [version, version])]
         fmap (map (length . snd)) (boundedVersions 1 locations) `shouldBe` Right [1, 1]
         fmap (map (length . snd)) (boundedVersions 0 locations) `shouldSatisfy` isLeft
@@ -358,15 +356,13 @@ packageName :: PackageName
 packageName = mkPackageName Npm Nothing "left-pad"
 
 contents :: [(PackageName, [Text])] -> Map PackageName [StoredVersion]
-contents = Map.fromList . map (second (map (\raw -> StoredVersion (mkVersion Npm raw) VersionServed Nothing)))
+contents = Map.fromList . map (second (servedVersions . map npmVersion))
 
 seeded :: Text -> [(PackageName, [Text])] -> IO FakeStore
 seeded label packages =
     newFakeStore
-        defaultFakeStoreConfig
-            { fakeContents = contents packages
-            , fakeFacts = (fakeFacts defaultFakeStoreConfig){factBackend = label}
-            , fakeManifests = Map.fromList [(name, sampleManifest name (map (mkVersion Npm) versions)) | (name, versions) <- packages]
+        (seededStoreConfig [(name, map npmVersion versions) | (name, versions) <- packages])
+            { fakeFacts = (fakeFacts defaultFakeStoreConfig){factBackend = label}
             }
 
 grouped :: FakeStore -> FakeStore -> IO SweepMount

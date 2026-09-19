@@ -21,9 +21,9 @@ import Ecluse.Core.Registry.Sweep.Types
 import Ecluse.Core.Rules (PreparedRule (prepEval), prepare)
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity), RuleVerdict (Allow, Deny))
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepGuardSkipped), SweepTarget (..))
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Version (Version)
 import Ecluse.Test.Maintenance
-import Ecluse.Test.Package (sampleManifest)
+import Ecluse.Test.Package (npmVersion)
 import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps)
 import Ecluse.Test.Sweep
 
@@ -62,8 +62,8 @@ spec = describe "grouped deletion" $ do
         recorded <- recordingPorts Nothing
         outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount]
         outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 Nothing)
-        held mirror `shouldReturn` [version "2.0.0"]
-        held cache `shouldReturn` [version "2.0.0"]
+        held mirror `shouldReturn` [npmVersion "2.0.0"]
+        held cache `shouldReturn` [npmVersion "2.0.0"]
 
     it "counts a cache version the allowance held back under the private target" $ do
         mirror <- seeded "mirror" ["1.0.0"]
@@ -75,7 +75,7 @@ spec = describe "grouped deletion" $ do
         operations <- recTargetResults recorded
         operations `shouldSatisfy` elem (SweepPrivate, SweepGuardSkipped)
         operations `shouldSatisfy` notElem (SweepMirror, SweepGuardSkipped)
-        held cache `shouldReturn` [version "2.0.0"]
+        held cache `shouldReturn` [npmVersion "2.0.0"]
 
     it "counts a cache version the per-batch recheck refuses under the private target" $ do
         mirror <- seeded "mirror" ["1.0.0"]
@@ -83,7 +83,7 @@ spec = describe "grouped deletion" $ do
         mount <- grouped mirror cache
         -- The backend hands the guard a version the allowance withheld, which is the batch the
         -- recheck exists to refuse, so the cap charge and not the allowance holds it back.
-        let widened = mapCacheDeletion (\send checks name _ -> send checks name (map version ["1.0.0", "2.0.0"])) (deletingCache (fakeMaintenance cache))
+        let widened = mapCacheDeletion (\send checks name _ -> send checks name (map npmVersion ["1.0.0", "2.0.0"])) (deletingCache (fakeMaintenance cache))
         recorded <- recordingPorts Nothing
         outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount{smStore = (smStore mount){ssPrivate = widened}}]
         outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 Nothing)
@@ -91,7 +91,7 @@ spec = describe "grouped deletion" $ do
         length (filter (== (SweepPrivate, SweepGuardSkipped)) operations) `shouldBe` 2
         operations `shouldSatisfy` notElem (SweepMirror, SweepGuardSkipped)
         held mirror `shouldReturn` []
-        held cache `shouldReturn` [version "2.0.0"]
+        held cache `shouldReturn` [npmVersion "2.0.0"]
 
     it "submits mirror work before cache work and rediscovers a failed cache after restart" $ do
         mirror <- seeded "mirror" ["1.0.0"]
@@ -105,7 +105,7 @@ spec = describe "grouped deletion" $ do
         _ <- sweepCycle testPacing (recPorts recorded) [mount{smStore = sourceStore{ssPrivate = cacheStore}}]
         readIORef calls `shouldReturn` ["mirror", "cache"]
         held mirror `shouldReturn` []
-        held cache `shouldReturn` [version "1.0.0"]
+        held cache `shouldReturn` [npmVersion "1.0.0"]
         restarted <- recordingPorts Nothing
         _ <- sweepCycle testPacing (recPorts restarted) [mount]
         held cache `shouldReturn` []
@@ -115,7 +115,7 @@ spec = describe "grouped deletion" $ do
         cache <- seeded "cache" ["1.0.0", "2.0.0", "3.0.0"]
         mount <- grouped mirror cache
         let original = fakeMaintenance mirror
-            withheld = version "1.0.0"
+            withheld = npmVersion "1.0.0"
             refusal = storeRefusal "REFUSED" "this version is retained"
             source =
                 mapDeletion
@@ -147,8 +147,8 @@ spec = describe "grouped deletion" $ do
         outcome <- sweepCycle testPacing (recPorts recorded) [mount{smStore = source}]
         outcomeHalt outcome `shouldSatisfy` isJust
         recErrors recorded >>= (`shouldSatisfy` any (T.isInfixOf "cleanup remains incomplete"))
-        held mirror `shouldReturn` [version "1.0.0"]
-        held cache `shouldReturn` [version "1.0.0"]
+        held mirror `shouldReturn` [npmVersion "1.0.0"]
+        held cache `shouldReturn` [npmVersion "1.0.0"]
 
     it "rechecks lost responses without blindly replaying a version now absent" $ do
         mirror <- seeded "mirror" ["1.0.0"]
@@ -219,7 +219,7 @@ spec = describe "grouped deletion" $ do
         outcome <- sweepCycle testPacing (recPorts recorded) [mount{smStore = source{ssPrivate = withdrawn}}]
         outcomeHalt outcome `shouldSatisfy` isJust
         held mirror `shouldReturn` []
-        held cache `shouldReturn` [version "1.0.0"]
+        held cache `shouldReturn` [npmVersion "1.0.0"]
 
     it "does not retry when current policy permits the version after an uncertain result" $ do
         mirror <- seeded "mirror" ["1.0.0"]
@@ -245,7 +245,7 @@ spec = describe "grouped deletion" $ do
         recorded <- recordingPorts Nothing
         _ <- sweepCycle testPacing (recPorts recorded) [mount{smRules = [policy], smStore = source}]
         readIORef attempts `shouldReturn` 1
-        held mirror `shouldReturn` [version "1.0.0"]
+        held mirror `shouldReturn` [npmVersion "1.0.0"]
 
     it "reassesses a newly retained revision after an absence without charging it again" $ do
         mirror <- seeded "mirror" ["1.0.0"]
@@ -268,7 +268,7 @@ spec = describe "grouped deletion" $ do
                     )
                     (smStore mount)
         recorded <- recordingPorts Nothing
-        let ports = (recPorts recorded){sweepDelay = \_ -> writeFakeContents mirror (Map.singleton packageName [StoredVersion (version "1.0.0") VersionServed (Just "retained-again")])}
+        let ports = (recPorts recorded){sweepDelay = \_ -> writeFakeContents mirror (Map.singleton packageName [StoredVersion (npmVersion "1.0.0") VersionServed (Just "retained-again")])}
         outcome <- sweepCycle testPacing{swpDeletionCap = 1} ports [mount{smStore = source}]
         outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 Nothing)
         readIORef attempts `shouldReturn` 2
@@ -288,7 +288,7 @@ spec = describe "grouped deletion" $ do
                     }
         recorded <- recordingPorts Nothing
         _ <- sweepCycle testPacing (recPorts recorded) [mount{smStore = original{ssObserve = observation}}]
-        held mirror `shouldReturn` [version "1.0.0"]
+        held mirror `shouldReturn` [npmVersion "1.0.0"]
 
     it "protects first-party names without reading either manifest" $ do
         mirror <- seeded "mirror" ["1.0.0"]
@@ -301,19 +301,15 @@ spec = describe "grouped deletion" $ do
         recorded <- recordingPorts Nothing
         outcome <- sweepCycle testPacing (recPorts recorded) [mount{smFirstParty = const True, smStore = protectCache (protect store)}]
         tallyGuardSkipped (outcomeTally outcome) `shouldBe` 2
-        held mirror `shouldReturn` [version "1.0.0"]
-        held cache `shouldReturn` [version "1.0.0"]
+        held mirror `shouldReturn` [npmVersion "1.0.0"]
+        held cache `shouldReturn` [npmVersion "1.0.0"]
 
 seeded :: Text -> [Text] -> IO FakeStore
 seeded backend raw =
     newFakeStore
-        defaultFakeStoreConfig
-            { fakeContents = Map.singleton packageName [StoredVersion item VersionServed Nothing | item <- versions]
-            , fakeManifests = Map.singleton packageName (sampleManifest packageName versions)
-            , fakeFacts = (fakeFacts defaultFakeStoreConfig){factBackend = backend, factCompletion = CompletesOnCall}
+        (seededStoreConfig [(packageName, map npmVersion raw)])
+            { fakeFacts = (fakeFacts defaultFakeStoreConfig){factBackend = backend, factCompletion = CompletesOnCall}
             }
-  where
-    versions = map version raw
 
 grouped :: FakeStore -> FakeStore -> IO SweepMount
 grouped mirror cache = do
@@ -323,7 +319,7 @@ grouped mirror cache = do
     pure (withPrivateCache (deletingCache (fakeMaintenance cache)) mount)
 
 held :: FakeStore -> IO [Version]
-held store = map storedVersion . Map.findWithDefault [] packageName <$> readFakeContents store
+held = heldVersions packageName
 
 mapDeletion :: ((DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]) -> DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]) -> SweepStore -> SweepStore
 mapDeletion f store = case ssExecute store of
@@ -337,6 +333,3 @@ mapCacheDeletion f cache = case scExecute cache of
 
 packageName :: PackageName
 packageName = mkPackageName Npm Nothing "left-pad"
-
-version :: Text -> Version
-version = mkVersion Npm
