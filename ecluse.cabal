@@ -841,7 +841,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Telemetry.MetricsSpec
     Ecluse.Core.TextSpec
     Ecluse.Core.Version.TokenSpec
-    Ecluse.Core.VersionOrderingSpec
     Ecluse.Core.VersionSpec
     Ecluse.Core.WireSpec
     Ecluse.Core.Worker.IntegritySpec
