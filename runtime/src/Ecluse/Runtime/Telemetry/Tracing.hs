@@ -8,8 +8,7 @@ entry point takes the 'Telemetry' handle and is inert when telemetry is off, so 
 manager settings come back untouched, and a domain-span bracket runs its body against no span. The
 data-plane http-client instrumentation records no request or response header and the WAI instrumentation
 never records @Authorization@, so a forwarded client token never reaches a span, while the
-high-cardinality package, version, and denial message deliberately do.
-"Ecluse.Runtime.Telemetry.Tracing.Internal" implements it.
+high-cardinality package, version, and denial message deliberately do. "Ecluse.Runtime.Telemetry.Tracing.Internal" implements it.
 -}
 module Ecluse.Runtime.Telemetry.Tracing (
     -- * WAI server span

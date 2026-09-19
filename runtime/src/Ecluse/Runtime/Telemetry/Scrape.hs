@@ -8,8 +8,7 @@ the SDK answers with a no-op push exporter, leaving the endpoint to the applicat
 carries the whole OpenTelemetry resource, naming the host, the process, and any cloud or cluster
 identity the SDK detected, so it never shares the port untrusted registry clients reach and binds
 @localhost@ until an operator widens it. @OTEL_EXPORTER_PROMETHEUS_HOST@ and
-@OTEL_EXPORTER_PROMETHEUS_PORT@ address it, as the OpenTelemetry specification defines them.
-"Ecluse.Runtime.Telemetry.Scrape.Internal" implements it.
+@OTEL_EXPORTER_PROMETHEUS_PORT@ address it, as the OpenTelemetry specification defines them. "Ecluse.Runtime.Telemetry.Scrape.Internal" implements it.
 -}
 module Ecluse.Runtime.Telemetry.Scrape (
     -- * The collection handle

@@ -7,9 +7,7 @@
 bounded label values its metric carries, so the type enforces the cardinality rule at the call
 site. With telemetry off, 'newMetrics' builds from the SDK's no-op meter provider, so the hot path
 records unconditionally: no per-call branch, and the 'metricAttributes' a call passes is never
-forced. @docs\/architecture\/observability.md@ describes the catalogue.
-"Ecluse.Runtime.Telemetry.Instruments.Internal" implements it, and holds the @record*@ helpers
-the ports below are built from.
+forced. @docs\/architecture\/observability.md@ describes the catalogue. "Ecluse.Runtime.Telemetry.Instruments.Internal" implements it.
 -}
 module Ecluse.Runtime.Telemetry.Instruments (
     -- * The instrument handle

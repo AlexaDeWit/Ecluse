@@ -8,8 +8,7 @@ JSONL line to the trace it was emitted within. This is the IO half "Ecluse.Runti
 which is why that module needs no OpenTelemetry dependency. The ids take
 @hs-opentelemetry-propagator-datadog@'s form: the unsigned decimal of the low 64 bits,
 big-endian. No span in scope, or one whose context is not valid, contributes no ids, so a line
-never carries a meaningless all-zero trace id. The identity still stamps it.
-"Ecluse.Runtime.Telemetry.Correlation.Internal" implements it.
+never carries a meaningless all-zero trace id. The identity still stamps it. "Ecluse.Runtime.Telemetry.Correlation.Internal" implements it.
 -}
 module Ecluse.Runtime.Telemetry.Correlation (
     -- * Identity
