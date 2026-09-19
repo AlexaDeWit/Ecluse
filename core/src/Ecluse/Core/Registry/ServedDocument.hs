@@ -6,6 +6,10 @@
 Ecosystem adapters own their wire shapes and reuse these name and location gates.
 -}
 module Ecluse.Core.Registry.ServedDocument (
+    -- * The cached-document boundary
+    assembleAcross,
+    serialiseAcross,
+
     -- * Replaying a merge plan
     overlaySurvivors,
 
@@ -16,10 +20,11 @@ module Ecluse.Core.Registry.ServedDocument (
     rebaseArtifactUrl,
 
     -- * Reading a raw document
+    documentObject,
     stringField,
 ) where
 
-import Data.Aeson (Value (String))
+import Data.Aeson (Value (Object, String), encode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -28,8 +33,33 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
 import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), SourceId)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Snapshot (Snapshot (..))
 import Ecluse.Core.Text (urlFilename)
+
+{- | Run an ecosystem's plain-'Value' assembly across its own cached-document boundary. A source
+or base another ecosystem injected projects as 'Nothing' and contributes nothing.
+-}
+assembleAcross ::
+    (Value -> CachedDoc, CachedDoc -> Maybe Value) ->
+    (Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value) ->
+    Text ->
+    Map SourceId (Snapshot CachedDoc) ->
+    MergePlan ->
+    Maybe CachedDoc ->
+    CachedDoc
+assembleAcross (inject, project) assemble mountBase bySource plan base =
+    inject
+        ( assemble
+            mountBase
+            (Map.mapMaybe (traverse project) bySource)
+            plan
+            (fromMaybe (Object mempty) (project =<< base))
+        )
+
+-- | Encode a served document to its compact wire bytes, an empty object for a foreign one.
+serialiseAcross :: (CachedDoc -> Maybe Value) -> CachedDoc -> LByteString
+serialiseAcross project = encode . fromMaybe (Object mempty) . project
 
 {- | Select exact admitted entries from the winning source snapshot, preserving each source's order.
 Missing keys, ambiguous keys, and mismatched snapshots contribute nothing.
@@ -80,6 +110,12 @@ rebaseArtifactUrl renderMountUrl url = do
     filename <- urlFilename url
     _ <- urlFilename (T.strip url)
     renderMountUrl filename
+
+-- | A raw document's own object, empty for a document that is not one.
+documentObject :: Value -> KeyMap Value
+documentObject = \case
+    Object o -> o
+    _ -> mempty
 
 -- | The 'Text' at @key@ in a raw document object, if present and a JSON string.
 stringField :: Key.Key -> KeyMap Value -> Maybe Text

@@ -14,7 +14,7 @@ module Ecluse.Core.Registry.PyPI.Filter (
     serialiseSimpleDocument,
 ) where
 
-import Data.Aeson (Value (Array, Object, String), encode)
+import Data.Aeson (Value (Array, Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -26,7 +26,14 @@ import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Package.Merge (MergePlan (mpName, mpSurvivors), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiSimpleCached)
 import Ecluse.Core.Registry.PyPI.Route (distributionPath)
-import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl, stringField)
+import Ecluse.Core.Registry.ServedDocument (
+    assembleAcross,
+    documentObject,
+    overlaySurvivors,
+    rebaseArtifactUrl,
+    serialiseAcross,
+    stringField,
+ )
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Text (joinUrlPath)
 
@@ -42,9 +49,7 @@ assembleSimpleIndex mountBase bySource plan base =
         )
   where
     baseObject :: KeyMap Value
-    baseObject = case base of
-        Object o -> o
-        _ -> mempty
+    baseObject = documentObject base
 
     survivingFiles :: [Value]
     survivingFiles =
@@ -81,12 +86,8 @@ entriesOf = \case
 
 -- | Assemble a PyPI document. Sources from another ecosystem contribute nothing.
 assembleSimpleDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
-assembleSimpleDocument mountBase bySource plan base =
-    fst pypiSimpleCached (assembleSimpleIndex mountBase sources plan baseValue)
-  where
-    sources = Map.mapMaybe (traverse (snd pypiSimpleCached)) bySource
-    baseValue = fromMaybe (Object mempty) (snd pypiSimpleCached =<< base)
+assembleSimpleDocument = assembleAcross pypiSimpleCached assembleSimpleIndex
 
 -- | Serialise a PyPI document to compact JSON, or an empty object for another ecosystem.
 serialiseSimpleDocument :: CachedDoc -> LByteString
-serialiseSimpleDocument = encode . fromMaybe (Object mempty) . snd pypiSimpleCached
+serialiseSimpleDocument = serialiseAcross (snd pypiSimpleCached)

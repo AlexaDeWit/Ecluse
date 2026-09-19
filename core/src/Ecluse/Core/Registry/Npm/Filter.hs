@@ -18,7 +18,7 @@ module Ecluse.Core.Registry.Npm.Filter (
     serialiseMergedDocument,
 ) where
 
-import Data.Aeson (Value (Object, String), encode)
+import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -30,7 +30,15 @@ import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpTime), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
-import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl, safeDocumentName, stringField)
+import Ecluse.Core.Registry.ServedDocument (
+    assembleAcross,
+    documentObject,
+    overlaySurvivors,
+    rebaseArtifactUrl,
+    safeDocumentName,
+    serialiseAcross,
+    stringField,
+ )
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Text (joinUrlPath, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
@@ -71,9 +79,7 @@ assembleMergedPackument mountBase bySource plan base =
             & KeyMap.insert "time" (Object reconciledTime)
 
     baseObject :: KeyMap Value
-    baseObject = case base of
-        Object o -> o
-        _ -> mempty
+    baseObject = documentObject base
 
     -- The shared gate reads the document's own upstream-controlled @name@ before it reaches
     -- the URL, and a document with no usable name has no version rewritten.
@@ -120,23 +126,13 @@ assembleMergedPackument mountBase bySource plan base =
                 ]
         _ -> mempty
 
-{- | npm's served-document __assemble__ capability
-('Ecluse.Core.Registry.Adapter.Types.metadataAssemble'), across npm's own 'CachedDoc' boundary.
--}
+-- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataAssemble', over npm's own boundary.
 assembleMergedDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
-assembleMergedDocument mountBase bySource plan base =
-    fst npmCached (assembleMergedPackument mountBase (Map.mapMaybe (traverse npmValue) bySource) plan (fromMaybe (Object mempty) (npmValue =<< base)))
+assembleMergedDocument = assembleAcross npmCached assembleMergedPackument
 
-{- | npm's served-document __serialise__ capability
-('Ecluse.Core.Registry.Adapter.Types.metadataSerialise'), to the compact wire bytes.
--}
+-- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataSerialise'.
 serialiseMergedDocument :: CachedDoc -> LByteString
-serialiseMergedDocument = encode . fromMaybe (Object mempty) . npmValue
-
--- A document another ecosystem injected projects as 'Nothing' and contributes nothing, rather
--- than reading as an empty one.
-npmValue :: CachedDoc -> Maybe Value
-npmValue = snd npmCached
+serialiseMergedDocument = serialiseAcross (snd npmCached)
 
 versionEntries :: Value -> [(EntryKey, Value)]
 versionEntries = \case
