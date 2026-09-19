@@ -88,6 +88,10 @@ sampleBytes = "some tarball bytes the digests below are computed over"
 tamperedBytes :: ByteString
 tamperedBytes = sampleBytes <> "!"
 
+-- The snapshot most cases take: one artifact under a sha512 SRI, which clears every floor.
+strongDetails :: PackageDetails
+strongDetails = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
+
 -- ── the digest-set generator for the differential property ─────────────────────
 
 -- One producible digest kind: how a registry could describe bytes. The 'Show' is
@@ -130,24 +134,21 @@ spec :: Spec
 spec = do
     describe "admitArtifact -- the shared serve/worker admission oracle" $ do
         it "carries the skipped-check evidence beside an admit, so the gate can record it once" $ do
-            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            (admission, skipped) <- admitArtifactWithEvidence ctx [skippedCveRule, admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
+            (admission, skipped) <- admitArtifactWithEvidence ctx [skippedCveRule, admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             skipped `shouldBe` [SkippedUnavailable "DenyIfCve" "no advisory database loaded"]
             case admission of
                 AdmissionAdmit{} -> pass
                 other -> expectationFailure ("expected an admit, got " <> show other)
 
         it "carries no evidence beside a refusal" $ do
-            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            (admission, skipped) <- admitArtifactWithEvidence ctx [skippedCveRule, denyRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
+            (admission, skipped) <- admitArtifactWithEvidence ctx [skippedCveRule, denyRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             skipped `shouldBe` []
             case admission of
                 AdmissionDenied{} -> pass
                 other -> expectationFailure ("expected a denial, got " <> show other)
 
         it "admits a rule-admitted, floor-clearing artifact, selecting it by filename" $ do
-            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
+            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             case admission of
                 AdmissionAdmit filename artifact digests -> do
                     artFilename artifact `shouldBe` "thing-1.0.0.tgz"
@@ -160,22 +161,19 @@ spec = do
                 other -> expectationFailure ("expected an admit, got " <> show other)
 
         it "carries a rule denial through as AdmissionDenied (both surfaces render the same decision)" $ do
-            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admission <- admitArtifact ctx [denyRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
+            admission <- admitArtifact ctx [denyRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             case admission of
                 AdmissionDenied Blocked{} -> pass
                 other -> expectationFailure ("expected a rule denial, got " <> show other)
 
         it "carries a fail-closed uncomputable rule through as AdmissionUndecidable" $ do
-            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
+            admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             case admission of
                 AdmissionUndecidable Undecidable{} -> pass
                 other -> expectationFailure ("expected undecidable, got " <> show other)
 
         it "reports an absent filename as AdmissionFileAbsent, never selecting another artifact" $ do
-            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "renamed-2.0.0.tgz") details
+            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "renamed-2.0.0.tgz") strongDetails
             case admission of
                 AdmissionFileAbsent -> pass
                 other -> expectationFailure ("expected a file miss, got " <> show other)
@@ -187,8 +185,8 @@ spec = do
                 other -> expectationFailure ("expected integrity-missing, got " <> show other)
 
         it "refuses a weak-only digest set as AdmissionBelowFloor" $ do
-            let details = detailsWith [unsafeHash SHA1 (Package.hexSha1Of sampleBytes)]
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
+            let weakDetails = detailsWith [unsafeHash SHA1 (Package.hexSha1Of sampleBytes)]
+            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") weakDetails
             case admission of
                 AdmissionBelowFloor -> pass
                 other -> expectationFailure ("expected below-floor, got " <> show other)
@@ -203,8 +201,7 @@ spec = do
 
     describe "admissionTransience -- the retry projection the serve gate and the worker share" $ do
         it "reads out the transience of an inability the evaluator expects to clear" $ do
-            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
+            admission <- admitArtifact ctx [cannotVetRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             admissionTransience admission `shouldBe` Just (WillResolve Nothing)
 
         it "carries a WontResolve inability through, so serve renders a 500 and the worker drops" $
@@ -214,8 +211,7 @@ spec = do
                 `shouldBe` Just WontResolve
 
         it "reports no transience for a settled verdict, so no consumer waits on one" $ do
-            let details = detailsWith (sriHashesOf (Package.sriSha512Of sampleBytes))
-            admitted <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
+            admitted <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") strongDetails
             admissionTransience admitted `shouldBe` Nothing
             admissionTransience (AdmissionDenied (Blocked "test-deny" Nothing "denied by current policy")) `shouldBe` Nothing
             admissionTransience AdmissionFileAbsent `shouldBe` Nothing
@@ -227,9 +223,9 @@ spec = do
             -- Admission and mirroring must compare the same individual digest from a multi-component SRI.
             let joined = Package.sriSha512Of sampleBytes <> " " <> Package.sriSha256Of sampleBytes
                 hashes = sriHashesOf joined
-                details = detailsWith hashes
-            classifyArtifacts defaultMinIntegrity (pkgArtifacts details) `shouldBe` MeetsFloor
-            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") details
+                joinedDetails = detailsWith hashes
+            classifyArtifacts defaultMinIntegrity (pkgArtifacts joinedDetails) `shouldBe` MeetsFloor
+            admission <- admitArtifact ctx [admitRule] defaultMinIntegrity (unsafeFilename "thing-1.0.0.tgz") joinedDetails
             case admission of
                 AdmissionAdmit _ _ admitted -> do
                     verifyIntegrity admitted sampleBytes `shouldBe` IntegrityVerified
@@ -250,8 +246,7 @@ spec = do
             -- The closed gap: the floor admitted SHA-256 while the worker's
             -- hand-rolled vocabulary could not verify it, stranding the version.
             let hashes = [unsafeHash SHA256 (Package.hexSha256Of sampleBytes)]
-                details = detailsWith hashes
-            classifyArtifacts defaultMinIntegrity (pkgArtifacts details) `shouldBe` MeetsFloor
+            classifyArtifacts defaultMinIntegrity (pkgArtifacts (detailsWith hashes)) `shouldBe` MeetsFloor
             verifyIntegrity (NE.fromList hashes) sampleBytes `shouldBe` IntegrityVerified
 
     describe "the differential property: floor-admitted implies worker-verifiable" $
