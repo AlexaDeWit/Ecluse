@@ -303,19 +303,19 @@ ruleVerdictFields = \case
         , ("ecluse.rule.message", rejectionMessage rejection)
         ]
             <> ruleNameField (rejectionReason rejection)
-  where
-    reasonClass :: RejectReason -> Text
-    reasonClass = \case
-        ByPolicy _ -> "by_policy"
-        Unavailable _ -> "unavailable"
-        MissingIntegrity -> "missing_integrity"
-        BelowIntegrityFloor -> "below_integrity_floor"
-        UpstreamInvalid -> "upstream_invalid"
 
-    ruleNameField :: RejectReason -> [(Text, Text)]
-    ruleNameField = \case
-        ByPolicy (RuleName ruleName) -> [("ecluse.rule.name", ruleName)]
-        _ -> []
+reasonClass :: RejectReason -> Text
+reasonClass = \case
+    ByPolicy _ -> "by_policy"
+    Unavailable _ -> "unavailable"
+    MissingIntegrity -> "missing_integrity"
+    BelowIntegrityFloor -> "below_integrity_floor"
+    UpstreamInvalid -> "upstream_invalid"
+
+ruleNameField :: RejectReason -> [(Text, Text)]
+ruleNameField = \case
+    ByPolicy (RuleName ruleName) -> [("ecluse.rule.name", ruleName)]
+    _ -> []
 
 {- Run an action within a domain span of the given kind and links, or against 'Nothing' when
 telemetry is disabled, which creates no tracer and opens no span. The span is parented on the

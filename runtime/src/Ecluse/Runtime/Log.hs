@@ -247,12 +247,12 @@ jsonLine logIdentity verb logItem = Object (KeyMap.fromList (reserved <> whenPre
             , ("dd",) . spanObject <$> ddSpan context
             ]
 
-    -- The @katip@ keys this line renders itself, so the nested block does not repeat them.
-    promoted :: [Key]
-    promoted = ["at", "data", "env", "msg", "sev"]
+-- The @katip@ keys the line renders itself, so the nested block does not repeat them.
+promoted :: [Key]
+promoted = ["at", "data", "env", "msg", "sev"]
 
-    spanObject :: DdSpan -> Value
-    spanObject theSpan = object ["trace_id" .= ddTraceId theSpan, "span_id" .= ddSpanId theSpan]
+spanObject :: DdSpan -> Value
+spanObject theSpan = object ["trace_id" .= ddTraceId theSpan, "span_id" .= ddSpanId theSpan]
 
 {- The active span's ids from a log site's own @dd@ payload ('ddField'). Both ids must be
 present, so a line never renders a half-filled correlation pair. -}

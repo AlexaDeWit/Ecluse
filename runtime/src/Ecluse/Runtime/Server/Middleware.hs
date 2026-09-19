@@ -47,11 +47,10 @@ goingAwayMiddleware drain app request respond = do
     if draining
         then modifyResponse closeConnection app request respond
         else app request respond
-  where
-    -- Add @Connection: close@ to the response's header set. A streaming response keeps
-    -- streaming: only its headers are rewritten.
-    closeConnection :: Response -> Response
-    closeConnection = mapResponseHeaders ((hConnection, "close") :)
+
+-- A streaming response keeps streaming: only its headers are rewritten.
+closeConnection :: Response -> Response
+closeConnection = mapResponseHeaders ((hConnection, "close") :)
 
 {- | The per-request timeout, in seconds. Generous enough for a large packument
 fetch, bounded so a stuck upstream cannot pin a handler indefinitely.
@@ -106,10 +105,11 @@ readinessResponse verdict = case verdict of
 mountsOf :: Map.Map Ecosystem MountReadiness -> Value
 mountsOf mounts =
     object [Key.fromText (ecosystemName eco) .= mountLabel mount | (eco, mount) <- Map.toList mounts]
-  where
-    mountLabel = \case
-        MountReady -> readyLabel
-        MountAwaitingFirstSync -> awaitingLabel
+
+mountLabel :: MountReadiness -> Text
+mountLabel = \case
+    MountReady -> readyLabel
+    MountAwaitingFirstSync -> awaitingLabel
 
 readyLabel, awaitingLabel :: Text
 readyLabel = "ready"

@@ -346,6 +346,10 @@ data Stepped = Stepped
     , stFault :: Maybe OsvDbFetchFault
     }
 
+steppedOf :: AdvisorySyncResult -> Bool -> Maybe DbEtag -> Stepped
+steppedOf result settled seen =
+    Stepped{stResult = result, stSettled = settled, stSeen = seen, stFault = Nothing}
+
 {- One observed step. Residue propagates to supervision, and the span closes after the two records,
 so it reads longer.
 -}
@@ -373,32 +377,30 @@ observedStep metrics tracing env eco notifyFirstSync lastSeen =
         asmpSyncDuration metrics ecosystem (stResult attempted) seconds
         pure attempted
 
-    stepped result settled seen = Stepped{stResult = result, stSettled = settled, stSeen = seen, stFault = Nothing}
-
     attempt =
         liftIO (syncStep env lastSeen) >>= \case
             SyncFetchFaulted fault ->
                 -- The step learned nothing about the remote artifact, so the last seen ETag and
                 -- the last good database both stand and the next poll retries.
-                pure (stepped AdvisoryFetchFailed False lastSeen){stFault = Just fault}
+                pure (steppedOf AdvisoryFetchFailed False lastSeen){stFault = Just fault}
             SyncSwapped etag meta -> do
                 logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show (metadataSummary meta)))
                 source <- liftIO (currentAdvisorySource (syncSlot env))
                 logFM InfoS (ls ("cve-sync[" <> eco <> "]: serving artifact source: " <> maybe unrecordedValue renderAdvisorySource source))
                 whenNothing_ (asPushedAt =<< source) (undatedArtifact eco etag)
                 liftIO notifyFirstSync
-                pure (stepped AdvisorySwapped True (Just etag))
+                pure (steppedOf AdvisorySwapped True (Just etag))
             SyncUnchanged -> do
                 logFM DebugS (ls ("cve-sync[" <> eco <> "]: advisory database unchanged"))
-                pure (stepped AdvisoryUnchanged True lastSeen)
+                pure (steppedOf AdvisoryUnchanged True lastSeen)
             SyncAbsent -> do
                 logFM DebugS (ls ("cve-sync[" <> eco <> "]: no advisory database published yet"))
-                pure (stepped AdvisoryNonePublished False lastSeen)
+                pure (steppedOf AdvisoryNonePublished False lastSeen)
             SyncRejected etag rejection -> do
                 logFM ErrorS (ls ("cve-sync[" <> eco <> "]: downloaded artifact refused (keeping last good): " <> show rejection))
                 -- Remember the ETag so the same refused artifact is not re-downloaded.
                 -- A fixed re-publish carries a new one. Identical bytes cannot end differently.
-                pure (stepped AdvisoryRefused True (Just etag))
+                pure (steppedOf AdvisoryRefused True (Just etag))
 
 {- An artifact the object store gave no publication time for: its age cannot be established, so
 CVE-based denial refuses on it. One line per swap, because only a swap can install one. -}
@@ -420,16 +422,18 @@ alone, on the same rule as 'metadataSummary' below: artifact text never reaches 
 renderAdvisorySource :: AdvisorySource -> Text
 renderAdvisorySource source =
     "pushed_at="
-        <> stamp (asPushedAt source)
+        <> renderStamp (asPushedAt source)
         <> " osv_source="
         <> maybe unrecordedValue authorityLabel (apOsvSource prov)
         <> " osv_newest_modified="
-        <> stamp (apOsvNewestModified prov)
+        <> renderStamp (apOsvNewestModified prov)
         <> " epss_score_date="
-        <> stamp (apEpssScoreDate prov)
+        <> renderStamp (apEpssScoreDate prov)
   where
     prov = asProvenance source
-    stamp = maybe unrecordedValue renderIso8601Utc
+
+renderStamp :: Maybe UTCTime -> Text
+renderStamp = maybe unrecordedValue renderIso8601Utc
 
 -- What a value the artifact never recorded reads as, so absence is not read as a zero.
 unrecordedValue :: Text

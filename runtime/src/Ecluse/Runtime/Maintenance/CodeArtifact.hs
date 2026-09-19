@@ -60,6 +60,7 @@ import Ecluse.Core.Registry.Maintenance (
     pageSource,
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (
+    RepositoryLinks,
     UndecidabilityReason (NetworkFailure),
     UnsafeReason (InsufficientPermissions),
     UpstreamSafety (Undecidable, Unsafe),
@@ -230,10 +231,11 @@ probeUpstreamSafety observer store =
     linksOf repository =
         describedLinks <$> rpDescribeUpstream observer (describeUpstreamRequest store repository)
 
-    -- An answer that described no repository settled nothing, so the question stays open.
-    describedLinks response = do
-        described <- response
-        maybe (Left (Undecidable NetworkFailure)) (Right . upstreamLinksOf) (described ^. CAL.describeRepositoryResponse_repository)
+-- An answer that described no repository settled nothing, so the question stays open.
+describedLinks :: Either UpstreamSafety CA.DescribeRepositoryResponse -> Either UpstreamSafety RepositoryLinks
+describedLinks response = do
+    described <- response
+    maybe (Left (Undecidable NetworkFailure)) (Right . upstreamLinksOf) (described ^. CAL.describeRepositoryResponse_repository)
 
 {- A service refusal comes back as a value, so a throw here is the identity itself: none was
 discovered, or the one discovered could not be renewed. An identity that cannot ask fails closed. -}
