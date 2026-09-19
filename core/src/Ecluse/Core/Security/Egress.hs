@@ -5,10 +5,13 @@
 {- | The egress posture for registry traffic: https-only by construction.
 
 Every outbound registry URL is a 'RegistryUrl', so a plain-HTTP target cannot be represented
-and a non-https configured upstream fails closed at boot. TLS certificate validation, not a
-resolved-IP pin, is the endpoint-authentication boundary: an attacker who steers a name to an
-internal address cannot make it present a CA-trusted certificate for that host. The host
-allowlist ('Ecluse.Core.Security.isAllowedUpstreamHost'), the literal internal-range block,
+and a non-https configured upstream fails closed at boot.
+
+== Endpoint authentication
+
+TLS certificate validation, not a resolved-IP pin, is the boundary: an attacker who steers a
+name to an internal address cannot make it present a CA-trusted certificate for that host. The
+host allowlist ('Ecluse.Core.Security.isAllowedUpstreamHost'), the literal internal-range block,
 and the @redirectCount = 0@ every request carries are complementary controls owned elsewhere.
 -}
 module Ecluse.Core.Security.Egress (
