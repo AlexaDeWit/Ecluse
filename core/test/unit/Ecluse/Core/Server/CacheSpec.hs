@@ -18,8 +18,7 @@ import UnliftIO (mapConcurrently)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (..), PackageName, mkPackageName)
+import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (..), PackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead, digestOf)
@@ -38,8 +37,7 @@ import Ecluse.Core.Server.Cache (
 import Ecluse.Core.Server.Cache qualified as Cache
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
-import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName, unscopedNpm, v1_0_0)
+import Ecluse.Test.Package (npmVersion, pypiVersion, sampleArtifact, sampleDetails, thingName, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Snapshot (readDetails, versionReadOf)
@@ -128,15 +126,12 @@ countingFetch calls name marker = do
     pure (entry name marker)
 
 pypiName :: PackageName
-pypiName = mkPackageName PyPI Nothing "auditdemo"
-
-pypiVersion :: Version
-pypiVersion = mkVersion PyPI "1"
+pypiName = unscopedPyPI "auditdemo"
 
 selectedRelease :: Int -> Int -> Either MetadataError VersionRead
 selectedRelease count padding =
     fmap untagged
-        . projectPyPIVersion defaultLimits pypiName pypiVersion
+        . projectPyPIVersion defaultLimits pypiName (pypiVersion "1")
         . BL.toStrict
         . encode
         $ object ["name" .= ("auditdemo" :: Text), "files" .= map file [1 .. count]]
@@ -169,8 +164,8 @@ spec = do
                 seen <- newIORef 0
                 let port = noopMetricsPort{mpVersionCacheResidentBytes = writeIORef seen}
                 c <- newMetadataCache (configBytes 60 100 accounted)
-                Cache.resolveVersion port c publicSource pypiName pypiVersion (pure (Right release)) `shouldReturn` Right release
-                Cache.cachedVersion c publicSource pypiName pypiVersion `shouldReturn` Just release
+                Cache.resolveVersion port c publicSource pypiName (pypiVersion "1") (pure (Right release)) `shouldReturn` Right release
+                Cache.cachedVersion c publicSource pypiName (pypiVersion "1") `shouldReturn` Just release
                 readIORef seen `shouldReturn` accounted
 
         it "serves an oversized selected release without evicting the cached absence" $ do
@@ -178,12 +173,12 @@ spec = do
             seen <- newIORef 0
             calls <- newIORef (0 :: Int)
             let port = noopMetricsPort{mpVersionCacheResidentBytes = writeIORef seen}
-                absentVersion = mkVersion PyPI "2"
+                absentVersion = pypiVersion "2"
                 fetch = modifyIORef' calls (+ 1) $> Right release
             c <- newMetadataCache (configBytes 60 100 16384)
             _ <- Cache.resolveVersion port c publicSource pypiName absentVersion (pure (Right (untagged Nothing)))
-            replicateM_ 2 $ Cache.resolveVersion port c publicSource pypiName pypiVersion fetch `shouldReturn` Right release
-            Cache.cachedVersion c publicSource pypiName pypiVersion `shouldReturn` Nothing
+            replicateM_ 2 $ Cache.resolveVersion port c publicSource pypiName (pypiVersion "1") fetch `shouldReturn` Right release
+            Cache.cachedVersion c publicSource pypiName (pypiVersion "1") `shouldReturn` Nothing
             Cache.cachedVersion c publicSource pypiName absentVersion `shouldReturn` Just (untagged Nothing)
             readIORef calls `shouldReturn` 2
             readIORef seen `shouldReturn` 1024
@@ -344,9 +339,9 @@ spec = do
             let name = unscopedNpm "hot-head"
             _ <- resolveMetadata c publicSource name (pure (entry name "raw"))
             for_ ([1 .. 5] :: [Int]) $ \i ->
-                Cache.resolveVersion noopMetricsPort c publicSource name (mkVersion Npm (show i <> ".0.0")) (pure (Right (untagged Nothing)))
+                Cache.resolveVersion noopMetricsPort c publicSource name (npmVersion (show i <> ".0.0")) (pure (Right (untagged Nothing)))
 
-            Cache.cachedVersion c publicSource name (mkVersion Npm "1.0.0") `shouldReturn` Nothing
+            Cache.cachedVersion c publicSource name (npmVersion "1.0.0") `shouldReturn` Nothing
 
             found <- cachedMetadata c publicSource name
             found `shouldSatisfy` isJust
@@ -375,7 +370,7 @@ spec = do
             for_ ([1 .. 10] :: [Int]) $ \i -> do
                 let name = unscopedNpm ("filler-" <> show i)
                 _ <- Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
-                _ <- Cache.resolveVersion port c publicSource name (mkVersion Npm "1.0.0") (pure (Right (untagged Nothing)))
+                _ <- Cache.resolveVersion port c publicSource name (npmVersion "1.0.0") (pure (Right (untagged Nothing)))
                 _ <- Cache.resolveAssembled port c (show i) (pure (mkBytes 2048 'x'))
                 pass
             total <- sum <$> traverse readIORef [fullSeen, versionSeen, assembledSeen]
@@ -392,7 +387,7 @@ spec = do
                         , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
                         }
             let name = unscopedNpm "recency"
-                v n = mkVersion Npm (show (n :: Int) <> ".0.0")
+                v n = npmVersion (show (n :: Int) <> ".0.0")
             _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 1) (pure (Right (untagged Nothing)))
             _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 2) (pure (Right (untagged Nothing)))
 

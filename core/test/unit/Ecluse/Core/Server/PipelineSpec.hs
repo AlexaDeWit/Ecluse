@@ -18,15 +18,14 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
-import Katip (LogEnv, closeScribes)
+import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (hContentType, status200, status304, status401, status403, status404, statusCode)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mkSecret, unSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (HashAlg (SHA512), PackageName, mkPackageName)
+import Ecluse.Core.Package (HashAlg (SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
-import Ecluse.Core.Registry.Maintenance (ConsentVerdict (ConsentWithheld), StoreClass (StorePreserved), StoreFacts (factBackend), StoredVersion (StoredVersion, storedVersion), VersionPresence (VersionServed))
+import Ecluse.Core.Registry.Maintenance (ConsentVerdict (ConsentWithheld), StoreClass (StorePreserved), StoreFacts (factBackend))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Route (npmRouter)
 import Ecluse.Core.Registry.Npm.Route.Internal (
@@ -64,10 +63,19 @@ import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Deny, Unavailable), SweepResult (SweepDeleted), SweepTarget (SweepPrivate))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
-import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
-import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents, writeFakeContents), FakeStoreConfig (fakeClass, fakeConsent, fakeContents, fakeFacts, fakeManifests), defaultFakeStoreConfig, newFakeStore)
-import Ecluse.Test.Package (hexSha1Of, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
+import Ecluse.Core.Version (Version)
+import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
+import Ecluse.Test.Maintenance (
+    FakeStore (fakeMaintenance, readFakeContents, writeFakeContents),
+    FakeStoreConfig (fakeClass, fakeConsent, fakeFacts, fakeManifests),
+    defaultFakeStoreConfig,
+    heldVersions,
+    newFakeStore,
+    seededStoreConfig,
+    servedVersion,
+    servedVersions,
+ )
+import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
 import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
@@ -80,7 +88,7 @@ import Network.Wai (Application, Request (rawPathInfo, requestHeaders), defaultR
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (Response (ResponseBuilder), ResponseReceived (ResponseReceived))
 import Test.Hspec
-import UnliftIO.Exception (bracket, throwIO)
+import UnliftIO.Exception (throwIO)
 
 -- | Pin client responses and metrics, including trusted reads after a policy change.
 spec :: Spec
@@ -100,7 +108,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                 base <- depsFor 1
                 let deps = withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) base
                 for_ [serveTarball, headTarball] $ \serve -> do
-                    response <- captureServe npmTarballContract rt (mountWith deps) (serve npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                    response <- captureServe npmTarballContract rt (mountWith deps) (serve npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
                     statusCode (responseStatus response) `shouldBe` if expected == Deny then 403 else statusCode upstreamStatus
                 decisions `shouldReturn` [expected, expected]
 
@@ -109,7 +117,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             (metricsPort, decisions) <- recordingMetricsPort
             rt <- mkRuntime metricsPort
             deps <- depsFor port
-            resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
+            resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
@@ -118,7 +126,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         rt <- mkRuntime metricsPort
         -- 'depsFor 1' points both origins at a closed port, which refuses each fetch.
         deps <- depsFor 1
-        resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
+        resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
         statusCode (responseStatus resp) `shouldBe` 503
         decisions >>= (`shouldBe` [Unavailable])
 
@@ -133,7 +141,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         npmPackumentContract
                         rt
                         (mountUnder mapping gated)
-                        (servePackument npmPackumentReplies leftpad (requestWith headers))
+                        (servePackument npmPackumentReplies leftpadName (requestWith headers))
         serveUnder npmCredential [("Authorization", "Bearer " <> edgeToken)] >>= (`shouldBe` 503)
         serveUnder npmCredential [("X-Api-Key", edgeToken)] >>= (`shouldBe` 401)
         serveUnder apiKeyCredential [("X-Api-Key", edgeToken)] >>= (`shouldBe` 503)
@@ -149,7 +157,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     npmTarballContract
                     rt
                     (mountWith deps)
-                    (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                    (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
@@ -166,13 +174,13 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         npmPackumentContract
                         rt
                         (mountWith base{pdFirstParty = firstParty})
-                        (servePackument npmPackumentReplies leftpad defaultRequest)
+                        (servePackument npmPackumentReplies leftpadName defaultRequest)
             -- A cold cache makes a zero count prove that the public leg never ran.
-            firstParty <- serveUnder (== leftpad)
+            firstParty <- serveUnder (== leftpadName)
             statusCode (responseStatus firstParty) `shouldBe` 503
             readIORef hits >>= (`shouldBe` 0)
             decisions >>= (`shouldBe` [Unavailable])
-            thirdParty <- serveUnder (/= leftpad)
+            thirdParty <- serveUnder (/= leftpadName)
             statusCode (responseStatus thirdParty) `shouldBe` 200
             readIORef hits >>= (`shouldSatisfy` (> 0))
             decisions >>= (`shouldBe` [Unavailable, Admit])
@@ -188,12 +196,12 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         npmTarballContract
                         rt
                         (mountWith base{pdFirstParty = firstParty})
-                        (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
-            firstParty <- serveUnder (== leftpad)
+                        (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+            firstParty <- serveUnder (== leftpadName)
             statusCode (responseStatus firstParty) `shouldBe` 404
             readIORef hits >>= (`shouldBe` 0)
             decisions >>= (`shouldBe` [Deny])
-            thirdParty <- serveUnder (/= leftpad)
+            thirdParty <- serveUnder (/= leftpadName)
             statusCode (responseStatus thirdParty) `shouldBe` 200
             readIORef hits >>= (`shouldSatisfy` (> 0))
             decisions >>= (`shouldBe` [Deny, Admit])
@@ -204,7 +212,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         admission <- newServeAdmissionTuned 1 0 0
         rt <- mkRuntimeWith admission metricsPort
         deps <- depsFor 1
-        held <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest))
+        held <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest))
         response <- maybe (throwIO MissingFixtureResponse) pure held
         statusCode (responseStatus response) `shouldBe` 503
         (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
@@ -215,9 +223,9 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             admission <- newServeAdmissionTuned 1 0 0
             rt <- mkRuntimeWith admission metricsPort
             deps <- depsFor port
-            saturated <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest))
+            saturated <- withServeAdmission (srMetrics rt) admission (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest))
             (statusCode . responseStatus <$> saturated) `shouldBe` Just 503
-            admitted <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
+            admitted <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
             statusCode (responseStatus admitted) `shouldBe` 200
 
     it "sheds a tarball miss when its public metadata gate cannot acquire admission" $ do
@@ -231,7 +239,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                     npmTarballContract
                     rt
                     (mountWith deps)
-                    (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                    (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
         response <- maybe (throwIO MissingFixtureResponse) pure held
         statusCode (responseStatus response) `shouldBe` 503
         (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
@@ -249,7 +257,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
                         npmTarballContract
                         rt
                         (mountWith privateDeps)
-                        (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                        (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             (statusCode . responseStatus <$> held) `shouldBe` Just 200
 
 divergenceEvidenceSpec :: Spec
@@ -259,8 +267,8 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
             denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
             -- The public tag names 2.0.0 while it survives; the deny leaves only the private 1.0.0.
             for_ [(base, "2.0.0", ["1.0.0", "2.0.0"], 1), (base{pdRules = denied}, "1.0.0", ["1.0.0"], 2)] $ \(deps, latest, keys, count) -> do
-                logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
-                    resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
+                (_, logged) <- captureJsonLog $ \logEnv -> do
+                    resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
                     assertPrivatePackument latest keys resp
                 assertConflictLog True logged
                 divergences `shouldReturn` count
@@ -269,8 +277,8 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
     it "retains denied conflict evidence beside another admitted public version" $
         withConflictOrigins (conflictPublicApp (\v -> v{vsHasInstallScript = vsVersion v == "1.0.0"})) divergentPrivateApp $ \rt base divergences _ -> do
             denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
-            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
-                resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpad defaultRequest)
+            (_, logged) <- captureJsonLog $ \logEnv -> do
+                resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpadName defaultRequest)
                 assertPrivatePackument "2.0.0" ["1.0.0", "2.0.0"] resp
             assertConflictLog True logged
             divergences `shouldReturn` 1
@@ -288,8 +296,8 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
             it ("does not alarm for " <> label <> " on a denied public copy") $
                 withConflictOrigins (conflictPublicApp change) divergentPrivateApp $ \rt base divergences _ -> do
                     denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
-                    logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
-                        resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpad defaultRequest)
+                    (_, logged) <- captureJsonLog $ \logEnv -> do
+                        resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpadName defaultRequest)
                         assertPrivatePackument "1.0.0" ["1.0.0"] resp
                     assertConflictLog False logged
                     divergences `shouldReturn` 0
@@ -298,15 +306,15 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
         withConflictOrigins (conflictPublicApp (\v -> v{vsIntegrity = Just (sriSha256Of artifactBytes)})) (privateAppWithIntegrity (sriSha256Of "private bytes")) $ \rt base divergences _ -> do
             floorSpec <- either (fail . toString) pure (mkMinIntegrity SHA512)
             denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
-            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
-                resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied, pdMinIntegrity = floorSpec}) (servePackument npmPackumentReplies leftpad defaultRequest)
+            (_, logged) <- captureJsonLog $ \logEnv -> do
+                resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied, pdMinIntegrity = floorSpec}) (servePackument npmPackumentReplies leftpadName defaultRequest)
                 assertTrustedPackument (sriSha256Of "private bytes") "1.0.0" ["1.0.0"] resp
             assertConflictLog False logged
             divergences `shouldReturn` 0
 
     it "does not fetch public conflict evidence for a first-party name" $
         withConflictOrigins (conflictPublicApp id) divergentPrivateApp $ \rt base divergences publicHits -> do
-            resp <- captureServe npmPackumentContract rt (mountWith base{pdFirstParty = (== leftpad)}) (servePackument npmPackumentReplies leftpad defaultRequest)
+            resp <- captureServe npmPackumentContract rt (mountWith base{pdFirstParty = (== leftpadName)}) (servePackument npmPackumentReplies leftpadName defaultRequest)
             assertPrivatePackument "1.0.0" ["1.0.0"] resp
             divergences `shouldReturn` 0
             readIORef publicHits `shouldReturn` 0
@@ -314,7 +322,7 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
     for_ [status401, status403] $ \refusal ->
         it ("keeps private HTTP " <> show (statusCode refusal) <> " authoritative without another public fetch") $
             withConflictOrigins (conflictPublicApp id) (\_ respond -> respond (responseLBS refusal [] "refused")) $ \rt deps divergences publicHits -> do
-                resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
+                resp <- captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
                 statusCode (responseStatus resp) `shouldBe` 403
                 divergences `shouldReturn` 0
                 readIORef publicHits `shouldReturn` 1
@@ -326,10 +334,10 @@ skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact 
             (metricsPort, _decisions) <- recordingMetricsPort
             rt <- mkRuntime metricsPort
             deps <- skippingDeps port
-            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
-                packument <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest)
+            (_, logged) <- captureJsonLog $ \logEnv -> do
+                packument <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
                 statusCode (responseStatus packument) `shouldBe` 200
-                tarball <- captureServeWithLog logEnv npmTarballContract rt (mountWith deps) (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                tarball <- captureServeWithLog logEnv npmTarballContract rt (mountWith deps) (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
                 statusCode (responseStatus tarball) `shouldBe` 200
             let evidence = filter (T.isInfixOf "skipped for unavailability") (lines logged)
             length evidence `shouldBe` 1
@@ -343,10 +351,10 @@ skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact 
             (reporter, deps) <- observedSkippingDeps port
             twoSkips <- prepare (ruleDepsOf reporter) (atDefaultPrecedence (Rules.DenyIfEpss (Rules.DenyIfEpssParams 0.5 Rules.FailNoDecision)) : skipPolicy)
             let serve logEnv d ver = do
-                    tarball <- captureServeWithLog logEnv npmTarballContract rt (mountWith d) (serveTarball npmTarballReplies leftpad (mkVersion Npm ver) (unsafeFilename ("leftpad-" <> ver <> ".tgz")) defaultRequest)
+                    tarball <- captureServeWithLog logEnv npmTarballContract rt (mountWith d) (serveTarball npmTarballReplies leftpadName (npmVersion ver) (unsafeFilename ("leftpad-" <> ver <> ".tgz")) defaultRequest)
                     statusCode (responseStatus tarball) `shouldBe` 200
                 evidenceLines = length . filter (T.isInfixOf "skipped for unavailability") . lines
-            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv -> do
+            (_, logged) <- captureJsonLog $ \logEnv -> do
                 -- Five public serves of one version during one outage: one line.
                 replicateM_ 5 (serve logEnv deps "1.0.0")
                 -- Another version is its own identity.
@@ -369,9 +377,9 @@ skippedCheckAuditSpec = describe "skipped-check evidence at the public artifact 
             rt <- mkRuntime metricsPort
             -- The public upstream sits on a closed port, so only the private copy can serve.
             deps <- withPrivateBaseUrl (Just (loopbackRegistryUrl ("http://localhost:" <> show port))) <$> skippingDeps 1
-            logged <- captureStdout $ bracket jsonLogEnv (void . closeScribes) $ \logEnv ->
+            (_, logged) <- captureJsonLog $ \logEnv ->
                 replicateM_ 3 $ do
-                    tarball <- captureServeWithLog logEnv npmTarballContract rt (mountWith deps) (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                    tarball <- captureServeWithLog logEnv npmTarballContract rt (mountWith deps) (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
                     statusCode (responseStatus tarball) `shouldBe` 200
             logged `shouldSatisfy` (not . T.isInfixOf "skipped for unavailability")
 
@@ -420,7 +428,7 @@ distTagSpec = describe "served dist-tags.latest" $ do
         denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
         let public = publicAppOver ["1.0.0", "2.0.0", "3.0.0"] "3.0.0" (\v -> v{vsHasInstallScript = vsVersion v == "3.0.0"})
         withConflictOrigins public (privateAppOver ["1.0.0"] "1.0.0") $ \rt base _divergences _ -> do
-            resp <- captureServe npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpad defaultRequest)
+            resp <- captureServe npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpadName defaultRequest)
             fields <- servedFields resp
             KeyMap.lookup "dist-tags" fields `shouldBe` Just (object ["latest" .= ("2.0.0" :: Text)])
             servedKeys fields `shouldBe` Just ["1.0.0", "2.0.0"]
@@ -430,7 +438,7 @@ distTagSpec = describe "served dist-tags.latest" $ do
         -- tags 2.0.0. Maintainer intent wins over both the ordering and the store.
         let public = publicAppOver ["1.0.0", "2.0.0"] "1.0.0" id
         withConflictOrigins public (privateAppOver ["1.0.0", "2.0.0"] "2.0.0") $ \rt base _divergences _ -> do
-            resp <- captureServe npmPackumentContract rt (mountWith base) (servePackument npmPackumentReplies leftpad defaultRequest)
+            resp <- captureServe npmPackumentContract rt (mountWith base) (servePackument npmPackumentReplies leftpadName defaultRequest)
             fields <- servedFields resp
             KeyMap.lookup "dist-tags" fields `shouldBe` Just (object ["latest" .= ("1.0.0" :: Text)])
             servedKeys fields `shouldBe` Just ["1.0.0", "2.0.0"]
@@ -442,7 +450,7 @@ sharedCacheSpec = describe "the shared metadata cache across the two origins" $
         let public = publicAppOver ["1.0.0", "2.0.0"] "2.0.0" id
             private = countingUpstream privateHits (privateAppOver ["1.0.0"] "1.0.0")
         withConflictOrigins public private $ \rt deps _divergences publicHits -> do
-            replicateM_ 2 (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpad defaultRequest))
+            replicateM_ 2 (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest))
             -- The private leg re-reads its upstream per request, so it never answers one caller
             -- from another's authorised read. The public leg reads once and then serves the cache.
             readIORef privateHits `shouldReturn` 2
@@ -453,7 +461,7 @@ sharedCacheSpec = describe "the shared metadata cache across the two origins" $
 
 -- Whether the shared cache holds a full-document entry under an origin's own key.
 cachedUnder :: ServeRuntime -> RegistryUrl -> IO Bool
-cachedUnder rt baseUrl = isJust <$> cachedMetadata (srMetadataCache rt) (Source (registryUrlText baseUrl)) leftpad
+cachedUnder rt baseUrl = isJust <$> cachedMetadata (srMetadataCache rt) (Source (registryUrlText baseUrl)) leftpadName
 
 withConflictOrigins :: Application -> Application -> (ServeRuntime -> PackumentDeps -> IO Int -> IORef Int -> IO ()) -> IO ()
 withConflictOrigins public private action = do
@@ -575,37 +583,34 @@ cacheRetentionSpec = describe "a private read that retains a version the cycle r
         let mount = withPrivateCache (deletingCache (fakeMaintenance cache)) (testMount (fakeMaintenance mirror) rules [Rules.prRule identityDeny])
         cleared <- recordingPorts Nothing
         _ <- sweepCycle testPacing (recPorts cleared) [mount]
-        storedVersions mirror `shouldReturn` [keptVersion]
-        storedVersions cache `shouldReturn` []
+        heldVersions leftpadName mirror `shouldReturn` [keptVersion]
+        heldVersions leftpadName cache `shouldReturn` []
         nextPrivateGet (retainingUpstream cache) rules True
-        storedVersions cache `shouldReturn` [deniedVersion]
+        heldVersions leftpadName cache `shouldReturn` [deniedVersion]
         reconciled <- recordingPorts Nothing
         _ <- sweepCycle testPacing (recPorts reconciled) [mount]
         recTargetResults reconciled >>= (`shouldSatisfy` elem (SweepPrivate, SweepDeleted))
-        storedVersions cache `shouldReturn` []
-        storedVersions mirror `shouldReturn` [keptVersion]
+        heldVersions leftpadName cache `shouldReturn` []
+        heldVersions leftpadName mirror `shouldReturn` [keptVersion]
 
 -- Each store answers under its own backend name, because a grouped cycle keys its inventories on it.
 retentionStore :: Text -> [Version] -> FakeStoreConfig
 retentionStore backend versions =
-    defaultFakeStoreConfig
-        { fakeContents = Map.singleton leftpad [StoredVersion item VersionServed Nothing | item <- versions]
-        , fakeManifests = Map.singleton leftpad (sampleManifest leftpad [deniedVersion, keptVersion])
+    (seededStoreConfig [(leftpadName, versions)])
+        { -- Both stores answer for the pair, so a delete never hides behind an unread manifest.
+          fakeManifests = Map.singleton leftpadName (sampleManifest leftpadName [deniedVersion, keptVersion])
         , fakeFacts = (fakeFacts defaultFakeStoreConfig){factBackend = backend}
         }
 
 -- A cache that retains what it serves, the way a read through an upstream relationship refills one.
 retainingUpstream :: FakeStore -> Application
 retainingUpstream store req respond = do
-    writeFakeContents store (Map.singleton leftpad [StoredVersion deniedVersion VersionServed Nothing])
+    writeFakeContents store (Map.singleton leftpadName (servedVersions [deniedVersion]))
     upstreamApp req respond
 
-storedVersions :: FakeStore -> IO [Version]
-storedVersions store = map storedVersion . Map.findWithDefault [] leftpad <$> readFakeContents store
-
 deniedVersion, keptVersion :: Version
-deniedVersion = mkVersion Npm "1.0.0"
-keptVersion = mkVersion Npm "2.0.0"
+deniedVersion = npmVersion "1.0.0"
+keptVersion = npmVersion "2.0.0"
 
 data CopyDisposition = Retained | Removed
     deriving stock (Eq)
@@ -642,8 +647,8 @@ winningDeny = LifetimePolicy [identityDeny] ((== Just "DenyByIdentity") . blocke
 checkLifetime :: SweepShape -> LifetimePolicy -> LifetimeStore -> Expectation
 checkLifetime shape policy storeState = do
     ctx <- Rules.mkEvalContext (pure fixedNow) (pure Nothing)
-    let version = mkVersion Npm "1.0.0"
-        details = sampleDetails leftpad version
+    let version = npmVersion "1.0.0"
+        details = sampleDetails leftpadName version
         initialPolicy = Rules.PrecededRule 700 (Rules.AllowByIdentity "leftpad@1.0.0") : lpRules policy
     initial <- prepare inertRuleDeps initialPolicy
     admittedBy <$> evalRules ctx initial (Rules.completeEvidence details) `shouldReturn` Just "AllowByIdentity"
@@ -653,18 +658,18 @@ checkLifetime shape policy storeState = do
     recorded <- recordingPorts Nothing
     let mount =
             (testMount (fakeMaintenance store) preparedAfter (map Rules.prRule (lpRules policy)))
-                { smFirstParty = \name -> storeState == FirstParty && name == leftpad
+                { smFirstParty = \name -> storeState == FirstParty && name == leftpadName
                 }
     outcome <- sweepCycle testPacing{swpShape = shape} (recPorts recorded) [mount]
     let retained = stopsBeforeRules storeState || lpDisposition policy == Retained
-        expectedVersions = [StoredVersion version VersionServed Nothing | retained]
+        expectedVersions = [servedVersion version | retained]
         examined
             | stopsBeforeRules storeState = 0
             | shape == SweepCandidates && identityDeny `notElem` lpRules policy = 0
             | otherwise = 1
     tallyExamined (outcomeTally outcome) `shouldBe` examined
     tallyDeleted (outcomeTally outcome) `shouldBe` if retained then 0 else 1
-    Map.lookup leftpad <$> readFakeContents store `shouldReturn` Just expectedVersions
+    Map.lookup leftpadName <$> readFakeContents store `shouldReturn` Just expectedVersions
     nextPrivateGet (storedUpstream store) preparedAfter retained
 
 lifetimeStoreConfig :: LifetimeStore -> FakeStoreConfig
@@ -674,12 +679,8 @@ lifetimeStoreConfig storeState = case storeState of
     ManifestMissing -> seeded{fakeManifests = Map.empty}
     _ -> seeded
   where
-    version = mkVersion Npm "1.0.0"
-    seeded =
-        defaultFakeStoreConfig
-            { fakeContents = Map.singleton leftpad [StoredVersion version VersionServed Nothing]
-            , fakeManifests = Map.singleton leftpad (sampleManifest leftpad [version])
-            }
+    version = npmVersion "1.0.0"
+    seeded = seededStoreConfig [(leftpadName, [version])]
 
 nextPrivateGet :: Application -> [PreparedRule] -> Bool -> Expectation
 nextPrivateGet privateUpstream rules retained = do
@@ -696,7 +697,7 @@ nextPrivateGet privateUpstream rules retained = do
                     npmTarballContract
                     rt
                     (mountWith deps)
-                    (serveTarball npmTarballReplies leftpad (mkVersion Npm "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
+                    (serveTarball npmTarballReplies leftpadName (npmVersion "1.0.0") (unsafeFilename "leftpad-1.0.0.tgz") defaultRequest)
             statusCode (responseStatus response) `shouldBe` if retained then 200 else 403
             decisions `shouldReturn` [if retained then Admit else Deny]
             readIORef privateHits `shouldReturn` 1
@@ -706,7 +707,7 @@ nextPrivateGet privateUpstream rules retained = do
 storedUpstream :: FakeStore -> Application
 storedUpstream store req respond = do
     contents <- readFakeContents store
-    if StoredVersion (mkVersion Npm "1.0.0") VersionServed Nothing `elem` Map.findWithDefault [] leftpad contents
+    if servedVersion (npmVersion "1.0.0") `elem` Map.findWithDefault [] leftpadName contents
         then upstreamApp req respond
         else respond (responseLBS status404 [] "")
 
@@ -741,9 +742,6 @@ mkRuntimeWith admission metricsPort = do
     cache <- newMetadataCache defaultCacheConfig
     queue <- newTestMemoryQueue
     pure (ServeRuntime admission manager manager cache queue metricsPort passthroughTracingPort)
-
-leftpad :: PackageName
-leftpad = mkPackageName Npm Nothing "leftpad"
 
 mountWith :: PackumentDeps -> MountBinding
 mountWith = mountUnder npmCredential

@@ -15,7 +15,7 @@ import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
-import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     RetryAdvice (RetryWorthwhile),
@@ -25,8 +25,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFault (StoreFault, faultRetry, faultTransport),
     StoreMaintenance (classifyStore, enumerateVersions, listPackagesIn, readStoreManifest, storeCursor, verifyConsent),
     StoreObservation (obVerifyConsent),
-    StoredVersion (StoredVersion),
-    VersionPresence (VersionServed),
+    StoredVersion,
     meteredMaintenance,
     protocolFault,
     storedVersion,
@@ -70,16 +69,17 @@ import Ecluse.Core.Registry.Sweep.Types (
  )
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup), prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny, FailNoDecision), Rule (AllowIfRemediatesCve, DenyByIdentity, DenyIfCve, DenyIfEpss))
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Version (Version)
 import Ecluse.Test.Cve (fakeCveLookup, unscoredEpssCases)
 import Ecluse.Test.Maintenance (
     FakeStore (fakeMaintenance, fakeObservation, readFakeContents, readFakeCursor),
     FakeStoreConfig (..),
     defaultFakeStoreConfig,
     newFakeStore,
+    seededStoreConfig,
     withBucket,
  )
-import Ecluse.Test.Package (sampleManifest)
+import Ecluse.Test.Package (npmVersion, unscopedNpm)
 import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps)
 import Ecluse.Test.Sweep (
     RecordedSweep (..),
@@ -124,13 +124,13 @@ permissionSpec = describe "consent and classification" $ do
         (outcome, held) <- unreadableCycle (\h -> h{verifyConsent = pure (Right (ConsentWithheld "attach it"))})
         outcomeHalt outcome `shouldBe` Just (HaltConsentWithheld Npm "fake" "attach it")
         tallyDeleted (outcomeTally outcome) `shouldBe` 0
-        held `shouldBe` [version "1.0.0"]
+        held `shouldBe` [npmVersion "1.0.0"]
 
     it "deletes nothing from a store that refills itself, so the next request still serves it" $ do
         (outcome, held) <- unreadableCycle (\h -> h{classifyStore = pure (Right (StorePreserved "it has an upstream"))})
         outcomeHalt outcome `shouldBe` Just (HaltStorePreserved Npm "fake" "it has an upstream")
         tallyDeleted (outcomeTally outcome) `shouldBe` 0
-        held `shouldBe` [version "1.0.0"]
+        held `shouldBe` [npmVersion "1.0.0"]
 
     it "deletes on identity alone once both guards pass, so the next request 404s" $ do
         (outcome, held) <- unreadableCycle id
@@ -187,7 +187,7 @@ previewSpec = describe "a preview cycle" $ do
             sweepCycle
                 testPacing
                 (recPorts rec')
-                [(previewMountFor store){smFirstParty = (== packageName "left-pad")}]
+                [(previewMountFor store){smFirstParty = (== unscopedNpm "left-pad")}]
         tallyGuardSkipped (outcomeTally outcome) `shouldBe` 1
         tallyDeleted (outcomeTally outcome) `shouldBe` 0
 
@@ -462,7 +462,7 @@ budgetSpec = describe "the cycle request budget" $ do
         outcome <- sweepCycle testPacing (recPorts rec') [testMount (faulting (fakeMaintenance store)) prepared [pinsName]]
         contents <- readFakeContents store
         tallyDeleted (outcomeTally outcome) `shouldBe` 0
-        map storedVersion (Map.findWithDefault [] (packageName "left-pad") contents) `shouldBe` [version "1.0.0"]
+        map storedVersion (Map.findWithDefault [] (unscopedNpm "left-pad") contents) `shouldBe` [npmVersion "1.0.0"]
         gapManifests (outcomeEvidence outcome) `shouldSatisfy` (> 0)
 
     it "paces two stores that landed in one pool by the narrower of what each claims" $ do
@@ -615,7 +615,7 @@ pacingSpec = describe "cycle chunk pacing" $ do
 
 assertPacing :: SweepShape -> Int -> String -> [[Text]] -> [Text] -> [(Text, Int)] -> Expectation
 assertPacing shape chunkSize alphabet pages candidates expected = do
-    let names = map packageName (concat pages)
+    let names = map unscopedNpm (concat pages)
         config =
             (storeConfigFor names)
                 { fakeFacts = (fakeFacts seededConfig){factNameAlphabet = mkNameAlphabet alphabet}
@@ -629,7 +629,7 @@ assertPacing shape chunkSize alphabet pages candidates expected = do
                 { listPackagesIn = \prefix -> do
                     -- The walk joins both inventories, so it reads a bucket whole before it
                     -- decides any name in it. Pacing still counts names rather than pages.
-                    forM_ pages $ \page -> yield (filter (inBucket prefix) (map packageName page))
+                    forM_ pages $ \page -> yield (filter (inBucket prefix) (map unscopedNpm page))
                     pure Nothing
                 , enumerateVersions = \name -> do
                     pauses <- recDelays rec'
@@ -649,7 +649,7 @@ assertPacing shape chunkSize alphabet pages candidates expected = do
     {- One examination per name, at the pause count it was reached under. Equal neighbours collapse
     (the reassessment re-reads), so a repeat across a pause boundary still stands on its own. -}
     examined <- mapMaybe listToMaybe . group . reverse <$> readIORef observed
-    examined `shouldBe` map (first packageName) expected
+    examined `shouldBe` map (first unscopedNpm) expected
     recDelays rec' `shouldReturn` foldl' max 0 (map snd expected)
 
 epssSpec :: Spec
@@ -661,7 +661,7 @@ epssSpec = describe "individual missing EPSS scores under the production evaluat
             tallyExamined (outcomeTally outcome) `shouldBe` 1
             tallyKept (outcomeTally outcome) `shouldBe` 1
             tallyDeleted (outcomeTally outcome) `shouldBe` 0
-            Map.lookup (packageName "left-pad") contents `shouldBe` Map.lookup (packageName "left-pad") (fakeContents seededConfig)
+            Map.lookup (unscopedNpm "left-pad") contents `shouldBe` Map.lookup (unscopedNpm "left-pad") (fakeContents seededConfig)
 
     it "keeps below-threshold scores and deletes when a known high score returns" $
         forM_ [(Just 0.01, 0), (Nothing, 0), (Just 0.75, 1)] $ \(score, deleted) -> do
@@ -674,7 +674,7 @@ epssSpec = describe "individual missing EPSS scores under the production evaluat
                 [advisory "MAL-2026-1" Nothing, advisory "CVE-2026-10002" (Just 0.75)]
                 [epssRule]
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
-        Map.findWithDefault [] (packageName "left-pad") contents `shouldBe` []
+        Map.findWithDefault [] (unscopedNpm "left-pad") contents `shouldBe` []
 
     it "preserves CVSS denial of an unscored malware advisory" $ do
         (outcome, _) <-
@@ -730,7 +730,7 @@ unreadableCycle f = do
     prepared <- prepare inertRuleDeps [atDefaultPrecedence revoked]
     outcome <- sweepCycle testPacing (recPorts rec') [testMount (f (fakeMaintenance store)) prepared [revoked]]
     contents <- readFakeContents store
-    pure (outcome, maybe [] (map storedVersion) (Map.lookup (packageName "left-pad") contents))
+    pure (outcome, maybe [] (map storedVersion) (Map.lookup (unscopedNpm "left-pad") contents))
   where
     revoked = DenyByIdentity "left-pad@1.0.0"
 
@@ -738,23 +738,13 @@ seededStore :: IO FakeStore
 seededStore = newFakeStore seededConfig
 
 seededConfig :: FakeStoreConfig
-seededConfig = storeConfigFor [packageName "left-pad", packageName "lodash"]
+seededConfig = storeConfigFor [unscopedNpm "left-pad", unscopedNpm "lodash"]
 
 storeConfigFor :: [PackageName] -> FakeStoreConfig
-storeConfigFor names =
-    defaultFakeStoreConfig
-        { fakeContents = Map.fromList [(name, [StoredVersion (version "1.0.0") VersionServed Nothing]) | name <- names]
-        , fakeManifests = Map.fromList [(name, sampleManifest name [version "1.0.0"]) | name <- names]
-        }
+storeConfigFor names = seededStoreConfig [(name, [npmVersion "1.0.0"]) | name <- names]
 
 generation :: Maybe DbEtag
 generation = Just (DbEtag "etag-1")
-
-packageName :: Text -> PackageName
-packageName = mkPackageName Npm Nothing
-
-version :: Text -> Version
-version = mkVersion Npm
 
 generationSpec :: Spec
 generationSpec = describe "deletion evidence generation" $

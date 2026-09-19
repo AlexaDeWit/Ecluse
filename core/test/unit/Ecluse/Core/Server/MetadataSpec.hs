@@ -16,7 +16,6 @@ import Test.Hspec
 import UnliftIO (concurrently, mapConcurrently)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
     Artifact (..),
@@ -49,8 +48,8 @@ import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata,
 import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, selectVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamFetchError))
-import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Core.Version (Version)
+import Ecluse.Test.Package (npmVersion, unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Snapshot (readDetails)
@@ -72,8 +71,8 @@ spec = do
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 1
-            found <- fetchVersionMetadata client name (ver "1.0.0")
-            fmap (fmap pkgVersion . readDetails) found `shouldBe` Right (Just (ver "1.0.0"))
+            found <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            fmap (fmap pkgVersion . readDetails) found `shouldBe` Right (Just (npmVersion "1.0.0"))
             readIORef calls `shouldReturn` 1
 
         it "pairs a warm full-cache select with that entry's own raw object, with no upstream call" $ do
@@ -82,7 +81,7 @@ spec = do
             let info = manifest name ["1.0.0", "2.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
-            found <- fetchVersionMetadata client name (ver "1.0.0")
+            found <- fetchVersionMetadata client name (npmVersion "1.0.0")
             fmap (fmap vdRaw . vrVersion) found `shouldBe` Right (Just (Just (markedObject "1.0.0")))
             readIORef calls `shouldReturn` 1
 
@@ -92,11 +91,11 @@ spec = do
             let info = manifest name ["1.0.0", "2.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
-            older <- fetchVersionMetadata client name (ver "1.0.0")
-            newer <- fetchVersionMetadata client name (ver "2.0.0")
+            older <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            newer <- fetchVersionMetadata client name (npmVersion "2.0.0")
             fmap (fmap vdRaw . vrVersion) older `shouldBe` Right (Just (Just (markedObject "1.0.0")))
             fmap (fmap vdRaw . vrVersion) newer `shouldBe` Right (Just (Just (markedObject "2.0.0")))
-            fmap (fmap (pkgVersion . vdDetails) . vrVersion) newer `shouldBe` Right (Just (ver "2.0.0"))
+            fmap (fmap (pkgVersion . vdDetails) . vrVersion) newer `shouldBe` Right (Just (npmVersion "2.0.0"))
             readIORef calls `shouldReturn` 1
 
         it "cold: leads a selective single-version fetch, caches it, and a repeat hits the version cache" $ do
@@ -104,11 +103,11 @@ spec = do
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
-            cold <- fetchVersionMetadata client name (ver "1.0.0")
-            fmap (fmap pkgVersion . readDetails) cold `shouldBe` Right (Just (ver "1.0.0"))
+            cold <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            fmap (fmap pkgVersion . readDetails) cold `shouldBe` Right (Just (npmVersion "1.0.0"))
             readIORef calls `shouldReturn` 1
-            warmHit <- fetchVersionMetadata client name (ver "1.0.0")
-            fmap (fmap pkgVersion . readDetails) warmHit `shouldBe` Right (Just (ver "1.0.0"))
+            warmHit <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            fmap (fmap pkgVersion . readDetails) warmHit `shouldBe` Right (Just (npmVersion "1.0.0"))
             readIORef calls `shouldReturn` 1
             -- The cold single-version path stays isolated on writes: it never populated the
             -- shared full-packument cache (only the version cache).
@@ -119,8 +118,8 @@ spec = do
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
-            cold <- fetchVersionMetadata client name (ver "1.0.0")
-            warmHit <- fetchVersionMetadata client name (ver "1.0.0")
+            cold <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            warmHit <- fetchVersionMetadata client name (npmVersion "1.0.0")
             fmap (fmap vdRaw . vrVersion) cold `shouldBe` Right (Just (Just (markedObject "cold")))
             warmHit `shouldBe` cold
             readIORef calls `shouldReturn` 1
@@ -132,9 +131,9 @@ spec = do
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
-            _ <- fetchVersionMetadata client name (ver "1.0.0")
+            _ <- fetchVersionMetadata client name (npmVersion "1.0.0")
             _ <- fetchFullManifest client name
-            again <- fetchVersionMetadata client name (ver "1.0.0")
+            again <- fetchVersionMetadata client name (npmVersion "1.0.0")
             fmap (fmap vdRaw . vrVersion) again `shouldBe` Right (Just (Just (markedObject "cold")))
             readIORef calls `shouldReturn` 2
 
@@ -145,7 +144,7 @@ spec = do
                 here = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
                 elsewhere = publicClientAt (Source "https://other.example") anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest here name
-            found <- fetchVersionMetadata elsewhere name (ver "1.0.0")
+            found <- fetchVersionMetadata elsewhere name (npmVersion "1.0.0")
             fmap (fmap vdRaw . vrVersion) found `shouldBe` Right (Just (Just (markedObject "cold")))
             readIORef calls `shouldReturn` 2
 
@@ -154,21 +153,21 @@ spec = do
             cache <- newMetadataCache defaultCacheConfig
             let info = tagged (manifest name ["1.0.0", "2.0.0"]) "2.0.0"
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
-            cold <- fetchVersionMetadata client name (ver "1.0.0")
-            fmap vrUpstreamLatest cold `shouldBe` Right (Just (ver "2.0.0"))
+            cold <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            fmap vrUpstreamLatest cold `shouldBe` Right (Just (npmVersion "2.0.0"))
             _ <- fetchFullManifest client name
-            warm <- fetchVersionMetadata client name (ver "2.0.0")
-            fmap vrUpstreamLatest warm `shouldBe` Right (Just (ver "2.0.0"))
+            warm <- fetchVersionMetadata client name (npmVersion "2.0.0")
+            fmap vrUpstreamLatest warm `shouldBe` Right (Just (npmVersion "2.0.0"))
 
         it "caches a determined absence: an absent version is a Nothing re-served without a re-fetch" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
-            absent <- fetchVersionMetadata client name (ver "2.0.0")
+            absent <- fetchVersionMetadata client name (npmVersion "2.0.0")
             fmap (fmap pkgVersion . readDetails) absent `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
-            absentHit <- fetchVersionMetadata client name (ver "2.0.0")
+            absentHit <- fetchVersionMetadata client name (npmVersion "2.0.0")
             fmap (fmap pkgVersion . readDetails) absentHit `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
 
@@ -193,7 +192,7 @@ spec = do
                 replicateM_ 2 $ do
                     full <- fetchFullManifest client name
                     void full `shouldBe` Left refusal
-                    single <- fetchVersionMetadata client name (ver "1.0.0")
+                    single <- fetchVersionMetadata client name (npmVersion "1.0.0")
                     void single `shouldBe` Left refusal
                 readIORef causes `shouldReturn` replicate 4 (Metric.Private, expectedCause)
                 readIORef failures `shouldReturn` replicate 4 (name, refusal)
@@ -207,7 +206,7 @@ spec = do
                 replicateM_ 2 $ do
                     full <- fetchFullManifest client name
                     void full `shouldBe` Left failure
-                    single <- fetchVersionMetadata client name (ver "1.0.0")
+                    single <- fetchVersionMetadata client name (npmVersion "1.0.0")
                     void single `shouldBe` Left failure
                 readIORef calls `shouldReturn` 4
 
@@ -271,9 +270,6 @@ httpFailures =
 
 name :: PackageName
 name = unscopedNpm "is-odd"
-
-ver :: Text -> Version
-ver = mkVersion Npm
 
 source :: Source
 source = Source "https://public.example"
@@ -358,13 +354,13 @@ manifest who versions =
 
 -- The same snapshot with a declared release tag, for the tag-carrying cases.
 tagged :: PackageInfo -> Text -> PackageInfo
-tagged info raw = info{infoDistTags = Map.singleton "latest" (ver raw)}
+tagged info raw = info{infoDistTags = Map.singleton "latest" (npmVersion raw)}
 
 details :: PackageName -> Text -> PackageDetails
 details who rawVer =
     PackageDetails
         { pkgName = who
-        , pkgVersion = ver rawVer
+        , pkgVersion = npmVersion rawVer
         , pkgPublishedAt = Nothing
         , pkgInstallCode = NoCodeOnInstall
         , pkgTrust = TrustUnknown
