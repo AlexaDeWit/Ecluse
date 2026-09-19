@@ -53,6 +53,7 @@ module Ecluse.Core.Registry.Maintenance (
     storeFaultOfFetch,
     storeFaultOfMetadata,
     protocolFault,
+    statusFault,
     unformableFault,
 
     -- * Deletion
@@ -504,10 +505,7 @@ storeFaultOfMetadata :: MetadataError -> StoreFault
 storeFaultOfMetadata = \case
     MetadataAbsent -> protocolFault "the store has no metadata for the requested package (HTTP 404)"
     MetadataHttpFailure code ->
-        StoreFault
-            { faultTransport = transportFault TransportProtocol ("the store refused the metadata read with HTTP " <> show code)
-            , faultRetry = if isRetryableStatusCode code then RetryWorthwhile else RetryFutile
-            }
+        statusFault isRetryableStatusCode code ("the store refused the metadata read with HTTP " <> show code)
     MetadataAuthorisationFailure _ -> protocolFault "the store refused metadata access"
     MetadataFetch fault -> storeFaultOfFetch fault
     MetadataBoundExceeded _ -> protocolFault "the store's metadata crossed a structural bound"
@@ -524,6 +522,16 @@ unformableFault err =
 protocolFault :: Text -> StoreFault
 protocolFault detail =
     StoreFault{faultTransport = transportFault TransportProtocol detail, faultRetry = RetryFutile}
+
+{- | A fault the store's answer status classifies. The predicate is the caller's own, because the
+statuses worth another attempt differ between the reads.
+-}
+statusFault :: (Int -> Bool) -> Int -> Text -> StoreFault
+statusFault retryable status detail =
+    StoreFault
+        { faultTransport = transportFault TransportProtocol detail
+        , faultRetry = if retryable status then RetryWorthwhile else RetryFutile
+        }
 
 -- | Apply the backend batch limit, treating a non-positive limit as one.
 chunksOfCeiling :: DeleteCeiling -> [a] -> [[a]]

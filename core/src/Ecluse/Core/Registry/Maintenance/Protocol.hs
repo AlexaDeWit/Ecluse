@@ -18,10 +18,6 @@ import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
-import Ecluse.Core.Fault (
-    TransportCause (TransportProtocol),
-    transportFault,
- )
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
@@ -42,11 +38,10 @@ import Ecluse.Core.Registry.Maintenance (
     DeleteGuard,
     NamePrefix,
     RefillPosture (RefillPermitted),
-    RetryAdvice (RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
     StoreDeletion (..),
     StoreFacts (..),
-    StoreFault (..),
+    StoreFault,
     StoreMaintenance,
     StoreManifestRead,
     StoreObservation (..),
@@ -60,6 +55,7 @@ import Ecluse.Core.Registry.Maintenance (
     maintenanceOf,
     noNameAlphabet,
     protocolFault,
+    statusFault,
     storeFaultOfFetch,
     storeRefusal,
     unformableFault,
@@ -182,16 +178,13 @@ listPackages store =
 
 listingUnavailable :: Int -> StoreFault
 listingUnavailable status =
-    StoreFault
-        { faultTransport =
-            transportFault
-                TransportProtocol
-                ( "the store answered the package listing with HTTP "
-                    <> show status
-                    <> if status == 404 then ": it serves no enumeration this sweep can walk" else ""
-                )
-        , faultRetry = if isRetryableStatusCode status then RetryWorthwhile else RetryFutile
-        }
+    statusFault
+        isRetryableStatusCode
+        status
+        ( "the store answered the package listing with HTTP "
+            <> show status
+            <> if status == 404 then ": it serves no enumeration this sweep can walk" else ""
+        )
 
 {- The presence probe's read, which already projects a store's version list for the mirror
 worker. A store that holds no document for a package holds no versions of it either. -}
@@ -283,8 +276,4 @@ parseFault subject err =
 -- Version and document reads retain their server-error-only retry policy.
 readFault :: Text -> Int -> StoreFault
 readFault subject status =
-    StoreFault
-        { faultTransport =
-            transportFault TransportProtocol ("the store answered the " <> subject <> " read with HTTP " <> show status)
-        , faultRetry = if status >= 500 then RetryWorthwhile else RetryFutile
-        }
+    statusFault (>= 500) status ("the store answered the " <> subject <> " read with HTTP " <> show status)
