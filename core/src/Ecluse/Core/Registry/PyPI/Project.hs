@@ -239,7 +239,7 @@ matchProjectChunks (expected : remaining) rest = do
     guard (not (T.null separated))
     matchProjectChunks remaining (T.dropWhile isNameSeparator separated)
 
--- The characters PEP 503 treats as one separator when it normalises a name.
+-- | The characters PEP 503 treats as one separator when it normalises a name.
 isNameSeparator :: Char -> Bool
 isNameSeparator c = c == '-' || c == '_' || c == '.'
 

@@ -86,7 +86,7 @@ import Ecluse.Core.Server.Route (
 import Ecluse.Core.Server.RouteDescription (RouteSpec, catchAllSpecs, specsOf, unsupportedPathParam)
 import Ecluse.Core.Version (Version, mkVersion)
 
--- | Match the first applicable route, otherwise answer 'pypiNotFound'.
+-- | Match the first applicable route, otherwise answer with the 404 fallback.
 pypiRouter :: MountRouter
 pypiRouter = routerOf pypiNotFound pypiRoutes
 
