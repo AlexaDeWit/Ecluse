@@ -4,17 +4,11 @@
 
 {- | npm's client-facing error body, as a codec.
 
-The agnostic serve layer decides the HTTP /status/ of a refusal. The /body/ shape is
-npm's, and it lives here as one 'NpmError' type with an @autodocodec@ codec. That codec
-is the single source of truth. The serve path encodes the wire denial from it, and the
-OpenAPI spec renders the /same/ codec to the documented schema. The manifest runs
-in its own tier, so @openapi3@ never reaches the proxy. An npm client reads the
-human-facing reason from a JSON @{"error": …}@ object, matching npm's own denial bodies.
-
-There is no separate renderer handle. A route's abstract
-'Ecluse.Core.Server.Contract.ResponseContract' pairs each status with its body codec. The
-handler receives only constructors for values that contract admits, so the emitted body is
-the documented body by construction.
+The agnostic serve layer decides a refusal's HTTP status. The body shape is npm's own
+@{"error": …}@ object, which its clients read the human-facing reason from. One
+@autodocodec@ codec backs both the wire body and the OpenAPI schema, so the served denial
+and its documentation cannot diverge. The manifest runs in its own tier, so @openapi3@
+never reaches the proxy.
 -}
 module Ecluse.Core.Registry.Npm.Serve (
     NpmError (..),
@@ -26,10 +20,7 @@ import Autodocodec (HasCodec (codec), JSONCodec, object, requiredField, (.=))
 
 import Ecluse.Core.Server.Response (HelpMessage, appendHelp)
 
-{- | npm's client-facing error body: a JSON object carrying the human-facing reason under
-a single @error@ string ('npmErrorKey'). One codec backs both the wire encoding and the
-documented schema, so the served body and its documentation cannot diverge.
--}
+-- | npm's error body: the human-facing reason under a single @error@ string ('npmErrorKey').
 newtype NpmError = NpmError {npmErrorReason :: Text}
     deriving stock (Eq, Show)
 
@@ -42,12 +33,10 @@ instance HasCodec NpmError where
         object "NpmError" $
             NpmError <$> requiredField npmErrorKey "The human-facing reason the request was refused." .= npmErrorReason
 
--- | npm's error-body codec: the source of truth for its wire form and documented schema.
+-- | npm's error-body codec.
 npmErrorCodec :: JSONCodec NpmError
 npmErrorCodec = codec
 
-{- | Build an npm error body from the human-facing reason and the operator help message,
-appending the help message when one is present.
--}
+-- | Build an npm error body, appending the operator help message when one is configured.
 npmError :: Maybe HelpMessage -> Text -> NpmError
 npmError help message = NpmError (appendHelp help message)
