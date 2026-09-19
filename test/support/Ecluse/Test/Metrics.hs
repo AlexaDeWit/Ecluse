@@ -27,7 +27,8 @@ import Prelude hiding (universe)
 
 import Data.Universe.Class (universe)
 
-import Ecluse.Core.Telemetry.Metrics (LabelKey, MetricName)
+import Ecluse.Core.Telemetry.Catalogue (MetricName)
+import Ecluse.Core.Telemetry.Metrics (LabelKey)
 
 -- | Every metric in the catalogue (the Generic-derived 'Universe' enumeration).
 allMetricNames :: [MetricName]

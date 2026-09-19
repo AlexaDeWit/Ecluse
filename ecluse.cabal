@@ -218,6 +218,7 @@ library ecluse-core
     Ecluse.Core.Server.Upstream
     Ecluse.Core.Stream
     Ecluse.Core.Supervision
+    Ecluse.Core.Telemetry.Catalogue
     Ecluse.Core.Telemetry.Metrics
     Ecluse.Core.Telemetry.Record
     Ecluse.Core.Telemetry.Span

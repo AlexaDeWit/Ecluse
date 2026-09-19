@@ -11,6 +11,9 @@ import Data.Universe.Class (universe)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Telemetry.Catalogue (
+    metricName,
+ )
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
@@ -28,7 +31,6 @@ import Ecluse.Core.Telemetry.Metrics (
     labelKey,
     labelKeyName,
     metricAttributes,
-    metricName,
     renderLabel,
  )
 import Ecluse.Test.Metrics (allLabelKeys, allMetricNames, highCardinalityKeys)

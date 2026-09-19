@@ -86,6 +86,10 @@ import OpenTelemetry.Metric.Core (
  )
 
 import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Telemetry.Catalogue (
+    MetricName (..),
+    metricName,
+ )
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult,
     AdvisoryDropCause,
@@ -97,7 +101,6 @@ import Ecluse.Core.Telemetry.Metrics (
     CredentialResult,
     Decision,
     Label (LAdvisoryCompileResult, LAdvisoryDropCause, LAdvisorySyncResult, LBreakerSource, LCacheResult, LCause, LCredentialResult, LDecision, LEcosystem, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LSweepResult, LSweepTarget, LTier, LUpstream),
-    MetricName (..),
     MirrorResult,
     Provider,
     ReasonClass,
@@ -110,7 +113,6 @@ import Ecluse.Core.Telemetry.Metrics (
     Upstream,
     breakerStateCode,
     metricAttributes,
-    metricName,
  )
 import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (..), AdvisorySyncMetricsPort (..), DredgerMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..))
 import Ecluse.Core.Telemetry.Span (ecluseScope)
