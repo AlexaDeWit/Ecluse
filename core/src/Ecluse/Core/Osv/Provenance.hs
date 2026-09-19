@@ -138,7 +138,7 @@ parseHttpDate raw = parseTimeM True defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z"
 
 -- | The instant a response's @Last-Modified@ names. An absent or unreadable header records nothing.
 lastModifiedOf :: [ByteString] -> Maybe UTCTime
-lastModifiedOf = (parseHttpDate . decodeUtf8 =<<) . listToMaybe
+lastModifiedOf = parseHttpDate . decodeUtf8 <=< listToMaybe
 
 {- | How old each source may be before Pilot raises its alarm. Loud ecosystems take a short
 threshold and slow ones a long threshold, so a quiet feed is not read as a stalled one.
