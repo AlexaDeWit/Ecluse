@@ -15,13 +15,12 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     RequestKind (DeleteBatch, ListingPage, ManifestRead, VersionPage),
     RequestTally,
     StoreBudget (StoreBudget, bgCosts, bgOrigin, bgQuotas, bgScope),
-    freePace,
     mkQuotaScope,
     oneRequest,
-    paceSeconds,
     requestKinds,
     undeclaredBudget,
  )
+import Ecluse.Core.Registry.Maintenance.Budget.Internal (freePace, paceSeconds)
 import Ecluse.Core.Registry.Sweep.Pacing (
     PaceDecision (pdFraction, pdPace, pdShortfall),
     decidePace,
