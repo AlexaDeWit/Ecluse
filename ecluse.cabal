@@ -742,6 +742,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Osv.ProvenanceSpec
     Ecluse.Core.Osv.RetrySpec
     Ecluse.Core.Osv.SchemaSpec
+    Ecluse.Core.Osv.StreamSpec
     Ecluse.Core.Package.AdmissionSpec
     Ecluse.Core.Package.FilterSpec
     Ecluse.Core.Package.HashSpec
