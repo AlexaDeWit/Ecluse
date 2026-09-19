@@ -45,13 +45,14 @@ module Ecluse.Core.Registry.Npm.Request (
     parseRequestEither,
 ) where
 
-import Network.HTTP.Client (Request)
+import Network.HTTP.Client (Request (decompress, requestHeaders))
+import Network.HTTP.Types.Header (hAccept, hAcceptEncoding)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, unScope, unscopedName)
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
-import Ecluse.Core.Registry.Request (Validators, attachCredential, joinPath, parseRequestEither)
+import Ecluse.Core.Registry.Request (Validators, addValidators, attachCredential, joinPath, parseRequestEither)
 import Ecluse.Core.Registry.Request qualified as Request
 import Ecluse.Core.Server.Path (encodeComponent)
 
@@ -93,9 +94,18 @@ metadataRequest ::
     Validators ->
     PackageName ->
     Either UrlFormationError Request
-metadataRequest baseUrl token form validators name =
-    packageUrl baseUrl name
-        >>= Request.metadataRequestFor npmCredential (metadataAccept form) token validators
+metadataRequest baseUrl token form validators name = do
+    url <- packageUrl baseUrl name
+    base <- parseRequestEither url
+    pure
+        . withToken token
+        . addValidators validators
+        $ base
+            { requestHeaders =
+                (hAccept, metadataAccept form)
+                    : (hAcceptEncoding, "gzip")
+                    : requestHeaders base
+            }
 
 {- | Build the artifact @GET@ request at @{baseUrl}/{encoded-pkg}/-/{filename}@, addressing the
 tarball by the filename the client requested and never one rebuilt from @(package, version)@, so
@@ -110,8 +120,17 @@ artifactRequestByFile ::
     PackageName ->
     Text ->
     Either UrlFormationError Request
-artifactRequestByFile baseUrl token name filename =
-    artifactFileUrl baseUrl name filename >>= Request.artifactRequestByUrl npmCredential token
+artifactRequestByFile baseUrl token name filename = do
+    url <- artifactFileUrl baseUrl name filename
+    base <- parseRequestEither url
+    pure
+        . withToken token
+        $ base
+            { -- Never gunzip a tarball in flight: a @.tgz@ is opaque, already-compressed
+              -- binary. It advertises no @Accept-Encoding@ either, because an encoding it then
+              -- refuses to decode risks a doubly-gzipped body that fails its @dist.integrity@.
+              decompress = const False
+            }
 
 {- | Build npm's artifact @GET@ request for the absolute @url@ the projection preserved from the
 upstream's @dist.tarball@. The location is absolute, so it names no base URL, and it delegates
