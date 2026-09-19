@@ -435,17 +435,15 @@ registerAdvisoryDatabaseAge :: Metrics -> Ecosystem -> IO (Maybe Double) -> IO (
 registerAdvisoryDatabaseAge m eco installedAt =
     void (observableGaugeRegisterCallback (mAdvisoryDatabaseAgeSeconds m) (reportAdvisoryDatabaseAge eco installedAt))
 
-{- | What one collection reports: whole seconds from the install stamp to now, clamped non-negative.
-With no generation installed it observes nothing, so a never-filled slot never reads as fresh.
+{- | What one collection reports: whole seconds from the install stamp to now. With no generation
+installed it observes nothing, so a never-filled slot never reads as fresh.
 -}
 reportAdvisoryDatabaseAge :: Ecosystem -> IO (Maybe Double) -> ObservableResult Int64 -> IO ()
-reportAdvisoryDatabaseAge eco installedAt result =
-    installedAt
-        >>= traverse_
-            ( \stamp -> do
-                now <- getMonotonicTime
-                observe result (max 0 (floor (now - stamp))) (metricAttributes [LEcosystem eco])
-            )
+reportAdvisoryDatabaseAge eco installedAt result = do
+    mStamp <- installedAt
+    for_ mStamp $ \stamp -> do
+        now <- getMonotonicTime
+        observeAge result eco (floor (now - stamp))
 
 {- | Attach one ecosystem's advisory-source age to @ecluse.advisory.source.age.seconds@: the age
 the CVE-deny path expires on, where 'registerAdvisoryDatabaseAge' is an installation diagnostic.
@@ -458,13 +456,15 @@ registerAdvisorySourceAge m eco pushedAt =
 time to measure, it observes nothing rather than a zero.
 -}
 reportAdvisorySourceAge :: Ecosystem -> IO (Maybe UTCTime) -> ObservableResult Int64 -> IO ()
-reportAdvisorySourceAge eco pushedAt result =
-    pushedAt
-        >>= traverse_
-            ( \stamp -> do
-                now <- getCurrentTime
-                observe result (max 0 (floor (diffUTCTime now stamp))) (metricAttributes [LEcosystem eco])
-            )
+reportAdvisorySourceAge eco pushedAt result = do
+    mStamp <- pushedAt
+    for_ mStamp $ \stamp -> do
+        now <- getCurrentTime
+        observeAge result eco (floor (diffUTCTime now stamp))
+
+-- An age is never negative, whatever a clock or a stamp says.
+observeAge :: ObservableResult Int64 -> Ecosystem -> Int64 -> IO ()
+observeAge result eco seconds = observe result (max 0 seconds) (metricAttributes [LEcosystem eco])
 
 -- | Record the advisory entries one compile pass accepted (@ecluse.advisory.compile.accepted@).
 recordAdvisoryCompileAccepted :: (MonadIO m) => Metrics -> Ecosystem -> Int -> m ()
