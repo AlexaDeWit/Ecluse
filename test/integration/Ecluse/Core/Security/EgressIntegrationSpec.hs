@@ -17,9 +17,9 @@ import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated))
-import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Registry.Origin (OriginClient (ocToken))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Test.Registry.Npm (defaultNpmConfig)
 import Ecluse.Test.Stub (stubPort, withStub, withStubHeaders)
 
 {- | The data-plane egress posture, driven through the real npm fetch path against an
@@ -70,11 +70,8 @@ fetchMetadata manager port token =
 -- test-only plain-HTTP opt-in, a constructor a release build does not have.
 clientConfig :: Manager -> Port -> Maybe Text -> OriginClient
 clientConfig manager port token =
-    OriginClient
-        { ocBaseUrl = loopbackRegistryUrl ("http://127.0.0.1:" <> show port)
-        , ocManager = manager
-        , ocToken = bareCredential . mkSecret <$> token
-        , ocLimits = defaultLimits
+    (defaultNpmConfig (loopbackRegistryUrl ("http://127.0.0.1:" <> show port)) manager)
+        { ocToken = bareCredential . mkSecret <$> token
         }
 
 -- Run an action against an in-process upstream serving the packument on loopback.

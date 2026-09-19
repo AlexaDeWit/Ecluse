@@ -22,7 +22,6 @@ import Ecluse.Integration.Ministack (
     QueueOptions (qoVisibilityTimeout, qoWaitSeconds),
     defaultQueueOptions,
     freshQueue,
-    unwrapQ,
     withMinistack,
  )
 import Ecluse.Integration.WorkerLoop (
@@ -38,6 +37,7 @@ import Ecluse.Runtime.Env (envWorkerHeartbeat, lastPoll)
 import Ecluse.Test.Package (sriSha512Of, unsafeFilename, unsafeHash)
 import Ecluse.Test.Rules (admitRule, denyRule)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
+import Ecluse.Test.Support (expectRightIO)
 
 {- | The mirror worker end to end against real SQS (a @ministack@ container) and WAI stubs: the
 visibility, redelivery, and boot-policy semantics the in-memory double cannot reproduce.
@@ -52,12 +52,12 @@ spec =
                         queue <- freshQueue container "worker-success" defaultQueueOptions
                         env <- newQueueEnv queue
                         policies <- faithfulPolicies mirrorUrl
-                        unwrapQ (enqueue queue (job upstreamUrl))
+                        expectRightIO (enqueue queue (job upstreamUrl))
                         runLoopUntil policies env (publishedAtLeast publishLog 1)
                         published <- readIORef publishLog
                         length published `shouldBe` 1
                         -- The worker acked the job, so it does not redeliver.
-                        leftover <- unwrapQ (receive queue)
+                        leftover <- expectRightIO (receive queue)
                         leftover `shouldBe` []
 
             it "publishes nothing when the artifact fails its integrity digest" $ \container ->
@@ -68,7 +68,7 @@ spec =
                         -- The re-admitted digest is well-formed but does not match the served
                         -- bytes: a tampered artifact the worker must refuse to publish.
                         tamperPolicies <- mirrorPoliciesAt Nothing mirrorUrl (unsafeHash SRI mismatchSri :| [])
-                        unwrapQ (enqueue queue (job upstreamUrl))
+                        expectRightIO (enqueue queue (job upstreamUrl))
                         runLoopFor tamperPolicies env 4_000_000
                         published <- readIORef publishLog
                         published `shouldBe` []
@@ -81,9 +81,9 @@ spec =
                         queue <- freshQueue container "worker-idempotent" defaultQueueOptions
                         env <- newQueueEnv queue
                         policies <- faithfulPolicies mirrorUrl
-                        unwrapQ (enqueue queue (job upstreamUrl))
+                        expectRightIO (enqueue queue (job upstreamUrl))
                         runLoopUntil policies env (publishedAtLeast publishLog 1)
-                        leftover <- unwrapQ (receive queue)
+                        leftover <- expectRightIO (receive queue)
                         leftover `shouldBe` []
 
             it "leaves a transiently-rejected job un-acked, so it redelivers" $ \container ->
@@ -94,7 +94,7 @@ spec =
                         queue <- freshQueue container "worker-retry" defaultQueueOptions
                         env <- newQueueEnv queue
                         policies <- faithfulPolicies mirrorUrl
-                        unwrapQ (enqueue queue (job upstreamUrl))
+                        expectRightIO (enqueue queue (job upstreamUrl))
                         -- A second PUT exists only because the un-acked 503 message redelivered
                         -- through 'releaseForRetry'. Stopping at the first PUT races that release.
                         runLoopUntil policies env (publishedAtLeast publishLog 2)
@@ -112,7 +112,7 @@ spec =
                         -- A fetch cap below the artifact's size. The bounded fetch aborts fail-
                         -- closed, so the worker dead-letters the job and never mirrors it.
                         policies <- mirrorPoliciesAt (Just 8) mirrorUrl (unsafeHash SRI trueSri :| [])
-                        unwrapQ (enqueue queue (job upstreamUrl))
+                        expectRightIO (enqueue queue (job upstreamUrl))
                         runLoopFor policies env 4_000_000
                         published <- readIORef publishLog
                         published `shouldBe` []
@@ -125,7 +125,7 @@ spec =
                         -- A permissive role queued this job. The queue carries no policy, so the
                         -- worker's own boot rules decide, and a deny is terminal rather than retried.
                         strict <- mirrorPoliciesUnderAt [denyRule] mirrorUrl (unsafeHash SRI trueSri :| [])
-                        unwrapQ (enqueue queue (job upstreamUrl))
+                        expectRightIO (enqueue queue (job upstreamUrl))
                         runLoopFor strict env rolloutLoopWindow
                         readIORef publishLog `shouldReturn` []
                         assertQueueDrained queue
@@ -136,7 +136,7 @@ spec =
                         queue <- freshQueue container "worker-rollout-old" rolloutQueueOptions
                         env <- newQueueEnv queue
                         old <- mirrorPoliciesUnderAt [admitRule] mirrorUrl (unsafeHash SRI trueSri :| [])
-                        unwrapQ (enqueue queue (job upstreamUrl))
+                        expectRightIO (enqueue queue (job upstreamUrl))
                         -- A fixed window rather than a stop at the first publish, so the ack lands
                         -- inside the run and a missing one shows up as a second delivery.
                         runLoopFor old env rolloutLoopWindow
@@ -172,7 +172,7 @@ worker left un-acked is visible again rather than hidden behind its lease.
 assertQueueDrained :: MirrorQueue -> IO ()
 assertQueueDrained queue = do
     threadDelay 2_500_000
-    leftover <- unwrapQ (receive queue)
+    leftover <- expectRightIO (receive queue)
     leftover `shouldBe` []
 
 -- The artifact bytes the upstream stub serves.

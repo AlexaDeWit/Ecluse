@@ -21,7 +21,6 @@ module Ecluse.Integration.Ministack (
     defaultQueueOptions,
     receiveUntil,
     receiveUntilWithin,
-    unwrapQ,
 
     -- * Endpoint
     endpointFor,
@@ -241,9 +240,3 @@ receiveUntilWithin attempts queue =
         Right [] -> fail "receiveUntilWithin: no message arrived within the retry budget"
   where
     arrived = either (const False) (not . null)
-
-{- | Unwrap a queue outcome from a backend the test expects to be healthy. A 'Left' fails
-the test with the classified fault.
--}
-unwrapQ :: (Show e) => IO (Either e a) -> IO a
-unwrapQ act = act >>= either (\fault -> fail ("queue operation faulted: " <> show fault)) pure

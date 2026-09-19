@@ -28,7 +28,6 @@ import Ecluse.Integration.Ministack (
     freshQueue,
     quietLogEnv,
     receiveUntil,
-    unwrapQ,
     withMinistack,
  )
 import Ecluse.Runtime.Aws.Env (AwsEndpoint (AwsEndpoint, endpointHost, endpointPort, endpointSecure))
@@ -38,6 +37,7 @@ import Ecluse.Runtime.Queue.Sqs.Internal (
     newSqsQueue,
  )
 import Ecluse.Test.Package (unsafeFilename, unsafeRegistryUrl)
+import Ecluse.Test.Support (expectRightIO)
 
 {- | These cases drive the SQS 'MirrorQueue' backend against a @ministack@ container from
 "Ecluse.Integration.Ministack". They are gating and need a Docker daemon, never real AWS.
@@ -48,20 +48,20 @@ spec =
         describe "mirror queue (ministack)" $ do
             it "round-trips a job: enqueue, receive, ack, then no redelivery" $ \container -> do
                 queue <- freshQueue container "mirror-roundtrip" defaultQueueOptions
-                unwrapQ (enqueue queue sampleJob)
+                expectRightIO (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
                 msgJob message `shouldBe` sampleJob
-                unwrapQ (ack queue (msgReceipt message))
+                expectRightIO (ack queue (msgReceipt message))
                 -- After the ack the job is gone: a poll past the (short) visibility
                 -- window yields nothing.
-                afterAck <- unwrapQ (receive queue)
+                afterAck <- expectRightIO (receive queue)
                 map msgJob afterAck `shouldBe` []
 
             it "redelivers a job that was received but never acked" $ \container -> do
                 -- A one-second visibility timeout so the un-acked job becomes
                 -- visible again within the test's patience.
                 queue <- freshQueue container "mirror-redeliver" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
-                unwrapQ (enqueue queue sampleJob)
+                expectRightIO (enqueue queue sampleJob)
                 _firstDelivery <- receiveUntil queue
                 -- Deliberately do not ack: retry-is-don't-ack means the job must
                 -- reappear once its visibility window lapses.
@@ -72,19 +72,19 @@ spec =
                 -- Extend the in-flight message well past its 1s visibility timeout. No
                 -- reappearance inside the original window proves the extension held it.
                 queue <- freshQueue container "mirror-extend" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
-                unwrapQ (enqueue queue sampleJob)
+                expectRightIO (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
-                unwrapQ (extendVisibility queue (msgReceipt message) (Seconds 30))
+                expectRightIO (extendVisibility queue (msgReceipt message) (Seconds 30))
                 -- Past the original 1s window (poll twice over ~2s), still hidden.
-                stillHidden1 <- unwrapQ (receive queue)
-                stillHidden2 <- unwrapQ (receive queue)
+                stillHidden1 <- expectRightIO (receive queue)
+                stillHidden2 <- expectRightIO (receive queue)
                 map msgJob (stillHidden1 <> stillHidden2) `shouldBe` []
 
             it "renews a received job's visibility for as long as the worker holds it (issue #1208)" $ \container -> do
                 -- The lease controller against real SQS: a job that outruns its two-second
                 -- window stays hidden, so no second consumer can take it mid-mirror.
                 queue <- freshQueue container "mirror-lease" defaultQueueOptions{qoVisibilityTimeout = Seconds 2}
-                unwrapQ (enqueue queue sampleJob)
+                expectRightIO (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
                 logEnv <- quietLogEnv
                 outcomes <-
@@ -100,9 +100,9 @@ spec =
                 -- fault. It returns the message with the terminal backoff, so the message rides
                 -- the operator's redrive policy. Reappearance proves nothing deleted it.
                 queue <- freshQueue container "mirror-deadletter" defaultQueueOptions{qoVisibilityTimeout = Seconds 30, qoTerminalBackoff = Seconds 1}
-                unwrapQ (enqueue queue sampleJob)
+                expectRightIO (enqueue queue sampleJob)
                 [message] <- receiveUntil queue
-                unwrapQ (deadLetter queue (msgReceipt message))
+                expectRightIO (deadLetter queue (msgReceipt message))
                 redelivered <- receiveUntil queue
                 map msgJob redelivered `shouldBe` [sampleJob]
 
@@ -110,7 +110,7 @@ spec =
                 -- SQS omits this attribute unless the request asks for it. A missing
                 -- parameter would read as a first delivery forever, so the budget never fires.
                 queue <- freshQueue container "mirror-receive-count" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
-                unwrapQ (enqueue queue sampleJob)
+                expectRightIO (enqueue queue sampleJob)
                 [first'] <- receiveUntil queue
                 msgReceiveCount first' `shouldBe` 1
                 [second'] <- receiveUntil queue
@@ -161,8 +161,8 @@ heldJob :: MirrorQueue -> KatipContextT IO ()
 heldJob queue = liftIO $ do
     threadDelay 6_000_000
     -- Two polls, each past the original window: still hidden, so the renewals held.
-    stillHidden1 <- unwrapQ (receive queue)
-    stillHidden2 <- unwrapQ (receive queue)
+    stillHidden1 <- expectRightIO (receive queue)
+    stillHidden2 <- expectRightIO (receive queue)
     map msgJob (stillHidden1 <> stillHidden2) `shouldBe` []
 
 -- | A sample mirror job carried end-to-end through SQS.

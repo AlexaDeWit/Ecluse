@@ -8,6 +8,8 @@ Private index failures retain their access-refusal or fallback policy.
 module Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec (spec) where
 
 import Data.Aeson (Value (Array, Object, String), decode, encode, object, (.=))
+import Data.Aeson.Key (Key)
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (dropWhileEnd, lookup)
@@ -34,6 +36,7 @@ import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, postPath, requestAt)
 import Ecluse.Service (mountBindingFor)
+import Ecluse.Test.Json (asObject, fieldAt, objectAt, textAt)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
@@ -106,14 +109,14 @@ conditionalFloorSpec = describe "listing validators across configured integrity 
                 initial <- request [] (proxyApp proxy)
                 statusOf initial `shouldBe` 200
                 servedVersions initial `shouldBe` ["2.34.2"]
-                mapMaybe (entryText "marker") (servedFiles initial) `shouldBe` ["weak", "strong", "strong", "last"]
+                mapMaybe (textAt "marker" . asObject) (servedFiles initial) `shouldBe` ["weak", "strong", "strong", "last"]
                 oldTag <- validator initial
                 unchanged <- request [("If-None-Match", oldTag)] (proxyApp proxy)
                 statusOf unchanged `shouldBe` 304
                 changed <- request [("If-None-Match", oldTag)] strictApp
                 statusOf changed `shouldBe` 200
                 servedVersions changed `shouldBe` servedVersions initial
-                mapMaybe (entryText "marker") (servedFiles changed) `shouldBe` ["strong", "strong", "last"]
+                mapMaybe (textAt "marker" . asObject) (servedFiles changed) `shouldBe` ["strong", "strong", "last"]
                 simpleBody changed `shouldNotBe` simpleBody initial
                 newTag <- validator changed
                 newTag `shouldNotBe` oldTag
@@ -386,40 +389,25 @@ servedVersions resp = case field "versions" resp of
 
 -- | The locations the served index names, in the order it named them.
 servedUrls :: SResponse -> [Text]
-servedUrls = mapMaybe (entryText "url") . servedFiles
+servedUrls = mapMaybe (textAt "url" . asObject) . servedFiles
 
 -- | The digests the served index carries, one per file.
 servedDigests :: SResponse -> [Text]
 servedDigests = mapMaybe digestOf . servedFiles
   where
-    digestOf = \case
-        Object entry | Just (Object hashes) <- KeyMap.lookup "hashes" entry -> case KeyMap.lookup "sha256" hashes of
-            Just (String digest) -> Just digest
-            _ -> Nothing
-        _ -> Nothing
+    digestOf = textAt "sha256" . objectAt "hashes" . asObject
 
 -- | Every key the served file entries carry.
 servedKeys :: SResponse -> [Text]
-servedKeys = concatMap keysOf . servedFiles
-  where
-    keysOf = \case
-        Object entry -> map show (KeyMap.keys entry)
-        _ -> []
+servedKeys = concatMap (map Key.toText . KeyMap.keys . asObject) . servedFiles
 
 servedFiles :: SResponse -> [Value]
 servedFiles resp = case field "files" resp of
     Just (Array files) -> toList files
     _ -> []
 
-entryText :: Text -> Value -> Maybe Text
-entryText key = \case
-    Object entry | Just (String value) <- KeyMap.lookup (fromString (toString key)) entry -> Just value
-    _ -> Nothing
-
-field :: Text -> SResponse -> Maybe Value
-field key resp = case decode (simpleBody resp) of
-    Just (Object top) -> KeyMap.lookup (fromString (toString key)) top
-    _ -> Nothing
+field :: Key -> SResponse -> Maybe Value
+field key resp = fieldAt key =<< decode (simpleBody resp)
 
 -- | A response's status code, for an example that names the number rather than the constant.
 statusOf :: SResponse -> Int

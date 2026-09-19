@@ -4,10 +4,12 @@
 
 module Ecluse.Test.OsvSpec (spec) where
 
-import Database.SQLite.Simple (Only (..), close, open, query_)
+import Database.SQLite.Simple (FromRow, Only (..), Query, close, open, query_)
+import Database.SQLite.Simple.FromField (FromField)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
+import Test.Hspec (Spec, describe, it, shouldReturn)
+import UnliftIO (bracket)
 
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Test.Osv (CorpusVersion (..), mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
@@ -43,12 +45,16 @@ corpusV2Rows =
     , ("corpus-vuln", "GHSA-corpus-0004", Just "2.0.0", Just "2.5.0", Just 6.9, Just 0.0625)
     ]
 
+-- | Read one query off a generated artifact, closing the connection before the assertion.
+readRows :: (FromRow r) => FilePath -> Query -> IO [r]
+readRows db sql = bracket (open db) close (`query_` sql)
+
+-- | The one column of a single-column query.
+readColumn :: (FromField a) => FilePath -> Query -> IO [a]
+readColumn db sql = map fromOnly <$> readRows db sql
+
 rangeRows :: FilePath -> IO [RangeRow]
-rangeRows db = do
-    conn <- open db
-    rows <- query_ conn "SELECT package_name, cve_id, introduced_version, fixed_version, severity, epss_score FROM package_vulnerability_ranges ORDER BY package_name, cve_id, introduced_version"
-    close conn
-    pure rows
+rangeRows db = readRows db "SELECT package_name, cve_id, introduced_version, fixed_version, severity, epss_score FROM package_vulnerability_ranges ORDER BY package_name, cve_id, introduced_version"
 
 spec :: Spec
 spec = do
@@ -62,34 +68,24 @@ spec = do
             withFixtureOsvDb CorpusV2 (\db -> rangeRows db `shouldReturn` corpusV2Rows)
 
         it "omits foreign affected packages from mixed-ecosystem advisories" $
-            withFixtureOsvDb CorpusV1 $ \db -> do
-                conn <- open db
-                rows <- query_ conn "SELECT package_name FROM package_vulnerability_ranges WHERE package_name = 'redis'" :: IO [Only Text]
-                close conn
-                map fromOnly rows `shouldBe` []
+            withFixtureOsvDb CorpusV1 $ \db ->
+                (readColumn db "SELECT package_name FROM package_vulnerability_ranges WHERE package_name = 'redis'" :: IO [Text])
+                    `shouldReturn` []
 
         it "stamps the generated artifact with the current schema epoch" $
-            withFixtureOsvDb CorpusV1 $ \db -> do
-                conn <- open db
-                stamped <- query_ conn "PRAGMA user_version" :: IO [Only Int]
-                close conn
-                map fromOnly stamped `shouldBe` [osvSchemaEpoch]
+            withFixtureOsvDb CorpusV1 $ \db ->
+                (readColumn db "PRAGMA user_version" :: IO [Int]) `shouldReturn` [osvSchemaEpoch]
 
     describe "hostile artifacts" $ do
         it "the wrong-epoch artifact carries a mismatched user_version" $
             withSystemTempDirectory "ecluse-osv-hostile" $ \dir -> do
                 let path = dir </> "wrong-epoch.db"
                 mkDbWithWrongEpoch path
-                conn <- open path
-                stamped <- query_ conn "PRAGMA user_version" :: IO [Only Int]
-                close conn
-                map fromOnly stamped `shouldBe` [osvSchemaEpoch + 1]
+                (readColumn path "PRAGMA user_version" :: IO [Int]) `shouldReturn` [osvSchemaEpoch + 1]
 
         it "the view-shadowed artifact defines the ranges relation as a view, not a table" $
             withSystemTempDirectory "ecluse-osv-hostile" $ \dir -> do
                 let path = dir </> "view-shadow.db"
                 mkDbWithViewShadowingRanges path
-                conn <- open path
-                kinds <- query_ conn "SELECT type FROM sqlite_master WHERE name = 'package_vulnerability_ranges'" :: IO [Only Text]
-                close conn
-                map fromOnly kinds `shouldBe` ["view"]
+                (readColumn path "SELECT type FROM sqlite_master WHERE name = 'package_vulnerability_ranges'" :: IO [Text])
+                    `shouldReturn` ["view"]
