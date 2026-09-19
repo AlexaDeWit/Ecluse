@@ -49,7 +49,7 @@
 - functions:
     - {name: System.IO.Error.userError, within: [], message: "Stringly IOError: throw a typed Exception (e.g. a nullary type with an Exception instance), or return a domain value. See STYLE.md section 11."}
     - {name: UnliftIO.Exception.stringException, within: [], message: "Stringly exception: throw a typed Exception or return a domain value. See STYLE.md section 11."}
-    - {name: UnliftIO.Exception.throwString, within: [Ecluse.Core.Registry.NpmSmokeSpec], message: "Stringly exception: throw a typed Exception or return a domain value (docs/style.md section 11). In a test, simulate a failure with a nullary typed exception."}
+    - {name: UnliftIO.Exception.throwString, within: [], message: "Stringly exception: throw a typed Exception or return a domain value (docs/style.md section 11). In a test, simulate a failure with a nullary typed exception."}
     - {name: UnliftIO.throwString, within: [], message: "Stringly exception: import throwString from UnliftIO.Exception, which the test allowlist names."}
 
 # --- Debugging leftovers: banned in committed code --------------------------
