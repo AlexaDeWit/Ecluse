@@ -110,16 +110,16 @@ routeExportFailure sink diagnostic = do
         EmitHeartbeat suppressed -> sinkSurface sink WarningS (heartbeatMessage suppressed diagnostic)
         EmitSuppress -> pass
 
-{- | Observe one exporter's 'ExportResult', routing a 'Failure' through the sink. It only observes,
-so export semantics stay untouched. @signal@ names the failing exporter (@span@ \/ @metric@).
+{- | Observe one exporter's 'ExportResult', routing a 'Failure' through the sink. @signal@ names the
+exporter (@span@ \/ @metric@). @hs-opentelemetry 1.0.0.0@ drops a failed OTLP export, so only this feed reports one.
 -}
 observeExportResult :: ExportFailureSink -> Text -> ExportResult -> IO ()
 observeExportResult sink signal = \case
     Success -> pass
     Failure mErr -> routeExportFailure sink (signal <> " export failed" <> maybe "" ((": " <>) . show) mErr)
 
-{- | Install a process-global handler for the SDK's own diagnostic stream, which forwards the SDK's
-text verbatim. @hs-opentelemetry 1.0.0.0@ drops a failed OTLP export instead of routing it here.
+{- | Install a process-global handler for the SDK's own diagnostic stream, forwarded verbatim. Ecluse
+reads none of @OTEL_EXPORTER_OTLP_HEADERS@, @DD_API_KEY@, @DD_SITE@, so the SDK's own text is the only leak channel.
 -}
 installExportErrorHandler :: ExportFailureSink -> IO ()
 installExportErrorHandler sink = setGlobalErrorHandler (routeExportFailure sink . toText)

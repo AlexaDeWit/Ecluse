@@ -30,10 +30,10 @@ import Ecluse.Runtime.Telemetry.Resolve (
     telemetryWarnings,
  )
 
-{- | Tests the telemetry config resolver and the export-failure throttle. Precedence is the
-Datadog value, then vanilla OpenTelemetry, then the default. One W3C baggage grammar reads
-@OTEL_RESOURCE_ATTRIBUTES@ for both the log identity and the span resource, and the same
-limits that grammar carries decide what the exported header keeps.
+{- | Tests the telemetry config resolver. Precedence is the Datadog value, then vanilla
+OpenTelemetry, then the default. One W3C baggage grammar reads @OTEL_RESOURCE_ATTRIBUTES@ for both
+the log identity and the span resource, and the same limits that grammar carries decide what the
+exported header keeps.
 -}
 spec :: Spec
 spec = do
