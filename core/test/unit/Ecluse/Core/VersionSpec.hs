@@ -30,36 +30,17 @@ spec = do
         it "parses a valid version into a key" $
             versionKey (mkVersion Npm "1.2.3") `shouldSatisfy` isJust
 
-    describe "parseVersionKey" $ do
-        describe "Npm" $ do
-            it "parses a valid Npm version" $
-                parseVersionKey Npm "1.2.3" `shouldSatisfy` isRight
-            it "returns a VersionError for invalid Npm input" $
-                parseVersionKey Npm "nope" `shouldSatisfy` isLeft
-            it "successfully parses generated valid Npm versions" $
-                hedgehog $ do
-                    v <- forAll genNpm
-                    assert (isRight (parseVersionKey Npm v))
-
-        describe "PyPI" $ do
-            it "parses a valid PyPI version" $
-                parseVersionKey PyPI "1.2.3" `shouldSatisfy` isRight
-            it "returns a VersionError for invalid PyPI input" $
-                parseVersionKey PyPI "totally bogus" `shouldSatisfy` isLeft
-            it "successfully parses generated valid PyPI versions" $
-                hedgehog $ do
-                    v <- forAll genPyPI
-                    assert (isRight (parseVersionKey PyPI v))
-
-        describe "RubyGems" $ do
-            it "parses a valid RubyGems version" $
-                parseVersionKey RubyGems "1.2.3" `shouldSatisfy` isRight
-            it "returns a VersionError for unparseable RubyGems input" $
-                parseVersionKey RubyGems "" `shouldSatisfy` isLeft
-            it "successfully parses generated valid RubyGems versions" $
-                hedgehog $ do
-                    v <- forAll genGem
-                    assert (isRight (parseVersionKey RubyGems v))
+    describe "parseVersionKey" $
+        for_ parseableEcosystems $ \(eco, valid, invalid, refusalName, gen) ->
+            describe (show eco) $ do
+                it ("parses a valid " <> show eco <> " version") $
+                    parseVersionKey eco valid `shouldSatisfy` isRight
+                it refusalName $
+                    parseVersionKey eco invalid `shouldSatisfy` isLeft
+                it ("successfully parses generated valid " <> show eco <> " versions") $
+                    hedgehog $ do
+                        v <- forAll gen
+                        assert (isRight (parseVersionKey eco v))
 
     -- Strictness: the ordering fixture can only rank, so these cases assert rejection (Left)
     -- explicitly and pin the valid spellings that must keep parsing (Right).
@@ -226,44 +207,13 @@ spec = do
                         H.cover 1 "x > y" (not (le x y))
                         when (le x y && le y z) (H.assert (le x z))
 
-    describe "isStable" $ do
-        -- stableOf parses a known-good version, then applies the predicate. These fixtures all
-        -- parse, so it answers Just True or Just False, never Nothing.
-        let stableOf eco raw = fmap isStable (rightToMaybe (parseVersionKey eco raw))
-
-        describe "semver (npm)" $ do
-            it "a final release is stable" $
-                stableOf Npm "1.0.0" `shouldBe` Just True
-            it "an -rc prerelease is not stable" $
-                stableOf Npm "1.0.0-rc.1" `shouldBe` Just False
-            it "a -beta prerelease is not stable" $
-                stableOf Npm "2.0.0-beta" `shouldBe` Just False
-            it "a numeric prerelease id is not stable" $
-                stableOf Npm "1.0.0-1" `shouldBe` Just False
-
-        describe "PEP 440 (PyPI)" $ do
-            it "a final release is stable" $
-                stableOf PyPI "1.0" `shouldBe` Just True
-            it "a post-release is stable (post is not a prerelease)" $
-                stableOf PyPI "1.0.post1" `shouldBe` Just True
-            it "an alpha pre-release is not stable" $
-                stableOf PyPI "1.0a1" `shouldBe` Just False
-            it "an rc pre-release is not stable" $
-                stableOf PyPI "1.0rc1" `shouldBe` Just False
-            it "a dev release is not stable" $
-                stableOf PyPI "1.0.dev1" `shouldBe` Just False
-            it "a pre+dev release is not stable" $
-                stableOf PyPI "1.0a1.dev2" `shouldBe` Just False
-            it "a post+dev release is not stable (dev disqualifies)" $
-                stableOf PyPI "1.0.post1.dev2" `shouldBe` Just False
-
-        describe "RubyGems" $ do
-            it "an all-numeric version is stable" $
-                stableOf RubyGems "1.0.0" `shouldBe` Just True
-            it "a .pre letter segment is not stable" $
-                stableOf RubyGems "1.0.0.pre" `shouldBe` Just False
-            it "a .rc1 letter segment is not stable" $
-                stableOf RubyGems "1.2.0.rc1" `shouldBe` Just False
+    describe "isStable" $
+        -- Every fixture below parses, so stableOf answers Just True or Just False, never Nothing.
+        for_ stabilityGrammars $ \(grammar, eco, cases) ->
+            describe grammar $
+                for_ cases $ \(name, raw, expected) ->
+                    it name $
+                        fmap isStable (rightToMaybe (parseVersionKey eco raw)) `shouldBe` Just expected
 
     describe "canonicalPep440" $ do
         it "spells a release without its trailing zeros" $
@@ -345,6 +295,53 @@ spec = do
                 case result of
                     Nothing -> survivorRaws === []
                     Just r -> assert (renderVersion r `elem` raws survivors)
+
+{- | Per ecosystem: a version that parses, one that does not, the name its refusal case
+carries, and the generator of structurally valid raw versions.
+-}
+parseableEcosystems :: [(Ecosystem, Text, Text, String, Gen Text)]
+parseableEcosystems =
+    [ (Npm, "1.2.3", "nope", "returns a VersionError for invalid Npm input", genNpm)
+    , (PyPI, "1.2.3", "totally bogus", "returns a VersionError for invalid PyPI input", genPyPI)
+    , (RubyGems, "1.2.3", "", "returns a VersionError for unparseable RubyGems input", genGem)
+    ]
+
+-- | What each grammar counts as a stable release, and what it counts as a pre-release.
+stabilityGrammars :: [(String, Ecosystem, [(String, Text, Bool)])]
+stabilityGrammars =
+    [
+        ( "semver (npm)"
+        , Npm
+        ,
+            [ ("a final release is stable", "1.0.0", True)
+            , ("an -rc prerelease is not stable", "1.0.0-rc.1", False)
+            , ("a -beta prerelease is not stable", "2.0.0-beta", False)
+            , ("a numeric prerelease id is not stable", "1.0.0-1", False)
+            ]
+        )
+    ,
+        ( "PEP 440 (PyPI)"
+        , PyPI
+        ,
+            [ ("a final release is stable", "1.0", True)
+            , ("a post-release is stable (post is not a prerelease)", "1.0.post1", True)
+            , ("an alpha pre-release is not stable", "1.0a1", False)
+            , ("an rc pre-release is not stable", "1.0rc1", False)
+            , ("a dev release is not stable", "1.0.dev1", False)
+            , ("a pre+dev release is not stable", "1.0a1.dev2", False)
+            , ("a post+dev release is not stable (dev disqualifies)", "1.0.post1.dev2", False)
+            ]
+        )
+    ,
+        ( "RubyGems"
+        , RubyGems
+        ,
+            [ ("an all-numeric version is stable", "1.0.0", True)
+            , ("a .pre letter segment is not stable", "1.0.0.pre", False)
+            , ("a .rc1 letter segment is not stable", "1.2.0.rc1", False)
+            ]
+        )
+    ]
 
 -- | One fixture comparison: @A@ relative to @B@ is @Ordering@ for @Ecosystem@.
 data Row = Row Ecosystem Text Text Ordering
