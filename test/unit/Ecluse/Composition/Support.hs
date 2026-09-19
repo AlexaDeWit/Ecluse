@@ -36,6 +36,7 @@ module Ecluse.Composition.Support (
     withoutPrivateUpstreamUrl,
     withoutQueueUrl,
     overrideEnv,
+    withAmbientAws,
     expectEnv,
     expectAppConfig,
     expectProviders,
@@ -48,6 +49,8 @@ module Ecluse.Composition.Support (
 
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
+import System.Environment (setEnv, unsetEnv)
+import UnliftIO.Exception (bracket_)
 
 import Ecluse.Composition.BootError (BootError (MirrorTargetOnMountEndpoint, StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
@@ -239,6 +242,15 @@ withoutQueueUrl = filter ((/= "ECLUSE_QUEUE__URL") . fst)
 -- | Override (or insert) one environment entry.
 overrideEnv :: String -> String -> [(String, String)] -> [(String, String)]
 overrideEnv k v env = (k, v) : filter ((/= k) . fst) env
+
+{- | Run an action under an AWS identity the SDK's own credential discovery finds. The entries
+are cleared afterwards, since the whole suite shares one process environment.
+-}
+withAmbientAws :: IO a -> IO a
+withAmbientAws =
+    bracket_ (traverse_ (uncurry setEnv) ambientAws) (traverse_ (unsetEnv . fst) ambientAws)
+  where
+    ambientAws = [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test"), ("AWS_REGION", "us-east-1")]
 
 -- | Load an environment layer, failing the test on a parse error.
 expectEnv :: [(String, String)] -> IO AppConfig

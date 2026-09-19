@@ -14,7 +14,6 @@ import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, getCurrentTime, 
 import Database.SQLite.Simple (close, execute_, open)
 import Katip (closeScribes)
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
-import System.Environment (setEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
@@ -23,7 +22,7 @@ import UnliftIO.Exception (bracket, throwIO)
 import UnliftIO.STM (checkSTM)
 import UnliftIO.Timeout (timeout)
 
-import Ecluse.Composition.Support (expectAppConfig)
+import Ecluse.Composition.Support (expectAppConfig, withAmbientAws)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (CveDbRejected (CveDbEpssNotEstablished))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotGeneration)
@@ -65,8 +64,7 @@ spec = do
             Map.keys plan `shouldBe` []
 
         it "plans one handle per configured mount ecosystem and prepares the data dir" $
-            withSystemTempDirectory "ecluse-cve-sync-plan" $ \dir -> do
-                setDummyAwsCredentials
+            withSystemTempDirectory "ecluse-cve-sync-plan" $ \dir -> withAmbientAws $ do
                 let dataDir = dir </> "osv"
                 -- A stale in-progress download and a canonical artifact from a
                 -- previous run: the sweep removes the former and keeps the latter.
@@ -426,14 +424,6 @@ isStale :: AdvisoryFreshness -> Bool
 isStale = \case
     AdvisoryStale{} -> True
     _ -> False
-
--- The S3 env discovers credentials from the process environment. The plan only wires
--- the transport and makes no request, so dummies satisfy it.
-setDummyAwsCredentials :: IO ()
-setDummyAwsCredentials = do
-    setEnv "AWS_ACCESS_KEY_ID" "test"
-    setEnv "AWS_SECRET_ACCESS_KEY" "test"
-    setEnv "AWS_REGION" "us-east-1"
 
 mountedNpmDoc :: ByteString
 mountedNpmDoc =
