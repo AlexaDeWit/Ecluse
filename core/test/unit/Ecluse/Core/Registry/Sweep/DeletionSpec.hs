@@ -16,6 +16,7 @@ import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance
 import Ecluse.Core.Registry.Sweep (sweepCycle)
+import Ecluse.Core.Registry.Sweep.Outcome
 import Ecluse.Core.Registry.Sweep.Types
 import Ecluse.Core.Rules (PreparedRule (prepEval), prepare)
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity), RuleVerdict (Allow, Deny))

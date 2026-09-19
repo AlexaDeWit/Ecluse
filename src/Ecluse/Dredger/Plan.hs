@@ -28,19 +28,21 @@ import Ecluse.Config (
     DredgerSettings (drgChunkPause, drgChunkSize, drgCyclePause, drgDeletionCap, drgFullWalk, drgRequestBudgetFraction, drgTargetCycleWindow),
  )
 import Ecluse.Core.Clock (secondsToMicros)
-import Ecluse.Core.Registry.Sweep.Pacing (defaultCycleWindow)
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt,
     CycleOutcome (outcomeEvidence, outcomeHalt),
+    evidenceComplete,
+    outcomeComplete,
+    renderCycleHalt,
+    renderEvidenceGaps,
+ )
+import Ecluse.Core.Registry.Sweep.Pacing (defaultCycleWindow)
+import Ecluse.Core.Registry.Sweep.Types (
     SweepMount (smConfigured),
     SweepPacing (SweepPacing, swpBudgetFraction, swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
     SweepReport (SweepReport, reportCapHalts, reportOpening, reportRemoval),
     SweepShape (SweepCandidates, SweepEverything),
     deletionCapPerStore,
-    evidenceComplete,
-    outcomeComplete,
-    renderCycleHalt,
-    renderEvidenceGaps,
  )
 import Ecluse.Core.Rules.Types (readsAdvisories)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepWouldDelete))

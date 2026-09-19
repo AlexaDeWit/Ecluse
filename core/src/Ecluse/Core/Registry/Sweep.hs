@@ -44,12 +44,24 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
  )
 import Ecluse.Core.Registry.Sweep.Candidates (CandidateSet, candidateSet, inCandidates)
 import Ecluse.Core.Registry.Sweep.Group (boundedVersions, collectGroupBucket, groupAlphabet)
-import Ecluse.Core.Registry.Sweep.Pacing (PaceDecision (pdPace, pdScope), decidePace, renderPaceDecision)
-import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackageGroup)
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltBucketUnsplittable, HaltConsentWithheld, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (CycleOutcome, outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
     PrerequisiteStatus (PrerequisiteMet, PrerequisiteUnmet, PrerequisiteUnread),
+    TargetPrerequisites (TargetPrerequisites, tpBackend, tpClassification, tpConsent, tpEcosystem),
+    evidenceComplete,
+    prerequisitesMet,
+    renderCycleHalt,
+    renderEvidenceGaps,
+    renderPrerequisites,
+    renderStoreFault,
+    renderTally,
+    storeSubject,
+    unloadedGeneration,
+ )
+import Ecluse.Core.Registry.Sweep.Pacing (PaceDecision (pdPace, pdScope), decidePace, renderPaceDecision)
+import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackageGroup)
+import Ecluse.Core.Registry.Sweep.Types (
     SweepAudit (auditError, auditInfo, auditWarn),
     SweepExecution (SweepCounts, SweepRemoves),
     SweepMount (smConfigured, smEcosystem, smProjectName, smRuleDeps, smStore),
@@ -58,25 +70,15 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepShape (SweepEverything),
     SweepState,
     SweepStore (ssExecute, ssObserve, ssVersionLimit),
-    TargetPrerequisites (TargetPrerequisites, tpBackend, tpClassification, tpConsent, tpEcosystem),
     countingAt,
-    evidenceComplete,
     newSweepState,
-    prerequisitesMet,
     privateStore,
     recordGap,
     recordPrerequisites,
-    renderCycleHalt,
-    renderEvidenceGaps,
-    renderPrerequisites,
-    renderStoreFault,
-    renderTally,
     stChunkProgress,
     stEvidence,
     stPrerequisites,
     stTally,
-    storeSubject,
-    unloadedGeneration,
     walkMarkerOf,
  )
 import Ecluse.Core.Registry.Sweep.Walk (

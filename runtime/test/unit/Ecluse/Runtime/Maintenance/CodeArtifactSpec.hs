@@ -54,8 +54,9 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     upstreamCallCeiling,
     upstreamHopCeiling,
  )
+import Ecluse.Core.Registry.Sweep.Outcome (CycleHalt (HaltDeletionCap, HaltStoreFault))
 import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
-import Ecluse.Core.Registry.Sweep.Types (CycleHalt (HaltDeletionCap, HaltStoreFault), SweepMount (smStore), SweepPacing (swpDeletionCap), SweepState (stIssued), newSweepState)
+import Ecluse.Core.Registry.Sweep.Types (SweepMount (smStore), SweepPacing (swpDeletionCap), SweepState (stIssued), newSweepState)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepExamined, SweepKept))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Runtime.Maintenance.CodeArtifact (

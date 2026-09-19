@@ -59,7 +59,8 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     noUpstreamMechanism,
  )
 import Ecluse.Core.Registry.Sweep (sweepCycle)
-import Ecluse.Core.Registry.Sweep.Types (CycleOutcome (outcomePrerequisites, outcomeTally), SweepMount (smEcosystem), SweepTally (tallyDeleted))
+import Ecluse.Core.Registry.Sweep.Outcome (CycleOutcome (outcomePrerequisites, outcomeTally), SweepTally (tallyDeleted))
+import Ecluse.Core.Registry.Sweep.Types (SweepMount (smEcosystem))
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Context (MountBinding (bindingPrefix))
 import Ecluse.Core.Version (mkVersion)

@@ -25,8 +25,13 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Sweep.Deletion (Selection (Selection), deleteGroup)
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt,
+    renderGeneration,
+    renderStoreFault,
+    unreadManifest,
+ )
+import Ecluse.Core.Registry.Sweep.Types (
     SweepAudit (auditError, auditInfo),
     SweepMount (smConfigured, smEcosystem, smFirstParty, smRuleDeps, smRules, smStore),
     SweepPacing (swpDeletionCap),
@@ -40,9 +45,6 @@ import Ecluse.Core.Registry.Sweep.Types (
     recordGap,
     recordMetric,
     recordTally,
-    renderGeneration,
-    renderStoreFault,
-    unreadManifest,
  )
 import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), evalRules, renderIneligible)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvidence, completeEvidence, identityEvidence, mkEvalContext, readsAdvisories, ruleName)

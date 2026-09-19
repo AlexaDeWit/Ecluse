@@ -29,17 +29,19 @@ import Ecluse.Core.Registry.Maintenance (
     storeRefusal,
  )
 import Ecluse.Core.Registry.Metadata (Manifest)
-import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackageGroup)
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltDeletionCap),
     EvidenceGaps (gapManifests),
+    evidenceComplete,
+ )
+import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackageGroup)
+import Ecluse.Core.Registry.Sweep.Types (
     SweepExecution (SweepCounts, SweepRemoves),
     SweepMount (smConfigured, smFirstParty, smRuleDeps, smStore),
     SweepPacing (swpDeletionCap),
     SweepPorts (sweepAdvisoryEtag, sweepNow),
     SweepState (stEvidence, stIssued),
     SweepStore (ssExecute, ssObserve),
-    evidenceComplete,
     newSweepState,
  )
 import Ecluse.Core.Rules (PreparedRule (prepEval), RuleDeps (rdAdvisoryFreshness, rdWithCveLookup), prepare)

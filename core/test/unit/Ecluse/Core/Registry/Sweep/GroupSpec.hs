@@ -32,22 +32,24 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Group (boundedVersions)
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltBucketUnsplittable, HaltStoreFault),
     CycleOutcome (..),
     EvidenceGaps (gapManifests),
     PrerequisiteStatus (PrerequisiteUnmet),
+    SweepTally (..),
+    TargetPrerequisites (tpConsent),
+    outcomeComplete,
+    renderPrerequisites,
+    renderStoreFault,
+ )
+import Ecluse.Core.Registry.Sweep.Types (
     SweepCache (..),
     SweepMount (..),
     SweepPacing (swpDeletionCap, swpShape),
     SweepShape (SweepEverything),
     SweepStore (..),
-    SweepTally (..),
-    TargetPrerequisites (tpConsent),
-    outcomeComplete,
     previewCache,
-    renderPrerequisites,
-    renderStoreFault,
  )
 import Ecluse.Core.Registry.Sweep.Walk (bucketNameBudget)
 import Ecluse.Core.Rules (PreparedRule (prepEval), prepare)

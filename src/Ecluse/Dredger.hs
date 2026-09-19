@@ -32,10 +32,14 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort)
 import Ecluse.Core.Registry.Sweep (paceAtCeiling, storeBudgets, sweepCycle)
-import Ecluse.Core.Registry.Sweep.Pacing (renderScopeBudget)
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt,
     CycleOutcome (outcomeHalt),
+    latches,
+    renderCycleHalt,
+ )
+import Ecluse.Core.Registry.Sweep.Pacing (renderScopeBudget)
+import Ecluse.Core.Registry.Sweep.Types (
     SweepAudit (SweepAudit, auditError, auditInfo, auditWarn),
     SweepCache (scObserve),
     SweepMount (smEcosystem, smStore),
@@ -44,9 +48,7 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepReport,
     SweepShape (SweepCandidates, SweepEverything),
     SweepStore (ssObserve, ssPrivate),
-    latches,
     privateStore,
-    renderCycleHalt,
     walkMarkerOf,
  )
 import Ecluse.Core.Server.Readiness (Readiness (Latched), allMountsReady)

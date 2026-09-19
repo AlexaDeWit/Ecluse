@@ -155,6 +155,7 @@ library ecluse-core
     Ecluse.Core.Registry.Sweep.Candidates
     Ecluse.Core.Registry.Sweep.Deletion
     Ecluse.Core.Registry.Sweep.Group
+    Ecluse.Core.Registry.Sweep.Outcome
     Ecluse.Core.Registry.Sweep.Pacing
     Ecluse.Core.Registry.Sweep.Package
     Ecluse.Core.Registry.Sweep.Types

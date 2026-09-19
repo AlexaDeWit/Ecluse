@@ -16,6 +16,7 @@ import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance
 import Ecluse.Core.Registry.Sweep.Group (boundedVersions)
+import Ecluse.Core.Registry.Sweep.Outcome (CycleHalt (HaltDeletionCap, HaltStoreFault), renderStoreFault)
 import Ecluse.Core.Registry.Sweep.Types
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepGuardSkipped), SweepTarget (SweepMirror))
 import Ecluse.Core.Version (Version, renderVersion)

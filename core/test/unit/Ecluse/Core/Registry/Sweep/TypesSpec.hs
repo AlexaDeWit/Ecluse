@@ -9,7 +9,7 @@ import Test.Hspec
 
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltBucketUnsplittable, HaltConsentWithheld, HaltDeletionCap, HaltStoreFault, HaltStorePreserved),
     SweepTally (SweepTally, tallyDeleted, tallyExamined, tallyGuardSkipped, tallyKept),
     latches,
