@@ -20,7 +20,6 @@ module Ecluse.Cve.Sync (
     cveSyncScheduleFor,
     cveSyncTasks,
     registerAdvisoryAges,
-    backgroundLoopBackoff,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -63,7 +62,7 @@ import Ecluse.Core.Server.Readiness (
     mountStateFor,
  )
 import Ecluse.Core.Supervision (
-    BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
+    backgroundLoopBackoff,
     superviseLoop,
     transientPolicy,
  )
@@ -216,12 +215,6 @@ registerAdvisoryAges metrics plan =
     for_ (Map.toList plan) $ \(eco, handle) -> do
         registerAdvisoryDatabaseAge metrics eco (generationInstalledAt (syncSlot (csEnv handle)))
         registerAdvisorySourceAge metrics eco (advisoryPushTime handle)
-
-{- | The pace every shell background loop retries a transient fault at: one second after the
-first failure, doubling to a thirty-second ceiling.
--}
-backgroundLoopBackoff :: BackoffSchedule
-backgroundLoopBackoff = BackoffSchedule{bsBaseMicros = 1_000_000, bsCapMicros = 30_000_000}
 
 -- | One configured ecosystem's advisory-sync wiring.
 data CveSyncHandle = CveSyncHandle

@@ -68,11 +68,12 @@ import Ecluse.Core.Server.Readiness (Readiness)
 import Ecluse.Core.Supervision (
     FaultDisposition (Permanent, Transient),
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
+    backgroundLoopBackoff,
     superviseLoop,
     transientPolicy,
  )
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
-import Ecluse.Cve.Sync (backgroundLoopBackoff, cveSyncReadiness, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
+import Ecluse.Cve.Sync (cveSyncReadiness, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..))
 import Ecluse.Runtime.Telemetry (Telemetry)

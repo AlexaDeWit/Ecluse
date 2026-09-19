@@ -20,6 +20,7 @@ module Ecluse.Core.Supervision (
     -- * Bounded exponential backoff
     BackoffSchedule (..),
     backoffMicros,
+    backgroundLoopBackoff,
 
     -- * Bounded retry pacing
     delayListPolicy,
@@ -112,6 +113,12 @@ warnAndBackOff policy consecutiveFaults fault = do
     let delay = backoffMicros (spBackoff policy) consecutiveFaults
     logFM WarningS (ls (spLabel policy <> ": iteration faulted (retrying in " <> show delay <> "µs): " <> displayExceptionT fault))
     threadDelay delay
+
+{- | The pace a background loop retries a transient fault at: one second after the first
+failure, doubling to a thirty-second ceiling.
+-}
+backgroundLoopBackoff :: BackoffSchedule
+backgroundLoopBackoff = BackoffSchedule{bsBaseMicros = 1_000_000, bsCapMicros = 30_000_000}
 
 {- | A delay list as a "Control.Retry" policy: retry @n@ waits the @n@-th delay in microseconds,
 so the list's length is the retry budget. It paces a bounded run, not an endless loop.
