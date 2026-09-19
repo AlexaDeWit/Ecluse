@@ -5,9 +5,9 @@
 {- | The drop-tracking vocabulary a registry projection records a malformed entry in.
 
 The record reaches an operator log line and an upstream-supplied value can carry a credential,
-so 'mkInvalidEntry' is the only builder and the constructor stays hidden. Each ecosystem
-contributes its own 'InvalidEntryKind' arms, and the neutral serve path buckets them through
-'dropCountsByKind' rather than branching on them.
+so 'mkInvalidEntry' is the only builder and the constructor stays hidden. The kinds span every
+ecosystem, and the neutral serve diagnostics bucket them through 'dropCountsByKind' rather than
+branching on them.
 -}
 module Ecluse.Core.Package.InvalidEntry (
     -- * A dropped entry
@@ -28,9 +28,8 @@ import Data.Vector qualified as V
 
 import Ecluse.Core.Security.Authority (authorityLabel)
 
-{- | A single registry-document entry a projection __dropped__ as malformed rather than
-failing the entire document. It is kept so the drop is observable: an operator can see that
-an upstream served a malformed entry, and which one.
+{- | A single registry-document entry a projection __dropped__ as malformed rather than failing
+the whole document, kept so an operator can see that an upstream served one, and which.
 -}
 data InvalidEntry = InvalidEntry
     { invalidKind :: InvalidEntryKind
@@ -40,9 +39,8 @@ data InvalidEntry = InvalidEntry
     or publish time, the tag name for a dist-tag, the file name for an index file.
     -}
     , invalidValue :: Value
-    {- ^ The __offending value__, so an operator can see what the upstream sent rather than
-    only a reason string, with every URL reduced to its authority by 'mkInvalidEntry'. Render
-    it at log time, truncating if it is large.
+    {- ^ The __offending value__, with every URL reduced to its authority by 'mkInvalidEntry'.
+    Render it at log time, truncating if it is large.
     -}
     , invalidReason :: Text
     -- ^ Why the entry could not be projected (the decode error), for the operator log.
@@ -69,15 +67,15 @@ redactUrls = \case
     Array xs -> Array (V.map redactUrls xs)
     scalar -> scalar
 
-{- The scheme separator is what makes a string a URL that can carry userinfo, so it is the
-one shape reduced. Anything else is recorded as the upstream wrote it. -}
+-- The scheme separator is what makes a string a URL that can carry userinfo, so it is the one
+-- shape reduced. Anything else is recorded as the upstream wrote it.
 redactUrlText :: Text -> Text
 redactUrlText raw
     | "://" `T.isInfixOf` raw = authorityLabel raw
     | otherwise = raw
 
-{- | Which kind of registry-document entry a dropped 'InvalidEntry' came from. A dropped
-manifest or index file loses a serve candidate; an advisory kind loses only its own datum.
+{- | Which kind of registry-document entry a dropped 'InvalidEntry' came from. A dropped manifest
+or index file loses a serve candidate, a dropped tag, time or listing only its own datum.
 -}
 data InvalidEntryKind
     = -- | A @versions@ entry whose manifest did not project (no @dist@\/@tarball@, an unusable @version@).
