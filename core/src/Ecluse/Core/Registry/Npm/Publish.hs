@@ -29,7 +29,7 @@ import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Request)
 
-import Ecluse.Core.Credential (ClientCredential, bareCredential)
+import Ecluse.Core.Credential (ClientCredential, Secret, bareCredential)
 import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, Scope, hashAlg, hashValue, pkgNamespace, renderPackageName)
 import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (
@@ -55,11 +55,28 @@ npmPublishCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated noValidators
         , pcParseVersionList = Project.parseVersionList
-        , pcPublishRequest = \targetUrl token name plan artifact bytes -> do
-            document <- npmPublishDocument name plan (unFilename (maFilename artifact)) (strongestSriValue artifact) (firstHashValue SHA1 artifact) bytes
-            first (PublishFetch . FetchUrlUnformable) (publishRequest targetUrl (bareCredential <$> token) name document)
+        , pcPublishRequest = npmPublishRequestFor
         , pcPublishOutcome = classifyPublish
         }
+
+npmPublishRequestFor ::
+    Text ->
+    Maybe Secret ->
+    PackageName ->
+    PublishPlan ->
+    MirrorArtifact ->
+    ByteString ->
+    Either PublishFault Request
+npmPublishRequestFor targetUrl token name plan artifact bytes = do
+    document <-
+        npmPublishDocument
+            name
+            plan
+            (unFilename (maFilename artifact))
+            (strongestSriValue artifact)
+            (firstHashValue SHA1 artifact)
+            bytes
+    first (PublishFetch . FetchUrlUnformable) (publishRequest targetUrl (bareCredential <$> token) name document)
 
 strongestSriValue :: MirrorArtifact -> Maybe Text
 strongestSriValue artifact = do
