@@ -314,12 +314,14 @@ collectFile cap = go 0 []
                  in if seen' > cap
                         then drainOversize seen'
                         else go seen' (bs : acc)
-    -- Not carrying acc forward frees the accumulated prefix, so the drain to the next
-    -- entry boundary retains only the running size.
-    drainOversize !seen =
-        await >>= \case
-            Nothing -> pure (EntryOversize seen)
-            Just (Left entry) -> do
-                leftover (Left entry)
-                pure (EntryOversize seen)
-            Just (Right bs) -> drainOversize (seen + BS.length bs)
+
+-- Carrying no accumulator frees the collected prefix, so the drain to the next entry
+-- boundary retains only the running size.
+drainOversize :: (Monad m) => Int -> ConduitT (Either ZipEntry ByteString) o m EntryOutcome
+drainOversize !seen =
+    await >>= \case
+        Nothing -> pure (EntryOversize seen)
+        Just (Left entry) -> do
+            leftover (Left entry)
+            pure (EntryOversize seen)
+        Just (Right bs) -> drainOversize (seen + BS.length bs)
