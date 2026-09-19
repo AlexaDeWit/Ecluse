@@ -7,8 +7,7 @@ Private index failures retain their access-refusal or fallback policy.
 -}
 module Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec (spec) where
 
-import Data.Aeson (Value (Array, Object, String), decode, encode, object, (.=))
-import Data.Aeson.Key (Key)
+import Data.Aeson (Value (Array, Object, String), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
@@ -41,7 +40,7 @@ import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Server.Mount (pypiServeDeps)
-import Ecluse.Test.Wai (localhost, lookupAuth, selfBaseUrl)
+import Ecluse.Test.Wai (decodedBody, localhost, lookupAuth, selfBaseUrl)
 
 spec :: Spec
 spec = do
@@ -383,7 +382,7 @@ helpBytes = LBS.fromStrict (encodeUtf8 helpMessage)
 
 -- | The served index's PEP 700 versions array.
 servedVersions :: SResponse -> [Text]
-servedVersions resp = case field "versions" resp of
+servedVersions resp = case fieldAt "versions" (decodedBody resp) of
     Just (Array versions) -> [v | String v <- toList versions]
     _ -> []
 
@@ -402,12 +401,9 @@ servedKeys :: SResponse -> [Text]
 servedKeys = concatMap (map Key.toText . KeyMap.keys . asObject) . servedFiles
 
 servedFiles :: SResponse -> [Value]
-servedFiles resp = case field "files" resp of
+servedFiles resp = case fieldAt "files" (decodedBody resp) of
     Just (Array files) -> toList files
     _ -> []
-
-field :: Key -> SResponse -> Maybe Value
-field key resp = fieldAt key =<< decode (simpleBody resp)
 
 -- | A response's status code, for an example that names the number rather than the constant.
 statusOf :: SResponse -> Int
