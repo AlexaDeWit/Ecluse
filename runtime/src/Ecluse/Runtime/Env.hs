@@ -53,11 +53,11 @@ data Env = Env
     -}
     , envManager :: Manager
     {- ^ The shared validating-TLS 'Manager' for the __untrusted__ data plane. Egress is https-only,
-    so a public @dist.tarball@ cannot steer the proxy at an internal or rebound address.
+    so certificate validation authenticates the host a @dist.tarball@ names.
     -}
     , envPrivateManager :: Manager
     {- ^ The 'Manager' for the __trusted__ private upstream, held to the same https-only
-    requirement. The split stays because credential handling and @dist.tarball@ host trust differ.
+    requirement. The split stays because credential handling differs.
     -}
     , envMetadataCache :: MetadataCache
     {- ^ The metadata cache ("Ecluse.Core.Server.Cache"). One parsed packument serves the

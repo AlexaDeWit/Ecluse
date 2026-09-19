@@ -5,8 +5,9 @@
 {- | The key vocabulary every configuration group decodes through ("Ecluse.Config.Aeson").
 
 One declaration list is both the accepted-key list and the read list, so a key no field reads
-cannot pass unnoticed and must be declared with 'unreadKey'. Each refusal carries the group-
-qualified label and the Aeson path, so a nested type error names the setting an operator wrote.
+cannot pass unnoticed and must be declared with 'unreadKey'. Each refusal carries the
+group-qualified label and the Aeson path, so a nested type error names the setting an operator
+wrote.
 -}
 module Ecluse.Config.Parser (
     -- * Group decoding
