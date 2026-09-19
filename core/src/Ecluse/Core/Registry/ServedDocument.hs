@@ -19,9 +19,10 @@ module Ecluse.Core.Registry.ServedDocument (
     -- * Rebasing an artifact location
     rebaseArtifactUrl,
 
-    -- * Reading a raw document
+    -- * Reading and editing a raw document
     documentObject,
     stringField,
+    adjustField,
 ) where
 
 import Data.Aeson (Value (Object, String), encode)
@@ -122,3 +123,11 @@ stringField :: Key.Key -> KeyMap Value -> Maybe Text
 stringField key o = case KeyMap.lookup key o of
     Just (String s) -> Just s
     _ -> Nothing
+
+{- | Edit the value at @key@, only when the object already carries that key. A missing key stays
+absent, never fabricated, so passthrough stays lossless.
+-}
+adjustField :: Key.Key -> (Value -> Value) -> KeyMap Value -> KeyMap Value
+adjustField key edit o = case KeyMap.lookup key o of
+    Just v -> KeyMap.insert key (edit v) o
+    Nothing -> o

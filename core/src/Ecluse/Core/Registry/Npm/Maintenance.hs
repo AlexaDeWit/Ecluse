@@ -49,7 +49,7 @@ import Ecluse.Core.Registry.Npm.Request (
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Request (joinPath, noValidators, parseRequestEither)
-import Ecluse.Core.Registry.ServedDocument (stringField)
+import Ecluse.Core.Registry.ServedDocument (adjustField, stringField)
 import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (nonBlank, urlFilenameComponent)
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, renderVersion)
@@ -187,11 +187,11 @@ atRevision revision url = url <> "/-rev/" <> encodeComponent revision
 packument without one leaves an unqualified install with no version to resolve. -}
 removeVersion :: Text -> Object -> Object -> Object
 removeVersion raw versions packument =
-    KeyMap.insert "versions" (Object remaining) (adjustObject "dist-tags" retag prunedTime)
+    KeyMap.insert "versions" (Object remaining) (adjustField "dist-tags" (withinObject retag) prunedTime)
   where
     key = Key.fromText raw
     remaining = KeyMap.delete key versions
-    prunedTime = adjustObject "time" (KeyMap.delete key) packument
+    prunedTime = adjustField "time" (withinObject (KeyMap.delete key)) packument
     retag tags = maybe kept (\latest -> KeyMap.insert "latest" (String latest) kept) restoredLatest
       where
         kept = KeyMap.filter (/= String raw) tags
@@ -199,10 +199,11 @@ removeVersion raw versions packument =
             guard (KeyMap.lookup "latest" tags == Just (String raw))
             greatestVersion (map Key.toText (KeyMap.keys remaining))
 
-adjustObject :: Key.Key -> (Object -> Object) -> Object -> Object
-adjustObject key edit document = case KeyMap.lookup key document of
-    Just (Object inner) -> KeyMap.insert key (Object (edit inner)) document
-    _ -> document
+-- A slot holding anything but an object is left as the store sent it.
+withinObject :: (Object -> Object) -> Value -> Value
+withinObject edit = \case
+    Object inner -> Object (edit inner)
+    other -> other
 
 greatestVersion :: [Text] -> Maybe Text
 greatestVersion = foldl' keepGreater Nothing
