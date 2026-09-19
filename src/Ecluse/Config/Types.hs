@@ -1,8 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 {- | The configuration vocabulary: the settings records a load resolves to, the refusals their
 URL-valued keys carry, and the errors a refused load reports.

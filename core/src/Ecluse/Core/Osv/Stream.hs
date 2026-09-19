@@ -1,9 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 {- | Streaming ingest of the osv.dev export archive Pilot compiles @osv.db@ from. The feed
 aggregates many upstream databases, so one poisoned record can ride in with every transport

@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE OverloadedStrings #-}
 
 {- | Compile OSV advisories and EPSS scores into the artifact
 consumed by CVE sync.

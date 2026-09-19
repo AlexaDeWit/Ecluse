@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE OverloadedStrings #-}
 
 {- | Decode advisory evidence for the compiled artifact.
 Package keys use the same ecosystem identity as policy queries.

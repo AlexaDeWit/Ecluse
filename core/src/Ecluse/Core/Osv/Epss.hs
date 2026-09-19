@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE OverloadedStrings #-}
 
 {- | The FIRST.org EPSS feed, the exploitability score Pilot joins onto each advisory.
 
