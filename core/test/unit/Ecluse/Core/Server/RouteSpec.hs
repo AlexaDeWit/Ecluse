@@ -11,14 +11,7 @@ imports no registry module: if one were needed, the glue would not be shared.
 module Ecluse.Core.Server.RouteSpec (spec) where
 
 import Network.HTTP.Types (status404)
-import Network.HTTP.Types.Method (
-    Method,
-    methodDelete,
-    methodGet,
-    methodHead,
-    methodPost,
-    methodPut,
- )
+import Network.HTTP.Types.Method (Method, methodGet)
 import Test.Hspec
 
 import Ecluse.Core.Server.Context (ResponseAction (AnswerLocally))
@@ -34,7 +27,7 @@ import Ecluse.Core.Server.Route (
     isHead,
     safeSegment,
  )
-import Ecluse.Test.Server.Route (claimedBy)
+import Ecluse.Test.Server.Route (claimedOn, everyMethod)
 
 spec :: Spec
 spec = do
@@ -127,11 +120,7 @@ capFile = Capture "file" "The file's name." (safeSegment ToyFile) toySegment
 
 -- The name of the route that claims a request, or 'Nothing' when none does.
 claimed :: Method -> [Text] -> Maybe RouteName
-claimed method = claimedBy toyRoutes method []
-
--- Every method a route is held against, the two reads first.
-everyMethod :: [Method]
-everyMethod = [methodGet, methodHead, methodPost, methodPut, methodDelete]
+claimed = claimedOn toyRoutes
 
 -- | The one segment a toy capture claims, written back out.
 toySegment :: ToyCap -> [Text]

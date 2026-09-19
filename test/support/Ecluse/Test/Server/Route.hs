@@ -21,6 +21,8 @@ module Ecluse.Test.Server.Route (
     genPathSegmentFrom,
     genSegmentName,
     claimedBy,
+    claimedOn,
+    everyMethod,
     claimsEveryRendering,
 ) where
 
@@ -28,7 +30,7 @@ import Hedgehog (Gen, PropertyT, annotateShow, failure, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Network.HTTP.Types (Method, RequestHeaders)
-import Network.HTTP.Types.Method (methodGet)
+import Network.HTTP.Types.Method (methodDelete, methodGet, methodHead, methodPost, methodPut)
 
 import Ecluse.Core.Server.Route (Route (routeName), RouteName, matchRoute, renderRoute)
 
@@ -74,6 +76,16 @@ segmentChars = ['a', 'b', 'c', 'n', 'p', 'm', '@', '-', '/', '.', '%', ' ', '1',
 claimedBy :: [Route v] -> Method -> RequestHeaders -> [Text] -> Maybe RouteName
 claimedBy table method headers segments =
     routeName . fst <$> matchRoute table method headers segments
+
+{- | 'claimedBy' with no request headers, for a table whose routes negotiate no media type.
+A header-sensitive table takes 'claimedBy' instead.
+-}
+claimedOn :: [Route v] -> Method -> [Text] -> Maybe RouteName
+claimedOn table method = claimedBy table method []
+
+-- | Every method a table is held against, the two reads first.
+everyMethod :: [Method]
+everyMethod = [methodGet, methodHead, methodPost, methodPut, methodDelete]
 
 {- | Assert that the named route's own rendering of one set of captures is a URL that same
 route claims out of its table.

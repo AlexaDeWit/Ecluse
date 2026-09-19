@@ -41,7 +41,7 @@ import Ecluse.Core.Server.Route (RouteName (RouteName))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Package (npmVersion, scopedNpm, unsafeFilename, unscopedNpm)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
-import Ecluse.Test.Server.Route (claimedBy, claimsEveryRendering)
+import Ecluse.Test.Server.Route (claimedOn, claimsEveryRendering, everyMethod)
 
 {- | What a request routes to, rebuilt from the table's public surface: which route claimed the
 path, and what that route's captures parse to. The routes carry actions, not comparable values.
@@ -60,7 +60,7 @@ data Routed
 
 routed :: Method -> [Text] -> Routed
 routed method segments =
-    case claimedBy npmRoutes method [] segments of
+    case claimedOn npmRoutes method segments of
         Nothing -> Denied
         Just (RouteName "ping") -> ToPing
         Just (RouteName "search") -> ToSearch
@@ -106,7 +106,7 @@ request, never what its closure serves.
 -}
 matchedId :: Method -> [Text] -> Maybe RouteName
 -- npm's routes negotiate no media type, so the reference routes with no Accept header.
-matchedId method = claimedBy npmRoutes method []
+matchedId = claimedOn npmRoutes
 
 spec :: Spec
 spec = do
@@ -410,7 +410,7 @@ safe c =
 -- Generators -----------------------------------------------------------------
 
 genMethod :: Gen Method
-genMethod = Gen.element [methodGet, methodPut, methodHead, methodPost, methodDelete]
+genMethod = Gen.element everyMethod
 
 {- | A request shaped like a dist-tag route, every part perturbed, so the property reaches
 all three routes and the near misses that must deny. 'NpmFixture.genPathSegments' reaches none.
