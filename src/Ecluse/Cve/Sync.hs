@@ -2,11 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The advisory-sync plan: one ecosystem's sync wiring ('CveSyncHandle') and the
-config-driven plan that builds it ('planCveSync'). It also holds the projections the
-composition root reads off that plan: the per-ecosystem rule capabilities, the
-per-mount readiness verdict, the sync schedule, and database-age observations. Every consuming
-role registers the observations once and runs one supervised sync task per handle.
+{- | The advisory-sync plan: one 'CveSyncHandle' per mount ecosystem ('planCveSync'), the
+projections the composition root reads off it, and one supervised sync task per handle.
 -}
 module Ecluse.Cve.Sync (
     CveSyncHandle (..),
@@ -44,7 +41,7 @@ import Ecluse.Config (
     advisoryStoreUrlText,
  )
 import Ecluse.Core.Breaker (BreakerReporter)
-import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotGeneration)
+import Ecluse.Core.Cve.Slot (AdvisorySource (asPushedAt), CveSlot, currentAdvisoryEtag, currentAdvisorySource, generationInstalledAt, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Osv.Schema (EpssRequirement, osvDbFileName)
 import Ecluse.Core.Rules (RuleDeps (..), SourceReporter, noSourceReporter)
@@ -79,18 +76,19 @@ import Ecluse.Runtime.Telemetry.Instruments (Metrics, advisorySyncMetricsPortOf,
 import Ecluse.Runtime.Telemetry.Tracing (advisorySyncTracingPortOf)
 
 {- | The rules' boot-bound capabilities for one mount ecosystem. A mount's rules read only their own
-ecosystem's advisory database, and abstain when the sync plan carries no slot for it. An ecosystem
-with no handle has no source to observe, so its rules report outages nowhere.
+ecosystem's advisory database, and abstain and report nowhere when the plan carries no handle for it.
 -}
 cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> (Ecosystem -> OutageReport -> IO ()) -> Ecosystem -> RuleDeps
 cveRuleDepsFor plan reporter reportOutage eco =
     RuleDeps
-        { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotGeneration . syncSlot . csEnv) (Map.lookup eco plan)
-        , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . syncSlot . csEnv) (Map.lookup eco plan)
+        { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotGeneration . syncSlot . csEnv) handle
+        , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . syncSlot . csEnv) handle
         , rdBreakerReporter = reporter
-        , rdSourceReporter = maybe noSourceReporter (sourceReporterOf (reportOutage eco)) (Map.lookup eco plan)
-        , rdAdvisoryFreshness = advisoryFreshnessFor plan eco
+        , rdSourceReporter = maybe noSourceReporter (sourceReporterOf (reportOutage eco)) handle
+        , rdAdvisoryFreshness = advisoryFreshnessOrFresh handle
         }
+  where
+    handle = Map.lookup eco plan
 
 -- One handle's reporter, over the outage state every mount of the ecosystem shares.
 sourceReporterOf :: (OutageReport -> IO ()) -> CveSyncHandle -> SourceReporter
@@ -106,7 +104,11 @@ outageReportPeriod = fromIntegral absentReportInterval / 1_000_000
 has no advisory stack at all, so nothing ages and the absent-database path decides instead.
 -}
 advisoryFreshnessFor :: Map.Map Ecosystem CveSyncHandle -> Ecosystem -> IO AdvisoryFreshness
-advisoryFreshnessFor plan eco = maybe (pure AdvisoryFresh) advisoryFreshnessOf (Map.lookup eco plan)
+advisoryFreshnessFor plan eco = advisoryFreshnessOrFresh (Map.lookup eco plan)
+
+-- The same reading over a handle already looked up, so one lookup serves every rule capability.
+advisoryFreshnessOrFresh :: Maybe CveSyncHandle -> IO AdvisoryFreshness
+advisoryFreshnessOrFresh = maybe (pure AdvisoryFresh) advisoryFreshnessOf
 
 {- | One handle's reading: the slot's publication time against this mount's maximum, on the
 handle's own clock. A failed poll never swaps, so a warm process keeps the last time it read.
@@ -226,9 +228,7 @@ data CveSyncHandle = CveSyncHandle
     { csReady :: TVar Bool
     -- ^ The one-way first-sync readiness flag.
     , csEnv :: SyncEnv
-    {- ^ The sync task's environment. Its 'syncSlot' is the slot this ecosystem's mount
-    rules borrow through.
-    -}
+    -- ^ The sync task's environment. Its 'syncSlot' is the slot this ecosystem's rules borrow through.
     , csMaxAge :: MaxAdvisoryAge
     -- ^ This mount's effective maximum push age, derived once at boot from its own rules.
     , csClock :: IO UTCTime
@@ -262,36 +262,17 @@ planCveSync logEnv s3Endpoint appCfg needs = case advUrl (cfgAdvisories appCfg) 
         cveSource <- newS3CveSource s3Endpoint
         Map.fromList <$> traverse (cveSyncHandleFor appCfg cveSource store) needs
 
--- 'cveSource' captures the S3 environment once, so every ecosystem's transport shares one
--- credential discovery. The store addresses the remote object, the local copy its bare file name.
 cveSyncHandleFor :: AppConfig -> S3CveSource -> AdvisoryStoreUrl -> AdvisoryNeed -> IO (Ecosystem, CveSyncHandle)
 cveSyncHandleFor appCfg cveSource store need = do
     slot <- newCveSlot
     ready <- newTVarIO False
     alarmed <- newTVarIO False
     outage <- newTVarIO Healthy
-    let eco = anEcosystem need
-        fileName = osvDbFileName (ecosystemName eco)
-        maxBytes = limMaxAdvisoryDatabaseBytes (cfgLimits appCfg)
-        syncEnv =
-            SyncEnv
-                { syncFetch =
-                    s3CveFetchFor
-                        cveSource
-                        (advisoryStoreBucket store)
-                        (advisoryObjectKey store fileName)
-                        maxBytes
-                , syncEcosystem = eco
-                , syncEpssRequirement = anEpss need
-                , syncDbPath = advDataDir (cfgAdvisories appCfg) </> fileName
-                , syncSlot = slot
-                , syncStoreRef = advisoryStoreUrlText store
-                }
     pure
-        ( eco
+        ( anEcosystem need
         , CveSyncHandle
             { csReady = ready
-            , csEnv = syncEnv
+            , csEnv = syncEnvFor appCfg cveSource store need slot
             , csMaxAge = anMaxAge need
             , csClock = getCurrentTime
             , csAgeAlarmed = alarmed
@@ -299,6 +280,27 @@ cveSyncHandleFor appCfg cveSource store need = do
             , csDatabase = anDatabase need
             }
         )
+
+-- 'cveSource' captures the S3 environment once, so every ecosystem's transport shares one
+-- credential discovery. The store addresses the remote object, the local copy its bare file name.
+syncEnvFor :: AppConfig -> S3CveSource -> AdvisoryStoreUrl -> AdvisoryNeed -> CveSlot -> SyncEnv
+syncEnvFor appCfg cveSource store need slot =
+    SyncEnv
+        { syncFetch =
+            s3CveFetchFor
+                cveSource
+                (advisoryStoreBucket store)
+                (advisoryObjectKey store fileName)
+                (limMaxAdvisoryDatabaseBytes (cfgLimits appCfg))
+        , syncEcosystem = eco
+        , syncEpssRequirement = anEpss need
+        , syncDbPath = advDataDir (cfgAdvisories appCfg) </> fileName
+        , syncSlot = slot
+        , syncStoreRef = advisoryStoreUrlText store
+        }
+  where
+    eco = anEcosystem need
+    fileName = osvDbFileName (ecosystemName eco)
 
 {- | Sweep the in-progress downloads an interrupted run left behind, which an @emptyDir@ keeps
 across a container restart. The sweep is best effort, per 'sweepStep'.
