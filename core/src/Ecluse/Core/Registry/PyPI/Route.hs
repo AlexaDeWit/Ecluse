@@ -1,23 +1,16 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
--- TupleSections: local convenience for pairing a parsed capture with its trailing
--- segments in 'takeProject' ((,rest)). See docs/style.md §2.
+-- TupleSections: local convenience for pairing a parsed capture with the remainder in
+-- 'takeProject' and 'artifactCoordinate'. See docs/style.md §2.
 {-# LANGUAGE TupleSections #-}
 
 {- | PyPI route contracts shared by serving and OpenAPI generation.
 Project names must be canonical, and distribution filenames must match their project.
 -}
 module Ecluse.Core.Registry.PyPI.Route (
-    -- * The mount's router and fallback action
+    -- * The mount's router
     pypiRouter,
-    pypiNotFound,
-
-    -- * Route-scoped pipeline contracts (exported for direct pipeline specs)
-    pypiIndexContract,
-    pypiIndexReplies,
-    pypiArtifactContract,
-    pypiArtifactReplies,
 
     -- * The table, as data
     pypiRoutes,
@@ -97,7 +90,7 @@ import Ecluse.Core.Version (Version, mkVersion)
 pypiRouter :: MountRouter
 pypiRouter = routerOf pypiNotFound pypiRoutes
 
--- | Refuse unmatched paths with 404.
+-- Refuse unmatched paths with 404.
 pypiNotFound :: RouteAction
 pypiNotFound = RouteAction unsupportedContract (AnswerRefusal (declaredRefusal "no route claims this path" []))
 
@@ -165,7 +158,7 @@ uploadRoute =
 simpleIndexSchema :: Text
 simpleIndexSchema = "PyPISimpleIndex"
 
--- | The closed Simple-index response sum. 'pypiIndexReplies' is the only interface the pipeline receives for selecting one of its constructors.
+-- The closed Simple-index response sum: every status the index route may answer.
 type PyPIIndexResponse =
     ResponseChoice
         (ResponseValue LByteString)
@@ -216,7 +209,7 @@ pypiIndexContract =
             )
         )
 
--- | A refusal has no body unless operator help text is configured.
+-- A refusal has no body unless operator help text is configured.
 refusalContract :: Status -> Text -> ResponseContract (ResponseValue (Maybe LByteString))
 refusalContract status description =
     optionalBodyContract status (description <> " The body is empty unless `server.helpMessage` is configured.") (SchemaText "text/plain")
@@ -239,7 +232,7 @@ notAcceptable :: ResponseHeaders -> Maybe HelpMessage -> PyPIIndexResponse
 notAcceptable headers help =
     SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (declaredRefusal "no representation this index serves is acceptable" headers help))))))
 
--- | Permit upstream-controlled artifact responses and local refusals through one open response contract.
+-- Upstream-controlled artifact responses and local refusals share one open response contract.
 pypiArtifactContract :: ResponseContract PassthroughResponse
 pypiArtifactContract =
     passthroughContract
@@ -297,13 +290,13 @@ data PyPICap
     = PyPIProject PackageName
     | PyPIFile Text
 
--- | Render project captures canonically so the parser can read them back.
+-- Render project captures canonically so the parser can read them back.
 renderCapture :: PyPICap -> [Text]
 renderCapture = \case
     PyPIProject name -> [canonicalName name]
     PyPIFile file -> [file]
 
--- | Accept canonical projects only. Non-canonical spellings receive 404 rather than redirects.
+-- Accept canonical projects only. Non-canonical spellings receive 404 rather than redirects.
 capProject :: Capture PyPICap
 capProject =
     Capture
@@ -312,7 +305,7 @@ capProject =
         (fmap (first PyPIProject) . takeProject)
         renderCapture
 
--- | The distribution-file capture. The coordinate parse (the release and the archive form) is 'artifactCoordinate''s, applied in 'buildArtifact'.
+-- The segment is checked here; 'artifactCoordinate' reads the release and archive form from it.
 capFile :: Capture PyPICap
 capFile =
     Capture

@@ -69,7 +69,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | Bind one origin's PyPI metadata reads to their observers, leaving the caching policy to the caller.
+-- | Bind one origin's PyPI metadata reads to their observers. The caching policy is the caller's.
 newPyPIMetadataReads ::
     TracingPort ->
     MetricsPort ->
@@ -79,7 +79,7 @@ newPyPIMetadataReads ::
     OriginFor posture ->
     MetadataReads posture
 newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
-    -- No per-release raw object yet: the mirror write for PyPI is not built.
+    -- PyPI has no mirror write, so no per-release raw object is retained.
     newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing) (\_ _ -> Nothing)
 
 fetchSimpleIndex :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
