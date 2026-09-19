@@ -20,7 +20,6 @@ module Ecluse.Runtime.Maintenance.CodeArtifact (
     -- * The calls the handle makes
     ControlPlane (..),
     controlPlaneFor,
-    readPlaneFor,
     maintenanceFor,
     observationFor,
     boundedObservationFor,
@@ -185,7 +184,7 @@ controlPlaneFor env = do
             , cpUntagResource = sendStore env
             }
 
--- | The observing calls alone, over one env, so a caller handed these can change nothing.
+-- The observing calls alone, over one env, so a caller handed these can change nothing.
 readPlaneFor :: AWS.Env -> ReadPlane
 readPlaneFor env =
     ReadPlane

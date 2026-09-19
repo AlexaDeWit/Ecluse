@@ -210,10 +210,10 @@ jsonLineFormat :: (LogItem a) => DdContext -> ItemFormatter a
 jsonLineFormat logIdentity _colourise verb logItem =
     TB.fromLazyText (encodeToLazyText (jsonLine logIdentity verb logItem))
 
-{- The rendered JSON log line. The emitter's own @katip@ fields nest under @katip@, so they
-cannot collide with a reserved top-level attribute a log backend reads. -}
+-- The rendered JSON log line, assembled from the reserved attributes and the optional ones.
 jsonLine :: (LogItem a) => DdContext -> Verbosity -> Item a -> Value
-jsonLine logIdentity verb logItem = Object (KeyMap.fromList (reserved <> whenPresent))
+jsonLine logIdentity verb logItem =
+    Object (KeyMap.fromList (reservedFields context logItem structured katipObject <> whenPresent context))
   where
     katipObject :: KeyMap.KeyMap Value
     katipObject = case itemJson verb logItem of
@@ -229,23 +229,23 @@ jsonLine logIdentity verb logItem = Object (KeyMap.fromList (reserved <> whenPre
     context :: DdContext
     context = logIdentity{ddSpan = payloadSpan structured <|> ddSpan logIdentity}
 
-    reserved :: [(Key, Value)]
-    reserved =
-        [ ("timestamp", toJSON (_itemTime logItem))
-        , ("status", toJSON (severityStatus (_itemSeverity logItem)))
-        , ("message", toJSON (TB.toLazyText (unLogStr (_itemMessage logItem))))
-        , ("service", toJSON (ddService context))
-        , ("env", maybe (toJSON (_itemEnv logItem)) toJSON (ddEnv context))
-        , ("data", Object (KeyMap.delete "dd" structured))
-        , ("katip", Object (KeyMap.filterWithKey (\key _ -> key `notElem` promoted) katipObject))
-        ]
+reservedFields :: DdContext -> Item a -> KeyMap.KeyMap Value -> KeyMap.KeyMap Value -> [(Key, Value)]
+reservedFields context logItem structured katipObject =
+    [ ("timestamp", toJSON (_itemTime logItem))
+    , ("status", toJSON (severityStatus (_itemSeverity logItem)))
+    , ("message", toJSON (TB.toLazyText (unLogStr (_itemMessage logItem))))
+    , ("service", toJSON (ddService context))
+    , ("env", maybe (toJSON (_itemEnv logItem)) toJSON (ddEnv context))
+    , ("data", Object (KeyMap.delete "dd" structured))
+    , ("katip", Object (KeyMap.filterWithKey (\key _ -> key `notElem` promoted) katipObject))
+    ]
 
-    whenPresent :: [(Key, Value)]
-    whenPresent =
-        catMaybes
-            [ ("version",) . toJSON <$> ddVersion context
-            , ("dd",) . spanObject <$> ddSpan context
-            ]
+whenPresent :: DdContext -> [(Key, Value)]
+whenPresent context =
+    catMaybes
+        [ ("version",) . toJSON <$> ddVersion context
+        , ("dd",) . spanObject <$> ddSpan context
+        ]
 
 -- The @katip@ keys the line renders itself, so the nested block does not repeat them.
 promoted :: [Key]
