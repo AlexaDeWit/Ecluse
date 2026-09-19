@@ -18,6 +18,7 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     NameAlphabet,
@@ -28,6 +29,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factBackend, factBudget, factNameAlphabet),
     StoreFault (faultRetry),
     StoreObservation (obClassifyStore, obEnumerateVersions, obFacts, obVerifyConsent),
+    StoredVersion,
     renderNamePrefix,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (
@@ -233,6 +235,17 @@ walkStore pacing ports counters mount = do
     reportAdvisoryHalf ports counters mount
     walkGroup pacing ports counters mount (privateStore (smStore mount))
 
+{- What every step of one mount's paired walk closes over: the two stores, the pacing and ports
+the steps run under, and the name a halt reports both backends under. -}
+data GroupWalk = GroupWalk
+    { gwPacing :: SweepPacing
+    , gwPorts :: SweepPorts
+    , gwCounters :: SweepState
+    , gwMount :: SweepMount
+    , gwCache :: SweepStore
+    , gwCombined :: Text
+    }
+
 walkGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> SweepStore -> IO (Maybe CycleHalt)
 walkGroup pacing ports counters mount cache = do
     resume <- if resumable then readWalkCursor pacing ports mount else pure (Right Nothing)
@@ -240,38 +253,74 @@ walkGroup pacing ports counters mount cache = do
         Left halt -> pure (Just halt)
         Right cursor -> go cursor (resumeAfter cursor (walkBuckets alphabet))
   where
+    walk =
+        GroupWalk
+            { gwPacing = pacing
+            , gwPorts = ports
+            , gwCounters = counters
+            , gwMount = mount
+            , gwCache = cache
+            , gwCombined = backendOf mount <> " and " <> factBackend (obFacts (ssObserve cache)) <> " (combined inventory)"
+            }
     alphabet = groupAlphabet (observed mount) (ssObserve cache)
-    combined = backendOf mount <> " and " <> factBackend (obFacts (ssObserve cache)) <> " (combined inventory)"
     resumable = swpShape pacing == SweepEverything && alphabet == alphabetOf mount
     marker action = if resumable then onCursor pacing ports mount action else pure Nothing
     go _ [] = marker clearCursor
     go resume (prefix : rest) =
         collectGroupBucket alphabet prefix (observed mount) (ssObserve cache) >>= \case
             BucketFaulted (store, fault) -> pure (Just (storeHalt (locatedMount mount store) fault))
-            BucketUnsplittable -> pure (Just (HaltBucketUnsplittable (smEcosystem mount) combined (renderNamePrefix prefix)))
+            BucketUnsplittable -> pure (Just (HaltBucketUnsplittable (smEcosystem mount) (gwCombined walk) (renderNamePrefix prefix)))
             BucketOverflowed narrower -> go resume (resumeAfter resume (toList narrower) <> rest)
             BucketRead names ->
                 withCandidates
                     ports
                     mount
                     ( \candidates ctx ->
-                        stepUntilHalt (previewOne ctx) (filter (wanted candidates . fst) names)
+                        stepUntilHalt (sweepOneName walk ctx) (filter (wanted candidates . fst) names)
                     )
                     >>= maybe (marker (`writeCursor` prefix) >>= maybe (go resume rest) (pure . Just)) (pure . Just)
     wanted candidates name = swpShape pacing == SweepEverything || inCandidates candidates name
-    previewOne ctx (name, slots) = do
-        let locations = map (\slot -> if slot then cache else smStore mount) slots
-        paceName pacing ports counters
-        readLocations <- traverse (\store -> fmap (store,) <$> withStoreRetry pacing ports (locatedMount mount (ssObserve store)) (obEnumerateVersions (ssObserve store) name)) locations
-        case sequence readLocations of
-            Left halt -> pure (Just halt)
-            Right versions -> case boundedVersions (ssVersionLimit (smStore mount)) versions of
-                Left fault -> pure (Just (HaltStoreFault (smEcosystem mount) combined (renderStoreFault fault)))
-                Right bounded -> case ssExecute (smStore mount) of
-                    SweepCounts -> previewPackageGroup pacing ports counters mount ctx name (map (first ssObserve) bounded)
-                    SweepRemoves _ ->
-                        let present store = fromMaybe [] (lookup (factBackend (obFacts (ssObserve store))) [(factBackend (obFacts (ssObserve located)), versions') | (located, versions') <- bounded])
-                         in sweepPackageGroup pacing ports counters mount name [(smStore mount, present (smStore mount)), (cache, present cache)]
+
+{- One name of a bucket: the chunk pause falls here, before the enumeration reads, so a pause
+never lands between the two locations of a single name. -}
+sweepOneName :: GroupWalk -> EvalContext -> (PackageName, [Bool]) -> IO (Maybe CycleHalt)
+sweepOneName walk ctx (name, slots) = do
+    paceName (gwPacing walk) (gwPorts walk) (gwCounters walk)
+    readGroupVersions walk name slots >>= \case
+        Left halt -> pure (Just halt)
+        Right versions -> case boundedVersions (ssVersionLimit (smStore (gwMount walk))) versions of
+            Left fault ->
+                pure (Just (HaltStoreFault (smEcosystem (gwMount walk)) (gwCombined walk) (renderStoreFault fault)))
+            Right bounded -> groupOutcome walk ctx name bounded
+
+-- What each of a name's locations holds, in slot order. The first store fault halts the cycle.
+readGroupVersions :: GroupWalk -> PackageName -> [Bool] -> IO (Either CycleHalt [(SweepStore, [StoredVersion])])
+readGroupVersions walk name slots = sequence <$> traverse readOne locations
+  where
+    locations = map (\slot -> if slot then gwCache walk else smStore (gwMount walk)) slots
+    readOne store =
+        fmap (store,)
+            <$> withStoreRetry
+                (gwPacing walk)
+                (gwPorts walk)
+                (locatedMount (gwMount walk) (ssObserve store))
+                (obEnumerateVersions (ssObserve store) name)
+
+-- Count or remove one name's joined inventory, as the mount's execution mode decides.
+groupOutcome :: GroupWalk -> EvalContext -> PackageName -> [(SweepStore, [StoredVersion])] -> IO (Maybe CycleHalt)
+groupOutcome walk ctx name bounded = case ssExecute (smStore mount) of
+    SweepCounts -> previewPackageGroup pacing ports counters mount ctx name (map (first ssObserve) bounded)
+    SweepRemoves _ ->
+        sweepPackageGroup pacing ports counters mount name [(smStore mount, held (smStore mount)), (gwCache walk, held (gwCache walk))]
+  where
+    pacing = gwPacing walk
+    ports = gwPorts walk
+    counters = gwCounters walk
+    mount = gwMount walk
+    -- Read with `lookup`, so two stores under one backend name both take the first one's
+    -- inventory. A Map would take the last instead, which is a different set of versions.
+    held store = fromMaybe [] (lookup (backendName store) [(backendName located, versions) | (located, versions) <- bounded])
+    backendName = factBackend . obFacts . ssObserve
 
 locatedMount :: SweepMount -> StoreObservation -> SweepMount
 locatedMount mount store = mount{smStore = countingAt (smStore mount) store}
