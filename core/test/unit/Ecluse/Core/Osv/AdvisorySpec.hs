@@ -87,11 +87,11 @@ spec = describe "one OSV advisory record" $ do
                 `shouldBe` Just 9.8
 
         it "parses a CVSS v4 vector (needs cvss >= 0.3) rather than dropping it" $
-            -- A critical v4 vector, no label: it can only score above 8 if the v4
-            -- parser is present. On cvss 0.2 the vector is unscored (Nothing).
+            -- A critical v4 vector, no label: only a v4 parser scores it at all, and only
+            -- the v4 metric weights put it at 9.3.
             advisorySeverity
                 (advisory [OsvSeverityEntry "CVSS_V4" "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"] Nothing)
-                `shouldSatisfy` maybe False (>= 8.0)
+                `shouldBe` Just 9.3
 
         it "falls back to the qualitative label when no vector parses" $
             advisorySeverity

@@ -66,10 +66,11 @@ spec = do
             got <- currentToken (staticProvider tok)
             unSecret (authSecret got) `shouldBe` "static-token"
 
-        it "currentToken returns the same token every call (no expiry, no refresh)" $ do
+        it "currentToken returns the configured token every call (no expiry, no refresh)" $ do
             let tok = AuthToken{authSecret = mkSecret "static-token", authExpiresAt = Just anExpiry}
                 provider = staticProvider tok
-            tok1 <- currentToken provider
-            tok2 <- currentToken provider
-            authExpiresAt tok1 `shouldBe` authExpiresAt tok2
-            unSecret (authSecret tok1) `shouldBe` unSecret (authSecret tok2)
+            -- Compared against the configured token rather than against each other, so a
+            -- provider handing out a consistently wrong token cannot pass.
+            served <- replicateM 2 (currentToken provider)
+            map authExpiresAt served `shouldBe` [Just anExpiry, Just anExpiry]
+            map (unSecret . authSecret) served `shouldBe` ["static-token", "static-token"]
