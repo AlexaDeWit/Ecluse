@@ -6,13 +6,13 @@
 # upload, each under its own flag. The smoke tier stays out: it is non-gating and
 # network-bound.
 
-# The single gating build-test job uploads four coverage reports per commit:
+# The gating coverage job uploads four coverage reports per commit, one per matrix leg:
 # `ecluse-core-unit` (flag: unit), `ecluse-runtime-unit` (flag: unit), `ecluse-unit`
 # (flag: unit), and `ecluse-integration` (flag: integration). Wait for all FOUR before
 # computing statuses. With the default of 1, Codecov computes the project total off
 # whichever upload lands first. It fires a transient "coverage decreased" status, then
-# re-computes when the others arrive. The build-test job always emits exactly these
-# four, so a fixed wait is deterministic and safe here. Were the count ever variable,
+# re-computes when the others arrive. The matrix always has exactly these four legs, so
+# a fixed wait is deterministic here. Were the count ever variable,
 # `notify.manual_trigger` plus an explicit send-notifications step would be the
 # alternative.
 codecov:
@@ -46,8 +46,8 @@ coverage:
 # core/src/ (core), so the merged flag view excludes no layer.
 #
 # `carryforward` here is a SAFETY NET, not an active path. Every flag re-uploads on
-# EVERY commit: the single `build-test` job runs all three Coverage steps
-# unconditionally, with no `if:` guard and `fail_ci_if_error: true`. So each flag
+# EVERY commit: every leg of the `coverage` matrix job uploads unconditionally, with
+# no `if:` guard and `fail_ci_if_error: true`. So each flag
 # always lands a fresh report, and `carryforward` never substitutes. A PR that
 # *adds* a module cannot show that module uncovered from a stale carried-forward
 # report. `carryforward` takes effect only when an upload is genuinely missing, a

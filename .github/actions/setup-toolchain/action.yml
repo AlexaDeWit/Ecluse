@@ -28,7 +28,7 @@ inputs:
   nix-cache-prefix:
     description: >-
       The Nix-store cache key prefix, one entry per distinct closure. "nix" is the
-      shared `.#ci` dev-shell store, written by build-test. "nix-docs" is the
+      shared `.#ci` dev-shell store, written by ci.yml's build job. "nix-docs" is the
       Nix-built Haskell closure, the ~188-package dependency set that both
       `checks.docs` and `.#dockerImage` link against: the docs job writes it and the
       e2e job reads it. A job that realises neither closure needs its own prefix and

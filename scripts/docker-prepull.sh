@@ -13,7 +13,7 @@
 # Warming the images here first, with retries, means the suite's own `docker run`
 # and `docker build FROM` find them already cached.
 #
-# The caller passes the image references in (the CI e2e and build-test jobs).
+# The caller passes the image references in (the CI e2e and coverage jobs).
 # They MUST stay in sync with the pins in the test harness, which is the source
 # of truth:
 #   - test/support/Ecluse/Test/Container/Image.hs

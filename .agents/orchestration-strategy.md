@@ -335,7 +335,8 @@ job in [`../.github/workflows/ci.yml`](../.github/workflows/ci.yml), and they ma
 
 | Gating CI job | Display name (`gh pr checks`) | Local command |
 | --- | --- | --- |
-| `build-test` | Build & tests | `task check` (build + unit); `task test-integration` (Docker integration) |
+| `build` | Build & compile checks (all targets, residency, doctest) | `task build test-residency doctest cabal-check` |
+| `coverage` | Coverage (`<suite>`), one leg per suite | `task coverage-unit SUITE=<suite>`; `task coverage-integration` (Docker) |
 | `static-checks` | Static checks (format, lint, Semgrep, workflows, site) | included in `task check` |
 | `docs` | Haddock builds | `task docs-check` |
 | `e2e` | End-to-end tests (whole-system, real npm) | `task test-e2e` |

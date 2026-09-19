@@ -40,7 +40,7 @@ jobs:
         with:
           # Restore the warm cabal store (this job compiles the benchmark).
           cabal-cache: "true"
-          # Restore the shared Nix store but never write it. The build-test job on
+          # Restore the shared Nix store but never write it. The CI build job on
           # main is the single writer. This job realises the same `.#ci` closure, so a
           # save here would race and bloat the canonical entry. Restore-only.
           save-nix-store: "false"

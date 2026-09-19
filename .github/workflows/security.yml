@@ -52,7 +52,7 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          # Restore-only for the shared Nix store: build-test is its single
+          # Restore-only for the shared Nix store: the CI build job is its single
           # writer.
           save-nix-store: "false"
 
@@ -86,7 +86,7 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          # Restore-only for the shared Nix store: build-test is its single
+          # Restore-only for the shared Nix store: the CI build job is its single
           # writer.
           save-nix-store: "false"
 

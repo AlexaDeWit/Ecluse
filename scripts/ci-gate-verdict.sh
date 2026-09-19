@@ -25,7 +25,8 @@ require() {
 
 require changes "${CHANGES:-missing}"
 require static-checks "${STATIC_CHECKS:-missing}"
-require build-test "${BUILD_TEST:-missing}" yes
+require build "${BUILD:-missing}" yes
+require coverage "${COVERAGE:-missing}" yes
 require docs "${DOCS:-missing}" yes
 require e2e "${E2E:-missing}" yes
 require weeder "${WEEDER:-missing}" yes

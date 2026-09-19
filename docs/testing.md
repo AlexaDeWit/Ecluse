@@ -291,6 +291,13 @@ from the entry point (`Ecluse.run`). **`stan`** runs HIE-based partial-function 
 the floor in `.stan.toml`. Each is its own parallel job the CI `gate` depends on, and a finding above
 its floor blocks the merge. Among the always-on jobs, only `smoke` is non-gating.
 
+The Haskell work runs as parallel jobs, so no job waits on another's steps. `build` compiles every
+target and then runs the residency suite, the doctests, and `cabal check`. `coverage` is a matrix
+with one runner per instrumented suite. `docs`, `e2e`, `weeder`, `stan`, and `static-checks` each
+hold their own runner. `build` compiles the widest plan, so it is the sole writer of the shared Nix
+and cabal caches that the other jobs restore. Each `coverage` leg writes its own `dist-coverage`
+cache key, so no two legs race for one entry.
+
 A PR that edits documentation only skips the Haskell jobs. The `changes` job classifies it
 against an allow-list of documentation paths in
 [`scripts/ci-classify-change.sh`](../scripts/ci-classify-change.sh), which fails closed: an
@@ -333,10 +340,11 @@ the integration tier, so it needs a Docker daemon. Without one it fails and poin
 For a quick, Docker-free loop, `task coverage-unit` (default `SUITE=ecluse-unit`, or another suite)
 measures one tier and prints loudly that it is a partial view.
 
-**What CI uploads.** The build-test job runs `task cabal-checks`, which runs `task coverage`. That
-writes four per-suite JSONs as a byproduct: `ecluse-core-unit`, `ecluse-runtime-unit`, and
-`ecluse-unit` (all under the Codecov flag `unit`), and `ecluse-integration` (flag `integration`). CI
-uploads each under its flag. Codecov waits for all four (`notify.after_n_builds: 4` in
+**What CI uploads.** The `coverage` job is a four-leg matrix, one runner per instrumented suite.
+Each leg builds and runs its own suite through `scripts/coverage.sh` and uploads the JSON that
+produces: `ecluse-core-unit`, `ecluse-runtime-unit`, and `ecluse-unit` (all under the Codecov flag
+`unit`), and `ecluse-integration` (flag `integration`). Only the integration leg needs a Docker
+daemon. Codecov waits for all four (`notify.after_n_builds: 4` in
 [`codecov.yml`](../codecov.yml)) before it computes the total, so a partial upload cannot fire a
 transient "coverage decreased" status. The smoke and e2e tiers upload nothing: they are not built
 with HPC, so a line only they exercise reads as uncovered. Never reason "the e2e test covers it". A
