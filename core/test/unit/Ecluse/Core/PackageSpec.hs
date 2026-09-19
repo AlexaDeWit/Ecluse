@@ -67,9 +67,8 @@ spec = do
             pkgBaseName (mkPackageName Npm (Just (mkScope "babel")) "code-frame")
                 `shouldBe` "code-frame"
         it "does not enter identity: two names differing only in base are equal" $ do
-            -- Identity is (ecosystem, namespace, canonical). PEP 503 folds both spellings to
-            -- one canonical key while each keeps the base name it was published under, so the
-            -- pair differs in the base name alone.
+            -- Identity is (ecosystem, namespace, canonical). PEP 503 folds both spellings to one
+            -- canonical key, so this pair differs in the base name alone.
             let published = mkPackageName PyPI Nothing "Flask_Thing"
                 normalised = mkPackageName PyPI Nothing "flask-thing"
             unscopedName published `shouldNotBe` unscopedName normalised

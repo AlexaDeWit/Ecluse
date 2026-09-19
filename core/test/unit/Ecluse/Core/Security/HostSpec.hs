@@ -170,6 +170,7 @@ classificationCorpusSpec =
     nat64Embedded =
         [ ("64:ff9b::a9fe:a9fe", True) -- IMDSv4 under the NAT64 well-known prefix, hex spelling
         , ("64:ff9b::169.254.169.254", True) -- IMDSv4 under the well-known prefix, dotted spelling
+        , ("64:ff9b:0:0:0:0:a9fe:a9fe", True) -- IMDSv4 under the well-known prefix, fully expanded
         , ("64:ff9b::127.0.0.1", True) -- NAT64 loopback
         , ("64:ff9b::1.1.1.1", False) -- NAT64 public stays permitted
         , ("64:ff9b:1::169.254.169.254", True) -- IMDSv4 under the RFC 8215 local-use prefix
@@ -188,9 +189,8 @@ classificationCorpusSpec =
         , ("fe80::1ffff", False) -- over-16-bit group is not a literal
         ]
 
-    -- A tripwire, not plain coverage. The e2e suite runs on a docker network in TEST-NET-3
-    -- and needs these ranges reachable. A documentation range never aliases a real service,
-    -- so blocking it adds no SSRF protection.
+    -- A tripwire, not coverage: the e2e docker network lives in TEST-NET-3 and needs these
+    -- reachable. A documentation range aliases no real service, so blocking it adds nothing.
     documentationRanges =
         [ ("203.0.113.2", False) -- TEST-NET-3 203.0.113.0/24, the e2e network subnet
         , ("192.0.2.1", False) -- TEST-NET-1 192.0.2.0/24
