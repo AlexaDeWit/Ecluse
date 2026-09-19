@@ -111,8 +111,8 @@ compileSources advisories opts =
 data PilotCompileOptions = PilotCompileOptions
     { pcoEcosystem :: Text
     , pcoSource :: Maybe String
-    {- ^ Overrides the export URL. 'Nothing' selects the configured export
-    base under osv.dev's spelling of the ecosystem ('osvExportUrl' under @osvExportBaseUrl@).
+    {- ^ Overrides the export URL. 'Nothing' takes @osvExportBaseUrl@ under osv.dev's spelling of
+    the ecosystem ('osvExportUrl').
     -}
     , pcoEpssSource :: Maybe String
     -- ^ Overrides the EPSS feed URL. 'Nothing' selects the configured @epssFeedUrl@.

@@ -109,8 +109,8 @@ both entry points report in the order they hold here.
 -}
 data BootPlan = BootPlan
     { bpRole :: BootRole
-    {- ^ The role the pass vetted under. A boot selects the behaviour it starts from this, so
-    the severities it cleared and the behaviour it runs name one role.
+    {- ^ The role the pass vetted under, which a boot also selects its behaviour from, so the
+    severities it cleared and the behaviour it runs name one role.
     -}
     , bpValidated :: ValidatedPlan
     -- ^ What the pure pass cleared: the mounts, the endpoints, and the settings no rule vets.
@@ -123,9 +123,7 @@ data BootPlan = BootPlan
     , bpCacheConfig :: CacheConfig
     -- ^ The metadata cache's budgets, split out of the memory plan's cache aggregate.
     , bpS3Endpoint :: Maybe AwsEndpoint
-    {- ^ The @AWS_ENDPOINT_URL@ override the S3 advisory client dials. 'Nothing' is no override,
-    since a malformed one refused the boot.
-    -}
+    -- ^ The @AWS_ENDPOINT_URL@ override the S3 advisory client dials. A malformed one refused the boot.
     , bpPrivateConnections :: Int
     -- ^ The private-upstream connection-pool size.
     , bpPublicConnections :: Int

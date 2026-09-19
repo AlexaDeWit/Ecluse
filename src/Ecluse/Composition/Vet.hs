@@ -72,8 +72,8 @@ data Severity finding
       Refuse (finding -> BootError)
     | -- | Boot, and log this advisory.
       Advise (finding -> Advisory)
-    | {- | Boot, and log nothing. A finding that changes this role's own behaviour advises, and
-      one only another role acts on ignores, which @ecluse check-config@ names that role for.
+    | {- | Boot, and log nothing: only another role acts on the finding, and
+      @ecluse check-config@ names that role for it.
       -}
       Ignore
 

@@ -74,14 +74,12 @@ data ValidatedPlan = ValidatedPlan
     , vpPublications :: Map Ecosystem VettedPublication
     -- ^ Each mount's cleared publish path, absent where the mount declares no target.
     , vpMirrorStores :: Map Ecosystem ClearedBackend
-    {- ^ The backend for each store a sweep may delete from. Only @ecluse dredger@'s pass
-    clears one.
-    -}
+    -- ^ The backend for each store a sweep may delete from. Only @ecluse dredger@'s pass clears one.
     , vpPrivateCaches :: Map Ecosystem (Maybe StoreBackend, ClearedBackend)
     -- ^ Private caches cleared for this role with their own credential plans.
     , vpSettings :: AppConfig
-    {- ^ The settings no rule vets. The mounts it still carries are the raw declarations, and
-    'vpMounts' holds the vetted ones the runtime reads.
+    {- ^ The settings no rule vets. The mounts it carries are the raw declarations, and 'vpMounts'
+    holds the vetted ones the runtime reads.
     -}
     }
 
