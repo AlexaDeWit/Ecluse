@@ -14,12 +14,16 @@ backend's own cap or drop reporting builds its own config instead.
 module Ecluse.Test.Queue (
     newTestMemoryQueue,
     sampleJob,
+    otherJob,
+    thirdJob,
 ) where
 
 import UnliftIO.Exception (throwIO)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Queue (MirrorJob (..), MirrorQueue)
 import Ecluse.Core.Queue.Memory (MemoryQueueConfig (..), newBoundedInMemoryQueue)
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (thingName, unsafeFilename, unsafeRegistryUrl, v1_0_0)
 
 {- | A cap-overflow drop from the test queue, carrying the backend's running drop total. It is a
@@ -49,3 +53,10 @@ sampleJob =
         , jobArtifactFilename = unsafeFilename "thing-1.0.0.tgz"
         , jobTraceContext = Nothing
         }
+
+{- | Two siblings of 'sampleJob', differing only in version. That is enough to tell jobs apart
+on receive, which is what an ordering or a cap assertion needs.
+-}
+otherJob, thirdJob :: MirrorJob
+otherJob = sampleJob{jobVersion = mkVersion Npm "2.0.0"}
+thirdJob = sampleJob{jobVersion = mkVersion Npm "3.0.0"}

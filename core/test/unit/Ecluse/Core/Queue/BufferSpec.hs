@@ -19,8 +19,7 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Queue.Buffer (
     newEnqueueBuffer,
  )
-import Ecluse.Queue.Support (otherJob, thirdJob)
-import Ecluse.Test.Queue (sampleJob)
+import Ecluse.Test.Queue (otherJob, sampleJob, thirdJob)
 import Ecluse.Test.Support (expectRightIO)
 
 -- | Tests the contract module's buffered producer hand-off.

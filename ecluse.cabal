@@ -851,7 +851,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Worker.LivenessSpec
     Ecluse.Core.Worker.LoopSpec
     Ecluse.Core.Worker.RealiseSpec
-    Ecluse.Queue.Support
     Ecluse.Rules.Outage.Support
     Ecluse.Rules.Support
     Ecluse.Security.Support

@@ -18,8 +18,7 @@ import Ecluse.Core.Queue.Memory (
     memoryQueueDropReportInterval,
     newBoundedInMemoryQueue,
  )
-import Ecluse.Queue.Support (otherJob, thirdJob)
-import Ecluse.Test.Queue (sampleJob)
+import Ecluse.Test.Queue (otherJob, sampleJob, thirdJob)
 import Ecluse.Test.Support (expectRightIO)
 
 spec :: Spec
