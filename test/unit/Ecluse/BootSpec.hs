@@ -8,12 +8,12 @@ module Ecluse.BootSpec (spec) where
 import Prelude hiding (get)
 
 import Data.Text qualified as T
-import System.Environment (setEnv, unsetEnv, withArgs)
+import System.Environment (withArgs)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import UnliftIO (bracket_, throwIO, timeout, try)
+import UnliftIO (throwIO, timeout, try)
 
 import Ecluse (run)
 import Ecluse.Boot (BootAborted (..), BootEnv (beLogEnv), applySecretFileIndirection, applyServerSettings, logBootInfo, orExit, probeServerConfig, readConfigDocument, withBootEnv)
@@ -38,6 +38,7 @@ import Ecluse.Runtime.Server (
     mkServerConfig,
     newDrainSignal,
  )
+import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Log (captureStderrWith, captureStdout)
 
 runEnv :: [(String, String)]
@@ -105,7 +106,7 @@ spec = do
     describe "process log cleanup" $
         forM_ [("normal return", Right ()), ("exceptional exit", Left (SimulatedServiceFault "role failed"))] $ \(label, expected) ->
             it ("drains queued final audit lines on " <> label) $
-                withEnvVars runEnv $ do
+                withEnvVars caseKeys runEnv $ do
                     output <- captureStdout $ do
                         result <- try $ withBootEnv BootWithoutPipeline $ \boot -> do
                             replicateM_ 100 (logBootInfo (beLogEnv boot) "final queued audit marker")
@@ -347,14 +348,6 @@ spec = do
                 Left (BootAborted rendered) -> rendered `shouldBe` "boot rejected"
                 Right () -> expectationFailure "expected the boot to abort"
 
-{- | Run one case with every key any case here sets cleared, then its own entries alone.
-Another spec can leave one behind, so the clearing is what scopes the case.
--}
-withEnvVars :: [(String, String)] -> IO a -> IO a
-withEnvVars envVars = bracket_ enter (traverse_ unsetEnv caseKeys)
-  where
-    enter = traverse_ unsetEnv caseKeys >> traverse_ (uncurry setEnv) envVars
-
 -- | Every environment key a case in this module sets.
 caseKeys :: [String]
 caseKeys =
@@ -379,17 +372,17 @@ caseKeys =
 with the role still serving, which is what a boot that reached its listeners answers.
 -}
 serves :: [String] -> [(String, String)] -> Expectation
-serves args envVars = withEnvVars envVars (timeout 100000 (withArgs args run)) `shouldReturn` Nothing
+serves args envVars = withEnvVars caseKeys envVars (timeout 100000 (withArgs args run)) `shouldReturn` Nothing
 
 -- | 'serves' for a boot that must abort before its listeners, reporting the status it took.
 abortsBoot :: [String] -> [(String, String)] -> Expectation
 abortsBoot args envVars =
-    withEnvVars envVars (try (timeout 100000 (withArgs args run)) :: IO (Either ExitCode (Maybe ())))
+    withEnvVars caseKeys envVars (try (timeout 100000 (withArgs args run)) :: IO (Either ExitCode (Maybe ())))
         `shouldReturn` Left (ExitFailure 2)
 
 -- | Run the checker under these entries, keeping the status it exited with.
 checkConfig :: [(String, String)] -> IO (Either ExitCode ())
-checkConfig envVars = withEnvVars envVars (try (withArgs ["check-config"] run))
+checkConfig envVars = withEnvVars caseKeys envVars (try (withArgs ["check-config"] run))
 
 -- | What the checker exits with on a configuration it refuses.
 refusedCheck :: Either ExitCode ()
@@ -398,18 +391,18 @@ refusedCheck = Left (ExitFailure 2)
 -- | The checker's own standard output over a configuration it must clear.
 checkConfigOutput :: [(String, String)] -> IO Text
 checkConfigOutput envVars =
-    withEnvVars envVars . captureStdout $
+    withEnvVars caseKeys envVars . captureStdout $
         (try (withArgs ["check-config"] run) :: IO (Either ExitCode ())) `shouldReturn` Left ExitSuccess
 
 -- | The checker's status and the lines it reported on standard error.
 checkConfigRefusal :: [(String, String)] -> IO (Either ExitCode (), [Text])
-checkConfigRefusal envVars = withEnvVars envVars $ do
+checkConfigRefusal envVars = withEnvVars caseKeys envVars $ do
     (outcome, report) <- captureStderrWith (try (withArgs ["check-config"] run))
     pure (outcome, reportLines report)
 
 -- | The status a boot took and the lines it reported on standard error.
 bootRefusal :: [String] -> [(String, String)] -> IO (Either ExitCode (Maybe ()), [Text])
-bootRefusal args envVars = withEnvVars envVars $ do
+bootRefusal args envVars = withEnvVars caseKeys envVars $ do
     -- The timeout guards against a hung boot, without requiring refusal within a boot-speed
     -- deadline.
     (outcome, report) <- captureStderrWith (try (timeout 5_000_000 (withArgs args run)))

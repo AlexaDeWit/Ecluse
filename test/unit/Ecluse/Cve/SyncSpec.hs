@@ -14,12 +14,11 @@ import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, getCurrentTime, 
 import Database.SQLite.Simple (close, execute_, open)
 import Katip (closeScribes)
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
-import System.Environment (setEnv, unsetEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO.Async (withAsync)
-import UnliftIO.Exception (bracket, bracket_, throwIO)
+import UnliftIO.Exception (bracket, throwIO)
 import UnliftIO.STM (checkSTM)
 import UnliftIO.Timeout (timeout)
 
@@ -50,6 +49,7 @@ import Ecluse.Cve.Sync (AdvisoryNeed (..), CveSyncHandle (..), advisoryFreshness
 import Ecluse.Runtime.Cve.Sync.Internal (FetchedObject (..), SyncEnv (..), SyncHooks (..), SyncOutcome (..), SyncSchedule (..), absentReportInterval, bootBackoffDelays, runCveSync, syncStep)
 import Ecluse.Runtime.Test.Cve (fetchServingAt, headOnlyFetch, refusingFetch)
 import Ecluse.Test.Cve (fakeCveDb)
+import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv, runQuietKatip)
 import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
@@ -425,15 +425,6 @@ isStale :: AdvisoryFreshness -> Bool
 isStale = \case
     AdvisoryStale{} -> True
     _ -> False
-
-{- | Run the case under an AWS identity the sync's own credential discovery finds. The entries
-are cleared afterwards, since the whole suite shares one process environment.
--}
-withAmbientAws :: IO a -> IO a
-withAmbientAws =
-    bracket_ (traverse_ (uncurry setEnv) ambientAws) (traverse_ (unsetEnv . fst) ambientAws)
-  where
-    ambientAws = [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test"), ("AWS_REGION", "us-east-1")]
 
 mountedNpmDoc :: ByteString
 mountedNpmDoc =

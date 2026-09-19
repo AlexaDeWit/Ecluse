@@ -6,10 +6,9 @@ module Ecluse.Composition.ExecutableSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import System.Environment (setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import UnliftIO.Exception (bracket_, throwIO)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Composition (
     BootWiring (bwBindings, bwPublishTargets),
@@ -67,6 +66,7 @@ import Ecluse.Cve.Sync (CveSyncHandle (csEnv))
 import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEpssRequirement))
 import Ecluse.Service (mountBindingFor)
+import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeUpstream), defaultFakeStoreConfig, newFakeStore, seededStoreConfig)
 import Ecluse.Test.Package (unscopedNpm)
@@ -335,15 +335,6 @@ storePlan role = reportWith codeArtifactEnvVars role (\_ _ _ -> Nothing) refusin
 probedPlan :: MirrorRole -> UpstreamSafety -> IO ([Advisory], Either [BootError] ExecutablePlan)
 probedPlan role answer =
     reportWith staticEnvVars (BootMirrorPipeline role) mountBindingFor inertQueue (probing answer inertStore)
-
-{- | Run the case under an AWS identity the sync's own credential discovery finds. The entries
-are cleared afterwards, since the whole suite shares one process environment.
--}
-withAmbientAws :: IO a -> IO a
-withAmbientAws =
-    bracket_ (traverse_ (uncurry setEnv) ambientAws) (traverse_ (unsetEnv . fst) ambientAws)
-  where
-    ambientAws = [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test"), ("AWS_REGION", "us-east-1")]
 
 -- | The arm a settled plan came back through, failing the case on a refusal.
 armOf :: Either [BootError] ExecutablePlan -> IO Text

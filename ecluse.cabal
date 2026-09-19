@@ -619,6 +619,7 @@ library ecluse-test-support
     Ecluse.Test.Cve
     Ecluse.Test.EcosystemBench
     Ecluse.Test.EcosystemBench.Types
+    Ecluse.Test.Env
     Ecluse.Test.Json
     Ecluse.Test.Log
     Ecluse.Test.Maintenance
