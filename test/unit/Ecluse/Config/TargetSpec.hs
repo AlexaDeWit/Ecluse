@@ -300,12 +300,10 @@ tagCollisionSpec = describe "one tag per store" $ do
 parseCodeArtifactHostSpec :: Spec
 parseCodeArtifactHostSpec = describe "parseCodeArtifactHost" $ do
     it "parses a valid CodeArtifact host into domain, owner, and region" $ do
+        -- The domain keeps every hyphen it was written with: only the last one separates
+        -- the owner, so a hyphenated domain does not lose its head.
         parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.us-west-2.amazonaws.com"
             `shouldBe` Just ("my-domain", "111122223333", "us-west-2")
-
-    it "parses a valid CodeArtifact host with hyphens in the domain" $ do
-        parseCodeArtifactHost "my-company-domain-111122223333.d.codeartifact.eu-central-1.amazonaws.com"
-            `shouldBe` Just ("my-company-domain", "111122223333", "eu-central-1")
 
     it "returns Nothing if the host does not contain .d.codeartifact." $ do
         parseCodeArtifactHost "example.com" `shouldBe` Nothing

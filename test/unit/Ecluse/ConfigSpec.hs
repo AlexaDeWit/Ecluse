@@ -134,18 +134,14 @@ spec = do
                                ]
 
         it "adds no maintenance notice for registry targets or serve-only mounts" $ do
+            -- A mount with a private upstream carries the probe notice a boot makes and a
+            -- checker does not, and a pure public gate carries its posture line alone.
             registry <- configFor (registryMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://mirror.example.test")])
             private <- configFor (registryMountDoc [("privateUpstream", "https://priv.example.test")])
             public <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
             forM_ [registry, private] $ \cfg ->
                 drop 1 (mountPostureLines cfg) `shouldBe` [upstreamProbeNotice]
             length (mountPostureLines public) `shouldBe` 1
-
-        it "names the private-upstream check a boot makes and a checker does not" $ do
-            private <- configFor (registryMountDoc [("privateUpstream", "https://priv.example.test")])
-            public <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
-            mountPostureLines private `shouldSatisfy` elem upstreamProbeNotice
-            mountPostureLines public `shouldSatisfy` notElem upstreamProbeNotice
 
     describe "the advisory push-age limit reported at boot" $ do
         it "derives six days from the shipped seven-day quarantine, naming the rule" $ do

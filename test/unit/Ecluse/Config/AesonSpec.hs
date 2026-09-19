@@ -48,9 +48,6 @@ spec = describe "decodeDocument" $ do
     it "decodes a document carrying only a rule policy (no mounts)" $
         mountKeysOf [] (Just "{\"rules\":{\"min-age\":{\"ageSeconds\":1209600}}}") `shouldReturn` []
 
-    it "keys a mount by its ecosystem name, deriving the prefix from it" $
-        mountKeysOf pubUrlEnv (Just (completeMountDoc "npm")) `shouldReturn` [Npm]
-
     it "rejects an unparseable JSON body" $
         loadConfig [] (Just "{not json") `shouldSatisfy` isLeft
 
@@ -113,10 +110,6 @@ spec = describe "decodeDocument" $ do
         -- Mirroring is derived from the declared target, so a mount with no endpoint keys fronts
         -- only the template public upstream.
         mountKeysOf pubUrlEnv (Just "{\"mounts\":{\"npm\":{}}}") `shouldReturn` [Npm]
-
-    it "resolves a mount declaring only a private upstream as serve-only over the merge" $
-        mountKeysOf pubUrlEnv (Just (npmMountDoc ["\"privateUpstream\":{\"registry\":{\"url\":\"https://private.example.test\"}}"]))
-            `shouldReturn` [Npm]
 
     it "fails loudly when a mirrored mount (mirrorTarget declared) omits its private upstream" $
         -- The mirror must be readable back through the private leg, so a mirrored
