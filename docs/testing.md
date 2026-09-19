@@ -296,7 +296,8 @@ target and then runs the residency suite, the doctests, and `cabal check`. `cove
 with one runner per instrumented suite. `docs`, `e2e`, `weeder`, `stan`, and `static-checks` each
 hold their own runner. `build` compiles the widest plan, so it is the sole writer of the shared Nix
 and cabal caches that the other jobs restore. Each `coverage` leg writes its own `dist-coverage`
-cache key, so no two legs race for one entry.
+cache key, so no two legs race for one entry. `codecov-notify` follows the coverage legs and
+releases the Codecov statuses.
 
 A PR that edits documentation only skips the Haskell jobs. The `changes` job classifies it
 against an allow-list of documentation paths in
@@ -304,9 +305,9 @@ against an allow-list of documentation paths in
 unlisted path runs everything. The static checks run on every PR either way, because the site
 build reads the very files such a PR edits, and it fails on a broken internal link or anchor.
 The `gate` job accepts a skipped job from that filter and from nothing else, so a job that
-silently never ran still fails the gate. Such a PR uploads no coverage, so the required
-`codecov/project` status stays pending by design, and the repo owner merges it by
-administrator bypass.
+silently never ran still fails the gate. Such a PR uploads no coverage and skips the
+`codecov-notify` job, so the required `codecov/project` status stays pending by design, and
+the repo owner merges it by administrator bypass.
 
 The Haddock job wraps its flake checks with `scripts/ci-build-diagnostics.sh`. On Linux,
 the wrapper observes output bytes through two `tee` processes and their `/proc` IO counters.
@@ -344,9 +345,15 @@ measures one tier and prints loudly that it is a partial view.
 Each leg builds and runs its own suite through `scripts/coverage.sh` and uploads the JSON that
 produces: `ecluse-core-unit`, `ecluse-runtime-unit`, and `ecluse-unit` (all under the Codecov flag
 `unit`), and `ecluse-integration` (flag `integration`). Only the integration leg needs a Docker
-daemon. Codecov waits for all four (`notify.after_n_builds: 4` in
-[`codecov.yml`](../codecov.yml)) before it computes the total, so a partial upload cannot fire a
-transient "coverage decreased" status. The smoke and e2e tiers upload nothing: they are not built
+daemon.
+
+**When the Codecov statuses post.** `notify.manual_trigger: true` in
+[`codecov.yml`](../codecov.yml) holds every Codecov status and comment until the CLI asks for them.
+The `codecov-notify` job makes that call, and it runs only once all four legs are green, so
+`codecov/project` and `codecov/patch` post once, against the complete four-upload report. A failed
+leg skips the job, and the statuses then never post: `gate` is already red through `coverage`, and
+a required status that stays pending is the correct outcome rather than a number read off a partial
+report. The smoke and e2e tiers upload nothing: they are not built
 with HPC, so a line only they exercise reads as uncovered. Never reason "the e2e test covers it". A
 path that needs coverage needs a unit or integration test.
 
