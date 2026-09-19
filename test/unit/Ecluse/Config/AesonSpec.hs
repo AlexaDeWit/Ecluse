@@ -10,6 +10,7 @@ import Data.Text qualified as T
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
+import Ecluse.Composition.Support (codeArtifactMirrorUrl, completeMountDoc, npmMountDoc, pubUrlEnv)
 import Ecluse.Config (
     AdvisoriesSettings (..),
     AppConfig (..),
@@ -52,7 +53,7 @@ spec = describe "decodeDocument" $ do
             Right doc -> configMounts doc `shouldBe` mempty
 
     it "keys a mount by its ecosystem name, deriving the prefix from it" $
-        case loadConfig pubUrlEnv (Just (mountDocForEcosystem "npm")) of
+        case loadConfig pubUrlEnv (Just (completeMountDoc "npm")) of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
@@ -95,7 +96,7 @@ spec = describe "decodeDocument" $ do
         loadConfig [] (Just "{\"awsRegion\":\"us-east-1\"}") `shouldSatisfy` decodeErrorMentions "awsRegion"
 
     it "rejects an unknown mount ecosystem key, naming it (strict, not silently dropped)" $
-        loadConfig [] (Just (mountDocForEcosystem "npmm")) `shouldSatisfy` decodeErrorMentions "npmm"
+        loadConfig [] (Just (completeMountDoc "npmm")) `shouldSatisfy` decodeErrorMentions "npmm"
 
     it "rejects an unknown key inside a mount, naming it" $
         loadConfig [] (Just (mountDocWithExtraKey "baseURL")) `shouldSatisfy` decodeErrorMentions "baseURL"
@@ -125,7 +126,7 @@ spec = describe "decodeDocument" $ do
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
     it "resolves a mount declaring only a private upstream as serve-only over the merge" $
-        case loadConfig pubUrlEnv (Just (mountDoc "\"privateUpstream\":{\"registry\":{\"url\":\"https://private.example.test\"}}")) of
+        case loadConfig pubUrlEnv (Just (npmMountDoc ["\"privateUpstream\":{\"registry\":{\"url\":\"https://private.example.test\"}}"])) of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
@@ -134,7 +135,7 @@ spec = describe "decodeDocument" $ do
         -- mount without one is refused. Only serve-only mounts may omit it.
         loadConfig
             []
-            (Just (mountDoc "\"mirrorTarget\":{\"registry\":{\"url\":\"https://mirror.example.test\",\"token\":\"t\"}}"))
+            (Just (npmMountDoc ["\"mirrorTarget\":{\"registry\":{\"url\":\"https://mirror.example.test\",\"token\":\"t\"}}"]))
             `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
 
     it "loads a mount whose mirror target is declared equal to its private upstream" $
@@ -143,9 +144,10 @@ spec = describe "decodeDocument" $ do
         case loadConfig
             pubUrlEnv
             ( Just
-                ( mountDoc
-                    "\"privateUpstream\":{\"registry\":{\"url\":\"https://one.example.test\"}},\
-                    \\"mirrorTarget\":{\"registry\":{\"url\":\"https://one.example.test\",\"token\":\"t\"}}"
+                ( npmMountDoc
+                    [ "\"privateUpstream\":{\"registry\":{\"url\":\"https://one.example.test\"}}"
+                    , "\"mirrorTarget\":{\"registry\":{\"url\":\"https://one.example.test\",\"token\":\"t\"}}"
+                    ]
                 )
             ) of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
@@ -680,13 +682,10 @@ spec = describe "decodeDocument" $ do
 
         it "accepts the CodeArtifact token-duration range ends: 900 and 43200" $ do
             let docFor (n :: Int) =
-                    encodeUtf8 @Text @ByteString $
-                        "{\"mounts\":{\"npm\":{\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\
-                        \\"mirrorTarget\":{\"codeArtifact\":{\"url\":\""
-                            <> codeArtifactMirror
-                            <> "\",\"tokenDuration\":"
-                            <> show n
-                            <> "}}}}}"
+                    npmMountDoc
+                        [ "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}}"
+                        , codeArtifactDurationDoc (show n)
+                        ]
             case loadConfig pubUrlEnv (Just (docFor 900)) of
                 Left e -> expectationFailure ("unexpected decode error: " <> show e)
                 Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
@@ -697,10 +696,10 @@ spec = describe "decodeDocument" $ do
         it "rejects a CodeArtifact token duration outside 900..43200, through both layers" $ do
             loadConfig
                 []
-                (Just (mountDoc (codeArtifactDurationDoc "899")))
+                (Just (npmMountDoc [codeArtifactDurationDoc "899"]))
                 `shouldSatisfy` decodeErrorMentions "mirrorTarget.codeArtifact.tokenDuration must be a duration in seconds within 900..43200"
             loadConfig
-                [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", toString codeArtifactMirror)
+                [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", toString @Text codeArtifactMirrorUrl)
                 , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__TOKEN_DURATION", "43201")
                 ]
                 Nothing
@@ -710,7 +709,7 @@ spec = describe "decodeDocument" $ do
             for_ (["0x1000", " 3600", "(3600)"] :: [Text]) $ \spelling ->
                 loadConfig
                     []
-                    (Just (mountDoc (codeArtifactDurationDoc ("\"" <> spelling <> "\""))))
+                    (Just (npmMountDoc [codeArtifactDurationDoc ("\"" <> spelling <> "\"")]))
                     `shouldSatisfy` decodeErrorMentions "mirrorTarget.codeArtifact.tokenDuration: invalid duration"
 
     describe "secret environment values (taken verbatim, never JSON-coerced)" $ do
@@ -739,9 +738,6 @@ spec = describe "decodeDocument" $ do
 
 -- server.publicUrl is required once a mount is active. This list supplies it, so each
 -- decode example stays about its own concern.
-pubUrlEnv :: [(String, String)]
-pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
-
 {- Each firstParty entry the loader must agree with the npm route about: the leading sigil is
 optional, and anything that is not one usable path component is refused. -}
 scopeEntryVerdicts :: [(Text, Bool)]
@@ -786,41 +782,21 @@ singleMountDoc =
 -- A codeArtifact mirror target carrying the given token duration, written as JSON.
 codeArtifactDurationDoc :: Text -> Text
 codeArtifactDurationDoc duration =
-    "\"mirrorTarget\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactMirror <> "\",\"tokenDuration\":" <> duration <> "}}"
-
--- A one-mount npm document carrying exactly the given mount keys.
-mountDoc :: Text -> ByteString
-mountDoc keys = encodeUtf8 ("{\"mounts\":{\"npm\":{" <> keys <> "}}}")
-
--- The CodeArtifact repository endpoint the tagged mirror-target cases address.
-codeArtifactMirror :: Text
-codeArtifactMirror = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"
-
-mountDocForEcosystem :: Text -> ByteString
-mountDocForEcosystem eco =
-    encodeUtf8 $
-        "{\"mounts\":{\""
-            <> eco
-            <> "\":{\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\
-               \\"publicUpstream\":{\"registry\":{\"url\":\"https://b\"}},\
-               \\"mirrorTarget\":{\"registry\":{\"url\":\"https://c\",\"token\":\"token\"}}}}}"
+    "\"mirrorTarget\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactMirrorUrl <> "\",\"tokenDuration\":" <> duration <> "}}"
 
 mountDocWithMirrorTarget :: Text -> ByteString
 mountDocWithMirrorTarget target =
-    mountDoc
-        ( "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\
-          \\"mirrorTarget\":{\"registry\":{\"url\":\""
-            <> target
-            <> "\",\"token\":\"token\"}}"
-        )
+    npmMountDoc
+        [ "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}}"
+        , "\"mirrorTarget\":{\"registry\":{\"url\":\"" <> target <> "\",\"token\":\"token\"}}"
+        ]
 
 mountDocWithExtraKey :: Text -> ByteString
 mountDocWithExtraKey extra =
-    mountDoc
-        ( "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\""
-            <> extra
-            <> "\":\"x\""
-        )
+    npmMountDoc
+        [ "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}}"
+        , "\"" <> extra <> "\":\"x\""
+        ]
 
 decodeErrorMentions :: Text -> Either [ConfigError] a -> Bool
 decodeErrorMentions phrase (Left errs) = any (\err -> phrase `T.isInfixOf` renderConfigError err) errs

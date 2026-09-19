@@ -19,6 +19,7 @@ import Ecluse.Composition.BootError (BootError (..), renderBootError)
 import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirrorWrite))
 import Ecluse.Composition.Support (
+    completeMountDoc,
     expectConfig,
     expectEnv,
     expectProviders,
@@ -84,19 +85,6 @@ spec = do
 
 expectDoc :: ByteString -> IO ByteString
 expectDoc = pure
-
-{- | A complete document mount keyed by the given ecosystem. Its non-CodeArtifact mirror target
-and static write token resolve, so the no-adapter case fails on the adapter alone.
--}
-mountDoc :: Text -> ByteString
-mountDoc eco =
-    encodeUtf8
-        ( "{\"mounts\":{\""
-            <> eco
-            <> "\":{\"privateUpstream\":{\"registry\":{\"url\":\"https://priv\"}},\
-               \\"publicUpstream\":{\"registry\":{\"url\":\"https://pub\"}},\
-               \\"mirrorTarget\":{\"registry\":{\"url\":\"https://mir\",\"token\":\"t\"}}}}}"
-        )
 
 {- The ports a unit test injects into the environment-dependent tier: the real adapter resolver,
 a fixed clock, inert rule deps, and reporters that record nothing. -}
@@ -322,8 +310,8 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
                     : ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__TOKEN", "t")
                     : staticEnvVars
         _ <- expectEnv unservedEnv
-        _ <- expectDoc (mountDoc "rubygems")
-        planFrom unservedEnv (Just (mountDoc "rubygems")) >>= \case
+        _ <- expectDoc (completeMountDoc "rubygems")
+        planFrom unservedEnv (Just (completeMountDoc "rubygems")) >>= \case
             Left errs -> errs `shouldBe` [MissingAdapter RubyGems]
             Right _ -> expectationFailure "expected boot failure"
 

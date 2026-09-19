@@ -34,6 +34,7 @@ import Ecluse.Composition.Maintenance (
  )
 import Ecluse.Composition.Support (
     clearedUrl,
+    codeArtifactDomain,
     codeArtifactEnvVars,
     codeArtifactMirrorUrl,
     expectConfig,
@@ -398,7 +399,7 @@ probeSpec = describe "the private upstream's answer" $ do
 unaddressablePrivateUpstream :: PrivateEndpoint
 unaddressablePrivateUpstream =
     PrivateEndpoint
-        { preTarget = Target TagCodeArtifact (unsafeRegistryUrl "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/")
+        { preTarget = Target TagCodeArtifact (unsafeRegistryUrl (codeArtifactDomain <> "/npm/"))
         , preToken = Nothing
         , preConsent = DeletionWithheld
         }
@@ -496,11 +497,11 @@ verdaccioEnv permitDeletion =
             overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN" "write-token" $
                 withoutMirrorTargetToken (withoutMirrorTargetUrl staticEnvVars)
 
-pypiEndpoint :: (IsString s) => s
-pypiEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/pypi/mirror/"
+pypiEndpoint :: (IsString s, Semigroup s) => s
+pypiEndpoint = codeArtifactDomain <> "/pypi/mirror/"
 
-pypiInternalEndpoint :: (IsString s) => s
-pypiInternalEndpoint = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/pypi/internal/"
+pypiInternalEndpoint :: (IsString s, Semigroup s) => s
+pypiInternalEndpoint = codeArtifactDomain <> "/pypi/internal/"
 
 -- | A private CodeArtifact cache on its own repository, distinct from the mirror target's.
 retainedEndpoint :: (IsString s) => s

@@ -11,7 +11,12 @@ module Ecluse.Composition.Support (
     fdLimit,
     noCeiling,
     staticEnvVars,
+    pubUrlEnv,
     scopedName,
+    mountDocFor,
+    npmMountDoc,
+    completeMountDoc,
+    codeArtifactDomain,
     codeArtifactMirrorUrl,
     codeArtifactEnvVars,
     withObservablePrivate,
@@ -35,6 +40,7 @@ module Ecluse.Composition.Support (
     expectPlanFor,
 ) where
 
+import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
 import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
@@ -95,6 +101,30 @@ staticEnvVars =
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "mirror-write-token")
     ]
 
+-- | The one environment entry every document fixture needs: the public URL a mount derives from.
+pubUrlEnv :: [(String, String)]
+pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
+
+-- | A one-mount configuration document for the given ecosystem, carrying exactly these keys.
+mountDocFor :: Text -> [Text] -> ByteString
+mountDocFor eco keys = encodeUtf8 ("{\"mounts\":{\"" <> eco <> "\":{" <> T.intercalate "," keys <> "}}}")
+
+-- | 'mountDocFor' on npm, the ecosystem most document fixtures declare.
+npmMountDoc :: [Text] -> ByteString
+npmMountDoc = mountDocFor "npm"
+
+{- | A complete mount for the given ecosystem: both upstreams and a registry mirror target with
+its static write token, so a case refuses on the fact it varies and not on a missing endpoint.
+-}
+completeMountDoc :: Text -> ByteString
+completeMountDoc eco =
+    mountDocFor
+        eco
+        [ "\"privateUpstream\":{\"registry\":{\"url\":\"https://private.example.test\"}}"
+        , "\"publicUpstream\":{\"registry\":{\"url\":\"https://public.example.test\"}}"
+        , "\"mirrorTarget\":{\"registry\":{\"url\":\"https://mirror.example.test\",\"token\":\"t\"}}"
+        ]
+
 {- | 'Ecluse.Test.Package.thingName' under the given scope, for the specs that read a
 first-party predicate. The unscoped counterpart is @thingName@ itself.
 -}
@@ -107,11 +137,15 @@ points must report it, and neither may echo the credential it holds.
 malformedAwsEndpoint :: String
 malformedAwsEndpoint = "http://operator:s3cr3t@localhost:9000"
 
-{- | The CodeArtifact repository endpoint the deleting role's fixtures mirror to: the one host
-this build carries a store maintenance backend for.
+{- | The CodeArtifact domain endpoint the fixtures address: the one host this build carries a
+store maintenance backend for. Its account id and region are the shapes the host parser accepts.
 -}
-codeArtifactMirrorUrl :: (IsString s) => s
-codeArtifactMirrorUrl = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"
+codeArtifactDomain :: (IsString s) => s
+codeArtifactDomain = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com"
+
+-- | The repository under 'codeArtifactDomain' the deleting role's fixtures mirror to.
+codeArtifactMirrorUrl :: (IsString s, Semigroup s) => s
+codeArtifactMirrorUrl = codeArtifactDomain <> "/npm/mirror/"
 
 {- | 'staticEnvVars' mirroring to 'codeArtifactMirrorUrl' under its own tag. That tag mints the
 write token, so the static one goes with the registry target it belonged to.

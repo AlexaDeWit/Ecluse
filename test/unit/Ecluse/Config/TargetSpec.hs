@@ -10,6 +10,7 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (StoreTagConflict))
 import Ecluse.Composition.Endpoints (vetEndpoints)
+import Ecluse.Composition.Support (codeArtifactDomain, npmMountDoc, pubUrlEnv)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
@@ -149,7 +150,7 @@ layeringSpec = describe "one tag per endpoint" $ do
     it "refuses an environment override that writes a second tag over the document's" $
         loadConfig
             (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "t")])
-            (Just (mountDoc (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror]])))
+            (Just (npmMountDoc (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror]])))
             `shouldSatisfy` refusalMentions "must name exactly one store tag"
 
     it "fills a key under the tag the document declared, from the environment layer" $ do
@@ -364,9 +365,6 @@ twoTagged =
     decl' "mirrorTarget" $
         "{\"codeArtifact\":{" <> url codeArtifactMirror <> "},\"verdaccio\":{" <> url verdaccioUrl <> "}}"
 
-mountDoc :: [Text] -> ByteString
-mountDoc endpoints = encodeUtf8 ("{\"mounts\":{\"npm\":{" <> T.intercalate "," endpoints <> "}}}")
-
 -- A rubygems mount mirroring into CodeArtifact, which carries no format for that ecosystem.
 rubygemsDoc :: ByteString
 rubygemsDoc =
@@ -380,7 +378,7 @@ rubygemsDoc =
             <> "}}}"
 
 loadMount :: [Text] -> Either [ConfigError] Config
-loadMount endpoints = loadConfig pubUrlEnv (Just (mountDoc endpoints))
+loadMount endpoints = loadConfig pubUrlEnv (Just (npmMountDoc endpoints))
 
 loadsWith :: [Text] -> Expectation
 loadsWith endpoints = case loadMount endpoints of
@@ -411,7 +409,7 @@ mountsFor endpoints = cfgMounts . configApp <$> expectLoad pubUrlEnv endpoints
 -- Load one npm mount under an environment layer, failing the test on a refusal.
 expectLoad :: [(String, String)] -> [Text] -> IO Config
 expectLoad env endpoints =
-    either (fail . show . map renderConfigError) pure (loadConfig env (Just (mountDoc endpoints)))
+    either (fail . show . map renderConfigError) pure (loadConfig env (Just (npmMountDoc endpoints)))
 
 -- The tag-conflict refusals one role's endpoint pass earns, with its other findings dropped.
 tagConflicts :: RegistryRole -> Map Ecosystem MountConfig -> [BootError]
@@ -423,9 +421,6 @@ isConflictAt :: Text -> Text -> BootError -> Bool
 isConflictAt key otherKey = \case
     StoreTagConflict _ written _ otherWritten _ -> written == key && otherWritten == otherKey
     _ -> False
-
-pubUrlEnv :: [(String, String)]
-pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 
 publicUrl, privateUrl, mirrorUrl, publishUrl, verdaccioUrl, sharedUrl :: Text
 publicUrl = "https://registry.npmjs.org"
@@ -440,6 +435,3 @@ codeArtifactMirror = codeArtifactDomain <> "/npm/mirror/"
 codeArtifactInternal = codeArtifactDomain <> "/npm/internal/"
 codeArtifactPyPI = codeArtifactDomain <> "/pypi/mirror/"
 codeArtifactBare = codeArtifactDomain <> "/npm/"
-
-codeArtifactDomain :: Text
-codeArtifactDomain = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com"
