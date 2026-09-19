@@ -22,7 +22,7 @@ Three details of the wire protocol are load-bearing and handled here:
 * __Streaming and buffering__. The artifact builders ('artifactRequestByFile',
   'artifactRequestByUrl') mark their request __non-decompressing__. A @.tgz@ is
   opaque binary that reaches the client byte-for-byte, so its @dist.integrity@ stays
-  valid. 'artifactRequestByUrl' forms its request through the shared
+  valid. Both form their request through the shared
   'Ecluse.Core.Registry.Request.artifactRequestByUrl', under npm's own credential
   presentation ("Ecluse.Core.Registry.Npm.Credential").
 -}
