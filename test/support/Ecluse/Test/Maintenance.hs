@@ -28,7 +28,6 @@ import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted),
     DeleteCeiling (AtMost),
     DeleteGuard (..),
-    NamePrefix,
     RefillPosture (RefillRefused),
     StoreClass (StoreDestroyable),
     StoreCursor (..),
@@ -40,14 +39,17 @@ import Ecluse.Core.Registry.Maintenance (
     VersionOutcome (VersionRefused, VersionRemoving),
     chunksOfCeiling,
     deleteAll,
-    inBucket,
-    mkNameAlphabet,
-    noNameAlphabet,
-    parseNamePrefix,
     storeFaultOfMetadata,
     storeRefusal,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (undeclaredBudget)
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NamePrefix,
+    inBucket,
+    mkNameAlphabet,
+    noNameAlphabet,
+    parseNamePrefix,
+ )
 import Ecluse.Core.Registry.Maintenance.Upstream (UndecidabilityReason (NoMechanism), UpstreamSafety (Undecidable))
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError (MetadataUndecodable))
 import Ecluse.Core.Version (Version)

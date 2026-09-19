@@ -38,7 +38,8 @@ import Ecluse.Core.Registry (
     UrlFormationError,
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
-import Ecluse.Core.Registry.Maintenance (NameAlphabet, StoreRefusal)
+import Ecluse.Core.Registry.Maintenance (StoreRefusal)
+import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet)
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError)
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor)
 import Ecluse.Core.Registry.Publish (PublishCodec)

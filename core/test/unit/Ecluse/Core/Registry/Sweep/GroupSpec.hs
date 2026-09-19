@@ -23,8 +23,10 @@ import Ecluse.Core.Registry.Maintenance (
     StoreObservation (..),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
-    mkNameAlphabet,
     protocolFault,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    mkNameAlphabet,
     renderNamePrefix,
  )
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))

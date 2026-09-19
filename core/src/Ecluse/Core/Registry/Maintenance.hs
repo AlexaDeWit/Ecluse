@@ -3,8 +3,9 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Backend maintenance capabilities for a mirror store: the observing and deleting halves of
-one handle, the buckets a name space is walked in, and the drives every backend shares.
-Enumeration and deletion may need a control plane beyond the store's own package protocol.
+one handle, and the drives every backend shares. Enumeration and deletion may need a control
+plane beyond the store's own package protocol. The buckets a walk addresses are in
+"Ecluse.Core.Registry.Maintenance.NameSpace".
 -}
 module Ecluse.Core.Registry.Maintenance (
     -- * The handle
@@ -32,18 +33,6 @@ module Ecluse.Core.Registry.Maintenance (
     -- * Enumeration
     StoredVersion (..),
     VersionPresence (..),
-
-    -- * The name space, walked in buckets
-    NameAlphabet,
-    mkNameAlphabet,
-    noNameAlphabet,
-    NamePrefix,
-    wholeNameSpace,
-    renderNamePrefix,
-    parseNamePrefix,
-    initialBuckets,
-    extendBucket,
-    inBucket,
 
     -- * Walk resumption
     StoreCursor (..),
@@ -84,7 +73,6 @@ module Ecluse.Core.Registry.Maintenance (
 import Data.Conduit (ConduitT, await, fuseBoth, fuseBothMaybe, fuseUpstream, runConduit, yield)
 import Data.Conduit.List qualified as CL
 import Data.Set qualified as Set
-import Data.Text qualified as T
 
 import Ecluse.Core.Fault (
     RetryAfter,
@@ -96,7 +84,7 @@ import Ecluse.Core.Fault (
     transportRetryable,
  )
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
-import Ecluse.Core.Package (PackageName, unscopedName)
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     UrlFormationError,
@@ -107,6 +95,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     RequestKind (CursorRead, CursorWrite, DeleteBatch, ListingPage, ManifestRead, PermissionRead, VersionPage),
     StoreBudget,
  )
+import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet, NamePrefix)
 import Ecluse.Core.Registry.Maintenance.Upstream (UpstreamSafety)
 import Ecluse.Core.Registry.Metadata (
     Manifest,
@@ -310,50 +299,6 @@ data VersionPresence
     | -- | The store lists the version but no longer serves it.
       VersionWithdrawn
     deriving stock (Eq, Show)
-
--- | Permitted leading characters of ecosystem package names.
-newtype NameAlphabet = NameAlphabet [Char]
-    deriving stock (Eq, Show)
-
--- | Build an alphabet, dropping repeats and keeping the order given.
-mkNameAlphabet :: [Char] -> NameAlphabet
-mkNameAlphabet = NameAlphabet . ordNub
-
--- | Use a single whole-store bucket when the backend cannot filter its listing.
-noNameAlphabet :: NameAlphabet
-noNameAlphabet = NameAlphabet []
-
--- | A bucket prefix addresses the package's base name, excluding its namespace.
-newtype NamePrefix = NamePrefix Text
-    deriving stock (Eq, Ord, Show)
-
--- | The unfiltered whole-store bucket.
-wholeNameSpace :: NamePrefix
-wholeNameSpace = NamePrefix ""
-
--- | The prefix as a store filter and a walk cursor spell it. Empty stands for no filter at all.
-renderNamePrefix :: NamePrefix -> Text
-renderNamePrefix (NamePrefix raw) = raw
-
--- | Reject prefixes outside the current alphabet so an incompatible cursor restarts the walk.
-parseNamePrefix :: NameAlphabet -> Text -> Maybe NamePrefix
-parseNamePrefix (NameAlphabet chars) raw
-    | T.all (`elem` chars) raw = Just (NamePrefix raw)
-    | otherwise = Nothing
-
--- | Partition the store into disjoint buckets that cover every permitted name.
-initialBuckets :: NameAlphabet -> NonEmpty NamePrefix
-initialBuckets (NameAlphabet chars) =
-    maybe (wholeNameSpace :| []) (fmap (NamePrefix . T.singleton)) (nonEmpty chars)
-
--- | Subdivide an oversized bucket. An empty alphabet permits no subdivision.
-extendBucket :: NameAlphabet -> NamePrefix -> [NamePrefix]
-extendBucket (NameAlphabet chars) (NamePrefix raw) =
-    [NamePrefix (raw <> T.singleton ch) | ch <- chars]
-
--- | Whether a name falls in a bucket, for a store whose listing has no prefix filter of its own.
-inBucket :: NamePrefix -> PackageName -> Bool
-inBucket (NamePrefix raw) name = raw `T.isPrefixOf` unscopedName name
 
 -- | Persist the last completed bucket so a restart repeats only unfinished work.
 data StoreCursor = StoreCursor

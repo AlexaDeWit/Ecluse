@@ -22,7 +22,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMetadata (..),
  )
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
-import Ecluse.Core.Registry.Maintenance (mkNameAlphabet)
+import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)

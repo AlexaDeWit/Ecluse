@@ -36,7 +36,6 @@ import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
     DeleteGuard,
-    NamePrefix,
     RefillPosture (RefillPermitted),
     StoreClass (StoreDestroyable, StorePreserved),
     StoreDeletion (..),
@@ -51,9 +50,7 @@ import Ecluse.Core.Registry.Maintenance (
     VersionPresence (VersionServed),
     chunksOfCeiling,
     deleteAll,
-    inBucket,
     maintenanceOf,
-    noNameAlphabet,
     protocolFault,
     statusFault,
     storeFaultOfFetch,
@@ -65,6 +62,11 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     StoreBudget (bgCosts),
     requestKinds,
     undeclaredBudget,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NamePrefix,
+    inBucket,
+    noNameAlphabet,
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)

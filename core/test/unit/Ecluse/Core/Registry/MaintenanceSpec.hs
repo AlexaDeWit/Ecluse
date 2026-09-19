@@ -27,27 +27,29 @@ import Ecluse.Core.Registry.Maintenance (
     collectPages,
     collectPagesBounded,
     deleteAll,
-    extendBucket,
-    inBucket,
-    initialBuckets,
     meteredMaintenance,
-    mkNameAlphabet,
-    noNameAlphabet,
     pageAll,
     pageSource,
-    parseNamePrefix,
     refusalCode,
     refusalDetail,
-    renderNamePrefix,
     storeFaultOfFetch,
     storeFaultOfMetadata,
     storeRefusal,
     unreachedBatch,
-    wholeNameSpace,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (
     RequestGate (RequestGate, gateSpend),
     RequestKind (CursorWrite, DeleteBatch, ListingPage, ManifestRead, PermissionRead, VersionPage),
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    extendBucket,
+    inBucket,
+    initialBuckets,
+    mkNameAlphabet,
+    noNameAlphabet,
+    parseNamePrefix,
+    renderNamePrefix,
+    wholeNameSpace,
  )
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),

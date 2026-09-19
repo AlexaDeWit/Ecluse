@@ -12,13 +12,15 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
+    StoreFault,
+    protocolFault,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
     NameAlphabet,
     NamePrefix,
-    StoreFault,
     mkNameAlphabet,
     noNameAlphabet,
     parseNamePrefix,
-    protocolFault,
     renderNamePrefix,
  )
 import Ecluse.Core.Registry.Sweep.Walk (

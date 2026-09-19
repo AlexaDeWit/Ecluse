@@ -18,7 +18,6 @@ import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
-    NamePrefix,
     RetryAdvice (RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
     StoreCursor (writeCursor),
@@ -28,11 +27,8 @@ import Ecluse.Core.Registry.Maintenance (
     StoreObservation (obVerifyConsent),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
-    inBucket,
     meteredMaintenance,
-    mkNameAlphabet,
     protocolFault,
-    renderNamePrefix,
     storedVersion,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (
@@ -47,6 +43,12 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     requestKinds,
     tallyCounts,
     undeclaredBudget,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NamePrefix,
+    inBucket,
+    mkNameAlphabet,
+    renderNamePrefix,
  )
 import Ecluse.Core.Registry.Sweep (paceAtCeiling, storeBudgets, sweepCycle, withStoreRetry)
 import Ecluse.Core.Registry.Sweep.Types (

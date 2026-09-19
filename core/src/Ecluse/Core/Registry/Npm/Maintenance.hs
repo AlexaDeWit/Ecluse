@@ -37,7 +37,8 @@ import Ecluse.Core.Registry.Adapter.Capability (
     StoreListing (..),
     VersionDelete (..),
  )
-import Ecluse.Core.Registry.Maintenance (StoreRefusal, mkNameAlphabet, storeRefusal)
+import Ecluse.Core.Registry.Maintenance (StoreRefusal, storeRefusal)
+import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Npm.Project (npmNameLeadChars, projectName)
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Full),

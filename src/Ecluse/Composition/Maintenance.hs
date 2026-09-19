@@ -89,14 +89,12 @@ import Ecluse.Core.Registry.Adapter.Capability (
  )
 import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Ecluse.Core.Registry.Maintenance (
-    NameAlphabet,
     StoreFacts (factBudget),
     StoreMaintenance (storeFacts),
     StoreManifestRead,
     StoreObservation (obFacts),
     meteredMaintenance,
     meteredObservation,
-    noNameAlphabet,
     storeFaultOfMetadata,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (
@@ -105,6 +103,10 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     RequestGate,
     StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope),
     mkQuotaScope,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NameAlphabet,
+    noNameAlphabet,
  )
 import Ecluse.Core.Registry.Maintenance.Protocol (
     ProtocolRead (..),

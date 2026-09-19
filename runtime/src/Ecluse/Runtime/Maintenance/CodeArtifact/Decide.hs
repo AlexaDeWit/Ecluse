@@ -84,8 +84,6 @@ import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
-    NameAlphabet,
-    NamePrefix,
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryDelayed, RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
@@ -94,8 +92,6 @@ import Ecluse.Core.Registry.Maintenance (
     StoreRefusal,
     VersionOutcome (VersionRefused, VersionRemoved),
     VersionPresence (VersionServed, VersionWithdrawn),
-    parseNamePrefix,
-    renderNamePrefix,
     storeRefusal,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (
@@ -105,6 +101,12 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     RequestKind (CursorRead, CursorWrite, DeleteBatch, ListingPage, ManifestRead, PermissionRead, VersionPage),
     StoreBudget (StoreBudget, bgCosts, bgOrigin, bgQuotas, bgScope),
     mkQuotaScope,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NameAlphabet,
+    NamePrefix,
+    parseNamePrefix,
+    renderNamePrefix,
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (
     ExternalConnection (ExternalConnection, externalConnectionText),

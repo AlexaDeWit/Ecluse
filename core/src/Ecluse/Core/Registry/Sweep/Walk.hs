@@ -22,7 +22,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry.Maintenance (
+import Ecluse.Core.Registry.Maintenance.NameSpace (
     NameAlphabet,
     NamePrefix,
     extendBucket,

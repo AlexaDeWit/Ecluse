@@ -40,8 +40,6 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict,
     DeleteGuard,
-    NameAlphabet,
-    NamePrefix,
     StoreClass (StoreDestroyable),
     StoreCursor (..),
     StoreDeletion (..),
@@ -57,6 +55,10 @@ import Ecluse.Core.Registry.Maintenance (
     maintenanceOf,
     pageAll,
     pageSource,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NameAlphabet,
+    NamePrefix,
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (
     RepositoryLinks,

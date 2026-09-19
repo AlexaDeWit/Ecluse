@@ -24,7 +24,6 @@ import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
-    NameAlphabet,
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryFutile),
     StoreClass (StoreDestroyable, StorePreserved),
@@ -39,8 +38,11 @@ import Ecluse.Core.Registry.Maintenance (
     VersionPresence (VersionServed),
     chunksOfCeiling,
     collectPages,
-    mkNameAlphabet,
     refusalCode,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NameAlphabet,
+    mkNameAlphabet,
     renderNamePrefix,
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (

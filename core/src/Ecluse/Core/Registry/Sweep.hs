@@ -21,8 +21,6 @@ import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
-    NameAlphabet,
-    NamePrefix,
     RetryAdvice (RetryDelayed, RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
     StoreCursor (clearCursor, readCursor, writeCursor),
@@ -30,7 +28,6 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFault (faultRetry),
     StoreObservation (obClassifyStore, obEnumerateVersions, obFacts, obVerifyConsent),
     StoredVersion,
-    renderNamePrefix,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (
     BudgetPort (budgetClose, budgetOpen, budgetPaced),
@@ -39,6 +36,11 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     narrowestBudget,
     renderQuotaScope,
     renderRequestTally,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NameAlphabet,
+    NamePrefix,
+    renderNamePrefix,
  )
 import Ecluse.Core.Registry.Sweep.Candidates (CandidateSet, candidateSet, inCandidates)
 import Ecluse.Core.Registry.Sweep.Group (boundedVersions, collectGroupBucket, groupAlphabet)

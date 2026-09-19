@@ -130,6 +130,7 @@ library ecluse-core
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Maintenance
     Ecluse.Core.Registry.Maintenance.Budget
+    Ecluse.Core.Registry.Maintenance.NameSpace
     Ecluse.Core.Registry.Maintenance.Protocol
     Ecluse.Core.Registry.Maintenance.Upstream
     Ecluse.Core.Registry.Metadata
