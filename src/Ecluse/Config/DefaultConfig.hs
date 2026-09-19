@@ -3,23 +3,18 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE TemplateHaskell #-}
 
-{- | The committed default configuration, embedded into the binary at compile time.
+{- | The committed @config\/default.yaml@, embedded into the binary at compile time and read by
+both the default-policy build ('Ecluse.Config.defaultPolicy') and the merged configuration load
+('Ecluse.Config.loadConfig').
 
-Both the default-policy build ('Ecluse.Config.defaultPolicy') and the merged
-configuration load ('Ecluse.Config.loadConfig') read the same @config\/default.yaml@.
-Embedding it once here gives them a single shared binding instead of two independent
-Template Haskell splices. It also confines the one accepted @STAN-0212@
-(unsafe-function) observation the 'embedFile' splice expands to. This module carries
-nothing but the embed, so its source lines never shift. The @.stan.toml@ exclude can
-therefore name the file itself, rather than a line and column that rots on every edit
-above it.
+The module carries nothing but the embed, so its source lines never shift and the @.stan.toml@
+exclude for the one accepted @STAN-0212@ observation of the 'embedFile' splice can name the file
+itself rather than a line and column.
 -}
 module Ecluse.Config.DefaultConfig (defaultConfigBytes) where
 
 import Data.FileEmbed (embedFile)
 
-{- | The committed default configuration document, embedded verbatim from
-@config\/default.yaml@ at compile time.
--}
+-- | The committed default configuration document, embedded verbatim at compile time.
 defaultConfigBytes :: ByteString
 defaultConfigBytes = $(embedFile "config/default.yaml")

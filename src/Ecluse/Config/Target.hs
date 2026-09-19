@@ -135,8 +135,8 @@ repositoryOfPath format url = case pathSegments url of
 pathSegments :: Text -> [Text]
 pathSegments = filter (not . T.null) . T.splitOn "/" . registryPath
 
-{- | Parse @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ into (domain, owner, region). The owner is the
-12-digit account id after the __last__ hyphen, so a domain may carry them. Any other host is 'Nothing'.
+{- | Parse @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ into (domain, owner, region).
+The owner is the 12-digit account id after the __last__ hyphen, so a domain may carry them.
 -}
 parseCodeArtifactHost :: Text -> Maybe (Text, Text, Text)
 parseCodeArtifactHost host =

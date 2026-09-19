@@ -93,7 +93,7 @@ advisoryStoreBucket url = case advisoryStoreTarget url of
     S3Store bucket _ -> bucket
 
 {- | The object key one compiled artifact takes in the store: the configured prefix ahead of the
-artifact's own file name. The proxy's sync and Pilot's export both address an object through this.
+artifact's own file name.
 -}
 advisoryObjectKey :: AdvisoryStoreUrl -> FilePath -> Text
 advisoryObjectKey url fileName = case advisoryStoreTarget url of

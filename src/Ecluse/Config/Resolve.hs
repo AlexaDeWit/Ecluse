@@ -2,10 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- |
-Hierarchical configuration resolution (Viper-style).
-Unifies defaults, configuration files, and environment variables into a single
-resolution tree with strict precedence: Defaults < File < Env.
+{- | Hierarchical configuration resolution: the defaults, the operator document, and the
+@ECLUSE_@ environment overlay merged into one tree, strongest last.
+
+A variable name maps to a document path rather than to a setting, so every key is reachable from
+the environment. 'envSpellingOf' inverts that mapping, which is how a refusal names the key an
+operator actually wrote.
 -}
 module Ecluse.Config.Resolve (
     deepMerge,
@@ -47,9 +49,8 @@ configEnvKey name
     | name `elem` reservedProcessKeys = Nothing
     | otherwise = T.stripPrefix "ECLUSE_" name
 
-{- | @ECLUSE_@-prefixed variables that address the boot process, not the config document.
-"Ecluse.Boot" consumes them before resolution, so they never become document keys.
--}
+-- @ECLUSE_@-prefixed variables that address the boot process, not the config document.
+-- "Ecluse.Boot" consumes them before resolution, so they never become document keys.
 reservedProcessKeys :: [Text]
 reservedProcessKeys = ["ECLUSE_CONFIG"]
 

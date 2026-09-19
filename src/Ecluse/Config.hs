@@ -44,7 +44,6 @@ module Ecluse.Config (
     MountIntegrity (..),
     MountConfig (..),
     Url,
-    mkUrl,
     unUrl,
     QueueTarget (..),
     QueueUrl,
@@ -129,18 +128,26 @@ loadConfig envVars mBytes = do
     let merged = deepMerge defaultAst overridesAst
     parsed <- parseAppConfig merged
     active <- declaredMounts overridesAst
-    let declared = Map.restrictKeys (cfgMounts parsed) active
-        -- enabled: false switches a declared mount off. Anything else declared serves.
-        served = Map.filter (\mcfg -> mntEnabled mcfg /= Just False) declared
-        appConfig = parsed{cfgMounts = served}
-    -- The proxy rewrites served tarball URLs against its own public base URL. Without one, every
-    -- install fails client by client instead of loudly at boot.
-    let publicUrlErrs = [PublicUrlRequired | not (Map.null served), isNothing (srvPublicUrl (cfgServer appConfig))]
+    let appConfig = parsed{cfgMounts = servedMounts active (cfgMounts parsed)}
     globalPolicy <- resolveGlobalPolicy overridesAst
-    mounts <- case (publicUrlErrs, resolveMounts globalPolicy appConfig) of
+    mounts <- case (publicUrlErrors appConfig, resolveMounts globalPolicy appConfig) of
         ([], resolved) -> resolved
         (errs, resolved) -> Left (errs <> fromLeft [] resolved)
     Right (Config appConfig mounts)
+
+-- enabled: false switches a declared mount off. Anything else declared serves.
+servedMounts :: Set Ecosystem -> Map Ecosystem MountConfig -> Map Ecosystem MountConfig
+servedMounts active declared =
+    Map.filter (\mcfg -> mntEnabled mcfg /= Just False) (Map.restrictKeys declared active)
+
+-- The proxy rewrites served tarball URLs against its own public base URL. Without one, every
+-- install fails client by client instead of loudly at boot.
+publicUrlErrors :: AppConfig -> [ConfigError]
+publicUrlErrors appConfig =
+    [ PublicUrlRequired
+    | not (Map.null (cfgMounts appConfig))
+    , isNothing (srvPublicUrl (cfgServer appConfig))
+    ]
 
 declaredMounts :: Value -> Either [ConfigError] (Set Ecosystem)
 declaredMounts overridesAst = Set.fromList <$> traverse parseKey (mountKeysOf overridesAst)
@@ -267,8 +274,8 @@ registryKey url = (hostPortAddress raw, stripTrailingSlash (registryPath raw))
   where
     raw = registryUrlText url
 
-{- | One line per resolved leaf of the merged configuration: the dotted path, the value with
-secret-typed keys redacted, and its layer. Empty when a layer fails to parse, and computed keys are absent.
+{- | One line per resolved leaf of the merged configuration: the dotted path, the redacted value,
+and its layer. Empty when a layer fails to parse, and a boot-computed key has no leaf to report.
 -}
 resolvedKeyProvenance :: [(String, String)] -> Maybe ByteString -> [Text]
 resolvedKeyProvenance envVars mBytes = fromRight [] $ do
@@ -292,9 +299,11 @@ renderResolvedLeaf envAst docAst (path, v) =
         | pathPresentIn docAst = "document"
         | otherwise = "default"
     pathPresentIn ast = isJust (lookupPath (T.splitOn "." path) ast)
-    lookupPath [] ast = Just ast
-    lookupPath (k : ks) (Object o) = lookupPath ks =<< KeyMap.lookup (Key.fromText k) o
-    lookupPath _ _ = Nothing
+
+lookupPath :: [Text] -> Value -> Maybe Value
+lookupPath [] ast = Just ast
+lookupPath (k : ks) (Object o) = lookupPath ks =<< KeyMap.lookup (Key.fromText k) o
+lookupPath _ _ = Nothing
 
 -- Secret-typed keys are redacted: the provenance dump must never widen a secret's exposure
 -- beyond the layer it arrived on.

@@ -44,9 +44,7 @@ data AmbientAws = AmbientAws
     }
     deriving stock (Eq, Show)
 
-{- | Read the ambient AWS values from the process environment (as
-'System.Environment.getEnvironment' returns it).
--}
+-- | Read the ambient AWS values from the process environment, as @getEnvironment@ returns it.
 ambientAwsFromEnv :: [(String, String)] -> AmbientAws
 ambientAwsFromEnv env =
     AmbientAws
