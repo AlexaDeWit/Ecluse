@@ -117,6 +117,12 @@ recordingEntriesPort = do
     let port = noopMetricsPort{mpCacheEntries = writeIORef seen . Just}
     pure (port, readIORef seen)
 
+recordingVersionResidencyPort :: IO (MetricsPort, IO (Maybe Int))
+recordingVersionResidencyPort = do
+    seen <- newIORef Nothing
+    let port = noopMetricsPort{mpVersionCacheResidentBytes = writeIORef seen . Just}
+    pure (port, readIORef seen)
+
 freshCache :: IO MetadataCache
 freshCache = newMetadataCache (config 60 100)
 
@@ -161,19 +167,17 @@ spec = do
                 (length . pkgArtifacts <$> readDetails release) `shouldBe` Just files
                 let accounted = weighVersion release
                 accounted `shouldSatisfy` (> files * urlLength)
-                seen <- newIORef 0
-                let port = noopMetricsPort{mpVersionCacheResidentBytes = writeIORef seen}
+                (port, readResidency) <- recordingVersionResidencyPort
                 c <- newMetadataCache (configBytes 60 100 accounted)
                 Cache.resolveVersion port c publicSource pypiName (pypiVersion "1") (pure (Right release)) `shouldReturn` Right release
                 Cache.cachedVersion c publicSource pypiName (pypiVersion "1") `shouldReturn` Just release
-                readIORef seen `shouldReturn` accounted
+                readResidency `shouldReturn` Just accounted
 
         it "serves an oversized selected release without evicting the cached absence" $ do
             release <- unwrapResolved (selectedRelease 1000 128)
-            seen <- newIORef 0
+            (port, readResidency) <- recordingVersionResidencyPort
             calls <- newIORef (0 :: Int)
-            let port = noopMetricsPort{mpVersionCacheResidentBytes = writeIORef seen}
-                absentVersion = pypiVersion "2"
+            let absentVersion = pypiVersion "2"
                 fetch = modifyIORef' calls (+ 1) $> Right release
             c <- newMetadataCache (configBytes 60 100 16384)
             _ <- Cache.resolveVersion port c publicSource pypiName absentVersion (pure (Right (untagged Nothing)))
@@ -181,7 +185,7 @@ spec = do
             Cache.cachedVersion c publicSource pypiName (pypiVersion "1") `shouldReturn` Nothing
             Cache.cachedVersion c publicSource pypiName absentVersion `shouldReturn` Just (untagged Nothing)
             readIORef calls `shouldReturn` 2
-            readIORef seen `shouldReturn` 1024
+            readResidency `shouldReturn` Just 1024
 
     describe "resolveMetadata -- hit/miss" $ do
         it "fetches on a miss and returns the parsed metadata with its raw bytes" $ do
@@ -275,8 +279,7 @@ spec = do
             for_ [1 .. 10 :: Int] $ \i -> do
                 _ <- Cache.resolveMetadata port c privateSource (unscopedNpm (show i)) (pure (Right (entry (unscopedNpm (show i)) "priv")))
                 Cache.resolveMetadata port c publicSource (unscopedNpm (show i)) (pure (Right (entry (unscopedNpm (show i)) "pub")))
-            n <- readEntries
-            n `shouldSatisfy` maybe False (<= 4)
+            readEntries `shouldReturn` Just 4
 
     describe "resident-byte budget" $
         it "reports the resident bytes through the residency gauge" $ do

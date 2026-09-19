@@ -268,8 +268,7 @@ spec = do
             sf <- newStore 60 4 (1000 * flatWeight)
             for_ [1 .. 20 :: Int] $ \i ->
                 resolveOkRecording seen sf (show i) (pure "raw")
-            occ <- readIORef seen
-            fmap occEntries occ `shouldSatisfy` maybe False (<= 4)
+            recordedOccupancy seen `shouldReturn` Just (4, 4 * flatWeight)
 
         it "keeps serving fresh resolutions even under eviction pressure" $ do
             sf <- newStore 60 2 (1000 * flatWeight)
@@ -370,9 +369,7 @@ spec = do
             sf <- newStore 60 1000 (held * flatWeight + flatWeight `div` 2)
             for_ [1 .. 20 :: Int] $ \i ->
                 resolveOkRecording seen sf (show i) (pure "raw")
-            occ <- readIORef seen
-            fmap occBytes occ `shouldSatisfy` maybe False (<= held * flatWeight + flatWeight `div` 2)
-            fmap occEntries occ `shouldSatisfy` maybe False (<= held)
+            recordedOccupancy seen `shouldReturn` Just (held, held * flatWeight)
 
         it "retains a repeatedly-accessed entry while evicting the one-shot tail" $ do
             let held = 3

@@ -30,8 +30,7 @@ tagB = mkStrongETag (hash ("input-fingerprint-b" :: ByteString) :: Digest SHA256
 spec :: Spec
 spec = do
     describe "mkStrongETag -- the quoted wire form" $ do
-        it "is stable for an identical digest and differs across digests" $ do
-            tagA `shouldBe` tagA
+        it "differs across digests" $
             tagA `shouldNotBe` tagB
 
         it "renders as a quoted strong validator" $ do
