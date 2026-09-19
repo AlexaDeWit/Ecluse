@@ -42,6 +42,7 @@ import Ecluse.Core.Osv.Schema (MetaKey (..), metaTableDdl, osvDbFileName, osvSch
 import Ecluse.Core.Osv.Stream (
     IngestStats (..),
     OsvAttempt (..),
+    OsvIngest,
     PilotIngestAborted (..),
     defaultIngestLimits,
     newOsvIngest,
@@ -78,61 +79,85 @@ refused candidate leaves any previous artifact, its metadata, and its recorded a
 -}
 compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> CompileSources -> QuietTime -> m FilePath
 compileOsvToSqlite metrics mTracerProvider outDir eco sources quietTime = do
-    let ecosystem = osvWireName eco
-        dbFile = outDir </> osvDbFileName ecosystem
-    logFM InfoS (ls ("Compiling OSV data for " <> ecosystem <> " to " <> toText dbFile))
+    let dbFile = outDir </> osvDbFileName (osvWireName eco)
+    logFM InfoS (ls ("Compiling OSV data for " <> osvWireName eco <> " to " <> toText dbFile))
 
     liftIO $ createDirectoryIfMissing True outDir
 
     bracket (liftIO $ newCandidate outDir) (liftIO . removeCandidate) $ \candidate -> do
-        compileCandidate candidate ecosystem
+        compileCandidate run candidate
         liftIO $ renameFile candidate dbFile
     pure dbFile
   where
-    compileCandidate dbFile ecosystem =
-        withOptionalSpan mTracerProvider Internal "ecluse.pilot.osv.compile" $
-            \mSpan -> do
-                forM_ mSpan $ \sp -> do
-                    addAttribute sp "ecluse.osv.ecosystem" ecosystem
-                    addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText (csOsvExportUrl sources)))
-
-                -- Every record's date is judged against this one instant, so a long pass
-                -- cannot let a later record pass a check an earlier one failed.
-                now <- liftIO getCurrentTime
-
-                -- The join needs the whole score table before the first advisory row lands, and a
-                -- feed the retry budget cannot fetch fails the pass rather than shipping without.
-                feed <- withOsvRetry defaultOsvRetryPolicy (fetchEpssScores maxEpssFeedBytes (csEpssFeedUrl sources))
-                ingest <- newOsvIngest defaultIngestLimits eco (efScores feed) now
-
-                bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
-                    liftIO $ initSchema conn
-
-                    -- A failed attempt leaves committed batches. NULL bounds defeat deduplication,
-                    -- so each retry clears the table, the tally, and the source metadata.
-                    withOsvRetry defaultOsvRetryPolicy $ do
-                        resetIngestStats ingest
-                        resetOsvAttempt ingest
-                        liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
-                        runConduit $
-                            streamOsvUrl mTracerProvider ingest (csOsvExportUrl sources)
-                                .| CL.filter ((== osvExportDirectory eco) . extEcosystem)
-                                .| CL.chunksOf 2000
-                                .| sinkSqlite conn
-
-                    stats <- readIngestStats ingest
-                    attempt <- readOsvAttempt ingest
-                    concludeCompile metrics mSpan conn (conclusionOf ecosystem now feed attempt stats)
-
-    conclusionOf ecosystem now feed attempt stats =
-        CompileConclusion
-            { ccEcosystem = ecosystem
-            , ccSources = sources
-            , ccStats = stats
-            , ccProvenance = passProvenance sources feed attempt
-            , ccQuietTime = quietTime
-            , ccNow = now
+    run =
+        CompileRun
+            { crMetrics = metrics
+            , crTracerProvider = mTracerProvider
+            , crEcosystem = eco
+            , crSources = sources
+            , crQuietTime = quietTime
             }
+
+-- What stays fixed across one pass, so each step below takes one parameter rather than five.
+data CompileRun = CompileRun
+    { crMetrics :: AdvisoryCompileMetricsPort
+    , crTracerProvider :: Maybe TracerProvider
+    , crEcosystem :: OsvEcosystem
+    , crSources :: CompileSources
+    , crQuietTime :: QuietTime
+    }
+
+-- Fill one candidate file, which the caller renames into place only once this returns.
+compileCandidate :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> FilePath -> m ()
+compileCandidate run dbFile =
+    withOptionalSpan (crTracerProvider run) Internal "ecluse.pilot.osv.compile" $ \mSpan -> do
+        forM_ mSpan (describeCompile run)
+
+        -- Every record's date is judged against this one instant, so a long pass
+        -- cannot let a later record pass a check an earlier one failed.
+        now <- liftIO getCurrentTime
+
+        -- The join needs the whole score table before the first advisory row lands, and a
+        -- feed the retry budget cannot fetch fails the pass rather than shipping without.
+        feed <- withOsvRetry defaultOsvRetryPolicy (fetchEpssScores maxEpssFeedBytes (csEpssFeedUrl (crSources run)))
+        ingest <- newOsvIngest defaultIngestLimits (crEcosystem run) (efScores feed) now
+
+        bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
+            liftIO $ initSchema conn
+            ingestAdvisories run ingest conn
+            stats <- readIngestStats ingest
+            attempt <- readOsvAttempt ingest
+            concludeCompile (crMetrics run) mSpan conn (conclusionOf run now feed attempt stats)
+
+describeCompile :: (MonadIO m) => CompileRun -> Span -> m ()
+describeCompile run sp = do
+    addAttribute sp "ecluse.osv.ecosystem" (osvWireName (crEcosystem run))
+    addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText (csOsvExportUrl (crSources run))))
+
+-- A failed attempt leaves committed batches. NULL bounds defeat deduplication, so each retry
+-- clears the table, the tally, and the source metadata before it re-streams.
+ingestAdvisories :: (MonadResource m, MonadMask m, KatipContext m) => CompileRun -> OsvIngest -> Connection -> m ()
+ingestAdvisories run ingest conn =
+    withOsvRetry defaultOsvRetryPolicy $ do
+        resetIngestStats ingest
+        resetOsvAttempt ingest
+        liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
+        runConduit $
+            streamOsvUrl (crTracerProvider run) ingest (csOsvExportUrl (crSources run))
+                .| CL.filter ((== osvExportDirectory (crEcosystem run)) . extEcosystem)
+                .| CL.chunksOf 2000
+                .| sinkSqlite conn
+
+conclusionOf :: CompileRun -> UTCTime -> EpssFeed -> OsvAttempt -> IngestStats -> CompileConclusion
+conclusionOf run now feed attempt stats =
+    CompileConclusion
+        { ccEcosystem = osvWireName (crEcosystem run)
+        , ccSources = crSources run
+        , ccStats = stats
+        , ccProvenance = passProvenance (crSources run) feed attempt
+        , ccQuietTime = crQuietTime run
+        , ccNow = now
+        }
 
 newCandidate :: FilePath -> IO FilePath
 newCandidate outDir = do
