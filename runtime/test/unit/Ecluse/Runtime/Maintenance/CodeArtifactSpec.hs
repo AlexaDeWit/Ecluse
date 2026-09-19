@@ -59,16 +59,7 @@ import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smStore), SweepPacing (swpDeletionCap), SweepState (stIssued), newSweepState)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepExamined, SweepKept))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
-import Ecluse.Runtime.Maintenance.CodeArtifact (
-    ControlPlane (..),
-    boundedObservationFor,
-    cacheMaintenanceFor,
-    controlPlaneFor,
-    maintenanceFor,
-    observationFor,
-    probeUpstreamSafety,
- )
-import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     CodeArtifactStore (..),
     codeArtifactFormat,
     consentTagKey,
@@ -76,6 +67,15 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     cursorTagKey,
     describeRepositoryGrant,
     describeUpstreamRefusal,
+ )
+import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (
+    ControlPlane (..),
+    boundedObservationFor,
+    cacheMaintenanceFor,
+    controlPlaneFor,
+    maintenanceFor,
+    observationFor,
+    probeUpstreamSafety,
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (ReadPlane (..))
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)

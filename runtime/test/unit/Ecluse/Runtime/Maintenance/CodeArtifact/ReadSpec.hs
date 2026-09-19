@@ -21,7 +21,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     CodeArtifactStore (..),
     codeArtifactFormat,
  )
-import Ecluse.Runtime.Maintenance.CodeArtifact.Read (
+import Ecluse.Runtime.Maintenance.CodeArtifact.Read.Internal (
     RepositoryIdentity (..),
     VersionObservation (..),
     VersionOrigin (..),

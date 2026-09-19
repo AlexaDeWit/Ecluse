@@ -431,7 +431,10 @@ library ecluse-runtime
     Ecluse.Runtime.Log
     Ecluse.Runtime.Maintenance.CodeArtifact
     Ecluse.Runtime.Maintenance.CodeArtifact.Decide
+    Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal
+    Ecluse.Runtime.Maintenance.CodeArtifact.Internal
     Ecluse.Runtime.Maintenance.CodeArtifact.Read
+    Ecluse.Runtime.Maintenance.CodeArtifact.Read.Internal
     Ecluse.Runtime.Pilot.Export
     Ecluse.Runtime.Queue.Sqs
     Ecluse.Runtime.Server
