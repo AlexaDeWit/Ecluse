@@ -358,8 +358,7 @@ leaf throws the typed `Unconfigured`, because there is nothing to decide.
 catch by category, and a `try` decays into grepping a message. Give the condition a type with an
 `Exception` instance: a nullary marker, or a small sum like `CredentialError`, as the codebase does
 for `BootAborted`. The rule holds in test code too: a test that simulates a failure throws a nullary
-typed exception. The `throwString` allowlist of test modules in `.hlint.yaml` is a backlog to drain,
-never a list to extend.
+typed exception. There is no allowlist, and a finding is never fixed by adding one.
 
 **11.3 Surface errors as values, and don't thread `ExceptT` through the base monad.** The effectful
 shell runs in `ReaderT Env IO` over `unliftio`. `MonadUnliftIO` has no instance for `ExceptT`, nor
