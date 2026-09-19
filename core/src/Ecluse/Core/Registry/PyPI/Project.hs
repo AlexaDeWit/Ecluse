@@ -19,6 +19,7 @@ module Ecluse.Core.Registry.PyPI.Project (
     projectName,
     canonicalName,
     isCanonicalName,
+    isNameSeparator,
     pypiNameLeadChars,
 ) where
 
@@ -28,6 +29,7 @@ import Data.Char (isAlphaNum, isAscii)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (
@@ -63,6 +65,15 @@ import Ecluse.Core.Registry.WireSupport (
     withinNameLimit,
  )
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, selectLatest)
+
+-- | A filename's canonical release and artifact kind.
+data FileCoordinate = FileCoordinate
+    { fcVersionKey :: Text
+    -- ^ The release key: the file's version in canonical PEP 440 form.
+    , fcKind :: ArtifactKind
+    -- ^ An 'Sdist', or a 'Wheel' carrying its compatibility tag (@py3-none-any@).
+    }
+    deriving stock (Eq, Show)
 
 -- | Project a decoded Simple index, refusing unusable structure and reporting name mismatches.
 projectSimpleIndexFromValue :: PackageName -> Value -> Either ParseError (Projection PackageInfo)
@@ -120,10 +131,10 @@ projectDetails name entries =
     PackageDetails
         { pkgName = name
         , pkgVersion = mkVersion PyPI (fcVersionKey (snd (NE.head entries)))
-        , pkgPublishedAt = newestUpload
-        , pkgInstallCode = installCode
+        , pkgPublishedAt = newestUpload files
+        , pkgInstallCode = releaseInstallCode entries
         , pkgTrust = TrustUnknown
-        , pkgAvailability = availability
+        , pkgAvailability = releaseAvailability files
         , pkgArtifacts = fmap (uncurry projectArtifact) entries
         , -- Licence and publisher live in distribution metadata, outside the Simple index.
           pkgLicenses = []
@@ -132,22 +143,27 @@ projectDetails name entries =
   where
     files = fmap fst entries
 
-    -- An unknown-age file cannot borrow a sibling's expired quarantine.
-    -- A later wheel restarts quarantine when every timestamp is known.
-    newestUpload = (\(instant :| rest) -> foldl' max instant rest) <$> traverse ifUploadTime files
+-- An unknown-age file cannot borrow a sibling's expired quarantine. A later wheel restarts
+-- quarantine when every timestamp is known.
+newestUpload :: NonEmpty IndexFile -> Maybe UTCTime
+newestUpload files = (\(instant :| rest) -> foldl' max instant rest) <$> traverse ifUploadTime files
 
-    installCode
-        | any ((== Sdist) . fcKind . snd) entries =
-            RunsCodeOnInstall "offers a source distribution, which runs its own build"
-        | otherwise = NoCodeOnInstall
+releaseInstallCode :: NonEmpty (IndexFile, FileCoordinate) -> CodeExecSignal
+releaseInstallCode entries
+    | any ((== Sdist) . fcKind . snd) entries =
+        RunsCodeOnInstall "offers a source distribution, which runs its own build"
+    | otherwise = NoCodeOnInstall
 
-    availability = case traverse withdrawnReason files of
-        Just reasons -> Yanked (asum reasons)
-        Nothing -> Available
+-- A release is withdrawn only when PEP 592 withdraws every file of it.
+releaseAvailability :: NonEmpty IndexFile -> Availability
+releaseAvailability files = case traverse withdrawnReason files of
+    Just reasons -> Yanked (asum reasons)
+    Nothing -> Available
 
-    withdrawnReason file = case ifYanked file of
-        FileWithdrawn reason -> Just reason
-        FileOffered -> Nothing
+withdrawnReason :: IndexFile -> Maybe (Maybe Text)
+withdrawnReason file = case ifYanked file of
+    FileWithdrawn reason -> Just reason
+    FileOffered -> Nothing
 
 -- The location stays verbatim. 'Ecluse.Core.Package.Filter' folds its scheme and authority
 -- against the egress and host policies afterward.
@@ -171,15 +187,6 @@ indexHash :: (Text, Text) -> Maybe Hash
 indexHash (algorithm, digest) = do
     algo <- rightToMaybe (parseHashAlg algorithm)
     rightToMaybe (mkHash algo digest)
-
--- | A filename's canonical release and artifact kind.
-data FileCoordinate = FileCoordinate
-    { fcVersionKey :: Text
-    -- ^ The release key: the file's version in canonical PEP 440 form.
-    , fcKind :: ArtifactKind
-    -- ^ An 'Sdist', or a 'Wheel' carrying its compatibility tag (@py3-none-any@).
-    }
-    deriving stock (Eq, Show)
 
 -- | Read a filename's coordinate, rejecting another project, an unknown archive, or invalid PEP 440.
 fileCoordinate :: PackageName -> Text -> Maybe FileCoordinate
@@ -262,9 +269,13 @@ usableComponent component =
     T.all nameChar component
         && maybe False (nameEdge . fst) (T.uncons component)
         && maybe False (nameEdge . snd) (T.unsnoc component)
-  where
-    nameChar ch = nameEdge ch || isNameSeparator ch
-    nameEdge ch = isAscii ch && isAlphaNum ch
+
+-- A separator is legal inside a name, never at either end.
+nameChar :: Char -> Bool
+nameChar ch = nameEdge ch || isNameSeparator ch
+
+nameEdge :: Char -> Bool
+nameEdge ch = isAscii ch && isAlphaNum ch
 
 -- PyPI's own cap on a project name, the one its own validator applies.
 pypiNameLimit :: Int

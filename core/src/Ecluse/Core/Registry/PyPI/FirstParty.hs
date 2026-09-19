@@ -25,7 +25,7 @@ import Data.Text.Short qualified as TS
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (PackageName, canonicalise, pkgCanonical, pkgEcosystem)
 import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.PyPI.Project (projectName)
+import Ecluse.Core.Registry.PyPI.Project (isNameSeparator, projectName)
 import Ecluse.Core.Registry.WireSupport (parseNameComponent)
 
 -- | A distribution-name prefix in PEP 503 canonical form.
@@ -68,17 +68,17 @@ projectFirstPartyEntry entry = case T.stripSuffix "*" entry of
         | otherwise -> invalid
     Nothing -> either (const invalid) (Right . PyPIOwnedName) (projectName entry)
   where
-    endsAtSeparator :: Text -> Bool
-    endsAtSeparator prefix = maybe False ((`elem` ("-_." :: String)) . snd) (T.unsnoc prefix)
-
     invalid :: Either ParseError a
     invalid = Left (ParseError ("invalid PyPI first-party entry: " <> show entry))
+
+endsAtSeparator :: Text -> Bool
+endsAtSeparator prefix = maybe False (isNameSeparator . snd) (T.unsnoc prefix)
 
 -- | Match an exact canonical name or a declared prefix. Deny by default.
 pypiFirstPartyName :: NonEmpty PyPIFirstParty -> PackageName -> Bool
 pypiFirstPartyName entries name = any (`owns` name) entries
-  where
-    owns :: PyPIFirstParty -> PackageName -> Bool
-    owns = \case
-        PyPIOwnedName owned -> (== owned)
-        PyPIOwnedPrefix prefix -> underPyPIPrefix prefix
+
+owns :: PyPIFirstParty -> PackageName -> Bool
+owns = \case
+    PyPIOwnedName owned -> (== owned)
+    PyPIOwnedPrefix prefix -> underPyPIPrefix prefix
