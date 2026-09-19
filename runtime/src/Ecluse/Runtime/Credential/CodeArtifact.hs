@@ -58,18 +58,14 @@ data CodeArtifactConfig = CodeArtifactConfig
     the calling account ('Nothing' to default to the caller's account).
     -}
     , caDurationSeconds :: Maybe Natural
-    {- ^ Requested token lifetime in seconds (@900@-@43200@, 15 min to 12 h). 'Nothing' lets
-    CodeArtifact default it to the caller's role-credential expiry. The refresh policy adapts
-    to the minted token's actual expiry, so this is only a preference.
+    {- ^ Requested token lifetime in seconds (@900@-@43200@). 'Nothing' defaults it to the
+    caller's role-credential expiry, and the refresh policy adapts to the minted expiry anyway.
     -}
     }
     deriving stock (Eq, Ord, Show)
 
-{- | Build a refreshing 'CredentialProvider' backed by CodeArtifact @GetAuthorizationToken@,
-discovering AWS credentials with 'AWS.discover'.
-
-It mints once eagerly, so a misconfiguration (bad region, missing credentials, no permission) fails
-at construction rather than on the first mirror write.
+{- | Build a refreshing 'CredentialProvider' backed by CodeArtifact @GetAuthorizationToken@. It
+mints once eagerly, so a misconfiguration fails at construction, not on the first mirror write.
 -}
 newCodeArtifactProvider :: CredentialReporters -> CodeArtifactConfig -> IO CredentialProvider
 newCodeArtifactProvider reporters cfg =

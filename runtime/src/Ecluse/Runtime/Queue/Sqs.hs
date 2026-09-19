@@ -87,19 +87,16 @@ data SqsConfig = SqsConfig
     for a message before returning @[]@, so an idle worker does not hot-loop on empty polls.
     -}
     , sqsVisibilityTimeout :: Seconds
-    {- ^ How long a received message stays hidden from other 'receive's before SQS
-    redelivers it: the budget for processing-then-'ack', extendable per message via
-    'extendVisibility'.
+    {- ^ How long a received message stays hidden before SQS redelivers it: the budget for
+    processing-then-'ack', extendable per message via 'extendVisibility'.
     -}
     , sqsTerminalBackoff :: Seconds
-    {- ^ The visibility timeout 'deadLetter' applies when it returns a __terminal__ message.
-    It exceeds the normal processing window, so the worker does not re-fetch a permanently
-    unmirrorable artifact in a hot loop.
+    {- ^ The visibility timeout 'deadLetter' applies to a __terminal__ message. It exceeds the
+    processing window, so the worker does not re-fetch an unmirrorable artifact in a hot loop.
     -}
     , sqsMaxReceiveCount :: DeliveryBudget
-    {- ^ The configured __floor__ on how many deliveries one message gets before the
-    worker retires it (@ECLUSE_QUEUE__MAX_RECEIVE_COUNT@). 'newSqsQueue' raises the
-    handle's effective budget past an attached redrive policy's own @maxReceiveCount@,
+    {- ^ The configured __floor__ on deliveries before the worker retires a message.
+    'newSqsQueue' raises the effective budget past an attached redrive policy's own count,
     so this floor never pre-empts a dead-letter queue's capture.
     -}
     }

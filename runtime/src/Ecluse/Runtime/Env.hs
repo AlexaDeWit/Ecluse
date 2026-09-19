@@ -41,9 +41,7 @@ import Ecluse.Runtime.Telemetry.Correlation (ddIdentityFromEnvironment, ddPayloa
 import Ecluse.Runtime.Telemetry.Instruments (Metrics, metricsPortOf, newMetrics, workerMetricsPortOf)
 import Ecluse.Runtime.Telemetry.Tracing (tracingPortOf, workerTracingPortOf)
 
-{- | The composition-root record from which the whole effectful shell is reached. The module
-header states the no-SDK and sole-composition-root invariants it upholds.
--}
+-- | The composition-root record from which the whole effectful shell is reached.
 data Env = Env
     { envServeAdmission :: ServeAdmission
     {- ^ The process-wide brief-wait bound for metadata-bearing serve work
@@ -54,15 +52,12 @@ data Env = Env
     mirror worker.
     -}
     , envManager :: Manager
-    {- ^ The shared validating-TLS 'Manager' for the __untrusted__ data plane: public
-    metadata fetches and artifact streams. Egress is https-only, so certificate validation
-    authenticates the dialled host. A public @dist.tarball@ cannot steer the proxy at an
-    internal or rebound address (see "Ecluse.Core.Security.Egress").
+    {- ^ The shared validating-TLS 'Manager' for the __untrusted__ data plane. Egress is
+    https-only, so certificate validation authenticates the host a @dist.tarball@ names.
     -}
     , envPrivateManager :: Manager
-    {- ^ The 'Manager' for the __trusted__ private upstream, the same validating TLS manager as
-    'envManager' and held to the same https-only requirement. The split stays because the two
-    origins differ in credential handling and in the @dist.tarball@ host gate's trust.
+    {- ^ The 'Manager' for the __trusted__ private upstream, the same validating TLS manager held
+    to the same https-only requirement. The split stays because credential handling differs.
     -}
     , envMetadataCache :: MetadataCache
     {- ^ The metadata cache ("Ecluse.Core.Server.Cache"). One parsed packument serves the
@@ -147,9 +142,8 @@ serveRuntimeOf env =
         , srTracing = tracingPortOf (envTelemetry env)
         }
 
-{- | Project the 'WorkerRuntime' the mirror worker closes over, the analogue of 'serveRuntimeOf'.
-'WorkerPolicies' is an argument because it derives from the served mounts. The worker re-runs
-it against a job before mirroring, through one codepath with the serve gate.
+{- | Project the 'WorkerRuntime' the mirror worker closes over. 'WorkerPolicies' is an argument
+because it derives from the served mounts, and the worker re-runs it through the serve gate.
 -}
 workerRuntimeOf :: WorkerPolicies -> Env -> WorkerRuntime
 workerRuntimeOf policies env =

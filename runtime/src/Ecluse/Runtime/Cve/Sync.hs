@@ -210,9 +210,8 @@ then the burst concedes to the steady poll. The poll interval, not this, is the 
 bootBackoffDelays :: [Int]
 bootBackoffDelays = [1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000]
 
-{- | The shipped gap between repeats of the unloaded-database and fetch-failure reports, in
-microseconds. A stuck rollout keeps saying so without filling the log at the poll interval. The
-rules' outage reminder paces on the same gap.
+{- | The shipped gap, in microseconds, between repeats of the unloaded-database and
+fetch-failure reports, so a stuck rollout keeps saying so without filling the log.
 -}
 absentReportInterval :: Int
 absentReportInterval = 900_000_000
@@ -386,9 +385,7 @@ steppedOf :: AdvisorySyncResult -> Bool -> Maybe DbEtag -> Stepped
 steppedOf result settled seen =
     Stepped{stResult = result, stSettled = settled, stSeen = seen, stFault = Nothing}
 
-{- One observed step. Residue propagates to supervision, and the span closes after the two records,
-so it reads longer.
--}
+-- One observed step: the attempt, timed and labelled, inside this ecosystem's attempt span.
 observedStep ::
     (MonadUnliftIO m, KatipContext m) =>
     AdvisorySyncMetricsPort ->
@@ -400,43 +397,48 @@ observedStep ::
     m Stepped
 observedStep metrics tracing env eco notifyFirstSync lastSeen =
     withRunInIO $ \runInIO ->
-        astpSyncAttemptSpan tracing ecosystem stResult (metered (runInIO attempt))
+        astpSyncAttemptSpan
+            tracing
+            ecosystem
+            stResult
+            (meteredStep metrics ecosystem (runInIO (attemptStep env eco notifyFirstSync lastSeen)))
   where
     ecosystem = syncEcosystem env
 
-    -- Residue escaping the attempt bypasses these records. An attempt that never
-    -- concluded has no result to label, and the supervision above reports it.
-    metered :: IO Stepped -> IO Stepped
-    metered act = do
-        (attempted, seconds) <- timedSeconds act
-        asmpSyncAttempt metrics ecosystem (stResult attempted)
-        asmpSyncDuration metrics ecosystem (stResult attempted) seconds
-        pure attempted
+-- Residue escaping the attempt bypasses these records. An attempt that never concluded has no
+-- result to label, and the supervision above reports it.
+meteredStep :: AdvisorySyncMetricsPort -> Ecosystem -> IO Stepped -> IO Stepped
+meteredStep metrics ecosystem act = do
+    (attempted, seconds) <- timedSeconds act
+    asmpSyncAttempt metrics ecosystem (stResult attempted)
+    asmpSyncDuration metrics ecosystem (stResult attempted) seconds
+    pure attempted
 
-    attempt =
-        liftIO (syncStep env lastSeen) >>= \case
-            SyncFetchFaulted fault ->
-                -- The step learned nothing about the remote artifact, so the last seen ETag and
-                -- the last good database both stand and the next poll retries.
-                pure (steppedOf AdvisoryFetchFailed False lastSeen){stFault = Just fault}
-            SyncSwapped etag meta -> do
-                logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show (metadataSummary meta)))
-                source <- liftIO (currentAdvisorySource (syncSlot env))
-                logFM InfoS (ls ("cve-sync[" <> eco <> "]: serving artifact source: " <> maybe unrecordedValue renderAdvisorySource source))
-                whenNothing_ (asPushedAt =<< source) (undatedArtifact eco etag)
-                liftIO notifyFirstSync
-                pure (steppedOf AdvisorySwapped True (Just etag))
-            SyncUnchanged -> do
-                logFM DebugS (ls ("cve-sync[" <> eco <> "]: advisory database unchanged"))
-                pure (steppedOf AdvisoryUnchanged True lastSeen)
-            SyncAbsent -> do
-                logFM DebugS (ls ("cve-sync[" <> eco <> "]: no advisory database published yet"))
-                pure (steppedOf AdvisoryNonePublished False lastSeen)
-            SyncRejected etag rejection -> do
-                logFM ErrorS (ls ("cve-sync[" <> eco <> "]: downloaded artifact refused (keeping last good): " <> show rejection))
-                -- Remember the ETag so the same refused artifact is not re-downloaded.
-                -- A fixed re-publish carries a new one. Identical bytes cannot end differently.
-                pure (steppedOf AdvisoryRefused True (Just etag))
+attemptStep :: (KatipContext m) => SyncEnv -> Text -> IO () -> Maybe DbEtag -> m Stepped
+attemptStep env eco notifyFirstSync lastSeen =
+    liftIO (syncStep env lastSeen) >>= \case
+        SyncFetchFaulted fault ->
+            -- The step learned nothing about the remote artifact, so the last seen ETag and
+            -- the last good database both stand and the next poll retries.
+            pure (steppedOf AdvisoryFetchFailed False lastSeen){stFault = Just fault}
+        SyncSwapped etag meta -> do
+            logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show (metadataSummary meta)))
+            source <- liftIO (currentAdvisorySource (syncSlot env))
+            logFM InfoS (ls ("cve-sync[" <> eco <> "]: serving artifact source: " <> maybe unrecordedValue renderAdvisorySource source))
+            whenNothing_ (asPushedAt =<< source) (undatedArtifact eco etag)
+            liftIO notifyFirstSync
+            pure (steppedOf AdvisorySwapped True (Just etag))
+        SyncUnchanged -> do
+            logFM DebugS (ls ("cve-sync[" <> eco <> "]: advisory database unchanged"))
+            pure (steppedOf AdvisoryUnchanged True lastSeen)
+        SyncAbsent -> do
+            logFM DebugS (ls ("cve-sync[" <> eco <> "]: no advisory database published yet"))
+            pure (steppedOf AdvisoryNonePublished False lastSeen)
+        SyncRejected etag rejection -> do
+            logFM ErrorS (ls ("cve-sync[" <> eco <> "]: downloaded artifact refused (keeping last good): " <> show rejection))
+            -- Remember the ETag so the same refused artifact is not re-downloaded.
+            -- A fixed re-publish carries a new one. Identical bytes cannot end differently.
+            pure (steppedOf AdvisoryRefused True (Just etag))
 
 {- An artifact the object store gave no publication time for: its age cannot be established, so
 CVE-based denial refuses on it. One line per swap, because only a swap can install one. -}
@@ -525,7 +527,7 @@ s3Head awsEnv bucket key =
             | otherwise -> Left (OsvDbTransport (classifyAwsTransport err))
 
 s3Download :: AWS.Env -> Text -> Text -> Int -> FilePath -> IO (Either OsvDbFetchFault FetchedObject)
-s3Download awsEnv bucket key maxBytes dest = classified . runResourceT $ do
+s3Download awsEnv bucket key maxBytes dest = foldFetchEscapes . runResourceT $ do
     resp <- AWS.send awsEnv (S3.newGetObject (S3.BucketName bucket) (S3.ObjectKey key))
     -- The declared length fails fast. The streaming cap is the enforcement: a
     -- declared length is not a guarantee.
@@ -534,14 +536,14 @@ s3Download awsEnv bucket key maxBytes dest = classified . runResourceT $ do
     AWS.sinkBody (resp ^. S3L.getObjectResponse_body) (cappedAt maxBytes .| C.sinkFile dest)
     let fetched etag = FetchedObject{foEtag = dbEtag etag, foPushedAt = resp ^. S3L.getObjectResponse_lastModified}
     pure (maybe (Left OsvDbNoEtag) (Right . fetched) (resp ^. S3L.getObjectResponse_eTag))
-  where
-    -- The adapter boundary: fold the two typed escapes into the value channel. Nothing else
-    -- is caught, so a filesystem fault writing the destination propagates as residue.
-    classified :: IO (Either OsvDbFetchFault FetchedObject) -> IO (Either OsvDbFetchFault FetchedObject)
-    classified act =
-        act
-            `catch` (\(err :: AWS.Error) -> pure (Left (OsvDbTransport (classifyAwsTransport err))))
-            `catch` (\(OsvDbCapExceeded n) -> pure (Left (OsvDbTooLarge n)))
+
+-- The adapter boundary: fold the two typed escapes into the value channel. Nothing else is
+-- caught, so a filesystem fault writing the destination propagates as residue.
+foldFetchEscapes :: IO (Either OsvDbFetchFault FetchedObject) -> IO (Either OsvDbFetchFault FetchedObject)
+foldFetchEscapes act =
+    act
+        `catch` (\(err :: AWS.Error) -> pure (Left (OsvDbTransport (classifyAwsTransport err))))
+        `catch` (\(OsvDbCapExceeded n) -> pure (Left (OsvDbTooLarge n)))
 
 dbEtag :: S3.ETag -> DbEtag
 dbEtag (S3.ETag bytes) = DbEtag (decodeUtf8 bytes)
