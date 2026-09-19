@@ -110,6 +110,15 @@ data RetryLeg
       AfterPublish
     deriving stock (Eq, Show)
 
+-- The failure detail marks the span errored, so only a job that did not publish carries one.
+jobSpanOutcome :: JobOutcome -> JobSpanOutcome
+jobSpanOutcome = \case
+    Succeeded -> JobSpanOutcome "succeeded" Nothing
+    Dropped reason -> JobSpanOutcome "dropped" (Just reason)
+    SourceUnavailable reason -> JobSpanOutcome "source-unavailable" (Just reason)
+    DeadLettered reason -> JobSpanOutcome "dead-lettered" (Just reason)
+    Retried _ reason -> JobSpanOutcome "retried" (Just reason)
+
 {- | Decide one job, re-checking current policy before publishing, because the queue wait is
 unbounded and mirrored bytes bypass every later rule.
 -}
@@ -122,15 +131,6 @@ processJob job = katipAddNamespace "job" $ do
         wtpMirrorJobSpan tracing (jobPackage job) (jobVersion job) (jobTraceContext job) jobSpanOutcome $
             runInIO $
                 wrInjectTraceContext runtime (reevaluateThenMirror job)
-  where
-    -- The failure detail marks the span errored, so only a job that did not publish carries one.
-    jobSpanOutcome :: JobOutcome -> JobSpanOutcome
-    jobSpanOutcome = \case
-        Succeeded -> JobSpanOutcome "succeeded" Nothing
-        Dropped reason -> JobSpanOutcome "dropped" (Just reason)
-        SourceUnavailable reason -> JobSpanOutcome "source-unavailable" (Just reason)
-        DeadLettered reason -> JobSpanOutcome "dead-lettered" (Just reason)
-        Retried _ reason -> JobSpanOutcome "retried" (Just reason)
 
 -- Use one ecosystem bundle throughout so a job cannot consult another ecosystem's policy or registry.
 reevaluateThenMirror :: MirrorJob -> WorkerM JobOutcome
