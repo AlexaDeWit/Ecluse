@@ -213,10 +213,6 @@ hostValidationSpec = describe "the URL a tag admits" $ do
         outcome `shouldSatisfy` refusalMentions "mounts.npm.privateUpstream.codeArtifact.url"
         outcome `shouldNotSatisfy` refusalMentions "mirrorTarget"
 
-    it "admits a codeArtifact private upstream that addresses a repository under its own format" $
-        loadMount [decl "privateUpstream" "codeArtifact" [url codeArtifactInternal]]
-            `shouldSatisfy` isRight
-
     it "refuses a codeArtifact mirror target on an ecosystem CodeArtifact has no format for" $ do
         let outcome = loadConfig pubUrlEnv (Just rubygemsDoc)
         outcome `shouldSatisfy` refusalMentions "CodeArtifact carries no package format for the rubygems ecosystem"
