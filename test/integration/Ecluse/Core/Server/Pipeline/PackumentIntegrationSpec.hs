@@ -15,7 +15,7 @@ import Ecluse.Test.Server.Mount (withPrivateBaseUrl)
 import Ecluse.Test.Wai
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
-import UnliftIO.Exception (throwString)
+import UnliftIO.Exception (throwIO)
 
 spec :: Spec
 spec = do
@@ -461,7 +461,7 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
         (privateUp, publicUp) <- twoServingUpstreams
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing Nothing app
-            etag <- maybe (throwString "no ETag on the 200 response") pure (header "ETag" firstResp)
+            etag <- etagOf firstResp
             secondResp <- getThingWith [("If-None-Match", etag)] app
             status secondResp `shouldBe` 304
             simpleBody secondResp `shouldBe` ""
@@ -470,7 +470,7 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
         (privateUp, publicUp) <- twoServingUpstreams
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing (Just "client-token") app
-            etag <- maybe (throwString "no ETag on the 200 response") pure (header "ETag" firstResp)
+            etag <- etagOf firstResp
             secondResp <- getThingWith [("If-None-Match", etag), ("Authorization", "Bearer client-token")] app
             status secondResp `shouldBe` 304
             -- The 304 answers about content, never about a skipped authorisation. The pipeline
@@ -491,7 +491,7 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing Nothing app
             status firstResp `shouldBe` 200
-            etag <- maybe (throwString "no ETag on the 200 response") pure (header "ETag" firstResp)
+            etag <- etagOf firstResp
             secondResp <- getThingWith [("If-None-Match", etag)] app
             status secondResp `shouldBe` 200
             header "ETag" secondResp `shouldSatisfy` (/= Just etag)
@@ -515,7 +515,7 @@ packumentHeadSpec = describe "HEAD on a packument route (same gating as GET, no 
         (privateUp, publicUp) <- twoServingUpstreams
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing Nothing app
-            etag <- maybe (throwString "no ETag on the 200 response") pure (header "ETag" firstResp)
+            etag <- etagOf firstResp
             headResp <- headThingWith [("If-None-Match", etag)] app
             status headResp `shouldBe` 304
             simpleBody headResp `shouldBe` ""
@@ -600,3 +600,13 @@ losslessSpec = describe "lossless served surface (raw Value edited in place)" $ 
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedTarball "1.0.0" resp `shouldBe` Just "https://proxy.test/thing/-/thing-1.0.0.tgz"
+
+-- | A 200 that carries no validator, which every conditional case here builds on.
+data NoETag = NoETag
+    deriving stock (Show)
+
+instance Exception NoETag
+
+-- | The validator a conditional case echoes back on its second request.
+etagOf :: SResponse -> IO ByteString
+etagOf = maybe (throwIO NoETag) pure . header "ETag"
