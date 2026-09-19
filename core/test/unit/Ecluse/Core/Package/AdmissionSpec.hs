@@ -254,7 +254,7 @@ spec = do
             hedgehog $ do
                 bytes <- forAll (Gen.bytes (Range.linear 0 200))
                 kinds <- forAll (Gen.shuffle =<< Gen.subsequence digestKinds)
-                let hashes = concatMap (expand bytes) kinds
+                let hashes = map (hashOfKind bytes) kinds
                 case nonEmpty hashes of
                     Nothing -> pass -- no digests: NoIntegrity, refused before any verify
                     Just ne -> do
@@ -268,8 +268,3 @@ spec = do
                             case verifyIntegrity ne (bytes <> "!") of
                                 IntegrityMismatch _ -> pass
                                 IntegrityVerified -> assert False
-  where
-    -- Realise one digest kind over the bytes. The #738 golden case above pins the
-    -- joined multi-component wire shape.
-    expand :: ByteString -> DigestKind -> [Hash]
-    expand bytes kind = [hashOfKind bytes kind]
