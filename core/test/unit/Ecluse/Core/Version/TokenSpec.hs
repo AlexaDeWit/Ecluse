@@ -13,19 +13,11 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Core.Version.Token (isAsciiAlphaNum)
 
 spec :: Spec
-spec = do
-    describe "isAsciiAlphaNum" $ do
-        it "matches isAscii && isAlphaNum for all characters" $
+spec =
+    describe "isAsciiAlphaNum" $
+        it "is isAscii && isAlphaNum, over ASCII and over the whole code-point range" $
             hedgehog $ do
-                c <- forAll Gen.unicodeAll
+                -- Gen.unicodeAll draws an ASCII character about once in ten thousand, so the
+                -- ASCII half of the law needs a generator of its own to be exercised at all.
+                c <- forAll (Gen.choice [Gen.ascii, Gen.unicodeAll])
                 isAsciiAlphaNum c === (isAscii c && isAlphaNum c)
-
-        it "returns True for ASCII letters and digits" $
-            hedgehog $ do
-                c <- forAll Gen.ascii
-                isAsciiAlphaNum c === isAlphaNum c
-
-        it "returns False for non-ASCII characters" $
-            hedgehog $ do
-                c <- forAll (Gen.filter (not . isAscii) Gen.unicodeAll)
-                isAsciiAlphaNum c === False
