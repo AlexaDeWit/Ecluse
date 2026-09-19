@@ -16,7 +16,7 @@ import Network.HTTP.Client (
     responseBody,
  )
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (Method, ResponseHeaders, Status, methodGet, methodHead, status200, status304, status404, statusCode, statusIsSuccessful)
+import Network.HTTP.Types (Method, ResponseHeaders, Status, methodGet, methodHead, status200, status206, status304, status404, statusCode, statusIsSuccessful)
 import Network.HTTP.Types.Header (HeaderName, hContentType, hETag)
 import Network.Wai (Application, Response, ResponseReceived, responseLBS, responseStream)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -79,6 +79,7 @@ spec = do
             -- above is the proof that this path never buffers the body whole.
             let bigBody = BS.replicate (4 * 1024 * 1024) 0x7a
             resp <- throughProxy (upstreamApp bigBody) conditionalProxy
+            statusCode (HTTP.responseStatus resp) `shouldBe` 206
             toStrict (responseBody resp) `shouldBe` bigBody
 
     describe "withUpstreamWhen -- conditional relay (hit / miss / open-failure)" $ do
@@ -176,10 +177,12 @@ askProxy manager app =
 headerOf :: HeaderName -> HTTP.Response body -> Maybe ByteString
 headerOf name = fmap snd . find ((== name) . fst) . HTTP.responseHeaders
 
--- An upstream that streams a fixed body back in 64 KiB chunks.
+{- | An upstream that streams a fixed body back in 64 KiB chunks, under a 2xx the proxy never
+answers itself, so a relay that committed its own status rather than upstream's would fail.
+-}
 upstreamApp :: ByteString -> Application
 upstreamApp body _req respond =
-    respond (responseStream status200 [] (\write flush -> writeChunks write flush (chunk 65536 body)))
+    respond (responseStream status206 [] (\write flush -> writeChunks write flush (chunk 65536 body)))
 
 -- An upstream that answers 200 with a body and a content header to relay.
 headeredUpstream :: Application
