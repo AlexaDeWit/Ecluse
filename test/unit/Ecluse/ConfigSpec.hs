@@ -216,9 +216,7 @@ spec = do
                 `shouldSatisfy` elem "config: mounts.npm.mirrorTarget.verdaccio.token = <redacted> (environment)"
             provenance `shouldSatisfy` (not . any (T.isInfixOf "hunter"))
 
-{- | The client-facing base URL every active-mount load needs (server.publicUrl).
-| An advisory store, which the age lines report only once one is configured.
--}
+-- | An advisory store, which the age lines report only once one is configured.
 advisoryStoreEnv :: [(String, String)]
 advisoryStoreEnv = [("ECLUSE_ADVISORIES__URL", "s3://advisories")]
 

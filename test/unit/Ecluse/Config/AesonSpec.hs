@@ -736,8 +736,6 @@ spec = describe "decodeDocument" $ do
                     Left e -> expectationFailure ("unexpected decode error for " <> payload <> ": " <> show e)
                     Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
 
--- server.publicUrl is required once a mount is active. This list supplies it, so each
--- decode example stays about its own concern.
 {- Each firstParty entry the loader must agree with the npm route about: the leading sigil is
 optional, and anything that is not one usable path component is refused. -}
 scopeEntryVerdicts :: [(Text, Bool)]
