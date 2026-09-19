@@ -99,7 +99,7 @@ spec = describe "graceful shutdown -- drain in-flight work" $ do
             stopped <- timeout 5_000_000 (wait serverThread)
             stopped `shouldBe` Just ()
 
-            -- And it served before stopping (not refused from the start).
+            -- And the port is gone once it stopped, so the stop really closed the socket.
             afterStop <- try (getStatusBody manager port) :: IO (Either SomeException (Int, LByteString))
             afterStop `shouldSatisfy` isLeft
 

@@ -65,7 +65,7 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         initial <- verdaccioSnapshot e2e
         privateInitial <- verdaccioSnapshot cache
         run <- runDredgerOnce plane ["--once"] (sweepEnv dredgerPkg)
-        assertFullSweep "deleting " dredgerPkg initial run
+        assertFullSweep dredgerPkg initial run
         verdaccioVersions e2e (psName dredgerPkg) `shouldReturn` []
         finalStore <- verdaccioSnapshot e2e
         finalStore `shouldBe` Map.delete (psName dredgerPkg) initial
@@ -177,14 +177,12 @@ identityEntry :: Int -> Text -> Pair
 identityEntry position revoked =
     fromString ("revoke-" <> show position) .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= revoked]
 
-assertFullSweep :: Text -> PkgSpec -> Map Text [Text] -> RoleRun -> Expectation
-assertFullSweep opening pkg initial run = do
+{- | A full walk over the seeded store: it exits clean, deletes every version of @pkg@, and
+closes with the cycle tally those deletions imply.
+-}
+assertFullSweep :: PkgSpec -> Map Text [Text] -> RoleRun -> Expectation
+assertFullSweep pkg initial run = do
     (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
-    assertSweepLines opening pkg initial run
-
--- | The lines a full walk over the seeded store wrote, for a run whose own status the case asserts.
-assertSweepLines :: Text -> PkgSpec -> Map Text [Text] -> RoleRun -> Expectation
-assertSweepLines opening pkg initial run = do
     let versions = Map.findWithDefault [] (psName pkg) initial
         guardCount = length (Map.findWithDefault [] publishDredgerName initial)
         examined = sum (map length (Map.elems initial)) - guardCount
@@ -198,7 +196,7 @@ assertSweepLines opening pkg initial run = do
     sweepMessages run `shouldMatchList` (map auditLine versions <> [cycleLine fields])
   where
     auditLine version =
-        opening
+        "deleting "
             <> psName pkg
             <> "@"
             <> version
