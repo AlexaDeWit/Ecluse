@@ -30,12 +30,11 @@ import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings 
 import Ecluse.Core.Cve.Slot (swapIn)
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Package (PackageName, mkPackageName, renderPackageName)
+import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Queue (noMirrorQueue)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentWithheld),
     StoredVersion (StoredVersion),
-    VersionPresence (VersionServed),
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Sweep (sweepCycle)
@@ -60,7 +59,7 @@ import Ecluse.Core.Server.Readiness (
     routable,
  )
 import Ecluse.Core.Telemetry.Metrics (Label (LEcosystem), SweepResult (SweepDeleted, SweepExamined, SweepWouldDelete), metricAttributes)
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Version (Version)
 import Ecluse.Cve.Sync (CveSyncHandle (..))
 import Ecluse.Dredger (dredgerReady, latchedStep, runDredger, withSyncTasks)
 import Ecluse.Dredger.Plan (DredgerOptions (DredgerOptions), SweepMode (SweepDeletes, SweepPreviews), SweepRepetition (SweepOnce), sweepReportFor)
@@ -72,8 +71,9 @@ import Ecluse.Test.Maintenance (
     FakeStoreConfig (..),
     defaultFakeStoreConfig,
     newFakeStore,
+    seededStoreConfig,
  )
-import Ecluse.Test.Package (sampleManifest)
+import Ecluse.Test.Package (unscopedNpm, v1_0_0)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Rules (denyRule)
 import Ecluse.Test.Sweep (RecordedSweep (..), recordingPorts, testMount, testPacing)
@@ -104,7 +104,7 @@ companionSpec = describe "withSyncTasks" $ do
         outcome <-
             Exception.try $
                 withSyncTasks [throwIO (SyncGaveUp "the advisory sync gave up")] (threadDelay 200000 >> writeIORef completed True)
-        outcome `shouldSatisfy` faulted
+        outcome `shouldSatisfy` faultedWith "the advisory sync gave up"
         readIORef completed `shouldReturn` False
 
 {- The cap is a breaker, so it stops the Dredger for the life of the process. Nothing clears it,
@@ -262,16 +262,10 @@ stepped steps = do
     pure (store, rec', latched)
 
 seededConfig :: FakeStoreConfig
-seededConfig =
-    defaultFakeStoreConfig
-        { fakeContents = Map.fromList [(name, [StoredVersion (version "1.0.0") VersionServed Nothing]) | name <- names]
-        , fakeManifests = Map.fromList [(name, sampleManifest name [version "1.0.0"]) | name <- names]
-        }
-  where
-    names = seededNames
+seededConfig = seededStoreConfig [(name, [v1_0_0]) | name <- seededNames]
 
 seededNames :: [PackageName]
-seededNames = [packageName "left-pad", packageName "lodash"]
+seededNames = [unscopedNpm "left-pad", unscopedNpm "lodash"]
 
 -- A cap of one, so the first cycle fills it and latches with the second package untouched.
 cappedPacing :: SweepPacing
@@ -285,15 +279,11 @@ held store = concatMap (map storedVersionOf) . Map.elems <$> readFakeContents st
 generation :: Maybe DbEtag
 generation = Just (DbEtag "etag-1")
 
-packageName :: Text -> PackageName
-packageName = mkPackageName Npm Nothing
-
-version :: Text -> Version
-version = mkVersion Npm
-
--- The linked companion rethrows asynchronously, so the assertion uses the base exception perimeter.
-faulted :: Either SomeException () -> Bool
-faulted = isLeft
+{- The linked companion rethrows asynchronously and wraps what it rethrows, so the assertion
+catches at the base perimeter and reads the sync task's own fault out of the rendering.
+-}
+faultedWith :: Text -> Either SomeException () -> Bool
+faultedWith needle = either (T.isInfixOf needle . toText . displayException) (const False)
 
 -- A typed fault a spec throws from a sync task, so the case names what it simulated.
 newtype SyncGaveUp = SyncGaveUp Text

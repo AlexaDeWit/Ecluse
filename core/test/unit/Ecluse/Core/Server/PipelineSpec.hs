@@ -28,10 +28,10 @@ import Ecluse.Core.Package (HashAlg (SHA512), PackageName, mkPackageName)
 import Ecluse.Core.Package.Integrity (mkMinIntegrity)
 import Ecluse.Core.Registry.Maintenance (ConsentVerdict (ConsentWithheld), StoreClass (StorePreserved), StoreFacts (factBackend), StoredVersion (StoredVersion, storedVersion), VersionPresence (VersionServed))
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
-import Ecluse.Core.Registry.Npm.Route (
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
+import Ecluse.Core.Registry.Npm.Route.Internal (
     npmPackumentContract,
     npmPackumentReplies,
-    npmRouter,
     npmTarballContract,
     npmTarballReplies,
  )

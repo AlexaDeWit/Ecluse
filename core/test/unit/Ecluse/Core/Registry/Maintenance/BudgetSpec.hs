@@ -25,17 +25,19 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     newBudgetMeter,
     oneRequest,
     paceOf,
-    paceSeconds,
     parseQuotaDimension,
     parseRequestKind,
-    quotaDimensionName,
-    quotaDimensions,
     renderRequestTally,
-    requestKindName,
     requestKinds,
     smallestQuota,
     tallyCounts,
     undeclaredBudget,
+ )
+import Ecluse.Core.Registry.Maintenance.Budget.Internal (
+    paceSeconds,
+    quotaDimensionName,
+    quotaDimensions,
+    requestKindName,
  )
 
 spec :: Spec

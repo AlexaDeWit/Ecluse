@@ -30,12 +30,8 @@ spec = do
             osvDbFileName "npm" `shouldBe` "npm-osv-schema4.db"
 
     describe "renderMetaKey" $ do
-        it "renders every meta key to a distinct stored form" $ do
-            let keys = map renderMetaKey (universe :: [MetaKey])
-            ordNub keys `shouldBe` keys
-
-        -- The literals pin the stored keys a consumer reads by name. A rename here breaks
-        -- every artifact already published under the epoch.
+        -- The literals pin the stored keys a consumer reads by name, each distinct from the
+        -- rest. A rename here breaks every artifact already published under the epoch.
         it "renders each key to its published spelling" $
             map renderMetaKey (universe :: [MetaKey])
                 `shouldBe` [ "pilot_version"

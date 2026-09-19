@@ -6,7 +6,7 @@
 @ECLUSE_@ environment overlay merged into one tree, strongest last.
 
 A variable name maps to a document path rather than to a setting, so every key is reachable from
-the environment. 'envSpellingOf' inverts that mapping, which is how a refusal names the key an
+the environment. The resolver inverts that mapping, which is how a refusal names the key an
 operator actually wrote.
 -}
 module Ecluse.Config.Resolve (
@@ -14,7 +14,6 @@ module Ecluse.Config.Resolve (
     buildEnvAst,
     secretLeafKeys,
     secretEnvSpellings,
-    envSpellingOf,
     mountKeyRef,
     mountDocRef,
 ) where
@@ -64,9 +63,8 @@ secretLeafKeys = ["authToken", "token"]
 secretEnvSpellings :: [Text]
 secretEnvSpellings = map envSpellingOf secretLeafKeys
 
-{- | The environment spelling of a camelCase document key (@authToken@ -> @AUTH_TOKEN@).
-It inverts 'buildEnvAst', so a boot error names exactly the key the resolver reads.
--}
+{- The environment spelling of a camelCase document key (@authToken@ -> @AUTH_TOKEN@).
+It inverts 'buildEnvAst', so a boot error names exactly the key the resolver reads. -}
 envSpellingOf :: Text -> Text
 envSpellingOf = T.toUpper . T.concatMap underscoreUpper
   where

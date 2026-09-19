@@ -7,9 +7,15 @@ module Ecluse.Core.InFlightSpec (spec) where
 import Test.Hspec
 import UnliftIO (async, cancel, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (mask, throwString, try)
+import UnliftIO.Exception (mask, throwIO, try)
 
 import Ecluse.Core.InFlight (guardInFlight)
+
+-- The body's own failure, distinguishable from anything the guard could raise.
+data BodyFailed = BodyFailed
+    deriving stock (Eq, Show)
+
+instance Exception BodyFailed
 
 spec :: Spec
 spec = do
@@ -28,12 +34,12 @@ spec = do
         it "hands the error to the orphan hook and still releases the slot on a synchronous failure" $ do
             released <- newIORef (0 :: Int)
             orphaned <- newIORef (0 :: Int)
-            outcome <-
+            outcome :: Either BodyFailed Int <-
                 try $
                     mask $ \restore ->
-                        guardInFlight restore (\_ -> bump orphaned) (bump released) (throwString "boom" :: IO Int)
+                        guardInFlight restore (\_ -> bump orphaned) (bump released) (throwIO BodyFailed :: IO Int)
             -- The body's exception propagates to the leader unchanged.
-            (outcome :: Either SomeException Int) `shouldSatisfy` isLeft
+            outcome `shouldBe` Left BodyFailed
             readIORef orphaned `shouldReturn` 1
             readIORef released `shouldReturn` 1
 
@@ -43,9 +49,9 @@ spec = do
             _ <-
                 try
                     ( mask $ \restore ->
-                        guardInFlight restore (\_ -> record "orphan") (record "release") (throwString "boom" :: IO ())
+                        guardInFlight restore (\_ -> record "orphan") (record "release") (throwIO BodyFailed :: IO ())
                     ) ::
-                    IO (Either SomeException ())
+                    IO (Either BodyFailed ())
             -- Order matters: a consumer fills its result promise (orphan) before the
             -- guard frees the slot (release). A follower never sees the slot gone
             -- without the result delivered.

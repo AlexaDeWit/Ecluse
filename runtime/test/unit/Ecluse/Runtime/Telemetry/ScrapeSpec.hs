@@ -15,7 +15,7 @@ import UnliftIO (bracket)
 import OpenTelemetry.Metric (createMeterProvider, defaultSdkMeterProviderOptions)
 import OpenTelemetry.Resource (emptyMaterializedResources)
 
-import Ecluse.Runtime.Telemetry.Scrape (
+import Ecluse.Runtime.Telemetry.Scrape.Internal (
     MetricScrape (MetricScrape, runMetricScrape),
     ScrapeListener (ScrapeListener),
     metricScrapeFor,

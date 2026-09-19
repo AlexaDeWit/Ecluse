@@ -30,7 +30,7 @@ import Test.Hspec
 import UnliftIO (evaluate)
 
 import Ecluse.Core.Credential (mkSecret)
-import Ecluse.Runtime.Log (
+import Ecluse.Runtime.Log.Internal (
     DdContext (..),
     DdSpan (..),
     LogFormat (..),

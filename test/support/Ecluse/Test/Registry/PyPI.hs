@@ -2,21 +2,25 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared PyPI declaration cases, filenames, and PEP 691 entries
-for configuration, projection, routing, and performance checks.
+{- | Shared PyPI declaration cases, filenames, PEP 691 entries, and the simple index that
+carries them, for configuration, projection, routing, and performance checks.
 -}
 module Ecluse.Test.Registry.PyPI (
     pypiEntryVerdicts,
     simpleFile,
+    filesNamed,
     withFileKeys,
+    simpleIndex,
+    simpleIndexWith,
     separatorHeavySdist,
 ) where
 
-import Data.Aeson (Value (Object), object, (.=))
+import Data.Aeson (Value, object, (.=))
 import Data.Aeson.Key (Key)
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (Pair)
 import Data.Text qualified as T
 
+import Ecluse.Test.Json (withKeys)
 import Ecluse.Test.Package (validSha256)
 
 -- | A PEP 691 entry on the declared files host with a SHA-256 digest.
@@ -31,11 +35,23 @@ simpleFile filename =
         , "provenance" .= ("https://pypi.org/integrity/x/provenance" :: Text)
         ]
 
+-- | One 'simpleFile' entry per filename, in the order given.
+filesNamed :: [Text] -> [Value]
+filesNamed = map simpleFile
+
 -- | A file entry with the given keys added or overridden, so an example names only its own axis.
 withFileKeys :: [(Key, Value)] -> Value -> Value
-withFileKeys overrides = \case
-    Object base -> Object (foldr (uncurry KeyMap.insert) base overrides)
-    other -> other
+withFileKeys = withKeys
+
+-- | A PEP 691 simple index: the project name and its file entries, nothing else.
+simpleIndex :: Text -> [Value] -> Value
+simpleIndex name = simpleIndexWith name []
+
+{- | 'simpleIndex' carrying site-specific top-level fields, such as a @meta@ block or the
+PEP 700 @tracks@ array, applied between the name and the files.
+-}
+simpleIndexWith :: Text -> [Pair] -> [Value] -> Value
+simpleIndexWith name extra files = object (["name" .= name] <> extra <> ["files" .= files])
 
 -- | A malformed sdist with distinct suffixes for allocation and scaling measurements.
 separatorHeavySdist :: Text -> Int -> Text -> Text

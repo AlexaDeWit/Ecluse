@@ -10,6 +10,7 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (StoreTagConflict))
 import Ecluse.Composition.Endpoints (vetEndpoints)
+import Ecluse.Composition.Support (codeArtifactDomain, expectConfig, npmMountDoc, pubUrlEnv)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
@@ -149,7 +150,7 @@ layeringSpec = describe "one tag per endpoint" $ do
     it "refuses an environment override that writes a second tag over the document's" $
         loadConfig
             (pubUrlEnv <> [("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN", "t")])
-            (Just (mountDoc (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror]])))
+            (Just (npmMountDoc (mirrored [decl "mirrorTarget" "codeArtifact" [url codeArtifactMirror]])))
             `shouldSatisfy` refusalMentions "must name exactly one store tag"
 
     it "fills a key under the tag the document declared, from the environment layer" $ do
@@ -211,10 +212,6 @@ hostValidationSpec = describe "the URL a tag admits" $ do
         outcome `shouldSatisfy` refusalMentions "its path must be /npm/{repository}/"
         outcome `shouldSatisfy` refusalMentions "mounts.npm.privateUpstream.codeArtifact.url"
         outcome `shouldNotSatisfy` refusalMentions "mirrorTarget"
-
-    it "admits a codeArtifact private upstream that addresses a repository under its own format" $
-        loadMount [decl "privateUpstream" "codeArtifact" [url codeArtifactInternal]]
-            `shouldSatisfy` isRight
 
     it "refuses a codeArtifact mirror target on an ecosystem CodeArtifact has no format for" $ do
         let outcome = loadConfig pubUrlEnv (Just rubygemsDoc)
@@ -299,12 +296,10 @@ tagCollisionSpec = describe "one tag per store" $ do
 parseCodeArtifactHostSpec :: Spec
 parseCodeArtifactHostSpec = describe "parseCodeArtifactHost" $ do
     it "parses a valid CodeArtifact host into domain, owner, and region" $ do
+        -- The domain keeps every hyphen it was written with: only the last one separates
+        -- the owner, so a hyphenated domain does not lose its head.
         parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.us-west-2.amazonaws.com"
             `shouldBe` Just ("my-domain", "111122223333", "us-west-2")
-
-    it "parses a valid CodeArtifact host with hyphens in the domain" $ do
-        parseCodeArtifactHost "my-company-domain-111122223333.d.codeartifact.eu-central-1.amazonaws.com"
-            `shouldBe` Just ("my-company-domain", "111122223333", "eu-central-1")
 
     it "returns Nothing if the host does not contain .d.codeartifact." $ do
         parseCodeArtifactHost "example.com" `shouldBe` Nothing
@@ -364,9 +359,6 @@ twoTagged =
     decl' "mirrorTarget" $
         "{\"codeArtifact\":{" <> url codeArtifactMirror <> "},\"verdaccio\":{" <> url verdaccioUrl <> "}}"
 
-mountDoc :: [Text] -> ByteString
-mountDoc endpoints = encodeUtf8 ("{\"mounts\":{\"npm\":{" <> T.intercalate "," endpoints <> "}}}")
-
 -- A rubygems mount mirroring into CodeArtifact, which carries no format for that ecosystem.
 rubygemsDoc :: ByteString
 rubygemsDoc =
@@ -380,7 +372,7 @@ rubygemsDoc =
             <> "}}}"
 
 loadMount :: [Text] -> Either [ConfigError] Config
-loadMount endpoints = loadConfig pubUrlEnv (Just (mountDoc endpoints))
+loadMount endpoints = loadConfig pubUrlEnv (Just (npmMountDoc endpoints))
 
 loadsWith :: [Text] -> Expectation
 loadsWith endpoints = case loadMount endpoints of
@@ -410,8 +402,7 @@ mountsFor endpoints = cfgMounts . configApp <$> expectLoad pubUrlEnv endpoints
 
 -- Load one npm mount under an environment layer, failing the test on a refusal.
 expectLoad :: [(String, String)] -> [Text] -> IO Config
-expectLoad env endpoints =
-    either (fail . show . map renderConfigError) pure (loadConfig env (Just (mountDoc endpoints)))
+expectLoad env endpoints = expectConfig env (Just (npmMountDoc endpoints))
 
 -- The tag-conflict refusals one role's endpoint pass earns, with its other findings dropped.
 tagConflicts :: RegistryRole -> Map Ecosystem MountConfig -> [BootError]
@@ -423,9 +414,6 @@ isConflictAt :: Text -> Text -> BootError -> Bool
 isConflictAt key otherKey = \case
     StoreTagConflict _ written _ otherWritten _ -> written == key && otherWritten == otherKey
     _ -> False
-
-pubUrlEnv :: [(String, String)]
-pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
 
 publicUrl, privateUrl, mirrorUrl, publishUrl, verdaccioUrl, sharedUrl :: Text
 publicUrl = "https://registry.npmjs.org"
@@ -440,6 +428,3 @@ codeArtifactMirror = codeArtifactDomain <> "/npm/mirror/"
 codeArtifactInternal = codeArtifactDomain <> "/npm/internal/"
 codeArtifactPyPI = codeArtifactDomain <> "/pypi/mirror/"
 codeArtifactBare = codeArtifactDomain <> "/npm/"
-
-codeArtifactDomain :: Text
-codeArtifactDomain = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com"

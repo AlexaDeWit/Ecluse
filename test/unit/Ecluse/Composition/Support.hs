@@ -6,12 +6,23 @@
 environment layers, their targeted mutations, and the expect-helpers that load them.
 -}
 module Ecluse.Composition.Support (
+    NoCredentials (NoCredentials),
     fixedNow,
     testLimits,
     fdLimit,
+    mib,
+    gib,
     noCeiling,
     staticEnvVars,
+    pubUrlEnv,
+    privateUpstreamUrl,
+    collapsingMirrorTarget,
+    collapsedMirrorRefusal,
     scopedName,
+    mountDocFor,
+    npmMountDoc,
+    completeMountDoc,
+    codeArtifactDomain,
     codeArtifactMirrorUrl,
     codeArtifactEnvVars,
     withObservablePrivate,
@@ -25,6 +36,7 @@ module Ecluse.Composition.Support (
     withoutPrivateUpstreamUrl,
     withoutQueueUrl,
     overrideEnv,
+    withAmbientAws,
     expectEnv,
     expectAppConfig,
     expectProviders,
@@ -35,9 +47,12 @@ module Ecluse.Composition.Support (
     expectPlanFor,
 ) where
 
+import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
+import System.Environment (setEnv, unsetEnv)
+import UnliftIO.Exception (bracket_)
 
-import Ecluse.Composition.BootError (BootError (StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
+import Ecluse.Composition.BootError (BootError (MirrorTargetOnMountEndpoint, StoreMaintenanceUnavailable), StoreMaintenanceReason (NoControlPlane, PrivateCacheUnavailable))
 import Ecluse.Composition.Credential (CredentialProviders, initCredentialProviders, initTargetCredentialProviders)
 import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl))
 import Ecluse.Composition.Plan (
@@ -57,6 +72,14 @@ import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
 import Ecluse.Test.Credential (noCredentialReporters)
 
+{- | The typed stand-in for amazonka's credential-discovery failure, which a boot folds into a
+refusal naming this constructor. A case that drives a build to throw throws this.
+-}
+data NoCredentials = NoCredentials
+    deriving stock (Show)
+
+instance Exception NoCredentials
+
 -- | A fixed clock for the injected 'pdNow', never advanced (no timing here).
 fixedNow :: UTCTime
 fixedNow = UTCTime (fromGregorian 2026 6 23) 0
@@ -68,6 +91,12 @@ testLimits = Limits{maxBodyBytes = 12582912, maxVersionCount = 100000, maxArtifa
 -- | A pinned file-descriptor soft limit, so both connection-pool sizings are deterministic.
 fdLimit :: Int
 fdLimit = 1024
+
+mib :: Int
+mib = 1024 * 1024
+
+gib :: Int
+gib = 1024 * mib
 
 {- | A posture with no heap-ceiling datapoint, so the memory plan renders its shipped
 fallbacks and every number a golden pins is fixed.
@@ -88,12 +117,50 @@ static write token, so the mount's mirror credential derives to a static provide
 staticEnvVars :: [(String, String)]
 staticEnvVars =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", privateUpstreamUrl)
     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://public.example.test")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "mirror-write-token")
     ]
+
+-- | The one environment entry every document fixture needs: the public URL a mount derives from.
+pubUrlEnv :: [(String, String)]
+pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
+
+-- | The private upstream the composition fixtures declare.
+privateUpstreamUrl :: (IsString s) => s
+privateUpstreamUrl = "https://private.example.test"
+
+{- | Point the npm mount's registry mirror target at its own private upstream. A writing role
+advises on the collapse and the deleting role refuses it.
+-}
+collapsingMirrorTarget :: [(String, String)] -> [(String, String)]
+collapsingMirrorTarget = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL" privateUpstreamUrl
+
+-- | The deleting role's refusal of 'collapsingMirrorTarget'.
+collapsedMirrorRefusal :: BootError
+collapsedMirrorRefusal = MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" privateUpstreamUrl
+
+-- | A one-mount configuration document for the given ecosystem, carrying exactly these keys.
+mountDocFor :: Text -> [Text] -> ByteString
+mountDocFor eco keys = encodeUtf8 ("{\"mounts\":{\"" <> eco <> "\":{" <> T.intercalate "," keys <> "}}}")
+
+-- | 'mountDocFor' on npm, the ecosystem most document fixtures declare.
+npmMountDoc :: [Text] -> ByteString
+npmMountDoc = mountDocFor "npm"
+
+{- | A complete mount for the given ecosystem: both upstreams and a registry mirror target with
+its static write token, so a case refuses on the fact it varies and not on a missing endpoint.
+-}
+completeMountDoc :: Text -> ByteString
+completeMountDoc eco =
+    mountDocFor
+        eco
+        [ "\"privateUpstream\":{\"registry\":{\"url\":\"https://private.example.test\"}}"
+        , "\"publicUpstream\":{\"registry\":{\"url\":\"https://public.example.test\"}}"
+        , "\"mirrorTarget\":{\"registry\":{\"url\":\"https://mirror.example.test\",\"token\":\"t\"}}"
+        ]
 
 {- | 'Ecluse.Test.Package.thingName' under the given scope, for the specs that read a
 first-party predicate. The unscoped counterpart is @thingName@ itself.
@@ -107,11 +174,15 @@ points must report it, and neither may echo the credential it holds.
 malformedAwsEndpoint :: String
 malformedAwsEndpoint = "http://operator:s3cr3t@localhost:9000"
 
-{- | The CodeArtifact repository endpoint the deleting role's fixtures mirror to: the one host
-this build carries a store maintenance backend for.
+{- | The CodeArtifact domain endpoint the fixtures address: the one host this build carries a
+store maintenance backend for. Its account id and region are the shapes the host parser accepts.
 -}
-codeArtifactMirrorUrl :: (IsString s) => s
-codeArtifactMirrorUrl = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"
+codeArtifactDomain :: (IsString s) => s
+codeArtifactDomain = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com"
+
+-- | The repository under 'codeArtifactDomain' the deleting role's fixtures mirror to.
+codeArtifactMirrorUrl :: (IsString s, Semigroup s) => s
+codeArtifactMirrorUrl = codeArtifactDomain <> "/npm/mirror/"
 
 {- | 'staticEnvVars' mirroring to 'codeArtifactMirrorUrl' under its own tag. That tag mints the
 write token, so the static one goes with the registry target it belonged to.
@@ -171,6 +242,15 @@ withoutQueueUrl = filter ((/= "ECLUSE_QUEUE__URL") . fst)
 -- | Override (or insert) one environment entry.
 overrideEnv :: String -> String -> [(String, String)] -> [(String, String)]
 overrideEnv k v env = (k, v) : filter ((/= k) . fst) env
+
+{- | Run an action under an AWS identity the SDK's own credential discovery finds. The entries
+are cleared afterwards, since the whole suite shares one process environment.
+-}
+withAmbientAws :: IO a -> IO a
+withAmbientAws =
+    bracket_ (traverse_ (uncurry setEnv) ambientAws) (traverse_ (unsetEnv . fst) ambientAws)
+  where
+    ambientAws = [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test"), ("AWS_REGION", "us-east-1")]
 
 -- | Load an environment layer, failing the test on a parse error.
 expectEnv :: [(String, String)] -> IO AppConfig

@@ -9,8 +9,7 @@ import Data.Conduit.List qualified as CL
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
     StoreFault,
     protocolFault,
@@ -32,6 +31,7 @@ import Ecluse.Core.Registry.Sweep.Walk (
     walkBuckets,
  )
 import Ecluse.Test.Maintenance (withBucket)
+import Ecluse.Test.Package (unscopedNpm)
 
 spec :: Spec
 spec = do
@@ -81,7 +81,7 @@ collectSpec :: Spec
 collectSpec = describe "collectBucketWith" $ do
     it "reads a bucket whole and sorts it, so the walk's order does not follow the store's" $ do
         outcome <- withBucket "a" $ \a -> collectBucket alphabet a (pagesOf [["apricot", "almond"], ["apple"]])
-        namesOf outcome `shouldBe` Just (map name ["almond", "apple", "apricot"])
+        namesOf outcome `shouldBe` Just (map unscopedNpm ["almond", "apple", "apricot"])
 
     it "reads an empty bucket as no names rather than as a fault" $ do
         outcome <- withBucket "z" $ \z -> collectBucket alphabet z (pagesOf [])
@@ -140,16 +140,13 @@ collectBucket alphabet prefix source =
 
 -- A listing that yields the given pages and ends cleanly.
 pagesOf :: [[Text]] -> ConduitT () [PackageName] IO (Maybe StoreFault)
-pagesOf pages = Nothing <$ traverse_ (yield . map name) pages
+pagesOf pages = Nothing <$ traverse_ (yield . map unscopedNpm) pages
 
 -- A listing that yields the given pages and then stops on a fault.
 faultingAfter :: [[Text]] -> ConduitT () [PackageName] IO (Maybe StoreFault)
 faultingAfter pages = do
-    traverse_ (yield . map name) pages
+    traverse_ (yield . map unscopedNpm) pages
     pure (Just (protocolFault "the store stopped answering the listing"))
-
-name :: Text -> PackageName
-name = mkPackageName Npm Nothing
 
 -- The buckets those spellings name, through the parser a cursor read uses.
 spelledBuckets :: [Text] -> [NamePrefix]

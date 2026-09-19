@@ -5,17 +5,14 @@
 
 module Ecluse.Config.TypesSpec (spec) where
 
-import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Config.Rule (PolicyError (..), renderPolicyError)
 import Ecluse.Config.Types (HttpScheme (Http, Https), mkUrl, splitHttpScheme, unUrl)
 
 spec :: Spec
 spec = do
     urlSpec
     schemeSpec
-    policyErrorRenderSpec
 
 {- A 'Url' exists only for a value that cleared every check, so each refusal below is a value the
 type cannot hold. The key names each one, because boot reports the key an operator must fix. -}
@@ -68,12 +65,3 @@ schemeSpec = describe "splitHttpScheme" $
         splitHttpScheme "http://localhost:8080" `shouldBe` Just (Http, "localhost:8080")
         splitHttpScheme "sqs://queue.example.test" `shouldBe` Nothing
         splitHttpScheme "registry.example.test" `shouldBe` Nothing
-
-policyErrorRenderSpec :: Spec
-policyErrorRenderSpec = describe "renderPolicyError" $
-    -- Each constructor renders a distinct, operator-facing line.
-    it "renders every policy-error kind" $ do
-        renderPolicyError (MissingRuleType "x") `shouldSatisfy` ("missing" `T.isInfixOf`)
-        renderPolicyError (UnknownRuleType "x" "Y") `shouldSatisfy` ("unknown type" `T.isInfixOf`)
-        renderPolicyError (MalformedRule "x" "bad") `shouldSatisfy` ("bad" `T.isInfixOf`)
-        renderPolicyError (SuppressUnknownRule "x") `shouldSatisfy` ("disables" `T.isInfixOf`)

@@ -7,7 +7,6 @@ module Ecluse.Composition.WorkerSpec (spec) where
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
-import Ecluse (mountBindingFor)
 import Ecluse.Composition (PublishTarget (ptEcosystem), planMounts, planPublishTargets)
 import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite))
 import Ecluse.Composition.Support (expectConfig, expectProviders, expectValidated, fixedNow, overrideEnv, scopedName, staticEnvVars, testLimits)
@@ -20,6 +19,7 @@ import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), Packumen
 import Ecluse.Core.Worker (WorkerPolicy (wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpNow))
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Test.Support (newTestEnv)
+import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Package (thingName)
 import Ecluse.Test.Rules (inertRuleDeps)
 

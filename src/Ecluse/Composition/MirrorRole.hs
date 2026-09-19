@@ -12,7 +12,6 @@ split deployment runs each in its own fleet so the front door and the worker sca
 The split only works over a durable queue, which is what 'mirrorRoleRefusal' decides.
 -}
 module Ecluse.Composition.MirrorRole (
-    runsWorker,
     spawnsWorker,
     enqueuesJobs,
     MirrorMintPlan (..),
@@ -27,7 +26,7 @@ import Ecluse.Composition.MirrorQueue (
  )
 import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly), roleInvocation)
 
--- | Whether this role would run the mirror worker, given a runtime that has one to run.
+-- Whether this role would run the mirror worker, given a runtime that has one to run.
 runsWorker :: MirrorRole -> Bool
 runsWorker = \case
     ServeAndMirror -> True

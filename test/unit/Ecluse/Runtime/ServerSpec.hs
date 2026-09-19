@@ -30,7 +30,8 @@ import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterProjectName))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter, npmPublish)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
-import Ecluse.Core.Registry.Npm.Route (npmNotFound, npmRouter)
+import Ecluse.Core.Registry.Npm.Route (npmRouter)
+import Ecluse.Core.Registry.Npm.Route.Internal (npmNotFound)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission)
@@ -41,7 +42,7 @@ import Ecluse.Core.Server.Readiness (Readiness (Latched))
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (UnclassifiedFault))
 import Ecluse.Core.Worker (Liveness (Liveness, liveHealthy, liveLastPoll), heartbeatLivenessNow, workerHeartbeatStaleAfter)
 import Ecluse.Runtime.Env (envWorkerHeartbeat, recordPoll)
-import Ecluse.Runtime.Server (
+import Ecluse.Runtime.Server.Internal (
     DrainSignal,
     MountBinding (..),
     ServerConfig (..),

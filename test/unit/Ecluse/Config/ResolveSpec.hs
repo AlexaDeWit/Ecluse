@@ -8,6 +8,7 @@ module Ecluse.Config.ResolveSpec (spec) where
 import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Ecluse.Composition.Support (codeArtifactMirrorUrl)
 import Ecluse.Config.Resolve (buildEnvAst, deepMerge)
 import Test.Hspec (Spec, describe, it, shouldBe)
 
@@ -130,7 +131,7 @@ spec = do
                     [ ("ECLUSE_SERVER__PORT", "4873")
                     , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.com")
                     , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM__REGISTRY__URL", "https://public.example.com")
-                    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", toString codeArtifactMirror)
+                    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", toString @Text codeArtifactMirrorUrl)
                     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
                     , ("ECLUSE_QUEUE__MAX_MEMORY_DEPTH", "50000")
                     , ("ECLUSE_QUEUE__MAX_RECEIVE_COUNT", "5")
@@ -186,7 +187,7 @@ spec = do
                                                         ( "mirrorTarget"
                                                         , tagged
                                                             "codeArtifact"
-                                                            [ ("url", String codeArtifactMirror)
+                                                            [ ("url", String codeArtifactMirrorUrl)
                                                             , ("tokenDuration", Number 43200)
                                                             ]
                                                         )
@@ -269,7 +270,3 @@ tagged tag keys = Object (KeyMap.singleton tag (Object (KeyMap.fromList keys)))
 -- | 'tagged' for the endpoints that carry the url alone.
 taggedUrl :: Key.Key -> Text -> Value
 taggedUrl tag value = tagged tag [("url", String value)]
-
--- | A CodeArtifact repository endpoint, as the tagged mirror target writes it.
-codeArtifactMirror :: Text
-codeArtifactMirror = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"

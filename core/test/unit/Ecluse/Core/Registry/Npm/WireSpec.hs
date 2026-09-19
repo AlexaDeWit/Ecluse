@@ -79,13 +79,6 @@ versionManifestSpec = describe "VersionManifest" $ do
                 "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":\"gone\"}"
         vmDeprecated vm `shouldBe` Just "gone"
 
-    it "decodes the same manifest bytes to equal whole records" $ do
-        -- Compare two decodes of the same bytes as whole records: a determinism
-        -- check that exercises the derived Eq over every field, not one selector.
-        a <- decodeFixture @VersionManifest "core-js.manifest.json"
-        b <- decodeFixture @VersionManifest "core-js.manifest.json"
-        a `shouldBe` b
-
 distSpec :: Spec
 distSpec = describe "Dist" $ do
     it "captures the integrity triple (tarball, shasum, integrity)" $ do
@@ -103,13 +96,7 @@ distSpec = describe "Dist" $ do
     it "tolerates a dist with only the required tarball field" $
         decodesTo @Dist
             "{\"tarball\":\"https://example.test/x.tgz\"}"
-            ( Dist
-                { distTarball = "https://example.test/x.tgz"
-                , distShasum = Nothing
-                , distIntegrity = Nothing
-                , distUnpackedSize = Nothing
-                }
-            )
+            (bareDist "https://example.test/x.tgz")
 
 {- | A regression guard on advisory-field leniency. The __advisory__ @unpackedSize@ field
 decides no rule and no serve. A single hostile value must degrade that field alone, never

@@ -32,7 +32,7 @@ import Ecluse.Integration.Ministack (
     withMinistack,
  )
 import Ecluse.Runtime.Aws.Env (AwsEndpoint (AwsEndpoint, endpointHost, endpointPort, endpointSecure))
-import Ecluse.Runtime.Queue.Sqs (
+import Ecluse.Runtime.Queue.Sqs.Internal (
     SqsConfig (sqsEndpoint, sqsWaitSeconds),
     defaultSqsConfig,
     newSqsQueue,

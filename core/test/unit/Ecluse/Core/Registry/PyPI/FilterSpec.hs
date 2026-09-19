@@ -34,8 +34,9 @@ import Ecluse.Core.Server.Response (
     ServeDecision (Reject),
  )
 import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
+import Ecluse.Test.Json (fieldAt, isObject)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, validSha1, validSha256)
-import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
+import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Snapshot (jsonSnapshot, projectJsonSnapshot)
 import Ecluse.Test.Support (expectRight)
 
@@ -51,14 +52,14 @@ spec = do
 relaySpec :: Spec
 relaySpec = describe "what the assembly relays from the base document" $ do
     it "keeps meta, so a mirror still reads the serial it revalidates against" $
-        field "meta" (assembleOne allFiles)
+        fieldAt "meta" (assembleOne allFiles)
             `shouldBe` Just (object ["api-version" .= ("1.4" :: Text), "_last-serial" .= (37059094 :: Int)])
 
     it "keeps the project name the winning document reported" $
-        field "name" (assembleOne allFiles) `shouldBe` Just (String "requests")
+        fieldAt "name" (assembleOne allFiles) `shouldBe` Just (String "requests")
 
     it "keeps a top-level key this build does not model" $
-        field "tracks" (assembleOne allFiles) `shouldBe` Just (Array mempty)
+        fieldAt "tracks" (assembleOne allFiles) `shouldBe` Just (Array mempty)
 
     it "keeps every modelled key on a served file entry, verbatim" $ do
         let entry = servedEntry (assembleOne allFiles) "requests-2.34.2-py3-none-any.whl"
@@ -79,7 +80,7 @@ relaySpec = describe "what the assembly relays from the base document" $ do
 survivorSpec :: Spec
 survivorSpec = describe "which releases and files the assembly serves" $ do
     it "names the surviving releases in the PEP 700 versions array, and no others" $
-        field "versions" (assembleOne allFiles) `shouldBe` Just (Array (fromList [String "2.34.2"]))
+        fieldAt "versions" (assembleOne allFiles) `shouldBe` Just (Array (fromList [String "2.34.2"]))
 
     it "omits a release the plan did not keep, files and all" $
         servedNames (assembleOne allFiles) `shouldNotContain` ["requests-2.34.1.tar.gz"]
@@ -101,7 +102,7 @@ survivorSpec = describe "which releases and files the assembly serves" $ do
 
     it "serves nothing at all for a plan with no survivors" $ do
         let served = assemble [] []
-        field "versions" served `shouldBe` Just (Array mempty)
+        fieldAt "versions" served `shouldBe` Just (Array mempty)
         servedNames served `shouldBe` []
 
 admissionSpec :: Spec
@@ -301,7 +302,7 @@ planFor name sources survivors kept =
                     [ nonEmpty
                         [ AdmittedEntry digest (ArrayEntry position) filename
                         | (position, entry) <- zip [0 ..] (servedFiles raw)
-                        , Just (String filename) <- [field "filename" entry]
+                        , Just (String filename) <- [fieldAt "filename" entry]
                         , filename `elem` names
                         ]
                     ]
@@ -315,12 +316,11 @@ indexOf :: [Value] -> Value
 indexOf = indexNamed "requests"
 
 indexNamed :: Text -> [Value] -> Value
-indexNamed name files =
-    object
-        [ "name" .= name
-        , "meta" .= object ["api-version" .= ("1.4" :: Text), "_last-serial" .= (37059094 :: Int)]
+indexNamed name =
+    simpleIndexWith
+        name
+        [ "meta" .= object ["api-version" .= ("1.4" :: Text), "_last-serial" .= (37059094 :: Int)]
         , "tracks" .= Array mempty
-        , "files" .= files
         ]
 
 allFiles :: [Value]
@@ -356,13 +356,8 @@ fileNamed filename =
 sidecarDigest :: Text
 sidecarDigest = "8c384ba3"
 
-field :: Text -> Value -> Maybe Value
-field key = \case
-    Object o -> KeyMap.lookup (fromString (toString key)) o
-    _ -> Nothing
-
 servedFiles :: Value -> [Value]
-servedFiles served = case field "files" served of
+servedFiles served = case fieldAt "files" served of
     Just (Array files) -> toList files
     _ -> []
 
@@ -375,8 +370,3 @@ servedNames = mapMaybe name . servedFiles
 
 servedEntry :: Value -> Text -> Maybe (KeyMap.KeyMap Value)
 servedEntry served filename = listToMaybe [entry | Object entry <- servedFiles served, KeyMap.lookup "filename" entry == Just (String filename)]
-
-isObject :: Value -> Bool
-isObject = \case
-    Object _ -> True
-    _ -> False

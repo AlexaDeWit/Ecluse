@@ -5,11 +5,12 @@
 
 module Ecluse.Config.AesonSpec (spec) where
 
-import Data.Text qualified as T
-
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Time (NominalDiffTime)
 import Test.Hspec
 
+import Ecluse.Composition.Support (codeArtifactMirrorUrl, completeMountDoc, expectAppConfig, expectConfig, npmMountDoc, pubUrlEnv)
 import Ecluse.Config (
     AdvisoriesSettings (..),
     AppConfig (..),
@@ -17,7 +18,7 @@ import Ecluse.Config (
     Config (..),
     ConfigError,
     EgressSettings (..),
-    FirstParty (FirstPartyPyPI),
+    FirstParty (FirstPartyNpmScopes, FirstPartyPyPI),
     LimitsSettings (..),
     MountConfig (mntFirstParty),
     ObservabilitySettings (..),
@@ -33,28 +34,20 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix)
 import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
 
+import Ecluse.Test.Package (unscopedPyPI)
 import Ecluse.Test.Registry.PyPI (pypiEntryVerdicts)
 
 spec :: Spec
 spec = describe "decodeDocument" $ do
     it "decodes a document with one mount and a rule patch" $
-        case loadConfig pubUrlEnv (Just singleMountDoc) of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+        mountKeysOf pubUrlEnv (Just singleMountDoc) `shouldReturn` [Npm]
 
     it "decodes a document carrying only a rule policy (no mounts)" $
-        case loadConfig [] (Just "{\"rules\":{\"min-age\":{\"ageSeconds\":1209600}}}") of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> configMounts doc `shouldBe` mempty
-
-    it "keys a mount by its ecosystem name, deriving the prefix from it" $
-        case loadConfig pubUrlEnv (Just (mountDocForEcosystem "npm")) of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+        mountKeysOf [] (Just "{\"rules\":{\"min-age\":{\"ageSeconds\":1209600}}}") `shouldReturn` []
 
     it "rejects an unparseable JSON body" $
         loadConfig [] (Just "{not json") `shouldSatisfy` isLeft
@@ -95,61 +88,51 @@ spec = describe "decodeDocument" $ do
         loadConfig [] (Just "{\"awsRegion\":\"us-east-1\"}") `shouldSatisfy` decodeErrorMentions "awsRegion"
 
     it "rejects an unknown mount ecosystem key, naming it (strict, not silently dropped)" $
-        loadConfig [] (Just (mountDocForEcosystem "npmm")) `shouldSatisfy` decodeErrorMentions "npmm"
+        loadConfig [] (Just (completeMountDoc "npmm")) `shouldSatisfy` decodeErrorMentions "npmm"
 
     it "rejects an unknown key inside a mount, naming it" $
         loadConfig [] (Just (mountDocWithExtraKey "baseURL")) `shouldSatisfy` decodeErrorMentions "baseURL"
 
     it "keeps the shipped template mounts dormant when the overlay never mentions them" $
-        case loadConfig [] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> configMounts doc `shouldBe` mempty
+        mountKeysOf [] Nothing `shouldReturn` []
 
     it "activates a mount from the environment layer alone" $
-        case loadConfig
+        mountKeysOf
             ( pubUrlEnv
                 <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
                    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
                    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "t")
                    ]
             )
-            Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+            Nothing
+            `shouldReturn` [Npm]
 
     it "resolves a mount declared with no endpoint keys as the serve-only pure gate" $
         -- Mirroring is derived from the declared target, so a mount with no endpoint keys fronts
         -- only the template public upstream.
-        case loadConfig pubUrlEnv (Just "{\"mounts\":{\"npm\":{}}}") of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
-
-    it "resolves a mount declaring only a private upstream as serve-only over the merge" $
-        case loadConfig pubUrlEnv (Just (mountDoc "\"privateUpstream\":{\"registry\":{\"url\":\"https://private.example.test\"}}")) of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+        mountKeysOf pubUrlEnv (Just "{\"mounts\":{\"npm\":{}}}") `shouldReturn` [Npm]
 
     it "fails loudly when a mirrored mount (mirrorTarget declared) omits its private upstream" $
         -- The mirror must be readable back through the private leg, so a mirrored
         -- mount without one is refused. Only serve-only mounts may omit it.
         loadConfig
             []
-            (Just (mountDoc "\"mirrorTarget\":{\"registry\":{\"url\":\"https://mirror.example.test\",\"token\":\"t\"}}"))
+            (Just (npmMountDoc ["\"mirrorTarget\":{\"registry\":{\"url\":\"https://mirror.example.test\",\"token\":\"t\"}}"]))
             `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
 
     it "loads a mount whose mirror target is declared equal to its private upstream" $
         -- Equality with the private upstream is a valid arrangement. Only the
         -- declaration itself is mandatory.
-        case loadConfig
+        mountKeysOf
             pubUrlEnv
             ( Just
-                ( mountDoc
-                    "\"privateUpstream\":{\"registry\":{\"url\":\"https://one.example.test\"}},\
-                    \\"mirrorTarget\":{\"registry\":{\"url\":\"https://one.example.test\",\"token\":\"t\"}}"
+                ( npmMountDoc
+                    [ "\"privateUpstream\":{\"registry\":{\"url\":\"https://one.example.test\"}}"
+                    , "\"mirrorTarget\":{\"registry\":{\"url\":\"https://one.example.test\",\"token\":\"t\"}}"
+                    ]
                 )
-            ) of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+            )
+            `shouldReturn` [Npm]
 
     it "fails loudly when an environment token declares a mirror target with no URL" $
         -- The write token lives under the target's tag, so a token alone declares the
@@ -194,7 +177,7 @@ spec = describe "decodeDocument" $ do
                     `shouldBe` Just
                         ( Just
                             ( FirstPartyPyPI
-                                (PyPIOwnedName (mkPackageName PyPI Nothing "Acme_Tools") :| [PyPIOwnedPrefix prefix])
+                                (PyPIOwnedName (unscopedPyPI "Acme_Tools") :| [PyPIOwnedPrefix prefix])
                             )
                         )
 
@@ -216,16 +199,19 @@ spec = describe "decodeDocument" $ do
                     then loadFirstParty entry `shouldSatisfy` isRight
                     else loadFirstParty entry `shouldSatisfy` decodeErrorMentions "invalid scope in firstParty"
 
-    it "accepts a well-formed comma-separated firstParty (trimmed, leading sigil tolerated)" $
-        case loadConfig
-            ( pubUrlEnv
-                <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
-                   , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme, beta")
-                   ]
-            )
-            Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+    it "accepts a well-formed comma-separated firstParty (trimmed, leading sigil tolerated)" $ do
+        -- The resolved value is what every consumer of the privilege derives from, so the
+        -- trimming and the optional sigil are read back off it rather than off a bare load.
+        config <-
+            expectConfig
+                ( pubUrlEnv
+                    <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
+                       , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme, beta")
+                       ]
+                )
+                Nothing
+        (mntFirstParty <$> Map.lookup Npm (cfgMounts (configApp config)))
+            `shouldBe` Just (Just (FirstPartyNpmScopes (mkScope "acme" :| [mkScope "beta"])))
 
     it "reports every incomplete mirrored mount in one load, not only the first" $ do
         let doc =
@@ -235,16 +221,12 @@ spec = describe "decodeDocument" $ do
         outcome `shouldSatisfy` decodeErrorMentions "mounts.npm.privateUpstream"
         outcome `shouldSatisfy` decodeErrorMentions "mounts.pypi.privateUpstream"
 
-    it "loads the bounded serve and connection-pool defaults" $
-        case loadConfig [] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> do
-                -- serveMaxInFlight is unset by default: the boot computes the
-                -- effective capacity from the resolved capability count.
-                rtServeMaxInFlight (cfgRuntime (configApp doc)) `shouldBe` Nothing
-                -- publicConnectionsPerHost is unset by default too: the boot computes the effective
-                -- pool from the file-descriptor limit, like the private pool.
-                rtPublicConnectionsPerHost (cfgRuntime (configApp doc)) `shouldBe` Nothing
+    it "loads the bounded serve and connection-pool defaults" $ do
+        -- Both are unset by default: the boot computes the effective serve capacity from the
+        -- resolved capability count, and both pools from the file-descriptor limit.
+        runtime <- runtimeOf [] Nothing
+        rtServeMaxInFlight runtime `shouldBe` Nothing
+        rtPublicConnectionsPerHost runtime `shouldBe` Nothing
 
     it "rejects a zero cveDbPollInterval (a zero delay would spin the poll)" $
         loadConfig [] (Just "{\"cveDbPollInterval\":0}")
@@ -285,17 +267,11 @@ spec = describe "decodeDocument" $ do
             `shouldSatisfy` decodeErrorMentions "advisories.pollInterval must be a non-negative integer count of seconds"
 
     it "accepts a zero and a positive integer cache.ttl (the pre-fix accepted forms, unchanged)" $ do
-        case loadConfig [] (Just "{\"cache\":{\"ttl\":0}}") of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> csTtl (cfgCache (configApp doc)) `shouldBe` 0
-        case loadConfig [("ECLUSE_CACHE__TTL", "120")] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> csTtl (cfgCache (configApp doc)) `shouldBe` 120
+        loadedTtl [] (Just "{\"cache\":{\"ttl\":0}}") `shouldReturn` 0
+        loadedTtl [("ECLUSE_CACHE__TTL", "120")] Nothing `shouldReturn` 120
 
     it "accepts a quoted integer cache.ttl and rejects a quoted fractional one (both branches agree)" $ do
-        case loadConfig [] (Just "{\"cache\":{\"ttl\":\"120\"}}") of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> csTtl (cfgCache (configApp doc)) `shouldBe` 120
+        loadedTtl [] (Just "{\"cache\":{\"ttl\":\"120\"}}") `shouldReturn` 120
         loadConfig [] (Just "{\"cache\":{\"ttl\":\"2.7\"}}")
             `shouldSatisfy` decodeErrorMentions "cache.ttl must be a non-negative integer count of seconds"
 
@@ -314,41 +290,33 @@ spec = describe "decodeDocument" $ do
         loadConfig [] (Just "{\"limits\":{\"maxAdvisoryDatabaseBytes\":0}}")
             `shouldSatisfy` decodeErrorMentions "limits.maxAdvisoryDatabaseBytes"
 
-    it "loads the shipped advisory-sync defaults (poll interval, byte cap, data dir, no store)" $
-        case loadConfig [] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> do
-                advPollInterval (cfgAdvisories (configApp doc)) `shouldBe` 60
-                limMaxAdvisoryDatabaseBytes (cfgLimits (configApp doc)) `shouldBe` 536870912
-                -- Absolute on purpose: the shipped image sets no working directory, so a
-                -- relative path lands in a root the container's user cannot write.
-                advDataDir (cfgAdvisories (configApp doc)) `shouldBe` "/var/lib/ecluse/advisories"
-                -- No default store: the artifact is unsigned and a bucket name is global, so a
-                -- shipped one would name a bucket this project does not own.
-                advUrl (cfgAdvisories (configApp doc)) `shouldBe` Nothing
+    it "loads the shipped advisory-sync defaults (poll interval, byte cap, data dir, no store)" $ do
+        app <- expectAppConfig [] Nothing
+        advPollInterval (cfgAdvisories app) `shouldBe` 60
+        limMaxAdvisoryDatabaseBytes (cfgLimits app) `shouldBe` 536870912
+        -- Absolute on purpose: the shipped image sets no working directory, so a
+        -- relative path lands in a root the container's user cannot write.
+        advDataDir (cfgAdvisories app) `shouldBe` "/var/lib/ecluse/advisories"
+        -- No default store: the artifact is unsigned and a bucket name is global, so a
+        -- shipped one would name a bucket this project does not own.
+        advUrl (cfgAdvisories app) `shouldBe` Nothing
 
     it "refuses a blank ECLUSE_ADVISORIES__URL rather than reading it as the erased key" $
         loadConfig [("ECLUSE_ADVISORIES__URL", "")] Nothing
             `shouldSatisfy` decodeErrorMentions "advisories.url"
 
     it "takes an explicit null as an absent advisory store, so a layer can withdraw one" $
-        case loadConfig [] (Just "{\"advisories\":{\"url\":null}}") of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> advUrl (cfgAdvisories (configApp doc)) `shouldBe` Nothing
+        advUrl <$> advisoriesOf [] (Just "{\"advisories\":{\"url\":null}}") `shouldReturn` Nothing
 
     describe "advisories.quietTime" $ do
-        it "ships seven days for npm and PyPI, and for the EPSS feed" $
-            case loadConfig [] Nothing of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc -> do
-                    advQuietTime (cfgAdvisories (configApp doc)) `shouldBe` Map.fromList [(Npm, 604800), (PyPI, 604800)]
-                    advEpssQuietTime (cfgAdvisories (configApp doc)) `shouldBe` 604800
+        it "ships seven days for npm and PyPI, and for the EPSS feed" $ do
+            advisories <- advisoriesOf [] Nothing
+            advQuietTime advisories `shouldBe` Map.fromList [(Npm, 604800), (PyPI, 604800)]
+            advEpssQuietTime advisories `shouldBe` 604800
 
         it "takes an operator's threshold for one ecosystem and leaves the others shipped" $
-            case loadConfig [("ECLUSE_ADVISORIES__QUIET_TIME__NPM", "86400")] Nothing of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc ->
-                    advQuietTime (cfgAdvisories (configApp doc)) `shouldBe` Map.fromList [(Npm, 86400), (PyPI, 604800)]
+            advQuietTime <$> advisoriesOf [("ECLUSE_ADVISORIES__QUIET_TIME__NPM", "86400")] Nothing
+                `shouldReturn` Map.fromList [(Npm, 86400), (PyPI, 604800)]
 
         it "refuses a zero threshold, which would alarm on every compile" $
             loadConfig [] (Just "{\"advisories\":{\"quietTime\":{\"npm\":0}}}")
@@ -364,14 +332,11 @@ spec = describe "decodeDocument" $ do
 
     describe "advisories.maxAgeSeconds" $ do
         it "is unset by default, so each mount derives its own maximum" $
-            case loadConfig [] Nothing of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc -> advMaxAgeSeconds (cfgAdvisories (configApp doc)) `shouldBe` Nothing
+            advMaxAgeSeconds <$> advisoriesOf [] Nothing `shouldReturn` Nothing
 
         it "takes an operator's explicit maximum" $
-            case loadConfig [("ECLUSE_ADVISORIES__MAX_AGE_SECONDS", "518400")] Nothing of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc -> advMaxAgeSeconds (cfgAdvisories (configApp doc)) `shouldBe` Just 518400
+            advMaxAgeSeconds <$> advisoriesOf [("ECLUSE_ADVISORIES__MAX_AGE_SECONDS", "518400")] Nothing
+                `shouldReturn` Just 518400
 
         it "refuses zero, which would expire every push at once" $
             loadConfig [] (Just "{\"advisories\":{\"maxAgeSeconds\":0}}")
@@ -409,20 +374,16 @@ spec = describe "decodeDocument" $ do
     it "leaves the runtime posture unset when the shipped defaults are all that apply" $ do
         -- Every runtime key unset: the boot resolves cores down its ladder, and the ladder's
         -- last rung takes its own default ceiling rather than one this layer supplies.
-        case loadConfig [] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> do
-                rtCores (cfgRuntime (configApp doc)) `shouldBe` Nothing
-                rtCoresCeiling (cfgRuntime (configApp doc)) `shouldBe` Nothing
-                rtMaxHeapBytes (cfgRuntime (configApp doc)) `shouldBe` Nothing
+        runtime <- runtimeOf [] Nothing
+        rtCores runtime `shouldBe` Nothing
+        rtCoresCeiling runtime `shouldBe` Nothing
+        rtMaxHeapBytes runtime `shouldBe` Nothing
 
     it "parses cores, coresCeiling, and maxHeapBytes from the environment layer" $ do
-        case loadConfig [("ECLUSE_RUNTIME__CORES", "2"), ("ECLUSE_RUNTIME__CORES_CEILING", "16"), ("ECLUSE_RUNTIME__MAX_HEAP_BYTES", "419430400")] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> do
-                rtCores (cfgRuntime (configApp doc)) `shouldBe` Just 2
-                rtCoresCeiling (cfgRuntime (configApp doc)) `shouldBe` Just 16
-                rtMaxHeapBytes (cfgRuntime (configApp doc)) `shouldBe` Just 419430400
+        runtime <- runtimeOf [("ECLUSE_RUNTIME__CORES", "2"), ("ECLUSE_RUNTIME__CORES_CEILING", "16"), ("ECLUSE_RUNTIME__MAX_HEAP_BYTES", "419430400")] Nothing
+        rtCores runtime `shouldBe` Just 2
+        rtCoresCeiling runtime `shouldBe` Just 16
+        rtMaxHeapBytes runtime `shouldBe` Just 419430400
 
     it "rejects non-positive cores, coresCeiling, and maxHeapBytes" $ do
         loadConfig [("ECLUSE_RUNTIME__CORES", "0")] Nothing
@@ -434,22 +395,17 @@ spec = describe "decodeDocument" $ do
         loadConfig [("ECLUSE_RUNTIME__MAX_HEAP_BYTES", "-1")] Nothing
             `shouldSatisfy` decodeErrorMentions "maxHeapBytes must be a positive integer"
 
-    it "parses an explicit serveMaxInFlight override" $ do
-        case loadConfig [("ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT", "24")] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> rtServeMaxInFlight (cfgRuntime (configApp doc)) `shouldBe` Just 24
+    it "parses an explicit serveMaxInFlight override" $
+        rtServeMaxInFlight <$> runtimeOf [("ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT", "24")] Nothing `shouldReturn` Just 24
 
-    it "parses an explicit privateConnectionsPerHost override" $ do
+    it "parses an explicit privateConnectionsPerHost override" $
         -- The private pool default is computed from the file-descriptor limit, independent of the
         -- admission capacity because it streams outside admission. An operator can still pin it.
-        case loadConfig [("ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST", "256")] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> rtPrivateConnectionsPerHost (cfgRuntime (configApp doc)) `shouldBe` Just 256
+        rtPrivateConnectionsPerHost <$> runtimeOf [("ECLUSE_RUNTIME__PRIVATE_CONNECTIONS_PER_HOST", "256")] Nothing
+            `shouldReturn` Just 256
 
     it "leaves privateConnectionsPerHost unset when not configured (computed at boot)" $
-        case loadConfig [] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> rtPrivateConnectionsPerHost (cfgRuntime (configApp doc)) `shouldBe` Nothing
+        rtPrivateConnectionsPerHost <$> runtimeOf [] Nothing `shouldReturn` Nothing
 
     it "rejects non-positive serve and connection capacities" $ do
         loadConfig [("ECLUSE_RUNTIME__SERVE_MAX_IN_FLIGHT", "0")] Nothing
@@ -460,19 +416,15 @@ spec = describe "decodeDocument" $ do
             `shouldSatisfy` decodeErrorMentions "privateConnectionsPerHost must be a positive integer"
 
     it "leaves additionalBlockedRanges empty by default" $
-        case loadConfig [] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> egrAdditionalBlockedRanges (cfgEgress (configApp doc)) `shouldBe` []
+        egrAdditionalBlockedRanges . cfgEgress <$> expectAppConfig [] Nothing `shouldReturn` []
 
     it "parses a comma-separated additionalBlockedRanges from the environment layer" $
-        case loadConfig [("ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES", "203.0.113.0/24,2001:db8::/32")] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> egrAdditionalBlockedRanges (cfgEgress (configApp doc)) `shouldBe` ["203.0.113.0/24", "2001:db8::/32"]
+        egrAdditionalBlockedRanges . cfgEgress <$> expectAppConfig [("ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES", "203.0.113.0/24,2001:db8::/32")] Nothing
+            `shouldReturn` ["203.0.113.0/24", "2001:db8::/32"]
 
     it "trims whitespace around each additionalBlockedRanges entry" $
-        case loadConfig [("ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES", " 203.0.113.0/24 , 2001:db8::/32 ")] Nothing of
-            Left e -> expectationFailure ("unexpected decode error: " <> show e)
-            Right doc -> egrAdditionalBlockedRanges (cfgEgress (configApp doc)) `shouldBe` ["203.0.113.0/24", "2001:db8::/32"]
+        egrAdditionalBlockedRanges . cfgEgress <$> expectAppConfig [("ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES", " 203.0.113.0/24 , 2001:db8::/32 ")] Nothing
+            `shouldReturn` ["203.0.113.0/24", "2001:db8::/32"]
 
     it "rejects a malformed entry in additionalBlockedRanges, naming it (fails closed at boot)" $
         loadConfig [("ECLUSE_EGRESS__ADDITIONAL_BLOCKED_RANGES", "not-a-range")] Nothing
@@ -480,27 +432,9 @@ spec = describe "decodeDocument" $ do
 
     describe "registry URL entries (the egress gate authorises each entry's host:port pair)" $ do
         it "accepts an upstream URL with an explicit port" $
-            case loadConfig
-                ( pubUrlEnv
-                    <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://repo.internal.example.test:8443/npm")
-                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
-                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "t")
-                       ]
-                )
-                Nothing of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+            mountKeysOf (mirroredFrom "https://repo.internal.example.test:8443/npm") Nothing `shouldReturn` [Npm]
         it "accepts an upstream URL with a bracketed IPv6 host and a port" $
-            case loadConfig
-                ( pubUrlEnv
-                    <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://[2001:db8::10]:8443/npm")
-                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
-                       , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "t")
-                       ]
-                )
-                Nothing of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+            mountKeysOf (mirroredFrom "https://[2001:db8::10]:8443/npm") Nothing `shouldReturn` [Npm]
         it "rejects an upstream URL with a non-numeric port, naming the value (fails closed at boot)" $
             -- The gate refuses every fetch from an authority it cannot extract, so the
             -- misconfiguration surfaces at load, never as a mount that silently serves nothing.
@@ -574,16 +508,11 @@ spec = describe "decodeDocument" $ do
                 `shouldSatisfy` decodeErrorMentions "advisories.osvExportBaseUrl must not carry a fragment"
 
         it "accepts a plain advisories.osvExportBaseUrl through both layers" $ do
-            case loadConfig [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://osv.example.test/exports")] Nothing of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc ->
-                    unUrl (advOsvExportBaseUrl (cfgAdvisories (configApp doc)))
-                        `shouldBe` "https://osv.example.test/exports"
-            case loadConfig [] (Just "{\"advisories\":{\"osvExportBaseUrl\":\"http://localhost:8080/osv\"}}") of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc ->
-                    unUrl (advOsvExportBaseUrl (cfgAdvisories (configApp doc)))
-                        `shouldBe` "http://localhost:8080/osv"
+            let exportBaseUrl env doc = unUrl . advOsvExportBaseUrl <$> advisoriesOf env doc
+            exportBaseUrl [("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", "https://osv.example.test/exports")] Nothing
+                `shouldReturn` "https://osv.example.test/exports"
+            exportBaseUrl [] (Just "{\"advisories\":{\"osvExportBaseUrl\":\"http://localhost:8080/osv\"}}")
+                `shouldReturn` "http://localhost:8080/osv"
 
         -- The cloud SDK receives queue.url without a parser scheme or authority check.
         -- Boot errors and check-config print it whole after a successful load.
@@ -630,12 +559,9 @@ spec = describe "decodeDocument" $ do
 
     describe "field invariants (document and environment enforce the same bounds)" $ do
         it "accepts the listener-port range ends: 0 (OS-assigned) and 65535" $ do
-            case loadConfig [] (Just "{\"server\":{\"port\":0}}") of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc -> srvPort (cfgServer (configApp doc)) `shouldBe` 0
-            case loadConfig [("ECLUSE_SERVER__PORT", "65535")] Nothing of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc -> srvPort (cfgServer (configApp doc)) `shouldBe` 65535
+            let port env doc = srvPort . cfgServer <$> expectAppConfig env doc
+            port [] (Just "{\"server\":{\"port\":0}}") `shouldReturn` 0
+            port [("ECLUSE_SERVER__PORT", "65535")] Nothing `shouldReturn` 65535
 
         it "rejects a listener port outside 0..65535, through both layers" $ do
             loadConfig [] (Just "{\"server\":{\"port\":-1}}")
@@ -664,9 +590,7 @@ spec = describe "decodeDocument" $ do
                 `shouldSatisfy` decodeErrorMentions "limits.maxNestingDepth must be a positive integer"
 
         it "accepts an http public URL (loopback development deployments stay legal)" $
-            case loadConfig [("ECLUSE_SERVER__PUBLIC_URL", "http://localhost:8080")] Nothing of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right _ -> pure ()
+            void (expectAppConfig [("ECLUSE_SERVER__PUBLIC_URL", "http://localhost:8080")] Nothing)
 
         it "rejects a schemeless public URL, naming the field" $
             loadConfig [("ECLUSE_SERVER__PUBLIC_URL", "registry.example.test")] Nothing
@@ -680,27 +604,20 @@ spec = describe "decodeDocument" $ do
 
         it "accepts the CodeArtifact token-duration range ends: 900 and 43200" $ do
             let docFor (n :: Int) =
-                    encodeUtf8 @Text @ByteString $
-                        "{\"mounts\":{\"npm\":{\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\
-                        \\"mirrorTarget\":{\"codeArtifact\":{\"url\":\""
-                            <> codeArtifactMirror
-                            <> "\",\"tokenDuration\":"
-                            <> show n
-                            <> "}}}}}"
-            case loadConfig pubUrlEnv (Just (docFor 900)) of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
-            case loadConfig pubUrlEnv (Just (docFor 43200)) of
-                Left e -> expectationFailure ("unexpected decode error: " <> show e)
-                Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
+                    npmMountDoc
+                        [ "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}}"
+                        , codeArtifactDurationDoc (show n)
+                        ]
+            for_ [900, 43200] $ \seconds ->
+                mountKeysOf pubUrlEnv (Just (docFor seconds)) `shouldReturn` [Npm]
 
         it "rejects a CodeArtifact token duration outside 900..43200, through both layers" $ do
             loadConfig
                 []
-                (Just (mountDoc (codeArtifactDurationDoc "899")))
+                (Just (npmMountDoc [codeArtifactDurationDoc "899"]))
                 `shouldSatisfy` decodeErrorMentions "mirrorTarget.codeArtifact.tokenDuration must be a duration in seconds within 900..43200"
             loadConfig
-                [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", toString codeArtifactMirror)
+                [ ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", toString @Text codeArtifactMirrorUrl)
                 , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__TOKEN_DURATION", "43201")
                 ]
                 Nothing
@@ -710,21 +627,18 @@ spec = describe "decodeDocument" $ do
             for_ (["0x1000", " 3600", "(3600)"] :: [Text]) $ \spelling ->
                 loadConfig
                     []
-                    (Just (mountDoc (codeArtifactDurationDoc ("\"" <> spelling <> "\""))))
+                    (Just (npmMountDoc [codeArtifactDurationDoc ("\"" <> spelling <> "\"")]))
                     `shouldSatisfy` decodeErrorMentions "mirrorTarget.codeArtifact.tokenDuration: invalid duration"
 
     describe "secret environment values (taken verbatim, never JSON-coerced)" $ do
         it "round-trips a JSON-looking authToken exactly" $
-            for_ jsonLookingSecrets $ \payload ->
-                case loadConfig (pubUrlEnv <> [("ECLUSE_SERVER__AUTH_TOKEN", payload)]) Nothing of
-                    Left e -> expectationFailure ("unexpected decode error for " <> payload <> ": " <> show e)
-                    Right doc ->
-                        (unSecret <$> srvAuthToken (cfgServer (configApp doc)))
-                            `shouldBe` Just (T.pack payload)
+            for_ jsonLookingSecrets $ \payload -> do
+                app <- expectAppConfig (pubUrlEnv <> [("ECLUSE_SERVER__AUTH_TOKEN", payload)]) Nothing
+                (unSecret <$> srvAuthToken (cfgServer app)) `shouldBe` Just (T.pack payload)
 
         it "loads JSON-looking mirror and publication tokens" $
             for_ jsonLookingSecrets $ \payload ->
-                case loadConfig
+                mountKeysOf
                     ( pubUrlEnv
                         <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
                            , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
@@ -733,14 +647,8 @@ spec = describe "decodeDocument" $ do
                            , ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN", payload)
                            ]
                     )
-                    Nothing of
-                    Left e -> expectationFailure ("unexpected decode error for " <> payload <> ": " <> show e)
-                    Right doc -> Map.keys (configMounts doc) `shouldBe` [Npm]
-
--- server.publicUrl is required once a mount is active. This list supplies it, so each
--- decode example stays about its own concern.
-pubUrlEnv :: [(String, String)]
-pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
+                    Nothing
+                    `shouldReturn` [Npm]
 
 {- Each firstParty entry the loader must agree with the npm route about: the leading sigil is
 optional, and anything that is not one usable path component is refused. -}
@@ -786,45 +694,47 @@ singleMountDoc =
 -- A codeArtifact mirror target carrying the given token duration, written as JSON.
 codeArtifactDurationDoc :: Text -> Text
 codeArtifactDurationDoc duration =
-    "\"mirrorTarget\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactMirror <> "\",\"tokenDuration\":" <> duration <> "}}"
-
--- A one-mount npm document carrying exactly the given mount keys.
-mountDoc :: Text -> ByteString
-mountDoc keys = encodeUtf8 ("{\"mounts\":{\"npm\":{" <> keys <> "}}}")
-
--- The CodeArtifact repository endpoint the tagged mirror-target cases address.
-codeArtifactMirror :: Text
-codeArtifactMirror = "https://acme-111122223333.d.codeartifact.eu-west-1.amazonaws.com/npm/mirror/"
-
-mountDocForEcosystem :: Text -> ByteString
-mountDocForEcosystem eco =
-    encodeUtf8 $
-        "{\"mounts\":{\""
-            <> eco
-            <> "\":{\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\
-               \\"publicUpstream\":{\"registry\":{\"url\":\"https://b\"}},\
-               \\"mirrorTarget\":{\"registry\":{\"url\":\"https://c\",\"token\":\"token\"}}}}}"
+    "\"mirrorTarget\":{\"codeArtifact\":{\"url\":\"" <> codeArtifactMirrorUrl <> "\",\"tokenDuration\":" <> duration <> "}}"
 
 mountDocWithMirrorTarget :: Text -> ByteString
 mountDocWithMirrorTarget target =
-    mountDoc
-        ( "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\
-          \\"mirrorTarget\":{\"registry\":{\"url\":\""
-            <> target
-            <> "\",\"token\":\"token\"}}"
-        )
+    npmMountDoc
+        [ "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}}"
+        , "\"mirrorTarget\":{\"registry\":{\"url\":\"" <> target <> "\",\"token\":\"token\"}}"
+        ]
 
 mountDocWithExtraKey :: Text -> ByteString
 mountDocWithExtraKey extra =
-    mountDoc
-        ( "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}},\""
-            <> extra
-            <> "\":\"x\""
-        )
+    npmMountDoc
+        [ "\"privateUpstream\":{\"registry\":{\"url\":\"https://a\"}}"
+        , "\"" <> extra <> "\":\"x\""
+        ]
 
 decodeErrorMentions :: Text -> Either [ConfigError] a -> Bool
 decodeErrorMentions phrase (Left errs) = any (\err -> phrase `T.isInfixOf` renderConfigError err) errs
 decodeErrorMentions _ (Right _) = False
+
+-- The ecosystems a load resolved a mount for, which is what the activation cases read.
+mountKeysOf :: [(String, String)] -> Maybe ByteString -> IO [Ecosystem]
+mountKeysOf envVars doc = Map.keys . configMounts <$> expectConfig envVars doc
+
+advisoriesOf :: [(String, String)] -> Maybe ByteString -> IO AdvisoriesSettings
+advisoriesOf envVars doc = cfgAdvisories <$> expectAppConfig envVars doc
+
+runtimeOf :: [(String, String)] -> Maybe ByteString -> IO RuntimeSettings
+runtimeOf envVars doc = cfgRuntime <$> expectAppConfig envVars doc
+
+loadedTtl :: [(String, String)] -> Maybe ByteString -> IO NominalDiffTime
+loadedTtl envVars doc = csTtl . cfgCache <$> expectAppConfig envVars doc
+
+-- A mirrored npm mount reading back through the given private upstream.
+mirroredFrom :: String -> [(String, String)]
+mirroredFrom privateUrl =
+    pubUrlEnv
+        <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", privateUrl)
+           , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
+           , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "t")
+           ]
 
 {- The resolved log level. This helper flattens the error side to text, so each assertion
 compares values instead of splitting on a case. -}

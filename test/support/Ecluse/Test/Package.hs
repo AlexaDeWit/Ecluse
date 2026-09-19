@@ -39,7 +39,15 @@ module Ecluse.Test.Package (
 
     -- * Shared identity fixtures
     unscopedNpm,
+    scopedNpm,
+    unscopedPyPI,
+    npmVersion,
+    pypiVersion,
     thingName,
+    leftpadName,
+    lodashName,
+    babelCore,
+    requestsName,
     v1_0_0,
 
     -- * Shared package fixtures
@@ -58,7 +66,7 @@ import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (
     Artifact (..),
     ArtifactKind (Tarball),
@@ -72,6 +80,7 @@ import Ecluse.Core.Package (
     Trust (Untrusted),
     mkHash,
     mkPackageName,
+    mkScope,
     mkSriHashes,
  )
 import Ecluse.Core.Package.Entry (EntryKey (..))
@@ -173,12 +182,40 @@ validSha512Sri = "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+
 unscopedNpm :: Text -> PackageName
 unscopedNpm = mkPackageName Npm Nothing
 
+-- | An npm package name under a scope, from the scope and the base name.
+scopedNpm :: Text -> Text -> PackageName
+scopedNpm scope = mkPackageName Npm (Just (mkScope scope))
+
+-- | A PyPI project name. PyPI has no namespace, so every name is unscoped.
+unscopedPyPI :: Text -> PackageName
+unscopedPyPI = mkPackageName PyPI Nothing
+
+-- | An npm version from its raw string.
+npmVersion :: Text -> Version
+npmVersion = mkVersion Npm
+
+-- | A PyPI release from its raw string.
+pypiVersion :: Text -> Version
+pypiVersion = mkVersion PyPI
+
 -- | The conventional fixture package and version, @thing\@1.0.0@.
 thingName :: PackageName
 thingName = unscopedNpm "thing"
 
+{- | The npm subject packages the maintenance, sweep, and serve fixtures address. The sweep
+fixtures address @left-pad@ instead, a different name, so they keep their own.
+-}
+leftpadName, lodashName, babelCore :: PackageName
+leftpadName = unscopedNpm "leftpad"
+lodashName = unscopedNpm "lodash"
+babelCore = scopedNpm "babel" "core"
+
+-- | The PyPI subject project the projection, routing, and request fixtures address.
+requestsName :: PackageName
+requestsName = unscopedPyPI "requests"
+
 v1_0_0 :: Version
-v1_0_0 = mkVersion Npm "1.0.0"
+v1_0_0 = npmVersion "1.0.0"
 
 -- | A single inert artifact. The packument-level tests do not inspect artifacts.
 sampleArtifact :: Artifact

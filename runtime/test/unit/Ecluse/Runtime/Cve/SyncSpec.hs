@@ -42,7 +42,7 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
  )
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Runtime.Cve.Sync (
+import Ecluse.Runtime.Cve.Sync.Internal (
     CveFetch (..),
     DbEtag (..),
     FetchedObject (..),

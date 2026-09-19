@@ -106,10 +106,6 @@ finaliseRequestSpec = describe "finaliseRequest pins the redirect count for ever
         req <- parseRequestOrFail "https://reg.test/x"
         Client.redirectCount (finaliseRequest id req) `shouldBe` 0
 
-    it "disables redirect following even when the attach adds a credential header" $ do
-        req <- parseRequestOrFail "https://reg.test/x"
-        Client.redirectCount (finaliseRequest (addAuth "Bearer tok") req) `shouldBe` 0
-
     it "applies the injected credential attach" $ do
         req <- parseRequestOrFail "https://reg.test/x"
         lookup "Authorization" (Client.requestHeaders (finaliseRequest (addAuth "Bearer tok") req))

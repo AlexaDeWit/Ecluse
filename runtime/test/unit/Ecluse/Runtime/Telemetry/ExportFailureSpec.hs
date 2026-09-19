@@ -7,7 +7,7 @@ module Ecluse.Runtime.Telemetry.ExportFailureSpec (spec) where
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 
-import Ecluse.Runtime.Telemetry.ExportFailure (
+import Ecluse.Runtime.Telemetry.ExportFailure.Internal (
     ThrottleEmit (..),
     ThrottleState (..),
     initialThrottle,

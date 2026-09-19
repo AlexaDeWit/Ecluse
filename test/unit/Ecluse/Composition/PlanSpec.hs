@@ -13,7 +13,6 @@ import Ecluse.Composition.BootError (
         AwsEndpointMalformed,
         MemoryPlanOverrideUnsafe,
         MirrorRoleWithoutMirroring,
-        MirrorTargetOnMountEndpoint,
         MissingAdapter,
         QueueUrlUnrecognised,
         SplitRoleNeedsDurableQueue
@@ -37,13 +36,17 @@ import Ecluse.Composition.Plan (
 import Ecluse.Composition.Support (
     bootInputsFor,
     codeArtifactEnvVars,
+    collapsedMirrorRefusal,
+    collapsingMirrorTarget,
     expectConfig,
     expectPlan,
     malformedAwsEndpoint,
+    mib,
     noCeiling,
     noMaintenanceBackend,
     overrideEnv,
     privateInventoryRefusal,
+    privateUpstreamUrl,
     staticEnvVars,
     withDredgeablePrivate,
     withObservablePrivate,
@@ -324,13 +327,10 @@ wouldRefuse invocation err = invocation <> " would refuse to boot: " <> renderBo
 
 -- | The npm mount mirroring where it reads: a writing role's advisory, the Dredger's refusal.
 collapsedMirrorEnv :: [(String, String)]
-collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL" "https://private.example.test" staticEnvVars
-
-collapsedMirrorRefusal :: BootError
-collapsedMirrorRefusal = MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" "https://private.example.test"
+collapsedMirrorEnv = collapsingMirrorTarget staticEnvVars
 
 mirrorCollapseAdvisory :: Advisory
-mirrorCollapseAdvisory = MirrorTargetOnPrivateUpstream Npm Npm (unsafeRegistryUrl "https://private.example.test")
+mirrorCollapseAdvisory = MirrorTargetOnPrivateUpstream Npm Npm (unsafeRegistryUrl privateUpstreamUrl)
 
 {- | A plan resolution reduced to its verdict. 'BootPlan' carries the cleared adapters, which are
 records of functions, so the refusal is what an assertion compares.
@@ -380,6 +380,3 @@ tightPod =
 -- | The provenance clause every memory-plan line carries with no heap-ceiling datapoint.
 fallbackClause :: Text
 fallbackClause = " (built-in default; no heap-ceiling datapoint)"
-
-mib :: Int
-mib = 1024 * 1024

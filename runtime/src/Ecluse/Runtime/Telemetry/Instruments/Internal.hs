@@ -1,0 +1,501 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+{- | The instrument handle and the typed @record*@ helpers behind
+"Ecluse.Runtime.Telemetry.Instruments", which documents the catalogue and re-exports the curated
+surface. Importing this module opts out of that stability promise, the convention @text@ and
+@bytestring@ use, so production code imports the public one.
+-}
+module Ecluse.Runtime.Telemetry.Instruments.Internal (
+    -- * The instrument handle
+    Metrics,
+    newMetrics,
+
+    -- * The core recording ports
+    metricsPortOf,
+    workerMetricsPortOf,
+    dredgerMetricsPortOf,
+    advisorySyncMetricsPortOf,
+    advisoryCompileMetricsPortOf,
+
+    -- * Serve decision
+    recordServeDecision,
+
+    -- * Rule gate
+    recordRuleDenial,
+    recordRuleEvalDuration,
+    recordRuleEffectfulFailure,
+    recordBreakerState,
+
+    -- * Upstream fetch (data plane)
+    recordUpstreamFetch,
+    recordUpstreamFetchError,
+
+    -- * Metadata cache
+    recordCacheRequest,
+    recordCacheEntries,
+
+    -- * Mirror
+    recordMirrorEnqueued,
+    recordMirrorEnqueueFailure,
+    recordMirrorJobProcessed,
+    recordMirrorPublishDuration,
+
+    -- * Credentials
+    recordCredentialRefresh,
+    registerCredentialTokenTtl,
+
+    -- * Advisory sync
+    recordAdvisorySyncAttempt,
+    recordAdvisorySyncDuration,
+
+    -- * Advisory ages (observable)
+    registerAdvisoryDatabaseAge,
+    reportAdvisoryDatabaseAge,
+    registerAdvisorySourceAge,
+    reportAdvisorySourceAge,
+
+    -- * Advisory compile
+    recordAdvisoryCompileAccepted,
+    recordAdvisoryCompileDropped,
+    recordAdvisoryCompileRun,
+) where
+
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import GHC.Clock (getMonotonicTime)
+import OpenTelemetry.Metric.Core (
+    Counter (counterAdd),
+    Gauge (gaugeRecord),
+    Histogram (histogramRecord),
+    Meter,
+    MeterProvider,
+    ObservableGauge (observableGaugeRegisterCallback),
+    ObservableResult (observe),
+    UpDownCounter (upDownCounterAdd),
+    defaultAdvisoryParameters,
+    getMeter,
+    meterCreateCounterInt64,
+    meterCreateGaugeInt64,
+    meterCreateHistogram,
+    meterCreateObservableGaugeInt64,
+    meterCreateUpDownCounterInt64,
+    noopMeterProvider,
+ )
+
+import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Telemetry.Catalogue (
+    MetricName (..),
+    metricName,
+ )
+import Ecluse.Core.Telemetry.Metrics (
+    AdvisoryCompileResult,
+    AdvisoryDropCause,
+    AdvisorySyncResult,
+    BreakerSource,
+    BreakerState,
+    CacheResult,
+    Cause,
+    CredentialResult,
+    Decision,
+    Label (LAdvisoryCompileResult, LAdvisoryDropCause, LAdvisorySyncResult, LBreakerSource, LCacheResult, LCause, LCredentialResult, LDecision, LEcosystem, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LSweepResult, LSweepTarget, LTier, LUpstream),
+    MirrorResult,
+    Provider,
+    ReasonClass,
+    RelayAnomaly,
+    RequestFaultCause,
+    StatusClass,
+    SweepResult,
+    SweepTarget,
+    Tier,
+    Upstream,
+    breakerStateCode,
+    metricAttributes,
+ )
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (..), AdvisorySyncMetricsPort (..), DredgerMetricsPort (..), MetricsPort (..), WorkerMetricsPort (..))
+import Ecluse.Core.Telemetry.Span (ecluseScope)
+import Ecluse.Runtime.Telemetry (Telemetry, telemetryMeterProvider)
+
+-- | Domain instruments. WAI emits @http.server.request.duration@ from its own meter.
+data Metrics = Metrics
+    { mServeDecision :: Counter Int64
+    , mServeAdmissionInFlight :: UpDownCounter Int64
+    , mServeAdmissionQueued :: Counter Int64
+    , mPublishBodyInFlightBytes :: UpDownCounter Int64
+    , mPublishBodyShed :: Counter Int64
+    , mMergeDivergence :: Counter Int64
+    , mRuleDenials :: Counter Int64
+    , mRuleEvalDuration :: Histogram
+    , mRuleEffectfulFailures :: Counter Int64
+    , mRuleBreakerState :: Gauge Int64
+    , mUpstreamFetchDuration :: Histogram
+    , mUpstreamFetchErrors :: Counter Int64
+    , mMetadataCacheRequests :: Counter Int64
+    , mMetadataCacheEntries :: Gauge Int64
+    , mMetadataCacheResidentBytes :: Gauge Int64
+    , mSingleVersionCacheResidentBytes :: Gauge Int64
+    , mAssembledCacheResidentBytes :: Gauge Int64
+    , mServeRelayAnomalies :: Counter Int64
+    , mServePerimeterFaults :: Counter Int64
+    , mMirrorEnqueued :: Counter Int64
+    , mMirrorEnqueueFailures :: Counter Int64
+    , mMirrorJobsProcessed :: Counter Int64
+    , mMirrorPublishDuration :: Histogram
+    , mDredgerVersions :: Counter Int64
+    , mCredentialRefresh :: Counter Int64
+    , mCredentialTokenTtlSeconds :: ObservableGauge Int64
+    , mAdvisorySyncAttempts :: Counter Int64
+    , mAdvisorySyncDuration :: Histogram
+    , mAdvisoryDatabaseAgeSeconds :: ObservableGauge Int64
+    , mAdvisorySourceAgeSeconds :: ObservableGauge Int64
+    , mAdvisoryCompileAccepted :: Counter Int64
+    , mAdvisoryCompileDropped :: Counter Int64
+    , mAdvisoryCompileRuns :: Counter Int64
+    }
+
+-- | Build instruments on the telemetry meter, or the SDK's no-op meter when disabled.
+newMetrics :: Telemetry -> IO Metrics
+newMetrics telemetry = do
+    let meterProvider :: MeterProvider
+        meterProvider = fromMaybe noopMeterProvider (telemetryMeterProvider telemetry)
+    meter <- getMeter meterProvider ecluseScope
+    Metrics
+        <$> counter meter ServeDecision "{decision}" "serve decisions by admit/deny/unavailable"
+        <*> upDownCounter meter ServeAdmissionInFlight "{request}" "in-flight metadata parses"
+        <*> counter meter ServeAdmissionQueued "{request}" "admissions that waited for a slot"
+        <*> upDownCounter meter PublishBodyInFlightBytes "By" "bytes reserved for buffered publish bodies"
+        <*> counter meter PublishBodyShed "{request}" "publishes shed at the body-byte budget"
+        <*> counter meter MergeDivergence "{divergence}" "cross-upstream integrity divergences detected in the packument merge"
+        <*> counter meter RuleDenials "{denial}" "rule denials by rule and reason class"
+        <*> histogram meter RuleEvalDuration "rule-evaluation latency by tier"
+        <*> counter meter RuleEffectfulFailures "{failure}" "effectful-rule failures by cause"
+        <*> gauge meter RuleBreakerState "circuit-breaker state by source (0 closed, 1 half-open, 2 open)"
+        <*> histogram meter UpstreamFetchDuration "upstream metadata-fetch latency by upstream and status class"
+        <*> counter meter UpstreamFetchErrors "{error}" "upstream metadata-fetch errors by upstream and cause"
+        <*> counter meter MetadataCacheRequests "{request}" "metadata-cache lookups by hit/miss"
+        <*> gauge meter MetadataCacheEntries "metadata-cache occupancy"
+        <*> gauge meter MetadataCacheResidentBytes "full-packument metadata-cache resident bytes"
+        <*> gauge meter SingleVersionCacheResidentBytes "single-version metadata-cache resident bytes"
+        <*> gauge meter AssembledCacheResidentBytes "assembled-representation store resident bytes"
+        <*> counter meter ServeRelayAnomalies "{relay}" "public relays that were not the admitted artifact, by class"
+        <*> counter meter ServePerimeterFaults "{fault}" "pre-commit handler escapes answered by the request perimeter, by cause"
+        <*> counter meter MirrorEnqueued "{job}" "mirror jobs enqueued"
+        <*> counter meter MirrorEnqueueFailures "{failure}" "mirror enqueue failures"
+        <*> counter meter MirrorJobsProcessed "{job}" "mirror jobs processed by result"
+        <*> histogram meter MirrorPublishDuration "mirror publish latency"
+        <*> counter meter DredgerVersions "{version}" "mirror-store versions a sweep cycle disposed of, by result"
+        <*> counter meter CredentialRefresh "{refresh}" "credential refreshes by result and provider"
+        <*> observableGauge meter CredentialTokenTtlSeconds "remaining outbound-token lifetime by provider"
+        <*> counter meter AdvisorySyncAttempts "{attempt}" "advisory sync attempts by ecosystem and result"
+        <*> histogram meter AdvisorySyncDuration "advisory sync attempt latency by ecosystem and result"
+        <*> observableGauge meter AdvisoryDatabaseAgeSeconds "seconds since this ecosystem's serving advisory database was installed"
+        <*> observableGauge meter AdvisorySourceAgeSeconds "seconds since this ecosystem's serving advisory artifact was published"
+        <*> counter meter AdvisoryCompileAccepted "{advisory}" "advisory entries a compile pass accepted, by ecosystem"
+        <*> counter meter AdvisoryCompileDropped "{advisory}" "advisory entries a compile pass dropped, by ecosystem and cause"
+        <*> counter meter AdvisoryCompileRuns "{run}" "advisory compile passes by ecosystem and result"
+
+counter :: Meter -> MetricName -> Text -> Text -> IO (Counter Int64)
+counter meter name unit description =
+    meterCreateCounterInt64 meter (metricName name) (Just unit) (Just description) defaultAdvisoryParameters
+
+histogram :: Meter -> MetricName -> Text -> IO Histogram
+histogram meter name description =
+    meterCreateHistogram meter (metricName name) (Just "s") (Just description) defaultAdvisoryParameters
+
+upDownCounter :: Meter -> MetricName -> Text -> Text -> IO (UpDownCounter Int64)
+upDownCounter meter name unit description =
+    meterCreateUpDownCounterInt64 meter (metricName name) (Just unit) (Just description) defaultAdvisoryParameters
+
+gauge :: Meter -> MetricName -> Text -> IO (Gauge Int64)
+gauge meter name description =
+    meterCreateGaugeInt64 meter (metricName name) Nothing (Just description) defaultAdvisoryParameters
+
+-- Reports nothing until a callback is registered.
+observableGauge :: Meter -> MetricName -> Text -> IO (ObservableGauge Int64)
+observableGauge meter name description =
+    meterCreateObservableGaugeInt64 meter (metricName name) Nothing (Just description) defaultAdvisoryParameters []
+
+{- | Project the instruments onto the core 'MetricsPort' that "Ecluse.Core.Server.Pipeline" records
+through. It is inert when telemetry is off, since the instruments are.
+-}
+metricsPortOf :: Metrics -> MetricsPort
+metricsPortOf m =
+    MetricsPort
+        { mpServeDecision = recordServeDecision m
+        , mpServeAdmissionInFlight = recordServeAdmissionInFlight m
+        , mpServeAdmissionQueued = recordServeAdmissionQueued m
+        , mpPublishBodyInFlightBytes = \delta -> addDelta (mPublishBodyInFlightBytes m) (fromIntegral delta) []
+        , mpPublishBodyShed = addOne (mPublishBodyShed m) []
+        , mpMergeDivergence = recordMergeDivergence m
+        , mpRuleDenial = recordRuleDenial m
+        , mpRuleEvalDuration = recordRuleEvalDuration m
+        , mpRuleEffectfulFailure = recordRuleEffectfulFailure m
+        , mpUpstreamFetch = recordUpstreamFetch m
+        , mpUpstreamFetchError = recordUpstreamFetchError m
+        , mpCacheRequest = recordCacheRequest m
+        , mpCacheEntries = recordCacheEntries m
+        , mpCacheResidentBytes = recordCacheResidentBytes m
+        , mpVersionCacheResidentBytes = recordVersionCacheResidentBytes m
+        , mpAssembledCacheResidentBytes = recordAssembledCacheResidentBytes m
+        , mpMirrorEnqueued = recordMirrorEnqueued m
+        , mpPublicRelayAnomaly = recordPublicRelayAnomaly m
+        , mpRequestPerimeterFault = recordRequestPerimeterFault m
+        , mpMirrorEnqueueFailure = recordMirrorEnqueueFailure m
+        }
+
+{- | Project the instruments onto the core 'WorkerMetricsPort' that "Ecluse.Core.Worker" records
+through. It is inert when telemetry is off, since the instruments are.
+-}
+workerMetricsPortOf :: Metrics -> WorkerMetricsPort
+workerMetricsPortOf m =
+    WorkerMetricsPort
+        { wmpMirrorJobProcessed = recordMirrorJobProcessed m
+        , wmpMirrorPublishDuration = recordMirrorPublishDuration m
+        }
+
+{- | Project the instruments onto the core 'DredgerMetricsPort' that "Ecluse.Core.Registry.Sweep"
+records through. It is inert when telemetry is off, since the instruments are.
+-}
+dredgerMetricsPortOf :: Metrics -> DredgerMetricsPort
+dredgerMetricsPortOf m = DredgerMetricsPort{dmpSweptVersion = recordSweptVersion m}
+
+{- | Project the instruments onto the core 'AdvisorySyncMetricsPort' that "Ecluse.Runtime.Cve.Sync"
+records through. It is inert when telemetry is off, since the instruments are.
+-}
+advisorySyncMetricsPortOf :: Metrics -> AdvisorySyncMetricsPort
+advisorySyncMetricsPortOf m =
+    AdvisorySyncMetricsPort
+        { asmpSyncAttempt = recordAdvisorySyncAttempt m
+        , asmpSyncDuration = recordAdvisorySyncDuration m
+        }
+
+-- | Bind compile observations to an ecosystem. An unknown ecosystem records no series.
+advisoryCompileMetricsPortOf :: Metrics -> Maybe Ecosystem -> AdvisoryCompileMetricsPort
+advisoryCompileMetricsPortOf m = maybe inertCompilePort boundPort
+  where
+    boundPort eco =
+        AdvisoryCompileMetricsPort
+            { acmpCompileAccepted = recordAdvisoryCompileAccepted m eco
+            , acmpCompileDropped = recordAdvisoryCompileDropped m eco
+            , acmpCompileRun = recordAdvisoryCompileRun m eco
+            }
+
+-- No bounded label to record under, so nothing is recorded.
+inertCompilePort :: AdvisoryCompileMetricsPort
+inertCompilePort =
+    AdvisoryCompileMetricsPort
+        { acmpCompileAccepted = const pass
+        , acmpCompileDropped = \_ _ -> pass
+        , acmpCompileRun = const pass
+        }
+
+-- | Record one serve decision (@ecluse.serve.decision@): admit, deny, or unavailable.
+recordServeDecision :: (MonadIO m) => Metrics -> Decision -> m ()
+recordServeDecision m decision =
+    addOne (mServeDecision m) [LDecision decision]
+
+-- Record a change in in-flight metadata parses (@ecluse.serve.admission.in_flight@).
+recordServeAdmissionInFlight :: (MonadIO m) => Metrics -> Int -> m ()
+recordServeAdmissionInFlight m delta =
+    addDelta (mServeAdmissionInFlight m) (fromIntegral delta) []
+
+-- Record one admission that waited for a slot before proceeding (@ecluse.serve.admission.queued@).
+recordServeAdmissionQueued :: (MonadIO m) => Metrics -> m ()
+recordServeAdmissionQueued m =
+    addOne (mServeAdmissionQueued m) []
+
+-- Count one divergence per contradicting version. Identifiers stay on the warning log, never labels.
+recordMergeDivergence :: (MonadIO m) => Metrics -> m ()
+recordMergeDivergence m =
+    addOne (mMergeDivergence m) []
+
+{- | Record one rule denial (@ecluse.rule.denials@) by reason class and, for a policy denial, the
+deciding rule. A non-policy refusal has no rule to attribute, so none is labelled.
+-}
+recordRuleDenial :: (MonadIO m) => Metrics -> Maybe Text -> ReasonClass -> m ()
+recordRuleDenial m rule reasonClass =
+    addOne (mRuleDenials m) (maybe [] (\name -> [LRule name]) rule <> [LReasonClass reasonClass])
+
+-- | Record a rule-evaluation latency sample (@ecluse.rule.eval.duration@) by tier.
+recordRuleEvalDuration :: (MonadIO m) => Metrics -> Tier -> Double -> m ()
+recordRuleEvalDuration m tier seconds =
+    record (mRuleEvalDuration m) seconds [LTier tier]
+
+-- | Record one effectful-rule failure (@ecluse.rule.effectful.failures@) by cause.
+recordRuleEffectfulFailure :: (MonadIO m) => Metrics -> Cause -> m ()
+recordRuleEffectfulFailure m cause =
+    addOne (mRuleEffectfulFailures m) [LCause cause]
+
+{- | Record the current circuit-breaker state (@ecluse.rule.breaker.state@) for a
+source as the gauge's bounded ordinal (0 closed, 1 half-open, 2 open).
+-}
+recordBreakerState :: (MonadIO m) => Metrics -> BreakerSource -> BreakerState -> m ()
+recordBreakerState m source breakerState =
+    set (mRuleBreakerState m) (breakerStateCode breakerState) [LBreakerSource source]
+
+-- | Record an upstream metadata-fetch latency sample to @ecluse.upstream.fetch.duration@.
+recordUpstreamFetch :: (MonadIO m) => Metrics -> Upstream -> StatusClass -> Double -> m ()
+recordUpstreamFetch m upstream statusClass seconds =
+    record (mUpstreamFetchDuration m) seconds [LUpstream upstream, LStatusClass statusClass]
+
+-- | Record one upstream metadata-fetch error to @ecluse.upstream.fetch.errors@.
+recordUpstreamFetchError :: (MonadIO m) => Metrics -> Upstream -> Cause -> m ()
+recordUpstreamFetchError m upstream cause =
+    addOne (mUpstreamFetchErrors m) [LUpstream upstream, LCause cause]
+
+-- | Record one metadata-cache lookup (@ecluse.metadata_cache.requests@) as a hit or miss.
+recordCacheRequest :: (MonadIO m) => Metrics -> CacheResult -> m ()
+recordCacheRequest m result =
+    addOne (mMetadataCacheRequests m) [LCacheResult result]
+
+-- | Record the metadata cache's current occupancy (@ecluse.metadata_cache.entries@).
+recordCacheEntries :: (MonadIO m) => Metrics -> Int -> m ()
+recordCacheEntries m entries =
+    set (mMetadataCacheEntries m) (fromIntegral entries) []
+
+{- | Record the full-packument metadata cache's resident bytes
+(@ecluse.metadata_cache.resident_bytes@).
+-}
+recordCacheResidentBytes :: (MonadIO m) => Metrics -> Int -> m ()
+recordCacheResidentBytes m bytes =
+    set (mMetadataCacheResidentBytes m) (fromIntegral bytes) []
+
+{- | Record the single-version metadata cache's resident bytes
+(@ecluse.metadata_cache.version.resident_bytes@).
+-}
+recordVersionCacheResidentBytes :: (MonadIO m) => Metrics -> Int -> m ()
+recordVersionCacheResidentBytes m bytes =
+    set (mSingleVersionCacheResidentBytes m) (fromIntegral bytes) []
+
+{- | Record the assembled-representation store's resident bytes
+(@ecluse.metadata_cache.assembled.resident_bytes@).
+-}
+recordAssembledCacheResidentBytes :: (MonadIO m) => Metrics -> Int -> m ()
+recordAssembledCacheResidentBytes m bytes =
+    set (mAssembledCacheResidentBytes m) (fromIntegral bytes) []
+
+-- | Record one mirror job enqueued (@ecluse.mirror.enqueued@).
+recordMirrorEnqueued :: (MonadIO m) => Metrics -> m ()
+recordMirrorEnqueued m = addOne (mMirrorEnqueued m) []
+
+-- | Record one mirror enqueue failure (@ecluse.mirror.enqueue.failures@).
+recordMirrorEnqueueFailure :: (MonadIO m) => Metrics -> m ()
+recordMirrorEnqueueFailure m = addOne (mMirrorEnqueueFailures m) []
+
+-- Record one perimeter-answered handler escape (@ecluse.serve.perimeter.faults@) by cause.
+recordRequestPerimeterFault :: (MonadIO m) => Metrics -> RequestFaultCause -> m ()
+recordRequestPerimeterFault m cause = addOne (mServePerimeterFaults m) [LPerimeterCause cause]
+
+-- Record one anomalous public relay (@ecluse.serve.relay.anomalies@) by class.
+recordPublicRelayAnomaly :: (MonadIO m) => Metrics -> RelayAnomaly -> m ()
+recordPublicRelayAnomaly m cls = addOne (mServeRelayAnomalies m) [LRelayAnomaly cls]
+
+-- | Record one processed mirror job (@ecluse.mirror.jobs.processed@) by its result.
+recordMirrorJobProcessed :: (MonadIO m) => Metrics -> MirrorResult -> m ()
+recordMirrorJobProcessed m result =
+    addOne (mMirrorJobsProcessed m) [LMirrorResult result]
+
+-- | Record one disposition of one swept mirror-store version (@ecluse.dredger.versions@).
+recordSweptVersion :: (MonadIO m) => Metrics -> SweepTarget -> SweepResult -> m ()
+recordSweptVersion m target result = addOne (mDredgerVersions m) [LSweepTarget target, LSweepResult result]
+
+-- | Record a mirror publish latency sample (@ecluse.mirror.publish.duration@).
+recordMirrorPublishDuration :: (MonadIO m) => Metrics -> Double -> m ()
+recordMirrorPublishDuration m seconds =
+    record (mMirrorPublishDuration m) seconds []
+
+-- | Record one credential refresh (@ecluse.credential.refresh@) by result and provider.
+recordCredentialRefresh :: (MonadIO m) => Metrics -> Provider -> CredentialResult -> m ()
+recordCredentialRefresh m provider result =
+    addOne (mCredentialRefresh m) [LProvider provider, LCredentialResult result]
+
+-- | Collect the shortest active expiry per provider as non-negative whole seconds remaining.
+registerCredentialTokenTtl :: Metrics -> IO UTCTime -> IO [(Provider, UTCTime)] -> IO ()
+registerCredentialTokenTtl m clock expiries =
+    void $ observableGaugeRegisterCallback (mCredentialTokenTtlSeconds m) $ \result -> do
+        now <- clock
+        current <- expiries
+        for_ current $ \(provider, expiry) ->
+            observe result (max 0 (floor (diffUTCTime expiry now))) (metricAttributes [LProvider provider])
+
+-- | Record one advisory sync attempt to @ecluse.advisory.sync.attempts@.
+recordAdvisorySyncAttempt :: (MonadIO m) => Metrics -> Ecosystem -> AdvisorySyncResult -> m ()
+recordAdvisorySyncAttempt m eco result =
+    addOne (mAdvisorySyncAttempts m) [LEcosystem eco, LAdvisorySyncResult result]
+
+-- | Record one advisory sync attempt's latency in seconds (@ecluse.advisory.sync.duration@).
+recordAdvisorySyncDuration :: (MonadIO m) => Metrics -> Ecosystem -> AdvisorySyncResult -> Double -> m ()
+recordAdvisorySyncDuration m eco result seconds =
+    record (mAdvisorySyncDuration m) seconds [LEcosystem eco, LAdvisorySyncResult result]
+
+{- | Attach one ecosystem's advisory-database age to @ecluse.advisory.database.age.seconds@. The
+SDK calls back at each collection, so a sync task that dies cannot freeze or reset the age.
+-}
+registerAdvisoryDatabaseAge :: Metrics -> Ecosystem -> IO (Maybe Double) -> IO ()
+registerAdvisoryDatabaseAge m eco installedAt =
+    void (observableGaugeRegisterCallback (mAdvisoryDatabaseAgeSeconds m) (reportAdvisoryDatabaseAge eco installedAt))
+
+{- | What one collection reports: whole seconds from the install stamp to now. With no generation
+installed it observes nothing, so a never-filled slot never reads as fresh.
+-}
+reportAdvisoryDatabaseAge :: Ecosystem -> IO (Maybe Double) -> ObservableResult Int64 -> IO ()
+reportAdvisoryDatabaseAge eco installedAt result = do
+    mStamp <- installedAt
+    for_ mStamp $ \stamp -> do
+        now <- getMonotonicTime
+        observeAge result eco (floor (now - stamp))
+
+{- | Attach one ecosystem's advisory-source age to @ecluse.advisory.source.age.seconds@: the age
+the CVE-deny path expires on, where 'registerAdvisoryDatabaseAge' is an installation diagnostic.
+-}
+registerAdvisorySourceAge :: Metrics -> Ecosystem -> IO (Maybe UTCTime) -> IO ()
+registerAdvisorySourceAge m eco pushedAt =
+    void (observableGaugeRegisterCallback (mAdvisorySourceAgeSeconds m) (reportAdvisorySourceAge eco pushedAt))
+
+{- | What one collection reports: whole seconds from the publication time to now. With no push
+time to measure, it observes nothing rather than a zero.
+-}
+reportAdvisorySourceAge :: Ecosystem -> IO (Maybe UTCTime) -> ObservableResult Int64 -> IO ()
+reportAdvisorySourceAge eco pushedAt result = do
+    mStamp <- pushedAt
+    for_ mStamp $ \stamp -> do
+        now <- getCurrentTime
+        observeAge result eco (floor (diffUTCTime now stamp))
+
+-- An age is never negative, whatever a clock or a stamp says.
+observeAge :: ObservableResult Int64 -> Ecosystem -> Int64 -> IO ()
+observeAge result eco seconds = observe result (max 0 seconds) (metricAttributes [LEcosystem eco])
+
+-- | Record the advisory entries one compile pass accepted (@ecluse.advisory.compile.accepted@).
+recordAdvisoryCompileAccepted :: (MonadIO m) => Metrics -> Ecosystem -> Int -> m ()
+recordAdvisoryCompileAccepted m eco entries =
+    addCount (mAdvisoryCompileAccepted m) entries [LEcosystem eco]
+
+{- | Record the advisory entries one compile pass dropped for a bounded cause
+(@ecluse.advisory.compile.dropped@).
+-}
+recordAdvisoryCompileDropped :: (MonadIO m) => Metrics -> Ecosystem -> AdvisoryDropCause -> Int -> m ()
+recordAdvisoryCompileDropped m eco cause entries =
+    addCount (mAdvisoryCompileDropped m) entries [LEcosystem eco, LAdvisoryDropCause cause]
+
+-- | Record how one compile pass concluded (@ecluse.advisory.compile.runs@).
+recordAdvisoryCompileRun :: (MonadIO m) => Metrics -> Ecosystem -> AdvisoryCompileResult -> m ()
+recordAdvisoryCompileRun m eco result =
+    addOne (mAdvisoryCompileRuns m) [LEcosystem eco, LAdvisoryCompileResult result]
+
+addOne :: (MonadIO m) => Counter Int64 -> [Label] -> m ()
+addOne instrument labels = liftIO (counterAdd instrument 1 (metricAttributes labels))
+
+-- A counter never goes backwards, so a negative tally adds nothing.
+addCount :: (MonadIO m) => Counter Int64 -> Int -> [Label] -> m ()
+addCount instrument n labels = liftIO (counterAdd instrument (fromIntegral (max 0 n)) (metricAttributes labels))
+
+addDelta :: (MonadIO m) => UpDownCounter Int64 -> Int64 -> [Label] -> m ()
+addDelta instrument delta labels = liftIO (upDownCounterAdd instrument delta (metricAttributes labels))
+
+record :: (MonadIO m) => Histogram -> Double -> [Label] -> m ()
+record instrument value labels = liftIO (histogramRecord instrument value (metricAttributes labels))
+
+-- Set a gauge under the given bounded labels: the last value wins per collect.
+set :: (MonadIO m) => Gauge Int64 -> Int64 -> [Label] -> m ()
+set instrument value labels = liftIO (gaugeRecord instrument value (metricAttributes labels))

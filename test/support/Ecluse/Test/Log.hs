@@ -14,6 +14,8 @@ module Ecluse.Test.Log (
     jsonLogEnv,
     captureStdout,
     captureStderr,
+    captureJsonLog,
+    runJsonLog,
     lineMessage,
 ) where
 
@@ -29,6 +31,7 @@ import Katip (
     Severity (DebugS),
     SimpleLogPayload,
     Verbosity (V2),
+    closeScribes,
     defaultScribeSettings,
     initLogEnv,
     permitItem,
@@ -84,6 +87,24 @@ captureHandle stream act =
         hFlush stream
         hDuplicateTo saved stream
         hClose saved
+
+{- | Run an action against a 'jsonLogEnv' and return its result beside the captured JSONL.
+The scribes close before the capture is read, so every buffered line is in the returned text.
+-}
+captureJsonLog :: (LogEnv -> IO a) -> IO (a, Text)
+captureJsonLog body = do
+    slot <- newEmptyMVar
+    captured <- captureStdout $ do
+        logEnv <- jsonLogEnv
+        result <- body logEnv
+        void (closeScribes logEnv)
+        putMVar slot result
+    (,captured) <$> takeMVar slot
+
+-- | 'captureJsonLog' over a @katip@-constrained action, at the empty context and namespace.
+runJsonLog :: KatipContextT IO () -> IO Text
+runJsonLog action =
+    snd <$> captureJsonLog (\logEnv -> runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action)
 
 -- | Read a JSONL message, returning 'Nothing' for malformed JSON or a missing or non-text message.
 lineMessage :: Text -> Maybe Text

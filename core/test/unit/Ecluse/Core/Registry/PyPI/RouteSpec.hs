@@ -16,21 +16,21 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Data.Text qualified as T
-import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Package (PackageName, mkPackageName, renderPackageName)
+import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName, projectName)
-import Ecluse.Core.Registry.PyPI.Route (
+import Ecluse.Core.Registry.PyPI.Route (distributionPath)
+import Ecluse.Core.Registry.PyPI.Route.Internal (
     PyPICap (PyPIFile, PyPIProject),
     artifactCoordinate,
-    distributionPath,
     pypiRoutes,
     takeProject,
  )
 import Ecluse.Core.Server.Path (Filename, unFilename)
-import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
+import Ecluse.Core.Server.Route (RouteName (RouteName))
 import Ecluse.Core.Version (Version, renderVersion)
+import Ecluse.Test.Package (requestsName, unscopedPyPI)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
-import Ecluse.Test.Server.Route (claimsEveryRendering)
+import Ecluse.Test.Server.Route (claimedBy, claimsEveryRendering)
 
 spec :: Spec
 spec = do
@@ -43,11 +43,6 @@ spec = do
 matchingSpec :: Spec
 matchingSpec = describe "which route claims a request" $ do
     it "routes a project's index read" $
-        claimed methodGet jsonAccept ["simple", "requests"] `shouldBe` Just (RouteName "simpleIndex")
-
-    it "routes the same path with a trailing slash, which the router strips" $
-        -- The mount dispatcher drops a trailing empty segment before the table sees the path,
-        -- so /simple/requests/ and /simple/requests are one template.
         claimed methodGet jsonAccept ["simple", "requests"] `shouldBe` Just (RouteName "simpleIndex")
 
     it "routes a HEAD of the index as the bodiless variation of its GET" $
@@ -100,9 +95,6 @@ matchingSpec = describe "which route claims a request" $ do
 
 negotiationSpec :: Spec
 negotiationSpec = describe "the index route serves the PEP 691 JSON form alone" $ do
-    it "claims a request that admits the JSON form" $
-        claimed methodGet jsonAccept ["simple", "requests"] `shouldBe` Just (RouteName "simpleIndex")
-
     it "claims a request that sends no Accept header at all" $
         claimed methodGet [] ["simple", "requests"] `shouldBe` Just (RouteName "simpleIndex")
 
@@ -118,7 +110,7 @@ negotiationSpec = describe "the index route serves the PEP 691 JSON form alone" 
 captureSpec :: Spec
 captureSpec = describe "takeProject" $ do
     it "peels a canonical project name off the path" $
-        fmap (first renderProject) (takeProject ["requests", "more"])
+        fmap (first renderPackageName) (takeProject ["requests", "more"])
             `shouldBe` Just ("requests", ["more"])
 
     it "refuses a spelling the upstream index would redirect" $ do
@@ -135,22 +127,22 @@ captureSpec = describe "takeProject" $ do
 coordinateSpec :: Spec
 coordinateSpec = describe "artifactCoordinate" $ do
     it "reads the release a wheel names, keyed canonically" $
-        fmap renderCoordinate (artifactCoordinate requests "requests-2.34.2-py3-none-any.whl")
+        fmap renderCoordinate (artifactCoordinate requestsName "requests-2.34.2-py3-none-any.whl")
             `shouldBe` Just ("2.34.2", "requests-2.34.2-py3-none-any.whl")
 
     it "reads the release a source distribution names" $
-        fmap renderCoordinate (artifactCoordinate requests "requests-2.34.2.tar.gz")
+        fmap renderCoordinate (artifactCoordinate requestsName "requests-2.34.2.tar.gz")
             `shouldBe` Just ("2.34.2", "requests-2.34.2.tar.gz")
 
     it "keeps the file name verbatim, so the upstream path is the one the client asked for" $
-        fmap (snd . renderCoordinate) (artifactCoordinate requests "requests-2.34-py3-none-any.whl")
+        fmap (snd . renderCoordinate) (artifactCoordinate requestsName "requests-2.34-py3-none-any.whl")
             `shouldBe` Just "requests-2.34-py3-none-any.whl"
 
     it "refuses a file naming another project" $
-        artifactCoordinate requests "urllib3-2.0.0.tar.gz" `shouldSatisfy` isNothing
+        artifactCoordinate requestsName "urllib3-2.0.0.tar.gz" `shouldSatisfy` isNothing
 
     it "refuses a name that is not a distribution at all" $
-        artifactCoordinate requests "requests" `shouldSatisfy` isNothing
+        artifactCoordinate requestsName "requests" `shouldSatisfy` isNothing
 
     it "reads a wheel of a hyphenated project under PEP 427's escaped spelling" $
         fmap (fst . renderCoordinate) (artifactCoordinate azureStorageBlob "azure_storage_blob-12.14.0-py3-none-any.whl")
@@ -163,7 +155,7 @@ coordinateSpec = describe "artifactCoordinate" $ do
             `shouldSatisfy` isNothing
 
 claimed :: Method -> RequestHeaders -> [Text] -> Maybe RouteName
-claimed method headers segments = routeName . fst <$> matchRoute pypiRoutes method headers segments
+claimed = claimedBy pypiRoutes
 
 jsonAccept :: RequestHeaders
 jsonAccept = [("Accept", "application/vnd.pypi.simple.v1+json, application/vnd.pypi.simple.v1+html;q=0.1, text/html;q=0.01")]
@@ -171,14 +163,8 @@ jsonAccept = [("Accept", "application/vnd.pypi.simple.v1+json, application/vnd.p
 htmlOnlyAccept :: RequestHeaders
 htmlOnlyAccept = [("Accept", "text/html")]
 
-requests :: PackageName
-requests = mkPackageName PyPI Nothing "requests"
-
 azureStorageBlob :: PackageName
-azureStorageBlob = mkPackageName PyPI Nothing "azure-storage-blob"
-
-renderProject :: PackageName -> Text
-renderProject = renderPackageName
+azureStorageBlob = unscopedPyPI "azure-storage-blob"
 
 renderCoordinate :: (Version, Filename) -> (Text, Text)
 renderCoordinate (version, file) = (renderVersion version, unFilename file)
@@ -193,7 +179,7 @@ renderingSpec = describe "every rendered file URL is one this table claims" $ do
             claimsEveryRendering pypiRoutes (RouteName "distribution") [PyPIProject project, PyPIFile file]
 
     it "renders the path the served index rebases a file onto" $
-        distributionPath requests "requests-2.34.2-py3-none-any.whl"
+        distributionPath requestsName "requests-2.34.2-py3-none-any.whl"
             `shouldBe` Just "simple/requests/requests-2.34.2-py3-none-any.whl"
 
 genCanonicalProject :: Gen PackageName

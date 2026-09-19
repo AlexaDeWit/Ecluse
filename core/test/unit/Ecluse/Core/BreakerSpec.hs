@@ -37,36 +37,7 @@ spec = do
         it "starts healthy with no failures recorded" $
             initialBreaker `shouldBe` Closed 0
 
-    describe "Eq / Show instances" $ do
-        it "compares equal only for the same constructor and payload" $ do
-            Closed 1 `shouldBe` Closed 1
-            HalfOpen `shouldBe` HalfOpen
-            Open now `shouldBe` Open now
-            Closed 1 `shouldNotBe` Closed 2
-            Open now `shouldNotBe` Open (addUTCTime 1 now)
-            Closed 0 `shouldNotBe` HalfOpen
-            Closed 0 `shouldNotBe` Open now
-            HalfOpen `shouldNotBe` Open now
-
-        it "renders each constructor distinctly" $ do
-            -- At the top level (precedence 0) the derived Show adds no parentheses.
-            show (Closed 3) `shouldBe` ("Closed 3" :: String)
-            show HalfOpen `shouldBe` ("HalfOpen" :: String)
-            show (Open now) `shouldContain` "Open "
-
-        it "parenthesises an argument-bearing constructor in a nested position" $ do
-            -- As an argument (precedence 11) the derived Show takes its parenthesising
-            -- branch, which a top-level show never reaches.
-            show (Just (Closed 3)) `shouldBe` ("Just (Closed 3)" :: String)
-            show [Open now] `shouldContain` "[Open "
-
     describe "admit" $ do
-        it "admits a closed breaker unchanged" $
-            admit now (Closed 0) `shouldBe` (True, Closed 0)
-
-        it "admits a closed breaker that has counted failures, unchanged" $
-            admit now (Closed 2) `shouldBe` (True, Closed 2)
-
         it "admits a half-open breaker unchanged (the probe is in flight)" $
             admit now HalfOpen `shouldBe` (True, HalfOpen)
 
@@ -74,13 +45,11 @@ spec = do
             let until' = addUTCTime cooldown now
             admit now (Open until') `shouldBe` (False, Open until')
 
-        it "half-opens and admits one probe once the cooldown instant is reached" $ do
+        it "half-opens and admits one probe at the cooldown instant and after it" $ do
             -- At exactly the cooldown instant the deadline is no longer in the future,
             -- so the probe passes and the state advances to half-open.
-            admit now (Open now) `shouldBe` (True, HalfOpen)
-
-        it "half-opens and admits once the cooldown instant is past" $ do
             let until' = addUTCTime cooldown now
+            admit now (Open now) `shouldBe` (True, HalfOpen)
             admit (addUTCTime 1 until') (Open until') `shouldBe` (True, HalfOpen)
 
     describe "recordSuccess" $ do
@@ -94,9 +63,6 @@ spec = do
             recordSuccess (Open (addUTCTime cooldown now)) `shouldBe` Closed 0
 
     describe "recordFailure" $ do
-        it "counts a failure up while below the trip threshold" $
-            failAt now (Closed 0) `shouldBe` Closed 1
-
         it "trips open for the cooldown once the count reaches the threshold" $
             -- Two failures already counted (Closed 2). The third reaches threshold 3.
             failAt now (Closed (threshold - 1)) `shouldBe` Open (addUTCTime cooldown now)

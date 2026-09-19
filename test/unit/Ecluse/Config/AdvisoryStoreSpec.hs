@@ -80,5 +80,7 @@ spec = describe "mkAdvisoryStoreUrl" $ do
                 \raw -> mkAdvisoryStoreUrl storeKey raw `shouldSatisfy` refusalNamingKey
 
         it "accepts the dotted and hyphenated names an existing bucket may carry" $
-            for_ ["s3://my.advisories.example", "s3://a-b-c", "s3://abc"] $
-                \raw -> mkAdvisoryStoreUrl storeKey raw `shouldSatisfy` isRight
+            for_ [("s3://my.advisories.example", "my.advisories.example"), ("s3://a-b-c", "a-b-c"), ("s3://abc", "abc")] $
+                \(raw, bucket) ->
+                    fmap advisoryStoreTarget (mkAdvisoryStoreUrl storeKey raw)
+                        `shouldBe` Right (S3Store bucket Nothing)

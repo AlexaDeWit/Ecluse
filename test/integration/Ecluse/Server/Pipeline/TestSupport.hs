@@ -115,7 +115,6 @@ import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMe
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse, defaultRequest, request, runSession, setPath)
 
-import Ecluse (mountBindingFor)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
@@ -143,6 +142,7 @@ import Ecluse.Runtime.Server (
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvLogging, newTestEnvWith)
+import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (sriSha256Of, sriSha512Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)

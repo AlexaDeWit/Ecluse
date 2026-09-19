@@ -48,7 +48,7 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UpstreamSafety (Undecidable, Unsafe),
  )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
-import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     CodeArtifactStore (..),
     arnOfDescription,
     classifyRepository,

@@ -18,7 +18,7 @@ import OpenTelemetry.Resource.Detect (detectResourceAttributes)
 import Ecluse.Test.Log (newTestLogEnv)
 
 import Ecluse.Core.Security (hostAddress)
-import Ecluse.Runtime.Telemetry.Resolve (
+import Ecluse.Runtime.Telemetry.Resolve.Internal (
     EndpointSource (..),
     ResolvedTelemetry (..),
     ResourceAttributes (..),

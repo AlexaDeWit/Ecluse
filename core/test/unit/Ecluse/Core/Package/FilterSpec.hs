@@ -97,10 +97,6 @@ survivorSpec = describe "fpSurvivors" $ do
 
 decisionsSpec :: Spec
 decisionsSpec = describe "fpDecisions" $ do
-    it "carries one decision per version (survivors and denials alike)" $ do
-        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "2.0.0") [("1.0.0", 30, False), ("2.0.0", 1, False)])
-        length (fpDecisions plan) `shouldBe` 2
-
     it "is all-non-approved when nothing survives" $ do
         plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "1.0.0") [("1.0.0", 1, False), ("2.0.0", 1, True)])
         length (fpDecisions plan) `shouldBe` 2

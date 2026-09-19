@@ -24,7 +24,7 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Queue.Lease (MonoTime (MonoTime), ReceiptLease, receiptLease)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Runtime.Queue.Sqs (
+import Ecluse.Runtime.Queue.Sqs.Internal (
     ReceivedMessage (..),
     SqsConfig (..),
     deadLetterTerminusOf,

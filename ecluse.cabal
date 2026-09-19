@@ -130,6 +130,7 @@ library ecluse-core
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Maintenance
     Ecluse.Core.Registry.Maintenance.Budget
+    Ecluse.Core.Registry.Maintenance.Budget.Internal
     Ecluse.Core.Registry.Maintenance.NameSpace
     Ecluse.Core.Registry.Maintenance.Protocol
     Ecluse.Core.Registry.Maintenance.Upstream
@@ -145,6 +146,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Publish
     Ecluse.Core.Registry.Npm.Request
     Ecluse.Core.Registry.Npm.Route
+    Ecluse.Core.Registry.Npm.Route.Internal
     Ecluse.Core.Registry.Npm.SelectiveDecode
     Ecluse.Core.Registry.Npm.Serve
     Ecluse.Core.Registry.Npm.Wire
@@ -156,6 +158,7 @@ library ecluse-core
     Ecluse.Core.Registry.Sweep.Group
     Ecluse.Core.Registry.Sweep.Outcome
     Ecluse.Core.Registry.Sweep.Pacing
+    Ecluse.Core.Registry.Sweep.Pacing.Internal
     Ecluse.Core.Registry.Sweep.Package
     Ecluse.Core.Registry.Sweep.Types
     Ecluse.Core.Registry.Sweep.Walk
@@ -167,6 +170,7 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Project
     Ecluse.Core.Registry.PyPI.Request
     Ecluse.Core.Registry.PyPI.Route
+    Ecluse.Core.Registry.PyPI.Route.Internal
     Ecluse.Core.Registry.PyPI.SelectiveDecode
     Ecluse.Core.Registry.PyPI.Wire
     Ecluse.Core.Registry.Request
@@ -176,6 +180,7 @@ library ecluse-core
     Ecluse.Core.Rules.Effectful
     Ecluse.Core.Rules.Freshness
     Ecluse.Core.Rules.Outage
+    Ecluse.Core.Rules.Outage.Internal
     Ecluse.Core.Rules.Types
     Ecluse.Core.Security
     Ecluse.Core.Security.Authority
@@ -321,6 +326,7 @@ library
   autogen-modules: Paths_ecluse
   exposed-modules:
     Ecluse
+    Ecluse.Internal
     Ecluse.Boot
     Ecluse.Proxy
     Ecluse.Mirror
@@ -425,28 +431,43 @@ library ecluse-runtime
     Ecluse.Runtime.Aws.Fault
     Ecluse.Runtime.Aws.S3
     Ecluse.Runtime.Credential.CodeArtifact
+    Ecluse.Runtime.Credential.CodeArtifact.Internal
     Ecluse.Runtime.Cve.Sync
+    Ecluse.Runtime.Cve.Sync.Internal
     Ecluse.Runtime.Env
     Ecluse.Runtime.Log
+    Ecluse.Runtime.Log.Internal
     Ecluse.Runtime.Maintenance.CodeArtifact
     Ecluse.Runtime.Maintenance.CodeArtifact.Decide
+    Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal
+    Ecluse.Runtime.Maintenance.CodeArtifact.Internal
     Ecluse.Runtime.Maintenance.CodeArtifact.Read
+    Ecluse.Runtime.Maintenance.CodeArtifact.Read.Internal
     Ecluse.Runtime.Pilot.Export
     Ecluse.Runtime.Queue.Sqs
+    Ecluse.Runtime.Queue.Sqs.Internal
     Ecluse.Runtime.Server
     Ecluse.Runtime.Server.Drain
     Ecluse.Runtime.Server.Halt
+    Ecluse.Runtime.Server.Internal
     Ecluse.Runtime.Server.Middleware
     Ecluse.Runtime.Telemetry
     Ecluse.Runtime.Telemetry.Correlation
+    Ecluse.Runtime.Telemetry.Correlation.Internal
     Ecluse.Runtime.Telemetry.ExportFailure
+    Ecluse.Runtime.Telemetry.ExportFailure.Internal
     Ecluse.Runtime.Telemetry.Instruments
+    Ecluse.Runtime.Telemetry.Instruments.Internal
+    Ecluse.Runtime.Telemetry.Internal
     Ecluse.Runtime.Telemetry.Reporters
     Ecluse.Runtime.Telemetry.Resolve
+    Ecluse.Runtime.Telemetry.Resolve.Internal
     Ecluse.Runtime.Telemetry.Scrape
+    Ecluse.Runtime.Telemetry.Scrape.Internal
     Ecluse.Runtime.Telemetry.Tracing
+    Ecluse.Runtime.Telemetry.Tracing.Internal
 
-  -- The generated version module. Ecluse.Runtime.Telemetry.Resolve falls back to the
+  -- The generated version module. Ecluse.Runtime.Telemetry.Resolve.Internal falls back to the
   -- running binary's own build version for the telemetry identity.
   other-modules:   Paths_ecluse
   autogen-modules: Paths_ecluse
@@ -706,7 +727,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.ClockSpec
     Ecluse.Core.Credential.Refresh.InternalSpec
     Ecluse.Core.CredentialSpec
-    Ecluse.Core.Cve.AcceptanceSpec
+    Ecluse.Core.Cve.InternalSpec
     Ecluse.Core.Cve.SlotSpec
     Ecluse.Core.CveSpec
     Ecluse.Core.EcosystemSpec
@@ -721,6 +742,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Osv.ProvenanceSpec
     Ecluse.Core.Osv.RetrySpec
     Ecluse.Core.Osv.SchemaSpec
+    Ecluse.Core.Osv.StreamSpec
     Ecluse.Core.Package.AdmissionSpec
     Ecluse.Core.Package.FilterSpec
     Ecluse.Core.Package.HashSpec
@@ -904,6 +926,7 @@ test-suite ecluse-unit
     Ecluse.BenchReportSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
+    Ecluse.InternalSpec
     Ecluse.DredgerSpec
     Ecluse.Dredger.PlanSpec
     Ecluse.Composition.BootErrorSpec

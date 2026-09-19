@@ -7,8 +7,6 @@ module Ecluse.BootSpec (spec) where
 
 import Prelude hiding (get)
 
-import Control.Concurrent qualified as Conc
-import Control.Exception (AsyncException (ThreadKilled))
 import Data.Text qualified as T
 import System.Environment (setEnv, unsetEnv, withArgs)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
@@ -16,15 +14,14 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO (bracket_, throwIO, timeout, try)
-import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse (ProcessOutcome (..), exitCodeFor, run, superviseProcess)
+import Ecluse (run)
 import Ecluse.Boot (BootAborted (..), BootEnv (beLogEnv), applySecretFileIndirection, applyServerSettings, logBootInfo, orExit, probeServerConfig, readConfigDocument, withBootEnv)
 import Ecluse.Composition.BootError (
-    BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, MirrorTargetOnMountEndpoint, PrivateUpstreamOnPublicUpstream, SplitRoleNeedsDurableQueue),
+    BootError (AwsEndpointMalformed, FirstPartyWithoutPrivateUpstream, MirrorRoleWithoutMirroring, PrivateUpstreamOnPublicUpstream, SplitRoleNeedsDurableQueue),
     renderBootError,
  )
-import Ecluse.Composition.Support (expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, withoutQueueUrl)
+import Ecluse.Composition.Support (collapsedMirrorRefusal, collapsingMirrorTarget, expectAppConfig, malformedAwsEndpoint, noMaintenanceBackend, overrideEnv, privateInventoryRefusal, privateUpstreamUrl, withoutMirrorTargetToken, withoutMirrorTargetUrl, withoutQueueUrl)
 import Ecluse.Composition.Types (BootRole (BootWithoutPipeline))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvAuthToken), loadConfig)
 import Ecluse.Core.Credential (Secret, mkSecret, unSecret)
@@ -46,7 +43,7 @@ import Ecluse.Test.Log (captureStderr, captureStdout)
 runEnv :: [(String, String)]
 runEnv =
     [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
-    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
+    , ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", privateUpstreamUrl)
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL", "https://mirror.example.test")
     , ("ECLUSE_QUEUE__URL", "https://sqs.us-east-1.amazonaws.com/123456789012/mirror")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN", "mirror-write-token")
@@ -67,7 +64,6 @@ awsRunEnv =
     ]
         <> runEnv
 
--- | Verify role boot, process outcomes, and cleanup through the application entry points.
 spec :: Spec
 spec = do
     describe "shared listener settings" $ do
@@ -109,7 +105,7 @@ spec = do
     describe "process log cleanup" $
         forM_ [("normal return", Right ()), ("exceptional exit", Left (SimulatedServiceFault "role failed"))] $ \(label, expected) ->
             it ("drains queued final audit lines on " <> label) $
-                bracket_ (traverse_ (uncurry setEnv) runEnv) (traverse_ (unsetEnv . fst) runEnv) $ do
+                withEnvVars runEnv $ do
                     output <- captureStdout $ do
                         result <- try $ withBootEnv BootWithoutPipeline $ \boot -> do
                             replicateM_ 100 (logBootInfo (beLogEnv boot) "final queued audit marker")
@@ -118,66 +114,34 @@ spec = do
                     length (filter (T.isInfixOf "final queued audit marker") (lines output)) `shouldBe` 100
 
     describe "run" $ do
-        it "boots from the environment layer alone (no document, no AWS_REGION) and serves" $ do
+        it "boots from the environment layer alone (no document, no AWS_REGION) and serves" $
             -- The queue URL's own host carries the region, so a real SQS
             -- deployment needs no AWS_REGION.
-            unsetEnv "AWS_REGION"
-            traverse_ (uncurry setEnv) runEnv
-            outcome <- timeout 100000 (withArgs ["proxy"] run)
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Nothing
+            serves ["proxy"] runEnv
 
-        it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $ do
-            unsetEnv "AWS_REGION"
-            unsetEnv "ECLUSE_QUEUE__URL"
-            setEnv "ECLUSE_MOUNTS__NPM__ENABLED" "true"
-            setEnv "ECLUSE_SERVER__PUBLIC_URL" "https://registry.example.test"
-            setEnv "ECLUSE_SERVER__PORT" "0"
-            outcome <- timeout 100000 (withArgs ["proxy"] run)
-            unsetEnv "ECLUSE_MOUNTS__NPM__ENABLED"
-            unsetEnv "ECLUSE_SERVER__PUBLIC_URL"
-            unsetEnv "ECLUSE_SERVER__PORT"
-            outcome `shouldBe` Nothing
+        it "boots the serve-only pure public gate on ENABLED alone (no queue or AWS variables)" $
+            serves
+                ["proxy"]
+                [ ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
+                , ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
+                , ("ECLUSE_SERVER__PORT", "0")
+                ]
 
-        it "boots with a config document at the ECLUSE_CONFIG override path and serves" $ do
-            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
-                let path = dir </> "config.yaml"
-                writeFileText path "server:\n  helpMessage: booted from the override document\n"
-                traverse_ (uncurry setEnv) awsRunEnv
-                setEnv "ECLUSE_CONFIG" path
-                outcome <- timeout 100000 (withArgs ["proxy"] run)
-                unsetEnv "ECLUSE_CONFIG"
-                traverse_ (unsetEnv . fst) awsRunEnv
-                outcome `shouldBe` Nothing
+        it "boots with a config document at the ECLUSE_CONFIG override path and serves" $
+            withDocument "server:\n  helpMessage: booted from the override document\n" $ \path ->
+                serves ["proxy"] (readingDocument path awsRunEnv)
 
-        it "aborts fast when the ECLUSE_CONFIG document carries an unknown key (the override is read and validated)" $ do
-            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
-                let path = dir </> "config.yaml"
-                writeFileText path "bogusKey: 1\n"
-                traverse_ (uncurry setEnv) awsRunEnv
-                setEnv "ECLUSE_CONFIG" path
-                outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-                unsetEnv "ECLUSE_CONFIG"
-                traverse_ (unsetEnv . fst) awsRunEnv
-                outcome `shouldBe` Left (ExitFailure 2)
+        it "aborts fast when the ECLUSE_CONFIG document carries an unknown key (the override is read and validated)" $
+            withDocument "bogusKey: 1\n" $ \path ->
+                abortsBoot ["proxy"] (readingDocument path awsRunEnv)
 
-        it "aborts fast when ECLUSE_CONFIG points at a missing file (never a silent documentless boot)" $ do
-            traverse_ (uncurry setEnv) awsRunEnv
-            setEnv "ECLUSE_CONFIG" "/nonexistent/ecluse/config.yaml"
-            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            unsetEnv "ECLUSE_CONFIG"
-            traverse_ (unsetEnv . fst) awsRunEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+        it "aborts fast when ECLUSE_CONFIG points at a missing file (never a silent documentless boot)" $
+            abortsBoot ["proxy"] (readingDocument "/nonexistent/ecluse/config.yaml" awsRunEnv)
 
-        it "aborts fast when ECLUSE_CONFIG points at an unreadable path (a typed refusal, not a raw exception)" $ do
+        it "aborts fast when ECLUSE_CONFIG points at an unreadable path (a typed refusal, not a raw exception)" $
             -- A directory gives an unreadable file path without relying on permission bits.
-            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
-                traverse_ (uncurry setEnv) awsRunEnv
-                setEnv "ECLUSE_CONFIG" dir
-                outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-                unsetEnv "ECLUSE_CONFIG"
-                traverse_ (unsetEnv . fst) awsRunEnv
-                outcome `shouldBe` Left (ExitFailure 2)
+            withSystemTempDirectory "ecluse-bootspec" $ \dir ->
+                abortsBoot ["proxy"] (readingDocument dir awsRunEnv)
 
         it "names the path and the error for an unreadable document, never its contents" $
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
@@ -188,27 +152,14 @@ spec = do
                         message `shouldSatisfy` T.isInfixOf (T.pack dir)
                         message `shouldSatisfy` T.isInfixOf "cannot be read"
 
-        it "aborts fast at boot when the queue URL names the unbuilt pubsub backend" $ do
-            traverse_ (uncurry setEnv) runEnv
-            setEnv "ECLUSE_QUEUE__URL" "projects/acme/topics/mirror"
-            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+        it "aborts fast at boot when the queue URL names the unbuilt pubsub backend" $
+            abortsBoot ["proxy"] (overrideEnv "ECLUSE_QUEUE__URL" "projects/acme/topics/mirror" runEnv)
 
-        it "aborts fast at boot when the queue URL's shape names no backend" $ do
-            traverse_ (uncurry setEnv) runEnv
-            setEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q"
-            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+        it "aborts fast at boot when the queue URL's shape names no backend" $
+            abortsBoot ["proxy"] (overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" runEnv)
 
-        it "boots on the in-memory mirror queue when no ECLUSE_QUEUE__URL is set (graceful rollover) and serves" $ do
-            unsetEnv "AWS_REGION"
-            unsetEnv "ECLUSE_QUEUE__URL"
-            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_QUEUE__URL") . fst) runEnv)
-            outcome <- timeout 100000 (withArgs ["proxy"] run)
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Nothing
+        it "boots on the in-memory mirror queue when no ECLUSE_QUEUE__URL is set (graceful rollover) and serves" $
+            serves ["proxy"] (withoutQueueUrl runEnv)
 
         it "refuses ecluse mirror over the in-memory queue, naming that command" $
             -- The proxy accepts this configuration, so the refusal identifies the dispatched role.
@@ -221,63 +172,29 @@ spec = do
             bootRefusal ["dredger"] collapsedMirrorEnv
                 `shouldReturn` (Left (ExitFailure 2), map renderBootError [collapsedMirrorRefusal, noMaintenanceBackend, privateInventoryRefusal])
 
-        it "aborts fast at boot when the SQS endpoint override is set with no AWS_REGION" $ do
+        it "aborts fast at boot when the SQS endpoint override is set with no AWS_REGION" $
             -- The override forces the SQS interpretation, and an emulator or VPC
             -- endpoint carries no region in its host, so AWS_REGION must scope it.
-            unsetEnv "AWS_REGION"
-            traverse_ (uncurry setEnv) runEnv
-            setEnv "AWS_ENDPOINT_URL_SQS" "http://localhost:4566"
-            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            unsetEnv "AWS_ENDPOINT_URL_SQS"
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+            abortsBoot ["proxy"] (overrideEnv "AWS_ENDPOINT_URL_SQS" "http://localhost:4566" runEnv)
 
-        it "aborts fast at boot when a mirror target declares its write token and no url" $ do
-            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL") . fst) awsRunEnv)
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL"
-            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            traverse_ (unsetEnv . fst) awsRunEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+        it "aborts fast at boot when a mirror target declares its write token and no url" $
+            abortsBoot ["proxy"] (withoutMirrorTargetUrl awsRunEnv)
 
-        it "aborts fast at boot when a registry mirror target has no write token" $ do
-            traverse_ (uncurry setEnv) awsRunEnv
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN"
-            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            traverse_ (unsetEnv . fst) awsRunEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+        it "aborts fast at boot when a registry mirror target has no write token" $
+            abortsBoot ["proxy"] (withoutMirrorTargetToken awsRunEnv)
 
-        it "aborts fast at boot when a second tag lands on the declared mirror target" $ do
+        it "aborts fast at boot when a second tag lands on the declared mirror target" $
             -- Overrides fill keys under a tag without removing another layer's tag.
-            traverse_ (uncurry setEnv) awsRunEnv
-            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactRepository
-            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL"
-            traverse_ (unsetEnv . fst) awsRunEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+            abortsBoot ["proxy"] (overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL" codeArtifactRepository awsRunEnv)
 
     describe "the *_FILE secret indirection" $ do
-        it "resolves a secret through *_FILE and serves" $ do
-            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
-                let secretPath = dir </> "mirror-token"
-                writeFileText secretPath "mirror-write-token\n"
-                traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN") . fst) runEnv)
-                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN"
-                setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE" secretPath
-                outcome <- timeout 100000 (withArgs ["proxy"] run)
-                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE"
-                traverse_ (unsetEnv . fst) runEnv
-                outcome `shouldBe` Nothing
+        it "resolves a secret through *_FILE and serves" $
+            withSecretFile $ \secretPath ->
+                serves ["proxy"] (readingTokenFile secretPath (withoutMirrorTargetToken runEnv))
 
-        it "refuses a secret supplied both directly and through *_FILE (no silent precedence)" $ do
-            withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
-                let secretPath = dir </> "mirror-token"
-                writeFileText secretPath "mirror-write-token\n"
-                traverse_ (uncurry setEnv) runEnv
-                setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE" secretPath
-                outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-                unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE"
-                traverse_ (unsetEnv . fst) runEnv
-                outcome `shouldBe` Left (ExitFailure 2)
+        it "refuses a secret supplied both directly and through *_FILE (no silent precedence)" $
+            withSecretFile $ \secretPath ->
+                abortsBoot ["proxy"] (readingTokenFile secretPath runEnv)
 
         it "passes JSON-looking *_FILE contents through to the exact secret string" $
             withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
@@ -305,14 +222,8 @@ spec = do
                                     (unSecret <$> srvAuthToken (cfgServer (configApp cfg)))
                                         `shouldBe` Just payload
 
-        it "refuses a *_FILE secret whose file cannot be read" $ do
-            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN") . fst) runEnv)
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN"
-            setEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE" "/nonexistent/ecluse/secret"
-            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either ExitCode (Maybe ()))
-            unsetEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE"
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+        it "refuses a *_FILE secret whose file cannot be read" $
+            abortsBoot ["proxy"] (readingTokenFile "/nonexistent/ecluse/secret" (withoutMirrorTargetToken runEnv))
 
     describe "private/public repository collisions"
         $ forM_
@@ -357,53 +268,28 @@ spec = do
             bootRefusal args envVars `shouldReturn` (Left (ExitFailure 2), expected)
 
     describe "check-config (validate and print, boot nothing)" $ do
-        it "validates a bootable configuration and exits 0" $ do
-            traverse_ (uncurry setEnv) runEnv
-            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Left ExitSuccess
+        it "validates a bootable configuration and exits 0" $
+            checkConfig runEnv `shouldReturn` Left ExitSuccess
 
-        it "refuses an invalid configuration with exit 2" $ do
-            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_SERVER__PUBLIC_URL") . fst) runEnv)
-            unsetEnv "ECLUSE_SERVER__PUBLIC_URL"
-            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+        it "refuses an invalid configuration with exit 2" $
+            checkConfig (filter ((/= "ECLUSE_SERVER__PUBLIC_URL") . fst) runEnv) `shouldReturn` refusedCheck
 
-        it "refuses an unrecognised queue URL with exit 2 (the queue plan is checked too)" $ do
-            traverse_ (uncurry setEnv) runEnv
-            setEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q"
-            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+        it "refuses an unrecognised queue URL with exit 2 (the queue plan is checked too)" $
+            checkConfig (overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" runEnv)
+                `shouldReturn` refusedCheck
 
-        it "refuses a publication target without first-party namespaces with exit 2 (the boot's own refusal)" $ do
-            traverse_ (uncurry setEnv) runEnv
-            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test"
-            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL"
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+        it "refuses a publication target without first-party namespaces with exit 2 (the boot's own refusal)" $
+            checkConfig (publishingTo runEnv) `shouldReturn` refusedCheck
 
-        it "refuses a static publication token without an inbound edge with exit 2" $ do
-            traverse_ (uncurry setEnv) runEnv
-            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test"
-            setEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme"
-            setEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN" "publish-write-token"
-            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL"
-            unsetEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY"
-            unsetEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN"
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+        it "refuses a static publication token without an inbound edge with exit 2" $
+            checkConfig
+                ( overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN" "publish-write-token" $
+                    overrideEnv "ECLUSE_MOUNTS__NPM__FIRST_PARTY" "@acme" (publishingTo runEnv)
+                )
+                `shouldReturn` refusedCheck
 
-        it "refuses an enabled ecosystem with no adapter with exit 2" $ do
-            traverse_ (uncurry setEnv) runEnv
-            setEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true"
-            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-            unsetEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED"
-            traverse_ (unsetEnv . fst) runEnv
-            outcome `shouldBe` Left (ExitFailure 2)
+        it "refuses an enabled ecosystem with no adapter with exit 2" $
+            checkConfig (overrideEnv "ECLUSE_MOUNTS__RUBYGEMS__ENABLED" "true" runEnv) `shouldReturn` refusedCheck
 
         forM_
             [ ("CodeArtifact", [("ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL", codeArtifactRepository)], True)
@@ -422,86 +308,34 @@ spec = do
                 it ("prints maintenance client notices only for control planes (" <> label <> ")") $ do
                     let envVars = mirrorEnv <> filter (not . isRegistryMirrorKey . fst) runEnv
                         notice = "mount \"npm\": the store maintenance client is built at boot against the live environment. check-config does not attempt this build."
-                    bracket_ (traverse_ (uncurry setEnv) envVars) (traverse_ (unsetEnv . fst) envVars) $ do
-                        output <- captureStdout $ do
-                            outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-                            outcome `shouldBe` Left ExitSuccess
-                        -- The mount prefix carries the posture and the push-age limit too, so
-                        -- this reads the notice itself rather than counting every mount line.
-                        let notices = filter (T.isInfixOf "the store maintenance client") (lines output)
-                        notices `shouldBe` [notice | hasControlPlane]
+                    output <- checkConfigOutput envVars
+                    -- The mount prefix carries the posture and the push-age limit too, so
+                    -- this reads the notice itself rather than counting every mount line.
+                    filter (T.isInfixOf "the store maintenance client") (lines output)
+                        `shouldBe` [notice | hasControlPlane]
 
         it "refuses an advisory deny with no advisory store with exit 2, naming the rule" $ do
-            (outcome, report) <- bootRefusal ["check-config"] (overrideEnv "ECLUSE_RULES" cveDenyRule runEnv)
-            outcome `shouldBe` Left (ExitFailure 2)
+            (outcome, report) <- checkConfigRefusal (overrideEnv "ECLUSE_RULES" cveDenyRule runEnv)
+            outcome `shouldBe` refusedCheck
             report `shouldSatisfy` any (T.isInfixOf "enables the advisory deny rules DenyIfCve")
 
-        it "prints the mirror-collapse advisory a writing role boots on" $
+        it "prints the mirror-collapse advisory a writing role boots on" $ do
             -- The typed advisory reaches an operator as this line or as nothing at all, so this
             -- is what pins the render to the print path rather than to the pass that logged it.
-            bracket_ (traverse_ (uncurry setEnv) collapsedMirrorEnv) (traverse_ (unsetEnv . fst) collapsedMirrorEnv) $ do
-                output <- captureStdout $ do
-                    outcome <- try (withArgs ["check-config"] run) :: IO (Either ExitCode ())
-                    outcome `shouldBe` Left ExitSuccess
-                lines output `shouldContain` [collapsedMirrorAdvisory]
+            output <- checkConfigOutput collapsedMirrorEnv
+            lines output `shouldContain` [collapsedMirrorAdvisory]
 
     describe "the ambient AWS_ENDPOINT_URL refusal (one verdict for both entry points)" $ do
         it "refuses one malformed override in the boot and in check-config alike" $ do
-            traverse_ (uncurry setEnv) runEnv
-            setEnv "AWS_ENDPOINT_URL" malformedAwsEndpoint
-            -- Each outcome leaves its capture through a ref, so every assertion waits for
-            -- the cleanup below and no failure strands the malformed override.
-            bootOutcome <- newIORef (Nothing :: Maybe (Either ExitCode (Maybe ())))
-            bootReport <- captureStderr $ do
-                outcome <- try (timeout 100000 (withArgs ["proxy"] run))
-                writeIORef bootOutcome (Just outcome)
-            checkOutcome <- newIORef (Nothing :: Maybe (Either ExitCode ()))
-            checkReport <- captureStderr $ do
-                outcome <- try (withArgs ["check-config"] run)
-                writeIORef checkOutcome (Just outcome)
-            unsetEnv "AWS_ENDPOINT_URL"
-            traverse_ (unsetEnv . fst) runEnv
-            readIORef bootOutcome `shouldReturn` Just (Left (ExitFailure 2))
-            readIORef checkOutcome `shouldReturn` Just (Left (ExitFailure 2))
-            reportLines bootReport `shouldBe` [endpointRefusal]
-            reportLines checkReport `shouldBe` [endpointRefusal, "configuration: refused"]
+            let envVars = overrideEnv "AWS_ENDPOINT_URL" malformedAwsEndpoint runEnv
+            (bootOutcome, bootReport) <- bootRefusal ["proxy"] envVars
+            (checkOutcome, checkReport) <- checkConfigRefusal envVars
+            bootOutcome `shouldBe` Left (ExitFailure 2)
+            checkOutcome `shouldBe` refusedCheck
+            bootReport `shouldBe` [endpointRefusal]
+            checkReport `shouldBe` [endpointRefusal, "configuration: refused"]
             -- The override can carry a credential, so no report may echo it.
-            checkReport `shouldNotSatisfy` T.isInfixOf "s3cr3t"
-
-    describe "superviseProcess (the typed process perimeter)" $ do
-        it "classifies a graceful return as ShutdownRequested" $
-            superviseProcess (pure ShutdownRequested) `shouldReturn` ShutdownRequested
-
-        it "classifies a boot abort as BootFault carrying the refusal it was raised with" $
-            superviseProcess (throwIO (BootAborted "mount npm has no adapter wired in this build"))
-                `shouldReturn` BootFault "mount npm has no adapter wired in this build"
-
-        it "classifies a synchronous service escape as ServiceExited with its rendered detail" $ do
-            outcome <- superviseProcess (throwIO (SimulatedServiceFault "wiring broke"))
-            case outcome of
-                ServiceExited detail -> detail `shouldSatisfy` T.isInfixOf "wiring broke"
-                other -> expectationFailure ("expected ServiceExited, got " <> show other)
-
-        it "classifies a kill delivery (ThreadKilled) as RunCancelled" $
-            superviseProcess (Conc.myThreadId >>= \tid -> Conc.throwTo tid ThreadKilled >> pure ShutdownRequested)
-                `shouldReturn` RunCancelled
-
-        it "rethrows a deliberate ExitCode so an intended status is preserved" $ do
-            outcome <- try (superviseProcess (throwIO (ExitFailure 130))) :: IO (Either ExitCode ProcessOutcome)
-            outcome `shouldBe` Left (ExitFailure 130)
-
-        it "propagates an unrecognised asynchronous exception (not ours to interpret)" $ do
-            -- A test's 'timeout' around 'run' must keep its semantics: the private
-            -- timeout token passes through rather than reading as a cancellation.
-            outcome <- timeout 50000 (superviseProcess (threadDelay 10_000_000 >> pure ShutdownRequested))
-            outcome `shouldBe` Nothing
-
-    describe "exitCodeFor (the operator-visible exit table)" $
-        it "maps each outcome onto its documented status" $ do
-            exitCodeFor ShutdownRequested `shouldBe` ExitSuccess
-            exitCodeFor (ServiceExited "detail") `shouldBe` ExitFailure 1
-            exitCodeFor (BootFault "refusal") `shouldBe` ExitFailure 2
-            exitCodeFor RunCancelled `shouldBe` ExitFailure 3
+            checkReport `shouldNotSatisfy` any (T.isInfixOf "s3cr3t")
 
     describe "orExit (boot fail-fast)" $ do
         it "yields the value on a Right (a passing boot phase)" $
@@ -513,20 +347,109 @@ spec = do
                 Left (BootAborted rendered) -> rendered `shouldBe` "boot rejected"
                 Right () -> expectationFailure "expected the boot to abort"
 
+{- | Run one case with every key any case here sets cleared, then exactly its own entries, and
+clear them all again afterwards. Another spec in the suite can leave one of these behind, so
+the clearing is what keeps each case a function of the entries it names alone.
+-}
+withEnvVars :: [(String, String)] -> IO a -> IO a
+withEnvVars envVars = bracket_ enter (traverse_ unsetEnv caseKeys)
+  where
+    enter = traverse_ unsetEnv caseKeys >> traverse_ (uncurry setEnv) envVars
+
+-- | Every environment key a case in this module sets.
+caseKeys :: [String]
+caseKeys =
+    ordNub $
+        map fst awsRunEnv
+            <> [ "ECLUSE_CONFIG"
+               , "AWS_ENDPOINT_URL"
+               , "AWS_ENDPOINT_URL_SQS"
+               , "ECLUSE_RULES"
+               , "ECLUSE_MOUNTS__NPM__ENABLED"
+               , "ECLUSE_MOUNTS__NPM__FIRST_PARTY"
+               , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__CODE_ARTIFACT__URL"
+               , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__URL"
+               , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__VERDACCIO__TOKEN"
+               , "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE"
+               , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL"
+               , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN"
+               , "ECLUSE_MOUNTS__RUBYGEMS__ENABLED"
+               ]
+
+{- | Start a role under these entries and hold it for 100 ms. 'Nothing' is the bound expiring
+with the role still serving, which is what a boot that reached its listeners answers.
+-}
+serves :: [String] -> [(String, String)] -> Expectation
+serves args envVars = withEnvVars envVars (timeout 100000 (withArgs args run)) `shouldReturn` Nothing
+
+-- | 'serves' for a boot that must abort before its listeners, reporting the status it took.
+abortsBoot :: [String] -> [(String, String)] -> Expectation
+abortsBoot args envVars =
+    withEnvVars envVars (try (timeout 100000 (withArgs args run)) :: IO (Either ExitCode (Maybe ())))
+        `shouldReturn` Left (ExitFailure 2)
+
+-- | Run the checker under these entries, keeping the status it exited with.
+checkConfig :: [(String, String)] -> IO (Either ExitCode ())
+checkConfig envVars = withEnvVars envVars (try (withArgs ["check-config"] run))
+
+-- | What the checker exits with on a configuration it refuses.
+refusedCheck :: Either ExitCode ()
+refusedCheck = Left (ExitFailure 2)
+
+-- | The checker's own standard output over a configuration it must clear.
+checkConfigOutput :: [(String, String)] -> IO Text
+checkConfigOutput envVars =
+    withEnvVars envVars . captureStdout $
+        (try (withArgs ["check-config"] run) :: IO (Either ExitCode ())) `shouldReturn` Left ExitSuccess
+
+-- | The checker's status and the lines it reported on standard error.
+checkConfigRefusal :: [(String, String)] -> IO (Either ExitCode (), [Text])
+checkConfigRefusal envVars = withEnvVars envVars $ do
+    outcome <- newIORef (Nothing :: Maybe (Either ExitCode ()))
+    report <- captureStderr (try (withArgs ["check-config"] run) >>= writeIORef outcome . Just)
+    readIORef outcome >>= \case
+        Nothing -> fail "the checker left no outcome behind"
+        Just result -> pure (result, reportLines report)
+
+-- | The status a boot took and the lines it reported on standard error.
 bootRefusal :: [String] -> [(String, String)] -> IO (Either ExitCode (Maybe ()), [Text])
-bootRefusal args envVars = do
-    unsetEnv "AWS_REGION"
-    unsetEnv "ECLUSE_QUEUE__URL"
-    traverse_ (uncurry setEnv) envVars
+bootRefusal args envVars = withEnvVars envVars $ do
     outcome <- newIORef (Nothing :: Maybe (Either ExitCode (Maybe ())))
     report <- captureStderr $ do
         -- Guard against a hung boot, without requiring refusal within a boot-speed deadline.
         result <- try (timeout 5_000_000 (withArgs args run))
         writeIORef outcome (Just result)
-    traverse_ (unsetEnv . fst) envVars
     readIORef outcome >>= \case
         Nothing -> fail "the boot left no outcome behind"
         Just result -> pure (result, reportLines report)
+
+-- | Write a configuration document to a temporary path and hand the path to the case.
+withDocument :: Text -> (FilePath -> IO a) -> IO a
+withDocument body use =
+    withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
+        let path = dir </> "config.yaml"
+        writeFileText path body
+        use path
+
+-- | Write the mirror write token to a temporary file and hand the path to the case.
+withSecretFile :: (FilePath -> IO a) -> IO a
+withSecretFile use =
+    withSystemTempDirectory "ecluse-bootspec" $ \dir -> do
+        let path = dir </> "mirror-token"
+        writeFileText path "mirror-write-token\n"
+        use path
+
+-- | Point ECLUSE_CONFIG at a document path.
+readingDocument :: FilePath -> [(String, String)] -> [(String, String)]
+readingDocument = overrideEnv "ECLUSE_CONFIG"
+
+-- | Supply the mirror write token through its @*_FILE@ indirection.
+readingTokenFile :: FilePath -> [(String, String)] -> [(String, String)]
+readingTokenFile = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__TOKEN_FILE"
+
+-- | Declare a publication target on the npm mount, with no first-party namespaces of its own.
+publishingTo :: [(String, String)] -> [(String, String)]
+publishingTo = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL" "https://publish.example.test"
 
 splitRoleRefusal :: [String] -> IO (Either ExitCode (Maybe ()), [Text])
 splitRoleRefusal args = bootRefusal args (withoutQueueUrl runEnv)
@@ -536,10 +459,7 @@ cveDenyRule :: String
 cveDenyRule = "{\"gate\":{\"type\":\"DenyIfCve\",\"minCvss\":8}}"
 
 collapsedMirrorEnv :: [(String, String)]
-collapsedMirrorEnv = overrideEnv "ECLUSE_MOUNTS__NPM__MIRROR_TARGET__REGISTRY__URL" "https://private.example.test" runEnv
-
-collapsedMirrorRefusal :: BootError
-collapsedMirrorRefusal = MirrorTargetOnMountEndpoint Npm Npm "privateUpstream" "https://private.example.test"
+collapsedMirrorEnv = collapsingMirrorTarget runEnv
 
 -- The advisory 'collapsedMirrorEnv' earns, as check-config prints it: its 'warn' prefix included.
 collapsedMirrorAdvisory :: Text
