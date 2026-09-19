@@ -145,7 +145,8 @@ spec = describe "grouped deletion" $ do
         let source = mapDeletion (\_ checks _ versions -> deleteAll checks (\batch -> pure (Right [(item, VersionRemoved) | item <- batch])) [versions]) (smStore mount)
         recorded <- recordingPorts Nothing
         outcome <- sweepCycle testPacing (recPorts recorded) [mount{smStore = source}]
-        outcomeHalt outcome `shouldSatisfy` isJust
+        outcomeHalt outcome
+            `shouldBe` Just (HaltStoreFault Npm "mirror" (renderStoreFault (protocolFault "cleanup remains incomplete for versions [\"1.0.0\"]")))
         recErrors recorded >>= (`shouldSatisfy` any (T.isInfixOf "cleanup remains incomplete"))
         held mirror `shouldReturn` [npmVersion "1.0.0"]
         held cache `shouldReturn` [npmVersion "1.0.0"]
@@ -217,7 +218,7 @@ spec = describe "grouped deletion" $ do
             source = mapDeletion (\send checks name versions -> send checks name versions <* writeIORef permitted False) (smStore mount)
         recorded <- recordingPorts Nothing
         outcome <- sweepCycle testPacing (recPorts recorded) [mount{smStore = source{ssPrivate = withdrawn}}]
-        outcomeHalt outcome `shouldSatisfy` isJust
+        outcomeHalt outcome `shouldBe` Just (HaltStoreFault Npm "cache" (renderStoreFault (protocolFault "cache revoked")))
         held mirror `shouldReturn` []
         held cache `shouldReturn` [npmVersion "1.0.0"]
 

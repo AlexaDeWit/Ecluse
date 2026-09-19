@@ -238,7 +238,8 @@ spec = describe "grouped preview" $ do
         let version = servedVersion (npmVersion "1.0.0")
             locations = [(fakeObservation mirror, [version, version]), (fakeObservation cache, [version, version])]
         fmap (map (length . snd)) (boundedVersions 1 locations) `shouldBe` Right [1, 1]
-        fmap (map (length . snd)) (boundedVersions 0 locations) `shouldSatisfy` isLeft
+        first renderStoreFault (fmap (map (length . snd)) (boundedVersions 0 locations))
+            `shouldBe` Left (renderStoreFault (protocolFault "the combined inventory crossed limits.maxVersionCount"))
 
     it "splits a grouped parent bucket and preserves each copy through the completed narrower buckets" $ do
         let mirrorOnly = mkPackageName Npm Nothing "aa-mirror"

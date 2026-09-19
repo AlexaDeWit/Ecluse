@@ -30,7 +30,7 @@ import Ecluse.Core.Security (
     Limits (maxVersionCount),
     defaultLimits,
  )
-import Ecluse.Test.Json (encodeStrict, isObject)
+import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, inertRuleDeps)
@@ -102,7 +102,9 @@ assertProtocolAcceptance :: ByteString -> Expectation
 assertProtocolAcceptance body = do
     (info, _) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
     let selected = Map.lookup "2.34.2" (infoVersions info)
-    selected `shouldSatisfy` isJust
+    -- Name the release the fixture declares, so the parity line below cannot agree on a
+    -- projection both paths got wrong.
+    artifactNames (Right selected) `shouldBe` Right (Just ["requests-2.34.2.tar.gz"])
     projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") body `shouldBe` Right selected
 
 protocolIndex :: Maybe Value -> ByteString
@@ -115,7 +117,7 @@ indexSpec = describe "projectPyPIIndex" $ do
             Right (info, raw) -> do
                 renderPackageName (infoName info) `shouldBe` "requests"
                 Map.keys (infoVersions info) `shouldBe` ["2.34.1", "2.34.2"]
-                raw `shouldSatisfy` isObject
+                raw `shouldBe` simpleIndex "requests" (filesNamed ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"])
             other -> expectationFailure ("expected a projection, got: " <> show other)
 
     it "reports an undecodable body" $

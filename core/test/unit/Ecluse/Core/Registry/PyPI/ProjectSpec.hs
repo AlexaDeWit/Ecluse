@@ -209,9 +209,10 @@ projectionSpec = describe "projectSimpleIndexFromValue" $ do
         info <- shouldProject requestsName (indexOf [simpleFile "urllib3-2.0.0.tar.gz"])
         map invalidValue (infoInvalidEntries info) `shouldBe` [toJSON ("files.pythonhosted.org:443" :: Text)]
 
-    it "agrees the index's self-reported name with the request through the shared check" $
-        projectSimpleIndexFromValue requestsName (simpleIndex "Requests" [wheelFile "2.34.2"])
-            `shouldSatisfy` either (const False) isProjected
+    it "agrees the index's self-reported name with the request through the shared check" $ do
+        info <- shouldProject requestsName (simpleIndex "Requests" [wheelFile "2.34.2"])
+        renderPackageName (infoName info) `shouldBe` "Requests"
+        artifactNames info "2.34.2" `shouldBe` Just ["requests-2.34.2-py3-none-any.whl"]
 
     it "refuses an index self-reporting another project, carrying the reported name" $
         projectSimpleIndexFromValue requestsName (simpleIndex "urllib3" [])
@@ -256,11 +257,6 @@ shouldProject name value = case projectSimpleIndexFromValue name value of
     Left err -> fail (show err)
     Right (NameMismatch reported) -> fail (toString ("index self-reported " <> reported))
     Right (Projected info) -> pure info
-
-isProjected :: Projection a -> Bool
-isProjected = \case
-    Projected _ -> True
-    NameMismatch _ -> False
 
 runsCode :: CodeExecSignal -> Bool
 runsCode = \case
