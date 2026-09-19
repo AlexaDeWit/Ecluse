@@ -210,6 +210,7 @@ spec = describe "decodeDocument" $ do
                        ]
                 )
                 Nothing
+        Map.keys (configMounts config) `shouldBe` [Npm]
         (mntFirstParty <$> Map.lookup Npm (cfgMounts (configApp config)))
             `shouldBe` Just (Just (FirstPartyNpmScopes (mkScope "acme" :| [mkScope "beta"])))
 

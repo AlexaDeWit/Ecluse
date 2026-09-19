@@ -6,9 +6,10 @@ module Ecluse.Composition.ExecutableSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import System.Environment (setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (bracket_, throwIO)
 
 import Ecluse.Composition (
     BootWiring (bwBindings, bwPublishTargets),
@@ -40,7 +41,7 @@ import Ecluse.Composition.Executable (
  )
 import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl), StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
-import Ecluse.Composition.Support (NoCredentials (NoCredentials), codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, staticEnvVars, withAmbientAws, withObservablePrivate)
+import Ecluse.Composition.Support (NoCredentials (NoCredentials), codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, staticEnvVars, withObservablePrivate)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
@@ -334,6 +335,15 @@ storePlan role = reportWith codeArtifactEnvVars role (\_ _ _ -> Nothing) refusin
 probedPlan :: MirrorRole -> UpstreamSafety -> IO ([Advisory], Either [BootError] ExecutablePlan)
 probedPlan role answer =
     reportWith staticEnvVars (BootMirrorPipeline role) mountBindingFor inertQueue (probing answer inertStore)
+
+{- | Run the case under an AWS identity the sync's own credential discovery finds. The entries
+are cleared afterwards, since the whole suite shares one process environment.
+-}
+withAmbientAws :: IO a -> IO a
+withAmbientAws =
+    bracket_ (traverse_ (uncurry setEnv) ambientAws) (traverse_ (unsetEnv . fst) ambientAws)
+  where
+    ambientAws = [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test"), ("AWS_REGION", "us-east-1")]
 
 -- | The arm a settled plan came back through, failing the case on a refusal.
 armOf :: Either [BootError] ExecutablePlan -> IO Text

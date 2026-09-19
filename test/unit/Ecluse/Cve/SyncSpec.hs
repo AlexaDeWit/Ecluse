@@ -14,15 +14,16 @@ import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, getCurrentTime, 
 import Database.SQLite.Simple (close, execute_, open)
 import Katip (closeScribes)
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
+import System.Environment (setEnv, unsetEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO.Async (withAsync)
-import UnliftIO.Exception (bracket, throwIO)
+import UnliftIO.Exception (bracket, bracket_, throwIO)
 import UnliftIO.STM (checkSTM)
 import UnliftIO.Timeout (timeout)
 
-import Ecluse.Composition.Support (expectAppConfig, withAmbientAws)
+import Ecluse.Composition.Support (expectAppConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve (CveDbRejected (CveDbEpssNotEstablished))
 import Ecluse.Core.Cve.Slot (newCveSlot, swapIn, withSlotGeneration)
@@ -424,6 +425,15 @@ isStale :: AdvisoryFreshness -> Bool
 isStale = \case
     AdvisoryStale{} -> True
     _ -> False
+
+{- | Run the case under an AWS identity the sync's own credential discovery finds. The entries
+are cleared afterwards, since the whole suite shares one process environment.
+-}
+withAmbientAws :: IO a -> IO a
+withAmbientAws =
+    bracket_ (traverse_ (uncurry setEnv) ambientAws) (traverse_ (unsetEnv . fst) ambientAws)
+  where
+    ambientAws = [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test"), ("AWS_REGION", "us-east-1")]
 
 mountedNpmDoc :: ByteString
 mountedNpmDoc =
