@@ -19,7 +19,6 @@ module Ecluse.Core.Server.Metadata (
 
     -- * Projecting one version
     selectVersion,
-    readOfEntry,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -79,7 +78,18 @@ newMetadataReads ::
     MetadataReads posture
 newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion selectRaw origin =
     MetadataReads $ \upstream caching ->
-        newMetadataClient metrics upstream caching logFailure logInvalid logFetch (rawFetch client) (rawFetchVersion client) selectRaw
+        newMetadataClient
+            ClientWiring
+                { cwMetrics = metrics
+                , cwUpstream = upstream
+                , cwCaching = caching
+                , cwFetch = rawFetch client
+                , cwFetchVersion = rawFetchVersion client
+                , cwSelectRaw = selectRaw
+                , cwLogFailure = logFailure
+                , cwLogInvalid = logInvalid
+                , cwLogFetch = logFetch
+                }
   where
     client = originClientOf origin
 
@@ -91,61 +101,70 @@ publicMetadataClient cache source (MetadataReads settle) = settle Metric.Public 
 privateMetadataClient :: MetadataReads Private -> MetadataClient
 privateMetadataClient (MetadataReads settle) = settle Metric.Private Uncached
 
-newMetadataClient ::
-    MetricsPort ->
-    Metric.Upstream ->
-    ManifestCaching ->
-    (PackageName -> MetadataError -> IO ()) ->
-    (PackageName -> [InvalidEntry] -> IO ()) ->
-    (PackageName -> IO ()) ->
-    (PackageName -> IO (Either MetadataError Manifest)) ->
-    (PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
-    (Version -> CachedDoc -> Maybe CachedDoc) ->
+-- One origin's raw reads and observers, already settled by a caching policy and an upstream
+-- label. Bundled so each read below takes it whole rather than nine positional parameters.
+data ClientWiring = ClientWiring
+    { cwMetrics :: MetricsPort
+    , cwUpstream :: Metric.Upstream
+    , cwCaching :: ManifestCaching
+    , cwFetch :: PackageName -> IO (Either MetadataError Manifest)
+    , cwFetchVersion :: PackageName -> Version -> IO (Either MetadataError VersionRead)
+    , cwSelectRaw :: Version -> CachedDoc -> Maybe CachedDoc
+    , cwLogFailure :: PackageName -> MetadataError -> IO ()
+    , cwLogInvalid :: PackageName -> [InvalidEntry] -> IO ()
+    , cwLogFetch :: PackageName -> IO ()
+    }
+
+newMetadataClient :: ClientWiring -> MetadataClient
+newMetadataClient wiring =
     MetadataClient
-newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFetch rawFetchVersion selectRaw =
-    MetadataClient
-        { fetchFullManifest = fmap (fmap entryToManifest) . resolveEntry
-        , fetchVersionMetadata = resolveVersionHybrid
+        { fetchFullManifest = fmap (fmap entryToManifest) . resolveEntry wiring
+        , fetchVersionMetadata = resolveVersionHybrid wiring
         }
-  where
-    resolveEntry :: PackageName -> IO (Either MetadataError CacheEntry)
-    resolveEntry name = case caching of
-        Uncached -> manifestLeader name
-        Cached cache source -> resolveMetadata metrics cache source name (manifestLeader name)
 
-    manifestLeader :: PackageName -> IO (Either MetadataError CacheEntry)
-    manifestLeader name = do
-        logFetch name
-        recordedFetch metrics upstream $
-            rawFetch name >>= \case
-                Right manifest -> do
-                    let invalid = infoInvalidEntries (manifestInfo manifest)
-                    unless (null invalid) (logInvalid name invalid)
-                    pure (Right (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestDigest manifest)))
-                Left err -> logFailure name err >> pure (Left err)
+resolveEntry :: ClientWiring -> PackageName -> IO (Either MetadataError CacheEntry)
+resolveEntry wiring name = case cwCaching wiring of
+    Uncached -> manifestLeader wiring name
+    Cached cache source -> resolveMetadata (cwMetrics wiring) cache source name (manifestLeader wiring name)
 
-    -- The single-version hybrid: the small version cache, then the warm full cache
-    -- read-only, then a cold selective fetch. Uncached, it is the raw selective fetch.
-    resolveVersionHybrid :: PackageName -> Version -> IO (Either MetadataError VersionRead)
-    resolveVersionHybrid name version = case caching of
-        Uncached -> versionLeader name version
-        Cached cache source -> do
-            cached <- cachedVersion cache source name version
-            case cached of
-                Just versionRead -> pure (Right versionRead)
-                Nothing -> do
-                    warm <- cachedMetadata cache source name
-                    case warm of
-                        Just entry -> pure (Right (readOfEntry selectRaw version entry))
-                        Nothing -> resolveVersion metrics cache source name version (versionLeader name version)
+manifestLeader :: ClientWiring -> PackageName -> IO (Either MetadataError CacheEntry)
+manifestLeader wiring name = do
+    cwLogFetch wiring name
+    recordedFetch (cwMetrics wiring) (cwUpstream wiring) $
+        traverse (entryOfManifest wiring name) =<< loggingFailure wiring name (cwFetch wiring name)
 
-    versionLeader :: PackageName -> Version -> IO (Either MetadataError VersionRead)
-    versionLeader name version = do
-        logFetch name
-        recordedFetch metrics upstream $
-            rawFetchVersion name version >>= \case
-                Right details -> pure (Right details)
-                Left err -> logFailure name err >> pure (Left err)
+-- Report the entries the projection dropped, then hold the fetched document as a cache entry.
+entryOfManifest :: ClientWiring -> PackageName -> Manifest -> IO CacheEntry
+entryOfManifest wiring name manifest = do
+    let invalid = infoInvalidEntries (manifestInfo manifest)
+    unless (null invalid) (cwLogInvalid wiring name invalid)
+    pure (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestDigest manifest))
+
+{- The single-version hybrid: the small version cache, then the warm full cache read-only, then
+a cold selective fetch. Uncached, it is the raw selective fetch. -}
+resolveVersionHybrid :: ClientWiring -> PackageName -> Version -> IO (Either MetadataError VersionRead)
+resolveVersionHybrid wiring name version = case cwCaching wiring of
+    Uncached -> versionLeader wiring name version
+    Cached cache source ->
+        cachedVersion cache source name version >>= \case
+            Just versionRead -> pure (Right versionRead)
+            Nothing ->
+                cachedMetadata cache source name >>= \case
+                    Just entry -> pure (Right (readOfEntry (cwSelectRaw wiring) version entry))
+                    Nothing -> resolveVersion (cwMetrics wiring) cache source name version (versionLeader wiring name version)
+
+versionLeader :: ClientWiring -> PackageName -> Version -> IO (Either MetadataError VersionRead)
+versionLeader wiring name version = do
+    cwLogFetch wiring name
+    recordedFetch (cwMetrics wiring) (cwUpstream wiring) $
+        loggingFailure wiring name (cwFetchVersion wiring name version)
+
+-- Report a leader fetch's failure on the way out, so both leaders log it identically.
+loggingFailure :: ClientWiring -> PackageName -> IO (Either MetadataError a) -> IO (Either MetadataError a)
+loggingFailure wiring name action = do
+    result <- action
+    whenLeft_ result (cwLogFailure wiring name)
+    pure result
 
 -- | Find a version by its ecosystem-rendered key in a package snapshot.
 selectVersion :: Version -> PackageInfo -> Maybe PackageDetails

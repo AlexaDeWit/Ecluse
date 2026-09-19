@@ -21,7 +21,6 @@ import Ecluse.Core.Registry.PyPI.Request (
     simpleIndexRequest,
     simpleIndexUrl,
  )
-import Ecluse.Core.Registry.Request (noValidators)
 
 spec :: Spec
 spec = do
@@ -45,19 +44,19 @@ indexSpec = describe "the Simple-index read" $ do
         simpleIndexUrl "" requests `shouldBe` Left EmptyBaseUrl
 
     it "asks for the PEP 691 JSON form and no HTML one" $ do
-        req <- formed (simpleIndexRequest "https://pypi.org" Nothing noValidators requests)
+        req <- formed (simpleIndexRequest "https://pypi.org" Nothing requests)
         lookup "Accept" (Client.requestHeaders req) `shouldBe` Just "application/vnd.pypi.simple.v1+json"
 
     it "asks for gzip, because a project's index runs to megabytes" $ do
-        req <- formed (simpleIndexRequest "https://pypi.org" Nothing noValidators requests)
+        req <- formed (simpleIndexRequest "https://pypi.org" Nothing requests)
         lookup "Accept-Encoding" (Client.requestHeaders req) `shouldBe` Just "gzip"
 
     it "attaches the caller's pair on the passthrough read" $ do
-        req <- formed (simpleIndexRequest "https://index.test" alicePair noValidators requests)
+        req <- formed (simpleIndexRequest "https://index.test" alicePair requests)
         lookup "Authorization" (Client.requestHeaders req) `shouldBe` Just "Basic YWxpY2U6aHVudGVyMg=="
 
     it "sends no credential header on an anonymous read" $ do
-        req <- formed (simpleIndexRequest "https://pypi.org" Nothing noValidators requests)
+        req <- formed (simpleIndexRequest "https://pypi.org" Nothing requests)
         lookup "Authorization" (Client.requestHeaders req) `shouldBe` Nothing
 
 artifactSpec :: Spec
@@ -98,9 +97,9 @@ filesHostSpec =
 sealSpec :: Spec
 sealSpec = describe "every request carries the shared outbound seal" $ do
     it "pins the redirect count on the index read, credentialed or not" $ do
-        anonymous <- formed (simpleIndexRequest "https://pypi.org" Nothing noValidators requests)
+        anonymous <- formed (simpleIndexRequest "https://pypi.org" Nothing requests)
         Client.redirectCount anonymous `shouldBe` 0
-        credentialed <- formed (simpleIndexRequest "https://index.test" alicePair noValidators requests)
+        credentialed <- formed (simpleIndexRequest "https://index.test" alicePair requests)
         Client.redirectCount credentialed `shouldBe` 0
 
     it "pins the redirect count on both artifact arms" $ do
@@ -110,7 +109,7 @@ sealSpec = describe "every request carries the shared outbound seal" $ do
         Client.redirectCount byUrl `shouldBe` 0
 
     it "identifies the proxy without spelling a User-Agent of its own" $ do
-        req <- formed (simpleIndexRequest "https://pypi.org" Nothing noValidators requests)
+        req <- formed (simpleIndexRequest "https://pypi.org" Nothing requests)
         lookup "User-Agent" (Client.requestHeaders req) `shouldBe` Just userAgent
 
 -- | The project every example reads.

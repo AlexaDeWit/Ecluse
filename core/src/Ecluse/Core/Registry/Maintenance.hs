@@ -2,9 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Backend maintenance capabilities for a mirror store.
-Enumeration and deletion may require a backend control plane beyond its package protocol.
-The sweep reads backend limits and policies from the handle.
+{- | Backend maintenance capabilities for a mirror store: the observing and deleting halves of
+one handle, and the drives every backend shares. Enumeration and deletion may need a control
+plane beyond the store's own package protocol. The buckets a walk addresses are in
+"Ecluse.Core.Registry.Maintenance.NameSpace".
 -}
 module Ecluse.Core.Registry.Maintenance (
     -- * The handle
@@ -17,6 +18,7 @@ module Ecluse.Core.Registry.Maintenance (
     DeletePhase (..),
     observationOf,
     deletionOf,
+    maintenanceOf,
 
     -- * What the backend does
     StoreFacts (..),
@@ -32,18 +34,6 @@ module Ecluse.Core.Registry.Maintenance (
     StoredVersion (..),
     VersionPresence (..),
 
-    -- * The name space, walked in buckets
-    NameAlphabet,
-    mkNameAlphabet,
-    noNameAlphabet,
-    NamePrefix,
-    wholeNameSpace,
-    renderNamePrefix,
-    parseNamePrefix,
-    initialBuckets,
-    extendBucket,
-    inBucket,
-
     -- * Walk resumption
     StoreCursor (..),
 
@@ -52,6 +42,7 @@ module Ecluse.Core.Registry.Maintenance (
     storeFaultOfFetch,
     storeFaultOfMetadata,
     protocolFault,
+    statusFault,
     unformableFault,
 
     -- * Deletion
@@ -82,7 +73,6 @@ module Ecluse.Core.Registry.Maintenance (
 import Data.Conduit (ConduitT, await, fuseBoth, fuseBothMaybe, fuseUpstream, runConduit, yield)
 import Data.Conduit.List qualified as CL
 import Data.Set qualified as Set
-import Data.Text qualified as T
 
 import Ecluse.Core.Fault (
     RetryAfter,
@@ -94,7 +84,7 @@ import Ecluse.Core.Fault (
     transportRetryable,
  )
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
-import Ecluse.Core.Package (PackageName, unscopedName)
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
     UrlFormationError,
@@ -105,6 +95,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     RequestKind (CursorRead, CursorWrite, DeleteBatch, ListingPage, ManifestRead, PermissionRead, VersionPage),
     StoreBudget,
  )
+import Ecluse.Core.Registry.Maintenance.NameSpace (NameAlphabet, NamePrefix)
 import Ecluse.Core.Registry.Maintenance.Upstream (UpstreamSafety)
 import Ecluse.Core.Registry.Metadata (
     Manifest,
@@ -134,9 +125,7 @@ data StoreMaintenance = StoreMaintenance
     -- ^ Optional persisted progress. Without it, every walk starts at the first bucket.
     }
 
-{- | The calls that only observe a store. A caller handed one can enumerate it, read a package's
-metadata, and read the two standing permissions, and can change nothing.
--}
+-- | The calls that only observe a store, which change nothing whatever the caller does.
 data StoreObservation = StoreObservation
     { obFacts :: StoreFacts
     -- ^ What the backend does, readable without a call.
@@ -193,8 +182,23 @@ observationOf store =
 deletionOf :: StoreMaintenance -> StoreDeletion
 deletionOf store = StoreDeletion{dlDeleteVersions = deleteVersions store, dlCursor = storeCursor store}
 
+-- | The two halves joined into a whole handle, which every backend builds its own through.
+maintenanceOf :: StoreObservation -> StoreDeletion -> StoreMaintenance
+maintenanceOf observed deletion =
+    StoreMaintenance
+        { storeFacts = obFacts observed
+        , listPackagesIn = obListPackagesIn observed
+        , enumerateVersions = obEnumerateVersions observed
+        , readStoreManifest = obReadManifest observed
+        , deleteVersions = dlDeleteVersions deletion
+        , verifyConsent = obVerifyConsent observed
+        , classifyStore = obClassifyStore observed
+        , probeUpstream = obProbeUpstream observed
+        , storeCursor = dlCursor deletion
+        }
+
 {- | Count and pace every request the observing calls make. A version enumeration counts as one
-request however many pages it takes, so a large package costs the backend more than was counted.
+request however many pages it takes, so a large package costs more than was counted.
 -}
 meteredObservation :: RequestGate -> StoreObservation -> StoreObservation
 meteredObservation gate observed =
@@ -210,8 +214,8 @@ meteredObservation gate observed =
     -- The page is counted once it arrives, so the wait falls between it and the next request.
     counted page = spend ListingPage $> page
 
-{- | The same metering over a whole handle. A delete counts one request per batch the backend's own
-ceiling divides the versions into, whatever the batch then reports per version.
+{- | The same metering over a whole handle. A delete counts one request per batch the backend's
+ceiling divides the versions into.
 -}
 meteredMaintenance :: RequestGate -> StoreMaintenance -> StoreMaintenance
 meteredMaintenance gate handle =
@@ -295,50 +299,6 @@ data VersionPresence
     | -- | The store lists the version but no longer serves it.
       VersionWithdrawn
     deriving stock (Eq, Show)
-
--- | Permitted leading characters of ecosystem package names.
-newtype NameAlphabet = NameAlphabet [Char]
-    deriving stock (Eq, Show)
-
--- | Build an alphabet, dropping repeats and keeping the order given.
-mkNameAlphabet :: [Char] -> NameAlphabet
-mkNameAlphabet = NameAlphabet . ordNub
-
--- | Use a single whole-store bucket when the backend cannot filter its listing.
-noNameAlphabet :: NameAlphabet
-noNameAlphabet = NameAlphabet []
-
--- | A bucket prefix addresses the package's base name, excluding its namespace.
-newtype NamePrefix = NamePrefix Text
-    deriving stock (Eq, Ord, Show)
-
--- | The unfiltered whole-store bucket.
-wholeNameSpace :: NamePrefix
-wholeNameSpace = NamePrefix ""
-
--- | The prefix as a store filter and a walk cursor spell it. Empty stands for no filter at all.
-renderNamePrefix :: NamePrefix -> Text
-renderNamePrefix (NamePrefix raw) = raw
-
--- | Reject prefixes outside the current alphabet so an incompatible cursor restarts the walk.
-parseNamePrefix :: NameAlphabet -> Text -> Maybe NamePrefix
-parseNamePrefix (NameAlphabet chars) raw
-    | T.all (`elem` chars) raw = Just (NamePrefix raw)
-    | otherwise = Nothing
-
--- | Partition the store into disjoint buckets that cover every permitted name.
-initialBuckets :: NameAlphabet -> NonEmpty NamePrefix
-initialBuckets (NameAlphabet chars) =
-    maybe (wholeNameSpace :| []) (fmap (NamePrefix . T.singleton)) (nonEmpty chars)
-
--- | Subdivide an oversized bucket. An empty alphabet permits no subdivision.
-extendBucket :: NameAlphabet -> NamePrefix -> [NamePrefix]
-extendBucket (NameAlphabet chars) (NamePrefix raw) =
-    [NamePrefix (raw <> T.singleton ch) | ch <- chars]
-
--- | Whether a name falls in a bucket, for a store whose listing has no prefix filter of its own.
-inBucket :: NamePrefix -> PackageName -> Bool
-inBucket (NamePrefix raw) name = raw `T.isPrefixOf` unscopedName name
 
 -- | Persist the last completed bucket so a restart repeats only unfinished work.
 data StoreCursor = StoreCursor
@@ -445,9 +405,11 @@ collectPagesBounded limit source = outcome <$> runConduit (fuseBothMaybe source 
     consume held pages =
         await >>= \case
             Nothing -> pure (Just (concat (reverse pages)))
-            Just page
-                | length page > max 0 limit - held -> pure Nothing
-                | otherwise -> consume (held + length page) (page : pages)
+            Just page ->
+                let taken = length page
+                 in if taken > max 0 limit - held
+                        then pure Nothing
+                        else consume (held + taken) (page : pages)
     outcome = \case
         (_, Nothing) -> Left (protocolFault "the store inventory crossed limits.maxVersionCount")
         (Just (Just fault), _) -> Left fault
@@ -488,10 +450,7 @@ storeFaultOfMetadata :: MetadataError -> StoreFault
 storeFaultOfMetadata = \case
     MetadataAbsent -> protocolFault "the store has no metadata for the requested package (HTTP 404)"
     MetadataHttpFailure code ->
-        StoreFault
-            { faultTransport = transportFault TransportProtocol ("the store refused the metadata read with HTTP " <> show code)
-            , faultRetry = if isRetryableStatusCode code then RetryWorthwhile else RetryFutile
-            }
+        statusFault isRetryableStatusCode code ("the store refused the metadata read with HTTP " <> show code)
     MetadataAuthorisationFailure _ -> protocolFault "the store refused metadata access"
     MetadataFetch fault -> storeFaultOfFetch fault
     MetadataBoundExceeded _ -> protocolFault "the store's metadata crossed a structural bound"
@@ -509,6 +468,16 @@ protocolFault :: Text -> StoreFault
 protocolFault detail =
     StoreFault{faultTransport = transportFault TransportProtocol detail, faultRetry = RetryFutile}
 
+{- | A fault the store's answer status classifies. The predicate is the caller's own: the
+statuses worth another attempt differ between the reads.
+-}
+statusFault :: (Int -> Bool) -> Int -> Text -> StoreFault
+statusFault retryable status detail =
+    StoreFault
+        { faultTransport = transportFault TransportProtocol detail
+        , faultRetry = if retryable status then RetryWorthwhile else RetryFutile
+        }
+
 -- | Apply the backend batch limit, treating a non-positive limit as one.
 chunksOfCeiling :: DeleteCeiling -> [a] -> [[a]]
 chunksOfCeiling ceiling' items = case ceiling' of
@@ -524,34 +493,61 @@ deleteAll ::
     ([Version] -> IO (Either StoreFault [(Version, VersionOutcome)])) ->
     [[Version]] ->
     IO [(Version, VersionOutcome)]
-deleteAll checks send = go []
+deleteAll checks send = deleteChunks DeleteRun{drChecks = checks, drSend = send} []
+
+-- The guard and the destructive call one run of 'deleteAll' drives, bundled so each step below
+-- carries one parameter for both.
+data DeleteRun = DeleteRun
+    { drChecks :: DeleteGuard
+    , drSend :: [Version] -> IO (Either StoreFault [(Version, VersionOutcome)])
+    }
+
+deleteChunks :: DeleteRun -> [[(Version, VersionOutcome)]] -> [[Version]] -> IO [(Version, VersionOutcome)]
+deleteChunks _ sent [] = pure (concat (reverse sent))
+deleteChunks run sent (chunk : rest) =
+    dgCheck (drChecks run) BeforeDelete chunk >>= \case
+        Left fault -> pure (settled <> concatMap (unreachedBatch fault) (chunk : rest))
+        Right current -> do
+            let permitted = filter (`elem` current) chunk
+                withheld = skipped (filter (`notElem` current) chunk)
+            issueBatch run permitted >>= \case
+                Right outcomes -> deleteChunks run ((withheld <> outcomes) : sent) rest
+                Left fault -> do
+                    outcomes <- reassessThenRetry run fault permitted
+                    pure (settled <> withheld <> outcomes <> concatMap (unreachedBatch fault) rest)
   where
-    go sent [] = pure (concat (reverse sent))
-    go sent (chunk : rest) =
-        dgCheck checks BeforeDelete chunk >>= \case
-            Left fault -> pure (concat (reverse sent) <> concatMap (unreachedBatch fault) (chunk : rest))
-            Right current -> do
-                let permitted = filter (`elem` current) chunk
-                    withheld = skipped (filter (`notElem` current) chunk)
-                answer <- if null permitted then pure (Right []) else send permitted
-                case answer of
-                    Right outcomes -> go ((withheld <> outcomes) : sent) rest
-                    Left fault -> do
-                        void (dgCheck checks AfterUncertain permitted)
-                        retry <- dgRetry checks fault
-                        fresh <- if retry then dgCheck checks BeforeDelete permitted else pure (Right [])
-                        outcomes <- retryBatch retry fault permitted fresh
-                        pure (concat (reverse sent) <> withheld <> outcomes <> concatMap (unreachedBatch fault) rest)
-    retryBatch retry fault issued fresh = case fresh of
-        Right current | retry && not (null current) -> do
-            let permitted = filter (`elem` current) issued
-                unchanged = uncertain fault (filter (`notElem` current) issued)
-            answer <- if null permitted then pure (Right []) else send permitted
-            case answer of
-                Right outcomes -> pure (unchanged <> outcomes)
-                Left again -> do
-                    void (dgCheck checks AfterUncertain permitted)
-                    pure (unchanged <> uncertain again permitted)
-        _ -> pure (uncertain fault issued)
-    skipped = map (,VersionRefused (storeRefusal "REASSESSED" "current evidence does not authorise this delete"))
-    uncertain fault = map (,VersionUncertain fault)
+    settled = concat (reverse sent)
+
+{- An uncertain batch is observed without reserving, then the guard decides whether another
+attempt is allowed at all, and only then is the reservation taken again. -}
+reassessThenRetry :: DeleteRun -> StoreFault -> [Version] -> IO [(Version, VersionOutcome)]
+reassessThenRetry run fault issued = do
+    void (dgCheck (drChecks run) AfterUncertain issued)
+    retry <- dgRetry (drChecks run) fault
+    fresh <- if retry then dgCheck (drChecks run) BeforeDelete issued else pure (Right [])
+    retryBatch run fault issued fresh
+
+-- A refused retry arrives as an empty reservation, so the versions it covers stay uncertain.
+retryBatch :: DeleteRun -> StoreFault -> [Version] -> Either StoreFault [Version] -> IO [(Version, VersionOutcome)]
+retryBatch run fault issued = \case
+    Right current | not (null current) -> do
+        let permitted = filter (`elem` current) issued
+            unchanged = uncertain fault (filter (`notElem` current) issued)
+        issueBatch run permitted >>= \case
+            Right outcomes -> pure (unchanged <> outcomes)
+            Left again -> do
+                void (dgCheck (drChecks run) AfterUncertain permitted)
+                pure (unchanged <> uncertain again permitted)
+    _ -> pure (uncertain fault issued)
+
+-- An empty batch reaches the backend as no call at all.
+issueBatch :: DeleteRun -> [Version] -> IO (Either StoreFault [(Version, VersionOutcome)])
+issueBatch run versions
+    | null versions = pure (Right [])
+    | otherwise = drSend run versions
+
+skipped :: [Version] -> [(Version, VersionOutcome)]
+skipped = map (,VersionRefused (storeRefusal "REASSESSED" "current evidence does not authorise this delete"))
+
+uncertain :: StoreFault -> [Version] -> [(Version, VersionOutcome)]
+uncertain fault = map (,VersionUncertain fault)

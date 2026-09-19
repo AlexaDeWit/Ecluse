@@ -5,34 +5,31 @@
 {- | PyPI's entry in the ecosystem adapter registry, assembled from the
 @Ecluse.Core.Registry.PyPI.*@ modules with no protocol logic of its own.
 
-Two capability slices are empty. 'adapterPublish' is 'Nothing', so the upload route answers its
-documented @405@ and the composition root refuses a write destination on the mount.
-'AdapterMaintenance' carries neither verb, because PyPI spells no public wire endpoint for
-listing a store's projects or deleting a release, so @ecluse dredger@ refuses such a store and
-names the missing verb. The name alphabet stays declared: a store with a control plane of its
-own is still walked in buckets over the ecosystem's leading characters.
+'adapterPublish' is 'Nothing', so the upload route answers its documented @405@ and the
+composition root refuses a write destination on the mount. 'AdapterMaintenance' carries neither
+verb, because PyPI spells no public wire endpoint for listing a store's projects or deleting a
+release, so @ecluse dredger@ refuses such a store and names the missing verb. The alphabet is
+declared regardless: a store with a control plane of its own is still walked in buckets.
 -}
 module Ecluse.Core.Registry.PyPI.Adapter (
     pypiAdapter,
 ) where
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Registry.Adapter.Types (
+import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (..),
     AdapterMaintenance (..),
     AdapterMetadata (..),
-    AdapterServe (..),
-    RegistryAdapter (..),
  )
-import Ecluse.Core.Registry.Maintenance (mkNameAlphabet)
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocToken))
+import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
+import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
+import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (fetchPyPIManifest, newPyPIMetadataReads)
 import Ecluse.Core.Registry.PyPI.Project (projectName, pypiNameLeadChars)
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPIRequest
 import Ecluse.Core.Registry.PyPI.Route qualified as PyPIRoute
-import Ecluse.Core.Security.Egress (registryUrlText)
 
 -- | PyPI's capability record.
 pypiAdapter :: RegistryAdapter
@@ -54,7 +51,7 @@ pypiAdapter =
                 }
         , adapterArtifact =
             AdapterArtifact
-                { artifactByFile = \origin -> PyPIRequest.artifactRequestByFile (registryUrlText (ocBaseUrl origin)) (ocToken origin)
+                { artifactByFile = \origin -> PyPIRequest.artifactRequestByFile (originBaseUrl origin) (ocToken origin)
                 , artifactByUrl = PyPIRequest.artifactRequestByUrl
                 , artifactHosts = PyPIRequest.pypiArtifactHosts
                 }

@@ -10,14 +10,14 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Core.Cve (AdvisoryRange (..), DbEtag (DbEtag))
+import Ecluse.Core.Cve (AdvisoryRange (..))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
-    NamePrefix,
     RetryAdvice (RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
     StoreCursor (writeCursor),
@@ -27,11 +27,8 @@ import Ecluse.Core.Registry.Maintenance (
     StoreObservation (obVerifyConsent),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
-    inBucket,
     meteredMaintenance,
-    mkNameAlphabet,
     protocolFault,
-    renderNamePrefix,
     storedVersion,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (
@@ -47,21 +44,29 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     tallyCounts,
     undeclaredBudget,
  )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NamePrefix,
+    inBucket,
+    mkNameAlphabet,
+    renderNamePrefix,
+ )
 import Ecluse.Core.Registry.Sweep (paceAtCeiling, storeBudgets, sweepCycle, withStoreRetry)
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltConsentWithheld, HaltDeletionCap, HaltStoreFault, HaltStorePreserved),
     CycleOutcome (outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
     EvidenceGaps (gapAdvisoryGeneration, gapManifests),
     PrerequisiteStatus (PrerequisiteMet, PrerequisiteUnmet, PrerequisiteUnread),
+    SweepTally (tallyDeleted, tallyExamined, tallyGuardSkipped, tallyKept),
+    TargetPrerequisites (tpClassification, tpConsent),
+    outcomeComplete,
+    prerequisitesMet,
+ )
+import Ecluse.Core.Registry.Sweep.Types (
     SweepMount (smConfigured, smFirstParty, smRuleDeps),
     SweepPacing (swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
     SweepPorts (sweepDelay),
     SweepShape (SweepCandidates, SweepEverything),
-    SweepTally (tallyDeleted, tallyExamined, tallyGuardSkipped, tallyKept),
-    TargetPrerequisites (tpClassification, tpConsent),
     deletingCache,
-    outcomeComplete,
-    prerequisitesMet,
  )
 import Ecluse.Core.Rules (RuleDeps (rdWithCveLookup), prepare)
 import Ecluse.Core.Rules.Types (DenyIfCveParams (..), DenyIfEpssParams (..), FailureAlignment (FailDeny, FailNoDecision), Rule (AllowIfRemediatesCve, DenyByIdentity, DenyIfCve, DenyIfEpss))

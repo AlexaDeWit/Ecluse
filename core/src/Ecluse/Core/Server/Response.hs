@@ -73,8 +73,8 @@ data Rejection = Rejection
 an /inability to decide/, whose 'Transience' separates a retryable @503@ from a terminal @500@.
 -}
 data RejectReason
-    = {- | A rule denied the version (including deny-by-default). The 'RuleName'
-      is the rule that decided, for the audit trail and the denial body.
+    = {- | A rule denied the version (deny-by-default included). The 'RuleName' is the rule that
+      decided, for the audit trail and the denial body.
       -}
       ByPolicy RuleName
     | -- | The version could not be vetted. Refuse it, with transience indicating whether a retry can help.
@@ -93,9 +93,7 @@ data RejectReason
       UpstreamInvalid
     deriving stock (Eq, Show)
 
-{- | The name of the rule that decided a refusal, carried for the audit trail and the denial
-body.
--}
+-- | The name of the rule that decided a refusal, for the audit trail and the denial body.
 newtype RuleName = RuleName Text
     deriving stock (Eq, Ord, Show)
 
@@ -128,9 +126,7 @@ data ArtifactStatus
       Ok
     | -- | @403@: refused by policy. The route's response contract shapes the body.
       Forbidden
-    | {- | @503@: a transient inability to decide. The 'RetryAfter', if known,
-      becomes the @Retry-After@ header.
-      -}
+    | -- | @503@: a transient inability to decide. A known 'RetryAfter' becomes the header.
       Unavailable' (Maybe RetryAfter)
     | -- | @500@: a permanent or internal inability to decide. Not retryable.
       ServerError
@@ -154,7 +150,7 @@ artifactStatus = \case
         -- misbehaving upstream on this path is an internal inability to serve.
         UpstreamInvalid -> ServerError
 
--- | The HTTP status an 'ArtifactStatus' renders as. Pure and total.
+-- | The HTTP status an 'ArtifactStatus' renders as.
 artifactHttpStatus :: ArtifactStatus -> Status
 artifactHttpStatus = \case
     Ok -> status200
@@ -169,8 +165,8 @@ is no @404@: the package exists, and a genuine absence is decided before the mer
 data PackumentStatus
     = -- | @200@: at least one version survived, so the proxy serves the merged, filtered packument.
       PackumentOk
-    | {- | @403@: no version survived and every exclusion was a policy denial. The
-      response body collects the denial reasons.
+    | {- | @403@: no version survived and every exclusion was a policy denial. The response body
+      collects the denial reasons.
       -}
       PackumentForbidden
     | {- | @503@: no version survived and an exclusion can recover.
@@ -198,31 +194,30 @@ packumentStatus decisions
     | tallyWontResolve tally = PackumentServerError
     | otherwise = PackumentForbidden
   where
-    -- One strict pass over the outcomes collects every signal the guards weigh, so the
-    -- all-denied path walks the exclusions once, not once per guard.
+    -- One strict pass collects every signal the guards weigh, so the all-denied path walks
+    -- the exclusions once, not once per guard.
     tally :: PackumentTally
-    tally = foldl' weigh (PackumentTally False [] False False) decisions
+    tally = foldl' weighDecision (PackumentTally False [] False False) decisions
 
     willResolveDelays :: [Maybe RetryAfter]
     willResolveDelays = tallyWillResolveDelays tally
 
-    weigh :: PackumentTally -> ServeDecision -> PackumentTally
-    weigh acc = \case
-        Admit -> acc{tallyAdmit = True}
-        Reject rej -> case rejectionReason rej of
-            Unavailable (WillResolve delay) ->
-                acc{tallyWillResolveDelays = delay : tallyWillResolveDelays acc}
-            UpstreamInvalid -> acc{tallyUpstreamInvalid = True}
-            Unavailable WontResolve -> acc{tallyWontResolve = True}
-            -- A deny-by-default cause (policy or admission refusal) leaves no signal
-            -- of its own. An empty tally is exactly the @403@ floor.
-            ByPolicy{} -> acc
-            MissingIntegrity -> acc
-            BelowIntegrityFloor -> acc
+-- A deny-by-default cause (policy or admission refusal) leaves no signal of its own,
+-- because an empty tally is exactly the @403@ floor.
+weighDecision :: PackumentTally -> ServeDecision -> PackumentTally
+weighDecision acc = \case
+    Admit -> acc{tallyAdmit = True}
+    Reject rej -> case rejectionReason rej of
+        Unavailable (WillResolve delay) ->
+            acc{tallyWillResolveDelays = delay : tallyWillResolveDelays acc}
+        UpstreamInvalid -> acc{tallyUpstreamInvalid = True}
+        Unavailable WontResolve -> acc{tallyWontResolve = True}
+        ByPolicy{} -> acc
+        MissingIntegrity -> acc
+        BelowIntegrityFloor -> acc
 
-{- | The signals 'packumentStatus' weighs, accumulated in one pass. The fields are strict
-('StrictData'), so the tally does not thunk across a large survivor set.
--}
+{- The signals 'packumentStatus' weighs, accumulated in one pass. The fields are strict, so the
+tally does not thunk across a large survivor set. -}
 data PackumentTally = PackumentTally
     { tallyAdmit :: Bool
     -- ^ At least one 'Admit' was seen, so the merged document has a survivor.

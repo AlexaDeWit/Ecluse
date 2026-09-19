@@ -6,10 +6,8 @@
 with backoff, and a per-source circuit breaker, attached by 'Ecluse.Core.Rules.prepare'.
 
 Any 'RuleVerdict' the rule returns, 'CannotVet' included, resets the breaker and comes back
-'Decided' unretried. Only a harness-observed fault advances it, resolving to 'Unavailable' under
-the rule's own alignment. 'runResilient' never throws, and the breaker reads 'resClock' fresh at
-each decision, so its cooldown starts at the failure commit. The harness reports its own faults
-to the rule's 'SourceReporter' with their detail, and the engine classifies every decided verdict.
+'Decided' unretried, so only a harness-observed fault advances the breaker and resolves to
+'Unavailable' under the rule's own alignment. 'runResilient' never throws.
 -}
 module Ecluse.Core.Rules.Effectful (
     -- * The resilience policy
@@ -113,23 +111,19 @@ attemptOnce :: Resilience -> (RuleEvidence -> IO RuleVerdict) -> RuleEvidence ->
 attemptOnce res evalAt ev = do
     result <- tryAny (timeout (ecTimeout (resConfig res)) (evalAt ev))
     pure $ case result of
-        Left e -> Left (transient, "the rule threw: " <> displayExceptionT e) -- the rule's IO threw
-        Right Nothing -> Left (transient, "the attempt timed out") -- the attempt timed out
-        Right (Just verdict) -> Right verdict -- a verdict is decided, never retried
+        Left e -> Left (transient, "the rule threw: " <> displayExceptionT e)
+        Right Nothing -> Left (transient, "the attempt timed out")
+        Right (Just verdict) -> Right verdict
   where
     transient = transientCause (resConfig res)
 
-{- The result a faulted evaluation resolves to. The reason rides along for the audit trail. -}
 exhausted :: Resilience -> Text -> Transience -> Text -> RuleEvaluation
 exhausted res name transience reason = Unavailable transience (resAlignment res) (name <> ": " <> reason)
 
-{- The transient 'Transience' an infrastructural failure (a timeout, an exception, an
-open breaker) surfaces: retryable, carrying the rule's configured 'RetryAfter'. -}
 transientCause :: EffectfulConfig -> Transience
 transientCause cfg = WillResolve (ecRetryAfter cfg)
 
-{- The breaker admission gate. 'Ecluse.Core.Breaker.admit' owns the admission policy, and
-this commits its decision so the move out of 'Open' takes effect. -}
+-- Commits what 'Ecluse.Core.Breaker.admit' decided, so the move out of 'Open' takes effect.
 admitProbe :: Resilience -> UTCTime -> IO Bool
 admitProbe res now = do
     (permitted, old, new) <- atomically $ do
@@ -140,8 +134,8 @@ admitProbe res now = do
     reportBreakerChange (resBreakerReporter res) old new
     pure permitted
 
-{- Commit a breaker fold and report the transition it made. It reads the breaker before and
-after in one transaction, so the report reflects exactly the committed transition. -}
+-- Reads the breaker before and after in one transaction, so the report reflects exactly the
+-- transition that committed.
 commitBreaker :: Resilience -> (Breaker -> Breaker) -> IO ()
 commitBreaker res step = do
     (old, new) <- atomically $ do
@@ -151,8 +145,6 @@ commitBreaker res step = do
         pure (st, st')
     reportBreakerChange (resBreakerReporter res) old new
 
-{- Advance the breaker on a failed evaluation per this rule's configured threshold
-and cooldown ('Ecluse.Core.Breaker.recordFailure'). -}
 tripOnFailure :: EffectfulConfig -> UTCTime -> Breaker -> Breaker
 tripOnFailure cfg = recordFailure (ecBreakerThreshold cfg) (ecBreakerCooldown cfg)
 

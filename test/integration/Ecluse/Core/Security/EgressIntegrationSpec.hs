@@ -18,7 +18,6 @@ import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated))
 import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
-import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Stub (stubPort, withStub, withStubHeaders)
@@ -65,7 +64,7 @@ spec = do
 
 fetchMetadata :: Manager -> Port -> Maybe Text -> IO (Either FetchFault RegistryResponse)
 fetchMetadata manager port token =
-    fetchMetadataFormBounded (clientConfig manager port token) Abbreviated noValidators thing
+    fetchMetadataFormBounded (clientConfig manager port token) Abbreviated thing
 
 -- An origin pointed at the loopback upstream on @port@. Its base URL comes from the
 -- test-only plain-HTTP opt-in, a constructor a release build does not have.

@@ -12,6 +12,7 @@ module Ecluse.Core.Clock (
     monoSecondsBetween,
     waitUntilMonotonic,
     waitSeconds,
+    secondsToMicros,
 ) where
 
 import Data.Time (NominalDiffTime)
@@ -49,3 +50,9 @@ waitSeconds seconds = when (micros > 0) (threadDelay (fromInteger (min ceilingMi
   where
     micros = round (toRational seconds * 1_000_000)
     ceilingMicros = toInteger (maxBound :: Int)
+
+{- | A delay in seconds as the microseconds a delay primitive takes. Every config decoder that
+spells a pause bounds it below @maxBound `div` 1_000_000@, so the conversion cannot wrap.
+-}
+secondsToMicros :: NominalDiffTime -> Int
+secondsToMicros seconds = round seconds * 1_000_000

@@ -22,7 +22,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry.Maintenance (
+import Ecluse.Core.Registry.Maintenance.NameSpace (
     NameAlphabet,
     NamePrefix,
     extendBucket,
@@ -72,7 +72,7 @@ data BucketNames fault a
       BucketFaulted fault
     deriving stock (Functor)
 
--- | Merge package inventory pages under one distinct-name bound, preserving caller-supplied location evidence.
+-- | Merge one bucket's listing pages under the distinct-name bound, keeping each name's evidence.
 collectBucketWith ::
     NameAlphabet ->
     NamePrefix ->
@@ -82,25 +82,16 @@ collectBucketWith ::
 collectBucketWith alphabet prefix merge source = outcome <$> runConduit (fuseBothMaybe source (takeToBudget merge))
   where
     outcome = \case
-        (_, Nothing) -> maybe BucketUnsplittable BucketOverflowed (nonEmpty =<< narrowerBuckets alphabet prefix)
+        (_, Nothing) -> maybe BucketUnsplittable BucketOverflowed (nonEmpty (narrowerBuckets alphabet prefix))
         (Just (Just fault), _) -> BucketFaulted fault
         (_, Just names) -> BucketRead names
 
--- | Refuse a new inventory identity before insertion would cross the bound. Existing identities merge in place.
-insertInventory :: (Ord key) => Int -> (value -> value -> value) -> Map key value -> (key, value) -> Maybe (Map key value)
-insertInventory limit merge held (key, value)
-    | Map.notMember key held && Map.size held >= max 0 limit = Nothing
-    | otherwise = Just (Map.insertWith merge key value held)
-
-{- The buckets covering this one, or nothing where none can. An alphabet with no characters can
-narrow nothing, and past the depth bound a further character has stopped dividing the names. -}
-narrowerBuckets :: NameAlphabet -> NamePrefix -> Maybe [NamePrefix]
+{- The buckets covering this one, none where it cannot be narrowed. An alphabet with no characters
+divides nothing, and past the depth bound a further character has stopped dividing the names. -}
+narrowerBuckets :: NameAlphabet -> NamePrefix -> [NamePrefix]
 narrowerBuckets alphabet prefix
-    | T.compareLength (renderNamePrefix prefix) bucketDepthLimit /= LT = Just []
-    | null narrower = Nothing
-    | otherwise = Just narrower
-  where
-    narrower = extendBucket alphabet prefix
+    | T.compareLength (renderNamePrefix prefix) bucketDepthLimit /= LT = []
+    | otherwise = extendBucket alphabet prefix
 
 {- Fold the pages until the bucket is read or the budget is crossed. 'Nothing' means the budget
 went first, which abandons the stream where it stands. -}
@@ -111,3 +102,9 @@ takeToBudget merge = go Map.empty
         await >>= \case
             Nothing -> pure (Just (Map.toAscList held))
             Just page -> maybe (pure Nothing) go (foldM (insertInventory bucketNameBudget merge) held page)
+
+-- | Refuse a new inventory identity before insertion would cross the bound. Existing ones merge.
+insertInventory :: (Ord key) => Int -> (value -> value -> value) -> Map key value -> (key, value) -> Maybe (Map key value)
+insertInventory limit merge held (key, value)
+    | Map.notMember key held && Map.size held >= max 0 limit = Nothing
+    | otherwise = Just (Map.insertWith merge key value held)

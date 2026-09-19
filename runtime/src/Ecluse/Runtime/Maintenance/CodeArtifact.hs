@@ -20,7 +20,6 @@ module Ecluse.Runtime.Maintenance.CodeArtifact (
     -- * The calls the handle makes
     ControlPlane (..),
     controlPlaneFor,
-    readPlaneFor,
     maintenanceFor,
     observationFor,
     boundedObservationFor,
@@ -41,10 +40,9 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict,
     DeleteGuard,
-    NameAlphabet,
-    NamePrefix,
     StoreClass (StoreDestroyable),
     StoreCursor (..),
+    StoreDeletion (..),
     StoreFault,
     StoreMaintenance (..),
     StoreManifestRead,
@@ -54,10 +52,16 @@ import Ecluse.Core.Registry.Maintenance (
     chunksOfCeiling,
     collectPagesBounded,
     deleteAll,
+    maintenanceOf,
     pageAll,
     pageSource,
  )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NameAlphabet,
+    NamePrefix,
+ )
 import Ecluse.Core.Registry.Maintenance.Upstream (
+    RepositoryLinks,
     UndecidabilityReason (NetworkFailure),
     UnsafeReason (InsufficientPermissions),
     UpstreamSafety (Undecidable, Unsafe),
@@ -182,7 +186,7 @@ controlPlaneFor env = do
             , cpUntagResource = sendStore env
             }
 
--- | The observing calls alone, over one env, so a caller handed these can change nothing.
+-- The observing calls alone, over one env, so a caller handed these can change nothing.
 readPlaneFor :: AWS.Env -> ReadPlane
 readPlaneFor env =
     ReadPlane
@@ -198,19 +202,12 @@ assembled, which together are every effect it has.
 -}
 maintenanceFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ControlPlane -> StoreMaintenance
 maintenanceFor alphabet readManifest store plane =
-    StoreMaintenance
-        { storeFacts = obFacts observed
-        , listPackagesIn = obListPackagesIn observed
-        , enumerateVersions = obEnumerateVersions observed
-        , readStoreManifest = obReadManifest observed
-        , deleteVersions = deleteChunks plane store
-        , verifyConsent = obVerifyConsent observed
-        , classifyStore = obClassifyStore observed
-        , probeUpstream = obProbeUpstream observed
-        , storeCursor = Just (walkCursor alphabet plane store)
-        }
-  where
-    observed = observationFor alphabet readManifest store (cpRead plane)
+    maintenanceOf
+        (observationFor alphabet readManifest store (cpRead plane))
+        StoreDeletion
+            { dlDeleteVersions = deleteChunks plane store
+            , dlCursor = Just (walkCursor alphabet plane store)
+            }
 
 -- | The observing calls over one 'ReadPlane', which is every effect they have.
 observationFor :: NameAlphabet -> StoreManifestRead -> CodeArtifactStore -> ReadPlane -> StoreObservation
@@ -235,10 +232,11 @@ probeUpstreamSafety observer store =
     linksOf repository =
         describedLinks <$> rpDescribeUpstream observer (describeUpstreamRequest store repository)
 
-    -- An answer that described no repository settled nothing, so the question stays open.
-    describedLinks response = do
-        described <- response
-        maybe (Left (Undecidable NetworkFailure)) (Right . upstreamLinksOf) (described ^. CAL.describeRepositoryResponse_repository)
+-- An answer that described no repository settled nothing, so the question stays open.
+describedLinks :: Either UpstreamSafety CA.DescribeRepositoryResponse -> Either UpstreamSafety RepositoryLinks
+describedLinks response = do
+    described <- response
+    maybe (Left (Undecidable NetworkFailure)) (Right . upstreamLinksOf) (described ^. CAL.describeRepositoryResponse_repository)
 
 {- A service refusal comes back as a value, so a throw here is the identity itself: none was
 discovered, or the one discovered could not be renewed. An identity that cannot ask fails closed. -}

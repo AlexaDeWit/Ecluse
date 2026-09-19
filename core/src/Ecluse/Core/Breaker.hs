@@ -2,21 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The small circuit-breaker state machine that guards an unreliable operation.
+{- | The circuit-breaker state machine fronting a call that can fail or hang: minting an
+outbound credential, or consulting an effectful rule source.
 
-A breaker fronts a call that can fail or hang: minting an outbound credential, or
-consulting an effectful rule source. While the call is healthy the breaker stays out
-of the way. Once failures pile up it trips open and fast-fails further calls for a
-cooldown, which spares both the caller's latency and the failing dependency. After
-the cooldown it admits a single half-open probe. A probe that succeeds resets the
-breaker, and a probe that fails re-opens it for another cooldown.
-
-The machine is pure and clock-injected: every transition takes the caller's @now@, so
-a test runs deterministically with no real time passing. The two policy knobs, the
-trip threshold and the cooldown, do not live here. Each caller passes its own to
-'recordFailure', so one breaker shape serves consumers that tune them differently.
-Concurrency and storage (an STM 'TVar', a record field) are the caller's concern too:
-these functions only fold one state into the next.
+Every transition takes the caller's @now@, so no wall clock is read here. The two policy
+knobs, the trip threshold and the cooldown, are the caller's and reach 'recordFailure' per
+call, and so are storage and concurrency. These functions only fold one state into the next.
 -}
 module Ecluse.Core.Breaker (
     Breaker (..),
@@ -72,7 +63,8 @@ recordFailure :: Int -> NominalDiffTime -> UTCTime -> Breaker -> Breaker
 recordFailure threshold cooldown now = \case
     Closed n | n + 1 >= threshold -> tripped
     Closed n -> Closed (n + 1)
-    _ -> tripped
+    Open{} -> tripped
+    HalfOpen -> tripped
   where
     tripped = Open (addUTCTime cooldown now)
 

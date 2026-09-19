@@ -55,11 +55,11 @@ import Ecluse.Core.Registry.Npm.Wire (
  )
 import Ecluse.Core.Registry.Npm.Wire qualified as Wire
 import Ecluse.Core.Registry.WireSupport (
-    NameRefusal (NameEmpty, NameNotAscii, NameUnsafeComponent),
     Projection,
     checkNameAgreement,
-    parseNameComponent,
+    nameComponentWith,
     partitionLenient,
+    withinNameLimit,
  )
 import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
@@ -87,34 +87,34 @@ instance FromJSON WirePackument where
                 , wpDistTags = distTags
                 , wpVersions = versions
                 , wpTime = time
-                , -- Deterministic order (versions, then dist-tags, then time), each
-                  -- already in ascending-key order, so the dropped-entry list is stable.
+                , -- Each source list is already in ascending-key order, so this fixed
+                  -- concatenation keeps the dropped-entry list stable.
                   wpInvalidEntries = versionDrops <> distTagDrops <> timeDrops
                 }
 
-{- Decode @versions@ element-wise, recording a manifest that lacks a required or security-decisive
-field as an 'InvalidVersionManifest': it cannot be evaluated, so it must never be served. -}
+{- Decode @versions@ element-wise. A manifest that lacks a required or security-decisive field
+is recorded as an 'InvalidVersionManifest': it cannot be evaluated, so it must never be served. -}
 lenientVersionMap :: Object -> Parser (Map Text VersionEntry, [InvalidEntry])
 lenientVersionMap o = do
     raw <- o .:? "versions" .!= mempty -- Map Text Value: each version object kept raw
     pure (partitionLenient InvalidVersionManifest (parseEither parseJSON) raw)
 
-{- Decode @dist-tags@ element-wise: a non-string value is dropped as an 'InvalidDistTag', so one
-bad tag loses only that tag. 'mkVersion' is total, so the merge reconciles tag targeting later. -}
+{- Decode @dist-tags@ element-wise, so one non-string value loses only that tag. 'mkVersion' is
+total, so the merge reconciles tag targeting later. -}
 lenientDistTags :: Object -> Parser (Map Text Text, [InvalidEntry])
 lenientDistTags o = do
     raw <- o .:? "dist-tags" .!= mempty
     pure (partitionLenient InvalidDistTag (parseEither parseJSON) raw)
 
-{- Decode @time@ element-wise, dropping an entry that is not an instant. Only a key naming a present
-version records an 'InvalidPublishTime': @created@ and @modified@ are package-level bookkeeping. -}
+{- Decode @time@ element-wise. Only a key naming a present version records an
+'InvalidPublishTime': @created@ and @modified@ are package-level bookkeeping. -}
 lenientTimeMap :: Set Text -> Object -> Parser (Map Text UTCTime, [InvalidEntry])
 lenientTimeMap versionKeys o = do
     raw <- o .:? "time" .!= mempty
     let (kept, dropped) = partitionLenient InvalidPublishTime (parseEither parseJSON) raw
     pure (kept, filter ((`Set.member` versionKeys) . invalidKey) dropped)
 
-{- A decoded version object: the wire 'VersionManifest' plus its @_npmUser@ publisher. -}
+-- A decoded version object: the wire 'VersionManifest' plus its @_npmUser@ publisher.
 data VersionEntry = VersionEntry
     { veManifest :: VersionManifest
     , vePublisher :: Maybe Wire.Person
@@ -138,8 +138,7 @@ projectValidated requestedName pkmt = do
     info <- projectPackageInfo pkmt
     pure (checkNameAgreement requestedName (infoName info) info)
 
--- Project a 'WirePackument' into 'PackageInfo', taking the upstream's self-reported name.
--- 'projectValidated' owns checking that name against the request.
+-- Takes the upstream's self-reported name. 'projectValidated' owns checking it against the request.
 projectPackageInfo :: WirePackument -> Either ParseError PackageInfo
 projectPackageInfo pkmt = do
     name <- projectName (wpName pkmt)
@@ -152,7 +151,7 @@ projectPackageInfo pkmt = do
             }
 
 {- | Project one @versions@ entry into 'PackageDetails', or 'Nothing' on a missing required field.
-"Ecluse.Core.Registry.Npm.SelectiveDecode" reuses this, so both decode paths project identically.
+The selective read in "Ecluse.Core.Registry.Npm.Metadata" reuses it, so both paths project alike.
 -}
 projectVersionEntry :: PackageName -> Version -> Maybe UTCTime -> Value -> Maybe PackageDetails
 projectVersionEntry name version publishedAt value =
@@ -170,8 +169,6 @@ decodePackument :: RegistryResponse -> Either ParseError WirePackument
 decodePackument =
     first (ParseError . toText) . eitherDecodeStrict . responseBody
 
-{- Decode an already-parsed 'Value' into a 'WirePackument'. The result matches 'decodePackument'
-on the bytes that produced it, because aeson runs the same 'FromJSON' instance either way. -}
 decodePackumentValue :: Value -> Either ParseError WirePackument
 decodePackumentValue =
     first (ParseError . toText) . parseEither parseJSON
@@ -202,14 +199,13 @@ projectDetails name version publishedAt entry =
   where
     vm = veManifest entry
 
--- The SPDX expression or license name carried by a wire 'License'.
 licenseText :: License -> Text
 licenseText = \case
     LicenseSpdx spdx -> spdx
     LicenseObject name _url -> name
 
-{- Map install-script presence onto 'CodeExecSignal', failing closed across two independent wire
-signals: a @false@ @hasInstallScript@ cannot hide a hook the @scripts@ map declares. -}
+{- Fail closed across two independent wire signals: a @false@ @hasInstallScript@ cannot hide a
+hook the @scripts@ map declares. -}
 installCode :: VersionManifest -> CodeExecSignal
 installCode vm
     | not (null hooks) =
@@ -224,12 +220,11 @@ installCode vm
 installHooks :: [Text]
 installHooks = ["preinstall", "install", "postinstall"]
 
--- Map an optional @deprecated@ notice onto 'Availability'.
 availability :: VersionManifest -> Availability
 availability vm = maybe Available Deprecated (vmDeprecated vm)
 
-{- Project @dist@ into an 'Artifact' carrying both digests. The @tarball@ URL stays verbatim, and
-"Ecluse.Core.Package.Filter" folds its scheme against the https-only egress policy afterward. -}
+{- The @tarball@ URL stays verbatim: "Ecluse.Core.Package.Filter" folds its scheme against the
+https-only egress policy afterward. -}
 projectArtifact :: Version -> Dist -> Artifact
 projectArtifact version dist =
     Artifact
@@ -244,17 +239,16 @@ projectArtifact version dist =
         , artProvenance = Nothing
         }
   where
-    -- The validating 'mkHash' makes a malformed digest absent, never degenerate: no bogus
-    -- fingerprint may pass the public-integrity admission gate (security.md invariant 5).
+    -- A malformed digest is absent, never degenerate: no bogus fingerprint may pass the
+    -- public-integrity admission gate (security.md invariant 5).
     toHash :: HashAlg -> Text -> Maybe Hash
     toHash alg = rightToMaybe . mkHash alg
-    -- 'mkSriHashes' splits a multi-component @integrity@ into one 'Hash' per component, so the
-    -- admission floor and the worker's tamper gate rank and verify each digest exactly.
+    -- One 'Hash' per @integrity@ component, so the admission floor and the worker's tamper
+    -- gate rank and verify each digest exactly.
     sriHashes = maybe [] (either (const []) toList . mkSriHashes) (distIntegrity dist)
     sha1Hash = distShasum dist >>= toHash SHA1
 
-{- The tarball's filename, falling back to @\<version\>.tgz@ when the URL ends in a
-slash or names no file. -}
+-- Falls back to @\<version\>.tgz@ when the URL ends in a slash or names no file.
 tarballFilename :: Text -> Version -> Text
 tarballFilename url version =
     fromMaybe (renderVersion version <> ".tgz") (urlFilename url)
@@ -267,7 +261,7 @@ point reads a name through. A bare @\@foo@ is a malformed scoped name, never an 
 -}
 projectName :: Text -> Either ParseError PackageName
 projectName raw = do
-    withinNameLimit raw
+    withinNpmNameLimit raw
     if T.isPrefixOf "@" raw
         then scopedName raw
         else mkPackageName Npm Nothing <$> nameComponent raw
@@ -289,7 +283,7 @@ scope @myorg@).
 projectScope :: Text -> Either ParseError Scope
 projectScope raw = do
     -- Measure after the strip, so @myorg and myorg stay one scope at the cap as well as below it.
-    withinNameLimit bare
+    withinNpmNameLimit bare
     mkScope <$> nameComponent bare
   where
     bare = fromMaybe raw (T.stripPrefix "@" raw)
@@ -297,18 +291,7 @@ projectScope raw = do
 {- One component of an npm name, the scope or the bare name. It sits on the shared name floor
 and adds npm's own grammar. 'projectName' and 'projectScope' own the length cap. -}
 nameComponent :: Text -> Either ParseError Text
-nameComponent component = do
-    onFloor <- first (refusalText component) (parseNameComponent component)
-    if usableComponent onFloor
-        then Right onFloor
-        else Left (ParseError ("unusable npm name component: " <> show component))
-
--- npm's own wording for each way the shared floor refuses a component.
-refusalText :: Text -> NameRefusal -> ParseError
-refusalText component = \case
-    NameEmpty -> ParseError "empty npm name component"
-    NameNotAscii -> ParseError ("non-ASCII npm name component: " <> show component)
-    NameUnsafeComponent -> ParseError ("unusable npm name component: " <> show component)
+nameComponent = nameComponentWith "npm name component" usableComponent
 
 usableComponent :: Text -> Bool
 usableComponent component =
@@ -316,13 +299,14 @@ usableComponent component =
         && T.take 1 component `notElem` [".", "-", "_"]
         && T.toLower component `notElem` reservedNames
 
--- The characters npm's validator admits in a name part. @ and / are scope structure, which
--- 'projectName' and 'scopedName' read, so a part carries neither.
+-- @ and / are scope structure, which 'projectName' and 'scopedName' read, so a part carries
+-- neither.
 npmNameChar :: Char -> Bool
 npmNameChar ch = isAsciiUpper ch || isAsciiLower ch || isDigit ch || ch `elem` npmNameSpecials
-  where
-    npmNameSpecials :: [Char]
-    npmNameSpecials = "-_.!~*'()"
+
+-- The punctuation npm's own name grammar admits outside the alphanumerics.
+npmNameSpecials :: [Char]
+npmNameSpecials = "-_.!~*'()"
 
 {- | Every character an npm package name may begin with, sieved out of ASCII by the grammar
 above so the store walk's bucket alphabet cannot drift from what this module parses.
@@ -335,20 +319,14 @@ reservedNames :: [Text]
 reservedNames = ["node_modules", "favicon.ico"]
 
 {- Refuse a name over npm's own cap. 'projectName' measures the whole name including any scope
-prefix, and 'projectScope' measures a bare scope. 'T.compareLength' stops at the cap. -}
-withinNameLimit :: Text -> Either ParseError ()
-withinNameLimit raw
-    | T.compareLength raw npmNameLimit == GT = Left (ParseError overLong)
-    | otherwise = Right ()
-  where
-    overLong :: Text
-    overLong = "npm name over " <> show npmNameLimit <> " characters, starting " <> show (T.take 24 raw)
+prefix, and 'projectScope' measures a bare scope. -}
+withinNpmNameLimit :: Text -> Either ParseError ()
+withinNpmNameLimit = withinNameLimit "npm name" npmNameLimit
 
 -- npm's own cap on a package name, the one its validator applies to a new package.
 npmNameLimit :: Int
 npmNameLimit = 214
 
--- Project a wire 'Wire.Person' into the domain 'Person' (a structural copy).
 projectPerson :: Wire.Person -> Person
 projectPerson p =
     Person

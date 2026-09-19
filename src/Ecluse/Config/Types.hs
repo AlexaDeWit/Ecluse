@@ -1,8 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 {- | The configuration vocabulary: the settings records a load resolves to, the refusals their
 URL-valued keys carry, and the errors a refused load reports.
@@ -267,8 +265,8 @@ sbControl = \case
     BackendCodeArtifact _ store -> ControlCodeArtifact store
     BackendVerdaccio token consent -> ControlProtocol token consent
 
-{- | The namespaces a mount's deployment owns, one arm per ecosystem, read only in that registry's own naming
-shape. Every consumer of the privilege derives its predicate from this one value.
+{- | The namespaces a mount's deployment owns, one arm per ecosystem, read only in that registry's
+own naming shape. Every consumer of the privilege derives its predicate from this one value.
 -}
 data FirstParty
     = -- | The npm scopes the deployment owns, at least one.
@@ -288,6 +286,7 @@ newtype MountIntegrity = MountIntegrity
     }
     deriving stock (Eq, Show)
 
+-- | One mount as the document declares it, before "Ecluse.Config" resolves it into a 'Mount'.
 data MountConfig = MountConfig
     { mntEnabled :: Maybe Bool
     {- ^ The mount's on\/off switch. Any operator-declared key already activates the mount, so
@@ -484,6 +483,7 @@ data QuotaOverride = QuotaOverride
     }
     deriving stock (Eq, Show)
 
+-- | A resolved mount's endpoints: the public upstream it gates, and what it does with the rest.
 data MountRegistries = MountRegistries
     { regPublicUpstream :: RegistryUrl
     , regMode :: MountMode
@@ -521,12 +521,14 @@ regMirrorTarget regs = case regMode regs of
     Mirrored legs -> Just (mlMirrorTarget legs)
     ServeOnly _ -> Nothing
 
+-- | A mirror target married to the backend resolved from the tag it was declared under.
 data MirrorTarget = MirrorTarget
     { mtUrl :: RegistryUrl
     , mtBackend :: StoreBackend
     }
     deriving stock (Eq, Show)
 
+-- | One resolved mount: its ecosystem, its endpoints, and the rules in precedence order.
 data Mount = Mount
     { mountEcosystem :: Ecosystem
     , mountRegistries :: MountRegistries
@@ -534,29 +536,26 @@ data Mount = Mount
     }
     deriving stock (Eq, Show)
 
+-- | The mounts a load resolved, keyed by the ecosystem each was declared under.
 type MountMap = Map Ecosystem Mount
 
+-- | A completed load: the document's settings and the mounts resolved against them.
 data Config = Config
     { configApp :: AppConfig
     , configMounts :: MountMap
     }
     deriving stock (Eq, Show)
 
+-- | Why a load was refused. 'renderConfigError' writes each one as the boot reports it.
 data ConfigError
     = ParseError Text
     | PolicyErrors [PolicyError]
-    | {- | A mount is active but @server.publicUrl@ is unset. The proxy must rewrite
-      served artifact URLs against its own externally-reachable base URL. The npm CLI
-      reads a relative @dist.tarball@ as a @file:@ path and every install fails, so
-      the omission is refused at boot rather than discovered client by client.
-      Host-header derivation is deliberately not offered: a spoofed header would
-      poison every shared-cache entry with an attacker-chosen artifact URL.
+    | {- | A mount is active but @server.publicUrl@ is unset. It is not derived from the @Host@
+      header: a spoofed header poisons shared-cache entries with an attacker-chosen artifact URL.
       -}
       PublicUrlRequired
-    | {- | A __mirrored__ mount (one that declares a @mirrorTarget@) does not define
-      its private upstream. The mirror write must be readable back through the
-      private leg, so a mirrored mount without one is refused. A serve-only mount
-      (no @mirrorTarget@) never raises this.
+    | {- | A mount declares a @mirrorTarget@ but no private upstream, through which the mirror
+      write must be readable back. A serve-only mount never raises this.
       -}
       MountMissingPrivateUpstream Ecosystem
     | {- | An endpoint declared under the @codeArtifact@ tag whose URL is not a CodeArtifact

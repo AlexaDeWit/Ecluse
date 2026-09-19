@@ -1,23 +1,16 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
--- TupleSections: local convenience for pairing a parsed capture with its trailing
--- segments in 'takeProject' ((,rest)). See docs/style.md §2.
+-- TupleSections: local convenience for pairing a parsed capture with the remainder in
+-- 'takeProject' and 'artifactCoordinate'. See docs/style.md §2.
 {-# LANGUAGE TupleSections #-}
 
 {- | PyPI route contracts shared by serving and OpenAPI generation.
 Project names must be canonical, and distribution filenames must match their project.
 -}
 module Ecluse.Core.Registry.PyPI.Route (
-    -- * The mount's router and fallback action
+    -- * The mount's router
     pypiRouter,
-    pypiNotFound,
-
-    -- * Route-scoped pipeline contracts (exported for direct pipeline specs)
-    pypiIndexContract,
-    pypiIndexReplies,
-    pypiArtifactContract,
-    pypiArtifactReplies,
 
     -- * The table, as data
     pypiRoutes,
@@ -56,7 +49,7 @@ import Ecluse.Core.Registry.PyPI.Project (FileCoordinate (fcVersionKey), canonic
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
 import Ecluse.Core.Server.Context (
     MountRouter,
-    ResponseAction (AnswerRefusal, RunPipeline),
+    ResponseAction (AnswerRefusal),
     RouteAction (RouteAction),
  )
 import Ecluse.Core.Server.Contract (
@@ -75,8 +68,9 @@ import Ecluse.Core.Server.Contract (
     responseValue,
  )
 import Ecluse.Core.Server.Path (Filename, mkFilename)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), headPackument, servePackument)
-import Ecluse.Core.Server.Pipeline.Tarball (TarballReplies (..), headTarball, serveTarball)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), packumentAction)
+import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
+import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (..))
 import Ecluse.Core.Server.Response (HelpMessage, Refusal, mkRefusal, refusalHelp)
 import Ecluse.Core.Server.Route (
     Capture (Capture),
@@ -85,20 +79,19 @@ import Ecluse.Core.Server.Route (
     PatternSeg (SegCap, SegLit),
     Route (Route),
     RouteName (RouteName),
-    isHead,
     refusing,
     renderRoute,
     routerOf,
     safeSegment,
  )
-import Ecluse.Core.Server.RouteDescription (ParamSpec (ParamSpec), RouteSpec, catchAllSpecs, specsOf)
+import Ecluse.Core.Server.RouteDescription (RouteSpec, catchAllSpecs, specsOf, unsupportedPathParam)
 import Ecluse.Core.Version (Version, mkVersion)
 
--- | Match the first applicable route, otherwise answer 'pypiNotFound'.
+-- | Match the first applicable route, otherwise answer with the 404 fallback.
 pypiRouter :: MountRouter
 pypiRouter = routerOf pypiNotFound pypiRoutes
 
--- | Refuse unmatched paths with 404.
+-- Refuse unmatched paths with 404.
 pypiNotFound :: RouteAction
 pypiNotFound = RouteAction unsupportedContract (AnswerRefusal (declaredRefusal "no route claims this path" []))
 
@@ -166,7 +159,7 @@ uploadRoute =
 simpleIndexSchema :: Text
 simpleIndexSchema = "PyPISimpleIndex"
 
--- | The closed Simple-index response sum. 'pypiIndexReplies' is the only interface the pipeline receives for selecting one of its constructors.
+-- The closed Simple-index response sum: every status the index route may answer.
 type PyPIIndexResponse =
     ResponseChoice
         (ResponseValue LByteString)
@@ -217,7 +210,7 @@ pypiIndexContract =
             )
         )
 
--- | A refusal has no body unless operator help text is configured.
+-- A refusal has no body unless operator help text is configured.
 refusalContract :: Status -> Text -> ResponseContract (ResponseValue (Maybe LByteString))
 refusalContract status description =
     optionalBodyContract status (description <> " The body is empty unless `server.helpMessage` is configured.") (SchemaText "text/plain")
@@ -240,7 +233,7 @@ notAcceptable :: ResponseHeaders -> Maybe HelpMessage -> PyPIIndexResponse
 notAcceptable headers help =
     SecondResponse (SecondResponse (SecondResponse (SecondResponse (SecondResponse (FirstResponse (declaredRefusal "no representation this index serves is acceptable" headers help))))))
 
--- | Permit upstream-controlled artifact responses and local refusals through one open response contract.
+-- Upstream-controlled artifact responses and local refusals share one open response contract.
 pypiArtifactContract :: ResponseContract PassthroughResponse
 pypiArtifactContract =
     passthroughContract
@@ -278,16 +271,11 @@ artifactRefusalBody refusal = maybe PassthroughEmpty PassthroughBytes (helpBytes
 helpBytes :: Refusal -> Maybe LByteString
 helpBytes = fmap (fromStrict . encodeUtf8) . refusalHelp
 
-{- @GET \/simple\/{project}@: a project unit is an index read. A @HEAD@ takes the head-mode
-handler, which runs the identical gating and merge but withholds the body. -}
+-- @GET \/simple\/{project}@: a project unit is an index read.
 buildIndex :: Method -> [PyPICap] -> Maybe (ResponseAction PyPIIndexResponse)
 buildIndex method = \case
-    [PyPIProject name]
-        | isHead method -> Just (RunPipeline perimeterFallback (headPackument pypiIndexReplies name))
-        | otherwise -> Just (RunPipeline perimeterFallback (servePackument pypiIndexReplies name))
+    [PyPIProject name] -> Just (packumentAction pypiIndexReplies method name)
     _ -> Nothing
-  where
-    perimeterFallback = packumentInternal pypiIndexReplies [] (mkRefusal Nothing "internal server error")
 
 -- 'artifactCoordinate' applies the cross-capture path-confusion check, so a file naming another
 -- project falls through to the @404@ rather than having a coordinate fabricated for it.
@@ -295,26 +283,21 @@ buildArtifact :: Method -> [PyPICap] -> Maybe (ResponseAction PassthroughRespons
 buildArtifact method = \case
     [PyPIProject name, PyPIFile file] -> do
         (version, filename) <- artifactCoordinate name file
-        pure $
-            if isHead method
-                then RunPipeline perimeterFallback (headTarball pypiArtifactReplies name version filename)
-                else RunPipeline perimeterFallback (serveTarball pypiArtifactReplies name version filename)
+        pure (tarballAction pypiArtifactReplies method name version filename)
     _ -> Nothing
-  where
-    perimeterFallback = tarballError pypiArtifactReplies status500 [] (mkRefusal Nothing "internal server error")
 
 -- | Positional captures distinguish parsed projects from checked distribution filenames.
 data PyPICap
     = PyPIProject PackageName
     | PyPIFile Text
 
--- | Render project captures canonically so the parser can read them back.
+-- Render project captures canonically so the parser can read them back.
 renderCapture :: PyPICap -> [Text]
 renderCapture = \case
     PyPIProject name -> [canonicalName name]
     PyPIFile file -> [file]
 
--- | Accept canonical projects only. Non-canonical spellings receive 404 rather than redirects.
+-- Accept canonical projects only. Non-canonical spellings receive 404 rather than redirects.
 capProject :: Capture PyPICap
 capProject =
     Capture
@@ -323,7 +306,7 @@ capProject =
         (fmap (first PyPIProject) . takeProject)
         renderCapture
 
--- | The distribution-file capture. The coordinate parse (the release and the archive form) is 'artifactCoordinate''s, applied in 'buildArtifact'.
+-- The segment is checked here; 'artifactCoordinate' reads the release and archive form from it.
 capFile :: Capture PyPICap
 capFile =
     Capture
@@ -351,8 +334,5 @@ distributionPath name file = T.intercalate "/" <$> renderRoute artifactRoute [Py
 -- | Describe the live router and its deny-by-default catch-all for OpenAPI.
 pypiRouteSpecs :: NonEmpty RouteSpec
 pypiRouteSpecs =
-    catchAllSpecs unsupportedContract unsupportedParam
+    catchAllSpecs unsupportedContract unsupportedPathParam
         `NE.appendList` concatMap specsOf pypiRoutes
-
-unsupportedParam :: ParamSpec
-unsupportedParam = ParamSpec "unsupportedPath" "Any path under this mount matched by none of the routes above."

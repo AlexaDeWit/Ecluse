@@ -12,15 +12,17 @@ import Ecluse.Composition.Support (expectConfig, staticEnvVars)
 import Ecluse.Composition.Types (BootRole (BootStorePreview, BootStorePruner))
 import Ecluse.Config (Config (configApp))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltDeletionCap, HaltStoreFault),
     CycleOutcome (CycleOutcome, outcomeEvidence, outcomeHalt, outcomePrerequisites, outcomeTally),
     PrerequisiteStatus (PrerequisiteMet, PrerequisiteUnmet),
+    TargetPrerequisites (TargetPrerequisites),
+    unreadManifest,
+ )
+import Ecluse.Core.Registry.Sweep.Types (
     SweepPacing (swpBudgetFraction, swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
     SweepShape (SweepCandidates, SweepEverything),
-    TargetPrerequisites (TargetPrerequisites),
     deletionCapPerStore,
-    unreadManifest,
  )
 import Ecluse.Dredger.Plan (
     SweepMode (SweepDeletes, SweepPreviews),

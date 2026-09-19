@@ -7,8 +7,7 @@
 osv.dev and Écluse do not always agree on the spelling, so a pass that carried one name would
 either fetch a directory that does not exist or write an artifact the proxy's sync refuses. The
 pass also needs the version grammar that orders the advisory bounds it ingests, and the fan-out
-an ordinary advisory of the feed stays under. This module holds all four, and
-"Ecluse.Core.Osv.Compile" takes it rather than a bare name.
+an ordinary advisory of the feed stays under.
 -}
 module Ecluse.Core.Osv.Ecosystem (
     OsvEcosystem (..),

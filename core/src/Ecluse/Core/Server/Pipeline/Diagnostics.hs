@@ -4,9 +4,20 @@
 
 {- | Operator diagnostics for metadata failures, dropped entries, and integrity divergence.
 Access-refusal logs contain no upstream body, headers, or credential.
+
+The bad-upstream warnings carry 'pipelineInternalModule' as their @module@ filter key and the other
+payload-bearing lines carry 'pipelineModule', both held stable as values rather than source module
+paths, so an operator's saved filter keeps matching.
 -}
 module Ecluse.Core.Server.Pipeline.Diagnostics (
+    -- * Metadata-read failures
     logMetadataFailure,
+    logDecodeFailure,
+    logNameMismatch,
+    logUpstreamUnformable,
+    logUpstreamUnreachable,
+
+    -- * Dropped entries and divergence
     logInvalidEntries,
     warnDivergences,
 ) where
@@ -15,8 +26,9 @@ import Data.Aeson (Value)
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
-import Katip (KatipContext, Severity (ErrorS, WarningS), katipAddContext, logFM, ls, sl)
+import Katip (KatipContext, Severity (ErrorS, WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
 
+import Ecluse.Core.Fault (TransportFault (tfCause, tfDetail))
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 
 import Ecluse.Core.Package (
@@ -34,7 +46,11 @@ import Ecluse.Core.Package.Merge (
     MergePlan (mpDivergences),
     integrityHashes,
  )
-import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable))
+import Ecluse.Core.Registry (
+    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    UrlFormationError,
+    renderUrlFormationError,
+ )
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
  )
@@ -42,12 +58,7 @@ import Ecluse.Core.Security (
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions),
     authorityLabel,
  )
-import Ecluse.Core.Server.Pipeline.Internal (
-    logDecodeFailure,
-    logNameMismatch,
-    logUpstreamUnformable,
-    logUpstreamUnreachable,
- )
+import Ecluse.Core.Server.Pipeline.Internal (pipelineInternalModule)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
 -- | Log once per real fetch, inside the single-flight leader's request context.
@@ -98,6 +109,101 @@ logBreach name err =
         TooManyArtifacts seen c -> ("artifact-count", show seen, show c)
         TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
 
+-- The fields every bad-upstream warning carries, before the caller's own. The response-bound
+-- guards leave these conditions silent, so an operator would otherwise see nothing at all.
+warnUpstream :: (KatipContext m) => PackageName -> SimpleLogPayload -> Text -> m ()
+warnUpstream name extra message =
+    katipAddContext (prefix <> extra) $ logFM WarningS (ls message)
+  where
+    prefix = sl "module" pipelineInternalModule <> sl "package" (renderPackageName name)
+
+-- | Warn that an upstream body did not decode into a usable packument.
+logDecodeFailure :: (KatipContext m) => PackageName -> m ()
+logDecodeFailure name =
+    warnUpstream name mempty "refused an upstream metadata document: it did not decode into a usable packument"
+
+{- | Warn that an origin's packument self-reported a name for a different package, so an
+operator can tell a misconfigured or hostile upstream from an ordinary outage.
+-}
+logNameMismatch :: (KatipContext m) => PackageName -> Text -> Text -> m ()
+logNameMismatch requested origin reported =
+    warnUpstream
+        requested
+        (sl "origin" (authorityLabel origin) <> sl "upstreamName" reported)
+        "dropped an upstream contribution: its packument self-reported a name for a different package"
+
+{- | Warn that this origin's configured base URL could not be formed into a request, so an
+operator sees a misconfigured mount rather than an upstream that merely appears unreachable.
+-}
+logUpstreamUnformable :: (KatipContext m) => PackageName -> Text -> UrlFormationError -> m ()
+logUpstreamUnformable name origin urlErr =
+    warnUpstream
+        name
+        (sl "origin" (authorityLabel origin) <> sl "urlError" (renderUrlFormationError urlErr))
+        "refused an upstream metadata fetch: the configured base URL could not be formed into a request"
+
+{- | Warn that the transport failed before a usable body returned, so an operator can tell an
+outage from a decode failure or a misconfigured mount.
+-}
+logUpstreamUnreachable :: (KatipContext m) => PackageName -> Text -> TransportFault -> m ()
+logUpstreamUnreachable name origin fault =
+    warnUpstream
+        name
+        ( sl "origin" (authorityLabel origin)
+            <> sl "transportCause" (show (tfCause fault) :: Text)
+            <> sl "transportDetail" (tfDetail fault)
+        )
+        "an upstream metadata fetch could not reach the origin; its contribution degrades this request"
+
+-- | The malformed packument entries the projection dropped rather than failing the whole document.
+logInvalidEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
+logInvalidEntries name baseUrl entries =
+    katipAddContext payload $
+        logFM WarningS (ls message)
+  where
+    payload =
+        sl "module" pipelineModule
+            <> sl "package" (renderPackageName name)
+            <> sl "upstream" (authorityLabel baseUrl)
+            <> sl "droppedByKind" (dropCountsByKind entries)
+            <> sl "droppedEntries" (map renderDroppedEntry (take maxRenderedDrops entries))
+
+    entriesLen :: Int
+    entriesLen = length entries
+
+    message :: Text
+    message =
+        "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream packument (the rest is served)"
+    plural = if entriesLen == 1 then "y" else "ies"
+
+renderDroppedEntry :: InvalidEntry -> Text
+renderDroppedEntry e =
+    renderInvalidEntryKind (invalidKind e)
+        <> " "
+        <> invalidKey e
+        <> " = "
+        <> truncatedValue (invalidValue e)
+        <> " ("
+        <> invalidReason e
+        <> ")"
+
+-- Only 'maxRenderedValueChars' characters are ever forced, so a huge value never balloons
+-- the log line.
+truncatedValue :: Value -> Text
+truncatedValue v =
+    let rendered = TL.toStrict (TL.take (fromIntegral maxRenderedValueChars + 1) (encodeToLazyText v))
+     in if T.compareLength rendered maxRenderedValueChars == GT
+            then T.take maxRenderedValueChars rendered <> "…"
+            else rendered
+
+-- How many dropped entries the log renders in full, and how many characters of each raw value, so
+-- a flood of drops or one huge value cannot bloat a log line. The per-kind counts stay complete.
+maxRenderedDrops :: Int
+maxRenderedDrops = 20
+
+maxRenderedValueChars :: Int
+maxRenderedValueChars = 200
+
 -- | Warn and increment the divergence metric when shared digests disagree across origins.
 warnDivergences :: (KatipContext m) => MetricsPort -> PackageName -> MergePlan -> m ()
 warnDivergences metrics name plan =
@@ -134,56 +240,7 @@ renderFingerprint fp = "{" <> T.intercalate ", " (map renderHash (integrityHashe
 renderHash :: (Text, Maybe HashAlg, Text) -> Text
 renderHash (file, alg, body) = file <> " " <> maybe "none" renderHashAlg alg <> ":" <> body
 
--- | Log at 'WarningS' the malformed packument entries the projection dropped rather than failing the whole document.
-logInvalidEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
-logInvalidEntries name baseUrl entries =
-    katipAddContext payload $
-        logFM WarningS (ls message)
-  where
-    payload =
-        sl "module" pipelineModule
-            <> sl "package" (renderPackageName name)
-            <> sl "upstream" (authorityLabel baseUrl)
-            <> sl "droppedByKind" (dropCountsByKind entries)
-            <> sl "droppedEntries" (map renderDroppedEntry (take maxRenderedDrops entries))
-
-    entriesLen :: Int
-    entriesLen = length entries
-
-    message :: Text
-    message =
-        "dropped " <> show entriesLen <> " malformed entr" <> plural <> " from an upstream packument (the rest is served)"
-    plural = if entriesLen == 1 then "y" else "ies"
-
-renderDroppedEntry :: InvalidEntry -> Text
-renderDroppedEntry e =
-    renderInvalidEntryKind (invalidKind e)
-        <> " "
-        <> invalidKey e
-        <> " = "
-        <> truncatedValue (invalidValue e)
-        <> " ("
-        <> invalidReason e
-        <> ")"
-
--- The raw value as compact JSON, truncated to 'maxRenderedValueChars': only that many
--- characters are ever forced, so a huge value never balloons the log line.
-truncatedValue :: Value -> Text
-truncatedValue v =
-    let rendered = TL.toStrict (TL.take (fromIntegral maxRenderedValueChars + 1) (encodeToLazyText v))
-     in if T.compareLength rendered maxRenderedValueChars == GT
-            then T.take maxRenderedValueChars rendered <> "…"
-            else rendered
-
--- How many dropped entries the log renders in full, and how many characters of each raw value, so
--- a flood of drops or one huge value cannot bloat a log line. The per-kind counts stay complete.
-maxRenderedDrops :: Int
-maxRenderedDrops = 20
-
-maxRenderedValueChars :: Int
-maxRenderedValueChars = 200
-
--- The operator-facing @module@ log filter key. It is held stable as this value rather than the
--- source module path, so an operator's saved filter keeps matching.
+-- The @module@ filter key for this module's own lines, held stable as this value rather than
+-- the source module path, so an operator's saved filter keeps matching.
 pipelineModule :: Text
 pipelineModule = "Ecluse.Server.Pipeline"

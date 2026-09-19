@@ -1,10 +1,15 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
+{- | The document decoders: one 'GroupDecoder' per configuration group, assembled from
+"Ecluse.Config.Parser"'s key vocabulary, plus the @FromJSON@ instances that run them.
+
+The instances are orphans because the types live in "Ecluse.Config.Types", which carries no Aeson
+dependency. A group's decoder declares every key the group admits, so an unknown key refuses.
+-}
 module Ecluse.Config.Aeson () where
 
 import Data.Aeson (FromJSON (..), Value (..), withObject)
@@ -215,9 +220,8 @@ dredgerDecoder =
         <*> optionalKey "deletionCap" parsePositiveInt
         <*> plainKey "fullWalk"
 
-{- | Parse each declared store capacity. The key is the store URL the entry describes, kept as
-written so the boot can match it against the endpoints the mounts declare.
--}
+-- The key is the store URL the entry describes, kept as written so the boot can match it against
+-- the endpoints the mounts declare.
 parseQuotaOverrides :: KeyMap.KeyMap Value -> Parser (Map.Map Text QuotaOverride)
 parseQuotaOverrides km = Map.fromList <$> traverse parseQuotaOverrideEntry (KeyMap.toList km)
 
@@ -243,32 +247,31 @@ parseRates entryPath readKey subject km = Map.fromList <$> traverse rate (KeyMap
         Nothing -> fail (entryPath <> ": " <> Key.toString k <> " is not a " <> subject <> " this build meters")
         Just metered -> (metered,) <$> parsePositiveRate (entryPath <> "." <> Key.toString k) v
 
-{- | Parse the per-ecosystem quiet-time thresholds. The key is the ecosystem, spelled as a
-mounts key is, so an unknown one fails the load rather than configuring nothing.
--}
 parseQuietTimes :: KeyMap.KeyMap Value -> Parser (Map.Map Ecosystem NominalDiffTime)
 parseQuietTimes km = Map.fromList <$> traverse parseQuietTimeEntry (KeyMap.toList km)
 
 parseQuietTimeEntry :: (Key.Key, Value) -> Parser (Ecosystem, NominalDiffTime)
 parseQuietTimeEntry (k, v) = do
-    eco <- case parseEcosystem (Key.toText k) of
-        Just e -> pure e
-        Nothing -> fail ("Invalid ecosystem in advisories.quietTime: " <> T.unpack (Key.toText k))
+    eco <- ecosystemKey " in advisories.quietTime" k
     (eco,) <$> parseDelaySeconds ("advisories.quietTime." <> T.unpack (Key.toText k)) v
 
-{- | Parse every mount in the merged @mounts@ object, the shipped per-ecosystem templates
-included. "Ecluse.Config" decides which of them are active and must be complete.
--}
+-- Every mount in the merged object, the shipped per-ecosystem templates included.
+-- "Ecluse.Config" decides which of them are active and must be complete.
 parseMounts :: KeyMap.KeyMap Value -> Parser (Map.Map Ecosystem MountConfig)
 parseMounts km = Map.fromList <$> traverse parseMountEntry (KeyMap.toList km)
 
 parseMountEntry :: (Key.Key, Value) -> Parser (Ecosystem, MountConfig)
 parseMountEntry (k, v) = do
-    eco <- case parseEcosystem (Key.toText k) of
-        Just e -> pure e
-        Nothing -> fail ("Invalid ecosystem: " <> T.unpack (Key.toText k))
+    eco <- ecosystemKey "" k
     mcfg <- withObject "MountConfig" (decodeBareGroup "mount" (mountDecoder eco)) v
     pure (eco, mcfg)
+
+-- A map key spelled as a mounts key is, so an unknown ecosystem fails the load rather than
+-- configuring nothing. The location is appended to the refusal that names the key.
+ecosystemKey :: String -> Key.Key -> Parser Ecosystem
+ecosystemKey location k = maybe (fail refusal) pure (parseEcosystem (Key.toText k))
+  where
+    refusal = "Invalid ecosystem" <> location <> ": " <> T.unpack (Key.toText k)
 
 parseSecret :: String -> Value -> Parser Secret
 parseSecret field = expectString field (pure . mkSecret)
@@ -314,17 +317,15 @@ parseBlockedRangeEntry entry =
         Just range -> pure range
         Nothing -> fail ("invalid CIDR range in additionalBlockedRanges: " <> T.unpack entry)
 
-{- | Parse a rate as a positive rational. A rate of zero admits no request at all, so it is
-refused rather than read as a store that may never be swept.
--}
+-- A rate of zero admits no request at all, so it is refused rather than read as a store that may
+-- never be swept.
 parsePositiveRate :: String -> Value -> Parser Rational
 parsePositiveRate field value = case value of
     Number n | Just rate <- boundedRational n, rate > 0 -> pure rate
     _ -> fail (field <> " must be a positive number written within nine decimal places")
 
-{- | Parse a share of a capacity: a number above zero and below one. Neither end is a share, so
-both are refused rather than read as a sweep that stops or one that takes the whole store.
--}
+-- Neither end of the range is a share, so both are refused rather than read as a sweep that
+-- stops or one that takes the whole store.
 parseUnitFraction :: String -> Value -> Parser Rational
 parseUnitFraction field value = case value of
     Number n | Just share <- boundedRational n, share > 0, share < 1 -> pure share

@@ -5,10 +5,9 @@
 {- | Textual extraction of the @host[:port]@ authority an outbound request dials.
 
 These are comparison extractors, not an RFC 3986 parser: a value with no recognisable
-authority yields the empty string or 'Nothing', which every guard treats as not-allowed.
-The SSRF gates in "Ecluse.Core.Security.Host" consume the extracted 'HostPort', so the
-parsing here carries no policy of its own. 'authorityLabel' renders the same extraction for
-a log line, and 'refuseCredentialMaterial' refuses a configured URL carrying a credential.
+authority yields the empty string or 'Nothing', which every guard treats as not-allowed. The
+SSRF gates in "Ecluse.Core.Security.Host" consume the extracted 'HostPort', so the parsing
+here carries no policy of its own.
 -}
 module Ecluse.Core.Security.Authority (
     -- * The dialled authority
@@ -93,8 +92,8 @@ credentialFreeUrl raw = scheme <> authorityOf raw <> path
         Nothing -> ("", raw)
     path = T.takeWhile (`notElem` ['?', '#']) (T.dropWhile (/= '/') afterScheme)
 
--- What a value carrying no dialable authority renders as. The angle brackets match the
--- convention the resolved-configuration provenance lines use for a withheld value.
+-- The angle brackets match what the resolved-configuration provenance lines use for a
+-- withheld value.
 unresolvedAuthority :: Text
 unresolvedAuthority = "<unresolved>"
 
@@ -124,8 +123,7 @@ parsePort t = do
     guard (n >= 1 && n <= 65535)
     pure (fromInteger n)
 
-{- Whether a URI or bare @host[:port]@ value carries userinfo in its authority. It answers the
-one question about the credential half, and returns no text. -}
+-- Returns the answer alone, never the credential-bearing span it read.
 carriesUserinfo :: Text -> Bool
 carriesUserinfo = T.isInfixOf "@" . authoritySpan
 

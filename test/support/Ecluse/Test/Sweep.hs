@@ -23,7 +23,7 @@ module Ecluse.Test.Sweep (
 
 import Data.Time (NominalDiffTime, UTCTime (UTCTime), fromGregorian)
 
-import Ecluse.Core.Cve (DbEtag)
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Registry.Adapter (adapterProjectName)
 import Ecluse.Core.Registry.Maintenance (

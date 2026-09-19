@@ -2,12 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The mirror-write capability: a shared publish transport, an adapter-provided protocol codec,
-and the married 'MirrorPublish' handle a worker bundle carries. The 'PublishCodec' is protocol: it
-shapes the request and reads the registry's status answer. The 'MirrorTransport' is everything else,
-so a new ecosystem contributes a codec and never a transport. It mints the bearer per call and seals
-every request, so no codec can ship a write that follows a redirect. Both effectful operations
-report failure as a __value__, so the worker's decisions stay total at the call site.
+{- | The mirror-write capability: a shared transport, an adapter-provided protocol codec, and the
+married 'MirrorPublish' handle a worker bundle carries. A new ecosystem contributes a codec and
+never a transport.
+
+The transport mints the bearer per call and re-seals every request, so no codec can ship a write
+that follows a redirect.
 -}
 module Ecluse.Core.Registry.Publish (
     -- * What one write declares
@@ -50,19 +50,14 @@ data PublishPlan = PublishPlan
     { ppVersion :: Version
     -- ^ The version these bytes publish.
     , ppLatest :: Version
-    {- ^ The @latest@ target to declare, always a version the store holds after this write. It is
-    the published version itself when nothing else is mirrored.
-    -}
+    -- ^ Always a version the store holds after this write, the published one when it is alone.
     , ppMetadata :: CachedDoc
-    {- ^ The version object the public registry served at admission, republished under the codec's
-    field-rewrite contract. A write without one is refused before the plan exists.
-    -}
+    -- ^ The version object the public registry served at admission, republished by the codec.
     }
     deriving stock (Eq, Show)
 
-{- | One ecosystem's mirror-write protocol: the pure request formations and projections, nothing
-effectful. The endpoint and bearer arrive as arguments, so the codec holds no URL, credential, or
-connection state.
+{- | One ecosystem's mirror-write protocol, all pure. The endpoint and bearer arrive as arguments,
+so a codec holds no URL, credential, or connection state.
 -}
 data PublishCodec = PublishCodec
     { pcProbeRequest :: Text -> Maybe Secret -> PackageName -> Either UrlFormationError Request
@@ -70,12 +65,12 @@ data PublishCodec = PublishCodec
     , pcParseVersionList :: RegistryResponse -> Either ParseError [Version]
     -- ^ Project a probed metadata response onto the versions the mirror holds.
     , pcPublishRequest :: Text -> Maybe Secret -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> Either PublishFault Request
-    {- ^ Form the complete publish request for one verified artifact, document assembly included.
-    A plan whose version object the codec cannot read refuses as a 'PublishFault' value.
+    {- ^ Form the complete publish request for one verified artifact. A plan whose version object
+    the codec cannot read refuses as a value.
     -}
     , pcPublishOutcome :: Int -> Either PublishFault ()
-    {- ^ Classify the registry's status answer, counting an idempotent already-present as
-    success. Registries disagree on how an immutable re-publish answers, so the codec decides.
+    {- ^ Classify the status answer. Registries disagree on how an immutable re-publish answers,
+    so the codec counts an idempotent already-present as success.
     -}
     }
 
@@ -86,33 +81,26 @@ data MirrorTransport = MirrorTransport
     { ptManager :: Manager
     -- ^ The trusted-path connection manager the worker dials the mirror target through.
     , ptMintToken :: IO (Maybe Secret)
-    {- ^ Mint the bearer for one request. Nothing caches it here: refresh, expiry, and breaker
-    policy live behind the action ("Ecluse.Core.Credential.Refresh").
-    -}
+    -- ^ Nothing caches it here: refresh, expiry, and breaker policy live behind the action.
     , ptLimits :: Limits
     -- ^ The response bound every exchange with the mirror target is held to (fail-closed).
     }
 
-{- | The mirror-write capability one worker bundle carries, bound to one mirror-target endpoint
-under one credential mint. The worker never sees the codec, the transport, or the adapter.
+{- | What one worker bundle carries, bound to one mirror-target endpoint under one credential
+mint. The worker never sees the codec, the transport, or the adapter.
 -}
 data MirrorPublish = MirrorPublish
     { mpProbeMetadata :: PackageName -> IO (Either FetchFault RegistryResponse)
-    {- ^ Read the package's metadata from the mirror target. Every failure is a 'FetchFault'
-    value, so the probe's fall-through match is total.
-    -}
+    -- ^ Every failure is a 'FetchFault' value, so the probe's fall-through match is total.
     , mpParseVersionList :: RegistryResponse -> Either ParseError [Version]
     -- ^ Project a probed response onto the versions the mirror holds.
     , mpPublishArtifact :: PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
-    {- ^ Publish one verified artifact to the mirror target. Every failure is a
-    'PublishFault' value, so the worker's retry-vs-drop decision is total at the
-    call site.
+    {- ^ Every failure is a 'PublishFault' value, so the worker's retry-vs-drop decision is
+    total at the call site.
     -}
     }
 
-{- | Marry a protocol codec to the shared transport against one mirror-target endpoint. The
-transport mints a bearer per call and folds every thrown failure into the typed channel.
--}
+-- | Marry a protocol codec to the shared transport against one mirror-target endpoint.
 newMirrorPublish :: MirrorTransport -> RegistryUrl -> PublishCodec -> MirrorPublish
 newMirrorPublish transport target codec =
     MirrorPublish

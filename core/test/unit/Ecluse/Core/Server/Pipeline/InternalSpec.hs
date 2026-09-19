@@ -14,7 +14,7 @@ import Katip.Monadic (runKatipContextT)
 import Test.Hspec
 
 import Ecluse.Core.Breaker (noBreakerReporter)
-import Ecluse.Core.Cve (DbEtag (..))
+import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     Hash,
@@ -23,7 +23,6 @@ import Ecluse.Core.Package (
     PackageInfo (..),
     PackageName,
  )
-import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Rules (
     PreparedRule (..),
     Resilience (Resilience),
@@ -46,11 +45,8 @@ import Ecluse.Core.Server.Pipeline.Internal (
     denialAuditPayload,
     denialLabels,
     evalTier,
-    logDecodeFailure,
     logDenials,
-    logNameMismatch,
     logSkippedChecks,
-    logUpstreamUnformable,
     packumentServeDecision,
     recordDenials,
     recordEffectfulFailures,
@@ -73,64 +69,6 @@ import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 
 spec :: Spec
 spec = do
-    describe "logDecodeFailure" $
-        it "logs a WARNING tagged with this module and the package, naming the decode failure" $ do
-            logged <- captureStdout $ do
-                logEnv <- jsonLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logDecodeFailure (unscopedNpm "is-odd"))
-                void (closeScribes logEnv)
-            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
-            logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
-            logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
-            logged `shouldSatisfy` T.isInfixOf "did not decode"
-
-    describe "logNameMismatch" $
-        it "logs a WARNING carrying both names and the origin when an upstream reports a different package" $ do
-            -- No span is active here, so the line carries no @dd@ object. The serve path adds that
-            -- correlation and is otherwise identical.
-            logged <- captureStdout $ do
-                logEnv <- jsonLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logNameMismatch (unscopedNpm "thing") "http://upstream.test" "other")
-                void (closeScribes logEnv)
-            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
-            logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
-            logged `shouldSatisfy` T.isInfixOf "\"package\":\"thing\""
-            logged `shouldSatisfy` T.isInfixOf "\"upstreamName\":\"other\""
-            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
-            logged `shouldSatisfy` T.isInfixOf "different package"
-
-    describe "logUpstreamUnformable" $
-        it "logs a WARNING naming the misconfigured origin and the URL fault, distinct from an outage" $ do
-            logged <- captureStdout $ do
-                logEnv <- jsonLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logUpstreamUnformable (unscopedNpm "is-odd") "http://upstream.test" EmptyBaseUrl)
-                void (closeScribes logEnv)
-            logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
-            logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
-            logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
-            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
-            logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"EmptyBaseUrl\""
-            logged `shouldSatisfy` T.isInfixOf "could not be formed"
-
-    describe "logUpstreamUnformable (url minimisation)" $
-        it "reduces the offending URL to its authority, dropping userinfo and query" $ do
-            -- The URL a fault carries can be an upstream-supplied artifact location.
-            -- That location can hold a credential in its userinfo or a signed query,
-            -- so the rendered fault names the authority alone.
-            let offending = UnparseableUrl "https://deploy:hunter2@upstream.test/base?token=abc"
-            logged <- captureStdout $ do
-                logEnv <- jsonLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logUpstreamUnformable (unscopedNpm "is-odd") "https://ops:s3cret@upstream.test/base?k=v" offending)
-                void (closeScribes logEnv)
-            logged `shouldSatisfy` T.isInfixOf "\"urlError\":\"UnparseableUrl upstream.test:443\""
-            -- The origin field takes the same reduction on the same line, so it holds
-            -- for every URL the payload names, not only the carried fault.
-            logged `shouldSatisfy` T.isInfixOf "\"origin\":\"upstream.test:443\""
-            logged `shouldSatisfy` (not . T.isInfixOf "hunter2")
-            logged `shouldSatisfy` (not . T.isInfixOf "token=abc")
-            logged `shouldSatisfy` (not . T.isInfixOf "s3cret")
-            logged `shouldSatisfy` (not . T.isInfixOf "k=v")
-
     -- Asserting every branch directly pins the bounded label set the metric catalogue records.
     -- PipelineSpec exercises the call sites.
     describe "packumentServeDecision (no-survivors -> decision)" $ do

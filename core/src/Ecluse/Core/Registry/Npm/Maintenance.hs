@@ -21,8 +21,8 @@ module Ecluse.Core.Registry.Npm.Maintenance (
 import Data.Aeson (Object, Value (Object, String), decodeStrict, encode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
-import Network.HTTP.Types.Header (hAccept, hContentType)
+import Network.HTTP.Client (Request (method, requestHeaders))
+import Network.HTTP.Types.Header (hAccept)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, unscopedName)
@@ -37,19 +37,20 @@ import Ecluse.Core.Registry.Adapter.Capability (
     StoreListing (..),
     VersionDelete (..),
  )
-import Ecluse.Core.Registry.Maintenance (StoreRefusal, mkNameAlphabet, storeRefusal)
+import Ecluse.Core.Registry.Maintenance (StoreRefusal, storeRefusal)
+import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Npm.Project (npmNameLeadChars, projectName)
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Full),
     artifactFileUrl,
+    jsonPutRequest,
     metadataRequest,
     packageUrl,
-    parseRequestEither,
     withToken,
  )
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocToken))
-import Ecluse.Core.Registry.Request (joinPath, noValidators)
-import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
+import Ecluse.Core.Registry.Request (joinPath, parseRequestEither)
+import Ecluse.Core.Registry.ServedDocument (adjustField, stringField)
 import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (nonBlank, urlFilenameComponent)
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, renderVersion)
@@ -76,7 +77,7 @@ npmMaintenance =
 -- | Read the store listing. The caller classifies any response other than @200@.
 listingRequestFor :: OriginClient -> Either UrlFormationError Request
 listingRequestFor origin = do
-    url <- joinPath (originBase origin) "-/all"
+    url <- joinPath (originBaseUrl origin) "-/all"
     base <- parseRequestEither url
     pure . withToken (ocToken origin) $
         base{requestHeaders = (hAccept, "application/json") : requestHeaders base}
@@ -97,7 +98,7 @@ parsePackageListing body = case decodeStrict body :: Maybe Object of
 -- | Read the full packument, because the install view omits @_rev@ and @time@.
 packumentRequestFor :: OriginClient -> PackageName -> Either UrlFormationError Request
 packumentRequestFor origin =
-    metadataRequest (originBase origin) (ocToken origin) Full noValidators
+    metadataRequest (originBaseUrl origin) (ocToken origin) Full
 
 -- | Refuse absent versions and unreadable revisions. Delete the whole package only for its last version.
 versionDeleteRequestsFor ::
@@ -110,25 +111,31 @@ versionDeleteRequestsFor origin name version response = do
     packument <- decodePackument (responseBody response)
     revision <- revisionOf packument
     versions <- versionsOf packument
-    manifest <-
-        maybeToRight
-            (storeRefusal "VERSION_ABSENT" "the store's packument holds no such version")
-            (KeyMap.lookup (Key.fromText raw) versions)
+    manifest <- manifestOf raw versions
     if KeyMap.size versions == 1
-        then do
-            request <- unformable (packageUrl (originBase origin) name >>= deleteAtRevision origin revision)
-            pure (request :| [])
-        else do
-            let filename = tarballFilename name version manifest
-                edited = removeVersion raw versions packument
-            editRequest <- unformable (packumentPutRequest origin name revision edited)
-            tarballRequest <- unformable (artifactFileUrl (originBase origin) name filename >>= deleteAtRevision origin revision)
-            pure (editRequest :| [tarballRequest])
+        then deleteWholePackage origin revision name
+        else
+            deleteOneVersion
+                origin
+                revision
+                name
+                (tarballFilename name version manifest)
+                (removeVersion raw versions packument)
   where
     raw = renderVersion version
 
-originBase :: OriginClient -> Text
-originBase = registryUrlText . ocBaseUrl
+deleteWholePackage :: OriginClient -> Text -> PackageName -> Either StoreRefusal (NonEmpty Request)
+deleteWholePackage origin revision name = do
+    request <- unformable (packageUrl (originBaseUrl origin) name >>= deleteAtRevision origin revision)
+    pure (request :| [])
+
+-- The requests run in order, so the packument edit goes first and a refused tarball delete
+-- cannot leave the version still served.
+deleteOneVersion :: OriginClient -> Text -> PackageName -> Text -> Object -> Either StoreRefusal (NonEmpty Request)
+deleteOneVersion origin revision name filename edited = do
+    editRequest <- unformable (packumentPutRequest origin name revision edited)
+    tarballRequest <- unformable (artifactFileUrl (originBaseUrl origin) name filename >>= deleteAtRevision origin revision)
+    pure (editRequest :| [tarballRequest])
 
 -- A URL that will not form is this one version's refusal, with the URL reduced to its authority.
 unformable :: Either UrlFormationError a -> Either StoreRefusal a
@@ -153,21 +160,16 @@ versionsOf packument = case KeyMap.lookup "versions" packument of
     _ ->
         Left (storeRefusal "UNREADABLE_DOCUMENT" "the store's packument carries no versions object")
 
--- A spec-compliant registry answers 415 unless the edited body is declared application/json.
+manifestOf :: Text -> Object -> Either StoreRefusal Value
+manifestOf raw versions =
+    maybeToRight
+        (storeRefusal "VERSION_ABSENT" "the store's packument holds no such version")
+        (KeyMap.lookup (Key.fromText raw) versions)
+
 packumentPutRequest :: OriginClient -> PackageName -> Text -> Object -> Either UrlFormationError Request
 packumentPutRequest origin name revision packument = do
-    url <- atRevision revision <$> packageUrl (originBase origin) name
-    base <- parseRequestEither url
-    pure
-        . withToken (ocToken origin)
-        $ base
-            { method = "PUT"
-            , requestBody = RequestBodyBS (toStrict (encode packument))
-            , requestHeaders =
-                (hContentType, "application/json")
-                    : (hAccept, "application/json")
-                    : requestHeaders base
-            }
+    url <- atRevision revision <$> packageUrl (originBaseUrl origin) name
+    jsonPutRequest (ocToken origin) url (toStrict (encode packument))
 
 deleteAtRevision :: OriginClient -> Text -> Text -> Either UrlFormationError Request
 deleteAtRevision origin revision url = do
@@ -186,11 +188,11 @@ atRevision revision url = url <> "/-rev/" <> encodeComponent revision
 packument without one leaves an unqualified install with no version to resolve. -}
 removeVersion :: Text -> Object -> Object -> Object
 removeVersion raw versions packument =
-    KeyMap.insert "versions" (Object remaining) (adjustObject "dist-tags" retag prunedTime)
+    KeyMap.insert "versions" (Object remaining) (adjustField "dist-tags" (withinObject retag) prunedTime)
   where
     key = Key.fromText raw
     remaining = KeyMap.delete key versions
-    prunedTime = adjustObject "time" (KeyMap.delete key) packument
+    prunedTime = adjustField "time" (withinObject (KeyMap.delete key)) packument
     retag tags = maybe kept (\latest -> KeyMap.insert "latest" (String latest) kept) restoredLatest
       where
         kept = KeyMap.filter (/= String raw) tags
@@ -198,18 +200,23 @@ removeVersion raw versions packument =
             guard (KeyMap.lookup "latest" tags == Just (String raw))
             greatestVersion (map Key.toText (KeyMap.keys remaining))
 
-adjustObject :: Key.Key -> (Object -> Object) -> Object -> Object
-adjustObject key edit document = case KeyMap.lookup key document of
-    Just (Object inner) -> KeyMap.insert key (Object (edit inner)) document
-    _ -> document
+-- A slot holding anything but an object is left as the store sent it.
+withinObject :: (Object -> Object) -> Value -> Value
+withinObject edit = \case
+    Object inner -> Object (edit inner)
+    other -> other
 
--- Non-semver pairs use text ordering to keep the choice deterministic.
 greatestVersion :: [Text] -> Maybe Text
 greatestVersion = foldl' keepGreater Nothing
   where
-    keepGreater held candidate = Just (maybe candidate (greater candidate) held)
-    greater a b = if ordering a b == GT then a else b
-    ordering a b = fromMaybe (compare a b) (compareVersions (mkVersion Npm a) (mkVersion Npm b))
+    keepGreater held candidate = Just (maybe candidate (greaterOf candidate) held)
+
+greaterOf :: Text -> Text -> Text
+greaterOf a b = if npmVersionOrdering a b == GT then a else b
+
+-- Non-semver pairs fall back to text ordering, so the choice stays deterministic.
+npmVersionOrdering :: Text -> Text -> Ordering
+npmVersionOrdering a b = fromMaybe (compare a b) (compareVersions (mkVersion Npm a) (mkVersion Npm b))
 
 tarballFilename :: PackageName -> Version -> Value -> Text
 tarballFilename name version manifest =
@@ -222,9 +229,7 @@ distTarballSegment manifest = urlFilenameComponent <$> tarballUrl manifest
 
 tarballUrl :: Value -> Maybe Text
 tarballUrl = \case
-    Object manifest -> case KeyMap.lookup "dist" manifest of
-        Just (Object dist) -> case KeyMap.lookup "tarball" dist of
-            Just (String url) -> Just url
-            _ -> Nothing
-        _ -> Nothing
+    Object manifest
+        | Just (Object dist) <- KeyMap.lookup "dist" manifest ->
+            stringField "tarball" dist
     _ -> Nothing

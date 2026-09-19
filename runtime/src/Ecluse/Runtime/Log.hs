@@ -2,58 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The structured-logging pipeline.
-
-Écluse sits in the install path of someone else's build. When it refuses a package or
-runs slow, the operator must see /why/ from the logs alone. This module stands up a
-@katip@ 'LogEnv', the single log stream every layer attaches context to. It chooses the
-on-the-wire shape and sets the severity the stream admits:
-
-* __'JsonLog'__ writes __one compact JSON object per line__ to stdout (JSONL). The
-  whole physical line /is/ the JSON, with no pretty-printing and no level or
-  timestamp prefix outside the object. Any newline inside a field is escaped as
-  @\\n@, so a record never spans two lines. This is the in-container default, the
-  shape a log collector's stdout JSON autodiscovery consumes directly.
-* __'ConsoleLog'__ writes the human-readable bracketed form for local development.
-
-A 'LogEnv' built here carries no colour codes even on a terminal, so a captured
-JSON line is always valid JSON. The configuration boundary (@Ecluse.Config@) parses the
-format from @ECLUSE_OBSERVABILITY__LOG_FORMAT@ and the 'LogLevel' from
-@ECLUSE_OBSERVABILITY__LOG_LEVEL@. The composition root ("Ecluse.Runtime.Env") holds the
-resulting 'LogEnv'.
-
-== The JSON line
-
-'JsonLog' renders the shape a Datadog-class collector reads without a custom pipeline.
-It uses that vendor's reserved log attributes ('jsonLine'):
-
-* @timestamp@ (RFC 3339 UTC), @status@, and @message@. The @status@ value is @debug@,
-  @info@, @warn@, or @error@, mapped from the @katip@ severity by 'severityStatus'.
-
-* @service@, @env@, and @version@: the unified-service identity, resolved once at
-  boot ("Ecluse.Runtime.Telemetry.Resolve") and handed to the formatter. The identity
-  stamps every line, a line raised outside a request included.
-
-* @dd.trace_id@ and @dd.span_id@ when a span is in scope. The formatter reads them
-  from the log site's own @dd@ payload ('ddField'), in the id format Datadog
-  correlates on (see "Ecluse.Runtime.Telemetry.Correlation").
-
-* @data@: the per-call structured payload, unchanged.
-
-* @katip@: the emitter's namespace, application, host, process, thread, and source
-  location.
-
-== Secrets
-
-A bearer token is carried as the redacted @Secret@ of "Ecluse.Core.Credential", whose
-'Show' renders only a placeholder. Token material therefore cannot reach a log field
-through any structured payload or message built from it (see
-@docs\/architecture\/observability.md@). 'Ecluse.Core.Security.Authority.authorityLabel'
-reduces a URL to its host and port before the URL names anything in a log line or a
-span. Userinfo and a pre-signed query string therefore cannot ride a location into the
-stream. This module adds no field that would defeat either guard.
-
-@docs\/architecture\/observability.md@ → "Logs" describes the model.
+{- | The structured-logging pipeline: the @katip@ 'LogEnv' every layer attaches context to, in
+the format and at the severity floor configuration chose. 'JsonLog' writes one compact JSON
+object per line to stdout, the shape a log collector's stdout autodiscovery consumes directly,
+and 'ConsoleLog' the human-readable bracketed form for local development. Colour is forced off
+either way, so a captured JSON line stays valid JSON. A bearer token reaches no field here: it
+is the redacted @Secret@ of "Ecluse.Core.Credential", and a URL is reduced to its authority
+before it names anything in a line.
 -}
 module Ecluse.Runtime.Log (
     -- * Log format
@@ -247,10 +202,11 @@ jsonLineFormat :: (LogItem a) => DdContext -> ItemFormatter a
 jsonLineFormat logIdentity _colourise verb logItem =
     TB.fromLazyText (encodeToLazyText (jsonLine logIdentity verb logItem))
 
-{- The rendered JSON log line. The emitter's own @katip@ fields nest under @katip@, so they
-cannot collide with a reserved top-level attribute a log backend reads. -}
+{- The emitter's own @katip@ fields nest under @katip@, so they cannot collide with a reserved
+top-level attribute a log backend reads. -}
 jsonLine :: (LogItem a) => DdContext -> Verbosity -> Item a -> Value
-jsonLine logIdentity verb logItem = Object (KeyMap.fromList (reserved <> whenPresent))
+jsonLine logIdentity verb logItem =
+    Object (KeyMap.fromList (reservedFields context logItem structured katipObject <> whenPresent context))
   where
     katipObject :: KeyMap.KeyMap Value
     katipObject = case itemJson verb logItem of
@@ -266,30 +222,30 @@ jsonLine logIdentity verb logItem = Object (KeyMap.fromList (reserved <> whenPre
     context :: DdContext
     context = logIdentity{ddSpan = payloadSpan structured <|> ddSpan logIdentity}
 
-    reserved :: [(Key, Value)]
-    reserved =
-        [ ("timestamp", toJSON (_itemTime logItem))
-        , ("status", toJSON (severityStatus (_itemSeverity logItem)))
-        , ("message", toJSON (TB.toLazyText (unLogStr (_itemMessage logItem))))
-        , ("service", toJSON (ddService context))
-        , ("env", maybe (toJSON (_itemEnv logItem)) toJSON (ddEnv context))
-        , ("data", Object (KeyMap.delete "dd" structured))
-        , ("katip", Object (KeyMap.filterWithKey (\key _ -> key `notElem` promoted) katipObject))
+reservedFields :: DdContext -> Item a -> KeyMap.KeyMap Value -> KeyMap.KeyMap Value -> [(Key, Value)]
+reservedFields context logItem structured katipObject =
+    [ ("timestamp", toJSON (_itemTime logItem))
+    , ("status", toJSON (severityStatus (_itemSeverity logItem)))
+    , ("message", toJSON (TB.toLazyText (unLogStr (_itemMessage logItem))))
+    , ("service", toJSON (ddService context))
+    , ("env", maybe (toJSON (_itemEnv logItem)) toJSON (ddEnv context))
+    , ("data", Object (KeyMap.delete "dd" structured))
+    , ("katip", Object (KeyMap.filterWithKey (\key _ -> key `notElem` promoted) katipObject))
+    ]
+
+whenPresent :: DdContext -> [(Key, Value)]
+whenPresent context =
+    catMaybes
+        [ ("version",) . toJSON <$> ddVersion context
+        , ("dd",) . spanObject <$> ddSpan context
         ]
 
-    whenPresent :: [(Key, Value)]
-    whenPresent =
-        catMaybes
-            [ ("version",) . toJSON <$> ddVersion context
-            , ("dd",) . spanObject <$> ddSpan context
-            ]
+-- The @katip@ keys the line renders itself, so the nested block does not repeat them.
+promoted :: [Key]
+promoted = ["at", "data", "env", "msg", "sev"]
 
-    -- The @katip@ keys this line renders itself, so the nested block does not repeat them.
-    promoted :: [Key]
-    promoted = ["at", "data", "env", "msg", "sev"]
-
-    spanObject :: DdSpan -> Value
-    spanObject theSpan = object ["trace_id" .= ddTraceId theSpan, "span_id" .= ddSpanId theSpan]
+spanObject :: DdSpan -> Value
+spanObject theSpan = object ["trace_id" .= ddTraceId theSpan, "span_id" .= ddSpanId theSpan]
 
 {- The active span's ids from a log site's own @dd@ payload ('ddField'). Both ids must be
 present, so a line never renders a half-filled correlation pair. -}

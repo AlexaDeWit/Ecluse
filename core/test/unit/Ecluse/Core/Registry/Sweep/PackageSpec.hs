@@ -12,7 +12,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Test.Hspec
 
-import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), DbEtag (DbEtag))
+import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (PackageName, mkPackageName)
@@ -28,17 +29,19 @@ import Ecluse.Core.Registry.Maintenance (
     storeRefusal,
  )
 import Ecluse.Core.Registry.Metadata (Manifest)
-import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackageGroup)
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltDeletionCap),
     EvidenceGaps (gapManifests),
+    evidenceComplete,
+ )
+import Ecluse.Core.Registry.Sweep.Package (previewPackageGroup, sweepPackageGroup)
+import Ecluse.Core.Registry.Sweep.Types (
     SweepExecution (SweepCounts, SweepRemoves),
     SweepMount (smConfigured, smFirstParty, smRuleDeps, smStore),
     SweepPacing (swpDeletionCap),
     SweepPorts (sweepAdvisoryEtag, sweepNow),
     SweepState (stEvidence, stIssued),
     SweepStore (ssExecute, ssObserve),
-    evidenceComplete,
     newSweepState,
  )
 import Ecluse.Core.Rules (PreparedRule (prepEval), RuleDeps (rdAdvisoryFreshness, rdWithCveLookup), prepare)

@@ -93,6 +93,7 @@ library ecluse-core
     Ecluse.Core.Cve
     Ecluse.Core.Cve.Internal
     Ecluse.Core.Cve.Slot
+    Ecluse.Core.Cve.Types
     Ecluse.Core.Ecosystem
     Ecluse.Core.Fault
     Ecluse.Core.Fault.Http
@@ -118,7 +119,7 @@ library ecluse-core
     Ecluse.Core.Package.Merge
     Ecluse.Core.Package.Pep503
     Ecluse.Core.Queue
-    Ecluse.Core.Snapshot
+    Ecluse.Core.Queue.Buffer
     Ecluse.Core.Queue.Lease
     Ecluse.Core.Queue.Memory
     Ecluse.Core.Registry
@@ -129,6 +130,7 @@ library ecluse-core
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Maintenance
     Ecluse.Core.Registry.Maintenance.Budget
+    Ecluse.Core.Registry.Maintenance.NameSpace
     Ecluse.Core.Registry.Maintenance.Protocol
     Ecluse.Core.Registry.Maintenance.Upstream
     Ecluse.Core.Registry.Metadata
@@ -152,6 +154,7 @@ library ecluse-core
     Ecluse.Core.Registry.Sweep.Candidates
     Ecluse.Core.Registry.Sweep.Deletion
     Ecluse.Core.Registry.Sweep.Group
+    Ecluse.Core.Registry.Sweep.Outcome
     Ecluse.Core.Registry.Sweep.Pacing
     Ecluse.Core.Registry.Sweep.Package
     Ecluse.Core.Registry.Sweep.Types
@@ -198,7 +201,11 @@ library ecluse-core
     Ecluse.Core.Server.Pipeline.Origin
     Ecluse.Core.Server.Pipeline.Packument
     Ecluse.Core.Server.Pipeline.Tarball
+    Ecluse.Core.Server.Pipeline.Tarball.Private
+    Ecluse.Core.Server.Pipeline.Tarball.Public
+    Ecluse.Core.Server.Pipeline.Tarball.Refusal
     Ecluse.Core.Server.Pipeline.Tarball.Relay
+    Ecluse.Core.Server.Pipeline.Tarball.Types
     Ecluse.Core.Server.Pipeline.Publish
     Ecluse.Core.Server.Pipeline.Shared
     Ecluse.Core.Server.Pipeline.Internal
@@ -209,8 +216,10 @@ library ecluse-core
     Ecluse.Core.Server.RouteDescription
     Ecluse.Core.Server.Stream
     Ecluse.Core.Server.Upstream
+    Ecluse.Core.Snapshot
     Ecluse.Core.Stream
     Ecluse.Core.Supervision
+    Ecluse.Core.Telemetry.Catalogue
     Ecluse.Core.Telemetry.Metrics
     Ecluse.Core.Telemetry.Record
     Ecluse.Core.Telemetry.Span
@@ -430,6 +439,7 @@ library ecluse-runtime
     Ecluse.Runtime.Server.Middleware
     Ecluse.Runtime.Telemetry
     Ecluse.Runtime.Telemetry.Correlation
+    Ecluse.Runtime.Telemetry.ExportFailure
     Ecluse.Runtime.Telemetry.Instruments
     Ecluse.Runtime.Telemetry.Reporters
     Ecluse.Runtime.Telemetry.Resolve
@@ -719,6 +729,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Package.MergeSpec
     Ecluse.Core.Package.Pep503Spec
     Ecluse.Core.PackageSpec
+    Ecluse.Core.Queue.BufferSpec
     Ecluse.Core.Queue.LeaseSpec
     Ecluse.Core.Queue.MemorySpec
     Ecluse.Core.QueueSpec
@@ -727,15 +738,16 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.CachedDocumentSpec
     Ecluse.Core.Registry.ExchangeSpec
     Ecluse.Core.Registry.Maintenance.BudgetSpec
+    Ecluse.Core.Registry.Maintenance.NameSpaceSpec
     Ecluse.Core.Registry.Maintenance.ProtocolSpec
     Ecluse.Core.Registry.Maintenance.UpstreamSpec
     Ecluse.Core.Registry.MaintenanceSpec
     Ecluse.Core.Registry.Sweep.CandidatesSpec
     Ecluse.Core.Registry.Sweep.DeletionSpec
     Ecluse.Core.Registry.Sweep.GroupSpec
+    Ecluse.Core.Registry.Sweep.OutcomeSpec
     Ecluse.Core.Registry.Sweep.PacingSpec
     Ecluse.Core.Registry.Sweep.PackageSpec
-    Ecluse.Core.Registry.Sweep.TypesSpec
     Ecluse.Core.Registry.Sweep.WalkSpec
     Ecluse.Core.Registry.SweepSpec
     Ecluse.Core.Registry.MetadataSpec
@@ -803,6 +815,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.UpstreamSpec
     Ecluse.Core.StreamSpec
     Ecluse.Core.SupervisionSpec
+    Ecluse.Core.Telemetry.CatalogueSpec
     Ecluse.Core.Telemetry.MetricsSpec
     Ecluse.Core.TextSpec
     Ecluse.Core.Version.TokenSpec
@@ -1019,6 +1032,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Server.DrainSpec
     Ecluse.Runtime.Server.HaltSpec
     Ecluse.Runtime.Telemetry.CorrelationSpec
+    Ecluse.Runtime.Telemetry.ExportFailureSpec
     Ecluse.Runtime.Telemetry.InstrumentsSpec
     Ecluse.Runtime.Telemetry.ReportersSpec
     Ecluse.Runtime.Telemetry.ResolveSpec

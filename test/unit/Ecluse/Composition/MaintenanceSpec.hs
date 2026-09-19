@@ -74,14 +74,12 @@ import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
-    NameAlphabet,
     RefillPosture (RefillPermitted),
     RetryAdvice (RetryWorthwhile),
     StoreFacts (..),
     StoreFault (faultRetry),
     StoreMaintenance (readStoreManifest, storeFacts, verifyConsent),
     StoreObservation (obFacts, obVerifyConsent),
-    noNameAlphabet,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (
     QuotaDimension (StoreRequests),
@@ -92,6 +90,10 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     mkQuotaScope,
     requestKinds,
     undeclaredBudget,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NameAlphabet,
+    noNameAlphabet,
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (
     ExternalConnection (ExternalConnection),

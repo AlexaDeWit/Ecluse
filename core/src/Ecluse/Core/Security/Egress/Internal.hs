@@ -4,14 +4,10 @@
 
 {- | The private construction boundary for 'RegistryUrl'.
 
-@ecluse-core@ does not expose this module (it is an @other-module@), so the raw
-'RegistryUrl' constructor is reachable only from inside the library. The public
-"Ecluse.Core.Security.Egress" re-exports the type /abstractly/, with the https-only
-'mkRegistryUrl' and its configured-endpoint form 'mkConfiguredRegistryUrl' as the only
-production builders. The test- and dev-only loopback builder in
-"Ecluse.Core.Security.Egress.DevHttp" compiles only under the @dev-http-egress@ Cabal
-flag. A release build therefore carries no way to construct a non-https registry
-target, in code or in configuration.
+@ecluse-core@ does not expose this module (it is an @other-module@), so the raw constructor is
+reachable only from inside the library. "Ecluse.Core.Security.Egress" re-exports the type
+abstractly with the https-only builders, and the loopback builder in
+"Ecluse.Core.Security.Egress.DevHttp" compiles only under the @dev-http-egress@ Cabal flag.
 -}
 module Ecluse.Core.Security.Egress.Internal (
     RegistryUrl (..),
@@ -24,16 +20,14 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Security.Authority (refuseCredentialMaterial)
 
-{- | An outbound registry-egress URL that is https by construction. Both production constructors
-reject any other scheme, so a plain-HTTP registry target cannot be represented in a running system.
-Stored with surrounding whitespace trimmed.
+{- | An outbound registry-egress URL, https by construction and stored with surrounding
+whitespace trimmed. A plain-HTTP registry target cannot be represented in a running system.
 -}
 newtype RegistryUrl = RegistryUrl Text
     deriving stock (Eq, Ord, Show)
 
-{- | Build a 'RegistryUrl', accepting only an @https:\/\/@ URL, the scheme matched
-case-insensitively. The configuration layer fails closed at boot on the 'Left' reason and reports
-the offending value.
+{- | Build a 'RegistryUrl', accepting only an @https:\/\/@ URL, matched case-insensitively. The
+configuration layer fails closed at boot on the 'Left' reason, which quotes the offending value.
 
 >>> mkRegistryUrl "https://registry.npmjs.org"
 Right (RegistryUrl "https://registry.npmjs.org")
@@ -49,14 +43,8 @@ mkRegistryUrl raw
   where
     trimmed = T.strip raw
 
-{- | Build a 'RegistryUrl' for an __operator-configured__ registry endpoint: 'mkRegistryUrl' under
-the shared configured-URL rule that refuses credential material
-('Ecluse.Core.Security.Authority.refuseCredentialMaterial').
-
-That refusal runs before 'mkRegistryUrl', which quotes the value it rejects. An upstream-supplied
-@dist.tarball@ keeps to 'mkRegistryUrl'. It may carry a signed query, the @host:port@ allowlist
-authorises it, and every log line reduces it to its authority
-('Ecluse.Core.Security.Authority.authorityLabel').
+{- | Build a 'RegistryUrl' for an __operator-configured__ endpoint. @refuseCredentialMaterial@
+runs before 'mkRegistryUrl', which quotes what it rejects.
 
 >>> mkConfiguredRegistryUrl "https://registry.npmjs.org"
 Right (RegistryUrl "https://registry.npmjs.org")

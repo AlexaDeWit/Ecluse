@@ -68,8 +68,8 @@ data MemoryPlan = MemoryPlan
     , mpAdmissionCapacity :: Int
     -- ^ @max 1 (min A_cpu A_mem)@. The composition root builds admission from it.
     , mpShedCapabilities :: Maybe Int
-    {- ^ A capability count the composition root shrinks to when the nursery is the memory
-    pressure, because each capability holds an allocation area. 'Nothing' leaves the live count.
+    {- ^ A count to shrink to when the nursery is the memory pressure, each capability holding an
+    allocation area. 'Nothing' leaves the live count.
     -}
     , mpPublishTenant :: Maybe PublishTenant
     -- ^ Tenant 5, present only when a publication target is configured.
@@ -84,8 +84,8 @@ data MemoryPlan = MemoryPlan
     , mpDegradations :: [Text]
     -- ^ The shed-ladder warnings, in the order taken. Empty when everything fits.
     , mpOverrideViolations :: [Text]
-    {- ^ The pins the plan blames for a residual overshoot it cannot shed around, from
-    'Ecluse.Composition.MemoryPlan.Override.attributeOverrideViolations'. The boot and check-config refuse on these with exit 2.
+    {- ^ The pins the plan blames for a residual overshoot it cannot shed around. The boot and
+    check-config refuse on these with exit 2.
     -}
     }
     deriving stock (Eq, Show)

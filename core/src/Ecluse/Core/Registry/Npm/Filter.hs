@@ -18,7 +18,7 @@ module Ecluse.Core.Registry.Npm.Filter (
     serialiseMergedDocument,
 ) where
 
-import Data.Aeson (Value (Object, String), encode)
+import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -30,7 +30,16 @@ import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpTime), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
-import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl, safeDocumentName, stringField)
+import Ecluse.Core.Registry.ServedDocument (
+    adjustField,
+    assembleAcross,
+    documentObject,
+    overlaySurvivors,
+    rebaseArtifactUrl,
+    safeDocumentName,
+    serialiseAcross,
+    stringField,
+ )
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Text (joinUrlPath, renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
@@ -44,10 +53,10 @@ verbatim. @prefix@ is upstream-controlled, so the caller gates it through 'npmDo
 -}
 rewriteVersion :: (Text -> Maybe Text) -> Value -> Value
 rewriteVersion servedUrl = \case
-    Object vo -> Object (adjustObject "dist" (rewriteDist servedUrl) vo)
+    Object vo -> Object (adjustField "dist" (rewriteDist servedUrl) vo)
     other -> other
 
--- | Rewrite a @dist@ object's @tarball@, leaving one with no readable file name unchanged.
+-- A @dist@ with no readable file name is left unchanged.
 rewriteDist :: (Text -> Maybe Text) -> Value -> Value
 rewriteDist servedUrl = \case
     Object dist
@@ -71,9 +80,7 @@ assembleMergedPackument mountBase bySource plan base =
             & KeyMap.insert "time" (Object reconciledTime)
 
     baseObject :: KeyMap Value
-    baseObject = case base of
-        Object o -> o
-        _ -> mempty
+    baseObject = documentObject base
 
     -- The shared gate reads the document's own upstream-controlled @name@ before it reaches
     -- the URL, and a document with no usable name has no version rewritten.
@@ -97,8 +104,6 @@ assembleMergedPackument mountBase bySource plan base =
             | (tag, v) <- Map.toList (mpDistTags plan)
             ]
 
-    -- @time@ rebuilt from the plan's surviving-version times, with the base
-    -- document's non-version bookkeeping keys (@created@\/@modified@) retained.
     reconciledTime :: KeyMap Value
     reconciledTime =
         bookkeepingTime
@@ -120,23 +125,13 @@ assembleMergedPackument mountBase bySource plan base =
                 ]
         _ -> mempty
 
-{- | npm's served-document __assemble__ capability
-('Ecluse.Core.Registry.Adapter.Types.metadataAssemble'), across npm's own 'CachedDoc' boundary.
--}
+-- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataAssemble', over npm's own boundary.
 assembleMergedDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
-assembleMergedDocument mountBase bySource plan base =
-    fst npmCached (assembleMergedPackument mountBase (Map.mapMaybe (traverse npmValue) bySource) plan (fromMaybe (Object mempty) (npmValue =<< base)))
+assembleMergedDocument = assembleAcross npmCached assembleMergedPackument
 
-{- | npm's served-document __serialise__ capability
-('Ecluse.Core.Registry.Adapter.Types.metadataSerialise'), to the compact wire bytes.
--}
+-- | npm's 'Ecluse.Core.Registry.Adapter.Capability.metadataSerialise'.
 serialiseMergedDocument :: CachedDoc -> LByteString
-serialiseMergedDocument = encode . fromMaybe (Object mempty) . npmValue
-
--- A document another ecosystem injected projects as 'Nothing' and contributes nothing, rather
--- than reading as an empty one.
-npmValue :: CachedDoc -> Maybe Value
-npmValue = snd npmCached
+serialiseMergedDocument = serialiseAcross (snd npmCached)
 
 versionEntries :: Value -> [(EntryKey, Value)]
 versionEntries = \case
@@ -149,14 +144,6 @@ versionEntries = \case
 -- unchanged.
 timeBookkeepingKeys :: [Text]
 timeBookkeepingKeys = ["created", "modified"]
-
-{- | Apply a function to the value at @key@, only when the object already carries that key.
-A missing key stays absent, never fabricated, so passthrough stays lossless.
--}
-adjustObject :: Key.Key -> (Value -> Value) -> KeyMap Value -> KeyMap Value
-adjustObject key f o = case KeyMap.lookup key o of
-    Just v -> KeyMap.insert key (f v) o
-    Nothing -> o
 
 {- The mount-local URL a served artifact resolves to, rendered from the artifact route that
 must claim it. -}

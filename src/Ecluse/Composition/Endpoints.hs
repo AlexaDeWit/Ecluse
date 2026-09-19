@@ -2,8 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared endpoint policy for boot refusals, advisories,
-and publication targets.
+{- | Every mount's declared endpoints, vetted against each other. A collision between two roles on
+one registry is the finding: a publish or a mirror write carries a credential that must not reach
+the endpoint it landed on, and a sweep deletes from a store another role owns. Three rules turn on
+'RegistryRole': the deleting role and its preview refuse a collision the writing role warns about
+or ignores. The rest refuse for every role.
 -}
 module Ecluse.Composition.Endpoints (
     -- * The endpoint pass
@@ -28,10 +31,11 @@ import Ecluse.Composition.BootError (
         StoreTagConflict
     ),
  )
-import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
+import Ecluse.Composition.Types (RegistryRole)
 import Ecluse.Composition.Vet (
     Severity (Advise, Ignore, Refuse),
     Vet,
+    byStoreRole,
     rule,
  )
 import Ecluse.Config (
@@ -105,10 +109,7 @@ publicationOffOwnPrivateUpstream =
     vetCollisions severity $
         EndpointComparison KeyPublicationTarget [KeyPrivateUpstream] SameMount ByRegistry
   where
-    severity = \case
-        MirrorWriter -> Ignore
-        MirrorPruner -> Refuse publicationOnMountEndpoint
-        MirrorPreviewer -> Refuse publicationOnMountEndpoint
+    severity = byStoreRole (Refuse publicationOnMountEndpoint) Ignore
 
 -- The mirror write carries this proxy's own credential, which must never reach a public registry.
 mirrorOffPublicUpstreams :: Map Ecosystem MountConfig -> Vet ()
@@ -156,10 +157,7 @@ storeTagConflict pair =
 {- A mirror target on another declared endpoint: the deleting role refuses, its preview refuses
 under the same reading, and the writing roles warn. -}
 mirrorCollapse :: (EndpointPair -> Advisory) -> RegistryRole -> Severity EndpointPair
-mirrorCollapse toAdvisory = \case
-    MirrorWriter -> Advise toAdvisory
-    MirrorPruner -> Refuse mirrorOnMountEndpoint
-    MirrorPreviewer -> Refuse mirrorOnMountEndpoint
+mirrorCollapse toAdvisory = byStoreRole (Refuse mirrorOnMountEndpoint) (Advise toAdvisory)
 
 {- Each advisory carries the mirror target's own URL, so the warning quotes the spelling the
 mount configured rather than the endpoint it collided with. -}

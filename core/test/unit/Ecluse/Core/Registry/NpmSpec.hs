@@ -41,7 +41,6 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full))
 import Ecluse.Core.Registry.Origin (OriginClient (..))
-import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Security (defaultLimits, maxBodyBytes)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
@@ -67,14 +66,14 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             withStub upstreamStatus (toLazy oversizedBody) $ \stub -> do
                 base <- stubConfig loopbackRegistryUrl stub
                 let config = base{ocLimits = defaultLimits{maxBodyBytes = 64}}
-                outcome <- fetchMetadataFormBounded config Full noValidators isOdd
+                outcome <- fetchMetadataFormBounded config Full isOdd
                 outcome `shouldBe` Right (RegistryResponse (statusCode upstreamStatus) "")
 
     it "refuses an over-cap body fail-closed as a FetchBoundExceeded value" $
         withStub status200 (toLazy oversizedBody) $ \stub -> do
             base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxBodyBytes = 64}}
-            outcome <- fetchMetadataFormBounded config Full noValidators isOdd
+            outcome <- fetchMetadataFormBounded config Full isOdd
             outcome `shouldSatisfy` isBoundExceeded
 
     it "returns a body that is within maxBodyBytes verbatim" $
@@ -82,7 +81,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
         withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
             base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxBodyBytes = 64}}
-            resp <- fetchMetadataFormBounded config Full noValidators isOdd
+            resp <- fetchMetadataFormBounded config Full isOdd
             fmap responseBody resp `shouldBe` Right "{\"name\":\"is-odd\"}"
 
     it "bounds DECOMPRESSED size: a small gzip body that inflates past the cap is refused" $
@@ -93,7 +92,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             -- Sanity: the compressed body is under the cap, so only the
             -- decompressed-size bound can explain a refusal.
             BS.length gzippedOversizedBody `shouldSatisfy` (< 1024)
-            outcome <- fetchMetadataFormBounded config Full noValidators isOdd
+            outcome <- fetchMetadataFormBounded config Full isOdd
             outcome `shouldSatisfy` isBoundExceeded
 
     it "reports an empty base URL as a FetchUrlUnformable value, never thrown" $ do
@@ -101,7 +100,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
         -- PublishFetch), not a thrown UrlFormationError laundered by a broad catch.
         manager <- newManager defaultManagerSettings
         let config = defaultNpmConfig (loopbackRegistryUrl "") manager
-        outcome <- fetchMetadataFormBounded config Full noValidators isOdd
+        outcome <- fetchMetadataFormBounded config Full isOdd
         outcome `shouldBe` Left (FetchUrlUnformable EmptyBaseUrl)
 
 -- | 'classifyTransport' folds each @http-client@ exception shape onto the bounded 'TransportCause'.
@@ -138,7 +137,7 @@ transportFaultSpec = describe "transport faults as values" $ do
         -- connect. It is the one live-transport case a unit test can drive determinately.
         manager <- newManager defaultManagerSettings
         let config = defaultNpmConfig (loopbackRegistryUrl "http://127.0.0.1:1") manager
-        outcome <- fetchMetadataFormBounded config Full noValidators isOdd
+        outcome <- fetchMetadataFormBounded config Full isOdd
         outcome `shouldSatisfy` isTransportFault
   where
     causeOf = tfCause . classifyTransport

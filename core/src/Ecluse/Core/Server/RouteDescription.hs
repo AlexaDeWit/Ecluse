@@ -21,6 +21,7 @@ module Ecluse.Core.Server.RouteDescription (
 
     -- * The synthetic catch-all
     catchAllSpecs,
+    unsupportedPathParam,
 ) where
 
 import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, POST, PUT))
@@ -34,10 +35,8 @@ import Ecluse.Core.Server.Route (
     RouteName (RouteName, unRouteName),
  )
 
-{- | One served HTTP operation, as the manifest documents it.
-
-No 'Eq' or 'Show': request and response schemas may carry @autodocodec@ codecs, which are
-functions.
+{- | One served HTTP operation, as the manifest documents it. No 'Eq' or 'Show': request and
+response schemas may carry @autodocodec@ codecs, which are functions.
 -}
 data RouteSpec = RouteSpec
     { rsName :: RouteName
@@ -71,9 +70,8 @@ data ParamSpec = ParamSpec
     }
     deriving stock (Eq, Show)
 
-{- | Project a route to every exact method it serves. The @HEAD@ contract is the
-'bodilessContract' interpretation of the same response value @GET@ uses. Its status set
-therefore cannot drift, and neither its manifest nor its wire response can carry a body.
+{- | Project a route to every exact method it serves. The @HEAD@ contract is the 'bodilessContract'
+reading of the response value @GET@ uses, so its status set cannot drift from the @GET@'s.
 -}
 specsOf :: Route v -> [RouteSpec]
 specsOf
@@ -97,15 +95,17 @@ specsOf
             RouteSpec
                 { rsName = operationName
                 , rsMethod = method
-                , rsPattern = map paramOf segments
+                , rsPattern = map pathSegOf segments
                 , rsSummary = summary
                 , rsDescription = description
                 , rsRequest = request
                 , rsOutcomes = responseDocs operationContract
                 }
 
-        paramOf (SegLit text) = Lit text
-        paramOf (SegCap capture) = Param (ParamSpec (capName capture) (capDescription capture))
+pathSegOf :: PatternSeg v -> PathSeg
+pathSegOf = \case
+    SegLit text -> Lit text
+    SegCap capture -> Param (ParamSpec (capName capture) (capDescription capture))
 
 -- The @HEAD@ projection's operation name, derived so it cannot collide with its @GET@.
 headName :: RouteName -> RouteName
@@ -138,3 +138,7 @@ catchAllSpecs contract param = catchAllGet :| [catchAllHead]
             \and no response body."
             Nothing
             (responseDocs (bodilessContract contract))
+
+-- | The catch-all's path parameter, as every mount's route table documents it.
+unsupportedPathParam :: ParamSpec
+unsupportedPathParam = ParamSpec "unsupportedPath" "Any path under this mount matched by none of the routes above."

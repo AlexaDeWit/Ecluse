@@ -17,6 +17,8 @@ module Ecluse.Core.Registry.Metadata (
 
     -- * The fetch-then-project step
     fetchThenProject,
+    ManifestProjection (..),
+    fetchManifestWith,
 
     -- * One version's read
     VersionDoc (..),
@@ -30,6 +32,8 @@ module Ecluse.Core.Registry.Metadata (
     fetchVersionDetails,
     versionTransience,
 ) where
+
+import Data.Aeson (Value)
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, responseStatusCode), isAuthorisationFailure, isSuccessStatus)
@@ -76,9 +80,7 @@ data VersionRead = VersionRead
     { vrVersion :: Maybe VersionDoc
     -- ^ The pair. 'Nothing' means the package resolved without this version.
     , vrUpstreamLatest :: Maybe Version
-    {- ^ The document's @latest@ target, whether or not it is the requested version. 'Nothing'
-    when the document declares none, or the ecosystem has no such tag.
-    -}
+    -- ^ 'Nothing' when the document declares none, or the ecosystem has no such tag.
     }
     deriving stock (Eq, Show)
 
@@ -98,6 +100,32 @@ fetchThenProject tracing fetch name project =
                 | isAuthorisationFailure code -> pure (Left (MetadataAuthorisationFailure code))
                 | isSuccessStatus code -> spanMetadataDecode tracing name (pure (project (responseBody response)))
                 | otherwise -> pure (Left (MetadataHttpFailure code))
+
+{- | The ecosystem-specific half of a full-manifest read: how a body projects, what its artifact
+locations are held to, and how the raw document enters the cached union.
+-}
+data ManifestProjection = ManifestProjection
+    { prjDecode :: PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
+    , prjLocations :: PackageInfo -> PackageInfo
+    , prjInject :: Value -> CachedDoc
+    -- ^ The adapter's own injector, so the raw document stays opaque to every other ecosystem.
+    }
+
+{- | Fetch a bounded document and project it into a 'Manifest' digested over the fetched bytes,
+which is what scopes the cached document.
+-}
+fetchManifestWith ::
+    TracingPort ->
+    (PackageName -> IO (Either FetchFault RegistryResponse)) ->
+    ManifestProjection ->
+    PackageName ->
+    IO (Either MetadataError Manifest)
+fetchManifestWith tracing fetch projection name =
+    fetchThenProject tracing fetch name $ \body ->
+        manifestOf (digestOf body) . first (prjLocations projection) <$> prjDecode projection name body
+  where
+    manifestOf digest (info, raw) =
+        Manifest{manifestInfo = info, manifestRaw = prjInject projection raw, manifestDigest = digest}
 
 -- | Why a metadata fetch could not yield a usable result.
 data MetadataError
@@ -119,9 +147,7 @@ data MetadataError
 
 -- | A version lookup result shared by public admission and mirror workers.
 data VersionEvaluation
-    = {- | The version resolved and projected, ready for the rules engine. The second field is
-      the same document's 'vrUpstreamLatest'.
-      -}
+    = -- | The version resolved and projected. The second field is the same document's @latest@.
       VersionPresent VersionDoc (Maybe Version)
     | -- | The package exists but does not supply the requested version.
       VersionMissing

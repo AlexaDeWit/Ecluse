@@ -57,9 +57,7 @@ assertedAlg h = case hashAlg h of
     SRI -> sriAlgorithm (hashValue h)
     alg -> Just alg
 
-{- | Select by asserted algorithm, then computability, retaining the last equal-ranked hash.
-The worker also considers the selected hash's same-algorithm SRI alternatives.
--}
+-- | Select by asserted algorithm, then computability, retaining the last equal-ranked hash.
 authoritativeDigest :: NonEmpty Hash -> Hash
 authoritativeDigest = maximumBy (comparing digestAuthority)
   where
@@ -110,9 +108,7 @@ mkMinTrustedIntegrity SRI =
     Left "the minimum trusted integrity algorithm must name a concrete algorithm, not a bare SRI"
 mkMinTrustedIntegrity alg = Right (MinTrustedIntegrity alg)
 
-{- | Parse a 'MinTrustedIntegrity' from an algorithm name (e.g. @"sha256"@, @"md5"@), case-
-and separator-insensitive. Unlike 'parseMinIntegrity' it accepts a sub-SHA-256 name.
--}
+-- | Parse an algorithm name. Unlike 'parseMinIntegrity' it accepts a sub-SHA-256 one.
 parseMinTrustedIntegrity :: Text -> Either Text MinTrustedIntegrity
 parseMinTrustedIntegrity raw = parseHashAlg raw >>= mkMinTrustedIntegrity
 

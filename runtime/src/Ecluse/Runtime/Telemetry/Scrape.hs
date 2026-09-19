@@ -3,13 +3,12 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The pull-side metrics transport: a Prometheus exposition on its own listener, never on the
-proxy's data port. A backend that scrapes selects it with @OTEL_METRICS_EXPORTER=prometheus@,
-which the SDK answers with a no-op push exporter, leaving the endpoint to the application. The
-exposition carries the whole OpenTelemetry resource, so it names the host, the process, and any
-cloud or cluster identity the SDK detected. That is why it never shares the port untrusted
-registry clients reach, and why it binds @localhost@ until an operator widens it.
-@OTEL_EXPORTER_PROMETHEUS_HOST@ and @OTEL_EXPORTER_PROMETHEUS_PORT@ address it, as the
-OpenTelemetry specification defines them.
+proxy's data port. A backend that scrapes selects it with @OTEL_METRICS_EXPORTER=prometheus@, which
+the SDK answers with a no-op push exporter, leaving the endpoint to the application. The exposition
+carries the whole OpenTelemetry resource, naming the host, the process, and any cloud or cluster
+identity the SDK detected, so it never shares the port untrusted registry clients reach and binds
+@localhost@ until an operator widens it. @OTEL_EXPORTER_PROMETHEUS_HOST@ and
+@OTEL_EXPORTER_PROMETHEUS_PORT@ address it, as the OpenTelemetry specification defines them.
 -}
 module Ecluse.Runtime.Telemetry.Scrape (
     -- * The collection handle
@@ -25,7 +24,6 @@ module Ecluse.Runtime.Telemetry.Scrape (
     withScrapeListener,
 ) where
 
-import Data.List (lookup)
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Katip (LogEnv, Severity (ErrorS, InfoS, WarningS))
@@ -41,8 +39,9 @@ import OpenTelemetry.Exporter.Metric (ResourceMetricsExport)
 import OpenTelemetry.Exporter.Prometheus.WAI (prometheusMiddleware)
 import OpenTelemetry.MeterProvider (SdkMeterEnv, collectResourceMetrics)
 
-import Ecluse.Core.Text (displayExceptionT, nonBlank)
+import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Runtime.Log (moduleLog)
+import Ecluse.Runtime.Telemetry.Resolve (declaredEnv)
 
 {- | One on-demand collection of the meter's current series. The substrate builds one only where
 the operator asked for the scrape transport.
@@ -83,19 +82,19 @@ so publishing the exposition any wider is an operator's deliberate act.
 scrapeListenerFrom :: [(String, String)] -> ScrapeListener
 scrapeListenerFrom environment =
     ScrapeListener
-        { slHost = fromMaybe defaultScrapeHost (declared hostVar environment)
+        { slHost = fromMaybe defaultScrapeHost (declaredEnv hostVar environment)
         , slPort = case declaredPort environment of
             PortDeclared port -> port
-            _ -> defaultScrapePort
+            PortAbsent -> defaultScrapePort
+            PortUnusable _ -> defaultScrapePort
         }
 
-{- | The warnings this environment raises, as values, so a test pins the message without a @katip@
-scribe. 'withScrapeListener' surfaces them before it binds.
--}
+-- | The warnings this environment raises. 'withScrapeListener' surfaces them before it binds.
 scrapeListenerWarnings :: [(String, String)] -> [Text]
 scrapeListenerWarnings environment = case declaredPort environment of
     PortUnusable raw -> [unusablePortMessage raw]
-    _ -> []
+    PortAbsent -> []
+    PortDeclared _ -> []
 
 -- What the operator's port variable amounts to. One reading feeds both the resolution and the
 -- warning, so the two can never disagree about which values are usable.
@@ -105,7 +104,7 @@ data PortSource
     | PortUnusable Text
 
 declaredPort :: [(String, String)] -> PortSource
-declaredPort environment = case declared portVar environment of
+declaredPort environment = case declaredEnv portVar environment of
     Nothing -> PortAbsent
     Just raw -> case readMaybe (toString raw) of
         Just port | isScrapeListenerPort port -> PortDeclared port
@@ -113,10 +112,6 @@ declaredPort environment = case declared portVar environment of
 
 isScrapeListenerPort :: Int -> Bool
 isScrapeListenerPort port = port == 0 || (port >= 1 && port <= 65535)
-
--- A present but blank value counts as unset, as it does across the telemetry resolution.
-declared :: String -> [(String, String)] -> Maybe Text
-declared name environment = nonBlank . toText =<< lookup name environment
 
 hostVar :: String
 hostVar = "OTEL_EXPORTER_PROMETHEUS_HOST"

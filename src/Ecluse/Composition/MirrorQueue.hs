@@ -2,14 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition root's mirror-queue backend selection: the pure decision of which queue
-this binary builds and the boot warnings the choice warrants.
+{- | The composition root's mirror-queue backend selection: the pure decision of which queue this
+binary builds, and the boot warnings the choice warrants.
 
-'planMirrorQueue' is the single place that knows which backends this binary can build. The
-composition root pattern-matches its 'MirrorQueuePlan' to make the one constructor call, and
-the warning functions turn the plan and the dead-letter probe into the boot's warning lines.
-Failures aggregate as 'Ecluse.Composition.BootError.BootError's, so one run reports every
-missing input.
+'planMirrorQueue' is the single place that knows which backends this binary can build. Failures
+aggregate as 'Ecluse.Composition.BootError.BootError's, so one run reports every missing input.
 -}
 module Ecluse.Composition.MirrorQueue (
     MirrorRuntimePlan (..),
@@ -70,9 +67,7 @@ the in-memory backend's depth cap is a memory-plan tenant, allocated after this 
 data MirrorQueuePlan
     = -- | The durable AWS SQS backend, built by @Ecluse.Runtime.Queue.Sqs.newSqsQueue@.
       SqsBackend SqsConfig
-    | {- | The bounded in-memory backend, built by
-      'Ecluse.Core.Queue.newBoundedInMemoryQueue'. Non-durable and best-effort, so boot warns.
-      -}
+    | -- | The bounded in-memory backend: non-durable and best-effort, so boot warns.
       MemoryBackend
     deriving stock (Eq, Show)
 
@@ -81,9 +76,8 @@ The generic @AWS_ENDPOINT_URL@ is the S3 advisory client's, and honouring it her
 -}
 planMirrorQueue :: AmbientAws -> AppConfig -> Either [BootError] MirrorQueuePlan
 planMirrorQueue ambient env = case qsUrl (cfgQueue env) of
-    -- No queue URL: a deliberate rollover to the in-memory queue, never a boot failure.
-    -- Mirroring is demand-driven, so a job lost to a restart re-enqueues on the next
-    -- demand: the rollover costs durability, not safety.
+    -- No queue URL is a deliberate rollover, never a boot failure. Mirroring is demand-driven, so a
+    -- job lost to a restart re-enqueues on the next demand: the rollover costs durability, not safety.
     Nothing -> Right MemoryBackend
     Just queueUrl ->
         let url = queueUrlText queueUrl

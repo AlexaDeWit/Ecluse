@@ -33,15 +33,16 @@ import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
 import Ecluse.Core.Registry.Metadata (
-    Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
+    Manifest,
+    ManifestProjection (ManifestProjection, prjDecode, prjInject, prjLocations),
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
-    digestOf,
+    fetchManifestWith,
     fetchThenProject,
  )
 import Ecluse.Core.Registry.Metadata.Projection (projectMetadata, projectionResult, selectiveError, validateReportedName)
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken), OriginFor)
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Project (
     fileVersionKey,
     projectName,
@@ -54,7 +55,6 @@ import Ecluse.Core.Registry.PyPI.SelectiveDecode (
     selectFilesFromIndex,
  )
 import Ecluse.Core.Registry.PyPI.Wire (checkApiVersion)
-import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (
     AllowedHostPorts,
@@ -63,13 +63,12 @@ import Ecluse.Core.Security (
     ecosystemArtifactAuthorities,
     maxNestingDepth,
  )
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | Bind one origin's PyPI metadata reads to their observers, leaving the caching policy to the caller.
+-- | Bind one origin's PyPI metadata reads to their observers. The caching policy is the caller's.
 newPyPIMetadataReads ::
     TracingPort ->
     MetricsPort ->
@@ -79,7 +78,7 @@ newPyPIMetadataReads ::
     OriginFor posture ->
     MetadataReads posture
 newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
-    -- No per-release raw object yet: the mirror write for PyPI is not built.
+    -- PyPI has no mirror write, so no per-release raw object is retained.
     newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing) (\_ _ -> Nothing)
 
 fetchSimpleIndex :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
@@ -87,20 +86,18 @@ fetchSimpleIndex origin name =
     formThen
         FetchUrlUnformable
         (boundedFetch (ocManager origin) (ocLimits origin))
-        (simpleIndexRequest (registryUrlText (ocBaseUrl origin)) (ocToken origin) noValidators name)
+        (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name)
 
 -- | Fetch a bounded Simple index with the digest that scopes its cached document.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
-fetchPyPIManifest tracing origin name =
-    fetchThenProject tracing (fetchSimpleIndex origin) name $ \body ->
-        manifestOf (digestOf body) . first (enforceArtifactLocations pypiArtifactAuthorities (originBaseUrl origin))
-            <$> projectPyPIIndex (ocLimits origin) name body
-  where
-    manifestOf digest (info, raw) =
-        Manifest
-            { manifestInfo = info
-            , manifestRaw = fst pypiSimpleCached raw
-            , manifestDigest = digest
+fetchPyPIManifest tracing origin =
+    fetchManifestWith
+        tracing
+        (fetchSimpleIndex origin)
+        ManifestProjection
+            { prjDecode = projectPyPIIndex (ocLimits origin)
+            , prjLocations = enforceArtifactLocations pypiArtifactAuthorities (originBaseUrl origin)
+            , prjInject = fst pypiSimpleCached
             }
 
 -- | Project a nesting-checked index and retain its raw document for assembly.
@@ -137,6 +134,3 @@ projectPyPIVersion limits name version body = do
 
 pypiArtifactAuthorities :: AllowedHostPorts
 pypiArtifactAuthorities = ecosystemArtifactAuthorities pypiArtifactHosts
-
-originBaseUrl :: OriginClient -> Text
-originBaseUrl = registryUrlText . ocBaseUrl

@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE OverloadedStrings #-}
 
 {- | Decode advisory evidence for the compiled artifact.
 Package keys use the same ecosystem identity as policy queries.
@@ -25,6 +24,7 @@ module Ecluse.Core.Osv.Advisory (
 import Prelude hiding (universe)
 
 import Data.Aeson (FromJSON (..), withObject, (.:), (.:?))
+import Data.Foldable1 qualified as Foldable1
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Universe.Class (Universe (universe))
@@ -37,10 +37,6 @@ import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Package (canonicalise)
 import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Core.Version (parseVersionKey)
-
--- | Build the ecosystem archive URL under a configured OSV export base.
-osvExportUrl :: Text -> Text -> String
-osvExportUrl baseUrl ecosystem = toString (joinUrlPath baseUrl (ecosystem <> "/all.zip"))
 
 -- | The OSV fields used to select and score active advisory evidence.
 data OsvAdvisory = OsvAdvisory
@@ -183,9 +179,7 @@ data ExtractedOsv = ExtractedOsv
 advisorySeverity :: OsvAdvisory -> Maybe Double
 advisorySeverity adv = vectorScore <|> labelScore
   where
-    vectorScore = case mapMaybe (parseVectorScore . sevScore) (fromMaybe [] (osvSeverity adv)) of
-        [] -> Nothing
-        (s : ss) -> Just (foldl' max s ss)
+    vectorScore = viaNonEmpty Foldable1.maximum (mapMaybe (parseVectorScore . sevScore) (fromMaybe [] (osvSeverity adv)))
     labelScore = ghsaSeverityCeiling =<< (dbsSeverity =<< osvDatabaseSpecific adv)
 
 parseVectorScore :: Text -> Maybe Double
@@ -288,3 +282,7 @@ extractRange = go Nothing
         | Just f <- eventFixed e = rangeSegment current (FixedBefore f) : go Nothing es
         | Just la <- eventLastAffected e = rangeSegment current (LastAffected la) : go Nothing es
         | otherwise = go current es
+
+-- | Build the ecosystem archive URL under a configured OSV export base.
+osvExportUrl :: Text -> Text -> String
+osvExportUrl baseUrl ecosystem = toString (joinUrlPath baseUrl (ecosystem <> "/all.zip"))

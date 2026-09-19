@@ -136,22 +136,23 @@ lenientFiles o = do
 
 -- | Decode indexed files without renumbering entries that survive lenient parsing.
 decodeIndexFiles :: [(Int, Value)] -> ([IndexFile], [InvalidEntry])
-decodeIndexFiles = foldMap decode
-  where
-    decode (position, value) =
-        first (map snd) $
-            partitionLenientList
-                InvalidIndexFile
-                (fmap (\file -> file{ifEntryKey = ArrayEntry position}) . parseEither parseJSON)
-                [(fileKey position value, value)]
+decodeIndexFiles = foldMap decodeIndexedFile
+
+decodeIndexedFile :: (Int, Value) -> ([IndexFile], [InvalidEntry])
+decodeIndexedFile (position, value) =
+    first (map snd) $
+        partitionLenientList
+            InvalidIndexFile
+            (fmap (\file -> file{ifEntryKey = ArrayEntry position}) . parseEither parseJSON)
+            [(fileKey position value, value)]
 
 lenientVersionListing :: Object -> Parser [InvalidEntry]
 lenientVersionListing o = do
     raw <- o .:? "versions" .!= []
     pure (snd (partitionLenientList InvalidVersionListing decodeVersion (zip (map show [0 :: Int ..]) raw)))
-  where
-    decodeVersion :: Value -> Either String Text
-    decodeVersion = parseEither parseJSON
+
+decodeVersion :: Value -> Either String Text
+decodeVersion = parseEither parseJSON
 
 fileKey :: Int -> Value -> Text
 fileKey position = \case

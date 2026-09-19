@@ -36,11 +36,12 @@ import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLoca
 import Ecluse.Core.Registry (FetchFault, RegistryResponse)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (
-    Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
+    Manifest,
+    ManifestProjection (ManifestProjection, prjDecode, prjInject, prjLocations),
     MetadataError (MetadataBoundExceeded),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
-    digestOf,
+    fetchManifestWith,
     fetchThenProject,
  )
 import Ecluse.Core.Registry.Metadata.Projection (projectMetadata, projectionResult, selectiveError, validateReportedName)
@@ -55,8 +56,7 @@ import Ecluse.Core.Registry.Npm.SelectiveDecode (
     SelectedVersion (svDistTagLatest, svName, svTime, svVersion, svVersionCount),
     selectVersionFromPackument,
  )
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits), OriginFor)
-import Ecluse.Core.Registry.Request (noValidators)
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (
     AllowedHostPorts,
@@ -65,7 +65,6 @@ import Ecluse.Core.Security (
     ecosystemArtifactAuthorities,
     maxNestingDepth,
  )
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -84,16 +83,19 @@ newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing) selectNpmVersionDoc
 
 fetchNpmPackument :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
-fetchNpmPackument origin = fetchMetadataFormBounded origin Full noValidators
+fetchNpmPackument origin = fetchMetadataFormBounded origin Full
 
 -- | Fetch a bounded full packument with the digest that scopes its cached document.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
-fetchNpmManifest tracing origin name =
-    fetchThenProject tracing (fetchNpmPackument origin) name $ \body ->
-        manifestOf (digestOf body) . first (enforceArtifactLocations npmArtifactAuthorities (originBaseUrl origin))
-            <$> projectNpmManifest (ocLimits origin) name body
-  where
-    manifestOf digest (info, raw) = Manifest{manifestInfo = info, manifestRaw = fst npmCached raw, manifestDigest = digest}
+fetchNpmManifest tracing origin =
+    fetchManifestWith
+        tracing
+        (fetchNpmPackument origin)
+        ManifestProjection
+            { prjDecode = projectNpmManifest (ocLimits origin)
+            , prjLocations = enforceArtifactLocations npmArtifactAuthorities (originBaseUrl origin)
+            , prjInject = fst npmCached
+            }
 
 -- | Project a nesting-checked packument and retain its raw document for assembly.
 projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
@@ -102,19 +104,21 @@ projectNpmManifest limits name = projectMetadata (parsePackageInfoFromValue name
 fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchNpmVersion tracing origin name version =
     fetchThenProject tracing (fetchNpmPackument origin) name $
-        fmap locationChecked . projectNpmVersion (ocLimits origin) name version
-  where
-    locationChecked versionRead =
-        versionRead{vrVersion = vrVersion versionRead >>= locationCheckedDoc}
-    locationCheckedDoc doc =
-        (\details -> doc{vdDetails = details}) <$> enforceArtifactLocationsOf npmArtifactAuthorities (originBaseUrl origin) (vdDetails doc)
+        fmap (locationChecked (originBaseUrl origin)) . projectNpmVersion (ocLimits origin) name version
+
+-- A version whose artifact sits off the serving authority drops, as it does on the whole document.
+locationChecked :: Text -> VersionRead -> VersionRead
+locationChecked upstreamBaseUrl versionRead =
+    versionRead{vrVersion = vrVersion versionRead >>= locationCheckedDoc upstreamBaseUrl}
+
+locationCheckedDoc :: Text -> VersionDoc -> Maybe VersionDoc
+locationCheckedDoc upstreamBaseUrl doc =
+    (\details -> doc{vdDetails = details})
+        <$> enforceArtifactLocationsOf npmArtifactAuthorities upstreamBaseUrl (vdDetails doc)
 
 -- npm artifacts must use the authority that served the packument.
 npmArtifactAuthorities :: AllowedHostPorts
 npmArtifactAuthorities = ecosystemArtifactAuthorities npmArtifactHosts
-
-originBaseUrl :: OriginClient -> Text
-originBaseUrl = registryUrlText . ocBaseUrl
 
 {- | Project one version without decoding its siblings. Absent or unprojectable versions yield
 'Nothing'. The pair carries the selected object as decoded, never a re-rendering of the typed view.
@@ -125,7 +129,7 @@ projectNpmVersion limits name version body = do
     reported <- validateReportedName projectName (svName decoded)
     selected <- projectionResult (checkNameAgreement name reported decoded)
     first MetadataBoundExceeded (checkVersionCountOf limits (svVersionCount selected))
-    publishedAt <- parsePublishTime (svTime selected)
+    let publishedAt = parsePublishTime (svTime selected)
     pure
         VersionRead
             { vrVersion = do
@@ -153,7 +157,5 @@ latestTarget = \case
 
 -- An absent or undecodable stamp means no known publish time, never a document failure.
 -- The whole-document path drops a malformed @time@ entry the same way.
-parsePublishTime :: Maybe Value -> Either MetadataError (Maybe UTCTime)
-parsePublishTime = \case
-    Nothing -> Right Nothing
-    Just timeValue -> Right (parseMaybe parseJSON timeValue)
+parsePublishTime :: Maybe Value -> Maybe UTCTime
+parsePublishTime = (>>= parseMaybe parseJSON)

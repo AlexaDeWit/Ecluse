@@ -2,19 +2,17 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | One supervision combinator for every background loop: the mirror worker's
-poll-and-process, the enqueue-buffer drain, the advisory sync tasks, the dredger sweep,
-Pilot's export cycle. Each loop's file carries only its step and its policy, never a
-private copy of the catch-log-backoff machinery. The typed fault channels stay in the
-steps, so a step that receives an @Either fault a@ from a handle makes its own domain
-decision, its own pacing included. What reaches this combinator's catch is residue: an
-exception escaping some dependency's typed contract, plus whichever faults a step's
-policy deliberately classifies 'Permanent'.
+{- | The one supervision combinator every background loop runs under, so no loop carries a
+private copy of the catch-log-backoff machinery.
+
+Typed fault channels stay in the steps: a step receiving an @Either fault a@ from a handle
+makes its own domain decision and sets its own pacing. What reaches this combinator's catch
+is residue, an exception escaping some dependency's typed contract, plus whatever a step's
+policy classifies 'Permanent'.
 -}
 module Ecluse.Core.Supervision (
     -- * The combinator
     superviseLoop,
-    secondsToMicros,
     SupervisionPolicy (..),
     transientPolicy,
     FaultDisposition (..),
@@ -22,13 +20,13 @@ module Ecluse.Core.Supervision (
     -- * Bounded exponential backoff
     BackoffSchedule (..),
     backoffMicros,
+    backgroundLoopBackoff,
 
     -- * Bounded retry pacing
     delayListPolicy,
 ) where
 
 import Control.Retry (RetryPolicyM, RetryStatus (rsIterNumber), retryPolicy)
-import Data.Time (NominalDiffTime)
 import Katip (KatipContext, Severity (ErrorS, WarningS), logFM, ls)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Concurrent (threadDelay)
@@ -36,9 +34,8 @@ import UnliftIO.Exception (throwIO, tryAny)
 
 import Ecluse.Core.Text (displayExceptionT)
 
-{- | What the supervisor does with a synchronous fault the step let escape. It never
-classifies an asynchronous exception: cancellation propagates untouched, so the
-shutdown race can always tear a supervised loop down.
+{- | What the supervisor does with a synchronous fault the step let escape. An asynchronous
+exception is never classified, so cancellation propagates and the shutdown race always wins.
 -}
 data FaultDisposition
     = -- | Log at 'WarningS', back off (bounded exponential), rerun the step.
@@ -47,9 +44,8 @@ data FaultDisposition
       Permanent
     deriving stock (Eq, Show)
 
-{- | A bounded exponential backoff, doubling from the base towards the cap as
-consecutive failures mount. A persistently-failing dependency therefore retries at most
-once per cap interval. A base equal to the cap is a fixed-interval retry.
+{- | A bounded exponential backoff, doubling from the base towards the cap as consecutive
+failures mount, so a persistently-failing dependency retries at most once per cap interval.
 -}
 data BackoffSchedule = BackoffSchedule
     { bsBaseMicros :: Int
@@ -94,18 +90,9 @@ transientPolicy label schedule =
         , spBackoff = schedule
         }
 
-{- | A delay list as a "Control.Retry" policy: retry @n@ waits the @n@-th delay in microseconds,
-so the list's length is the retry budget. It paces a bounded run, not an endless loop.
--}
-delayListPolicy :: (Monad m) => [Int] -> RetryPolicyM m
-delayListPolicy delays = retryPolicy (\rs -> delays !!? rsIterNumber rs)
-
-{- | Run the step forever under the policy. A completed step resets the backoff and
-reruns at once, since the step owns its own pacing: poll waits and cycle delays live
-inside it. A synchronous fault classifies through the policy, where 'Transient' logs
-and backs off and 'Permanent' rethrows. 'tryAny' never catches an asynchronous
-exception, so cancellation tears the loop down like any other thread. The 'Void'
-return makes "this loop never returns" a fact of the type.
+{- | Run the step forever under the policy: a completed step resets the backoff and reruns at once,
+since the step owns its own pacing. 'tryAny' leaves asynchronous exceptions alone, so cancellation
+tears the loop down.
 -}
 superviseLoop :: (MonadUnliftIO m, KatipContext m) => SupervisionPolicy -> m () -> m Void
 superviseLoop policy step = go 0
@@ -117,16 +104,24 @@ superviseLoop policy step = go 0
                 Permanent -> do
                     logFM ErrorS (ls (spLabel policy <> ": permanent fault, failing up: " <> displayExceptionT fault))
                     throwIO fault
-                Transient -> do
-                    let delay = backoffMicros (spBackoff policy) consecutiveFaults
-                    -- A retry the loop makes for itself, so it warns. The 'Permanent' arm above
-                    -- is this combinator's only error, and it fails the process up.
-                    logFM WarningS (ls (spLabel policy <> ": iteration faulted (retrying in " <> show delay <> "µs): " <> displayExceptionT fault))
-                    threadDelay delay
-                    go (consecutiveFaults + 1)
+                Transient -> warnAndBackOff policy consecutiveFaults fault >> go (consecutiveFaults + 1)
 
-{- | A delay in seconds as the microseconds a delay primitive takes. Every config decoder that
-spells a pause bounds it below @maxBound `div` 1_000_000@, so the conversion cannot wrap.
+-- A retry the loop makes for itself, so it warns. The 'Permanent' arm of 'superviseLoop' is this
+-- combinator's only error, and it fails the process up.
+warnAndBackOff :: (KatipContext m) => SupervisionPolicy -> Int -> SomeException -> m ()
+warnAndBackOff policy consecutiveFaults fault = do
+    let delay = backoffMicros (spBackoff policy) consecutiveFaults
+    logFM WarningS (ls (spLabel policy <> ": iteration faulted (retrying in " <> show delay <> "µs): " <> displayExceptionT fault))
+    threadDelay delay
+
+{- | The pace a background loop retries a transient fault at: one second after the first
+failure, doubling to a thirty-second ceiling.
 -}
-secondsToMicros :: NominalDiffTime -> Int
-secondsToMicros seconds = round seconds * 1_000_000
+backgroundLoopBackoff :: BackoffSchedule
+backgroundLoopBackoff = BackoffSchedule{bsBaseMicros = 1_000_000, bsCapMicros = 30_000_000}
+
+{- | A delay list as a "Control.Retry" policy: retry @n@ waits the @n@-th delay in microseconds,
+so the list's length is the retry budget. It paces a bounded run, not an endless loop.
+-}
+delayListPolicy :: (Monad m) => [Int] -> RetryPolicyM m
+delayListPolicy delays = retryPolicy (\rs -> delays !!? rsIterNumber rs)

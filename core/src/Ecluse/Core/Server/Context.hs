@@ -50,7 +50,7 @@ import Network.Wai qualified as Wai
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Cve (DbEtag)
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)

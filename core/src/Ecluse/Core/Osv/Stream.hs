@@ -1,18 +1,14 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
-{- | Streaming ingest of the osv.dev export archive Pilot compiles @osv.db@ from. The feed
-aggregates many upstream databases, so one poisoned record can ride in with every transport
-header honest, and the bounds here are per entry: a drop is counted in 'IngestStats' and the
-rest of the archive keeps flowing. 'ilMaxAdvisoryBytes' applies before the bytes are retained
-and before the JSON decodes, so an inflation bomb never reaches the decoder whole, and the
-offending entry drains to its boundary so the entries after it stay aligned. An advisory over
-the feed's 'osvMaxAdvisoryFanOut' is anomalous, logged, and kept. The aggregate verdict is the
-separate pure decision 'systemicDrop', which the compiler reads once the stream completes.
+{- | Streaming ingest of the osv.dev export archive Pilot compiles @osv.db@ from.
+
+The feed aggregates many upstream databases, so the bounds here are per entry: a drop is
+counted in 'IngestStats' and the rest of the archive keeps flowing. 'ilMaxAdvisoryBytes'
+applies before the bytes are retained and before the JSON decodes, and the refused entry drains
+to its boundary so the entries after it stay aligned. The aggregate verdict is 'systemicDrop',
+which the compiler reads once the stream completes.
 -}
 module Ecluse.Core.Osv.Stream (
     streamOsvUrl,
@@ -50,7 +46,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv, OsvAdvisory, extPackage, extractFromAdvisory, orderableBounds, osvId, osvModified, unorderableBounds)
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvEcosystemTag, osvMaxAdvisoryFanOut))
 import Ecluse.Core.Osv.Epss (EpssScores)
-import Ecluse.Core.Osv.Provenance (parseHttpDate, parseSourceTime)
+import Ecluse.Core.Osv.Provenance (lastModifiedOf, parseSourceTime)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Telemetry.Span (closeOptionalSpan, openOptionalSpan)
 
@@ -211,8 +207,6 @@ processZipEntries ingest =
 -- the byte cap. The signal carries the entry's full decompressed size, for the log.
 data EntryOutcome = EntryBytes !ByteString | EntryOversize !Int
 
--- Decide what one collected entry yields: a counted drop for an over-large or malformed
--- entry, or the decoded advisory's rows.
 handleEntry :: (KatipContext m) => OsvIngest -> ZipEntry -> EntryOutcome -> ConduitT (Either ZipEntry ByteString) ExtractedOsv m ()
 handleEntry ingest entry = \case
     EntryOversize seen -> lift $ do
@@ -241,7 +235,6 @@ admitAdvisory ingest adv = do
     -- about it is anomalous.
     unorderable = maybe [] (\eco -> mapMaybe (unorderableExample eco) extracted) (osvEcosystemTag (ingestEcosystem ingest))
 
--- The package and the first unorderable bound of one row, for the log line below.
 unorderableExample :: Ecosystem -> ExtractedOsv -> Maybe (Text, Text)
 unorderableExample eco row
     | orderableBounds eco row = Nothing
@@ -262,12 +255,11 @@ warnOnFanOut ingest adv extracted =
     n = length extracted
     limit = osvMaxAdvisoryFanOut (ingestEcosystem ingest)
 
--- The export's own @Last-Modified@, from the response that carried the rows. An absent or
--- unreadable header records nothing.
+-- The export's own @Last-Modified@, from the response that carried the rows.
 recordResponseDate :: (MonadIO m) => OsvIngest -> [ByteString] -> m ()
 recordResponseDate ingest headers =
     modifyIORef' (ingestAttempt ingest) $ \attempt ->
-        attempt{oaLastModified = parseHttpDate . decodeUtf8 =<< listToMaybe headers}
+        attempt{oaLastModified = lastModifiedOf headers}
 
 -- A date no grammar reads, and a date the source cannot know yet, are both counted and both
 -- dropped from the reading, never clamped. The record's rows are kept either way.
@@ -322,12 +314,14 @@ collectFile cap = go 0 []
                  in if seen' > cap
                         then drainOversize seen'
                         else go seen' (bs : acc)
-    -- Not carrying acc forward frees the accumulated prefix, so the drain to the next
-    -- entry boundary retains only the running size.
-    drainOversize !seen =
-        await >>= \case
-            Nothing -> pure (EntryOversize seen)
-            Just (Left entry) -> do
-                leftover (Left entry)
-                pure (EntryOversize seen)
-            Just (Right bs) -> drainOversize (seen + BS.length bs)
+
+-- Carrying no accumulator frees the collected prefix, so the drain to the next entry
+-- boundary retains only the running size.
+drainOversize :: (Monad m) => Int -> ConduitT (Either ZipEntry ByteString) o m EntryOutcome
+drainOversize !seen =
+    await >>= \case
+        Nothing -> pure (EntryOversize seen)
+        Just (Left entry) -> do
+            leftover (Left entry)
+            pure (EntryOversize seen)
+        Just (Right bs) -> drainOversize (seen + BS.length bs)

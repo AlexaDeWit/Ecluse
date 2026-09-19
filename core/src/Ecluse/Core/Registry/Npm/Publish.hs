@@ -27,10 +27,9 @@ import Data.Text qualified as T
 
 import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
-import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
-import Network.HTTP.Types.Header (hAccept, hContentType)
+import Network.HTTP.Client (Request)
 
-import Ecluse.Core.Credential (ClientCredential, bareCredential)
+import Ecluse.Core.Credential (ClientCredential, Secret, bareCredential)
 import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, Scope, hashAlg, hashValue, pkgNamespace, renderPackageName)
 import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 import Ecluse.Core.Registry (
@@ -44,9 +43,8 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
-import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest, packageUrl, parseRequestEither, withToken)
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), jsonPutRequest, metadataRequest, packageUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest, ppMetadata, ppVersion))
-import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (renderVersion)
 
@@ -54,13 +52,30 @@ import Ecluse.Core.Version (renderVersion)
 npmPublishCodec :: PublishCodec
 npmPublishCodec =
     PublishCodec
-        { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated noValidators
+        { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated
         , pcParseVersionList = Project.parseVersionList
-        , pcPublishRequest = \targetUrl token name plan artifact bytes -> do
-            document <- npmPublishDocument name plan (unFilename (maFilename artifact)) (strongestSriValue artifact) (firstHashValue SHA1 artifact) bytes
-            first (PublishFetch . FetchUrlUnformable) (publishRequest targetUrl (bareCredential <$> token) name document)
+        , pcPublishRequest = npmPublishRequestFor
         , pcPublishOutcome = classifyPublish
         }
+
+npmPublishRequestFor ::
+    Text ->
+    Maybe Secret ->
+    PackageName ->
+    PublishPlan ->
+    MirrorArtifact ->
+    ByteString ->
+    Either PublishFault Request
+npmPublishRequestFor targetUrl token name plan artifact bytes = do
+    document <-
+        npmPublishDocument
+            name
+            plan
+            (unFilename (maFilename artifact))
+            (strongestSriValue artifact)
+            (firstHashValue SHA1 artifact)
+            bytes
+    first (PublishFetch . FetchUrlUnformable) (publishRequest targetUrl (bareCredential <$> token) name document)
 
 strongestSriValue :: MirrorArtifact -> Maybe Text
 strongestSriValue artifact = do
@@ -84,18 +99,7 @@ publishRequest ::
     Either UrlFormationError Request
 publishRequest baseUrl credential name document = do
     url <- packageUrl baseUrl name
-    base <- parseRequestEither url
-    pure
-        . withToken credential
-        $ base
-            { method = "PUT"
-            , requestBody = RequestBodyBS document
-            , -- npm registries reject a publish without the JSON content type with HTTP 415.
-              requestHeaders =
-                (hContentType, "application/json")
-                    : (hAccept, "application/json")
-                    : requestHeaders base
-            }
+    jsonPutRequest credential url document
 
 {- | Assemble one version from the plan's metadata, under local authority for the name, version,
 and verified @dist@ fields. The declared @latest@ is the plan's: a registry left to choose can retag.
@@ -105,7 +109,7 @@ npmPublishDocument ::
     PublishPlan ->
     -- | The tarball's filename: the @_attachments@ key and tarball file segment.
     Text ->
-    -- | The @dist.integrity@ SRI string, if known (e.g. @"sha512-…"@).
+    -- | The @dist.integrity@ SRI string, if known (e.g. @"sha512-..."@).
     Maybe Text ->
     -- | The @dist.shasum@ (SHA-1, hex), if known.
     Maybe Text ->

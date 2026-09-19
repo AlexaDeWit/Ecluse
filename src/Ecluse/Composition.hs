@@ -7,9 +7,8 @@
 'MountBinding's and the worker's publish targets. Every refusal 'resolveBootWiring' reports needs a
 live environment: a writing role mints each mount's mirror-write credential, and every role runs
 'Ecluse.Core.Rules.prepare', which allocates per-rule engine state once at boot. That is why this
-is 'IO' and why @ecluse check-config@ reaches none of it. "Ecluse.Composition.Executable" runs it
-as one phase, and 'WiringPorts' carries every capability it needs in, so a unit test runs
-the assembly without opening a listener (see @docs\/architecture\/configuration.md@ → "Validation").
+is 'IO' and why @ecluse check-config@ reaches none of it. 'WiringPorts' carries every capability in,
+so a unit test runs the assembly without opening a listener.
 -}
 module Ecluse.Composition (
     -- * The environment-dependent wiring
@@ -79,8 +78,8 @@ import Ecluse.Core.Registry.Adapter (
     adapterMetadata,
     adapterProjectName,
     adapterPublish,
-    artifactHosts,
  )
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
 import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag, rdSourceReporter)
@@ -180,75 +179,87 @@ planMounts resolveAdapter clock ruleDepsFor mintPlan providers limits publishBud
     app :: AppConfig
     app = vpSettings plan
 
-    -- The operator help message, derived from the environment layer like the
-    -- inbound token, so every mount's denials carry it.
-    helpMessage :: Maybe HelpMessage
-    helpMessage = mkHelpMessage <$> srvHelpMessage (cfgServer app)
+    ctx :: WiringContext
+    ctx =
+        WiringContext
+            { wcApp = app
+            , wcLimits = limits
+            , wcClock = clock
+            , wcRuleDeps = ruleDepsFor
+            , wcPublishBudget = publishBudget
+            , -- Derived from the environment layer like the inbound token, and resolved once, so
+              -- every mount's denials carry the same message.
+              wcHelp = mkHelpMessage <$> srvHelpMessage (cfgServer app)
+            }
 
     {- The plan cleared the adapter, so only the credential reference and the injected resolver
     are still this mount's to check, and it reports both in one run. -}
     bindingFor :: VettedMount -> IO (Either [BootError] MountBinding)
     bindingFor vetted = do
-        deps <- packumentDepsFor (vmAdapter vetted) (vmMount vetted) (vmConfig vetted)
-        pure $ case (credentialError mintPlan providers (vmMount vetted), resolveAdapter eco deps (publishDeps vetted)) of
+        deps <- packumentDepsFor ctx (vmAdapter vetted) (vmMount vetted) (vmConfig vetted)
+        pure $ case (credentialError mintPlan providers (vmMount vetted), resolveAdapter eco deps (mountPublishDeps ctx plan vetted)) of
             (Nothing, Just binding) -> Right binding
             (mCredErr, mBinding) ->
                 Left (maybeToList mCredErr <> [MissingAdapter eco | isNothing mBinding])
       where
         eco = vmEcosystem vetted
 
-    -- A mount the pass cleared no publication for leaves @PUT \/{pkg}@ answering @405@.
-    publishDeps :: VettedMount -> Maybe PublishDeps
-    publishDeps vetted =
-        Map.lookup (vmEcosystem vetted) (vpPublications plan)
-            >>= publishDepsFor (vmAdapter vetted) app limits publishBudget helpMessage
+{- The deployment-wide inputs every mount's deps are built from. Each is resolved once for the
+whole pass, so two mounts cannot be wired against different values of one of them. -}
+data WiringContext = WiringContext
+    { wcApp :: AppConfig
+    , wcLimits :: Limits
+    , wcClock :: IO UTCTime
+    , wcRuleDeps :: Ecosystem -> RuleDeps
+    , wcPublishBudget :: Maybe PublishBudget
+    , wcHelp :: Maybe HelpMessage
+    }
 
-    {- The ecosystem-shaped fields are the adapter's own records, carried whole, and the
-    rest is the mount's configuration. @mountBaseUrl@ owns the @dist.tarball@ base. -}
-    packumentDepsFor :: RegistryAdapter -> Mount -> MountConfig -> IO PackumentDeps
-    packumentDepsFor adapter mount mcfg = do
-        -- 'prepare' allocates an effectful rule's resilience policy and breaker once per mount.
-        -- The deps below bridge that same 'RuleDeps' non-pinning advisory-ETag reader.
-        let ruleDeps = ruleDepsFor (mountEcosystem mount)
-        prepared <- prepare ruleDeps (mountPolicy mount)
-        let regs = mountRegistries mount
-        pure
-            PackumentDeps
-                { -- The leading argument is the adapter's declared artifact hosts: the
-                  -- ecosystem's own same-host equivalence for the tarball gate.
-                  pdUpstreams =
-                    mountUpstreams
-                        (artifactHosts (adapterArtifact adapter))
-                        (regPrivateUpstream regs)
-                        (regPublicUpstream regs)
-                        (maybe NoMirrorWrite (MirrorOnAdmit . mtUrl) (regMirrorTarget regs))
-                , -- Deny by default: a mount that declares no namespaces owns none, so every
-                  -- name resolves through both upstreams as before.
-                  pdFirstParty = maybe (const False) firstPartyName (mntFirstParty mcfg)
-                , pdMountBaseUrl = mountBaseUrl (srvPublicUrl (cfgServer app)) (mountEcosystem mount)
-                , pdRules = prepared
-                , -- The operator-configured ranges extending the fixed internal-range block
-                  -- on the dist.tarball host gate. The same list applies to every mount,
-                  -- because a network's internal ranges are a deployment-wide fact.
-                  pdAdditionalBlockedRanges = egrAdditionalBlockedRanges (cfgEgress app)
-                , pdLimits = limits
-                , pdInboundToken = srvAuthToken (cfgServer app)
-                , pdNow = clock
-                , pdAdvisoryEtag = rdCurrentAdvisoryEtag ruleDeps
-                , pdNoteAdmission = noteAdmission (rdSourceReporter ruleDeps)
-                , pdHelp = helpMessage
-                , -- The global public-integrity admission floor, validated at config
-                  -- load, carried onto every mount's deps so the public gate refuses
-                  -- a below-floor version.
-                  pdMinIntegrity = intMinPublic (cfgIntegrity app)
-                , -- The trusted-integrity admission floor: the global default
-                  -- (SHA-256, loosenable below it), refined per mount so a legacy
-                  -- registry's loosening never leaks onto a neighbouring mount.
-                  pdMinTrustedIntegrity = fromMaybe (intMinTrusted (cfgIntegrity app)) (miMinTrusted (mntIntegrity mcfg))
-                , pdMetadata = adapterMetadata adapter
-                , pdArtifact = adapterArtifact adapter
-                , pdEgressUrl = mkRegistryUrl
-                }
+-- A mount the pass cleared no publication for leaves @PUT \/{pkg}@ answering @405@.
+mountPublishDeps :: WiringContext -> ValidatedPlan -> VettedMount -> Maybe PublishDeps
+mountPublishDeps ctx plan vetted =
+    Map.lookup (vmEcosystem vetted) (vpPublications plan)
+        >>= publishDepsFor (vmAdapter vetted) (wcApp ctx) (wcLimits ctx) (wcPublishBudget ctx) (wcHelp ctx)
+
+-- The ecosystem-shaped fields are the adapter's own records, carried whole, and the rest is the
+-- mount's configuration. @pdMountBaseUrl@ owns the @dist.tarball@ base.
+packumentDepsFor :: WiringContext -> RegistryAdapter -> Mount -> MountConfig -> IO PackumentDeps
+packumentDepsFor ctx adapter mount mcfg = do
+    -- 'prepare' allocates an effectful rule's resilience policy and breaker once per mount.
+    -- 'pdAdvisoryEtag' reads the current ETag through those same 'RuleDeps', so no generation is pinned at boot.
+    let ruleDeps = wcRuleDeps ctx (mountEcosystem mount)
+    prepared <- prepare ruleDeps (mountPolicy mount)
+    let regs = mountRegistries mount
+        app = wcApp ctx
+    pure
+        PackumentDeps
+            { pdUpstreams =
+                mountUpstreams
+                    (artifactHosts (adapterArtifact adapter))
+                    (regPrivateUpstream regs)
+                    (regPublicUpstream regs)
+                    (maybe NoMirrorWrite (MirrorOnAdmit . mtUrl) (regMirrorTarget regs))
+            , -- Deny by default: a mount that declares no namespaces owns no first-party name.
+              pdFirstParty = maybe (const False) firstPartyName (mntFirstParty mcfg)
+            , pdMountBaseUrl = mountBaseUrl (srvPublicUrl (cfgServer app)) (mountEcosystem mount)
+            , pdRules = prepared
+            , -- Operator ranges extending the fixed internal-range block on the @dist.tarball@ host
+              -- gate. One list for every mount: internal ranges are a deployment-wide fact.
+              pdAdditionalBlockedRanges = egrAdditionalBlockedRanges (cfgEgress app)
+            , pdLimits = wcLimits ctx
+            , pdInboundToken = srvAuthToken (cfgServer app)
+            , pdNow = wcClock ctx
+            , pdAdvisoryEtag = rdCurrentAdvisoryEtag ruleDeps
+            , pdNoteAdmission = noteAdmission (rdSourceReporter ruleDeps)
+            , pdHelp = wcHelp ctx
+            , pdMinIntegrity = intMinPublic (cfgIntegrity app)
+            , -- Refined per mount, so a legacy registry's loosening below the global default
+              -- never leaks onto a neighbouring mount.
+              pdMinTrustedIntegrity = fromMaybe (intMinTrusted (cfgIntegrity app)) (miMinTrusted (mntIntegrity mcfg))
+            , pdMetadata = adapterMetadata adapter
+            , pdArtifact = adapterArtifact adapter
+            , pdEgressUrl = mkRegistryUrl
+            }
 
 -- A role that mints nothing references nothing, and a mount with no mirror target never writes,
 -- so neither can fail here.

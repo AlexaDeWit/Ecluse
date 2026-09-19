@@ -19,7 +19,8 @@ import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Core.Breaker (Breaker, initialBreaker, noBreakerReporter, recordFailure)
-import Ecluse.Core.Cve (AdvisoryRange (..), DbEtag (DbEtag))
+import Ecluse.Core.Cve (AdvisoryRange (..))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore, Unbounded))
 import Ecluse.Core.Package

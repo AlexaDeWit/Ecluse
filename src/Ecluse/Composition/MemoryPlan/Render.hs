@@ -48,29 +48,21 @@ renderPlanLines inputs d o =
 renderDegradations :: PlanInputs -> TenantDemands -> ShedOutcomes -> Maybe Int -> [Text]
 renderDegradations inputs d o shedCaps =
     catMaybes
-        [ listToMaybe
-            [ shedWarning "mirror artifact byte cap" (tdArtifactCapDesired d) (soArtifactCapFinal o) "this pod mirrors no artifact it cannot buffer safely"
-            | soMirrorShed o > 0
-            ]
-        , listToMaybe
-            [ shedWarning "cache aggregate" (tdCacheDesired d) (soCacheFinal o) "the proxy serves uncached"
-            | soCacheShed o > 0
-            ]
-        , listToMaybe
-            [ "memory plan: admission shed to "
-                <> show (soAdmissionFinal o)
-                <> " in-flight operation(s) (the material share cannot hold more at the floor response cap)"
-            | soMaterialShed o > 0
-            ]
+        [ shedWarning "mirror artifact byte cap" (tdArtifactCapDesired d) (soArtifactCapFinal o) "this pod mirrors no artifact it cannot buffer safely"
+            <$ guard (soMirrorShed o > 0)
+        , shedWarning "cache aggregate" (tdCacheDesired d) (soCacheFinal o) "the proxy serves uncached"
+            <$ guard (soCacheShed o > 0)
+        , "memory plan: admission shed to "
+            <> show (soAdmissionFinal o)
+            <> " in-flight operation(s) (the material share cannot hold more at the floor response cap)"
+            <$ guard (soMaterialShed o > 0)
         , capabilityShedWarning inputs <$> shedCaps
-        , listToMaybe
-            [ "memory plan: publish aggregate shed to one maximum request (" <> show (soPublishFinal o) <> " bytes)"
-            | soPublishShed o > 0
-            ]
-        , listToMaybe
-            ["memory plan: memory-queue depth shed to " <> show (soDepthFinal o) | soQueueShedBytes o > 0]
-        , listToMaybe
-            [irreducibleMinimumWarning freeOvershoot | soResidualOvershoot o > 0 && freeOvershoot > 0]
+        , "memory plan: publish aggregate shed to one maximum request ("
+            <> show (soPublishFinal o)
+            <> " bytes)"
+            <$ guard (soPublishShed o > 0)
+        , "memory plan: memory-queue depth shed to " <> show (soDepthFinal o) <$ guard (soQueueShedBytes o > 0)
+        , irreducibleMinimumWarning freeOvershoot <$ guard (soResidualOvershoot o > 0 && freeOvershoot > 0)
         ]
   where
     freeOvershoot = overrideFreeOvershoot d

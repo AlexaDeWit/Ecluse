@@ -30,7 +30,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Upstream (Private, Public),
     metricAttributes,
  )
-import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (acmpCompileAccepted, acmpCompileDropped, acmpCompileRun))
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (acmpCompileAccepted, acmpCompileDropped, acmpCompileRun), timedSeconds)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Telemetry.Instruments (
     advisoryCompileMetricsPortOf,
@@ -59,7 +59,6 @@ import Ecluse.Runtime.Telemetry.Instruments (
     registerCredentialTokenTtl,
     reportAdvisoryDatabaseAge,
     reportAdvisorySourceAge,
-    timedSeconds,
  )
 import Ecluse.Runtime.Test.Telemetry (gaugePoints, withTestTelemetry)
 import Ecluse.Test.Support (newTestClock)

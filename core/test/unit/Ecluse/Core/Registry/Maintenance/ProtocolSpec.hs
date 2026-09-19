@@ -39,9 +39,11 @@ import Ecluse.Core.Registry.Maintenance (
     VersionOutcome (VersionRefused, VersionRemoved, VersionUncertain, VersionUnreached),
     VersionPresence (VersionServed),
     collectPages,
-    noNameAlphabet,
     refusalCode,
     storeFaultOfMetadata,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    noNameAlphabet,
     wholeNameSpace,
  )
 import Ecluse.Core.Registry.Maintenance.Protocol (

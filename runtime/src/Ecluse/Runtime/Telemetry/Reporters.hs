@@ -47,14 +47,17 @@ newDeferredMetrics clock = DeferredMetrics <$> newIORef Nothing <*> newIORef Map
 -- | Install instruments once after boot, including observations received before installation.
 installMetrics :: DeferredMetrics -> Metrics -> IO ()
 installMetrics deferred metrics = do
-    registerCredentialTokenTtl metrics (dmClock deferred) $ do
-        expiries <- readIORef (dmExpiries deferred)
-        pure
-            [ (provider, expiry)
-            | provider <- Universe.universe
-            , Just expiry <- [viaNonEmpty Foldable1.minimum [stamp | (label, stamp) <- Map.elems expiries, label == provider]]
-            ]
+    registerCredentialTokenTtl metrics (dmClock deferred) (soonestExpiries <$> readIORef (dmExpiries deferred))
     writeIORef (dmMetrics deferred) (Just metrics)
+
+-- The soonest expiry each provider holds, so a gauge reports the lifetime that runs out first.
+-- A provider with no credential is absent rather than zero.
+soonestExpiries :: Map Ecosystem (Provider, UTCTime) -> [(Provider, UTCTime)]
+soonestExpiries expiries =
+    [ (provider, expiry)
+    | provider <- Universe.universe
+    , Just expiry <- [viaNonEmpty Foldable1.minimum [stamp | (label, stamp) <- Map.elems expiries, label == provider]]
+    ]
 
 withDeferredMetrics :: DeferredMetrics -> (Metrics -> IO ()) -> IO ()
 withDeferredMetrics deferred record = readIORef (dmMetrics deferred) >>= maybe pass record

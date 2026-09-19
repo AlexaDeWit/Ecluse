@@ -2,13 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition root's worker bundle construction: the per-ecosystem 'WorkerPolicies'
-the mirror worker dispatches every job through.
+{- | The composition root's worker bundle construction: the per-ecosystem 'WorkerPolicies' the
+mirror worker dispatches every job through.
 
-'Ecluse.Service.withServiceRuntime' consumes it for every role, so the embedded and the
-dedicated worker dispatch through one construction. Only the composition root consumes the
-adapter registry: the worker receives plain handles. Each bundle reuses its mount's __own__
-'PackumentDeps', so the ingest decision cannot diverge from the serve decision.
+Only the composition root consumes the adapter registry, so the worker receives plain handles.
+Each bundle reuses its mount's __own__ 'PackumentDeps', so ingest cannot diverge from serve.
 -}
 module Ecluse.Composition.Worker (
     workerPoliciesFor,
@@ -20,8 +18,8 @@ import Data.Map.Strict qualified as Map
 import Ecluse.Composition (PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl))
 import Ecluse.Core.Credential (mintSecret)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
-import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish, publishCodec)
-import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewReads))
+import Ecluse.Core.Registry.Adapter (adapterFor, adapterPublish)
+import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataNewReads), AdapterPublish (publishCodec))
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Origin (anonymousOrigin)
 import Ecluse.Core.Registry.Publish (

@@ -4,11 +4,9 @@
 
 {- | The advisory-range vocabulary of the OSV pipeline.
 
-"Ecluse.Core.Osv.Advisory" and "Ecluse.Core.Osv.Compile" write these bounds into the
-compiled artifact, and "Ecluse.Core.Cve" and "Ecluse.Core.Rules" read them back. The
-vocabulary lives apart from both so the reading side never imports the writing side.
-
-Nothing here evaluates. The module holds dependency-light data only.
+"Ecluse.Core.Osv.Advisory" and "Ecluse.Core.Osv.Compile" write these bounds into the compiled
+artifact, and "Ecluse.Core.Cve" and "Ecluse.Core.Rules" read them back. The vocabulary lives
+apart from both so the reading side never imports the writing side.
 -}
 module Ecluse.Core.Osv.Types (
     UpperBound (..),

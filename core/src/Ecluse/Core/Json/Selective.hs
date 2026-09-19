@@ -12,7 +12,6 @@ module Ecluse.Core.Json.Selective (
     -- * Bounded selection
     findInRecord,
     collectFromArray,
-    selectFromArray,
     selectIndexedFromArray,
     materialiseWithinBudget,
 
@@ -37,19 +36,17 @@ import Data.ByteString qualified as BS
 
 import Ecluse.Core.Security (withinNestingBudget)
 
-{- | Why a selective decode could not yield a value. These are the two refusal causes a
-whole-document decode would also raise, so a caller maps them onto its own error vocabulary.
+{- | Why a selective decode could not yield a value: the two causes a whole-document decode
+would also raise, which a caller maps onto its own error vocabulary.
 -}
 data SelectiveError
-    = {- | The token stream was not well-formed JSON: malformed bytes anywhere, or trailing
-      non-whitespace after the top-level value.
-      -}
+    = -- | Malformed bytes anywhere, or trailing non-whitespace after the top-level value.
       SelectiveUndecodable
     | -- | Some value nested deeper than the depth budget allowed.
       SelectiveTooDeeplyNested
     deriving stock (Eq, Show)
 
--- | Find the first occurrence of a record key, returning its value, the raw entry count, and continuation.
+-- | Find a record key's first occurrence, with the raw entry count and the continuation.
 findInRecord :: Int -> Text -> TkRecord k String -> Either SelectiveError (Maybe Value, Int, k)
 findInRecord childBudget target = go Nothing 0
   where
@@ -69,12 +66,12 @@ are skipped unallocated. The scan runs to the end, so a malformed unpicked item 
 collectFromArray :: Int -> (Int -> Bool) -> TkArray k String -> Either SelectiveError ([Value], Int, k)
 collectFromArray budget pick = selectFromArray budget (\position _ -> Right (pick position))
 
-{- | Collect the items a probe accepts, deciding from an item's own lazy tokens so reading one
+{- Collect the items a probe accepts, deciding from an item's own lazy tokens so reading one
 discriminating member costs no materialised value. The scan still runs to the array's end.
 -}
 selectFromArray ::
     Int ->
-    -- | The probe: an item's position and its own tokens, which continue into the rest of the array.
+    -- The probe: an item's position and its own tokens, which continue into the rest of the array.
     (Int -> Tokens (TkArray k String) String -> Either SelectiveError Bool) ->
     TkArray k String ->
     Either SelectiveError ([Value], Int, k)

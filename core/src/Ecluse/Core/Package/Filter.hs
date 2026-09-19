@@ -57,19 +57,15 @@ decision is 'Admitted', so an undecided one drops fail-closed.
 filterPlanFromDecisions :: Map Text Decision -> FilterPlan
 filterPlanFromDecisions decisions =
     FilterPlan
-        { fpSurvivors = survivors
+        { fpSurvivors = Map.keysSet (Map.filter isApproved decisions)
         , fpDecisions = Map.elems decisions
         }
-  where
-    -- A version survives only on an explicit approval. Every other outcome drops
-    -- it: deny, deny-by-default, undecidable.
-    survivors :: Set Text
-    survivors = Map.keysSet (Map.filter isApproved decisions)
 
-    isApproved :: Decision -> Bool
-    isApproved = \case
-        Admitted{} -> True
-        _ -> False
+-- A version survives only on an explicit approval. Deny, deny-by-default and undecidable drop.
+isApproved :: Decision -> Bool
+isApproved = \case
+    Admitted{} -> True
+    _ -> False
 
 {- | Restrict a 'PackageInfo' to the surviving version keys, pruning @dist-tags@ to targets
 that survive. 'Ecluse.Core.Package.Merge.mergePackuments' treats the result as already gated.
@@ -102,6 +98,14 @@ enforceArtifactLocationsOf :: AllowedHostPorts -> Text -> PackageDetails -> Mayb
 enforceArtifactLocationsOf ecosystemHosts upstreamBaseUrl details =
     fst (partitionArtifacts ecosystemHosts upstreamBaseUrl (renderVersion (pkgVersion details)) details)
 
+-- The reason and the offending URL a refused artifact carries, named so a drop record can
+-- reduce the URL to its authority.
+data ArtifactRefusal = ArtifactRefusal
+    { refusedFile :: Text
+    , refusedReason :: Text
+    , refusedUrl :: Text
+    }
+
 -- 'Nothing' survivors means the version itself drops, recorded once under its version key
 -- rather than once per file, so an emptied version reads as one loss.
 partitionArtifacts :: AllowedHostPorts -> Text -> Text -> PackageDetails -> (Maybe PackageDetails, [InvalidEntry])
@@ -113,16 +117,8 @@ partitionArtifacts ecosystemHosts upstreamBaseUrl rawVersion details =
     resolved = map (resolveArtifact ecosystemHosts upstreamBaseUrl) (toList (pkgArtifacts details))
     refusals = lefts resolved
 
-{- The reason and the offending URL a refused artifact carries, named so a drop record can
-reduce the URL to its authority. -}
-data ArtifactRefusal = ArtifactRefusal
-    { refusedFile :: Text
-    , refusedReason :: Text
-    , refusedUrl :: Text
-    }
-
-{- Record one dropped file under its own name. 'mkInvalidEntry' recognises a scheme-bearing
-string, so the URL is reduced to its authority whatever its spelling. -}
+-- Record one dropped file under its own name. 'mkInvalidEntry' recognises a scheme-bearing
+-- string, so the URL is reduced to its authority whatever its spelling.
 fileDrop :: ArtifactRefusal -> InvalidEntry
 fileDrop refusal =
     mkInvalidEntry InvalidIndexFile (refusedFile refusal) (String (authorityLabel (refusedUrl refusal))) (refusedReason refusal)

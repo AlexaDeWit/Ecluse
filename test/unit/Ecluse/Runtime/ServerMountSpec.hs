@@ -19,8 +19,8 @@ import Test.Hspec.Wai
 
 import Ecluse.Composition.TelemetrySupport (newAdvisoryHandles)
 import Ecluse.Core.Breaker (noBreakerReporter)
-import Ecluse.Core.Cve (DbEtag (DbEtag))
 import Ecluse.Core.Cve.Slot (swapIn)
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (

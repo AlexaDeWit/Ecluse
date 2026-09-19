@@ -10,11 +10,13 @@ module Ecluse.Core.Registry.Sweep.CandidatesSpec (spec) where
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup, DbEtag (DbEtag))
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup)
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Registry.Adapter (ProjectName, adapterProjectName)
+import Ecluse.Core.Registry.Adapter (adapterProjectName)
+import Ecluse.Core.Registry.Adapter.Capability (ProjectName)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.Sweep.Candidates (candidateSet, identityDenyNames, inCandidates)

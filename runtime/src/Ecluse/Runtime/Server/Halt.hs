@@ -43,15 +43,13 @@ defaultInteractiveHalt =
         , awaitHaltSignal = awaitStdinEof
         , halt = exitImmediately (ExitFailure 130)
         }
-  where
-    -- On a terminal, end-of-input arrives when the dev presses Ctrl-D.
-    awaitStdinEof :: IO ()
-    awaitStdinEof = go
-      where
-        go =
-            isEOF >>= \case
-                True -> pass
-                False -> void getLine >> go
+
+-- On a terminal, end-of-input arrives when the dev presses Ctrl-D.
+awaitStdinEof :: IO ()
+awaitStdinEof =
+    isEOF >>= \case
+        True -> pass
+        False -> void getLine >> awaitStdinEof
 
 {- | Run an action with the immediate-halt watcher armed only when 'haltOnInteractive' is
 'True'. The watcher lives exactly as long as the action, so it never outlives it.

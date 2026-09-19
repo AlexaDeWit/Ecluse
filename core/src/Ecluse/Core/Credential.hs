@@ -2,39 +2,16 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The outbound-credential handle: it mints the bearer token Écluse uses to
-__write__ approved packages to the mirror target.
+{- | The outbound-credential handle: the bearer token Écluse uses to __write__ approved packages
+to the mirror target. It serves Écluse's own store access only, never a read on a user's behalf:
+a private-upstream read forwards the client's own credential (see
+@docs\/architecture\/registry-model.md@, "Credential flow and authority").
 
-This is one of the two cloud handles. The other is "Ecluse.Core.Queue". It stays
-separate from the protocol handle "Ecluse.Core.Registry" because protocol and
-authentication are orthogonal axes. Every managed npm registry speaks the same npm
-protocol and differs only in how it hands out a bearer token. That holds for AWS
-CodeArtifact, GCP Artifact Registry, and a self-hosted Verdaccio alike (see
-@docs\/architecture\/cloud-backends.md@ → "Credential Provider").
-
-A 'CredentialProvider' serves Écluse's own store access, never a read on a user's
-behalf: the mirror worker's mirror-target write and Dredger's store reads, including its
-preview reads of the private cache. A private-upstream read forwards the /client's/ own
-credential, and a public read is anonymous (see @docs\/architecture\/registry-model.md@ →
-"Credential flow and authority").
-
-Like the other handles, the effectful field returns __'IO', not @App@__. An adapter
-closes over its own backend state (an @amazonka@ env, an HTTP manager) and never
-imports the proxy's @Env@\/@App@. Backends therefore stay decoupled from the core (see
-@docs\/architecture\/technology-stack.md@ → "Key Decisions").
-
-This module holds the handle and its payload types. 'staticProvider' is the
-in-memory leaf: a fixed token with no expiry. The refresh, cache, and expiry policy
-that wraps a per-cloud token mint lives in "Ecluse.Core.Credential.Refresh".
+The handle stays apart from the protocol handle "Ecluse.Core.Registry" because every managed
+registry speaks one protocol and differs only in how it hands out a token. Refresh, cache and
+expiry policy over a per-cloud mint live in "Ecluse.Core.Credential.Refresh".
 -}
 module Ecluse.Core.Credential (
-    -- * Provider handle
-    CredentialProvider (..),
-    mintSecret,
-
-    -- * Tokens
-    AuthToken (..),
-
     -- * Secrets
     Secret,
     mkSecret,
@@ -43,6 +20,13 @@ module Ecluse.Core.Credential (
     -- * A client's presented credential
     ClientCredential (..),
     bareCredential,
+
+    -- * Tokens
+    AuthToken (..),
+
+    -- * Provider handle
+    CredentialProvider (..),
+    mintSecret,
 
     -- * In-memory double
     staticProvider,
@@ -53,28 +37,40 @@ import Data.ByteArray qualified as BA
 import Data.Time (UTCTime)
 import Text.Show (showString, showsPrec)
 
-{- | A short-lived secret (an access token).
-
-Redacted in 'Show' and compared in constant time, so holding one cannot disclose it. Build one
-with 'mkSecret' and recover the text __only__ at the point of use with 'unSecret'.
+{- | A short-lived secret (an access token). Build one with 'mkSecret' and recover the text
+__only__ at the point of use with 'unSecret'.
 -}
 newtype Secret = Secret Text
 
-{- | Constant-time equality over the UTF-8 encoding of the wrapped token.
-
-The @ECLUSE_SERVER__AUTH_TOKEN@ edge gate compares a client's token through this instance.
-A short-circuiting compare would leak the secret's prefix length to a remote attacker. The token
-length still leaks, and Écluse accepts that.
+{- | Constant-time equality over the UTF-8 encoding. The @ECLUSE_SERVER__AUTH_TOKEN@ edge gate
+compares through it, a short-circuit would leak the prefix length. The token length still leaks.
 -}
 instance Eq Secret where
     Secret a == Secret b = BA.constEq (encodeUtf8 a :: ByteString) (encodeUtf8 b :: ByteString)
 
-{- | Render a fixed placeholder, __never__ the secret text, so no @show@-based signal can
-disclose it. It defines 'showsPrec' because relude re-exports a polymorphic @show@ that is not
-the class method.
+{- | Render a fixed placeholder, __never__ the secret text. It defines 'showsPrec' because relude
+re-exports a polymorphic @show@ that is not the class method.
 -}
 instance Show Secret where
     showsPrec _ _ = showString "Secret <REDACTED>"
+
+-- | The JSON encoding redacts the secret, so it never leaks into a JSON log.
+instance ToJSON Secret where
+    toJSON _ = String "<REDACTED>"
+
+-- | Decoding reads the secret from configuration, for example the environment AST.
+instance FromJSON Secret where
+    parseJSON = withText "Secret" (pure . mkSecret)
+
+-- | Wrap raw token text as a 'Secret'.
+mkSecret :: Text -> Secret
+mkSecret = Secret
+
+{- | Recover the raw token text. Call this __only__ at the point of use, when setting the auth
+header, and never log or otherwise render the result.
+-}
+unSecret :: Secret -> Text
+unSecret (Secret s) = s
 
 {- | A credential as a client presents it. The username is not part of the secret: a gate
 compares 'credSecret' alone, and a passthrough leg renders the pair verbatim.
@@ -91,28 +87,8 @@ data ClientCredential = ClientCredential
 bareCredential :: Secret -> ClientCredential
 bareCredential = ClientCredential Nothing
 
--- | Wrap raw token text as a 'Secret'.
-mkSecret :: Text -> Secret
-mkSecret = Secret
-
-{- | Recover the raw token text from a 'Secret'. Call this __only__ at the point of
-use, when setting the auth header. Never log or otherwise render the result.
--}
-unSecret :: Secret -> Text
-unSecret (Secret s) = s
-
--- | The JSON encoding redacts the secret, so it never leaks into a JSON log.
-instance ToJSON Secret where
-    toJSON _ = String "<REDACTED>"
-
--- | Decoding reads the secret from configuration, for example the environment AST.
-instance FromJSON Secret where
-    parseJSON = withText "Secret" (pure . mkSecret)
-
-{- | A bearer token for a registry endpoint, with its expiry when known.
-
-Cloud token lifetimes run from CodeArtifact's ~12h to ADC's ~1h, so a refresh schedules off
-'authExpiresAt' rather than a fixed interval.
+{- | A bearer token for a registry endpoint. Cloud lifetimes run from CodeArtifact's ~12h to
+ADC's ~1h, so a refresh schedules off 'authExpiresAt' rather than a fixed interval.
 -}
 data AuthToken = AuthToken
     { authSecret :: Secret
@@ -124,21 +100,20 @@ data AuthToken = AuthToken
 
 {- | The credential handle: it yields the token currently valid for the mirror target and
 refreshes it before expiry internally, so no caller blocks on a mint on the hot path.
-'currentToken' returns 'IO', not @App@, which keeps adapters decoupled from the core.
 -}
 newtype CredentialProvider = CredentialProvider
     { currentToken :: IO AuthToken
-    -- ^ The bearer token to use now. An adapter refreshes it behind this field.
+    -- ^ 'IO', not @App@, so an adapter closing over its own backend state stays off the core.
     }
-
-{- | A 'CredentialProvider' that always returns the same token, the @static@ leaf. It never
-refreshes, so it fits a registry reached with a long-lived credential.
--}
-staticProvider :: AuthToken -> CredentialProvider
-staticProvider token = CredentialProvider{currentToken = pure token}
 
 {- | The secret a provider's current token carries, for a caller that presents it and reads no
 expiry. It refreshes behind the provider, so a long-lived caller mints per use.
 -}
 mintSecret :: CredentialProvider -> IO Secret
 mintSecret = fmap authSecret . currentToken
+
+{- | A 'CredentialProvider' that always returns the same token, the @static@ leaf. It never
+refreshes, so it fits a registry reached with a long-lived credential.
+-}
+staticProvider :: AuthToken -> CredentialProvider
+staticProvider token = CredentialProvider{currentToken = pure token}

@@ -27,8 +27,8 @@ import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlan
 import Ecluse.Composition.TelemetrySupport (advisoryAgePoints, newAdvisoryHandles, withRoleTelemetry)
 import Ecluse.Composition.Types (BootRole (BootStorePreview, BootStorePruner))
 import Ecluse.Config (AppConfig (cfgServer), Config (configApp), ServerSettings (srvPort))
-import Ecluse.Core.Cve (DbEtag (DbEtag))
 import Ecluse.Core.Cve.Slot (swapIn)
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName, renderPackageName)
 import Ecluse.Core.Queue (noMirrorQueue)
@@ -39,15 +39,17 @@ import Ecluse.Core.Registry.Maintenance (
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Sweep (sweepCycle)
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt,
     CycleOutcome (outcomeHalt, outcomePrerequisites, outcomeTally),
     PrerequisiteStatus (PrerequisiteUnmet),
+    SweepTally (tallyDeleted),
+    TargetPrerequisites (tpConsent),
+ )
+import Ecluse.Core.Registry.Sweep.Types (
     SweepMount (smStore),
     SweepPacing (swpDeletionCap),
     SweepReport (reportCapHalts, reportRemoval),
-    SweepTally (tallyDeleted),
-    TargetPrerequisites (tpConsent),
     walkMarkerOf,
  )
 import Ecluse.Core.Rules.Types (Rule (DenyByIdentity))

@@ -24,36 +24,12 @@ module Ecluse.Core.Registry.Sweep.Types (
     SweepReport (..),
     SweepPorts (..),
     SweepAudit (..),
-
-    -- * What one cycle did
-    SweepTally (..),
-    CycleHalt (..),
-    CycleOutcome (..),
-    outcomeComplete,
-    latches,
-    renderCycleHalt,
-    renderGeneration,
-    renderTally,
-    renderStoreFault,
-    storeSubject,
-
-    -- * What a preview found standing in a real sweep's way
-    TargetPrerequisites (..),
-    PrerequisiteStatus (..),
-    prerequisitesMet,
-    renderPrerequisites,
-
-    -- * What a cycle could not read
-    EvidenceGaps (..),
-    unloadedGeneration,
-    unreadManifest,
-    evidenceComplete,
-    renderEvidenceGaps,
+    sweepTargetOf,
+    locatedPorts,
 
     -- * The cycle's running state
     SweepState (..),
     newSweepState,
-    labelAudit,
     record,
     recordMetric,
     recordTally,
@@ -61,27 +37,26 @@ module Ecluse.Core.Registry.Sweep.Types (
     recordPrerequisites,
 ) where
 
-import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime)
 
-import Ecluse.Core.Cve (DbEtag (DbEtag))
-import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Fault (TransportFault (tfCause, tfDetail), renderTransportCause)
+import Ecluse.Core.Cve.Types (DbEtag)
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (ProjectName)
 import Ecluse.Core.Registry.Maintenance (
     StoreCursor,
     StoreDeletion (dlCursor),
-    StoreFault (faultTransport),
+    StoreFacts (factBackend),
     StoreMaintenance,
-    StoreObservation,
+    StoreObservation (obFacts),
     deletionOf,
     observationOf,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort)
+import Ecluse.Core.Registry.Sweep.Outcome (EvidenceGaps, SweepTally (..), TargetPrerequisites)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps)
 import Ecluse.Core.Rules.Types (Rule)
-import Ecluse.Core.Telemetry.Metrics (SweepResult (..), SweepTarget)
+import Ecluse.Core.Telemetry.Metrics (SweepResult (..), SweepTarget (SweepMirror, SweepPrivate))
 import Ecluse.Core.Telemetry.Record (DredgerMetricsPort (dmpSweptVersion))
 
 -- | One mount's sweepable store, and everything that decides for it.
@@ -94,37 +69,29 @@ data SweepMount = SweepMount
     -- ^ The mount's own prepared rule set, the one the serve and ingest gates evaluate.
     , smConfigured :: [Rule]
     {- ^ The same rules as configured values, which a prepared rule no longer carries. The
-    candidate set reads the names an identity deny pins out of these.
+    candidate set reads an identity deny's names out of these.
     -}
     , smRuleDeps :: RuleDeps
-    {- ^ The mount's dependencies for candidate discovery and per-rule lookup acquisition.
-    Candidate discovery and a later verdict can use different generations.
-    -}
+    -- ^ Lookup acquisition, which candidate discovery and a later verdict may take at different generations.
     , smProjectName :: ProjectName
     -- ^ The ecosystem's own name parser, which both halves of the candidate set are read through.
     , smFirstParty :: PackageName -> Bool
-    {- ^ Whether a name belongs to a namespace this deployment owns, the shared predicate
-    derived once at the composition root.
-    -}
+    -- ^ Whether a name belongs to a namespace this deployment owns, derived once at the composition root.
     }
 
-{- | One mount's store as the booting role holds it: the calls that observe it, what this run
-executes against a condemned version, and the cache the mount pairs it with.
--}
+-- | One mount's sweepable store, with the private cache it is always swept beside.
 data SweepStore = SweepStore
     { ssObserve :: StoreObservation
     , ssExecute :: SweepExecution
     , ssPrivate :: SweepCache
-    {- ^ The mount's private cache. Every view of the mount's stores carries it, because the
-    pairing is a fact about the mount rather than about the store in hand.
+    {- ^ Carried by every view of the mount's stores, because the pairing is a fact about the
+    mount rather than about the store in hand.
     -}
     , ssVersionLimit :: Int
     -- ^ Maximum distinct versions held for one package across both observations.
     }
 
-{- | One store's own two halves: what observes it, and what this run executes against a condemned
-version. A cache is paired with no further store, so it carries none.
--}
+-- | One store's own two halves. A cache is paired with no further store, so it carries none.
 data SweepCache = SweepCache
     { scObserve :: StoreObservation
     , scExecute :: SweepExecution
@@ -145,9 +112,7 @@ deletingCache handle = SweepCache{scObserve = observationOf handle, scExecute = 
 previewCache :: StoreObservation -> SweepCache
 previewCache observation = SweepCache{scObserve = observation, scExecute = SweepCounts}
 
-{- | A mount's store: the mirror target's own halves, the private cache it is swept with, and the
-bound the two inventories share.
--}
+-- | A mount's store: the mirror target's halves, its private cache, and the bound they share.
 pairedStore :: Int -> SweepCache -> SweepCache -> SweepStore
 pairedStore limit mirror cache =
     SweepStore{ssObserve = scObserve mirror, ssExecute = scExecute mirror, ssPrivate = cache, ssVersionLimit = limit}
@@ -177,17 +142,15 @@ data SweepPacing = SweepPacing
     , swpChunkPause :: NominalDiffTime
     -- ^ The wait between chunks, and the wait a fault whose advice names no delay takes.
     , swpCyclePause :: NominalDiffTime
-    {- ^ The wait between the end of one cycle and the start of the next, a halted one
-    included. The role's own loop applies it, so a cycle is one supervised step.
+    {- ^ The wait between the end of one cycle and the start of the next, a halted one included.
+    The role's own loop applies it, so a cycle is one supervised step.
     -}
     , swpCycleWindow :: NominalDiffTime
     {- ^ The window an advisory is paced to reach every affected mirrored version inside. It
     covers the rest of the running cycle, the cycle pause, and the next whole cycle.
     -}
     , swpBudgetFraction :: Maybe Rational
-    {- ^ The share of a store's request capacity one sweep may take. Unset, each scope's share
-    is computed from its own tightest quota.
-    -}
+    -- ^ The share of a store's request capacity one sweep may take, else computed per scope.
     , swpDeletionCap :: Int
     -- ^ Versions one cycle may hand over for deletion before it halts for good.
     , swpShape :: SweepShape
@@ -215,8 +178,8 @@ data SweepShape
       bounded by the listing for store size and by advisory hits for reads.
       -}
       SweepCandidates
-    | {- | Every name in the store, bucket by bucket, resuming from the store's own cursor.
-      It covers a rule-configuration change, which no candidate set can see.
+    | {- | Every name in the store, bucket by bucket, resuming from the store's own cursor. It
+      covers a rule-configuration change, which no candidate set can see.
       -}
       SweepEverything
     deriving stock (Eq, Show)
@@ -230,9 +193,7 @@ data SweepReport = SweepReport
     , reportOpening :: Text
     -- ^ How a removal's audit line opens.
     , reportCapHalts :: Bool
-    {- ^ Whether reaching the cap stops the cycle. A preview counts past it instead, so it
-    reports the full reach a real run would have.
-    -}
+    -- ^ Whether reaching the cap stops the cycle. A preview counts past it instead.
     }
 
 {- | Where the sweep reports. The two severities are separate fields rather than a level
@@ -266,219 +227,32 @@ data SweepPorts = SweepPorts
     -- ^ Where the cycle's own request counts are measured and the next cycle's rate installed.
     }
 
--- | What one cycle did with the versions it examined.
-data SweepTally = SweepTally
-    { tallyExamined :: Int
-    , tallyDeleted :: Int
-    , tallyKept :: Int
-    , tallyGuardSkipped :: Int
-    }
-    deriving stock (Eq, Show)
-
-instance Semigroup SweepTally where
-    left <> right =
-        SweepTally
-            { tallyExamined = tallyExamined left + tallyExamined right
-            , tallyDeleted = tallyDeleted left + tallyDeleted right
-            , tallyKept = tallyKept left + tallyKept right
-            , tallyGuardSkipped = tallyGuardSkipped left + tallyGuardSkipped right
-            }
-
-instance Monoid SweepTally where
-    mempty = SweepTally 0 0 0 0
-
--- | Why a cycle stopped before it finished.
-data CycleHalt
-    = -- | The store carries no consent marker, with the backend and its how-to-attach text.
-      HaltConsentWithheld Ecosystem Text Text
-    | -- | The store refills itself from elsewhere, so deleting from it changes nothing.
-      HaltStorePreserved Ecosystem Text Text
-    | {- | The cycle reached its deletion cap, carrying the cap, what it handed over, and the
-      advisory generation of the exact denial that reached the cap. No later cycle runs.
-      -}
-      HaltDeletionCap Int Int (Maybe DbEtag)
-    | -- | A store call produced no answer and its retry advice ran out, carrying the fault.
-      HaltStoreFault Ecosystem Text Text
-    | {- | A bucket outgrew the memory budget and nothing narrows it further, so the walk cannot
-      read it without holding more than the budget allows.
-      -}
-      HaltBucketUnsplittable Ecosystem Text Text
-    deriving stock (Eq, Show)
-
--- | One cycle's result: what it did, why it stopped early if it did, and what it could not read.
-data CycleOutcome = CycleOutcome
-    { outcomeHalt :: Maybe CycleHalt
-    , outcomeTally :: SweepTally
-    , outcomePrerequisites :: [TargetPrerequisites]
-    {- ^ What a preview found of each target's standing permissions, in mount order. A run that
-    refuses on them instead reports none.
-    -}
-    , outcomeEvidence :: EvidenceGaps
-    -- ^ What the cycle could not read, which is separate from whether a real sweep may delete.
-    }
-    deriving stock (Eq, Show)
-
-{- | Whether a cycle's counts cover what they claim to: it walked the whole store it was given,
-and every rule that decided read the facts it needed. Nothing about permission enters here.
+{- | Which of a mount's two locations a store is. The decision keys on the backend name, so a
+mount whose mirror store and private cache report one name reads as the mirror at both.
 -}
-outcomeComplete :: CycleOutcome -> Bool
-outcomeComplete outcome =
-    isNothing (outcomeHalt outcome) && evidenceComplete (outcomeEvidence outcome)
+sweepTargetOf :: SweepMount -> StoreObservation -> SweepTarget
+sweepTargetOf mount store
+    | factBackend (obFacts store) == factBackend (obFacts (ssObserve (smStore mount))) = SweepMirror
+    | otherwise = SweepPrivate
 
-{- | What a preview could see of one standing permission. A preview exercises none of them, so an
-unmet one is reported and never acted on.
--}
-data PrerequisiteStatus
-    = -- | The store answered, and a real sweep would pass this one.
-      PrerequisiteMet
-    | -- | The store answered, and a real sweep would stop here, carrying the backend's own text.
-      PrerequisiteUnmet Text
-    | -- | The store did not answer, so nothing the preview read settles it.
-      PrerequisiteUnread Text
-    deriving stock (Eq, Show)
+-- | The ports an audit line from one located store is written through, labelled and targeted.
+locatedPorts :: SweepMount -> StoreObservation -> SweepPorts -> SweepPorts
+locatedPorts mount store ports =
+    ports
+        { sweepAudit = labelAudit (factBackend (obFacts store)) (sweepAudit ports)
+        , sweepTarget = sweepTargetOf mount store
+        }
 
--- | One target's standing permissions as a preview found them.
-data TargetPrerequisites = TargetPrerequisites
-    { tpEcosystem :: Ecosystem
-    , tpBackend :: Text
-    , tpConsent :: PrerequisiteStatus
-    -- ^ Whether the store carries the operator's own deletion consent marker.
-    , tpClassification :: PrerequisiteStatus
-    -- ^ Whether deleting from the store destroys anything.
-    }
-    deriving stock (Eq, Show)
-
--- | Whether a real sweep of this target would pass both standing permissions.
-prerequisitesMet :: TargetPrerequisites -> Bool
-prerequisitesMet target = all (== PrerequisiteMet) [tpConsent target, tpClassification target]
-
-{- | One target's line, which a preview prints above its counts. It closes on what no read
-settles: a preview deletes nothing, so it proves no authority to delete.
--}
-renderPrerequisites :: TargetPrerequisites -> Text
-renderPrerequisites target =
-    storeSubject (tpEcosystem target) (tpBackend target)
-        <> ": deletion consent "
-        <> renderPrerequisite (tpConsent target)
-        <> ", and store classification "
-        <> renderPrerequisite (tpClassification target)
-        <> ". This preview deleted nothing, so it proves no authority to delete"
-
-renderPrerequisite :: PrerequisiteStatus -> Text
-renderPrerequisite = \case
-    PrerequisiteMet -> "is met"
-    PrerequisiteUnmet detail -> "is not met: " <> detail
-    PrerequisiteUnread detail -> "could not be read: " <> detail
-
-{- | What one cycle could not read. A count taken with a gap open describes part of the store, so
-it is reported apart from the counts themselves rather than folded into them.
--}
-data EvidenceGaps = EvidenceGaps
-    { gapAdvisoryGeneration :: Int
-    -- ^ Mounts that decided with no advisory generation loaded, so every advisory rule abstained.
-    , gapManifests :: Int
-    -- ^ Packages whose metadata the store did not serve, decided on identity alone.
-    }
-    deriving stock (Eq, Show)
-
-instance Semigroup EvidenceGaps where
-    left <> right =
-        EvidenceGaps
-            { gapAdvisoryGeneration = gapAdvisoryGeneration left + gapAdvisoryGeneration right
-            , gapManifests = gapManifests left + gapManifests right
-            }
-
-instance Monoid EvidenceGaps where
-    mempty = EvidenceGaps 0 0
-
--- | The gap one mount deciding without an advisory generation leaves.
-unloadedGeneration :: EvidenceGaps
-unloadedGeneration = mempty{gapAdvisoryGeneration = 1}
-
--- | The gap one package the store served no metadata for leaves.
-unreadManifest :: EvidenceGaps
-unreadManifest = mempty{gapManifests = 1}
-
--- | Whether a cycle read every fact its counts rest on.
-evidenceComplete :: EvidenceGaps -> Bool
-evidenceComplete gaps = gaps == mempty
-
--- | What a cycle could not read, as its closing line reports it, naming only what it did miss.
-renderEvidenceGaps :: EvidenceGaps -> Text
-renderEvidenceGaps gaps =
-    T.intercalate
-        ", "
-        ( catMaybes
-            [ counted (gapAdvisoryGeneration gaps) "mount" "decided without an advisory generation"
-            , counted (gapManifests gaps) "package" "decided without the store's own metadata"
-            ]
-        )
+-- Keep per-target audit messages distinct when one cycle sweeps associated stores.
+labelAudit :: Text -> SweepAudit -> SweepAudit
+labelAudit target audit =
+    SweepAudit
+        { auditInfo = labelled (auditInfo audit)
+        , auditWarn = labelled (auditWarn audit)
+        , auditError = labelled (auditError audit)
+        }
   where
-    counted count noun what
-        | count <= 0 = Nothing
-        | count == 1 = Just ("1 " <> noun <> " " <> what)
-        | otherwise = Just (show count <> " " <> noun <> "s " <> what)
-
-{- | Whether a halt stops the Dredger for the life of the process. Only the cap does, because a
-breaker that re-closes itself is not a breaker; every other halt is re-read next cycle.
--}
-latches :: CycleHalt -> Bool
-latches = \case
-    HaltDeletionCap{} -> True
-    HaltConsentWithheld{} -> False
-    HaltStorePreserved{} -> False
-    HaltStoreFault{} -> False
-    HaltBucketUnsplittable{} -> False
-
--- | The operator-facing text of a halt, naming the backend that raised it and what to fix.
-renderCycleHalt :: CycleHalt -> Text
-renderCycleHalt = \case
-    HaltConsentWithheld eco backend descriptor ->
-        storeSubject eco backend <> " carries no deletion consent marker: " <> descriptor
-    HaltStorePreserved eco backend why ->
-        storeSubject eco backend <> " refills itself, so a delete changes nothing: " <> why
-    HaltDeletionCap cap issued etag ->
-        "the cycle handed over "
-            <> show issued
-            <> " versions and reached its deletion cap of "
-            <> show cap
-            <> " under advisory generation "
-            <> renderGeneration etag
-            <> ", so the Dredger runs no further cycle until it is restarted deliberately"
-    HaltStoreFault eco backend fault ->
-        "a call against " <> storeSubject eco backend <> " produced no answer: " <> fault
-    HaltBucketUnsplittable eco backend bucket ->
-        "the walk over "
-            <> storeSubject eco backend
-            <> " cannot read the bucket of names beginning \""
-            <> bucket
-            <> "\": it holds more names than one bucket may, and no narrower bucket divides them"
-
--- | The advisory generation an audit line names, or that none was loaded.
-renderGeneration :: Maybe DbEtag -> Text
-renderGeneration = maybe "none" (\(DbEtag etag) -> etag)
-
--- | Name a store without assuming whether it is the mirror or private target.
-storeSubject :: Ecosystem -> Text -> Text
-storeSubject eco backend = "the " <> ecosystemName eco <> " store on " <> backend
-
--- | One cycle's counts, as its closing line reports them.
-renderTally :: SweepTally -> Text
-renderTally tally =
-    "examined "
-        <> show (tallyExamined tally)
-        <> ", deleted "
-        <> show (tallyDeleted tally)
-        <> ", kept "
-        <> show (tallyKept tally)
-        <> ", guard-skipped "
-        <> show (tallyGuardSkipped tally)
-
--- | A store fault as an operator reads it: the transport's own cause and its bounded detail.
-renderStoreFault :: StoreFault -> Text
-renderStoreFault fault = renderTransportCause (tfCause transport) <> ": " <> tfDetail transport
-  where
-    transport = faultTransport fault
+    labelled write = write . ((target <> ": ") <>)
 
 -- | Cycle totals and pacing. The issued count bounds attempts, while the tally records outcomes.
 data SweepState = SweepState
@@ -501,14 +275,6 @@ newSweepState =
         <*> newIORef 0
         <*> newIORef mempty
         <*> newIORef []
-
--- | Record one gap in what this cycle could read.
-recordGap :: SweepState -> EvidenceGaps -> IO ()
-recordGap counters gaps = modifyIORef' (stEvidence counters) (<> gaps)
-
--- | Record one target's standing permissions, which only a preview reads rather than acts on.
-recordPrerequisites :: SweepState -> TargetPrerequisites -> IO ()
-recordPrerequisites counters target = modifyIORef' (stPrerequisites counters) (target :)
 
 -- | Count one version's disposition, in the cycle tally and at the metrics port together.
 record :: SweepPorts -> SweepState -> SweepResult -> IO ()
@@ -534,13 +300,10 @@ tallyOf = \case
     SweepKept -> mempty{tallyKept = 1}
     SweepGuardSkipped -> mempty{tallyGuardSkipped = 1}
 
--- | Keep per-target audit messages distinct when one cycle sweeps associated stores.
-labelAudit :: Text -> SweepAudit -> SweepAudit
-labelAudit target audit =
-    SweepAudit
-        { auditInfo = labelled (auditInfo audit)
-        , auditWarn = labelled (auditWarn audit)
-        , auditError = labelled (auditError audit)
-        }
-  where
-    labelled write = write . ((target <> ": ") <>)
+-- | Record one gap in what this cycle could read.
+recordGap :: SweepState -> EvidenceGaps -> IO ()
+recordGap counters gaps = modifyIORef' (stEvidence counters) (<> gaps)
+
+-- | Record one target's standing permissions, which only a preview reads rather than acts on.
+recordPrerequisites :: SweepState -> TargetPrerequisites -> IO ()
+recordPrerequisites counters target = modifyIORef' (stPrerequisites counters) (target :)

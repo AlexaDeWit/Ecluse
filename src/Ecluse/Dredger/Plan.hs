@@ -27,22 +27,24 @@ import Ecluse.Config (
     AppConfig (cfgDredger),
     DredgerSettings (drgChunkPause, drgChunkSize, drgCyclePause, drgDeletionCap, drgFullWalk, drgRequestBudgetFraction, drgTargetCycleWindow),
  )
-import Ecluse.Core.Registry.Sweep.Pacing (defaultCycleWindow)
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Clock (secondsToMicros)
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt,
     CycleOutcome (outcomeEvidence, outcomeHalt),
-    SweepMount (smConfigured),
-    SweepPacing (SweepPacing, swpBudgetFraction, swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
-    SweepReport (SweepReport, reportCapHalts, reportOpening, reportRemoval),
-    SweepShape (SweepCandidates, SweepEverything),
-    deletionCapPerStore,
     evidenceComplete,
     outcomeComplete,
     renderCycleHalt,
     renderEvidenceGaps,
  )
+import Ecluse.Core.Registry.Sweep.Pacing (defaultCycleWindow)
+import Ecluse.Core.Registry.Sweep.Types (
+    SweepMount (smConfigured),
+    SweepPacing (SweepPacing, swpBudgetFraction, swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
+    SweepReport (SweepReport, reportCapHalts, reportOpening, reportRemoval),
+    SweepShape (SweepCandidates, SweepEverything),
+    deletionCapPerStore,
+ )
 import Ecluse.Core.Rules.Types (readsAdvisories)
-import Ecluse.Core.Supervision (secondsToMicros)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepWouldDelete))
 
 -- | Whether the run deletes, or previews what a run that deletes would reach.

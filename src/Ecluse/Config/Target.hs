@@ -11,16 +11,6 @@ Every other tag admits any https registry the egress boundary cleared. Each refu
 so a store this build cannot address is refused at load rather than at the first write.
 -}
 module Ecluse.Config.Target (
-    -- * The resolved value
-    StoreTag (..),
-    storeTagName,
-    MintPlan (..),
-    ControlPlane (..),
-    StoreBackend (..),
-    sbTag,
-    sbMint,
-    sbControl,
-
     -- * Resolution
     resolveStoreBackend,
     resolvePrivateBackend,
@@ -35,17 +25,11 @@ import Data.Text qualified as T
 
 import Ecluse.Config.Types (
     ConfigError (..),
-    ControlPlane (..),
-    MintPlan (..),
     MirrorEndpoint (..),
     MirrorWrite (..),
     StoreBackend (..),
     StoreTag (..),
     Target (..),
-    sbControl,
-    sbMint,
-    sbTag,
-    storeTagName,
  )
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Security (hostAddress)
@@ -151,8 +135,8 @@ repositoryOfPath format url = case pathSegments url of
 pathSegments :: Text -> [Text]
 pathSegments = filter (not . T.null) . T.splitOn "/" . registryPath
 
-{- | Parse @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ into (domain, owner, region). The owner is the
-12-digit account id after the __last__ hyphen, so a domain may carry them. Any other host is 'Nothing'.
+{- | Parse @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ into (domain, owner, region).
+The owner is the 12-digit account id after the __last__ hyphen, so a domain may carry them.
 -}
 parseCodeArtifactHost :: Text -> Maybe (Text, Text, Text)
 parseCodeArtifactHost host =

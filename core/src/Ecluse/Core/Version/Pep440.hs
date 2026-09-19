@@ -4,22 +4,10 @@
 
 {- | The PEP 440 grammar and ordering (PyPI).
 
-'parsePep440' reads a PEP 440 version into a 'Pep440Key', the canonical ordering
-tuple @(epoch, release, pre, post, dev, local)@. It canonicalises non-normalised
-spellings (@1.0ALPHA1@, @1.0-1@, trailing zeros, …) along the way and strips the
-release's trailing zeros (@1.0 == 1.0.0@). The rank tuples encode PEP 440's
-None-handling, so 'Ord' on 'Pep440Key' reproduces the spec ordering directly.
-
-* The @p440Pre@ rank is @(band, stage, n)@. The @band@ is __0__ for a dev release with
-  no prerelease and no post, which sorts /before/ all prereleases (@1.0.dev1 < 1.0a1@).
-  It is __1__ for an actual prerelease, with @stage@ a\/b\/rc and its number. It is
-  __2__ for a final or post release, which sorts after prereleases.
-* The @p440Post@ rank is @(0,0)@ when absent, so a final sorts below any post-release.
-* The @p440Dev@ rank is @(0,n)@ when present and @(1,0)@ when absent, so a dev release
-  sorts below its non-dev sibling.
-
-A PEP 440 version is __stable__ iff it is neither a pre-release (@a@\/@b@\/@rc@) nor
-a dev release. Post-releases stay stable.
+'parsePep440' canonicalises a version (@1.0ALPHA1@, @1.0-1@, trailing zeros, ...) into a
+'Pep440Key', the ordering tuple @(epoch, release, pre, post, dev, local)@ whose rank fields
+make the derived 'Ord' reproduce the spec ordering. A version is stable iff it is neither a
+pre-release (@a@\/@b@\/@rc@) nor a dev release. Post-releases stay stable.
 -}
 module Ecluse.Core.Version.Pep440 (
     Pep440Key (..),
@@ -34,30 +22,26 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Version.Token (VToken (VNum, VStr), classifyRun, isAsciiAlphaNum, numOr0, parseNumSeg, withinVersionLength)
 
-{- | A parsed PEP 440 version as its canonical ordering key. The release has trailing
-zeros stripped (@1.0 == 1.0.0@), and the rank tuples encode PEP 440's None-handling for
-the derived 'Ord':
-
-\* @p440Pre@ is @(band, stage, n)@. Band __0__ is a dev release with no prerelease and no
-post, sorting before all prereleases (@1.0.dev1 < 1.0a1@). Band __1__ is a prerelease,
-with @stage@ a\/b\/rc. Band __2__ is a final or post release.
-\* @p440Post@ is @(0,0)@ when absent, so a final sorts below any post-release.
-\* @p440Dev@ is @(0,n)@ when present and @(1,0)@ when absent, so a dev release sorts below
-its non-dev sibling.
+{- | A parsed PEP 440 version as its canonical ordering key. The release carries no trailing
+zeros (@1.0 == 1.0.0@), and the rank fields encode PEP 440's None-handling for the derived 'Ord'.
 -}
 data Pep440Key = Pep440Key
     { p440Epoch :: Integer
     , p440Release :: [Integer]
     , p440Pre :: (Int, Int, Integer)
+    {- ^ @(band, stage, n)@. Band __0__ is a dev release with no prerelease and no post, which
+    sorts before all prereleases (@1.0.dev1 < 1.0a1@), __1__ a prerelease, __2__ a final or post.
+    -}
     , p440Post :: (Int, Integer)
+    -- ^ @(0, 0)@ when absent, so a final sorts below any post-release.
     , p440Dev :: (Int, Integer)
+    -- ^ @(0, n)@ when present and @(1, 0)@ when absent, so a dev release sorts below its sibling.
     , p440Local :: [VToken]
     }
     deriving stock (Eq, Ord, Show)
 
-{- | Parse a PEP 440 version, canonicalising non-normalised spellings
-(@1.0ALPHA1@, @1.0-1@, trailing zeros, …). Fails if the string is not a valid
-PEP 440 version (e.g. no release, or unrecognised trailing text).
+{- | Parse a PEP 440 version, canonicalising non-normalised spellings. Fails on anything that
+is not one: no release, or unrecognised trailing text.
 -}
 parsePep440 :: Text -> Maybe Pep440Key
 parsePep440 raw = do
@@ -91,7 +75,7 @@ parseRelease :: Text -> Maybe ([Integer], Text)
 parseRelease afterEpoch = do
     let (releaseText, suffix) = T.span (\c -> isDigit c || c == '.') afterEpoch
         -- 'releaseText' greedily grabs the dot that separates the release from a suffix
-        -- ("1.0.dev1" → "1.0." → ["1","0",""]), so drop one trailing empty segment.
+        -- ("1.0.dev1" gives "1.0.", then ["1","0",""]), so drop one trailing empty segment.
         relSegs = dropTrailingEmpty (T.splitOn "." releaseText)
     guard (not (any T.null relSegs))
     release <- traverse parseNumSeg relSegs
@@ -181,10 +165,8 @@ consumePre s =
         , ("c", 2)
         ]
 
-{- Consume an optional post-release (@.postN@, @.revN@, @.rN@, or @-N@) into @Just n@.
-PEP 440 normalises all three labels to @post@. It tries @post@ and @rev@ before the
-single-letter @r@, so it never mis-splits @revN@ as @r@ + @evN@.
--}
+{- Consume an optional post-release (@.postN@, @.revN@, @.rN@, or @-N@) into @Just n@. @post@
+and @rev@ are tried before the single-letter @r@, so @revN@ never mis-splits as @r@ + @evN@. -}
 consumePost :: Text -> (Maybe Integer, Text)
 consumePost s =
     case asum (map (\lbl -> T.stripPrefix lbl (dropSep s)) ["post", "rev", "r"]) of
@@ -206,8 +188,8 @@ consumeDev s =
              in (Just (numOr0 digits), rest)
         Nothing -> (Nothing, s)
 
-{- | Render a parsed version as the one spelling Python's @packaging.utils.canonicalize_version@
-produces, keeping no trailing release zeros so @1.0@ and @1.0.0@ render alike.
+{- | Render a parsed version as Python's @packaging.utils.canonicalize_version@ spells it,
+keeping no trailing release zeros so @1.0@ and @1.0.0@ render alike.
 
 >>> renderPep440 <$> parsePep440 "1.0.0"
 Just "1"
@@ -256,13 +238,11 @@ renderToken = \case
     VNum n -> show n
     VStr s -> s
 
-{- | Whether a PEP 440 version is stable: neither a pre-release (@a@\/@b@\/@rc@) nor a dev
-release. A post-release /is/ stable, so @1.0.post1@ is stable and @1.0a1.dev2@ is not.
+{- | Whether a PEP 440 version is stable: neither a pre-release nor a dev release. A
+post-release /is/ stable, so @1.0.post1@ is stable and @1.0a1.dev2@ is not.
 -}
 isPep440Stable :: Pep440Key -> Bool
-isPep440Stable k = noPre k && noDev k
+isPep440Stable k = preBand /= 1 && devBand /= 0
   where
-    -- Final/post: no prerelease band (1) and no dev band (0). 'Pep440Key' documents
-    -- the field semantics. Post-releases stay stable.
-    noPre key = case p440Pre key of (band, _, _) -> band /= 1
-    noDev key = case p440Dev key of (band, _) -> band /= 0
+    (preBand, _, _) = p440Pre k
+    (devBand, _) = p440Dev k

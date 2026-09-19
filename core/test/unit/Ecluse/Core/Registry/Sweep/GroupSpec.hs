@@ -11,7 +11,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
-import Ecluse.Core.Cve (DbEtag (DbEtag))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), PackageName, mkPackageName)
@@ -23,29 +23,33 @@ import Ecluse.Core.Registry.Maintenance (
     StoreObservation (..),
     StoredVersion (StoredVersion),
     VersionPresence (VersionServed),
-    mkNameAlphabet,
     protocolFault,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    mkNameAlphabet,
     renderNamePrefix,
  )
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Group (boundedVersions)
-import Ecluse.Core.Registry.Sweep.Types (
+import Ecluse.Core.Registry.Sweep.Outcome (
     CycleHalt (HaltBucketUnsplittable, HaltStoreFault),
     CycleOutcome (..),
     EvidenceGaps (gapManifests),
     PrerequisiteStatus (PrerequisiteUnmet),
+    SweepTally (..),
+    TargetPrerequisites (tpConsent),
+    outcomeComplete,
+    renderPrerequisites,
+    renderStoreFault,
+ )
+import Ecluse.Core.Registry.Sweep.Types (
     SweepCache (..),
     SweepMount (..),
     SweepPacing (swpDeletionCap, swpShape),
     SweepShape (SweepEverything),
     SweepStore (..),
-    SweepTally (..),
-    TargetPrerequisites (tpConsent),
-    outcomeComplete,
     previewCache,
-    renderPrerequisites,
-    renderStoreFault,
  )
 import Ecluse.Core.Registry.Sweep.Walk (bucketNameBudget)
 import Ecluse.Core.Rules (PreparedRule (prepEval), prepare)

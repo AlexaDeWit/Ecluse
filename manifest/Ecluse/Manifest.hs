@@ -258,7 +258,7 @@ specParams :: RouteSpec -> [ParamSpec]
 specParams spec = [p | Param p <- rsPattern spec]
 
 {- | Place an operation on the 'PathItem' field its HTTP method names. Total over 'StdMethod'.
-The unreachable @CONNECT@ branch is the sanctioned @error@ escape hatch (STYLE.md section 10).
+The unreachable @CONNECT@ branch is the sanctioned @error@ escape hatch (docs/style.md 10).
 -}
 
 {- HLINT ignore methodItem "Avoid restricted function" -}

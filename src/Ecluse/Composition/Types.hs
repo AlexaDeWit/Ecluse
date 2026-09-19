@@ -106,8 +106,6 @@ data RegistryRole
       MirrorWriter
     | -- | @ecluse dredger@: it permanently deletes from every mount's mirror target.
       MirrorPruner
-    | {- | @ecluse dredger --dry-run@: it reads every mount's mirror target under the same checks
-      and holds nothing that writes to one.
-      -}
+    | -- | @ecluse dredger --dry-run@: same checks, holding nothing that writes to a target.
       MirrorPreviewer
     deriving stock (Eq, Show)

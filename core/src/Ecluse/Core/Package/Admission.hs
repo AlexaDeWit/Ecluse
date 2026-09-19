@@ -2,14 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The single public-version admission gate, shared by the serve path and the mirror worker.
-Admitting a version to a concrete artifact request is a three-step decision: the rules engine
-decides the __version__, the requested 'Filename' selects the __artifact__, and the integrity
-floor decides whether that artifact's digests are __strong enough to gate__. The serve path's
-public tarball gate and the worker's ingest re-evaluation both call the one 'admitArtifact', so
-a version the worker would freeze into the rule-exempt mirror is exactly a version the serve
-gate would admit. Neither context decides for itself whether a retry could change a refusal:
-that is 'admissionTransience', read by both.
+{- | The single public-version admission gate: the rules engine decides the __version__, the
+requested 'Filename' selects the __artifact__, and the integrity floor decides whether that
+artifact's digests are __strong enough to gate__.
+
+The serve path's tarball gate and the worker's ingest re-evaluation both call the one
+'admitArtifact', so a version the worker would freeze into the rule-exempt mirror is exactly a
+version the serve gate would admit. Neither decides for itself whether a retry could change a
+refusal, which is 'admissionTransience', read by both.
 -}
 module Ecluse.Core.Package.Admission (
     ArtifactAdmission (..),
@@ -97,18 +97,22 @@ admitArtifactWithEvidence ctx rules minIntegrity file details = do
 admissionOf :: MinIntegrity -> Filename -> PackageDetails -> Decision -> ArtifactAdmission
 admissionOf minIntegrity file details decision =
     case decision of
-        Admitted{} -> case artifactFor file details of
-            Nothing -> AdmissionFileAbsent
-            Just artifact -> case classifyArtifacts minIntegrity (artifact :| []) of
-                MeetsFloor ->
-                    -- 'MeetsFloor' guarantees a digest is present, but 'artHashes' is a plain list.
-                    -- The unreachable empty case fails closed, as if no digest existed.
-                    maybe AdmissionIntegrityMissing (AdmissionAdmit file artifact) (nonEmpty (artHashes artifact))
-                BelowFloor -> AdmissionBelowFloor
-                NoIntegrity -> AdmissionIntegrityMissing
+        Admitted{} -> admitFile minIntegrity file details
         Blocked{} -> AdmissionDenied decision
         BlockedByDefault{} -> AdmissionDenied decision
         Undecidable{} -> AdmissionUndecidable decision
+
+-- The filename and integrity steps, once the rules engine has admitted the version.
+admitFile :: MinIntegrity -> Filename -> PackageDetails -> ArtifactAdmission
+admitFile minIntegrity file details = case artifactFor file details of
+    Nothing -> AdmissionFileAbsent
+    Just artifact -> case classifyArtifacts minIntegrity (artifact :| []) of
+        MeetsFloor ->
+            -- 'MeetsFloor' guarantees a digest is present, but 'artHashes' is a plain list.
+            -- The unreachable empty case fails closed, as if no digest existed.
+            maybe AdmissionIntegrityMissing (AdmissionAdmit file artifact) (nonEmpty (artHashes artifact))
+        BelowFloor -> AdmissionBelowFloor
+        NoIntegrity -> AdmissionIntegrityMissing
 
 {- | The transience of a verdict no rule could decide, and 'Nothing' for a settled one. The
 serve gate renders it as a @503@ or a @500@, and the mirror worker redelivers or drops on it.
@@ -125,8 +129,7 @@ admissionTransience = \case
     AdmissionIntegrityMissing -> Nothing
     AdmissionBelowFloor -> Nothing
 
-{- Select the artifact a request's filename names. 'Nothing' when none carries that filename:
-a forwarded miss, never a fabricated location. -}
+-- 'Nothing' when no artifact carries the filename: a forwarded miss, never a fabricated location.
 artifactFor :: Filename -> PackageDetails -> Maybe Artifact
 artifactFor file details =
     find ((== unFilename file) . artFilename) (pkgArtifacts details)

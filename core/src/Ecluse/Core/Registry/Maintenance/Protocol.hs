@@ -18,10 +18,6 @@ import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
-import Ecluse.Core.Fault (
-    TransportCause (TransportProtocol),
-    transportFault,
- )
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
@@ -40,13 +36,12 @@ import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
     DeleteGuard,
-    NamePrefix,
     RefillPosture (RefillPermitted),
-    RetryAdvice (RetryFutile, RetryWorthwhile),
     StoreClass (StoreDestroyable, StorePreserved),
+    StoreDeletion (..),
     StoreFacts (..),
-    StoreFault (..),
-    StoreMaintenance (..),
+    StoreFault,
+    StoreMaintenance,
     StoreManifestRead,
     StoreObservation (..),
     StoreRefusal,
@@ -55,9 +50,9 @@ import Ecluse.Core.Registry.Maintenance (
     VersionPresence (VersionServed),
     chunksOfCeiling,
     deleteAll,
-    inBucket,
-    noNameAlphabet,
+    maintenanceOf,
     protocolFault,
+    statusFault,
     storeFaultOfFetch,
     storeRefusal,
     unformableFault,
@@ -68,10 +63,14 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     requestKinds,
     undeclaredBudget,
  )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NamePrefix,
+    inBucket,
+    noNameAlphabet,
+ )
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcParseVersionList, pcProbeRequest))
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Version (Version)
 
 {- | One protocol-only store as a reader reaches it: where it is, how its protocol enumerates it,
@@ -118,20 +117,13 @@ newProtocolObservation store =
 -- | Delete versions individually because each edit changes the document revision needed by the next.
 newProtocolMaintenance :: ProtocolStore -> StoreMaintenance
 newProtocolMaintenance store =
-    StoreMaintenance
-        { storeFacts = obFacts observed
-        , listPackagesIn = obListPackagesIn observed
-        , enumerateVersions = obEnumerateVersions observed
-        , readStoreManifest = obReadManifest observed
-        , deleteVersions = deleteStoredVersions store
-        , verifyConsent = obVerifyConsent observed
-        , classifyStore = obClassifyStore observed
-        , probeUpstream = obProbeUpstream observed
-        , -- The protocol writes nothing but a publish, so a walk over this store keeps no cursor.
-          storeCursor = Nothing
-        }
-  where
-    observed = newProtocolObservation (psRead store)
+    maintenanceOf
+        (newProtocolObservation (psRead store))
+        StoreDeletion
+            { dlDeleteVersions = deleteStoredVersions store
+            , -- The protocol writes nothing but a publish, so a walk over this store keeps no cursor.
+              dlCursor = Nothing
+            }
 
 {- The store re-admits a version published again after a delete, and has applied it by the time it
 answers. It reports no alphabet: the listing below reads one document whole, bucket or no bucket. -}
@@ -187,16 +179,13 @@ listPackages store =
 
 listingUnavailable :: Int -> StoreFault
 listingUnavailable status =
-    StoreFault
-        { faultTransport =
-            transportFault
-                TransportProtocol
-                ( "the store answered the package listing with HTTP "
-                    <> show status
-                    <> if status == 404 then ": it serves no enumeration this sweep can walk" else ""
-                )
-        , faultRetry = if isRetryableStatusCode status then RetryWorthwhile else RetryFutile
-        }
+    statusFault
+        isRetryableStatusCode
+        status
+        ( "the store answered the package listing with HTTP "
+            <> show status
+            <> if status == 404 then ": it serves no enumeration this sweep can walk" else ""
+        )
 
 {- The presence probe's read, which already projects a store's version list for the mirror
 worker. A store that holds no document for a package holds no versions of it either. -}
@@ -276,7 +265,7 @@ sendFormed :: ProtocolRead -> Either UrlFormationError Request -> IO (Either Sto
 sendFormed store = formThen unformableFault (send store)
 
 originBase :: ProtocolRead -> Text
-originBase = registryUrlText . ocBaseUrl . prOrigin
+originBase = originBaseUrl . prOrigin
 
 originToken :: ProtocolRead -> Maybe Secret
 originToken = fmap credSecret . ocToken . prOrigin
@@ -288,8 +277,4 @@ parseFault subject err =
 -- Version and document reads retain their server-error-only retry policy.
 readFault :: Text -> Int -> StoreFault
 readFault subject status =
-    StoreFault
-        { faultTransport =
-            transportFault TransportProtocol ("the store answered the " <> subject <> " read with HTTP " <> show status)
-        , faultRetry = if status >= 500 then RetryWorthwhile else RetryFutile
-        }
+    statusFault (>= 500) status ("the store answered the " <> subject <> " read with HTTP " <> show status)

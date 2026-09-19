@@ -31,7 +31,6 @@ import Ecluse.Core.Registry.Npm.Request (
     artifactRequestByUrl,
     metadataRequest,
  )
-import Ecluse.Core.Registry.Request (Validators (..), noValidators)
 
 import Ecluse.Test.Registry.Npm (isOdd)
 import Ecluse.Test.Stub (
@@ -53,22 +52,8 @@ requestShapingSpec :: Spec
 requestShapingSpec =
     around (withStub status200 "{}") $
         describe "fetchMetadata request shaping" $ do
-            it "relays conditional-GET validators when present" $ \stub -> do
-                let validators =
-                        Validators
-                            { validatorIfNoneMatch = Just "\"etag-123\""
-                            , validatorIfModifiedSince = Just "Wed, 21 Oct 2015 07:28:00 GMT"
-                            }
-                let req = metadataRequest (stubBaseUrl stub) Nothing Abbreviated validators isOdd
-                case req of
-                    Right r -> do
-                        let hs = Client.requestHeaders r
-                        lookup "If-None-Match" hs `shouldBe` Just "\"etag-123\""
-                        lookup "If-Modified-Since" hs `shouldBe` Just "Wed, 21 Oct 2015 07:28:00 GMT"
-                    Left e -> fail (show e)
-
-            it "sends no conditional-GET validators by default" $ \stub -> do
-                let req = metadataRequest (stubBaseUrl stub) Nothing Abbreviated noValidators isOdd
+            it "sends no conditional-GET validators" $ \stub -> do
+                let req = metadataRequest (stubBaseUrl stub) Nothing Abbreviated isOdd
                 case req of
                     Right r -> do
                         let hs = Client.requestHeaders r
@@ -80,22 +65,22 @@ pathEncodingSpec :: Spec
 pathEncodingSpec =
     describe "scoped-package path encoding" $ do
         it "percent-encodes the scope separator of a scoped name (@scope%2Fname)" $ do
-            case metadataRequest "https://reg.test" Nothing Abbreviated noValidators babelCodeFrame of
+            case metadataRequest "https://reg.test" Nothing Abbreviated babelCodeFrame of
                 Right r -> Client.path r `shouldBe` "/@babel%2Fcode-frame"
                 Left e -> fail (show e)
 
         it "leaves an unscoped name unencoded" $ do
-            case metadataRequest "https://reg.test" Nothing Abbreviated noValidators isOdd of
+            case metadataRequest "https://reg.test" Nothing Abbreviated isOdd of
                 Right r -> Client.path r `shouldBe` "/is-odd"
                 Left e -> fail (show e)
 
         it "does not encode the leading @ of a scoped name" $ do
-            case metadataRequest "https://reg.test" Nothing Abbreviated noValidators babelCodeFrame of
+            case metadataRequest "https://reg.test" Nothing Abbreviated babelCodeFrame of
                 Right r -> BS.isPrefixOf "/@babel" (Client.path r) `shouldBe` True
                 Left e -> fail (show e)
 
         it "re-encodes a literal '%' in a once-decoded name so a live escape never reaches the upstream" $ do
-            case metadataRequest "https://reg.test" Nothing Abbreviated noValidators onceDecodedTraversal of
+            case metadataRequest "https://reg.test" Nothing Abbreviated onceDecodedTraversal of
                 Right r -> Client.path r `shouldBe` "/foo%252e%252e%252fbar"
                 Left e -> fail (show e)
 
@@ -113,7 +98,7 @@ contentNegotiationSpec =
   where
     acceptHeaderOf :: MetadataForm -> Maybe ByteString
     acceptHeaderOf form =
-        case metadataRequest "https://reg.test" Nothing form noValidators isOdd of
+        case metadataRequest "https://reg.test" Nothing form isOdd of
             Right r -> lookup "Accept" (Client.requestHeaders r)
             -- An unformable URL fails the assertion rather than throwing.
             Left _ -> Nothing
@@ -123,22 +108,22 @@ authSpec =
     describe "bearer-token attachment" $ do
         it "attaches an injected token as a Bearer Authorization header" $ do
             let token = Just (bareCredential (mkSecret "tok-abc"))
-            case metadataRequest "https://reg.test" token Abbreviated noValidators isOdd of
+            case metadataRequest "https://reg.test" token Abbreviated isOdd of
                 Right r -> lookup "Authorization" (Client.requestHeaders r) `shouldBe` Just "Bearer tok-abc"
                 Left e -> fail (show e)
 
         it "sends no Authorization header when no token is injected" $ do
-            case metadataRequest "https://reg.test" Nothing Abbreviated noValidators isOdd of
+            case metadataRequest "https://reg.test" Nothing Abbreviated isOdd of
                 Right r -> lookup "Authorization" (Client.requestHeaders r) `shouldBe` Nothing
                 Left e -> fail (show e)
 
 redirectSpec :: Spec
 redirectSpec = describe "no data-plane request follows an upstream redirect" $ do
     it "a token-bearing metadata request has redirectCount 0" $ do
-        expectRedirectCount 0 (metadataRequest "https://reg.test" (Just (bareCredential (mkSecret "tok"))) Abbreviated noValidators isOdd)
+        expectRedirectCount 0 (metadataRequest "https://reg.test" (Just (bareCredential (mkSecret "tok"))) Abbreviated isOdd)
 
     it "a credential-less metadata request also disables redirect following (0)" $ do
-        expectRedirectCount 0 (metadataRequest "https://reg.test" Nothing Abbreviated noValidators isOdd)
+        expectRedirectCount 0 (metadataRequest "https://reg.test" Nothing Abbreviated isOdd)
 
     it "a token-bearing by-filename artifact request has redirectCount 0 (the private tarball leg)" $ do
         expectRedirectCount 0 (artifactRequestByFile "https://reg.test" (Just (bareCredential (mkSecret "tok"))) isOdd "is-odd-1.0.0.tgz")
@@ -175,7 +160,7 @@ artifactSpec = describe "artifact request building" $ do
 urlFailureSpec :: Spec
 urlFailureSpec = describe "URL-formation failures" $ do
     it "metadataRequest refuses an empty base URL as a UrlFormationError, not a publish error" $ do
-        metadataRequest "" Nothing Abbreviated noValidators isOdd `shouldSatisfy` urlErrorWas EmptyBaseUrl
+        metadataRequest "" Nothing Abbreviated isOdd `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
     it "artifactRequestByFile refuses an empty base URL as a UrlFormationError" $ do
         artifactRequestByFile "" Nothing isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
@@ -187,10 +172,10 @@ urlFailureSpec = describe "URL-formation failures" $ do
         publishRequest "" Nothing isOdd "{}" `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
     it "reports a non-empty but unparseable base URL as UnparseableUrl" $ do
-        metadataRequest "not a url" Nothing Abbreviated noValidators isOdd `shouldSatisfy` isUnparseable
+        metadataRequest "not a url" Nothing Abbreviated isOdd `shouldSatisfy` isUnparseable
 
     it "builds a metadata request against a well-formed base URL" $ do
-        metadataRequest "https://reg.test/" Nothing Abbreviated noValidators isOdd `shouldNotSatisfy` isLeft
+        metadataRequest "https://reg.test/" Nothing Abbreviated isOdd `shouldNotSatisfy` isLeft
 
 babelCodeFrame :: PackageName
 babelCodeFrame = mkPackageName Npm (Just (mkScope "babel")) "code-frame"

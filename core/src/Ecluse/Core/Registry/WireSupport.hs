@@ -2,27 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Cross-ecosystem scaffolding for projecting an untrusted registry wire document
-into the domain model, shared by every ecosystem's projection
-("Ecluse.Core.Registry.Npm.Project"):
+{- | The floor every ecosystem's projection of an untrusted registry document sits on: per-entry
+lenient degradation, the shared name checks, and the upstream name-agreement test.
 
-* __Per-entry lenient degradation__. 'partitionLenientList' splits a list of keyed raw
-  entries into the ones that decode and the ones that do not, dropping each malformed
-  entry as an 'InvalidEntry' rather than failing the whole document. 'partitionLenient'
-  is the keyed-map form of it. This is the one place that realises per-entry leniency and
-  drop-tracking, and the one place that builds an 'InvalidEntry' from a decode failure.
-  Every ecosystem's element-wise-lenient axis layers its own decode on top: npm's
-  @versions@\/@dist-tags@\/@time@ maps, or an array-shaped index's file list, which
-  supplies each element's key itself.
-* __The name floor__. 'parseNameComponent' is the non-empty, ASCII, path-safe trio every
-  captured or wire-declared name component must clear before it reaches an interpolated
-  upstream URL. Each ecosystem's grammar sits on it and adds only its own rules, so no
-  parser can reach a URL having checked one of the three and forgotten another.
-* __Name agreement__. 'checkNameAgreement' checks that the name an upstream self-reports
-  agrees with the name the proxy resolved from the route, and carries what was projected
-  through on agreement. The requested name is the validation authority, never a rewrite. A
-  disagreement carries the reported name verbatim and no payload, so the caller cannot
-  serve a contribution the origin is untrusted for.
+The three name checks travel together because skipping any one of them reaches an interpolated
+upstream URL. An ecosystem's grammar layers its own rules on top and never replaces them.
 -}
 module Ecluse.Core.Registry.WireSupport (
     -- * Per-entry lenient degradation
@@ -36,6 +20,8 @@ module Ecluse.Core.Registry.WireSupport (
     -- * The name floor
     NameRefusal (..),
     parseNameComponent,
+    nameComponentWith,
+    withinNameLimit,
 ) where
 
 import Data.Aeson (Value)
@@ -50,6 +36,7 @@ import Ecluse.Core.Package (
     mkInvalidEntry,
     renderPackageName,
  )
+import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Server.Path (isSafeComponent)
 
 {- | Partition a list of keyed raw entries into the ones that decode and the ones that do not,
@@ -80,10 +67,8 @@ data Projection a
       NameMismatch Text
     deriving stock (Eq, Show)
 
-{- | Check an upstream's self-reported 'PackageName' against the requested one through
-ecosystem-aware 'PackageName' equality, never a byte compare an encoding variant could slip past.
-A disagreement carries the reported name so the caller can drop that origin's contribution, and
-the proxy never substitutes the name.
+{- | Compare through ecosystem-aware 'PackageName' equality, never a byte compare an encoding
+variant could slip past. The proxy never substitutes the reported name for the requested one.
 -}
 checkNameAgreement :: PackageName -> PackageName -> a -> Projection a
 checkNameAgreement requestedName reportedName projected
@@ -109,3 +94,33 @@ parseNameComponent component
     | not (isAsciiNameComponent component) = Left NameNotAscii
     | not (isSafeComponent component) = Left NameUnsafeComponent
     | otherwise = Right component
+
+{- | Clear the shared floor and then an ecosystem's own grammar. The noun names the component
+in every refusal, so each ecosystem keeps its own wording ("npm name component").
+-}
+nameComponentWith :: Text -> (Text -> Bool) -> Text -> Either ParseError Text
+nameComponentWith noun usable component = do
+    onFloor <- first floorRefusal (parseNameComponent component)
+    if usable onFloor
+        then Right onFloor
+        else Left unusable
+  where
+    floorRefusal :: NameRefusal -> ParseError
+    floorRefusal = \case
+        NameEmpty -> ParseError ("empty " <> noun)
+        NameNotAscii -> ParseError ("non-ASCII " <> noun <> ": " <> show component)
+        NameUnsafeComponent -> unusable
+
+    unusable :: ParseError
+    unusable = ParseError ("unusable " <> noun <> ": " <> show component)
+
+{- | Refuse a name over an ecosystem's own cap, which the noun names in the refusal text.
+'T.compareLength' stops at the cap without measuring the whole input.
+-}
+withinNameLimit :: Text -> Int -> Text -> Either ParseError ()
+withinNameLimit noun limit raw
+    | T.compareLength raw limit == GT = Left (ParseError overLong)
+    | otherwise = Right ()
+  where
+    overLong :: Text
+    overLong = noun <> " over " <> show limit <> " characters, starting " <> show (T.take 24 raw)

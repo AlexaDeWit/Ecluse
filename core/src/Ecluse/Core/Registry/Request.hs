@@ -2,13 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Ecosystem-agnostic request mechanics shared by every registry adapter's request layer:
-the finaliser every outbound request passes through, the conditional-GET validators, the
-opaque-artifact request core that streams a body byte-for-byte, URL parsing into a typed
-'UrlFormationError', and the empty-base-guarded path join. An adapter supplies only its
-ecosystem's protocol facts: its media types, its path encoding, its credential presentation.
-'sealRequest' holds the outbound invariants and 'parseRequestEither' applies it, so an
-adapter cannot obtain an unsealed 'Request' from this module at all.
+{- | Ecosystem-agnostic request mechanics: the outbound finaliser, the credential presentation,
+and URL parsing into a typed 'UrlFormationError'. An adapter supplies only its own protocol facts.
+
+'parseRequestEither' seals what it parses, so an adapter cannot obtain an unsealed 'Request'
+from this module at all.
 -}
 module Ecluse.Core.Registry.Request (
     -- * Request finalisation
@@ -20,11 +18,7 @@ module Ecluse.Core.Registry.Request (
     credentialMapping,
     credentialRecover,
     attachCredential,
-
-    -- * Conditional-GET validators
-    Validators (..),
-    noValidators,
-    addValidators,
+    authorizationUnder,
 
     -- * Request building
     artifactRequestByUrl,
@@ -34,18 +28,20 @@ module Ecluse.Core.Registry.Request (
 
 import Data.Text qualified as T
 import Network.HTTP.Client (Request (decompress, redirectCount, requestHeaders), parseRequest)
-import Network.HTTP.Types.Header (HeaderName, RequestHeaders, hIfModifiedSince, hIfNoneMatch, hUserAgent)
+import Network.HTTP.Types.Header (
+    HeaderName,
+    RequestHeaders,
+    hAuthorization,
+    hUserAgent,
+ )
 
 import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Text (joinUrlPath)
 
-{- | Seal the outbound invariants onto a request: pin @redirectCount = 0@ and add the
-proxy's @User-Agent@ unless one is set. Idempotent, so several formation steps yield one pin
-and one header. 'parseRequestEither' seals what it parses and "Ecluse.Core.Registry.Publish"
-re-seals what a codec hands it. A followed redirect could re-send a credential cross-host or
-steer an anonymous fetch past the host allowlist; the threat model records both.
+{- | Seal the outbound invariants onto a request, idempotently. A followed redirect could
+re-send a credential cross-host or steer an anonymous fetch past the host allowlist.
 -}
 sealRequest :: Request -> Request
 sealRequest request =
@@ -69,10 +65,8 @@ than replaying a header. The constructor is hidden, so no adapter spells its own
 -}
 data CredentialMapping = CredentialMapping
     { credentialRecover :: RequestHeaders -> Maybe ClientCredential
-    {- ^ Recover the credential a client presented, or 'Nothing' when the request carries none
-    in this ecosystem's form. The edge gate denies a 'Nothing' on a mount with a configured
-    inbound token, so it refuses a foreign presentation rather than half-reading one. It
-    compares the secret half alone, so a scheme carrying a username admits any username.
+    {- ^ 'Nothing' for a request carrying none in this ecosystem's form, which the edge gate
+    denies rather than half-reading. The compare is over the secret half alone.
     -}
     , -- The header that carries an outbound credential: named per ecosystem, never assumed.
       credentialHeader :: HeaderName
@@ -107,42 +101,18 @@ attachCredential mapping credential = finaliseRequest $ case credential of
                 (credentialHeader mapping, credentialRender mapping presented) : requestHeaders request
             }
 
-{- | The conditional-GET validators to relay on a metadata fetch. Replaying them lets the
-upstream answer @304 Not Modified@ with no body on a cache revalidation.
+{- | The first @Authorization@ header's remainder when it carries @scheme@ (compared without
+case), with the separating spaces dropped. Another scheme or no header yields 'Nothing'.
 -}
-data Validators = Validators
-    { validatorIfNoneMatch :: Maybe ByteString
-    -- ^ An entity tag to send as @If-None-Match@ (an upstream @ETag@).
-    , validatorIfModifiedSince :: Maybe ByteString
-    {- ^ An RFC-1123 date to send as @If-Modified-Since@ (an upstream
-    @Last-Modified@).
-    -}
-    }
-    deriving stock (Eq, Show)
+authorizationUnder :: Text -> RequestHeaders -> Maybe Text
+authorizationUnder scheme headers = do
+    (_, raw) <- find ((== hAuthorization) . fst) headers
+    let (presented, rest) = T.break (== ' ') (decodeUtf8 raw)
+    guard (T.toLower presented == T.toLower scheme)
+    pure (T.dropWhile (== ' ') rest)
 
--- | No conditional-GET validators: an unconditional fetch.
-noValidators :: Validators
-noValidators = Validators{validatorIfNoneMatch = Nothing, validatorIfModifiedSince = Nothing}
-
--- Add the present conditional-GET validators as request headers.
-addValidators :: Validators -> Request -> Request
-addValidators validators request =
-    request{requestHeaders = newHeaders <> requestHeaders request}
-  where
-    newHeaders =
-        catMaybes
-            [ (,) hIfNoneMatch <$> validatorIfNoneMatch validators
-            , (,) hIfModifiedSince <$> validatorIfModifiedSince validators
-            ]
-
-{- | Build the artifact @GET@ addressing a tarball at the absolute @url@ a projection preserved
-from the upstream's @dist.tarball@, never a rebuild from a @(base, package, file)@ coordinate.
-That location is server-chosen data, and it is the one the served metadata pairs its integrity
-digest with, so the bytes still verify.
-
-The request is __non-decompressing__ ('decompress' returns 'False'), so nothing gunzips an
-opaque tarball in flight and its integrity digest stays valid. It fails with a
-'UrlFormationError' only when the @url@ cannot be parsed.
+{- | Build the artifact @GET@ at the URL a projection preserved from upstream. Non-decompressing,
+so the bytes the served integrity digest is paired with are never gunzipped.
 -}
 artifactRequestByUrl :: CredentialMapping -> Maybe ClientCredential -> Text -> Either UrlFormationError Request
 artifactRequestByUrl mapping credential url = do

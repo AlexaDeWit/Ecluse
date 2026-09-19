@@ -28,6 +28,8 @@ import Ecluse.Core.Registry.Maintenance (
     VersionOutcome (VersionRefused, VersionRemoving, VersionUncertain),
     VersionPresence (VersionServed, VersionWithdrawn),
     collectPages,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
     noNameAlphabet,
     wholeNameSpace,
  )

@@ -30,7 +30,6 @@ import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue, projectName)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated, Full))
 import Ecluse.Core.Registry.Origin (OriginClient)
-import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
@@ -77,7 +76,7 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
         manager <- newManager tlsManagerSettings
         let isOdd = mkPackageName Npm Nothing "is-odd"
         config <- publicRegistryOrigin manager
-        outcome <- fetchMetadataFormBounded config Abbreviated noValidators isOdd
+        outcome <- fetchMetadataFormBounded config Abbreviated isOdd
         case outcome of
             Left _ ->
                 -- The typed channel reports the unreachable-registry case as a value.
@@ -145,7 +144,7 @@ admissibleUnderDefaults manager name = do
     -- 1. Body bound: fetchMetadataFormBounded reads through boundedRead against ocLimits,
     -- reporting any fetch fault (a bound breach included) as a value this smoke helper renders.
     response <-
-        fetchMetadataFormBounded config Full noValidators name
+        fetchMetadataFormBounded config Full name
             >>= either (\fault -> throwString ("bounded fetch refused: " <> show fault)) pure
     -- 2. Decode, then 3. nesting bound, 4. projection, 5. version-count bound: the same
     -- chain the serve-path projection runs. Any refusal throws and fails the smoke case.

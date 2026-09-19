@@ -31,9 +31,11 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFault (..),
     VersionOutcome (VersionRefused, VersionRemoved),
     VersionPresence (VersionServed, VersionWithdrawn),
-    mkNameAlphabet,
     refusalCode,
     refusalDetail,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    mkNameAlphabet,
     renderNamePrefix,
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (

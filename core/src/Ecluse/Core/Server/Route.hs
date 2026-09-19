@@ -44,10 +44,8 @@ import Ecluse.Core.Server.Contract (RequestSpec, ResponseContract, bodilessContr
 import Ecluse.Core.Server.Path (isSafeComponent)
 import Ecluse.Core.Server.Response (HelpMessage)
 
-{- | One route: how it matches, what it does, and what it documents.
-
-The type parameter @v@ is the ecosystem's capture value, the only part of a route that is
-not shared across ecosystems.
+{- | One route: how it matches, what it does, and what it documents. The type parameter @v@ is the
+ecosystem's capture value, the only part of a route not shared across ecosystems.
 -}
 data Route v = forall response. Route
     { routeName :: RouteName
@@ -60,7 +58,7 @@ data Route v = forall response. Route
     -- ^ The mount-relative path template: literal segments and named captures, in order.
     , routeBuild :: Method -> [v] -> Maybe (ResponseAction response)
     {- ^ Builds an action from captured values in template order. 'Nothing' falls through to the
-    next route. A @HEAD@ uses the @GET@ builder because its response has no body.
+    next route, and a @HEAD@ uses the @GET@ builder because its response has no body.
     -}
     , routeSummary :: Text
     -- ^ A one-line summary (the OpenAPI operation summary).
@@ -85,10 +83,8 @@ data PatternSeg v
     = SegLit Text
     | SegCap (Capture v)
 
-{- | A named path capture and its parser. 'capConsume' may consume more than one segment,
-which an ecosystem whose identifier spans a decoded @\'\/\'@ needs, and it returns the
-unconsumed tail so captures thread left to right. 'Nothing' fails the match, so the request
-falls through to the next route or to the deny-by-default catch-all.
+{- | A named path capture and its parser. 'capConsume' may claim more than one segment, which an
+ecosystem whose identifier spans a decoded @\'\/\'@ needs, and 'Nothing' fails the match.
 -}
 data Capture v = Capture
     { capName :: Text
@@ -108,7 +104,7 @@ data MediaNegotiation response
     = -- | The route negotiates nothing: every request is admitted whatever it says it accepts.
       AcceptsAnything
     | {- | The route serves these media types alone, and refuses a request whose @Accept@ admits
-      none of them, under the mount's configured help message.
+      none of them under the mount's configured help message.
       -}
       AcceptsOnly (NonEmpty ByteString) (Maybe HelpMessage -> response)
 
@@ -133,24 +129,20 @@ methodMatches MethodPost m = m == methodPost
 methodMatches MethodDelete m = m == methodDelete
 methodMatches MethodRead m = m == methodGet || m == methodHead
 
-{- | Fold an ecosystem's route table into its mount's router: the first route that claims the
+{- | Fold an ecosystem's route table into its mount's router. The first route that claims the
 request decides it, and deny-by-default is structural because there is no other way to answer.
-
-The headers reach the router because a route may declare the media types it serves, and a
-request admitting none of them takes that route's refusal before any handler runs.
 -}
 routerOf :: RouteAction -> [Route v] -> MountRouter
 routerOf notFound routes method headers segments =
-    maybe (fallbackFor method notFound) snd (matchRoute routes method headers segments)
-  where
-    fallbackFor requested (RouteAction contract action)
-        | isHead requested = RouteAction (bodilessContract contract) action
-        | otherwise = RouteAction contract action
+    maybe (fallbackAction method notFound) snd (matchRoute routes method headers segments)
+
+-- The catch-all, under the requested method's own contract.
+fallbackAction :: Method -> RouteAction -> RouteAction
+fallbackAction method (RouteAction contract action) =
+    RouteAction (contractForMethod method contract) action
 
 {- | The route that claims a request, and the action it names: the first route whose method
 condition holds, whose segments are consumed exactly, and whose builder accepts the captures.
-'Nothing' when none does. Exported beside 'routerOf' so a route table is testable with no
-server.
 -}
 matchRoute :: [Route v] -> Method -> RequestHeaders -> [Text] -> Maybe (Route v, RouteAction)
 matchRoute routes method headers segments =
@@ -159,26 +151,31 @@ matchRoute routes method headers segments =
     claim route@Route{routeMethod = matchedMethod, routeAccepts = negotiation, routeSegs = patternSegs, routeBuild = build, routeContract = contract}
         | methodMatches matchedMethod method = do
             captures <- consumeSegs patternSegs segments
-            action <- negotiated negotiation (build method captures)
-            pure (route, RouteAction (contractFor method contract) action)
+            action <- negotiated headers negotiation (build method captures)
+            pure (route, RouteAction (contractForMethod method contract) action)
         | otherwise = Nothing
 
-    {- A route the request will not take answers its own refusal, decided before the builder's
-    action is ever run and so before any upstream work. A route that negotiates nothing keeps
-    whatever its builder decided, 'Nothing' included, so matching still falls through. -}
-    negotiated negotiation built = case negotiation of
-        AcceptsAnything -> built
-        AcceptsOnly served refusal
-            | acceptsAny headers served -> built
-            | otherwise -> AnswerRefusal refusal <$ built
+-- A @HEAD@ answers the contract of its @GET@ with the body dropped.
+contractForMethod :: Method -> ResponseContract response -> ResponseContract response
+contractForMethod method
+    | isHead method = bodilessContract
+    | otherwise = id
 
-    contractFor requested
-        | isHead requested = bodilessContract
-        | otherwise = id
+{- A route the request will not take answers its own refusal, decided before the builder's action
+is ever run. A route that negotiates nothing keeps whatever its builder decided. -}
+negotiated ::
+    RequestHeaders ->
+    MediaNegotiation response ->
+    Maybe (ResponseAction response) ->
+    Maybe (ResponseAction response)
+negotiated headers negotiation built = case negotiation of
+    AcceptsAnything -> built
+    AcceptsOnly served refusal
+        | acceptsAny headers served -> built
+        | otherwise -> AnswerRefusal refusal <$ built
 
-{- Requires exact consumption: a leftover request segment, or a template segment with nothing
-to match, fails. A 'SegCap' may consume more than one segment and threads the remainder to
-the rest of the template. -}
+{- Requires exact consumption: a leftover request segment, or a template segment with nothing to
+match, fails. A 'SegCap' threads the remainder to the rest of the template. -}
 consumeSegs :: [PatternSeg v] -> [Text] -> Maybe [v]
 consumeSegs [] [] = Just []
 consumeSegs (SegLit l : ps) (s : ss)
@@ -212,12 +209,14 @@ safeSegment build = \case
 is built through this, so the URL served and the route that must claim it are one record.
 -}
 renderRoute :: Route v -> [v] -> Maybe [Text]
-renderRoute Route{routeSegs = patternSegs} = fill patternSegs
-  where
-    fill [] [] = Just []
-    fill (SegLit lit : ps) vs = (lit :) <$> fill ps vs
-    fill (SegCap capture : ps) (v : vs) = (capRender capture v <>) <$> fill ps vs
-    fill _ _ = Nothing
+renderRoute Route{routeSegs = patternSegs} = fillSegs patternSegs
+
+-- The inverse of 'consumeSegs': one capture value per 'SegCap', in template order.
+fillSegs :: [PatternSeg v] -> [v] -> Maybe [Text]
+fillSegs [] [] = Just []
+fillSegs (SegLit lit : ps) vs = (lit :) <$> fillSegs ps vs
+fillSegs (SegCap capture : ps) (v : vs) = (capRender capture v <>) <$> fillSegs ps vs
+fillSegs _ _ = Nothing
 
 -- | Whether a request is the bodiless read. A @HEAD@ is a variation of its @GET@, not a route.
 isHead :: Method -> Bool

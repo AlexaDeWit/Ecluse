@@ -3,14 +3,13 @@
 -- SPDX-License-Identifier: MIT
 
 {- | PyPI's own request facts, composed through the agnostic mechanics in
-"Ecluse.Core.Registry.Request" (the outbound seal, the redirect pin, the identity, validators).
+"Ecluse.Core.Registry.Request".
 
-Three protocol details are load-bearing. Metadata comes from the index and public PyPI serves
-distribution bytes from a separate files host, so the served index rebases every file URL back
-onto the mount. The index path carries its trailing slash, and its project segment the PEP 503
-canonical name, because PyPI redirects both and no data-plane request follows a redirect. The
-index read asks for @gzip@ and an artifact request advertises no encoding at all, so the bytes
-a client verifies against the served @sha256@ are the bytes that arrived.
+Two protocol details are load-bearing. The index path carries its trailing slash, and its
+project segment the PEP 503 canonical name, because PyPI redirects both and no data-plane
+request follows a redirect. The index read asks for @gzip@ while an artifact request advertises
+no encoding at all, so the bytes a client verifies against the served @sha256@ are the bytes
+that arrived.
 -}
 module Ecluse.Core.Registry.PyPI.Request (
     -- * The ecosystem's artifact hosts
@@ -36,7 +35,7 @@ import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName)
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
-import Ecluse.Core.Registry.Request (Validators, addValidators, attachCredential, joinPath, parseRequestEither)
+import Ecluse.Core.Registry.Request (attachCredential, joinPath, parseRequestEither)
 import Ecluse.Core.Registry.Request qualified as Request
 import Ecluse.Core.Server.Path (encodeComponent)
 
@@ -46,22 +45,19 @@ admits the files host without an operator naming it.
 pypiArtifactHosts :: [Text]
 pypiArtifactHosts = ["https://files.pythonhosted.org"]
 
-{- | Build the Simple-index @GET@ for a project at @{baseUrl}\/simple\/{canonical-name}\/@.
-
-Fails with a 'UrlFormationError' only when the URL cannot be formed (an empty base URL).
+{- | Build the Simple-index @GET@ for a project. It fails only when the URL cannot be formed,
+which here means an empty base URL.
 -}
 simpleIndexRequest ::
     Text ->
     Maybe ClientCredential ->
-    Validators ->
     PackageName ->
     Either UrlFormationError Request
-simpleIndexRequest baseUrl credential validators name = do
+simpleIndexRequest baseUrl credential name = do
     url <- simpleIndexUrl baseUrl name
     base <- parseRequestEither url
     pure
         . attachCredential pypiCredential credential
-        . addValidators validators
         $ base
             { requestHeaders =
                 (hAccept, simpleIndexMediaType)
@@ -94,25 +90,20 @@ artifactRequestByUrl ::
     Either UrlFormationError Request
 artifactRequestByUrl = Request.artifactRequestByUrl pypiCredential
 
-{- | The Simple-index URL @{baseUrl}\/simple\/{canonical-name}\/@, whose trailing slash is written
-because the index redirects a request without it.
--}
+-- | The Simple-index URL @{baseUrl}\/simple\/{canonical-name}\/@.
 simpleIndexUrl :: Text -> PackageName -> Either UrlFormationError Text
 simpleIndexUrl baseUrl name = joinPath baseUrl (projectPath (canonicalName name) <> "/")
 
-{- | The artifact URL @{baseUrl}\/simple\/{canonical-name}\/{encoded-filename}@, the exact
-on-the-wire name encoded as one component so a decoded escape cannot reach upstream raw.
--}
+-- | The artifact URL @{baseUrl}\/simple\/{canonical-name}\/{encoded-filename}@.
 artifactFileUrl :: Text -> PackageName -> Text -> Either UrlFormationError Text
 artifactFileUrl baseUrl name filename = joinPath baseUrl (artifactPath (canonicalName name) filename)
 
-{- | @simple\/{canonical-project}\/{file}@, relative to an index root. The upstream read and the
-served location are formed from this one spelling, each component percent-encoded.
+{- | @simple\/{canonical-project}\/{file}@, relative to an index root. Each component is
+percent-encoded, so a decoded escape cannot reach upstream raw.
 -}
 artifactPath :: Text -> Text -> Text
 artifactPath project filename = projectPath project <> "/" <> encodeComponent filename
 
-{- The project's index path, @simple\/{canonical-name}@. The canonical spelling is the one the
-index serves without a redirect. -}
+-- The project's index path, @simple\/{canonical-name}@.
 projectPath :: Text -> Text
 projectPath project = "simple/" <> encodeComponent project

@@ -20,8 +20,6 @@ module Ecluse.Composition.Maintenance (
     storeScope,
     overrideKey,
     resolvedBudget,
-    BuildStoreMaintenance,
-    BuildStoreObservation,
     BuildUpstreamProbe,
     StoreBuilds (..),
     storeBuilds,
@@ -51,7 +49,7 @@ import Ecluse.Composition.BootError (
 import Ecluse.Composition.Credential (CredentialProviders, CredentialTarget (..), lookupTargetProvider)
 import Ecluse.Composition.Sizing (newPooledManager)
 import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
-import Ecluse.Composition.Vet (Severity (Ignore, Refuse), Vet, rule, withRole)
+import Ecluse.Composition.Vet (Severity (Ignore, Refuse), Vet, byStoreRole, rule, withRole)
 import Ecluse.Config (
     ControlPlane (ControlCodeArtifact, ControlNone, ControlProtocol),
     DeletionConsent (DeletionPermitted, DeletionWithheld),
@@ -80,25 +78,23 @@ import Ecluse.Core.Registry.Adapter (
     adapterMaintenance,
     adapterMetadata,
     adapterPublish,
-    publishCodec,
  )
 import Ecluse.Core.Registry.Adapter.Capability (
     AdapterMaintenance (maintenanceAlphabet, maintenanceListing, maintenanceVersionDelete),
     AdapterMetadata (metadataFetchManifest),
+    AdapterPublish (publishCodec),
     ManifestFetch,
     StoreListing,
     VersionDelete,
  )
 import Ecluse.Core.Registry.Exchange (singleAttemptSettings)
 import Ecluse.Core.Registry.Maintenance (
-    NameAlphabet,
     StoreFacts (factBudget),
     StoreMaintenance (storeFacts),
     StoreManifestRead,
     StoreObservation (obFacts),
     meteredMaintenance,
     meteredObservation,
-    noNameAlphabet,
     storeFaultOfMetadata,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (
@@ -107,6 +103,10 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     RequestGate,
     StoreBudget (bgCosts, bgOrigin, bgQuotas, bgScope),
     mkQuotaScope,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NameAlphabet,
+    noNameAlphabet,
  )
 import Ecluse.Core.Registry.Maintenance.Protocol (
     ProtocolRead (..),
@@ -177,7 +177,7 @@ build can sweep. Both store roles refuse a target that fails it, and a writing r
 vetStoreBackends :: ResolveMaintenanceAdapter -> MountMap -> Vet (Map Ecosystem ClearedBackend)
 vetStoreBackends resolveAdapter mounts = withRole $ \role ->
     let resolved = resolvedFor role
-     in clearedFor role resolved <$ traverse_ (rule severity unmaintained) resolved
+     in clearedFor role resolved <$ traverse_ (rule severity unmaintainedOf) resolved
   where
     resolvedFor role =
         [ (eco, sweepableStore role (resolveAdapter eco) eco target)
@@ -185,20 +185,12 @@ vetStoreBackends resolveAdapter mounts = withRole $ \role ->
         , Just target <- [regMirrorTarget (mountRegistries mount)]
         ]
 
-    severity = \case
-        MirrorPruner -> Refuse (uncurry StoreMaintenanceUnavailable)
-        MirrorPreviewer -> Refuse (uncurry StoreMaintenanceUnavailable)
-        MirrorWriter -> Ignore
+    severity = byStoreRole (Refuse (uncurry StoreMaintenanceUnavailable)) Ignore
 
-    unmaintained (eco, outcome) = (eco,) <$> leftToMaybe outcome
-
-    -- A refused pass yields no plan, so a target the rule refused never reaches this map.
     clearedFor role resolved = case role of
         MirrorWriter -> Map.empty
-        MirrorPruner -> swept resolved
-        MirrorPreviewer -> swept resolved
-
-    swept resolved = Map.fromList [(eco, backend) | (eco, Right backend) <- resolved]
+        MirrorPruner -> clearedOf resolved
+        MirrorPreviewer -> clearedOf resolved
 
 -- | Vet each private cache under its own backend declaration and maintenance authority.
 vetPrivateCaches :: ResolveMaintenanceAdapter -> Map Ecosystem MountConfig -> MountMap -> Vet (Map Ecosystem (Maybe StoreBackend, ClearedBackend))
@@ -209,8 +201,8 @@ vetPrivateCaches resolveAdapter configured mounts = withRole $ \case
   where
     clearedFor role =
         let resolved = resolvedFor role
-         in Map.fromList [(eco, backend) | (eco, Right backend) <- resolved]
-                <$ traverse_ (rule (const (Refuse (uncurry StoreMaintenanceUnavailable))) unmaintained) resolved
+         in clearedOf resolved
+                <$ traverse_ (rule (const (Refuse (uncurry StoreMaintenanceUnavailable))) unmaintainedOf) resolved
     resolvedFor role =
         [ (eco, resolve role eco endpoint)
         | (eco, mount) <- Map.toAscList mounts
@@ -218,7 +210,6 @@ vetPrivateCaches resolveAdapter configured mounts = withRole $ \case
         , Just config <- [Map.lookup eco configured]
         , Just endpoint <- [mntPrivateUpstream config]
         ]
-    unmaintained (eco, outcome) = (eco,) <$> leftToMaybe outcome
     resolve role eco endpoint = case tgtTag target of
         TagCodeArtifact -> do
             (backend, store) <- first (PrivateCacheUnavailable . show) (resolvePrivateBackend eco target)
@@ -235,6 +226,14 @@ vetPrivateCaches resolveAdapter configured mounts = withRole $ \case
         target = preTarget endpoint
         adapter = resolveAdapter eco
         descriptor = mountKeyRef eco "privateUpstream.verdaccio.permitDeletion"
+
+-- A resolved entry that failed, named by the ecosystem that declared it.
+unmaintainedOf :: (Ecosystem, Either reason a) -> Maybe (Ecosystem, reason)
+unmaintainedOf (eco, outcome) = (eco,) <$> leftToMaybe outcome
+
+-- A refused pass yields no plan, so a target the rule refused never reaches this map.
+clearedOf :: [(Ecosystem, Either reason a)] -> Map Ecosystem a
+clearedOf resolved = Map.fromList [(eco, backend) | (eco, Right backend) <- resolved]
 
 {- Whether this role's boot needs the operator's own deletion key in hand. A preview reads the
 store and changes nothing, so the key is a finding it reports rather than one it refuses on. -}

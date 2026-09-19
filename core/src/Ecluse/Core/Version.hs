@@ -4,23 +4,12 @@
 
 {- | Version identity and ordering.
 
-A 'Version' carries the raw text verbatim, because version strings are embedded in
-artifact URLs and re-served, so fidelity matters. Beside it sits a parsed, canonical
-'VersionKey', present only when the raw text parses for its ecosystem. Ordering goes
-through 'compareVersions', which is defined __only__ on parsed keys, so non-canonical
-text can never reach the comparator (/parse, don't validate/).
-
-Parsing is per-ecosystem, selected by the 'Ecosystem' tag from
-"Ecluse.Core.Ecosystem": semver for npm ("Ecluse.Core.Version.Semver"), PEP 440 for PyPI
-("Ecluse.Core.Version.Pep440"), @Gem::Version@ for RubyGems ("Ecluse.Core.Version.Gem").
-Each grammar and its ordering rules live in its own module. This module is the
-agnostic abstraction that dispatches to them on the 'Ecosystem' tag. The grammar
-modules stay __private__: callers build with 'mkVersion' (total) or 'parseVersionKey'
-(reports the parse error) and compare with 'compareVersions'.
-
-"Ecluse.Core.Package" consumes this vocabulary (@PackageDetails@ holds a 'Version'), as
-does the rules engine ("Ecluse.Core.Rules"). See
-@docs\/architecture\/domain-model.md@ → "Version".
+A 'Version' keeps the raw text verbatim, because version strings are embedded in artifact
+URLs and re-served. Ordering goes through 'compareVersions' on the parsed 'VersionKey',
+which exists only when the raw text parses for its ecosystem, so non-canonical text can
+never reach a comparator. Parsing is per-ecosystem and the grammar modules stay private:
+callers build with 'mkVersion' or 'parseVersionKey'. See
+@docs\/architecture\/domain-model.md@, "Version".
 -}
 module Ecluse.Core.Version (
     -- * Versions
@@ -51,18 +40,11 @@ import Ecluse.Core.Version.Gem (GemKey, isGemStable, parseGem)
 import Ecluse.Core.Version.Pep440 (Pep440Key, isPep440Stable, parsePep440, renderPep440)
 import Ecluse.Core.Version.Semver (SemverKey, isSemverStable, parseSemver)
 
-{- | A package version.
-
-It keeps the raw text verbatim, because version strings are embedded in artifact URLs
-and re-served. Ordering instead uses the parsed 'VersionKey'.
-
-There is deliberately __no__ 'Ord' on 'Version'. Comparison goes through
-'compareVersions', which is defined only on parsed keys, so non-canonical text can never
-reach the comparator.
+{- | A package version: the raw text as published, plus the parsed ordering key when the text
+parses. There is deliberately __no__ 'Ord'. Comparison goes through 'compareVersions'.
 -}
 data Version = Version
-    { -- The version as published: for rendering and round-tripping only, never
-      -- for ordering decisions.
+    { -- The version as published: for rendering and round-tripping, never for ordering.
       versionRaw :: Text
     , versionKey :: Maybe VersionKey
     {- ^ The parsed, canonical ordering key. 'Nothing' if the raw text did not parse
@@ -71,9 +53,8 @@ data Version = Version
     }
     deriving stock (Eq, Show)
 
-{- | Build a 'Version', parsing the raw text into a canonical key when possible.
-Total: a version that does not parse is still represented, with no key, rather than
-rejected. A proxy therefore never drops a version over a parser gap.
+{- | Build a 'Version', parsing the raw text into a canonical key when possible. Total: an
+unparseable version is still represented, keyless, so a proxy never drops one over a parser gap.
 -}
 mkVersion :: Ecosystem -> Text -> Version
 mkVersion eco raw = Version raw (rightToMaybe (parseVersionKey eco raw))
@@ -88,8 +69,34 @@ key, in which case an ordering-based rule abstains.
 compareVersions :: Version -> Version -> Maybe Ordering
 compareVersions a b = compare <$> versionKey a <*> versionKey b
 
-{- | Whether a parsed version is a __stable__ (final, non-prerelease) release. The notion
-is ecosystem-specific: see 'isSemverStable', 'isPep440Stable' and 'isGemStable'.
+{- | The parsed, canonical, comparable form of a version. The type is __opaque__ and
+'parseVersionKey' is its only constructor, so the comparator cannot see non-canonical input.
+-}
+data VersionKey
+    = NpmKey SemverKey
+    | PyPIKey Pep440Key
+    | RubyGemsKey GemKey
+    deriving stock (Eq, Ord, Show)
+
+{- | Parse raw version text into a canonical 'VersionKey' for its ecosystem, or report why it
+did not parse. The 'Ord' on the result is meaningful only within one ecosystem.
+-}
+parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey
+parseVersionKey eco raw = case eco of
+    Npm -> note (NpmKey <$> parseSemver raw)
+    PyPI -> note (PyPIKey <$> parsePep440 raw)
+    RubyGems -> note (RubyGemsKey <$> parseGem raw)
+  where
+    note = maybe (Left (VersionError ("unparseable version: " <> raw))) Right
+
+-- | Why a version string failed to parse.
+newtype VersionError = VersionError
+    { versionErrorMessage :: Text
+    }
+    deriving stock (Eq, Show)
+
+{- | Whether a parsed version is a __stable__ (final, non-prerelease) release, under its own
+ecosystem's notion of one.
 
 >>> isStable <$> parseVersionKey Npm "1.0.0"
 Right True
@@ -119,20 +126,8 @@ Nothing
 canonicalPep440 :: Text -> Maybe Text
 canonicalPep440 = fmap renderPep440 . parsePep440
 
-{- | Resolve @dist-tags.latest@ once the caller has filtered out the denied and
-undecidable versions. This is the keep-unless-denied, stable-preferring rule from
-@docs\/architecture\/rules-engine.md@. The result, when present, is always one of
-@survivors@.
-
-The resolution, in order:
-
-* No survivors: 'Nothing'.
-* Keep: if @chosen@ survives by raw text, return it unchanged, so a prerelease never
-displaces a maintainer's stable @latest@.
-* Repoint: among survivors with a parseable key, take the greatest stable one, else the
-greatest prerelease one.
-* No parseable survivor: fall back to the lexicographically smallest survivor by
-'renderVersion', so the result still names a present version.
+{- | Resolve @dist-tags.latest@ over the survivors the caller left, keeping @chosen@ when it
+survives so a prerelease never displaces a maintainer's stable tag. The result is a survivor.
 -}
 selectLatest :: Maybe Version -> [Version] -> Maybe Version
 selectLatest chosen survivors = case nonEmpty survivors of
@@ -143,7 +138,8 @@ selectLatest chosen survivors = case nonEmpty survivors of
   where
     survives v = any ((== renderVersion v) . renderVersion) survivors
 
--- The repoint arm of 'selectLatest', whose Haddock documents the resolution order.
+-- The repoint arm: the greatest stable key, else the greatest key of any kind, else the
+-- lexicographically smallest survivor, so an unparseable set still names a present version.
 repointLatest :: NonEmpty Version -> Version
 repointLatest survivors =
     let keyed = [(v, k) | v <- toList survivors, Just k <- [versionKey v]]
@@ -152,37 +148,8 @@ repointLatest survivors =
             Just s -> fst (maxByKey s)
             Nothing -> case nonEmpty keyed of
                 Just ks -> fst (maxByKey ks)
-                -- No parseable survivor: deterministic, present fallback.
                 Nothing -> NE.head (NE.sortWith renderVersion survivors)
-  where
-    -- Greatest by canonical key. Total, because every element carries a key.
-    maxByKey :: NonEmpty (Version, VersionKey) -> (Version, VersionKey)
-    maxByKey = maximumBy (comparing snd)
 
--- | Why a version string failed to parse.
-newtype VersionError = VersionError
-    { versionErrorMessage :: Text
-    }
-    deriving stock (Eq, Show)
-
-{- | The parsed, canonical, comparable form of a version. The type is __opaque__ and
-'parseVersionKey' is its only constructor, so the comparator structurally cannot see
-non-canonical input. Its 'Ord' is meaningful only within one ecosystem, the only case
-that arises.
--}
-data VersionKey
-    = NpmKey SemverKey
-    | PyPIKey Pep440Key
-    | RubyGemsKey GemKey
-    deriving stock (Eq, Ord, Show)
-
-{- | Parse raw version text into a canonical 'VersionKey' for its ecosystem, or report
-why it did not parse.
--}
-parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey
-parseVersionKey eco raw = case eco of
-    Npm -> note (NpmKey <$> parseSemver raw)
-    PyPI -> note (PyPIKey <$> parsePep440 raw)
-    RubyGems -> note (RubyGemsKey <$> parseGem raw)
-  where
-    note = maybe (Left (VersionError ("unparseable version: " <> raw))) Right
+-- Greatest by canonical key. Total, because every element carries a key.
+maxByKey :: NonEmpty (Version, VersionKey) -> (Version, VersionKey)
+maxByKey = maximumBy (comparing snd)

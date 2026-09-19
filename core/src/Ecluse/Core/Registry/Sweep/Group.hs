@@ -18,14 +18,16 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance (
-    NameAlphabet,
-    NamePrefix,
     StoreFacts (factNameAlphabet),
     StoreFault,
     StoreObservation (obFacts, obListPackagesIn),
     StoredVersion (storedVersion),
-    noNameAlphabet,
     protocolFault,
+ )
+import Ecluse.Core.Registry.Maintenance.NameSpace (
+    NameAlphabet,
+    NamePrefix,
+    noNameAlphabet,
  )
 import Ecluse.Core.Registry.Sweep.Walk (BucketNames, collectBucketWith, insertInventory)
 import Ecluse.Core.Version (renderVersion)
@@ -46,6 +48,7 @@ collectGroupBucket alphabet prefix mirror cache =
     source = do
         fault <- locatedPages False mirror
         maybe (locatedPages True cache) (pure . Just) fault
+    -- The slot keys its own entry, so a name a location lists on several pages joins once.
     locatedPages slot store =
         fmap (store,)
             <$> fuseUpstream

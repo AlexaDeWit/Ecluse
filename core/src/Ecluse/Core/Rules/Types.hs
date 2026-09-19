@@ -49,7 +49,7 @@ module Ecluse.Core.Rules.Types (
 ) where
 
 import Data.Time (NominalDiffTime, UTCTime)
-import Ecluse.Core.Cve (DbEtag)
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Fault (RetryAfter (..))
 import Ecluse.Core.Package (
     CodeExecSignal,

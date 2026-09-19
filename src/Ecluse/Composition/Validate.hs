@@ -37,8 +37,7 @@ import Ecluse.Composition.Endpoints (
     vetEndpoints,
  )
 import Ecluse.Composition.Maintenance (ClearedBackend, overrideKey, vetPrivateCaches, vetStoreBackends)
-import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
-import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, rule)
+import Ecluse.Composition.Vet (Severity (Advise, Ignore, Refuse), Vet, byStoreRole, rule)
 import Ecluse.Config (
     AdvisoriesSettings (advUrl),
     AppConfig (cfgAdvisories, cfgDredger, cfgMounts, cfgServer),
@@ -74,14 +73,12 @@ data ValidatedPlan = ValidatedPlan
     , vpPublications :: Map Ecosystem VettedPublication
     -- ^ Each mount's cleared publish path, absent where the mount declares no target.
     , vpMirrorStores :: Map Ecosystem ClearedBackend
-    {- ^ The backend for each store a sweep may delete from. Only @ecluse dredger@'s pass
-    clears one.
-    -}
+    -- ^ The backend for each store a sweep may delete from. Only @ecluse dredger@'s pass clears one.
     , vpPrivateCaches :: Map Ecosystem (Maybe StoreBackend, ClearedBackend)
     -- ^ Private caches cleared for this role with their own credential plans.
     , vpSettings :: AppConfig
-    {- ^ The settings no rule vets. The mounts it still carries are the raw declarations, and
-    'vpMounts' holds the vetted ones the runtime reads.
+    {- ^ The settings no rule vets. The mounts it carries are the raw declarations, and 'vpMounts'
+    holds the vetted ones the runtime reads.
     -}
     }
 
@@ -134,10 +131,7 @@ pause that would sweep faster than an operator can stop it, and every other role
 vetSweepPacing :: AppConfig -> Vet ()
 vetSweepPacing app = rule severity beneathFloor (drgChunkPause (cfgDredger app))
   where
-    severity = \case
-        MirrorPruner -> Refuse (`DredgerChunkPauseBeneathFloor` minimumChunkPause)
-        MirrorPreviewer -> Refuse (`DredgerChunkPauseBeneathFloor` minimumChunkPause)
-        MirrorWriter -> Ignore
+    severity = byStoreRole (Refuse (`DredgerChunkPauseBeneathFloor` minimumChunkPause)) Ignore
 
     beneathFloor configured = configured <$ guard (configured < minimumChunkPause)
 
@@ -159,10 +153,7 @@ because an endpoint renamed under a running Dredger would otherwise stop the rol
 vetQuotaOverrides :: Config -> Vet ()
 vetQuotaOverrides config = traverse_ (rule severity unmatched) declaredKeys
   where
-    severity = \case
-        MirrorPruner -> Advise DredgerQuotaOverrideUnmatched
-        MirrorPreviewer -> Advise DredgerQuotaOverrideUnmatched
-        MirrorWriter -> Ignore
+    severity = byStoreRole (Advise DredgerQuotaOverrideUnmatched) Ignore
     declaredKeys = Map.keys (drgQuotaOverrides (cfgDredger (configApp config)))
     unmatched key = key <$ guard (overrideKey key `notElem` storeKeys)
     storeKeys = map overrideKey (declaredStoreUrls config)
@@ -172,10 +163,7 @@ differently refuse, because whichever the boot read last would silently set the 
 vetQuotaScopes :: AppConfig -> Vet ()
 vetQuotaScopes app = traverse_ (rule severity conflicting) (pairsBy declaredScope entries)
   where
-    severity = \case
-        MirrorPruner -> Refuse (\(scope, first', second') -> DredgerQuotaScopeConflict scope first' second')
-        MirrorPreviewer -> Refuse (\(scope, first', second') -> DredgerQuotaScopeConflict scope first' second')
-        MirrorWriter -> Ignore
+    severity = byStoreRole (Refuse (\(scope, first', second') -> DredgerQuotaScopeConflict scope first' second')) Ignore
     entries = Map.toAscList (drgQuotaOverrides (cfgDredger app))
     declaredScope (_, override) = qoScope override
     conflicting (scope, (leftKey, left), (rightKey, right))

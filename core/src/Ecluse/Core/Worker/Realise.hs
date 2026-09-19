@@ -4,13 +4,11 @@
 
 {- | Realising a job's verdict at the queue handle: ack, dead-letter, or release for retry.
 
-This half runs a batch and turns each 'JobOutcome' the decision half
-("Ecluse.Core.Worker.Job") reached into a queue operation. Every receipt in the batch is
-leased for the batch's whole run ("Ecluse.Core.Worker.Lease"), so a job never races the
-backend's visibility window and its disposition is the one thing that ends the lease. Jobs
-still run __sequentially__, one artifact task at a time. A delivery that already spent the
-queue's redelivery budget is retired before its job runs, so a message nothing else captures
-stops cycling instead of re-fetching its artifact on every redelivery.
+Every receipt in a batch is leased for the batch's whole run ("Ecluse.Core.Worker.Lease"), so
+a job never races the backend's visibility window and its disposition is the one thing that
+ends the lease. Jobs run __sequentially__, one artifact task at a time. A delivery that already
+spent the queue's redelivery budget is retired before its job runs, so a message nothing else
+captures stops cycling instead of re-fetching its artifact on every redelivery.
 -}
 module Ecluse.Core.Worker.Realise (
     processBatch,

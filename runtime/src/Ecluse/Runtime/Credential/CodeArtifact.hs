@@ -2,24 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The AWS CodeArtifact leaf of the outbound-credential handle: mint a
-short-lived registry bearer token via CodeArtifact's @GetAuthorizationToken@.
-
-This is the one genuinely cloud-specific part of outbound auth. Everything else
-(caching, proactive refresh, single-flight, the circuit breaker) is the
-cloud-agnostic policy in "Ecluse.Core.Credential.Refresh", which this module wires
-its mint into. The leaf itself is tiny: build an @amazonka@ 'Env' once, with
-credentials discovered the standard AWS way (environment, instance role, container
-role, SSO, STS). Each mint then calls @GetAuthorizationToken@ and returns the token
-with its real expiry, so the refresh policy schedules off the token's own lifetime.
-A CodeArtifact token lasts up to 12h.
-
-This is __control plane__ only. @amazonka@ obtains the token. The data plane that
-then uses it to publish to the registry stays on @http-client@ (see
-@docs\/architecture\/web-layer.md@ → "Control plane vs data plane"). The 'Env' is
-built once at provider creation and captured in the mint closure. The backend's state
-therefore never leaks into the proxy's @Env@\/@App@ (see
-@docs\/architecture\/technology-stack.md@ → "Key Decisions").
+{- | The AWS CodeArtifact leaf of the outbound-credential handle: mint a short-lived registry
+bearer token through @GetAuthorizationToken@, carrying its real expiry so the refresh policy
+schedules off the token's own lifetime. Caching, proactive refresh, single-flight, and the
+breaker are the cloud-agnostic policy of "Ecluse.Core.Credential.Refresh", which this leaf
+wires its mint into. This is __control plane__ only: the data plane that uses the token stays
+on @http-client@. The @amazonka@ 'Env' is built once at provider creation and captured in the
+mint closure, so the backend's state never reaches the proxy's @Env@.
 -}
 module Ecluse.Runtime.Credential.CodeArtifact (
     -- * Configuration
@@ -48,7 +37,8 @@ import Ecluse.Core.Credential.Refresh (
 import Ecluse.Runtime.Aws.Env (newAwsEnv)
 
 {- The mint's one failure: @GetAuthorizationToken@ succeeded but carried no token. The refresh
-breaker catches 'SomeException' to count failures, so this unexported leaf throws (STYLE.md 11.4).
+breaker catches 'SomeException' to count failures, so this unexported leaf throws
+(docs/style.md section 11.4).
 -}
 data CodeArtifactMintError = AuthorizationTokenMissing
     deriving stock (Eq, Show)
@@ -68,18 +58,14 @@ data CodeArtifactConfig = CodeArtifactConfig
     the calling account ('Nothing' to default to the caller's account).
     -}
     , caDurationSeconds :: Maybe Natural
-    {- ^ Requested token lifetime in seconds (@900@-@43200@, 15 min to 12 h). 'Nothing' lets
-    CodeArtifact default it to the caller's role-credential expiry. The refresh policy adapts
-    to the minted token's actual expiry, so this is only a preference.
+    {- ^ Requested token lifetime in seconds (@900@-@43200@). 'Nothing' defaults it to the
+    caller's role-credential expiry, and the refresh policy adapts to the minted expiry anyway.
     -}
     }
     deriving stock (Eq, Ord, Show)
 
-{- | Build a refreshing 'CredentialProvider' backed by CodeArtifact @GetAuthorizationToken@,
-discovering AWS credentials with 'AWS.discover'.
-
-It mints once eagerly, so a misconfiguration (bad region, missing credentials, no permission) fails
-at construction rather than on the first mirror write.
+{- | Build a refreshing 'CredentialProvider' backed by CodeArtifact @GetAuthorizationToken@. It
+mints once eagerly, so a misconfiguration fails at construction, not on the first mirror write.
 -}
 newCodeArtifactProvider :: CredentialReporters -> CodeArtifactConfig -> IO CredentialProvider
 newCodeArtifactProvider reporters cfg =

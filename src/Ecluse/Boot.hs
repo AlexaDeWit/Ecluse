@@ -2,17 +2,28 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The shared boot environment owns the process logger and telemetry resources.
-Role work ends before these resources drain and close.
+{- | The shared boot environment owns the process logger and telemetry resources. Role work ends
+before these resources drain and close. @ecluse check-config@ ("Ecluse.CheckConfig") reuses the
+configuration prologue and the runtime-knob projection here, so the two entry points cannot
+disagree about what a start-up reads or refuses.
 -}
 module Ecluse.Boot (
+    -- * The boot environment
     BootEnv (..),
+    withBootEnv,
+
+    -- * The configuration prologue
+    loadBootConfig,
     applySecretFileIndirection,
     readConfigDocument,
-    withBootEnv,
+    runtimeOverridesOf,
+
+    -- * Refusal
     BootAborted (..),
     orExit,
     refuseBoot,
+
+    -- * Boot-time logging and wiring
     logBootWarning,
     logBootInfo,
     logRuleBootOrder,
@@ -61,6 +72,7 @@ import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQue
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
+import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Rts (RuntimeOverrides (RuntimeOverrides, roCores, roCoresCeiling, roMaxHeapBytes), applyRuntimePosture)
 import Ecluse.Runtime.Log (moduleLog, newLogEnv)
 import Ecluse.Runtime.Queue.Sqs (newSqsQueue)
@@ -86,10 +98,21 @@ data BootEnv = BootEnv
     -- ^ The resolved plan, whose diagnostics were logged before role work starts.
     }
 
+{- | The environment, the secret files it names, the config document, and the parse, in that order.
+@decorate@ wraps each refusal, which is how @ecluse check-config@ adds its own verdict line.
+-}
+loadBootConfig :: (Text -> Text) -> IO ([(String, String)], Maybe ByteString, Config)
+loadBootConfig decorate = do
+    rawEnvVars <- getEnvironment
+    envVars <- applySecretFileIndirection rawEnvVars >>= orExit decorate
+    docBlob <- readConfigDocument envVars >>= orExit decorate
+    config <- orExit (decorate . T.unlines . map renderConfigError) (loadConfig envVars docBlob)
+    pure (envVars, docBlob, config)
+
 -- | Resolve secret files, strip trailing newlines, and refuse conflicting direct values.
 applySecretFileIndirection :: [(String, String)] -> IO (Either Text [(String, String)])
 applySecretFileIndirection envVars = do
-    reads' <- traverse readOne fileVars
+    reads' <- traverse readSecretFile fileVars
     let (readErrs, resolved) = partitionEithers reads'
     pure $ case conflicts <> readErrs of
         [] -> Right (filter (not . isSecretFileVar . fst) envVars <> resolved)
@@ -104,26 +127,29 @@ applySecretFileIndirection envVars = do
         , isJust (lookup base envVars)
         ]
 
-    readOne (name, path) = do
-        outcome <- tryIO (readFileBS path)
-        pure $ case outcome of
-            Left err ->
-                Left (T.pack name <> " points at " <> T.pack path <> ", which cannot be read: " <> T.pack (displayException err))
-            Right bytes ->
-                Right (baseVarOf name, T.unpack (T.dropWhileEnd (== '\n') (decodeUtf8 bytes)))
+readSecretFile :: (String, String) -> IO (Either Text (String, String))
+readSecretFile (name, path) = do
+    outcome <- tryIO (readFileBS path)
+    pure $ case outcome of
+        Left err ->
+            Left (T.pack name <> " points at " <> T.pack path <> ", which cannot be read: " <> displayExceptionT err)
+        Right bytes ->
+            Right (baseVarOf name, T.unpack (T.dropWhileEnd (== '\n') (decodeUtf8 bytes)))
 
-    isSecretFileVar name =
-        let spelling = T.pack name
-         in "ECLUSE_" `T.isPrefixOf` spelling && any (`T.isSuffixOf` spelling) secretFileSuffixes
+isSecretFileVar :: String -> Bool
+isSecretFileVar name =
+    let spelling = T.pack name
+     in "ECLUSE_" `T.isPrefixOf` spelling && any (`T.isSuffixOf` spelling) secretFileSuffixes
 
-    -- Total even though the callers only pass matched names: an unmatched name
-    -- passes through rather than inventing a partial strip.
-    baseVarOf name = maybe name T.unpack (T.stripSuffix "_FILE" (T.pack name))
+-- Total even though the callers only pass matched names: an unmatched name passes
+-- through rather than inventing a partial strip.
+baseVarOf :: String -> String
+baseVarOf name = maybe name T.unpack (T.stripSuffix "_FILE" (T.pack name))
 
-    -- The secret-typed keys, by their env-spelling tails. Anything else keeps the
-    -- strict no-secrets-in-config posture, with no file-shaped side door.
-    secretFileSuffixes :: [Text]
-    secretFileSuffixes = map (<> "_FILE") secretEnvSpellings
+-- The secret-typed keys, by their env-spelling tails. Anything else keeps the strict
+-- no-secrets-in-config posture, with no file-shaped side door.
+secretFileSuffixes :: [Text]
+secretFileSuffixes = map (<> "_FILE") secretEnvSpellings
 
 -- | Accept a missing default document, but refuse an explicit path that does not exist.
 readConfigDocument :: [(String, String)] -> IO (Either Text (Maybe ByteString))
@@ -154,32 +180,22 @@ readConfigDocument envVars = do
 -- | Drain the process logger after role work and telemetry cleanup, on normal or exceptional exit.
 withBootEnv :: BootRole -> (BootEnv -> IO a) -> IO a
 withBootEnv role action = do
-    rawEnvVars <- getEnvironment
-    envVars <- applySecretFileIndirection rawEnvVars >>= orExit id
-    docBlob <- readConfigDocument envVars >>= orExit id
-    config <- orExit (T.unlines . map renderConfigError) (loadConfig envVars docBlob)
-    let env = configApp config
-        observability = cfgObservability env
-        runtimeSettings = cfgRuntime env
-        runtimeOverrides =
-            RuntimeOverrides
-                { roCores = rtCores runtimeSettings
-                , roCoresCeiling = rtCoresCeiling runtimeSettings
-                , roMaxHeapBytes = rtMaxHeapBytes runtimeSettings
-                }
-    -- Resolve the log identity from the table the SDK reads, before any OTEL_* projection
-    -- applies, so a boot line carries the same identity as a served request.
+    (envVars, docBlob, config) <- loadBootConfig id
+    let observability = cfgObservability (configApp config)
+    -- The log identity comes from the table the SDK reads, before any OTEL_* projection applies,
+    -- so a boot line carries the same identity as a served request.
     ddIdentity <- ddIdentityFromEnvironment
     bracket
         (newLogEnv (obsLogFormat observability) (obsLogLevel observability) ddIdentity (Environment "production"))
         (void . closeScribes)
         $ \logEnv -> do
-            -- Apply the runtime posture before anything else spins up. It may exec the binary in
-            -- place to enforce a heap ceiling (same PID, see Ecluse.Rts).
+            -- Applying the posture may exec the binary in place to enforce a heap ceiling (same
+            -- PID, see "Ecluse.Rts"), so nothing else may have spun up yet.
             runtimePlan <-
-                applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) runtimeOverrides
+                applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) (runtimeOverridesOf (cfgRuntime (configApp config)))
             fdLimit <- openFileSoftLimit
-            let report =
+            bootPlan <-
+                reportBootPlan logEnv $
                     resolveBootPlan
                         role
                         BootInputs
@@ -189,20 +205,6 @@ withBootEnv role action = do
                             , biRuntimePlan = runtimePlan
                             , biFdLimit = fdLimit
                             }
-            -- The provenance block logs ahead of every refusable phase, so a refusal that names a
-            -- config key stays traceable to the layer that set it.
-            traverse_ (logBootInfo logEnv) (brProvenance report)
-            let logAdvisories = traverse_ (logBootWarning logEnv . renderAdvisory) (brAdvisories report)
-            bootPlan <- case brOutcome report of
-                -- An advisory about a configuration that will not start is still one its operator
-                -- must act on, so a refusal reports beside it rather than instead of it.
-                Left errs -> logAdvisories >> refuseBoot (renderBootErrors errs)
-                Right plan -> pure plan
-            -- @ecluse check-config@ prints the same lists in this order, so a transcript and a
-            -- boot log agree line for line.
-            traverse_ (logBootInfo logEnv) (bpLines bootPlan)
-            traverse_ (logBootWarning logEnv) (bpWarnings bootPlan)
-            logAdvisories
             prepareTelemetryBoot (obsTelemetry observability) logEnv
             withTelemetry (obsTelemetry observability) logEnv $ \telemetry ->
                 action
@@ -212,6 +214,34 @@ withBootEnv role action = do
                         , beTelemetry = telemetry
                         , beBootPlan = bootPlan
                         }
+
+{- Log the report and yield the plan, or refuse. The order is load-bearing: @ecluse check-config@
+prints the same lists in it, so a transcript and a boot log agree line for line. -}
+reportBootPlan :: LogEnv -> BootReport -> IO BootPlan
+reportBootPlan logEnv report = do
+    -- Provenance logs ahead of every refusable phase, so a refusal that names a config key stays
+    -- traceable to the layer that set it.
+    traverse_ (logBootInfo logEnv) (brProvenance report)
+    bootPlan <- case brOutcome report of
+        -- An advisory about a configuration that will not start is still one its operator must act
+        -- on, so a refusal reports beside it rather than instead of it.
+        Left errs -> logAdvisories >> refuseBoot (renderBootErrors errs)
+        Right plan -> pure plan
+    traverse_ (logBootInfo logEnv) (bpLines bootPlan)
+    traverse_ (logBootWarning logEnv) (bpWarnings bootPlan)
+    logAdvisories
+    pure bootPlan
+  where
+    logAdvisories = traverse_ (logBootWarning logEnv . renderAdvisory) (brAdvisories report)
+
+-- | Project the configured runtime knobs onto the posture the RTS applies.
+runtimeOverridesOf :: RuntimeSettings -> RuntimeOverrides
+runtimeOverridesOf settings =
+    RuntimeOverrides
+        { roCores = rtCores settings
+        , roCoresCeiling = rtCoresCeiling settings
+        , roMaxHeapBytes = rtMaxHeapBytes settings
+        }
 
 -- | Build the planned queue and log its durability and delivery-limit warnings.
 buildMirrorQueue :: LogEnv -> Int -> MirrorQueuePlan -> IO MirrorQueue

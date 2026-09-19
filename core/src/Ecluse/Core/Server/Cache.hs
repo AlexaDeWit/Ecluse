@@ -166,12 +166,9 @@ newMetadataCache cfg =
 
 -- | Coalesce public metadata fetches. Failures reach all waiters and retain nothing.
 resolveMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Either MetadataError CacheEntry) -> IO (Either MetadataError CacheEntry)
-resolveMetadata = resolveMetadataWith (pure ())
-
-resolveMetadataWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Either MetadataError CacheEntry) -> IO (Either MetadataError CacheEntry)
-resolveMetadataWith afterClaim metrics cache source name =
+resolveMetadata metrics cache source name =
     resolveSingleFlight
-        afterClaim
+        (pure ())
         (mpCacheRequest metrics)
         ( \occ -> do
             mpCacheEntries metrics (occEntries occ)
@@ -182,12 +179,9 @@ resolveMetadataWith afterClaim metrics cache source name =
 
 -- | Cache a selectively decoded release or its absence. Oversized releases remain uncached.
 resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (Either MetadataError VersionRead)
-resolveVersion = resolveVersionWith (pure ())
-
-resolveVersionWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (Either MetadataError VersionRead)
-resolveVersionWith afterClaim metrics cache source name version =
+resolveVersion metrics cache source name version =
     resolveSingleFlight
-        afterClaim
+        (pure ())
         (const pass)
         (mpVersionCacheResidentBytes metrics . occBytes)
         (mcVersion cache)

@@ -2,59 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The AWS SQS backend behind the 'MirrorQueue' handle.
-
-Maps the handle's receive → process → ack shape onto SQS:
-
-* 'enqueue' → @SendMessage@ (the job encoded as the message body).
-* 'receive' → one long-poll @ReceiveMessage@ (a batch, @[]@ on an empty poll).
-* 'ack' → @DeleteMessage@ (the message is gone, never redelivered).
-* 'extendVisibility' → @ChangeMessageVisibility@ (renew the worker's lease on a receipt).
-* 'deadLetter' → @ChangeMessageVisibility@ with the 'sqsTerminalBackoff' window and
-  __no @DeleteMessage@__ (a terminal fault rides the redrive policy to the
-  dead-letter queue).
-
-'newSqsQueue' __probes the queue's redrive configuration once__ (@GetQueueAttributes@
-for @RedrivePolicy@, which SQS never delivers with a message). The composition root can
-then warn when nothing captures a poison message. 'newSqsQueue' also holds the handle's
-redelivery budget one delivery above an attached policy's own @maxReceiveCount@. The
-dead-letter queue therefore always captures first. @ReceiveMessage@ likewise asks for
-@ApproximateReceiveCount@ explicitly, since SQS omits it by default. That is the
-delivery count every 'Ecluse.Core.Queue.QueueMessage' carries. Each delivery also carries the
-lease the worker renews it under (see "Ecluse.Core.Queue.Lease"), stamped from an instant read
-before the poll so it never claims more time than SQS granted.
-
-The provider differences SQS embodies are 'SqsConfig' knobs with sane defaults: the
-visibility timeout, the long-poll window, and the batch limit. The SQS receipt handle
-rides opaquely in a 'ReceiptHandle' (via 'mkReceiptHandle'), so none of it leaks past
-the handle. Retry is __"don't ack"__: a job whose processing fails transiently is
-simply not 'ack'ed, and SQS redelivers it once the visibility timeout lapses.
-Persistent failures fall to the queue's native dead-letter (max-receive-count), so
-there is no @nack@ (see "Ecluse.Core.Queue"). A __terminal__ fault ('deadLetter')
-returns with a backoff window and is never deleted. It too falls to the operator's
-dead-letter queue rather than being discarded. A deployment with no dead-letter queue
-has nothing to fall to. The worker's redelivery budget retires such a message instead
-(see "Ecluse.Core.Queue"), rather than letting it cycle until the retention window
-discards it unseen. Every operation reports its AWS failure as the handle's typed
-'Ecluse.Core.Fault.TransportFault' value, classified into the core transport vocabulary at
-this edge ("Ecluse.Runtime.Aws.Fault"). A queue outage never rides the exception channel
-through a caller.
-
-'newSqsQueue' builds the @amazonka@ 'AWS.Env' once, and the handle's closures capture it, so
-the backend's state never reaches the proxy's @Env@\/@App@ (see
-@docs\/architecture\/technology-stack.md@ → "Key Decisions"). The job's wire mapping belongs to
-the payload ('Ecluse.Core.Queue.decodeJob'), and this module supplies only the ecosystem name
-gate that decode reads through ('mirrorJobPackage'). An undecodable body is dropped rather than
-yielded as a partial, and like any unprocessed message it is not 'ack'ed, so it redelivers and
-reaches the dead-letter queue. Each drop is logged at 'DebugS' with its reason and message id, so
-a poison message is visible rather than cycling silently. The untrusted body is never logged.
-
-The SQS queue is a __trusted, operator-declared destination__ (the configured queue
-URL, or an endpoint override). Like the OTLP telemetry endpoint (see
-"Ecluse.Runtime.Telemetry.Resolve"), @amazonka@'s own client reaches it. It is __not__
-subject to the data-plane egress controls: the host allowlist and the https-only
-egress posture of "Ecluse.Core.Security.Egress". Those controls guard only untrusted
-package downloads, never a destination the operator configured.
+{- | The AWS SQS backend behind the 'MirrorQueue' handle, mapping its receive-process-ack shape
+onto @SendMessage@, @ReceiveMessage@, @DeleteMessage@, and @ChangeMessageVisibility@. Retry is
+__don't ack__: SQS redelivers an unacked message, and 'deadLetter' returns a terminal one under
+'sqsTerminalBackoff' without deleting it, so it rides the operator's redrive policy to the
+dead-letter queue. Every failure is a 'Ecluse.Core.Fault.TransportFault' value, never an
+exception. The queue is an operator-declared destination, so the data-plane egress controls of
+"Ecluse.Core.Security.Egress" do not apply to it.
 -}
 module Ecluse.Runtime.Queue.Sqs (
     -- * Configuration
@@ -133,20 +87,16 @@ data SqsConfig = SqsConfig
     for a message before returning @[]@, so an idle worker does not hot-loop on empty polls.
     -}
     , sqsVisibilityTimeout :: Seconds
-    {- ^ How long a received message stays hidden from other 'receive's before SQS
-    redelivers it: the budget for processing-then-'ack', extendable per message via
-    'extendVisibility'.
+    {- ^ How long a received message stays hidden before SQS redelivers it: the budget for
+    processing-then-'ack', extendable per message via 'extendVisibility'.
     -}
     , sqsTerminalBackoff :: Seconds
-    {- ^ The visibility timeout 'deadLetter' applies when it returns a __terminal__ message.
-    It exceeds the normal processing window, so the worker does not re-fetch a permanently
-    unmirrorable artifact in a hot loop.
+    {- ^ The visibility timeout 'deadLetter' applies to a __terminal__ message. It exceeds the
+    processing window, so the worker does not re-fetch an unmirrorable artifact in a hot loop.
     -}
     , sqsMaxReceiveCount :: DeliveryBudget
-    {- ^ The configured __floor__ on how many deliveries one message gets before the
-    worker retires it (@ECLUSE_QUEUE__MAX_RECEIVE_COUNT@). 'newSqsQueue' raises the
-    handle's effective budget past an attached redrive policy's own @maxReceiveCount@,
-    so this floor never pre-empts a dead-letter queue's capture.
+    {- ^ The configured __floor__ on deliveries before the worker retires a message. 'newSqsQueue'
+    raises the budget past a redrive policy's count, so it never pre-empts a dead-letter capture.
     -}
     }
     deriving stock (Eq, Show)

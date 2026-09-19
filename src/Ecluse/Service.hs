@@ -24,6 +24,7 @@ module Ecluse.Service (
 
 import GHC.Conc (setNumCapabilities)
 import Katip (LogEnv, SimpleLogPayload, katipAddNamespace, runKatipContextT)
+import Network.HTTP.Client (Manager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 
 import Ecluse.Boot (BootEnv (beLogEnv, beTelemetry), logBootWarning, logRuleBootOrder)
@@ -50,7 +51,8 @@ import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (AppConfig)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
-import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
+import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Queue.Buffer (newEnqueueBuffer, reportWorthy)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterEcosystem,
@@ -66,13 +68,15 @@ import Ecluse.Core.Server.Readiness (Readiness)
 import Ecluse.Core.Supervision (
     FaultDisposition (Permanent, Transient),
     SupervisionPolicy (SupervisionPolicy, spBackoff, spClassify, spLabel),
+    backgroundLoopBackoff,
     superviseLoop,
     transientPolicy,
  )
 import Ecluse.Core.Worker (Liveness, WorkerHeartbeat, WorkerPolicies, alwaysLive, heartbeatLivenessNow, runWorkerM, workerLoop)
-import Ecluse.Cve.Sync (backgroundLoopBackoff, cveSyncReadiness, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
+import Ecluse.Cve.Sync (cveSyncReadiness, cveSyncScheduleFor, cveSyncTasks, registerAdvisoryAges)
 import Ecluse.Runtime.Env (Env, envDdContext, envLogEnv, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Runtime.Server (MountBinding (..))
+import Ecluse.Runtime.Telemetry (Telemetry)
 import Ecluse.Runtime.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Runtime.Telemetry.Reporters (
     DeferredMetrics,
@@ -86,12 +90,10 @@ background tasks arrive already wrapped in their supervision policy.
 -}
 data ServiceRuntime = ServiceRuntime
     { svcRole :: MirrorRole
-    {- ^ The mirror-pipeline half this runtime serves, taken from the boot plan so the role's
-    entry point selects its behaviour from what the plan carries.
-    -}
+    -- ^ The mirror-pipeline half this runtime serves, taken from the boot plan.
     , svcRunsWorker :: Bool
-    {- ^ Whether this process runs the mirror worker ('spawnsWorker'), the one fact both the
-    spawn decision and the @\/livez@ arm below are derived from.
+    {- ^ Whether this process runs the mirror worker ('spawnsWorker'), the one fact both the spawn
+    decision and the @\/livez@ arm derive from.
     -}
     , svcEnv :: Env
     , svcAppConfig :: AppConfig
@@ -99,9 +101,7 @@ data ServiceRuntime = ServiceRuntime
     -- ^ The resolved mounts. A worker-only role builds them for their rules, and serves none.
     , svcWorkerPolicies :: WorkerPolicies
     , svcMirrorDrain :: Maybe (IO ())
-    {- ^ The supervised enqueue-buffer drain, present exactly when this role produces mirror
-    jobs into a configured queue.
-    -}
+    -- ^ The supervised enqueue-buffer drain, present when this role produces jobs into a queue.
     , svcSyncTasks :: [IO ()]
     -- ^ One supervised advisory-sync task per configured ecosystem.
     , svcCheckReady :: IO Readiness
@@ -115,8 +115,6 @@ withServiceRuntime :: BootEnv -> ExecutablePlan -> MirrorWiring -> (ServiceRunti
 withServiceRuntime bootEnv plan mirror action = do
     let logEnv = beLogEnv bootEnv
         telemetry = beTelemetry bootEnv
-        -- Every decision below comes from the plan the boot resolved and logged, and
-        -- "Ecluse.Composition.Executable" then cleared. This assembly only applies it.
         bootPlan = epBootPlan plan
         role = mwRole mirror
         appConfig = vpSettings (bpValidated bootPlan)
@@ -138,12 +136,7 @@ withServiceRuntime bootEnv plan mirror action = do
     (queue, mirrorDrain) <- mirrorHandOff role logEnv deferredMetrics mirrorRuntime (mwQueue mirror)
     metadataCache <- newMetadataCache (bpCacheConfig bootPlan)
 
-    -- The two managers stay split: public reads are anonymous and private reads forward the
-    -- client's credential. Https-only egress closes the SSRF and resolve-to-internal class.
-    publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
-    privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
-    manager <- newPooledManager (bpPublicConnections bootPlan) publicSettings
-    privateManager <- newPooledManager (bpPrivateConnections bootPlan) privateSettings
+    (manager, privateManager) <- dataPlaneManagers telemetry bootPlan
     withEnvWithAdmission serveAdmission queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
         -- The instruments exist now, so installing them makes the credential provider's deferred
         -- reporters live for the rest of the run.
@@ -170,6 +163,16 @@ withServiceRuntime bootEnv plan mirror action = do
                 , svcCheckReady = cveSyncReadiness cveSyncPlan
                 , svcCheckLive = workerLiveness runsWorkerHere heartbeat
                 }
+
+{- The two data-plane managers, each instrumented then pooled at its own bound. They stay split
+because public reads are anonymous and private reads forward the caller's credential. -}
+dataPlaneManagers :: Telemetry -> BootPlan -> IO (Manager, Manager)
+dataPlaneManagers telemetry bootPlan = do
+    publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
+    privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
+    manager <- newPooledManager (bpPublicConnections bootPlan) publicSettings
+    privateManager <- newPooledManager (bpPrivateConnections bootPlan) privateSettings
+    pure (manager, privateManager)
 
 {- | The @\/livez@ arm a process answers from, given whether it runs the worker
 ('spawnsWorker'): the consume-loop heartbeat where it does, the listener alone where it does not.

@@ -5,9 +5,8 @@
 {- | The advisory lookup's internals: the hardened SQLite open and the raw queries
 "Ecluse.Core.Cve" curates into the public handle.
 
-Importing this module opts out of the public surface's stability promises. It exists
-so a test can pin the hardening properties directly against the connection the handle
-actually uses. That connection refuses writes, and it distrusts schema-borne SQL.
+Importing this module opts out of the public surface's stability promises. It exists so a test
+can pin the hardening properties against the connection the handle actually uses.
 -}
 module Ecluse.Core.Cve.Internal (
     AdvisoryRange (..),
@@ -63,18 +62,21 @@ openHardenedConnection eco epssRequirement dbFile = do
     conn <- open dbFile
     -- The 'onException' guard closes the connection when a statement throws instead, for
     -- example a non-SQLite file whose first file-touching pragma raises.
-    let hardenAndAccept = do
-            execute_ conn "PRAGMA trusted_schema = OFF"
-            execute_ conn "PRAGMA query_only = ON"
-            execute_ conn "PRAGMA cell_size_check = ON"
-            execute_ conn "PRAGMA mmap_size = 0"
-            acceptArtifact eco epssRequirement conn
-    accepted <- hardenAndAccept `onException` close conn
+    accepted <-
+        (hardenConnection conn >> acceptArtifact eco epssRequirement conn)
+            `onException` close conn
     case accepted of
         Left rejection -> do
             close conn
             pure (Left rejection)
         Right () -> pure (Right conn)
+
+hardenConnection :: Connection -> IO ()
+hardenConnection conn = do
+    execute_ conn "PRAGMA trusted_schema = OFF"
+    execute_ conn "PRAGMA query_only = ON"
+    execute_ conn "PRAGMA cell_size_check = ON"
+    execute_ conn "PRAGMA mmap_size = 0"
 
 acceptArtifact :: Ecosystem -> EpssRequirement -> Connection -> IO (Either CveDbRejected ())
 acceptArtifact eco epssRequirement conn = runExceptT $ do

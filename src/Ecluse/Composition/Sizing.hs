@@ -62,11 +62,8 @@ apply it after telemetry instrumentation, so it cannot discard the instrumented 
 connectionPoolSettings :: Int -> ManagerSettings -> ManagerSettings
 connectionPoolSettings connections settings = settings{managerConnCount = connections}
 
-{- | The effective serve-admission capacity and its boot-log line: the explicit
-@serveMaxInFlight@, else @max 8 (10 x capabilities)@. The multiplier is empirical, not
-modelled, because the load bench's dose-response levelled near 10 per capability.
-Callers resolve this after 'Ecluse.Runtime.applyRuntimePosture' runs, so the capability
-count is the post-posture one. It bounds metadata materialisation only.
+{- | The serve-admission capacity and its boot-log line: explicit @serveMaxInFlight@, else
+@max 8 (10 x capabilities)@ on the post-posture count. The multiplier is where the bench levelled.
 -}
 resolveServeAdmission :: Maybe Int -> Int -> (Int, Text)
 resolveServeAdmission explicit capabilities =
@@ -84,12 +81,8 @@ serveAdmissionPerCapability = 10
 serveAdmissionFloor :: Int
 serveAdmissionFloor = 8
 
-{- | The effective private-upstream connection-pool size and its boot-log line: the
-explicit @privateConnectionsPerHost@, else @clamp (64, 4096) (nofile \/ 4)@. It is not tied
-to @serveMaxInFlight@, because private-hit tarball streams run outside serve admission
-and their concurrency is the inbound fan-out. 'Network.HTTP.Client.managerConnCount'
-caps retention, not concurrency, so sizing up retains more idle connections for reuse
-and never opens more sockets.
+{- | The private pool size and its boot-log line: @privateConnectionsPerHost@, else
+@clamp (64, 4096) (nofile \/ 4)@. 'managerConnCount' caps retention, not concurrency.
 -}
 resolvePrivateConnections :: Maybe Int -> Int -> (Int, Text)
 resolvePrivateConnections explicit fdLimit =
@@ -115,12 +108,8 @@ privateConnectionsFloor = 64
 privateConnectionsCap :: Int
 privateConnectionsCap = 4096
 
-{- | The effective public-upstream connection-pool size and its boot-log line: the
-explicit @publicConnectionsPerHost@, else @clamp (32, 1024) (nofile \/ 8)@, half the private
-share. The pool is not metadata-only: onboarding fail-over artifact streams and the
-worker's back-fill fetches ride the same manager and do not coalesce, so an onboarding
-burst tracks the inbound fan-out. Sizing up is safe for the reason
-'resolvePrivateConnections' gives.
+{- | The public pool size and its boot-log line: @publicConnectionsPerHost@, else
+@clamp (32, 1024) (nofile \/ 8)@. Onboarding fail-over and back-fill streams ride it too.
 -}
 resolvePublicConnections :: Maybe Int -> Int -> (Int, Text)
 resolvePublicConnections explicit fdLimit =
@@ -149,24 +138,20 @@ publicConnectionsFloor = 32
 publicConnectionsCap :: Int
 publicConnectionsCap = 1024
 
-{- | The depth of the hand-off buffer in front of the mirror queue
-('Ecluse.Core.Queue.newEnqueueBuffer'). It absorbs a cold @npm ci@ burst while bounding
-memory. A job dropped at the cap re-enqueues on the next demand, so overflow defers a
-mirror rather than losing it.
+{- | The depth of the hand-off buffer in front of the mirror queue. It absorbs a cold @npm ci@
+burst, and a job dropped at the cap re-enqueues on the next demand, so overflow defers a mirror.
 -}
 mirrorEnqueueBufferDepth :: Int
 mirrorEnqueueBufferDepth = 1024
 
-{- | How many enqueue-buffer drops or delivery failures pass between warning-log reports.
-The composition root reports the first, then every multiple of this. The buffer's
-callbacks still fire per event, so the counter stays exact.
+{- | How many enqueue-buffer drops or delivery failures pass between warning-log reports. The
+buffer's callbacks still fire per event, so the counter beside the log stays exact.
 -}
 mirrorEnqueueReportInterval :: Int
 mirrorEnqueueReportInterval = 100
 
-{- | The process soft file-descriptor limit (@RLIMIT_NOFILE@). An infinite or unknown
-limit falls back to @privateConnectionsCap x privateConnectionsFdShare@, so the computed
-pool lands on the cap rather than overflowing.
+{- | The process soft file-descriptor limit (@RLIMIT_NOFILE@). An infinite or unknown limit falls
+back to a value that lands the computed pool on its cap rather than overflowing.
 -}
 openFileSoftLimit :: IO Int
 openFileSoftLimit = do

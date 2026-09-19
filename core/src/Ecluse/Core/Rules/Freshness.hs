@@ -12,8 +12,6 @@ module Ecluse.Core.Rules.Freshness (
     MaxAdvisoryAge (..),
     AdvisoryAgeBasis (..),
     maxAdvisoryAgeFor,
-    advisoryAgeFloor,
-    advisoryAgeLead,
 
     -- * Reading one push
     AdvisoryPublication (..),
@@ -42,7 +40,7 @@ data MaxAdvisoryAge = MaxAdvisoryAge
 data AdvisoryAgeBasis
     = -- | The operator set @advisories.maxAgeSeconds@, which overrides every derivation.
       AgeConfigured
-    | {- | Derived to land 'advisoryAgeLead' ahead of the earliest quarantine admission this
+    | {- | Derived to land @advisoryAgeLead@ ahead of the earliest quarantine admission this
       mount's own rules allow (carried), so the failure shows before that cohort is admitted.
       -}
       AgeBeforeQuarantine NominalDiffTime

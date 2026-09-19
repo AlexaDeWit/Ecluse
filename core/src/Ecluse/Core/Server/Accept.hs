@@ -2,16 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Whether a request's @Accept@ header admits a media type the proxy can serve.
+{- | Whether a request's @Accept@ header admits a media type a route serves, the one question
+the router answers @406 Not Acceptable@ on. Nothing is selected by quality: each route serves
+one form, so a client that wants another is refused rather than given a substitute.
 
-A route declares the media types it serves, and the router answers @406 Not Acceptable@ before
-any upstream work when a request admits none of them. Only that yes-or-no question is answered
-here. Écluse never picks between representations by quality, because each route serves exactly
-one form: a client that wants another gets the refusal rather than a negotiated substitute.
-
-The reading follows RFC 9110. An absent @Accept@ admits anything. A range matches a type
-exactly, by its type half under @type\/*@, or universally under @*\/*@. A parameter on the
-range is ignored, except @q=0@, which is a rejection rather than a preference.
+The reading follows RFC 9110. An absent @Accept@ admits anything, a range matches exactly, by
+its type half under @type\/*@, or universally under @*\/*@, and a range parameter is ignored
+except @q=0@, which rejects rather than ranks.
 -}
 module Ecluse.Core.Server.Accept (
     acceptsAny,

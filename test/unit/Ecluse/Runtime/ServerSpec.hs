@@ -25,7 +25,8 @@ import Data.Time (addUTCTime, getCurrentTime)
 
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Registry.Adapter.Types (AdapterPublish (publishRelay), RegistryAdapter (adapterProjectName))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishRelay))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterProjectName))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter, npmPublish)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish

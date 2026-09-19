@@ -2,38 +2,23 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Internal guts of the serve pipeline ("Ecluse.Core.Server.Pipeline"), exposed for
-tests without widening that module's two-handler public API. This is the @.Internal@
-convention "Ecluse.Core.Credential.Refresh.Internal" also uses. Importing it opts out of
-the public module's stability promise.
+{- | Integrity admission, metric projections, and the denial audit trail that the packument
+and tarball handlers share and their specs reach directly. Importing this module opts out of
+the stability promise of the public hub, "Ecluse.Core.Server.Pipeline".
 
-It holds the operator-facing warning helpers for the bad-upstream and misconfiguration
-conditions the response-bound guards leave silent:
-
-* an upstream whose body does not decode into a usable packument ('logDecodeFailure')
-* an upstream whose packument self-reports a name for a /different/ package
-  ('logNameMismatch')
-* a mount whose configured base URL cannot be formed into a request
-  ('logUpstreamUnformable')
-* an upstream the transport could not reach ('logUpstreamUnreachable')
-
-Each surfaces at a 'WarningS' through the ambient @katip@ context before the contribution
-degrades. The serve path classifies the conditions themselves as a typed
-'Ecluse.Core.Registry.Metadata.MetadataError'. This module only renders their warning
-lines. Alongside them sit the pure integrity-floor admission and the metric-label
-projections the serve path records.
+The @module@ field on every line emitted here is 'pipelineInternalModule', a fixed operator
+filter key rather than the source module path.
 -}
 module Ecluse.Core.Server.Pipeline.Internal (
-    logDecodeFailure,
-    logNameMismatch,
-    logUpstreamUnformable,
-    logUpstreamUnreachable,
+    -- * The operator log-filter key
+    pipelineInternalModule,
 
     -- * Integrity-floor admission (pure)
     admitByIntegrity,
 
     -- * Metric-label projections (pure)
     packumentServeDecision,
+    statusServeDecision,
     serveDecisionClass,
     denialLabels,
     evalTier,
@@ -58,8 +43,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Katip (KatipContext, Severity (WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
 
-import Ecluse.Core.Cve (DbEtag (..))
-import Ecluse.Core.Fault (TransportFault (tfCause, tfDetail))
+import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Package (
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoVersions),
@@ -68,16 +52,17 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Integrity (
     IntegrityFloor,
-    VersionIntegrity (BelowFloor, NoIntegrity),
+    VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     partitionByFloor,
  )
-import Ecluse.Core.Registry (UrlFormationError, renderUrlFormationError)
 import Ecluse.Core.Rules (PreparedRule (prepResilience), cveIdsInReason)
 import Ecluse.Core.Rules.Outage (AdmissionIdentity (AdmissionIdentity))
-import Ecluse.Core.Rules.Types (Decision (Undecidable), SkippedCheck (SkippedUnavailable, Unreached))
-import Ecluse.Core.Security.Authority (authorityLabel)
+import Ecluse.Core.Rules.Types (
+    Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
+    SkippedCheck (SkippedUnavailable, Unreached),
+ )
 import Ecluse.Core.Server.Response (
-    PackumentStatus (PackumentForbidden, PackumentOk),
+    PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
     RuleName (RuleName),
@@ -89,70 +74,11 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort, mpRuleDenial, mpRuleEffectfulFailure)
 import Ecluse.Core.Version (renderVersion)
 
--- The operator-facing log filter key for this module's warnings, not the source module
--- path. Hold it stable so an operator's saved filter keeps matching.
+{- | The @module@ field every line in this family carries. It is held stable as this value
+rather than the source module path, so an operator's saved filter keeps matching.
+-}
 pipelineInternalModule :: Text
 pipelineInternalModule = "Ecluse.Server.Pipeline.Internal"
-
-{- | Warn that an upstream body did not decode into a usable packument. The response-bound
-guards leave this condition silent, so an operator would otherwise see nothing at all.
--}
-logDecodeFailure :: (KatipContext m) => PackageName -> m ()
-logDecodeFailure name =
-    katipAddContext payload $ logFM WarningS (ls message)
-  where
-    payload = sl "module" pipelineInternalModule <> sl "package" (renderPackageName name)
-    message :: Text
-    message = "refused an upstream metadata document: it did not decode into a usable packument"
-
-{- | Warn that an origin's packument self-reported a name for a different package, before
-the serve path drops it as untrusted. An operator can then tell a misconfigured or hostile
-upstream from an ordinary outage.
--}
-logNameMismatch :: (KatipContext m) => PackageName -> Text -> Text -> m ()
-logNameMismatch requested origin reported =
-    katipAddContext payload $ logFM WarningS (ls message)
-  where
-    payload =
-        sl "module" pipelineInternalModule
-            <> sl "package" (renderPackageName requested)
-            <> sl "origin" (authorityLabel origin)
-            <> sl "upstreamName" reported
-    message :: Text
-    message = "dropped an upstream contribution: its packument self-reported a name for a different package"
-
-{- | Warn that the configured base URL for this origin could not be formed into a request,
-so no fetch was attempted. This is a configuration fault, so an operator sees a
-misconfigured mount rather than an upstream that merely appears unreachable.
--}
-logUpstreamUnformable :: (KatipContext m) => PackageName -> Text -> UrlFormationError -> m ()
-logUpstreamUnformable name origin urlErr =
-    katipAddContext payload $ logFM WarningS (ls message)
-  where
-    payload =
-        sl "module" pipelineInternalModule
-            <> sl "package" (renderPackageName name)
-            <> sl "origin" (authorityLabel origin)
-            <> sl "urlError" (renderUrlFormationError urlErr)
-    message :: Text
-    message = "refused an upstream metadata fetch: the configured base URL could not be formed into a request"
-
-{- | Warn that the transport failed before a usable body returned, so this origin
-contributes nothing to the request. An operator can then tell an outage from a decode
-failure or a misconfigured mount.
--}
-logUpstreamUnreachable :: (KatipContext m) => PackageName -> Text -> TransportFault -> m ()
-logUpstreamUnreachable name origin fault =
-    katipAddContext payload $ logFM WarningS (ls message)
-  where
-    payload =
-        sl "module" pipelineInternalModule
-            <> sl "package" (renderPackageName name)
-            <> sl "origin" (authorityLabel origin)
-            <> sl "transportCause" (show (tfCause fault) :: Text)
-            <> sl "transportDetail" (tfDetail fault)
-    message :: Text
-    message = "an upstream metadata fetch could not reach the origin; its contribution degrades this request"
 
 {- | Keep each version's artifacts whose strongest digest meets the integrity floor, per artifact,
 so a version drops only when no file of it survives and the listing matches the download gate.
@@ -194,17 +120,26 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
         (below, missing) = Map.foldr bucket ([], []) partitioned
         bucket (Left BelowFloor) (b, m) = (belowFloorRefusal : b, m)
         bucket (Left NoIntegrity) (b, m) = (b, missingRefusal : m)
-        -- 'partitionByFloor' never reports 'MeetsFloor' as a refusal: that arm is the survivors.
-        bucket _ acc = acc
+        -- 'partitionByFloor' never reports 'MeetsFloor' as a refusal, and a 'Right' is a survivor.
+        bucket (Left MeetsFloor) acc = acc
+        bucket (Right _) acc = acc
 
 {- | Classify a no-survivors packument outcome into the bounded @ecluse.serve.decision@
 value: a forbidden set is a denial, any other non-served status a transient unavailability.
 -}
 packumentServeDecision :: [ServeDecision] -> Metric.Decision
-packumentServeDecision decisions = case packumentStatus decisions of
-    PackumentForbidden -> Metric.Deny
+packumentServeDecision = statusServeDecision . packumentStatus
+
+{- | 'packumentServeDecision' over an already-folded status, so the no-survivors path pays for
+one traversal of the decision list rather than two.
+-}
+statusServeDecision :: PackumentStatus -> Metric.Decision
+statusServeDecision = \case
     PackumentOk -> Metric.Admit
-    _ -> Metric.Unavailable
+    PackumentForbidden -> Metric.Deny
+    PackumentUnavailable _ -> Metric.Unavailable
+    PackumentBadGateway -> Metric.Unavailable
+    PackumentServerError -> Metric.Unavailable
 
 -- | Classify a single artifact-path serve decision into the bounded metric decision.
 serveDecisionClass :: ServeDecision -> Metric.Decision
@@ -266,7 +201,9 @@ recordEffectfulFailures metrics = traverse_ recordOne
     recordOne :: Decision -> IO ()
     recordOne = \case
         Undecidable transience _ -> mpRuleEffectfulFailure metrics (transienceCause transience)
-        _ -> pass
+        Admitted{} -> pass
+        Blocked{} -> pass
+        BlockedByDefault{} -> pass
 
 {- | A per-version serve outcome that keeps the version alongside its decision, so a denial's
 audit line can name the version it refused.

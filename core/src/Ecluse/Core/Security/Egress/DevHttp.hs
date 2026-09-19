@@ -2,15 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | A test- and dev-only escape hatch that builds a 'RegistryUrl' from a plain-HTTP
-loopback URL. The integration suites can then dial an in-process @http:\/\/127.0.0.1@
-server rather than standing up TLS.
+{- | A test- and dev-only builder for a plain-HTTP loopback 'RegistryUrl', so a suite can dial
+an in-process server rather than standing up TLS.
 
-The @dev-http-egress@ Cabal flag (default off) is the only build that exposes this
-module. The release library and the shipped executable build with the flag off. They
-therefore do not compile this module, and the loopback constructor does not exist in a
-release artifact. Nothing can relax the https-only egress posture in production. The
-production builder is the https-only "Ecluse.Core.Security.Egress".'mkRegistryUrl'.
+The @dev-http-egress@ Cabal flag (default off) is the only build that compiles this module, so
+a release artifact carries no way to construct a non-https registry target. The production
+builder is the https-only "Ecluse.Core.Security.Egress".'mkRegistryUrl'.
 -}
 module Ecluse.Core.Security.Egress.DevHttp (
     loopbackRegistryUrl,

@@ -22,14 +22,14 @@ import Ecluse.Core.Credential (ClientCredential, bareCredential)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), PublishRelayResponse (PublishRelayResponse))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishDeclaredNames, publishRelay))
-import Ecluse.Core.Registry.Origin (originClient)
+import Ecluse.Core.Registry.Origin (OriginClient, originClient)
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPublishDeps),
     PublishDeps (..),
-    ServeRuntime (srMetrics, srPrivateManager),
+    ServeRuntime (..),
     ctxMount,
     ctxRuntime,
  )
@@ -74,31 +74,11 @@ publishWithDeps replies deps clientToken name request respond
         liftIO (respond (publishTooLarge replies deps))
     | otherwise = do
         rt <- asks ctxRuntime
-        outcome <- withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight $ do
-            liftIO (boundedRead requestBodyLimits (getRequestBodyChunk request)) >>= \case
-                Left _ -> pure (publishTooLarge replies deps)
-                Right body -> case bodyNameDisagreement (publishDeclaredNames (pubAdapter deps)) (pubProjectName deps) name (LBS.fromStrict body) of
-                    Just declared -> pure (bodyNameMismatch replies deps name declared)
-                    Nothing ->
-                        renderRelay replies deps
-                            <$> liftIO (publishRelay (pubAdapter deps) (publicationTarget rt) name body)
+        outcome <-
+            withByteAdmission (srMetrics rt) (pubBodyBudget deps) bodyWeight $
+                liftIO (readAndRelay replies deps (publicationTarget deps rt clientToken) name request)
         liftIO (respond (fromMaybe (bodyBudgetShed replies deps) outcome))
   where
-    publicationTarget rt =
-        originClient
-            (pubLimits deps)
-            (srPrivateManager rt)
-            (pubTargetUrl deps)
-            publicationCredential
-
-    publicationCredential = case (pubInboundToken deps, pubStaticToken deps) of
-        (Just _, Just staticToken) -> Just (bareCredential staticToken)
-        _ -> clientToken
-
-    -- The per-request body cap as a 'boundedRead' bound. 'boundedRead' consults only
-    -- 'maxBodyBytes', so the response budget's other 'Limits' fields do not matter here.
-    requestBodyLimits = (pubLimits deps){maxBodyBytes = pubMaxRequestBytes deps}
-
     overDeclaredCap = case requestBodyLength request of
         KnownLength n -> n > fromIntegral (pubMaxRequestBytes deps)
         ChunkedBody -> False
@@ -106,6 +86,41 @@ publishWithDeps replies deps clientToken name request respond
     bodyWeight = case requestBodyLength request of
         KnownLength n -> fromIntegral n
         ChunkedBody -> pubMaxRequestBytes deps
+
+{- Read the bounded body, check the name it declares, then relay, in that order. This runs
+inside the byte-admission bracket, so the reserved weight always covers the bytes buffered. -}
+readAndRelay ::
+    PublishReplies response ->
+    PublishDeps ->
+    OriginClient ->
+    PackageName ->
+    Request ->
+    IO response
+readAndRelay replies deps target name request =
+    boundedRead requestBodyLimits (getRequestBodyChunk request) >>= \case
+        Left _ -> pure (publishTooLarge replies deps)
+        Right body -> case bodyNameDisagreement (publishDeclaredNames (pubAdapter deps)) (pubProjectName deps) name (LBS.fromStrict body) of
+            Just declared -> pure (bodyNameMismatch replies deps name declared)
+            Nothing -> renderRelay replies deps <$> publishRelay (pubAdapter deps) target name body
+  where
+    -- The per-request body cap as a 'boundedRead' bound. 'boundedRead' consults only
+    -- 'maxBodyBytes', so the response budget's other 'Limits' fields do not matter here.
+    requestBodyLimits = (pubLimits deps){maxBodyBytes = pubMaxRequestBytes deps}
+
+publicationTarget :: PublishDeps -> ServeRuntime -> Maybe ClientCredential -> OriginClient
+publicationTarget deps rt clientToken =
+    originClient
+        (pubLimits deps)
+        (srPrivateManager rt)
+        (pubTargetUrl deps)
+        (publicationCredential deps clientToken)
+
+-- A configured static token replaces the caller's own, but only on an authenticated edge, so
+-- an open edge never mints it.
+publicationCredential :: PublishDeps -> Maybe ClientCredential -> Maybe ClientCredential
+publicationCredential deps clientToken = case (pubInboundToken deps, pubStaticToken deps) of
+    (Just _, Just staticToken) -> Just (bareCredential staticToken)
+    _ -> clientToken
 
 renderRelay ::
     PublishReplies response ->

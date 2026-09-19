@@ -2,13 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The receipt-lease vocabulary a queue backend writes and the worker's renewal
-controller reads ("Ecluse.Core.Worker.Lease").
+{- | The receipt-lease vocabulary a queue backend writes and the worker's renewal controller
+reads ("Ecluse.Core.Worker.Lease").
 
-A backend that hides a received message stamps each delivery with the window it granted,
-when that window lapses, and the ceiling its own protocol puts on one receipt. The
-instants come from "Ecluse.Core.Clock" and are re-exported here, because a lease is where
-most callers meet them. A backend that never expires a delivery supplies no lease at all.
+The monotonic instants come from "Ecluse.Core.Clock" and are re-exported here, because a lease
+is where most callers meet them. A backend that never expires a delivery supplies no lease.
 -}
 module Ecluse.Core.Queue.Lease (
     -- * Durations

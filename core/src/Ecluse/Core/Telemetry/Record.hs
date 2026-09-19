@@ -54,74 +54,54 @@ data MetricsPort = MetricsPort
     { mpServeDecision :: Decision -> IO ()
     -- ^ Record one serve decision (@ecluse.serve.decision@): admit, deny, or unavailable.
     , mpServeAdmissionInFlight :: Int -> IO ()
-    {- ^ Record a change (+1 or -1) to in-flight metadata parses
-    (@ecluse.serve.admission.in_flight@).
-    -}
+    -- ^ Record a change (+1 or -1) to in-flight metadata parses (@ecluse.serve.admission.in_flight@).
     , mpServeAdmissionQueued :: IO ()
-    {- ^ Record one admission that waited for a slot before proceeding
-    (@ecluse.serve.admission.queued@).
-    -}
+    -- ^ Record one admission that waited for a slot (@ecluse.serve.admission.queued@).
     , mpPublishBodyInFlightBytes :: Int -> IO ()
-    {- ^ Record a change (the reserved weight, positive or negative) in bytes held
-    for buffered publish bodies (@ecluse.publish.body.in_flight_bytes@).
+    {- ^ Record a change in the bytes held for buffered publish bodies, the reserved weight
+    signed (@ecluse.publish.body.in_flight_bytes@).
     -}
     , mpPublishBodyShed :: IO ()
     -- ^ Record one publish shed at the body-byte budget (@ecluse.publish.body.shed@).
     , mpMergeDivergence :: IO ()
-    {- ^ Record one cross-upstream integrity divergence found in the packument merge
-    (@ecluse.registry.merge.divergence@), once per contradicting version. The
-    high-cardinality identifiers (package, version, the digest bodies) go on the
-    'WARNING' log line, never a metric label.
+    {- ^ Record one cross-upstream integrity divergence in the packument merge, once per
+    contradicting version (@ecluse.registry.merge.divergence@).
     -}
     , mpRuleDenial :: Maybe Text -> ReasonClass -> IO ()
-    {- ^ Record one rule denial (@ecluse.rule.denials@) by reason class and, for a
-    policy denial, the deciding rule. A non-policy refusal carries no rule.
+    {- ^ Record one rule denial (@ecluse.rule.denials@) by reason class and, for a policy
+    denial, the deciding rule. A non-policy refusal carries no rule.
     -}
     , mpRuleEvalDuration :: Tier -> Double -> IO ()
     -- ^ Record a rule-evaluation latency sample (@ecluse.rule.eval.duration@) by tier.
     , mpRuleEffectfulFailure :: Cause -> IO ()
     -- ^ Record one effectful-rule failure (@ecluse.rule.effectful.failures@) by cause.
     , mpUpstreamFetch :: Upstream -> StatusClass -> Double -> IO ()
-    {- ^ Record an upstream metadata-fetch latency sample
-    (@ecluse.upstream.fetch.duration@) by upstream and the response's status class.
-    -}
+    -- ^ Record an upstream metadata-fetch latency sample (@ecluse.upstream.fetch.duration@).
     , mpUpstreamFetchError :: Upstream -> Cause -> IO ()
-    {- ^ Record one upstream metadata-fetch error (@ecluse.upstream.fetch.errors@) by
-    upstream and the bounded cause.
-    -}
+    -- ^ Record one upstream metadata-fetch error (@ecluse.upstream.fetch.errors@).
     , mpCacheRequest :: CacheResult -> IO ()
-    {- ^ Record one metadata-cache lookup (@ecluse.metadata_cache.requests@) as a hit
-    or a miss.
-    -}
+    -- ^ Record one metadata-cache lookup (@ecluse.metadata_cache.requests@) as a hit or a miss.
     , mpCacheEntries :: Int -> IO ()
     -- ^ Record the metadata cache's current occupancy (@ecluse.metadata_cache.entries@).
     , mpCacheResidentBytes :: Int -> IO ()
-    {- ^ Record the full-packument metadata cache's resident bytes
-    (@ecluse.metadata_cache.resident_bytes@).
-    -}
+    -- ^ The full-packument cache's resident bytes (@ecluse.metadata_cache.resident_bytes@).
     , mpVersionCacheResidentBytes :: Int -> IO ()
-    {- ^ Record the single-version metadata cache's resident bytes
-    (@ecluse.metadata_cache.version.resident_bytes@).
-    -}
+    -- ^ The single-version cache's bytes (@ecluse.metadata_cache.version.resident_bytes@).
     , mpAssembledCacheResidentBytes :: Int -> IO ()
-    {- ^ Record the assembled-representation store's resident bytes
-    (@ecluse.metadata_cache.assembled.resident_bytes@).
-    -}
+    -- ^ The assembled store's bytes (@ecluse.metadata_cache.assembled.resident_bytes@).
     , mpPublicRelayAnomaly :: RelayAnomaly -> IO ()
     {- ^ Record one public artifact relay that did not carry the admitted artifact
-    (@ecluse.serve.relay.anomalies@) by its bounded class. Steady state is zero.
+    (@ecluse.serve.relay.anomalies@). Steady state is zero.
     -}
     , mpRequestPerimeterFault :: RequestFaultCause -> IO ()
-    {- ^ Record one pre-commit handler escape the request perimeter answered
-    (@ecluse.serve.perimeter.faults@) by its bounded classified cause.
-    -}
+    -- ^ Record one pre-commit handler escape the perimeter answered (@ecluse.serve.perimeter.faults@).
     , mpMirrorEnqueued :: IO ()
-    {- ^ Record one mirror job accepted for enqueue (@ecluse.mirror.enqueued@): the
-    serve path's hand-off to the enqueue buffer, not the backend write.
+    {- ^ Record one mirror job accepted for enqueue (@ecluse.mirror.enqueued@): the serve
+    path's hand-off to the buffer, not the backend write.
     -}
     , mpMirrorEnqueueFailure :: IO ()
-    {- ^ Record one mirror enqueue failure (@ecluse.mirror.enqueue.failures@): a
-    refused hand-off or a failed backend delivery.
+    {- ^ Record one mirror enqueue failure (@ecluse.mirror.enqueue.failures@): a refused
+    hand-off or a failed backend delivery.
     -}
     }
 
@@ -130,9 +110,7 @@ consumers share no field. @Ecluse.Runtime.Telemetry.Instruments@ supplies the OT
 -}
 data WorkerMetricsPort = WorkerMetricsPort
     { wmpMirrorJobProcessed :: MirrorResult -> IO ()
-    {- ^ Record one processed mirror job (@ecluse.mirror.jobs.processed@) by its
-    terminal result (published, or failed).
-    -}
+    -- ^ Record one processed mirror job by its terminal result (@ecluse.mirror.jobs.processed@).
     , wmpMirrorPublishDuration :: Double -> IO ()
     -- ^ Record one mirror publish-latency sample (@ecluse.mirror.publish.duration@).
     }
@@ -143,7 +121,7 @@ package and version a disposition concerns ride the sweep's own audit line, neve
 newtype DredgerMetricsPort = DredgerMetricsPort
     { dmpSweptVersion :: SweepTarget -> SweepResult -> IO ()
     {- ^ Record one disposition of one examined version (@ecluse.dredger.versions@). A version
-    counts once as examined and once more under what the sweep did with it.
+    counts once as examined and once under what the sweep did with it.
     -}
     }
 
@@ -154,24 +132,18 @@ data AdvisorySyncMetricsPort = AdvisorySyncMetricsPort
     { asmpSyncAttempt :: Ecosystem -> AdvisorySyncResult -> IO ()
     -- ^ Record one advisory sync attempt (@ecluse.advisory.sync.attempts@) by ecosystem and result.
     , asmpSyncDuration :: Ecosystem -> AdvisorySyncResult -> Double -> IO ()
-    {- ^ Record one advisory sync attempt's latency in seconds
-    (@ecluse.advisory.sync.duration@) by ecosystem and result.
-    -}
+    -- ^ Record one sync attempt's latency in seconds (@ecluse.advisory.sync.duration@).
     }
 
-{- | The Pilot compile's metric-recording port, recorded by @Ecluse.Core.Osv.Compile@. One port
-is bound to one ecosystem, so no field carries the ecosystem the compile holds as free text.
-@Ecluse.Runtime.Telemetry.Instruments@ binds the label when it builds the port.
+{- | The Pilot compile's metric-recording port. One port is bound to one ecosystem, so no
+field carries the ecosystem the compile holds as free text.
 -}
 data AdvisoryCompileMetricsPort = AdvisoryCompileMetricsPort
     { acmpCompileAccepted :: Int -> IO ()
-    {- ^ Record the advisory entries one compile pass accepted
-    (@ecluse.advisory.compile.accepted@).
-    -}
+    -- ^ The entries one compile pass accepted (@ecluse.advisory.compile.accepted@).
     , acmpCompileDropped :: AdvisoryDropCause -> Int -> IO ()
-    {- ^ Record the advisory entries one compile pass dropped for a bounded cause
-    (@ecluse.advisory.compile.dropped@). A pass with no drops records zero, so the series
-    exists before the first drop.
+    {- ^ The entries one pass dropped for a cause (@ecluse.advisory.compile.dropped@). A pass
+    with no drops records zero, so the series exists before the first drop.
     -}
     , acmpCompileRun :: AdvisoryCompileResult -> IO ()
     -- ^ Record how one compile pass concluded (@ecluse.advisory.compile.runs@).
