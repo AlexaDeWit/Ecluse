@@ -16,6 +16,7 @@ module Ecluse.Test.Registry.Npm (
     versionSpec,
     versionValue,
     packumentValue,
+    listingValue,
     publishedDaysAgo,
 
     -- * Mirror-write fixtures
@@ -30,6 +31,8 @@ module Ecluse.Test.Registry.Npm (
 
     -- * Client fixtures
     defaultNpmConfig,
+    writeTokenNpmConfig,
+    mirrorWriteToken,
     publicRegistryBaseUrl,
 
     -- * URL path generators
@@ -48,12 +51,13 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Network.HTTP.Client (Manager)
 
+import Ecluse.Core.Credential (Secret, bareCredential, mkSecret)
 import Ecluse.Core.Package (Artifact (artHashes, artUrl), Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageName, renderPackageName)
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc, vdDetails, vdRaw))
 import Ecluse.Core.Registry.Origin (OriginClient (..))
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Package (unsafeFilename, unsafeHash, unscopedNpm, validSha1)
@@ -215,6 +219,12 @@ packumentValue name latest versions times =
         , "time" .= object times
         ]
 
+{- | An npm @\/-\/all@ listing body: one empty entry per package name. The registry's own
+@_updated@ bookkeeping key is a site-specific extra, so a case that exercises it adds it.
+-}
+listingValue :: [Text] -> Value
+listingValue names = object [(Key.fromText name, object []) | name <- names]
+
 {- | Render an npm @time@ instant the given number of whole days before the caller's
 fixture clock.
 -}
@@ -246,6 +256,20 @@ defaultNpmConfig baseUrl manager =
         , ocToken = Nothing
         , ocLimits = defaultLimits
         }
+
+{- | 'defaultNpmConfig' carrying the mirror-write token as a bare credential, at caller-chosen
+response bounds. The maintenance verbs read the token off the origin, so a store fixture needs it.
+-}
+writeTokenNpmConfig :: RegistryUrl -> Manager -> Limits -> OriginClient
+writeTokenNpmConfig baseUrl manager limits =
+    (defaultNpmConfig baseUrl manager)
+        { ocToken = Just (bareCredential mirrorWriteToken)
+        , ocLimits = limits
+        }
+
+-- | The standing mirror-write secret the store fixtures present.
+mirrorWriteToken :: Secret
+mirrorWriteToken = mkSecret "write-token"
 
 -- | A URL path of arbitrary segments, at the length a router's property explores.
 genPathSegments :: Gen [Text]

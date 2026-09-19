@@ -26,12 +26,14 @@ module Ecluse.Test.Json (
     mapAt,
     keysAt,
     textAt,
+    encodeStrict,
 ) where
 
-import Data.Aeson (Object, Value (Array, Bool, Null, Number, Object, String))
+import Data.Aeson (Object, Value (Array, Bool, Null, Number, Object, String), encode)
 import Data.Aeson.Key (Key)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Scientific (Scientific, scientific)
 import Data.Vector qualified as V
@@ -113,6 +115,10 @@ mapAt key fields = Map.fromList [(Key.toText k, v) | (k, v) <- KeyMap.toList (ob
 -- | The keys of the object at one key, in the order the object holds them.
 keysAt :: Key -> Object -> [Text]
 keysAt key = map Key.toText . KeyMap.keys . objectAt key
+
+-- | A document as the strict bytes a decoder reads.
+encodeStrict :: Value -> ByteString
+encodeStrict = LBS.toStrict . encode
 
 -- | The string at one key, 'Nothing' when it is absent or holds another shape.
 textAt :: Key -> Object -> Maybe Text
