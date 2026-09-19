@@ -226,8 +226,8 @@ generationOf selections admitted =
     listToMaybe (reverse admitted) >>= \version -> selGeneration =<< find ((== version) . selVersion) selections
 
 countWithheld :: DeletionRun -> SweepStore -> [Version] -> IO ()
-countWithheld run store withheld =
-    traverse_ (const (record (labelled run store) (runCounters run) SweepGuardSkipped)) withheld
+countWithheld run store =
+    traverse_ (const (record (labelled run store) (runCounters run) SweepGuardSkipped))
 
 refuse :: DeletionRun -> Text -> StoreFault -> IO (Either StoreFault a)
 refuse run target fault = do
