@@ -113,15 +113,12 @@ newtype IntegrityFingerprint = IntegrityFingerprint [(Text, Maybe HashAlg, Text)
 integrityHashes :: IntegrityFingerprint -> [(Text, Maybe HashAlg, Text)]
 integrityHashes (IntegrityFingerprint hs) = hs
 
-rank :: Provenance -> SourceId -> (Provenance, SourceId)
-rank prov sid = (prov, sid)
-
 data Candidate = Candidate
     { candProvenance :: Provenance
     , candSourceId :: SourceId
-    , candFingerprint :: ~IntegrityFingerprint
-    , -- Fingerprints are forced only for colliding versions because ranks are unique.
-      candDetails :: PackageDetails
+    , -- Lazy: ranks are unique, so a fingerprint is forced only for a colliding version.
+      candFingerprint :: ~IntegrityFingerprint
+    , candDetails :: PackageDetails
     , candSnapshot :: ContentDigest
     }
     deriving stock (Show)
@@ -129,7 +126,7 @@ data Candidate = Candidate
 -- Eq and Ord both go through this key. 'candDetails' is deliberately excluded: a 'SourceId' is
 -- unique per call, so two contributions agreeing on rank and integrity are the same candidate.
 candKey :: Candidate -> ((Provenance, SourceId), IntegrityFingerprint)
-candKey c = (rank (candProvenance c) (candSourceId c), candFingerprint c)
+candKey c = ((candProvenance c, candSourceId c), candFingerprint c)
 
 instance Eq Candidate where
     a == b = candKey a == candKey b
@@ -261,69 +258,52 @@ planFrom acc = do
             { mpName = name
             , mpSurvivors = Map.map (candSourceId . winnerOf) (mergeVersions acc)
             , mpArtifacts = Map.map (admittedEntries . winnerOf) (mergeVersions acc)
-            , mpDistTags = reconciledTags
-            , mpTime = reconciledTimes
-            , mpDivergences = divergences
+            , mpDistTags = reconciledTags acc
+            , mpTime = Map.mapMaybe (pkgPublishedAt . candDetails . winnerOf) (mergeVersions acc)
+            , mpDivergences = divergencesOf (mergeVersions acc)
             }
+
+-- The minimum by rank. A key always has at least one candidate, so 'Set.findMin' is total here.
+winnerOf :: Set Candidate -> Candidate
+winnerOf = Set.findMin
+
+admittedEntries :: Candidate -> NonEmpty AdmittedEntry
+admittedEntries candidate =
+    fmap
+        (\artifact -> AdmittedEntry (candSnapshot candidate) (artEntryKey artifact) (artFilename artifact))
+        (pkgArtifacts (candDetails candidate))
+
+-- Divergence is a property of the /set/ of distinct fingerprints offered for a key, never of a
+-- pairwise fold step. That keeps it order-independent and associative for 3+ sources.
+divergencesOf :: Map Text (Set Candidate) -> Set Divergence
+divergencesOf versions =
+    Set.fromList
+        [ Divergence{divVersion = key, divWinning = win, divLosing = lose}
+        | (key, cs) <- Map.toList versions
+        , Set.size cs > 1
+        , let winner = winnerOf cs
+        , let win = candFingerprint winner
+        , let winningDigests = digestsByKey (candDetails winner)
+        , candidate <- Set.toList cs
+        , let lose = candFingerprint candidate
+        , lose /= win
+        , contradicts winningDigests (digestsByKey (candDetails candidate))
+        ]
+
+-- The accumulator has already resolved same-tag collisions by provenance, so a carried tag never
+-- depends on the order the caller passed the inputs.
+reconciledTags :: Merge -> Map Text Version
+reconciledTags acc = case selectLatest chosenLatest (map pkgVersion survivingDetails) of
+    Nothing -> Map.delete "latest" carried
+    Just v -> Map.insert "latest" v carried
   where
-    -- The precedence winner among a key's candidates: the minimum by rank. A key always has at
-    -- least one candidate, so 'Set.findMin' is total here.
-    winnerOf :: Set Candidate -> Candidate
-    winnerOf = Set.findMin
-
-    admittedEntries candidate =
-        fmap
-            (\artifact -> AdmittedEntry (candSnapshot candidate) (artEntryKey artifact) (artFilename artifact))
-            (pkgArtifacts (candDetails candidate))
-
-    survives :: Text -> Bool
+    carried = Map.filter (survives . renderVersion) (Map.map rankedValue (mergeDistTags acc))
     survives key = Map.member key (mergeVersions acc)
+    survivingDetails = [candDetails (winnerOf cs) | cs <- Map.elems (mergeVersions acc)]
 
-    -- The surviving version objects (the details that won each key).
-    survivingDetails :: [PackageDetails]
-    survivingDetails =
-        [candDetails (winnerOf cs) | cs <- Map.elems (mergeVersions acc)]
-
-    -- Divergence is a property of the /set/ of distinct fingerprints offered for a key, never
-    -- of a pairwise fold step. That keeps it order-independent and associative for 3+ sources.
-    divergences :: Set Divergence
-    divergences =
-        Set.fromList
-            [ Divergence{divVersion = key, divWinning = win, divLosing = lose}
-            | (key, cs) <- Map.toList (mergeVersions acc)
-            , Set.size cs > 1
-            , let winner = winnerOf cs
-            , let win = candFingerprint winner
-            , let winningDigests = digestsByKey (candDetails winner)
-            , candidate <- Set.toList cs
-            , let lose = candFingerprint candidate
-            , lose /= win
-            , contradicts winningDigests (digestsByKey (candDetails candidate))
-            ]
-
-    -- The accumulator has already resolved same-tag collisions by provenance, so the carried
-    -- tags never depend on the order the caller passed the inputs.
-    reconciledTags :: Map Text Version
-    reconciledTags =
-        let carried = Map.filter (survives . renderVersion) (Map.map rankedValue (mergeDistTags acc))
-         in case resolvedLatest of
-                Nothing -> Map.delete "latest" carried
-                Just v -> Map.insert "latest" v carried
-
-    -- 'selectLatest' owns the keep-or-repoint precedence.
-    resolvedLatest :: Maybe Version
-    resolvedLatest =
-        selectLatest chosenLatest (map pkgVersion survivingDetails)
-
-    -- The public document's @latest@ and nothing else: a private document, mirror store or not,
-    -- is never authoritative here, so 'selectLatest' projects over the survivors without one.
-    chosenLatest :: Maybe Version
+    -- A private document, mirror store or not, is never authoritative for @latest@, so
+    -- 'selectLatest' projects over the survivors from the public tag alone.
     chosenLatest = rankedValue <$> mergePublicLatest acc
-
-    -- Publish times retain the same source authority as the served manifest.
-    reconciledTimes :: Map Text UTCTime
-    reconciledTimes =
-        Map.mapMaybe (pkgPublishedAt . candDetails . winnerOf) (mergeVersions acc)
 
 {- | Compare integrity-admitted versions independently of rule eligibility, with the trusted map winning.
 Inputs must share a validated package identity. Only shared version keys are compared.
