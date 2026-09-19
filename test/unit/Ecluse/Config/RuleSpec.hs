@@ -23,6 +23,7 @@ import Ecluse.Core.Rules.Types (
     defaultAllowByIdentityPrecedence,
     defaultAllowIfOlderThanPrecedence,
     defaultAllowIfRemediatesCvePrecedence,
+    defaultAllowScopePrecedence,
     defaultDenyIfCvePrecedence,
     defaultDenyIfEpssPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
@@ -79,13 +80,11 @@ rulePolicySpec = describe "rulePolicySpec" $ do
 
         it "adds an AllowScope rule from a scope field" $
             resolveJson "{\"rules\":{\"trusted\":{\"type\":\"AllowScope\",\"scope\":\"myorg\"}}}"
-                `shouldSatisfy` containsAllowScope
+                `shouldResolveTo` (PrecededRule defaultAllowScopePrecedence (AllowScope (mkScope "myorg")) : shippedRules)
 
         it "adds a new AllowIfOlderThan rule from a valid ageSeconds" $
             resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100}}}"
-                `shouldSatisfy` either
-                    (const False)
-                    (elem (PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 100)))
+                `shouldResolveTo` (PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 100) : shippedRules)
 
         it "accepts a restated type on a patch that matches the default's kind" $
             resolveJson "{\"rules\":{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100}}}"
@@ -115,16 +114,14 @@ rulePolicySpec = describe "rulePolicySpec" $ do
                 `shouldBe` Left [MalformedRule "young" "\"AllowIfOlderThan\" requires \"ageSeconds\""]
 
         it "adds an AllowIfRemediatesCve rule at its type's default precedence" $
+            -- A second rule of the shipped fast lane's own type, so the resolved policy
+            -- carries both rather than one overwriting the other.
             resolveJson "{\"rules\":{\"cve-fast-lane\":{\"type\":\"AllowIfRemediatesCve\"}}}"
-                `shouldSatisfy` either
-                    (const False)
-                    (elem (PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve))
+                `shouldResolveTo` (PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve : shippedRules)
 
         it "adds an AllowByIdentity rule from an identity field" $
             resolveJson "{\"rules\":{\"pinned-fix\":{\"type\":\"AllowByIdentity\",\"identity\":\"left-pad@1.3.0\"}}}"
-                `shouldSatisfy` either
-                    (const False)
-                    (elem (PrecededRule defaultAllowByIdentityPrecedence (AllowByIdentity "left-pad@1.3.0")))
+                `shouldResolveTo` (PrecededRule defaultAllowByIdentityPrecedence (AllowByIdentity "left-pad@1.3.0") : shippedRules)
 
         it "rejects adding an AllowByIdentity without identity" $
             resolveJson "{\"rules\":{\"pinned-fix\":{\"type\":\"AllowByIdentity\"}}}"
@@ -376,12 +373,20 @@ epssBase =
     RulePolicy
         (Map.fromList [("deny-epss", PrecededRule defaultDenyIfEpssPrecedence (DenyIfEpss (DenyIfEpssParams 0.5 FailDeny)))])
 
-containsAllowScope :: Either [PolicyError] [PrecededRule] -> Bool
-containsAllowScope (Right rs) = any isAllowScope rs
-  where
-    isAllowScope (PrecededRule _ (AllowScope _)) = True
-    isAllowScope _ = False
-containsAllowScope _ = False
+{- | The whole resolved policy as a multiset, so an "adds a rule" case cannot pass on a policy
+that also lost, gained, or re-graded another rule. The order is the caller's own concern.
+-}
+shouldResolveTo :: Either [PolicyError] [PrecededRule] -> [PrecededRule] -> Expectation
+shouldResolveTo resolved expected = case resolved of
+    Right rules -> rules `shouldMatchList` expected
+    Left errs -> expectationFailure ("expected a resolved policy, got " <> show errs)
+
+-- | The two rules the shipped policy carries, which every add above resolves beside.
+shippedRules :: [PrecededRule]
+shippedRules =
+    [ PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
+    , PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+    ]
 
 hasRuleAtPrec :: Int -> Rule -> Either [PolicyError] [PrecededRule] -> Bool
 hasRuleAtPrec prec rule (Right rs) = PrecededRule prec rule `elem` rs

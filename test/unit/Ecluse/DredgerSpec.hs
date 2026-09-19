@@ -104,7 +104,7 @@ companionSpec = describe "withSyncTasks" $ do
         outcome <-
             Exception.try $
                 withSyncTasks [throwIO (SyncGaveUp "the advisory sync gave up")] (threadDelay 200000 >> writeIORef completed True)
-        outcome `shouldSatisfy` faulted
+        outcome `shouldSatisfy` faultedWith "the advisory sync gave up"
         readIORef completed `shouldReturn` False
 
 {- The cap is a breaker, so it stops the Dredger for the life of the process. Nothing clears it,
@@ -279,9 +279,11 @@ held store = concatMap (map storedVersionOf) . Map.elems <$> readFakeContents st
 generation :: Maybe DbEtag
 generation = Just (DbEtag "etag-1")
 
--- The linked companion rethrows asynchronously, so the assertion uses the base exception perimeter.
-faulted :: Either SomeException () -> Bool
-faulted = isLeft
+{- The linked companion rethrows asynchronously and wraps what it rethrows, so the assertion
+catches at the base perimeter and reads the sync task's own fault out of the rendering.
+-}
+faultedWith :: Text -> Either SomeException () -> Bool
+faultedWith needle = either (T.isInfixOf needle . toText . displayException) (const False)
 
 -- A typed fault a spec throws from a sync task, so the case names what it simulated.
 newtype SyncGaveUp = SyncGaveUp Text

@@ -18,7 +18,7 @@ import Ecluse.Config (
     Config (..),
     ConfigError,
     EgressSettings (..),
-    FirstParty (FirstPartyPyPI),
+    FirstParty (FirstPartyNpmScopes, FirstPartyPyPI),
     LimitsSettings (..),
     MountConfig (mntFirstParty),
     ObservabilitySettings (..),
@@ -34,6 +34,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix), mkPyPIPrefix)
 import Ecluse.Runtime.Log (LogLevel (DebugLevel, ErrorLevel, InfoLevel, WarnLevel))
 
@@ -198,15 +199,19 @@ spec = describe "decodeDocument" $ do
                     then loadFirstParty entry `shouldSatisfy` isRight
                     else loadFirstParty entry `shouldSatisfy` decodeErrorMentions "invalid scope in firstParty"
 
-    it "accepts a well-formed comma-separated firstParty (trimmed, leading sigil tolerated)" $
-        mountKeysOf
-            ( pubUrlEnv
-                <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
-                   , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme, beta")
-                   ]
-            )
-            Nothing
-            `shouldReturn` [Npm]
+    it "accepts a well-formed comma-separated firstParty (trimmed, leading sigil tolerated)" $ do
+        -- The resolved value is what every consumer of the privilege derives from, so the
+        -- trimming and the optional sigil are read back off it rather than off a bare load.
+        config <-
+            expectConfig
+                ( pubUrlEnv
+                    <> [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM__REGISTRY__URL", "https://private.example.test")
+                       , ("ECLUSE_MOUNTS__NPM__FIRST_PARTY", "@acme, beta")
+                       ]
+                )
+                Nothing
+        (mntFirstParty <$> Map.lookup Npm (cfgMounts (configApp config)))
+            `shouldBe` Just (Just (FirstPartyNpmScopes (mkScope "acme" :| [mkScope "beta"])))
 
     it "reports every incomplete mirrored mount in one load, not only the first" $ do
         let doc =
