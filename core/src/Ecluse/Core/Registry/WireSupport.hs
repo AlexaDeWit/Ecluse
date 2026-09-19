@@ -2,28 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Cross-ecosystem scaffolding for projecting an untrusted registry wire document
-into the domain model, shared by every ecosystem's projection
-("Ecluse.Core.Registry.Npm.Project"):
+{- | The floor every ecosystem's projection of an untrusted registry document sits on: per-entry
+lenient degradation, the shared name checks, and the upstream name-agreement test.
 
-* __Per-entry lenient degradation__. 'partitionLenientList' splits a list of keyed raw
-  entries into the ones that decode and the ones that do not, dropping each malformed
-  entry as an 'InvalidEntry' rather than failing the whole document. 'partitionLenient'
-  is the keyed-map form of it. This is the one place that realises per-entry leniency and
-  drop-tracking, and the one place that builds an 'InvalidEntry' from a decode failure.
-  Every ecosystem's element-wise-lenient axis layers its own decode on top: npm's
-  @versions@\/@dist-tags@\/@time@ maps, or an array-shaped index's file list, which
-  supplies each element's key itself.
-* __The name floor__. 'parseNameComponent' is the non-empty, ASCII, path-safe trio every
-  captured or wire-declared name component must clear before it reaches an interpolated
-  upstream URL. Each ecosystem's grammar sits on it and adds only its own rules, so no
-  parser can reach a URL having checked one of the three and forgotten another.
-  'nameComponentWith' and 'withinNameLimit' layer an ecosystem's own grammar and cap on it.
-* __Name agreement__. 'checkNameAgreement' checks that the name an upstream self-reports
-  agrees with the name the proxy resolved from the route, and carries what was projected
-  through on agreement. The requested name is the validation authority, never a rewrite. A
-  disagreement carries the reported name verbatim and no payload, so the caller cannot
-  serve a contribution the origin is untrusted for.
+The three name checks travel together because skipping any one of them reaches an interpolated
+upstream URL. An ecosystem's grammar layers its own rules on top and never replaces them.
 -}
 module Ecluse.Core.Registry.WireSupport (
     -- * Per-entry lenient degradation

@@ -76,9 +76,7 @@ data VersionRead = VersionRead
     { vrVersion :: Maybe VersionDoc
     -- ^ The pair. 'Nothing' means the package resolved without this version.
     , vrUpstreamLatest :: Maybe Version
-    {- ^ The document's @latest@ target, whether or not it is the requested version. 'Nothing'
-    when the document declares none, or the ecosystem has no such tag.
-    -}
+    -- ^ 'Nothing' when the document declares none, or the ecosystem has no such tag.
     }
     deriving stock (Eq, Show)
 
@@ -119,9 +117,7 @@ data MetadataError
 
 -- | A version lookup result shared by public admission and mirror workers.
 data VersionEvaluation
-    = {- | The version resolved and projected, ready for the rules engine. The second field is
-      the same document's 'vrUpstreamLatest'.
-      -}
+    = -- | The version resolved and projected. The second field is the same document's @latest@.
       VersionPresent VersionDoc (Maybe Version)
     | -- | The package exists but does not supply the requested version.
       VersionMissing

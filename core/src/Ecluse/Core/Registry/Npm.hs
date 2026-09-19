@@ -2,40 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The npm __read and relay data plane__: the effectful metadata fetch and the
-first-party publish relay over @http-client@.
+{- | The npm read and relay data plane over @http-client@: the bounded metadata fetch and the
+first-party publish relay. "Ecluse.Core.Registry.Npm.Wire" and
+"Ecluse.Core.Registry.Npm.Project" are the pure decode beside it, and the mirror write's codec
+is "Ecluse.Core.Registry.Npm.Publish".
 
-This module is the network half of the npm read-side protocol boundary.
-"Ecluse.Core.Registry.Npm.Wire" and "Ecluse.Core.Registry.Npm.Project" are the pure
-decode and projection. This module is the side-effecting exchange.
-'fetchMetadataFormBounded' reads a metadata document bounded, with every failure in
-its typed channel. 'relayPublishDocument' forwards a client's own publish to the
-publication target. The mirror write is not here. Its protocol codec lives in
-"Ecluse.Core.Registry.Npm.Publish" and executes through the shared transport
-("Ecluse.Core.Registry.Publish").
-
-It speaks the npm registry protocol directly with @http-client@, __never__
-@amazonka@. The control plane (the @GetAuthorizationToken@ mint, the mirror queue)
-is @amazonka@'s job behind separate handles. The data plane is ordinary HTTPS and
-JSON, identical across every npm-speaking backend: fetch metadata, stream a tarball,
-publish. Keeping the streaming path off @amazonka@'s @conduit@/@ResourceT@ machinery
-is what makes bounded-memory artifact proxying tractable.
-
-== Streaming and buffering
-
-The artifact request builders ('Ecluse.Core.Registry.Npm.Request.artifactRequestByFile'
-and 'Ecluse.Core.Registry.Npm.Request.artifactRequestByUrl') mark their requests
-__non-decompressing__, because a tarball is opaque binary that must reach the client
-byte-for-byte. The module exports them so the web layer can relay the open body
-__without buffering the whole artifact in memory__. The mirror worker must read the whole
-artifact to verify its integrity before publishing, so it buffers the artifact
-(bounded) through 'Ecluse.Core.Worker.Fetch.fetchArtifactBytes' instead.
-
-== Authentication
-
-Every request here carries an __injected__ bearer token, or none. This module never
-originates credential policy. Which token to send on which request is the request
-pipeline's authority model, decided upstream of this module.
+Every request carries the credential the origin was built with, or none. Which credential an
+origin holds is settled upstream, so nothing here originates credential policy.
 -}
 module Ecluse.Core.Registry.Npm (
     -- * Bounded metadata fetch
@@ -58,10 +31,8 @@ import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Request (Validators)
 
-{- | Fetch a package's metadata in the requested 'MetadataForm', relaying any conditional-GET
-'Validators'. Every failure, the body read included, comes back as a 'FetchFault' value, never
-an exception. It reads the body through 'Ecluse.Core.Security.boundedRead' and refuses one past
-'Ecluse.Core.Security.maxBodyBytes' fail-closed, so a hostile upstream cannot exhaust memory.
+{- | Fetch a package's metadata in the requested form, relaying any conditional-GET validators.
+The body read is bounded fail-closed, and every failure is a 'FetchFault' value, never an exception.
 -}
 fetchMetadataFormBounded ::
     OriginClient ->
@@ -75,10 +46,7 @@ fetchMetadataFormBounded origin form validators name =
         (boundedFetch (ocManager origin) (ocLimits origin))
         (metadataRequest (originBaseUrl origin) (ocToken origin) form validators name)
 
-{- | Relay a client's npm publish document to the publication target and return the
-target's own response. It is the first-party publish primitive behind the
-@PUT /{pkg}@ serve path.
--}
+-- | Relay a client's npm publish document to the publication target and return its own response.
 relayPublishDocument ::
     OriginClient ->
     PackageName ->
