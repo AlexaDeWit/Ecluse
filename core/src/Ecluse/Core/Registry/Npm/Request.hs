@@ -86,9 +86,8 @@ metadataRequest baseUrl token form validators name = do
                     : requestHeaders base
             }
 
-{- | Build the artifact @GET@ at @{baseUrl}/{encoded-pkg}/-/{filename}@, addressing the tarball by
-the filename the client requested and never one rebuilt from @(package, version)@, so a registry
-with its own tarball naming still resolves.
+{- | Build the artifact @GET@ at @{baseUrl}/{encoded-pkg}/-/{filename}@. It addresses the tarball by
+the filename the client requested, so a registry with its own tarball naming still resolves.
 -}
 artifactRequestByFile ::
     Text ->
@@ -121,17 +120,15 @@ packageUrl :: Text -> PackageName -> Either UrlFormationError Text
 packageUrl baseUrl name =
     joinPath baseUrl (encodePackagePath name)
 
-{- | The artifact URL @{baseUrl}/{encoded-name}/-/{encoded-filename}@, where @filename@ is the
-exact on-the-wire name, percent-encoded as one component so a once-decoded escape in it cannot
-reach the upstream raw.
+{- | @filename@ is the exact on-the-wire name, percent-encoded as one component, so a once-decoded
+escape in it cannot reach the upstream raw.
 -}
 artifactFileUrl :: Text -> PackageName -> Text -> Either UrlFormationError Text
 artifactFileUrl baseUrl name filename =
     joinPath baseUrl (encodePackagePath name <> "/-/" <> encodeComponent filename)
 
-{- Encode a package name as its on-the-wire path segment. This builder writes the @\@@ and the
-@%2F@ itself and percent-encodes every component, so a reserved byte in a decoded name never
-reaches the upstream URL raw (@%2e%2e%2f@ becomes @%252e%252e%252f@). -}
+{- This builder writes the @\@@ and the @%2F@ itself and percent-encodes every component, so a
+reserved byte in a decoded name never reaches the upstream URL raw. -}
 encodePackagePath :: PackageName -> Text
 encodePackagePath name = case pkgNamespace name of
     Just scope -> "@" <> encodeComponent (unScope scope) <> "%2F" <> encodeComponent (unscopedName name)
