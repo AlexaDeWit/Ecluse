@@ -4,85 +4,12 @@
 
 {- | Écluse: a supply-chain policy proxy for package registries.
 
-Écluse (package @ecluse@) sits between clients (developers, CI) and a package
-registry. It applies a configurable resilience policy before any dependency reaches
-a build, and it hosts no packages itself. The name is French for a canal lock: a
-chamber whose gates never open at once. Every dependency is held and cleared
-through that controlled passage before it enters a build.
-
-The goal is __resilience, not malware detection__. Shrink the blast radius of a bad
-publish, such as a version pushed from a hijacked maintainer account, rather than
-promise to recognise malice. The quarantine is the central control: each new public
-version waits out a window, because registries usually find and yank a malicious
-publish within it.
-
-Écluse is __not a registry__. The operator's own backend stores the packages (AWS
-CodeArtifact, or any registry that speaks the ecosystem's protocol). Écluse governs only
-what may be fetched from, and mirrored to, those backends. npm and PyPI ship today. The
-domain model is ecosystem-agnostic, so further ecosystems can follow.
-
-== How a request is cleared
-
-Écluse speaks a registry's native protocol across three read-path registries: the
-client's, a /private upstream/ of already-vetted packages, and the /public/
-registry. The two request shapes use them differently:
-
-* Écluse gates a __tarball__ request for that one version. It streams a
-  private-upstream hit unfiltered, because it is already vetted. On a miss, the
-  proxy fetches the version's public metadata and evaluates the rules. It then
-  streams the version from public __and enqueues an asynchronous mirror job__, or
-  returns a denial.
-* A __packument__ (metadata) request is a /merge/. Écluse fetches the private and
-  public upstreams in parallel, filters the public versions through the rules, and
-  trusts the private ones. It then combines the two into one document. Private wins
-  a version collision, Écluse flags an integrity divergence as a supply-chain
-  signal, and @latest@ stays where it is unless denied, and otherwise moves to the
-  highest stable survivor.
-
-Two properties run through both shapes. The rules engine is __deny by default__: a
-version is admitted only when the first decisive rule in precedence order allows it.
-When no rule decides, Écluse denies it. __Mirroring is demand-driven__, so Écluse
-mirrors only the versions a client actually pulls, never on the request's critical
-path.
-
-== How the code is organised
-
-Écluse is a __functional core with effects at the edges__. The policy and protocol
-logic is pure and easy to test, and a thin shell confines @IO@. Swappable
-backends sit behind /handles/, records of functions chosen at a single composition
-root. A new cloud or a new ecosystem is then one more implementation behind an
-existing handle, not a structural change.
-
-The library's vocabulary, roughly from the pure core outward:
-
-* __Domain model__: "Ecluse.Core.Package" (the ecosystem-agnostic package vocabulary
-  the rules reason over), "Ecluse.Core.Version" (version identity and per-ecosystem
-  ordering), and "Ecluse.Core.Ecosystem" (the ecosystem tag the rest dispatches on).
-* __Policy__: "Ecluse.Core.Rules" (deny-by-default evaluation) over the rule types
-  in "Ecluse.Core.Rules.Types".
-* __Protocol boundary__: "Ecluse.Core.Registry" (the registry-protocol handle),
-  "Ecluse.Core.Registry.Npm.Wire" and "Ecluse.Core.Registry.Npm.Project" (the lenient npm
-  wire decoders and their projection onto the domain model),
-  "Ecluse.Core.Registry.Npm.Route" (the npm path grammar), and "Ecluse.Core.Server.Route"
-  (the shared serve-action 'Route' set and the injected route classifier).
-* __Cloud handles__: "Ecluse.Core.Credential" (minting the mirror-target write token)
-  and "Ecluse.Core.Queue" (the durable mirror-job hand-off to the worker).
-* __Mirror worker__: "Ecluse.Core.Worker" (the supervised consume loop that fetches,
-  verifies against the job's integrity digest, and publishes an approved artifact).
-* __Supervision__: "Ecluse.Core.Supervision" (the one background-loop combinator every
-  long-running task runs under) and, in this module, the typed process perimeter
-  ('superviseProcess' and its 'exitCodeFor' table).
-
-'run' is the entry point the @ecluse@ executable invokes (see "Main"). It lives
-in the library, not in @app\/Main.hs@, so the composition root is a single
-importable unit. @app\/Main.hs@ stays a thin shell that only calls it.
-
-== Further reading
-
-@docs\/architecture.md@ is the systems-design index: what Écluse is, the roles it runs,
-and a map to the per-concern design documents. @CONTRIBUTING.md@
-covers the codebase layout and testing strategy, and @docs\/style.md@ the coding and
-documentation conventions.
+Écluse sits between clients and a package registry and applies a configurable resilience policy
+before any dependency reaches a build. It hosts no packages: the operator's own backend stores them,
+and Écluse governs only what may be fetched from, and mirrored to, those backends. The rules engine
+is __deny by default__ and mirroring is demand-driven, so it never runs on a request's critical path.
+'run', the entry point the @ecluse@ executable invokes, lives here rather than in @app\/Main.hs@ so
+the composition root is one importable unit. This module also holds the typed process perimeter.
 -}
 module Ecluse (
     -- * Entry point

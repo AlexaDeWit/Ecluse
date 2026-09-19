@@ -20,8 +20,6 @@ module Ecluse.Composition.Maintenance (
     storeScope,
     overrideKey,
     resolvedBudget,
-    BuildStoreMaintenance,
-    BuildStoreObservation,
     BuildUpstreamProbe,
     StoreBuilds (..),
     storeBuilds,

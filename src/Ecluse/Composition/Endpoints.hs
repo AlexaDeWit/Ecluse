@@ -2,8 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared endpoint policy for boot refusals, advisories,
-and publication targets.
+{- | Every mount's declared endpoints, vetted against each other. A collision between two roles on
+one registry is the finding: a publish or a mirror write carries a credential that must not reach
+the endpoint it landed on, and a sweep deletes from a store another role owns. The severity turns
+on 'RegistryRole', so the deleting role refuses what a writing role only warns about.
 -}
 module Ecluse.Composition.Endpoints (
     -- * The endpoint pass

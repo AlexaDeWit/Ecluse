@@ -288,8 +288,7 @@ budgetPortsFor dredger gateFor =
         }
 
 {- Every mirror store beside the cache it is swept with, under the bound they share. A mirrored
-mount is vetted with its private cache, so a mirror store with none here is a refusal rather than
-a mount swept alone. -}
+mount is vetted with its private cache, so a store with none here is a refusal, not a lone sweep. -}
 pairStoresWithCaches ::
     ValidatedPlan ->
     Limits ->

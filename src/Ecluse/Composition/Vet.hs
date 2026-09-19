@@ -77,9 +77,8 @@ data Severity finding
       -}
       Ignore
 
-{- | The severity split the store roles share: the deleting role and its preview read a finding
-alike, and the writing role reads it its own way. Spelling the preview arm separately is how the
-two store roles drift apart.
+{- | The severity split the store roles share, so the preview arm cannot be spelled apart from the
+deleting one and drift: the store-role severity first, then the writing role's.
 -}
 byStoreRole :: Severity finding -> Severity finding -> RegistryRole -> Severity finding
 byStoreRole stores writer = \case

@@ -97,9 +97,8 @@ data BootEnv = BootEnv
     -- ^ The resolved plan, whose diagnostics were logged before role work starts.
     }
 
-{- | The steps every start-up runs before anything else, in this order: read the environment,
-resolve the secret files it names, read the config document, and parse it. @decorate@ wraps each
-refusal, which is how @ecluse check-config@ adds its own verdict line without restating the steps.
+{- | The environment, the secret files it names, the config document, and the parse, in that order.
+@decorate@ wraps each refusal, which is how @ecluse check-config@ adds its own verdict line.
 -}
 loadBootConfig :: (Text -> Text) -> IO ([(String, String)], Maybe ByteString, Config)
 loadBootConfig decorate = do
