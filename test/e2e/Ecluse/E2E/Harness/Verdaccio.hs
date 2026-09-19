@@ -2,10 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Mirror-store probes and diagnostics for the local Verdaccio end-to-end topology.
+-- | Mirror-store probes, settle windows, and diagnostics for the local Verdaccio topology.
 module Ecluse.E2E.Harness.Verdaccio (
+    awaitMirrorWindow,
     verdaccioHasVersion,
     verdaccioHasVersionNow,
+    verdaccioMirroredWithinWindow,
     verdaccioListing,
     verdaccioAwaitListed,
     verdaccioNamesUnder,
@@ -34,6 +36,7 @@ import Network.HTTP.Client (
  )
 import Network.HTTP.Types (statusCode)
 import UnliftIO (handleAny)
+import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (ParseError (parseErrorMessage))
@@ -52,10 +55,24 @@ import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Support (expectRight)
 
+{- | Wait out the window a worker would need to mirror a version, so an absence read after it is
+an absence rather than a race.
+-}
+awaitMirrorWindow :: IO ()
+awaitMirrorWindow = threadDelay 1500000
+
 -- | Poll for a version, returning 'False' if the mirror does not serve it before the timeout.
 verdaccioHasVersion :: E2E -> Text -> Text -> IO Bool
 verdaccioHasVersion e2e pkg version =
     pollUntil 40 500000 id (verdaccioHasVersionNow e2e pkg version)
+
+{- | Whether the mirror took a version, read once 'awaitMirrorWindow' has passed.
+'verdaccioHasVersion' would instead spend its whole polling budget before answering 'False'.
+-}
+verdaccioMirroredWithinWindow :: E2E -> Text -> Text -> IO Bool
+verdaccioMirroredWithinWindow e2e pkg version = do
+    awaitMirrorWindow
+    verdaccioHasVersionNow e2e pkg version
 
 -- | Probe once for a version, returning 'False' on HTTP or transport failure.
 verdaccioHasVersionNow :: E2E -> Text -> Text -> IO Bool

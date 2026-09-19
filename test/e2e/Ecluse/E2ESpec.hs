@@ -12,7 +12,6 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 
 import Test.Hspec
-import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.E2E.Fixtures.Npm (
     allowPkg,
@@ -53,10 +52,7 @@ scenarios = do
 
             it "blocks a package that declares an install script, and never mirrors it" $ \e2e -> do
                 void $ npmInstall e2e (psName denyPkg) >>= shouldFail
-                -- Give the worker a 1.5s window to erroneously mirror it, then assert absence.
-                -- Using verdaccioHasVersion here would incur a 20-second timeout penalty.
-                threadDelay 1500000
-                mirrored <- verdaccioHasVersionNow e2e (psName denyPkg) (psVersion denyPkg)
+                mirrored <- verdaccioMirroredWithinWindow e2e (psName denyPkg) (psVersion denyPkg)
                 mirrored `shouldBe` False
 
             it "runs no package lifecycle script during a harness install (defence in depth)" $ \e2e -> do
@@ -84,8 +80,7 @@ scenarios = do
                 -- A tarball request enqueues a mirror on demand. The worker's digest gate must
                 -- reject the tampered bytes, so the version never reaches the private mirror.
                 _ <- proxyGet e2e (npmTarballPath (psName tamperPkg) (psVersion tamperPkg))
-                threadDelay 1500000
-                mirrored <- verdaccioHasVersionNow e2e (psName tamperPkg) (psVersion tamperPkg)
+                mirrored <- verdaccioMirroredWithinWindow e2e (psName tamperPkg) (psVersion tamperPkg)
                 mirrored `shouldBe` False
 
         describe "protocol behaviours" $
@@ -96,8 +91,7 @@ scenarios = do
                 status `shouldBe` 200
                 bodyBytes `shouldBe` 0
                 declared `shouldSatisfy` maybe False (> 0)
-                threadDelay 1500000
-                mirrored <- verdaccioHasVersionNow e2e (psName headPkg) (psVersion headPkg)
+                mirrored <- verdaccioMirroredWithinWindow e2e (psName headPkg) (psVersion headPkg)
                 mirrored `shouldBe` False
 
         describe "server↔worker -- the full mirror lifecycle" $ do
@@ -287,8 +281,7 @@ publishScenarios = do
                 absentBefore `shouldBe` False
                 withPublishProject e2e name ver $ \proj -> do
                     void $ npmPublishIn proj >>= shouldFail
-                    threadDelay 1500000
-                    reached <- verdaccioHasVersionNow e2e name ver
+                    reached <- verdaccioMirroredWithinWindow e2e name ver
                     reached `shouldBe` False
 
 pendingScenarios :: SpecWith GlobalDataPlane
