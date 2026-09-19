@@ -87,15 +87,12 @@ spec = do
             reportOutcomes (Acceptance.evaluate Npm crit [Left ("webpack", "registry unreachable")])
                 `shouldBe` [Unavailable "webpack" "registry unreachable"]
 
-    describe "reportBreached" $ do
-        it "is True when the full leg is over budget" $
-            reportBreached (Acceptance.evaluate Npm crit [Right overFull]) `shouldBe` True
-        it "is True when only the single-version leg is over budget" $
-            reportBreached (Acceptance.evaluate Npm crit [Right overSingle]) `shouldBe` True
-        it "is False when both legs are within budget" $
-            reportBreached (Acceptance.evaluate Npm crit [Right within]) `shouldBe` False
-        it "is False for an unavailable package (flaky registry is not a regression)" $
-            reportBreached (Acceptance.evaluate Npm crit [Left ("x", "unreachable")]) `shouldBe` False
+    describe "reportBreached and reportExitCode" $
+        for_ verdictRows $ \(name, samples, breached, code) ->
+            it name $ do
+                let report = Acceptance.evaluate Npm crit samples
+                reportBreached report `shouldBe` breached
+                reportExitCode [report] `shouldBe` code
 
     describe "headroom" $ do
         it "is the budget-to-observed multiple" $
@@ -105,8 +102,8 @@ spec = do
             headroom 100 (-1) `shouldBe` Nothing
 
     describe "watchFraction" $
-        it "sits strictly between the healthy range and the bar" $
-            watchFraction `shouldSatisfy` (\f -> f > 0 && f < 1)
+        it "marks a leg at seven tenths of its budget, the figure the report prints" $
+            watchFraction `shouldBe` 0.7
 
     describe "renderReport" $ do
         let op = OperatingPoint 5 8
@@ -179,24 +176,7 @@ spec = do
             (Map.keys . critPerPackageSingleVersionBudgetMs <$> Map.lookup PyPI sections)
                 `shouldBe` Just ["boto3", "numpy", "requests"]
 
-    describe "ecosystem exit decisions" $ do
-        forM_ [Npm, PyPI] $ \eco -> do
-            it ("fails for " <> show eco <> " full overhead") $ do
-                let report = Acceptance.evaluate eco crit [Right overFull]
-                reportBreached report `shouldBe` True
-                reportExitCode [report] `shouldBe` ExitFailure 1
-            it ("fails for " <> show eco <> " selective overhead") $ do
-                let report = Acceptance.evaluate eco crit [Right overSingle]
-                reportBreached report `shouldBe` True
-                reportExitCode [report] `shouldBe` ExitFailure 1
-            it ("passes " <> show eco <> " observations exactly at both budgets") $ do
-                let report = Acceptance.evaluate eco crit [Right (Sample "exact" 1 10 100 30)]
-                reportBreached report `shouldBe` False
-                reportExitCode [report] `shouldBe` ExitSuccess
-            it ("passes " <> show eco <> " unavailable registries without a breach") $ do
-                let report = Acceptance.evaluate eco crit [Left ("same", "registry HTTP 503")]
-                reportBreached report `shouldBe` False
-                reportExitCode [report] `shouldBe` ExitSuccess
+    describe "ecosystem exit decisions" $
         it "keeps the same package name's budgets separate across ecosystems" $ do
             let npm = Acceptance.evaluate Npm crit [Right within]
                 pypi = Acceptance.evaluate PyPI (Criteria 10 mempty 2 mempty) [Right within]
@@ -208,6 +188,19 @@ spec = do
             rendered `shouldSatisfy` T.isInfixOf "### pypi"
             rendered `shouldSatisfy` T.isInfixOf "100.0 / 30.0"
             rendered `shouldSatisfy` T.isInfixOf "10.0 / 2.0"
+
+{- | Each pairing of a measured leg with the verdict it earns and the status the driver exits
+with. The ecosystem is a label on the report and no input to either decision, so one ecosystem
+settles these and the separation case decides what crossing them would break.
+-}
+verdictRows :: [(String, [Either (Text, Text) Sample], Bool, ExitCode)]
+verdictRows =
+    [ ("is True, and exits 1, when the full leg is over budget", [Right overFull], True, ExitFailure 1)
+    , ("is True, and exits 1, when only the single-version leg is over budget", [Right overSingle], True, ExitFailure 1)
+    , ("is False, and exits 0, when both legs are within budget", [Right within], False, ExitSuccess)
+    , ("is False, and exits 0, for observations exactly at both budgets", [Right (Sample "exact" 1 10 100 30)], False, ExitSuccess)
+    , ("is False, and exits 0, for an unavailable package (a flaky registry is not a regression)", [Left ("x", "unreachable")], False, ExitSuccess)
+    ]
 
 renderOne :: OperatingPoint -> Report -> Text
 renderOne op report = renderReport op [report]

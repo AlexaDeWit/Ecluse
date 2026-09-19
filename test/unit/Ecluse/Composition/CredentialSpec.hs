@@ -42,14 +42,10 @@ spec = do
 
 credentialProvidersSpec :: Spec
 credentialProvidersSpec = describe "initCredentialProviders" $ do
-    it "realises a static provider for a non-CodeArtifact mirror target with a token" $ do
-        config <- expectConfig staticEnvVars Nothing
-        providers <- expectProviders config
-        initializedEcosystems providers `shouldBe` fromList [Npm]
-
     it "yields the configured static token through the initialized provider" $ do
         config <- expectConfig staticEnvVars Nothing
         providers <- expectProviders config
+        initializedEcosystems providers `shouldBe` fromList [Npm]
         case lookupProvider Npm providers of
             Nothing -> expectationFailure "expected an initialized static provider"
             Just provider -> do

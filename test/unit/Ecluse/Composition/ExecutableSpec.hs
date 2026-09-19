@@ -296,18 +296,18 @@ spec = describe "planExecutable" $ do
         it ("advises " <> show role <> ", and boots it, where the backend settled nothing") $ do
             (advisories, outcome) <- probedPlan role (Undecidable NoMechanism)
             advisories `shouldBe` [PrivateUpstreamUndecided Npm NoMechanism]
-            isRight outcome `shouldBe` True
+            armOf outcome `shouldReturn` "mirror pipeline"
 
         it ("says nothing to " <> show role <> " about a private upstream that aggregates nothing") $ do
             (advisories, outcome) <- probedPlan role Safe
             advisories `shouldBe` []
-            isRight outcome `shouldBe` True
+            armOf outcome `shouldReturn` "mirror pipeline"
 
-    it "reads no private upstream on the mirror worker or the pilot, which serve no client from one" $
-        for_ [BootMirrorPipeline MirrorOnly, BootWithoutPipeline] $ \role -> do
+    for_ [(BootMirrorPipeline MirrorOnly, "mirror pipeline"), (BootWithoutPipeline, "pilot")] $ \(role, arm) ->
+        it ("reads no private upstream on the " <> toString arm <> ", which serves no client from one") $ do
             (advisories, outcome) <- reportWith staticEnvVars role mountBindingFor inertQueue (neverProbing inertStore)
             advisories `shouldBe` []
-            isRight outcome `shouldBe` True
+            armOf outcome `shouldReturn` arm
 
     for_ [(BootStorePruner, privateDeleting), (BootStorePreview, privateObserving)] $ \(role, buildsAnswering) -> do
         it ("refuses " <> show role <> " through the private handle it already holds") $ do
@@ -321,12 +321,12 @@ spec = describe "planExecutable" $ do
         it ("advises " <> show role <> ", and boots it, where the backend settled nothing") $ do
             (advisories, outcome) <- storePlan role (buildsAnswering (Undecidable NoMechanism))
             advisories `shouldBe` [PrivateUpstreamUndecided Npm NoMechanism]
-            isRight outcome `shouldBe` True
+            armOf outcome `shouldReturn` "store pruner"
 
         it ("says nothing to " <> show role <> " about a private upstream that aggregates nothing") $ do
             (advisories, outcome) <- storePlan role (buildsAnswering Safe)
             advisories `shouldBe` []
-            isRight outcome `shouldBe` True
+            armOf outcome `shouldReturn` "store pruner"
 
 -- | Plan a store role over the CodeArtifact fixture, whose private cache the case's builds answer for.
 storePlan :: BootRole -> StoreBuilds -> IO ([Advisory], Either [BootError] ExecutablePlan)
@@ -336,6 +336,10 @@ storePlan role = reportWith codeArtifactEnvVars role (\_ _ _ -> Nothing) refusin
 probedPlan :: MirrorRole -> UpstreamSafety -> IO ([Advisory], Either [BootError] ExecutablePlan)
 probedPlan role answer =
     reportWith staticEnvVars (BootMirrorPipeline role) mountBindingFor inertQueue (probing answer inertStore)
+
+-- | The arm a settled plan came back through, failing the case on a refusal.
+armOf :: Either [BootError] ExecutablePlan -> IO Text
+armOf = either (\errs -> fail ("planning refused: " <> show errs)) (pure . plannedArm . epRoleWiring)
 
 -- | Which arm of the phase a plan came back through, so an assertion names it rather than a shape.
 plannedArm :: RoleWiring -> Text

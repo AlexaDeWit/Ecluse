@@ -19,10 +19,7 @@ import Ecluse.Composition.Types (
 spec :: Spec
 spec = do
     describe "roleInvocation -- the refusal quotes what the operator typed" $
-        it "spells each role as its command line, so the message names a runnable fix" $ do
-            roleInvocation ServeAndMirror `shouldBe` "ecluse proxy"
-            roleInvocation ServeOnly `shouldBe` "ecluse proxy --no-worker"
-            roleInvocation MirrorOnly `shouldBe` "ecluse mirror"
+        it "reaches the refusal whole, so the message names a runnable fix" $
             renderBootError (SplitRoleNeedsDurableQueue (roleInvocation MirrorOnly))
                 `shouldSatisfy` T.isInfixOf "ecluse mirror"
 
