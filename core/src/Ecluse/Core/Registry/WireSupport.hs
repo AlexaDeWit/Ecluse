@@ -18,6 +18,7 @@ into the domain model, shared by every ecosystem's projection
   captured or wire-declared name component must clear before it reaches an interpolated
   upstream URL. Each ecosystem's grammar sits on it and adds only its own rules, so no
   parser can reach a URL having checked one of the three and forgotten another.
+  'nameComponentWith' and 'withinNameLimit' layer an ecosystem's own grammar and cap on it.
 * __Name agreement__. 'checkNameAgreement' checks that the name an upstream self-reports
   agrees with the name the proxy resolved from the route, and carries what was projected
   through on agreement. The requested name is the validation authority, never a rewrite. A
@@ -36,6 +37,8 @@ module Ecluse.Core.Registry.WireSupport (
     -- * The name floor
     NameRefusal (..),
     parseNameComponent,
+    nameComponentWith,
+    withinNameLimit,
 ) where
 
 import Data.Aeson (Value)
@@ -50,6 +53,7 @@ import Ecluse.Core.Package (
     mkInvalidEntry,
     renderPackageName,
  )
+import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Server.Path (isSafeComponent)
 
 {- | Partition a list of keyed raw entries into the ones that decode and the ones that do not,
@@ -109,3 +113,33 @@ parseNameComponent component
     | not (isAsciiNameComponent component) = Left NameNotAscii
     | not (isSafeComponent component) = Left NameUnsafeComponent
     | otherwise = Right component
+
+{- | Clear the shared floor and then an ecosystem's own grammar. The noun names the component
+in every refusal, so each ecosystem keeps its own wording ("npm name component").
+-}
+nameComponentWith :: Text -> (Text -> Bool) -> Text -> Either ParseError Text
+nameComponentWith noun usable component = do
+    onFloor <- first floorRefusal (parseNameComponent component)
+    if usable onFloor
+        then Right onFloor
+        else Left unusable
+  where
+    floorRefusal :: NameRefusal -> ParseError
+    floorRefusal = \case
+        NameEmpty -> ParseError ("empty " <> noun)
+        NameNotAscii -> ParseError ("non-ASCII " <> noun <> ": " <> show component)
+        NameUnsafeComponent -> unusable
+
+    unusable :: ParseError
+    unusable = ParseError ("unusable " <> noun <> ": " <> show component)
+
+{- | Refuse a name over an ecosystem's own cap, which the noun names in the refusal text.
+'T.compareLength' stops at the cap without measuring the whole input.
+-}
+withinNameLimit :: Text -> Int -> Text -> Either ParseError ()
+withinNameLimit noun limit raw
+    | T.compareLength raw limit == GT = Left (ParseError overLong)
+    | otherwise = Right ()
+  where
+    overLong :: Text
+    overLong = noun <> " over " <> show limit <> " characters, starting " <> show (T.take 24 raw)

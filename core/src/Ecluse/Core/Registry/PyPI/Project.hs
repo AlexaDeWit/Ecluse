@@ -57,10 +57,10 @@ import Ecluse.Core.Registry.PyPI.Wire (
     decodeIndexFiles,
  )
 import Ecluse.Core.Registry.WireSupport (
-    NameRefusal (NameEmpty, NameNotAscii, NameUnsafeComponent),
     Projection,
     checkNameAgreement,
-    parseNameComponent,
+    nameComponentWith,
+    withinNameLimit,
  )
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, selectLatest)
 
@@ -243,7 +243,7 @@ canonicalName = canonicalise PyPI . renderPackageName
 -- | Parse one PyPI name component under the shared floor and PEP 508 grammar.
 projectName :: Text -> Either ParseError PackageName
 projectName raw = do
-    withinNameLimit raw
+    withinNameLimit "PyPI project name" pypiNameLimit raw
     mkPackageName PyPI Nothing <$> nameComponent raw
 
 -- | Whether the route can claim this name without a canonical-spelling redirect.
@@ -251,17 +251,7 @@ isCanonicalName :: Text -> Bool
 isCanonicalName raw = canonicalise PyPI raw == raw
 
 nameComponent :: Text -> Either ParseError Text
-nameComponent component = do
-    onFloor <- first (refusalText component) (parseNameComponent component)
-    if usableComponent onFloor
-        then Right onFloor
-        else Left (ParseError ("unusable PyPI project name: " <> show component))
-
-refusalText :: Text -> NameRefusal -> ParseError
-refusalText component = \case
-    NameEmpty -> ParseError "empty PyPI project name"
-    NameNotAscii -> ParseError ("non-ASCII PyPI project name: " <> show component)
-    NameUnsafeComponent -> ParseError ("unusable PyPI project name: " <> show component)
+nameComponent = nameComponentWith "PyPI project name" usableComponent
 
 -- | Initial characters for partitioning canonical PyPI names during a store walk.
 pypiNameLeadChars :: [Char]
@@ -275,15 +265,6 @@ usableComponent component =
   where
     nameChar ch = nameEdge ch || isNameSeparator ch
     nameEdge ch = isAscii ch && isAlphaNum ch
-
--- 'T.compareLength' stops at the cap without measuring the whole input.
-withinNameLimit :: Text -> Either ParseError ()
-withinNameLimit raw
-    | T.compareLength raw pypiNameLimit == GT = Left (ParseError overLong)
-    | otherwise = Right ()
-  where
-    overLong :: Text
-    overLong = "PyPI project name over " <> show pypiNameLimit <> " characters, starting " <> show (T.take 24 raw)
 
 -- PyPI's own cap on a project name, the one its own validator applies.
 pypiNameLimit :: Int

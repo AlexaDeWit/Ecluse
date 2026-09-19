@@ -55,11 +55,11 @@ import Ecluse.Core.Registry.Npm.Wire (
  )
 import Ecluse.Core.Registry.Npm.Wire qualified as Wire
 import Ecluse.Core.Registry.WireSupport (
-    NameRefusal (NameEmpty, NameNotAscii, NameUnsafeComponent),
     Projection,
     checkNameAgreement,
-    parseNameComponent,
+    nameComponentWith,
     partitionLenient,
+    withinNameLimit,
  )
 import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
@@ -267,7 +267,7 @@ point reads a name through. A bare @\@foo@ is a malformed scoped name, never an 
 -}
 projectName :: Text -> Either ParseError PackageName
 projectName raw = do
-    withinNameLimit raw
+    withinNpmNameLimit raw
     if T.isPrefixOf "@" raw
         then scopedName raw
         else mkPackageName Npm Nothing <$> nameComponent raw
@@ -289,7 +289,7 @@ scope @myorg@).
 projectScope :: Text -> Either ParseError Scope
 projectScope raw = do
     -- Measure after the strip, so @myorg and myorg stay one scope at the cap as well as below it.
-    withinNameLimit bare
+    withinNpmNameLimit bare
     mkScope <$> nameComponent bare
   where
     bare = fromMaybe raw (T.stripPrefix "@" raw)
@@ -297,18 +297,7 @@ projectScope raw = do
 {- One component of an npm name, the scope or the bare name. It sits on the shared name floor
 and adds npm's own grammar. 'projectName' and 'projectScope' own the length cap. -}
 nameComponent :: Text -> Either ParseError Text
-nameComponent component = do
-    onFloor <- first (refusalText component) (parseNameComponent component)
-    if usableComponent onFloor
-        then Right onFloor
-        else Left (ParseError ("unusable npm name component: " <> show component))
-
--- npm's own wording for each way the shared floor refuses a component.
-refusalText :: Text -> NameRefusal -> ParseError
-refusalText component = \case
-    NameEmpty -> ParseError "empty npm name component"
-    NameNotAscii -> ParseError ("non-ASCII npm name component: " <> show component)
-    NameUnsafeComponent -> ParseError ("unusable npm name component: " <> show component)
+nameComponent = nameComponentWith "npm name component" usableComponent
 
 usableComponent :: Text -> Bool
 usableComponent component =
@@ -335,14 +324,9 @@ reservedNames :: [Text]
 reservedNames = ["node_modules", "favicon.ico"]
 
 {- Refuse a name over npm's own cap. 'projectName' measures the whole name including any scope
-prefix, and 'projectScope' measures a bare scope. 'T.compareLength' stops at the cap. -}
-withinNameLimit :: Text -> Either ParseError ()
-withinNameLimit raw
-    | T.compareLength raw npmNameLimit == GT = Left (ParseError overLong)
-    | otherwise = Right ()
-  where
-    overLong :: Text
-    overLong = "npm name over " <> show npmNameLimit <> " characters, starting " <> show (T.take 24 raw)
+prefix, and 'projectScope' measures a bare scope. -}
+withinNpmNameLimit :: Text -> Either ParseError ()
+withinNpmNameLimit = withinNameLimit "npm name" npmNameLimit
 
 -- npm's own cap on a package name, the one its validator applies to a new package.
 npmNameLimit :: Int
