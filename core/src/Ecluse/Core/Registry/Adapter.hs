@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The ecosystem adapter registry: which ecosystems this build supports, independent of what an
-operator configures. An unsupported ecosystem resolves to 'Nothing' here and a configured one is
+operator configures. An unsupported ecosystem resolves to 'Nothing' here and an unconfigured one is
 never activated, so the composition root can tell a missing adapter from an unconfigured mount.
 -}
 module Ecluse.Core.Registry.Adapter (

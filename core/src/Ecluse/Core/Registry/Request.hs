@@ -147,8 +147,9 @@ addValidators validators request =
             , (,) hIfModifiedSince <$> validatorIfModifiedSince validators
             ]
 
-{- | Build the artifact @GET@ at the URL a projection preserved from the upstream's own
-location field, which is the one the served integrity digest is paired with.
+{- | Build the artifact @GET@ at the URL a projection preserved from the upstream's own location
+field. It is non-decompressing, so nothing gunzips the bytes the served integrity digest is paired
+with.
 -}
 artifactRequestByUrl :: CredentialMapping -> Maybe ClientCredential -> Text -> Either UrlFormationError Request
 artifactRequestByUrl mapping credential url = do
