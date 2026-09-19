@@ -2,9 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Core transport-fault vocabulary shared by client-library adapters.
-Adapters classify exceptions at their edge, so the consumer layers use this closed value.
-'tfDetail' gives diagnostic text for logs and is never parsed.
+{- | The core transport-fault vocabulary. A client-library adapter classifies its own
+exceptions at its edge, so no consumer layer ever sees the library's exception type.
 -}
 module Ecluse.Core.Fault (
     -- * Transport faults
@@ -36,6 +35,12 @@ data TransportFault = TransportFault
     }
     deriving stock (Eq, Show)
 
+{- | Build a 'TransportFault' with the detail truncated to the log-line budget, so a
+pathological rendered exception cannot bloat a log line or a held error value.
+-}
+transportFault :: TransportCause -> Text -> TransportFault
+transportFault cause detail = TransportFault cause (boundedDetail detail)
+
 {- | Why the transport could not deliver. Coarse on purpose: each constructor is a
 distinction an operator reads differently, and anything finer belongs in 'tfDetail'.
 -}
@@ -55,6 +60,14 @@ data TransportCause
       TransportProtocol
     deriving stock (Eq, Show)
 
+-- | What a transport cause says happened, for a line an operator reads.
+renderTransportCause :: TransportCause -> Text
+renderTransportCause = \case
+    TransportTimeout -> "the peer did not answer in time"
+    TransportUnreachable -> "the peer could not be reached"
+    TransportTls -> "the TLS layer refused the peer"
+    TransportProtocol -> "the peer's answer could not be used"
+
 {- | Is a fault with this cause worth another attempt? A timeout and an unreachable peer
 can clear on their own. A TLS refusal and a protocol fault need an operator or a fix.
 -}
@@ -65,25 +78,11 @@ transportRetryable = \case
     TransportTls -> False
     TransportProtocol -> False
 
--- | What a transport cause says happened, for a line an operator reads.
-renderTransportCause :: TransportCause -> Text
-renderTransportCause = \case
-    TransportTimeout -> "the peer did not answer in time"
-    TransportUnreachable -> "the peer could not be reached"
-    TransportTls -> "the TLS layer refused the peer"
-    TransportProtocol -> "the peer's answer could not be used"
-
 {- | A @Retry-After@ delay, in whole seconds. A 'newtype' so a raw count of seconds is
 never confused with some other integer when it reaches a response header or a sweep's wait.
 -}
 newtype RetryAfter = RetryAfter Int
     deriving stock (Eq, Ord, Show)
-
-{- | Build a 'TransportFault' with the detail truncated to the log-line budget, so a
-pathological rendered exception cannot bloat a log line or a held error value.
--}
-transportFault :: TransportCause -> Text -> TransportFault
-transportFault cause detail = TransportFault cause (boundedDetail detail)
 
 {- | Truncate a rendered detail to the shared log-line budget. Every fault vocabulary that
 carries diagnostic text bounds it identically.

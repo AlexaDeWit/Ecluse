@@ -55,8 +55,6 @@ module Ecluse.Core.Package (
     computeDigest,
     isComputable,
 
-    -- * Dependencies
-
     -- * People
     Person (..),
 
@@ -126,12 +124,9 @@ unScope (Scope s) = TS.toText s
 renderScope :: Scope -> Text
 renderScope (Scope s) = "@" <> TS.toText s
 
-{- | A package identity, decoupled from any registry's wire format. Build it with
-'mkPackageName'.
-
-Equality and ordering use @('pkgEcosystem', 'pkgNamespace', 'pkgCanonical')@ only, never
-the display or base form. So @Flask@ and @flask@ are the same PyPI package but different
-npm ones.
+{- | A package identity, decoupled from any registry's wire format and built with
+'mkPackageName'. Equality and ordering read @('pkgEcosystem', 'pkgNamespace',
+'pkgCanonical')@ only, so @Flask@ and @flask@ are one PyPI package and two npm ones.
 -}
 data PackageName = PackageName
     { pkgEcosystem :: Ecosystem
@@ -139,16 +134,12 @@ data PackageName = PackageName
     , pkgNamespace :: Maybe Scope
     -- ^ The scope, if scoped (npm @\@scope\/name@). 'Nothing' for PyPI/RubyGems.
     , pkgCanonical :: ShortText
-    {- ^ The normalised key for equality and matching: PEP 503 for PyPI, verbatim for npm
-    and RubyGems.
-    -}
+    -- ^ The normalised matching key: PEP 503 for PyPI, verbatim for npm and RubyGems.
     , pkgDisplay :: ShortText
-    {- ^ The name as published, for rendering and round-tripping. Held as
-    'ShortText'. Read it back as 'Text' through 'renderPackageName'.
-    -}
+    -- ^ The name as published, read back as 'Text' through 'renderPackageName'.
     , pkgBaseName :: ShortText
-    {- ^ The unscoped base name, with any @\@scope\/@ prefix dropped (@\@babel\/code-frame@ →
-    @code-frame@). It is not part of identity. Read it back through 'unscopedName'.
+    {- ^ The base name with any @\@scope\/@ prefix dropped. It is not part of identity. Read it
+    back through 'unscopedName'.
     -}
     }
     deriving stock (Show)
@@ -193,7 +184,7 @@ canonicalise = \case
 renderPackageName :: PackageName -> Text
 renderPackageName = TS.toText . pkgDisplay
 
--- | The unscoped (base) name as 'Text' (@\@babel\/code-frame@ → @code-frame@).
+-- | The unscoped (base) name as 'Text': @\@babel\/code-frame@ reads back as @code-frame@.
 unscopedName :: PackageName -> Text
 unscopedName = TS.toText . pkgBaseName
 
@@ -281,16 +272,14 @@ data Artifact = Artifact
     , artHashes :: [Hash]
     -- ^ Integrity digests. The client verifies the download against these.
     , artSize :: Maybe Int
-    {- ^ The registry-declared size, if reported. Not guaranteed to be the tarball
-    byte count: npm populates it from @dist.unpackedSize@, the size of the unpacked
-    tree.
+    {- ^ The registry-declared size, if reported. Not the tarball byte count: npm populates
+    it from @dist.unpackedSize@, the size of the unpacked tree.
     -}
     , artInterpreter :: Maybe Text
     -- ^ Interpreter constraint (@requires-python@ \/ @required_ruby_version@).
     , artYanked :: Bool
-    {- ^ Whether this individual file is yanked (PyPI per-file yank). For
-    ecosystems that yank whole versions this stays 'False' and
-    'pkgAvailability' carries the status instead.
+    {- ^ Whether this individual file is yanked (PyPI per-file yank). An ecosystem that yanks
+    whole versions leaves it 'False' and carries the status on 'pkgAvailability'.
     -}
     , artProvenance :: Maybe Text
     -- ^ URL of a provenance\/attestation bundle, if any.
@@ -332,11 +321,9 @@ data PackageDetails = PackageDetails
     , pkgLicenses :: [Text]
     -- ^ Declared licenses (SPDX expressions/ids). There may be several.
     , pkgPublisher :: Maybe Person
-    {- ^ Who published __this__ version, if known (provenance).
-
-    Dependencies and maintainers are __deliberately not modelled__. A dependency is gated when
-    the client fetches it, through this same gate, so the wire layer never parses the thousands
-    of per-version dependency entries a heavy packument carries.
+    {- ^ Who published __this__ version, if known. Dependencies and maintainers are deliberately
+    not modelled: a dependency is gated when the client fetches it, through this same gate, so
+    the wire layer never parses a heavy packument's thousands of per-version entries.
     -}
     }
     deriving stock (Eq, Show)
@@ -349,18 +336,14 @@ data PackageInfo = PackageInfo
     { infoName :: PackageName
     -- ^ The package identity this document describes.
     , infoVersions :: Map Text PackageDetails
-    {- ^ Every published version, keyed by its __raw version string__ (the packument's own
-    key). A 'Version' has no 'Ord', so ordering goes through
-    'Ecluse.Core.Version.compareVersions', never a derived instance.
+    {- ^ Every published version, keyed by its __raw version string__. A 'Version' has no 'Ord',
+    so ordering goes through 'Ecluse.Core.Version.compareVersions', never a derived instance.
     -}
     , infoDistTags :: Map Text Version
-    {- ^ Distribution tags (e.g. @"latest"@, @"next"@) to the 'Version' they
-    point at.
-    -}
+    -- ^ Distribution tags (e.g. @"latest"@, @"next"@) to the 'Version' they point at.
     , infoInvalidEntries :: [InvalidEntry]
     {- ^ The malformed entries the projection __dropped__ rather than failing the whole
-    document, kept so the serve path can surface them to an operator. Only /dropped/ entries
-    appear here: a version's own publish time lives on 'PackageDetails.pkgPublishedAt'.
+    document, kept so the serve path can surface them to an operator.
     -}
     }
     deriving stock (Eq, Show)

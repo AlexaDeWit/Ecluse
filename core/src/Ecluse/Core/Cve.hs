@@ -6,24 +6,16 @@
 Package keys are canonical per ecosystem. Fix versions match raw text exactly.
 -}
 module Ecluse.Core.Cve (
-    -- * The owning resource
+    -- * The opened artifact
     CveDb (..),
     openCveDb,
+    CveDbRejected (..),
+    DbEtag (..),
 
     -- * The consumer view
     CveLookup (..),
-
-    -- * What a lookup returns
     AdvisoryRange (..),
-
-    -- * Rejection
-    CveDbRejected (..),
-
-    -- * Query faults
     CveQueryFault (..),
-
-    -- * Artifact identity
-    DbEtag (..),
 
     -- * Pure range matching
     insideAffectedRange,
@@ -54,16 +46,12 @@ Display names must not be used as query keys.
 data CveLookup = CveLookup
     { cveRemediationProbe :: Text -> Text -> IO Bool
     {- ^ Does any advisory for this package name carry this exact version string as a fixed
-    bound? Throws the confined 'CveQueryFault' on a query fault.
+    bound? Throws the confined 'CveQueryFault' on a query fault, as every field here does.
     -}
     , cveAdvisoriesFor :: Text -> IO [AdvisoryRange]
-    {- ^ Every advisory range recorded against a package name. Rule predicates
-    interpret them. A query fault throws the confined 'CveQueryFault'.
-    -}
+    -- ^ Every advisory range recorded against a package name, for a rule predicate to read.
     , cveCoveredNames :: IO [Text]
-    {- ^ Every package name this generation records an advisory against. A store sweep
-    intersects it with the store's listing. Throws the confined 'CveQueryFault' on a fault.
-    -}
+    -- ^ Every package name this generation records an advisory against, for a store sweep.
     }
 
 -- | A database query fault for the rule's resilience policy to classify.
@@ -84,16 +72,14 @@ data CveDb = CveDb
     { cveDbLookup :: CveLookup
     -- ^ The view consumers query through.
     , cveDbClose :: IO ()
-    {- ^ Release the artifact's connection. Owner-only: nothing may read through this
-    handle's view afterwards. __Never throws__, since the connection is going away either way.
+    {- ^ Release the connection. Owner-only, and __never throws__, since the connection is
+    going away either way.
     -}
     , cveDbMeta :: [(Text, Text)]
-    {- ^ The artifact's @meta@ provenance rows (Pilot version, ecosystem, build timestamp,
-    source URL, row count), snapshotted at open and key-sorted for the audit trail.
-    -}
+    -- ^ The artifact's @meta@ provenance rows, snapshotted at open and key-sorted for the audit trail.
     , cveDbProvenance :: AdvisoryProvenance
-    {- ^ What the artifact records about the sources it was compiled from, decoded once at
-    open. An artifact written before those keys decodes as absence.
+    {- ^ What the artifact records about the sources it was compiled from. An artifact written
+    before those keys decodes as absence.
     -}
     }
 
