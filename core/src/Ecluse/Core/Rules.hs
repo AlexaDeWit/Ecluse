@@ -328,32 +328,34 @@ renderBootOrder rules = zipWith line [1 :: Int ..] (bootOrder rules)
 
 -- | Decide in boot order despite concurrent lookups. Unexpected direct-rule faults refuse admission.
 evalRules :: EvalContext -> [PreparedRule] -> RuleEvidence -> IO Decision
-evalRules ctx rules ev = step (bootOrder rules) []
-  where
-    -- 'passed' holds each non-decisive evaluation in reverse boot order. The deny-by-default
-    -- trail and an admission's skipped-check evidence both read it back.
-    step :: [PreparedRule] -> [Passed] -> IO Decision
-    step [] passed = pure (BlockedByDefault (map passedReason (reverse passed)))
-    step (r : rs) passed
-        | isNothing (prepResilience r) = do
-            -- A direct rule is zero-cost, so run it in place; reaching it moots no speculated
-            -- IO. It still goes through the one runner, so no rule can skip its own gate.
-            evaluated <- tryAny (runEffectfulRule ctx r ev)
-            case evaluated of
-                Left escape ->
-                    -- A direct-rule exception breaks its contract and must refuse admission.
-                    pure (Undecidable (WillResolve Nothing) (prepName r <> ": the rule threw: " <> displayExceptionT escape))
-                Right res ->
-                    case decisive (prepName r) res of
-                        Just d -> pure (withEvidence passed rs d)
-                        Nothing -> step rs (Passed (prepName r) res : passed)
-        | otherwise =
-            -- Stopping the block at the next direct rule keeps the "no mooted IO" guarantee: that
-            -- rule runs, and may decide, before the engine launches any resilient rule beyond it.
-            let (block, rest) = span (isJust . prepResilience) (r : rs)
-             in evalBlock ctx ev block >>= \case
-                    BlockDecided d inBlock unreached -> pure (withEvidence (inBlock <> passed) (unreached <> rest) d)
-                    BlockPassed inBlock -> step rest (inBlock <> passed)
+evalRules ctx rules ev = stepRules ctx ev (bootOrder rules) []
+
+-- 'passed' holds each non-decisive evaluation in reverse boot order. The deny-by-default trail
+-- and an admission's skipped-check evidence both read it back.
+stepRules :: EvalContext -> RuleEvidence -> [PreparedRule] -> [Passed] -> IO Decision
+stepRules _ _ [] passed = pure (BlockedByDefault (map passedReason (reverse passed)))
+stepRules ctx ev (r : rs) passed
+    | isNothing (prepResilience r) =
+        directOutcome ctx ev r >>= \case
+            Left d -> pure (withEvidence passed rs d)
+            Right res -> stepRules ctx ev rs (Passed (prepName r) res : passed)
+    | otherwise =
+        -- Stopping the block at the next direct rule keeps the "no mooted IO" guarantee: that
+        -- rule runs, and may decide, before the engine launches any resilient rule beyond it.
+        let (block, rest) = span (isJust . prepResilience) (r : rs)
+         in evalBlock ctx ev block >>= \case
+                BlockDecided d inBlock unreached -> pure (withEvidence (inBlock <> passed) (unreached <> rest) d)
+                BlockPassed inBlock -> stepRules ctx ev rest (inBlock <> passed)
+
+-- A direct rule is zero-cost, so it runs in place: reaching it moots no speculated IO. It still
+-- goes through the one runner, so no rule can skip its own gate.
+directOutcome :: EvalContext -> RuleEvidence -> PreparedRule -> IO (Either Decision RuleEvaluation)
+directOutcome ctx ev r = do
+    evaluated <- tryAny (runEffectfulRule ctx r ev)
+    pure $ case evaluated of
+        -- A direct-rule exception breaks its contract and must refuse admission.
+        Left escape -> Left (Undecidable (WillResolve Nothing) (prepName r <> ": the rule threw: " <> displayExceptionT escape))
+        Right res -> maybe (Right res) Left (decisive (prepName r) res)
 
 -- One non-decisive evaluation as the fold keeps it, so the trail and the evidence read one record.
 data Passed = Passed Text RuleEvaluation
