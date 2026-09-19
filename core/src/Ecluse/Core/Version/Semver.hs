@@ -47,6 +47,7 @@ maxNumericRun :: Int
 maxNumericRun = 18
 
 hasOverlongNumericRun :: Text -> Bool
-hasOverlongNumericRun = any overlong . digitRuns
-  where
-    overlong run = T.all isDigit run && T.compareLength run maxNumericRun == GT
+hasOverlongNumericRun = any overlongRun . digitRuns
+
+overlongRun :: Text -> Bool
+overlongRun run = T.all isDigit run && T.compareLength run maxNumericRun == GT
