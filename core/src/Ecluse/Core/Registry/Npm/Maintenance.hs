@@ -45,11 +45,10 @@ import Ecluse.Core.Registry.Npm.Request (
     jsonPutRequest,
     metadataRequest,
     packageUrl,
-    parseRequestEither,
     withToken,
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
-import Ecluse.Core.Registry.Request (joinPath, noValidators)
+import Ecluse.Core.Registry.Request (joinPath, noValidators, parseRequestEither)
 import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (nonBlank, urlFilenameComponent)
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, renderVersion)
