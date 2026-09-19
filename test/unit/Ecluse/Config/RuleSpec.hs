@@ -30,7 +30,21 @@ import Ecluse.Core.Rules.Types (
  )
 
 spec :: Spec
-spec = describe "rulePolicySpec" $ do
+spec = do
+    rulePolicySpec
+    policyErrorRenderSpec
+
+policyErrorRenderSpec :: Spec
+policyErrorRenderSpec = describe "renderPolicyError" $
+    -- Each constructor renders a distinct, operator-facing line.
+    it "renders every policy-error kind" $ do
+        renderPolicyError (MissingRuleType "x") `shouldSatisfy` ("missing" `T.isInfixOf`)
+        renderPolicyError (UnknownRuleType "x" "Y") `shouldSatisfy` ("unknown type" `T.isInfixOf`)
+        renderPolicyError (MalformedRule "x" "bad") `shouldSatisfy` ("bad" `T.isInfixOf`)
+        renderPolicyError (SuppressUnknownRule "x") `shouldSatisfy` ("disables" `T.isInfixOf`)
+
+rulePolicySpec :: Spec
+rulePolicySpec = describe "rulePolicySpec" $ do
     describe "resolveJson" $ do
         it "overrides a default rule's precedence" $
             resolveJson "{\"rules\":{\"min-age\":{\"precedence\":175}}}"
