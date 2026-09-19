@@ -11,11 +11,8 @@ import Hedgehog qualified as H
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     PackageName,
-    mkPackageName,
-    mkScope,
     pkgNamespace,
     renderPackageName,
     unScope,
@@ -24,10 +21,11 @@ import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodPut)
 
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes, takePackage, tarballCoordinate)
 import Ecluse.Core.Server.Path (Filename, unFilename)
-import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
-import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Package (unsafeFilename, unscopedNpm)
+import Ecluse.Core.Server.Route (RouteName (RouteName))
+import Ecluse.Core.Version (Version)
+import Ecluse.Test.Package (npmVersion, scopedNpm, unsafeFilename, unscopedNpm)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
+import Ecluse.Test.Server.Route (claimedBy)
 
 {- | What a request routes to, rebuilt from the table's public surface: which route claimed the
 path, and what that route's captures parse to. The routes carry actions, not comparable values.
@@ -46,7 +44,7 @@ data Routed
 
 routed :: Method -> [Text] -> Routed
 routed method segments =
-    case routeName . fst <$> matchRoute npmRoutes method [] segments of
+    case claimedBy npmRoutes method [] segments of
         Nothing -> Denied
         Just (RouteName "ping") -> ToPing
         Just (RouteName "search") -> ToSearch
@@ -78,14 +76,6 @@ written = routed methodPut
 removed :: [Text] -> Routed
 removed = routed methodDelete
 
--- | A scoped npm package identity (scope, base name), for expected 'Route's.
-scoped :: Text -> Text -> PackageName
-scoped scope = mkPackageName Npm (Just (mkScope scope))
-
--- | An npm version, for the parsed coordinate a 'Tarball' route carries.
-npmVersion :: Text -> Version
-npmVersion = mkVersion Npm
-
 {- | A scoped name's two-segment wire encoding (@\@scope@ then @pkg@), or 'Nothing' when the name
 carries no separator to split at.
 -}
@@ -112,10 +102,10 @@ spec = do
             classify ["is-odd"] `shouldBe` ToPackument (unscopedNpm "is-odd")
         it "routes a scoped package (two segments) to its packument" $
             classify ["@babel", "code-frame"]
-                `shouldBe` ToPackument (scoped "babel" "code-frame")
+                `shouldBe` ToPackument (scopedNpm "babel" "code-frame")
         it "routes a scoped package (one decoded segment) to its packument" $
             classify ["@babel/code-frame"]
-                `shouldBe` ToPackument (scoped "babel" "code-frame")
+                `shouldBe` ToPackument (scopedNpm "babel" "code-frame")
         it "agrees on the same Route for both scoped encodings" $
             classify ["@babel", "code-frame"] `shouldBe` classify ["@babel/code-frame"]
 
@@ -126,10 +116,10 @@ spec = do
         it "routes a scoped tarball (two segments) to its artifact" $
             -- The basename drops the scope: @\@babel\/code-frame@ → @code-frame-7.0.0.tgz@.
             classify ["@babel", "code-frame", "-", "code-frame-7.0.0.tgz"]
-                `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (unsafeFilename "code-frame-7.0.0.tgz")
+                `shouldBe` ToTarball (scopedNpm "babel" "code-frame") (npmVersion "7.0.0") (unsafeFilename "code-frame-7.0.0.tgz")
         it "routes a scoped tarball (one decoded segment) to its artifact" $
             classify ["@babel/code-frame", "-", "code-frame-7.0.0.tgz"]
-                `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (unsafeFilename "code-frame-7.0.0.tgz")
+                `shouldBe` ToTarball (scopedNpm "babel" "code-frame") (npmVersion "7.0.0") (unsafeFilename "code-frame-7.0.0.tgz")
         it "reads a prerelease-hyphen version out of the basename verbatim" $
             -- The version itself carries hyphens (@1.0.0-rc.1@). The parse must split on
             -- the FIRST @{name}-@ boundary, taking everything after it as the version.
@@ -139,7 +129,7 @@ spec = do
             -- The file's parsed version round-trips and the Filename is byte-identical
             -- to what arrived. That Filename, not a reconstruction, fetches the bytes.
             classify ["@babel/code-frame", "-", "code-frame-7.0.0.tgz"]
-                `shouldBe` ToTarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (unsafeFilename "code-frame-7.0.0.tgz")
+                `shouldBe` ToTarball (scopedNpm "babel" "code-frame") (npmVersion "7.0.0") (unsafeFilename "code-frame-7.0.0.tgz")
         it "denies a basename that does not match the requested package (path-confusion)" $
             -- The file names a DIFFERENT package's artifact under @is-odd@'s path.
             -- The basename lacks the @is-odd-@ prefix, so the parse denies rather than fabricates.
@@ -198,9 +188,9 @@ spec = do
         it "routes a PUT of an unscoped package to Publish" $
             written ["is-odd"] `shouldBe` ToPublish (unscopedNpm "is-odd")
         it "routes a PUT of a scoped package (two segments) to Publish" $
-            written ["@acme", "widget"] `shouldBe` ToPublish (scoped "acme" "widget")
+            written ["@acme", "widget"] `shouldBe` ToPublish (scopedNpm "acme" "widget")
         it "routes a PUT of a scoped package (one decoded segment) to Publish" $
-            written ["@acme/widget"] `shouldBe` ToPublish (scoped "acme" "widget")
+            written ["@acme/widget"] `shouldBe` ToPublish (scopedNpm "acme" "widget")
         it "agrees on the same Publish route for both scoped encodings" $
             written ["@acme", "widget"] `shouldBe` written ["@acme/widget"]
         it "denies a PUT to a tarball slot (a publish is a bare-package path only)" $
@@ -296,12 +286,12 @@ spec = do
             classify ["is-odd"] `shouldBe` ToPackument (unscopedNpm "is-odd")
         it "accepts a scoped name in two segments" $
             classify ["@babel", "code-frame"]
-                `shouldBe` ToPackument (scoped "babel" "code-frame")
+                `shouldBe` ToPackument (scopedNpm "babel" "code-frame")
         it "accepts a scoped name in one decoded segment" $
             classify ["@babel/code-frame"]
-                `shouldBe` ToPackument (scoped "babel" "code-frame")
+                `shouldBe` ToPackument (scopedNpm "babel" "code-frame")
         it "accepts the @types scope" $
-            classify ["@types", "node"] `shouldBe` ToPackument (scoped "types" "node")
+            classify ["@types", "node"] `shouldBe` ToPackument (scopedNpm "types" "node")
 
     describe "properties" $
         -- The invariant: no hostile path yields an accepted route with an unsafe component.

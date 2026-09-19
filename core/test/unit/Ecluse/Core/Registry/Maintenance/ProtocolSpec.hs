@@ -5,9 +5,8 @@
 -- | Protocol maintenance against a recording HTTP stub for sequencing and fault contracts.
 module Ecluse.Core.Registry.Maintenance.ProtocolSpec (spec) where
 
-import Data.Aeson (Object, Value (Object), decodeStrict, encode, object, (.=))
+import Data.Aeson (Object, Value (Number), decodeStrict, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -15,8 +14,6 @@ import Network.HTTP.Client (Manager, ManagerSettings (managerModifyRequest), Req
 import Network.HTTP.Types.Status (Status, status200, status201, status404, status408, status429, status500, status503, statusCode)
 import Test.Hspec
 
-import Ecluse.Core.Credential (bareCredential, mkSecret)
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportUnreachable), tfCause, tfDetail)
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (
@@ -57,13 +54,14 @@ import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
 import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
-import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Json (keysAt, withKeys)
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
-import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Test.Package (leftpadName, npmVersion, unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Registry.Npm (listingValue, writeTokenNpmConfig)
 import Ecluse.Test.Stub (
     Captured (capBody, capHeaders, capMethod, capPath),
     Stub,
@@ -150,25 +148,25 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
 
     it "reads a package's versions through the presence probe, all served" $
         withStore True answerStore $ \handle _ -> do
-            stored <- enumerateVersions handle leftpad
-            fmap (map storedVersion) stored `shouldBe` Right [version "1.0.0", version "2.0.0"]
+            stored <- enumerateVersions handle leftpadName
+            fmap (map storedVersion) stored `shouldBe` Right [npmVersion "1.0.0", npmVersion "2.0.0"]
             fmap (map storedPresence) stored `shouldBe` Right [VersionServed, VersionServed]
 
     it "reads the store's own manifest for a package, projected through the ecosystem's codec" $
         withStore True answerStore $ \handle stub -> do
-            outcome <- readStoreManifest handle leftpad
+            outcome <- readStoreManifest handle leftpadName
             fmap (Map.keys . infoVersions . manifestInfo) outcome `shouldBe` Right ["1.0.0", "2.0.0"]
             calls stub `shouldReturn` [("GET", "/leftpad")]
 
     it "carries the store's own write credential on the manifest read" $
         withStore True answerStore $ \handle stub -> do
-            _ <- readStoreManifest handle leftpad
+            _ <- readStoreManifest handle leftpadName
             sent <- allCaptured stub
             map (headerValue "Authorization") sent `shouldBe` [Just "Bearer write-token"]
 
     it "retains an absent manifest as HTTP 404 without retry advice" $
         withStore True answerNothing $ \handle stub -> do
-            outcome <- readStoreManifest handle leftpad
+            outcome <- readStoreManifest handle leftpadName
             fmap faultRetry (leftToMaybe outcome) `shouldBe` Just RetryFutile
             fmap (tfDetail . faultTransport) (leftToMaybe outcome)
                 `shouldBe` Just "the store has no metadata for the requested package (HTTP 404)"
@@ -177,7 +175,7 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
     for_ [status408, status429, status500, status503] $ \manifestStatus ->
         it ("retains manifest HTTP " <> show (statusCode manifestStatus) <> " with retry advice") $
             withStore True (answerAll manifestStatus "{}") $ \handle stub -> do
-                outcome <- readStoreManifest handle leftpad
+                outcome <- readStoreManifest handle leftpadName
                 fmap faultRetry (leftToMaybe outcome) `shouldBe` Just RetryWorthwhile
                 fmap (tfDetail . faultTransport) (leftToMaybe outcome)
                     `shouldBe` Just ("the store refused the metadata read with HTTP " <> show (statusCode manifestStatus))
@@ -185,7 +183,7 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
 
     it "retains a malformed successful manifest as a decode failure without retry advice" $
         withStore True (answerAll status200 "{}") $ \handle stub -> do
-            outcome <- readStoreManifest handle leftpad
+            outcome <- readStoreManifest handle leftpadName
             fmap faultRetry (leftToMaybe outcome) `shouldBe` Just RetryFutile
             fmap (tfDetail . faultTransport) (leftToMaybe outcome)
                 `shouldBe` Just "the store's metadata did not decode into a manifest"
@@ -193,13 +191,13 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
 
     it "advises another attempt when the store never answered the manifest read at all" $ do
         handle <- unreachableStore
-        outcome <- readStoreManifest handle leftpad
+        outcome <- readStoreManifest handle leftpadName
         fmap (tfCause . faultTransport) (leftToMaybe outcome) `shouldBe` Just TransportUnreachable
         fmap faultRetry (leftToMaybe outcome) `shouldBe` Just RetryWorthwhile
 
     it "reads a package the store no longer holds as holding no versions" $
         withStore True answerNothing $ \handle _ ->
-            enumerateVersions handle leftpad `shouldReturn` Right []
+            enumerateVersions handle leftpadName `shouldReturn` Right []
 
     it "faults when a listing answers 200 with a body that is no listing at all" $
         withStore True (answerAll status200 "[\"leftpad\"]") $ \handle _ ->
@@ -219,7 +217,7 @@ enumerationSpec = describe "enumeration over the protocol's own reads" $ do
 
     it "advises another attempt when a read fails server-side, unlike an absent listing" $
         withStore True (answerAll status503 "{}") $ \handle _ ->
-            (fmap faultRetry . leftToMaybe <$> enumerateVersions handle leftpad)
+            (fmap faultRetry . leftToMaybe <$> enumerateVersions handle leftpadName)
                 `shouldReturn` Just RetryWorthwhile
 
 deletionSpec :: Spec
@@ -227,14 +225,14 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
     for_ [1, 2 :: Int] $ \faultAt ->
         it ("stops after protocol request fault " <> show faultAt) $ do
             let raws = take (faultAt + 1) ["1.0.0", "2.0.0", "3.0.0"]
-                versions = map version raws
+                versions = map npmVersion raws
                 faultPath = "/leftpad/-/leftpad-" <> encodeUtf8 (show faultAt :: Text) <> ".0.0.tgz/-rev/3-abc"
                 answer captured
                     | capMethod captured == "GET" = (status200, encode (packumentWithVersions raws (capAuthority captured)))
                     | capPath captured == faultPath = (status201, LBS.replicate 20000 0x61)
                     | otherwise = (status201, "{\"ok\":true}")
             withBoundedStore midSequenceBound answer $ \handle stub -> do
-                outcomes <- deleteVersions handle testDeleteGuard leftpad versions
+                outcomes <- deleteVersions handle testDeleteGuard leftpadName versions
                 map fst outcomes `shouldBe` versions
                 map snd (take (faultAt - 1) outcomes) `shouldBe` replicate (faultAt - 1) VersionRemoved
                 map (unreachedRetry . snd) (drop (faultAt - 1) outcomes) `shouldBe` replicate 2 (Just RetryFutile)
@@ -251,33 +249,33 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
 
     it "carries on to the next version after the store refuses one version's edit" $
         withStore True answerRefusingEdit $ \handle stub -> do
-            outcomes <- deleteVersions handle testDeleteGuard leftpad [version raw | raw <- ["1.0.0", "2.0.0"]]
+            outcomes <- deleteVersions handle testDeleteGuard leftpadName [npmVersion raw | raw <- ["1.0.0", "2.0.0"]]
             map (refusedAs . snd) outcomes `shouldBe` replicate 2 (Just "HTTP 500")
             calls stub
                 `shouldReturn` [("GET", "/leftpad"), ("PUT", "/leftpad/-rev/3-abc"), ("GET", "/leftpad"), ("PUT", "/leftpad/-rev/3-abc")]
 
     it "removes the final version with one package DELETE after the document read" $
         withStore True (answerSingleVersion status201 "{\"ok\":true}") $ \handle stub -> do
-            deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
-                `shouldReturn` [(version "1.0.0", VersionRemoved)]
+            deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]
+                `shouldReturn` [(npmVersion "1.0.0", VersionRemoved)]
             calls stub `shouldReturn` [("GET", "/leftpad"), ("DELETE", "/leftpad/-rev/3-abc")]
 
     it "reports a refused whole-package DELETE without reporting the version removed" $
         withStore True (answerSingleVersion status500 "{}") $ \handle stub -> do
-            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]
             map (refusedAs . snd) outcomes `shouldBe` [Just "HTTP 500"]
             calls stub `shouldReturn` [("GET", "/leftpad"), ("DELETE", "/leftpad/-rev/3-abc")]
 
     it "reports an oversized whole-package DELETE response as an unknown outcome" $
         withBoundedStore midSequenceBound (answerSingleVersion status201 (LBS.replicate 20000 0x61)) $ \handle stub -> do
-            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]
             map (unreachedRetry . snd) outcomes `shouldBe` [Just RetryFutile]
             calls stub `shouldReturn` [("GET", "/leftpad"), ("DELETE", "/leftpad/-rev/3-abc")]
 
     it "reads the document, edits it, then deletes the tarball, in that order" $
         withStore True answerStore $ \handle stub -> do
-            deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
-                `shouldReturn` [(version "1.0.0", VersionRemoved)]
+            deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]
+                `shouldReturn` [(npmVersion "1.0.0", VersionRemoved)]
             calls stub
                 `shouldReturn` [ ("GET", "/leftpad")
                                , ("PUT", "/leftpad/-rev/3-abc")
@@ -286,13 +284,13 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
 
     it "carries the store's write credential on every call of the sequence" $
         withStore True answerStore $ \handle stub -> do
-            _ <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
+            _ <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]
             sent <- allCaptured stub
             map (headerValue "Authorization") sent `shouldBe` replicate 3 (Just "Bearer write-token")
 
     it "sends every destructive call over the injected client, and the document read over the reading one" $
         withSplitOrigins answerStore $ \handle stub -> do
-            _ <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
+            _ <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]
             sent <- allCaptured stub
             map (\cap -> (capMethod cap, headerValue deleteClientHeader cap)) sent
                 `shouldBe` [("GET", Nothing), ("PUT", Just "1"), ("DELETE", Just "1")]
@@ -300,31 +298,31 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
 
     it "sends a packument edit with the deleted version gone and the rest intact" $
         withStore True answerStore $ \handle stub -> do
-            _ <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
+            _ <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]
             edited <- editedPackument stub
-            keysUnder "versions" edited `shouldBe` ["2.0.0"]
-            keysUnder "time" edited `shouldBe` ["2.0.0"]
+            keysAt "versions" edited `shouldBe` ["2.0.0"]
+            keysAt "time" edited `shouldBe` ["2.0.0"]
 
     it "re-reads the document for every version, because the edit addresses its revision" $
         withStore True answerStore $ \handle stub -> do
-            _ <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0", version "2.0.0"]
+            _ <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0", npmVersion "2.0.0"]
             documentReads <- filter ((== "GET") . capMethod) <$> allCaptured stub
             length documentReads `shouldBe` 2
 
     it "refuses the version, and sends no tarball delete, when the store refuses the edit" $
         withStore True answerRefusingEdit $ \handle stub -> do
-            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]
             map (refusedAs . snd) outcomes `shouldBe` [Just "HTTP 500"]
             calls stub `shouldReturn` [("GET", "/leftpad"), ("PUT", "/leftpad/-rev/3-abc")]
 
     it "refuses the version when the store holds no document for the package" $
         withStore True answerNothing $ \handle _ -> do
-            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]
             map (refusedAs . snd) outcomes `shouldBe` [Just "NOT_FOUND"]
 
     it "carries the verb's own refusal out, sending neither write" $
         withStore True answerStore $ \handle stub -> do
-            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "9.9.9"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "9.9.9"]
             map (refusedAs . snd) outcomes `shouldBe` [Just "VERSION_ABSENT"]
             calls stub `shouldReturn` [("GET", "/leftpad")]
 
@@ -332,7 +330,7 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
         -- The bound admits the document and the edit and refuses the answer to the tarball
         -- delete, which is the one fault a caller must not read as a completed removal.
         withBoundedStore midSequenceBound answerOversizedDelete $ \handle stub -> do
-            outcomes <- deleteVersions handle testDeleteGuard leftpad [version "1.0.0"]
+            outcomes <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]
             map (unreachedRetry . snd) outcomes `shouldBe` [Just RetryFutile]
             map fst <$> calls stub `shouldReturn` ["GET", "PUT", "DELETE"]
 
@@ -352,7 +350,7 @@ withStoreUnder ::
 withStoreUnder permitted limits answer action =
     withRoutedStub reply $ \stub -> do
         manager <- newManager defaultManagerSettings
-        store <- protocolStore permitted (originAt manager limits (stubLocalhostUrl stub))
+        store <- protocolStore permitted (storeOrigin manager limits (stubLocalhostUrl stub))
         action (newProtocolMaintenance store) stub
   where
     reply captured = let (status, body) = answer captured in (status, [], body)
@@ -367,8 +365,8 @@ withSplitOrigins answer action =
     withRoutedStub reply $ \stub -> do
         reading <- newManager defaultManagerSettings
         deleting <- newManager (singleAttemptSettings defaultManagerSettings{managerModifyRequest = pure . marked})
-        store <- protocolStore True (originAt reading defaultLimits (stubLocalhostUrl stub))
-        let destructive = originAt deleting defaultLimits (stubLocalhostUrl stub)
+        store <- protocolStore True (storeOrigin reading defaultLimits (stubLocalhostUrl stub))
+        let destructive = storeOrigin deleting defaultLimits (stubLocalhostUrl stub)
         action (newProtocolMaintenance store{psDeleteOrigin = destructive}) stub
   where
     reply captured = let (status, body) = answer captured in (status, [], body)
@@ -387,19 +385,15 @@ withObservation ::
 withObservation permitted answer action =
     withRoutedStub reply $ \stub -> do
         manager <- newManager defaultManagerSettings
-        store <- protocolStore permitted (originAt manager defaultLimits (stubLocalhostUrl stub))
+        store <- protocolStore permitted (storeOrigin manager defaultLimits (stubLocalhostUrl stub))
         action (newProtocolObservation (psRead store)) stub
   where
     reply captured = let (status, body) = answer captured in (status, [], body)
 
-originAt :: Manager -> Limits -> Text -> OriginClient
-originAt manager limits baseUrl =
-    OriginClient
-        { ocBaseUrl = loopbackRegistryUrl baseUrl
-        , ocManager = manager
-        , ocToken = Just (bareCredential (mkSecret "write-token"))
-        , ocLimits = limits
-        }
+-- The shared mirror-write client, at the loopback URL the stub answers on.
+storeOrigin :: Manager -> Limits -> Text -> OriginClient
+storeOrigin manager limits baseUrl =
+    writeTokenNpmConfig (loopbackRegistryUrl baseUrl) manager limits
 
 {- npm fills the maintenance slice, so an empty verb here is a wiring fault the case reports
 rather than works around. -}
@@ -441,7 +435,7 @@ unreachableStore :: IO StoreMaintenance
 unreachableStore = do
     port <- freePort
     manager <- newManager defaultManagerSettings
-    newProtocolMaintenance <$> protocolStore True (originAt manager defaultLimits (localhost port))
+    newProtocolMaintenance <$> protocolStore True (storeOrigin manager defaultLimits (localhost port))
 
 {- The listing body is larger than this, so the bounded read refuses it rather than truncating
 what the sweep would then act on. -}
@@ -455,23 +449,21 @@ midSequenceBound = defaultLimits{maxBodyBytes = 4096}
 consentKey :: Text
 consentKey = "set mounts.npm.mirrorTarget.verdaccio.permitDeletion to true"
 
-leftpad :: PackageName
-leftpad = unscopedNpm "leftpad"
-
 listWholeStore :: StoreMaintenance -> IO (Either StoreFault [PackageName])
 listWholeStore handle = listBucketOf handle ""
 
 listBucketOf :: StoreMaintenance -> Text -> IO (Either StoreFault [PackageName])
 listBucketOf handle raw = withBucket raw (collectPages . listPackagesIn handle)
 
-version :: Text -> Version
-version = mkVersion Npm
-
 answerStore :: Captured -> (Status, LBS.ByteString)
 answerStore captured = case (capMethod captured, capPath captured) of
-    ("GET", "/-/all") -> (status200, encode listingDocument)
+    ("GET", "/-/all") -> (status200, encode storeListing)
     ("GET", _) -> (status200, encode (packumentDocumentOn (capAuthority captured)))
     _ -> (status201, "{\"ok\":true}")
+
+-- The store's package listing: the two names it holds, beside the registry's bookkeeping key.
+storeListing :: Value
+storeListing = withKeys [("_updated", Number 1)] (listingValue ["leftpad", "rightpad"])
 
 answerSingleVersion :: Status -> LBS.ByteString -> Captured -> (Status, LBS.ByteString)
 answerSingleVersion status body captured = case capMethod captured of
@@ -479,7 +471,7 @@ answerSingleVersion status body captured = case capMethod captured of
     _ -> (status, body)
 
 {- The store answers the tarball delete with a body past the bound. The delete reached it, so
-the version's fate is unknown, which is what the sequence's fault arm must report.  -}
+the npmVersion's fate is unknown, which is what the sequence's fault arm must report.  -}
 answerOversizedDelete :: Captured -> (Status, LBS.ByteString)
 answerOversizedDelete captured = case capMethod captured of
     "GET" -> (status200, encode (packumentDocumentOn (capAuthority captured)))
@@ -497,10 +489,6 @@ answerNothing = answerAll status404 "{}"
 
 answerAll :: Status -> LBS.ByteString -> Captured -> (Status, LBS.ByteString)
 answerAll status body = const (status, body)
-
-listingDocument :: Value
-listingDocument =
-    object ["_updated" .= (1 :: Int), "leftpad" .= object [], "rightpad" .= object []]
 
 packumentDocumentOn :: Text -> Value
 packumentDocumentOn = packumentWithVersions ["1.0.0", "2.0.0"]
@@ -537,15 +525,6 @@ editedPackument stub = do
 
 calls :: Stub -> IO [(ByteString, ByteString)]
 calls stub = map (\captured -> (capMethod captured, capPath captured)) <$> allCaptured stub
-
-keysUnder :: Key.Key -> Object -> [Text]
-keysUnder key document = case KeyMap.lookup key document of
-    Just value -> maybe [] (map Key.toText . KeyMap.keys) (asObject value)
-    Nothing -> []
-  where
-    asObject = \case
-        Object inner -> Just inner
-        _ -> Nothing
 
 -- The fault's diagnostic text, cut at the store's own message so the assertion reads the subject.
 faultDetail :: Either StoreFault a -> Maybe Text

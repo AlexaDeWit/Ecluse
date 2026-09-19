@@ -7,7 +7,7 @@ Invalid package coordinates must not produce deletion requests.
 -}
 module Ecluse.Core.Registry.Npm.MaintenanceSpec (spec) where
 
-import Data.Aeson (Object, Value (Object, String), decodeStrict, encode, object, (.=))
+import Data.Aeson (Object, Value (Object, String), decodeStrict, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair)
@@ -16,7 +16,6 @@ import Network.HTTP.Client (Manager, Request, RequestBody (RequestBodyBS), defau
 import Network.HTTP.Client qualified as Client
 import Test.Hspec
 
-import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
@@ -27,11 +26,14 @@ import Ecluse.Core.Registry.Npm.Maintenance (
     parsePackageListing,
     versionDeleteRequestsFor,
  )
-import Ecluse.Core.Registry.Origin (OriginClient (OriginClient, ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Core.Version (Version)
+import Ecluse.Test.Json (encodeStrict, keysAt, objectAt)
+import Ecluse.Test.Package (leftpadName, npmVersion, unscopedNpm)
+import Ecluse.Test.Registry.Npm (listingValue, writeTokenNpmConfig)
+import Ecluse.Test.Support (expectRightIO)
 
 -- | Verify that deletion addresses only versions present in the fetched document.
 spec :: Spec
@@ -43,21 +45,21 @@ spec = do
 listingSpec :: Spec
 listingSpec = describe "the package listing verb" $ do
     it "forms the listing read under the origin's base URL, carrying its credential" $ do
-        request <- formed (listingRequestFor <$> storeOrigin)
+        request <- expectRightIO (listingRequestFor <$> storeOrigin)
         Client.method request `shouldBe` "GET"
         Client.path request `shouldBe` "/-/all"
         headerOf "Accept" request `shouldBe` Just "application/json"
         headerOf "Authorization" request `shouldBe` Just "Bearer write-token"
 
     it "reads every package key the listing holds" $
-        parsePackageListing (listingBody ["leftpad", "rightpad"])
-            `shouldBe` Right [leftpad, unscopedNpm "rightpad"]
+        parsePackageListing (encodeStrict . listingValue $ ["leftpad", "rightpad"])
+            `shouldBe` Right [leftpadName, unscopedNpm "rightpad"]
 
     it "drops the listing's own bookkeeping key" $
-        parsePackageListing (listingBody ["_updated", "leftpad"]) `shouldBe` Right [leftpad]
+        parsePackageListing (encodeStrict . listingValue $ ["_updated", "leftpad"]) `shouldBe` Right [leftpadName]
 
     it "drops a key this ecosystem cannot read as a name, keeping the rest" $
-        parsePackageListing (listingBody ["@foo", "leftpad"]) `shouldBe` Right [leftpad]
+        parsePackageListing (encodeStrict . listingValue $ ["@foo", "leftpad"]) `shouldBe` Right [leftpadName]
 
     it "refuses a listing body that is not a JSON object" $
         parsePackageListing "[\"leftpad\"]" `shouldSatisfy` isLeft
@@ -65,18 +67,18 @@ listingSpec = describe "the package listing verb" $ do
 packumentReadSpec :: Spec
 packumentReadSpec = describe "the delete verb's document read" $ do
     it "asks for the full packument, which is the form carrying _rev" $ do
-        request <- formed (flip packumentRequestFor leftpad <$> storeOrigin)
+        request <- expectRightIO (flip packumentRequestFor leftpadName <$> storeOrigin)
         Client.path request `shouldBe` "/leftpad"
         headerOf "Accept" request `shouldBe` Just "application/json"
 
     it "encodes a scoped name as one path segment" $ do
-        request <- formed (flip packumentRequestFor acmeTool <$> storeOrigin)
+        request <- expectRightIO (flip packumentRequestFor acmeTool <$> storeOrigin)
         Client.path request `shouldBe` "/@acme%2Ftool"
 
 deleteSequenceSpec :: Spec
 deleteSequenceSpec = describe "the version delete verb" $ do
     it "forms the packument edit and then the tarball delete, both at the read revision" $ do
-        (edit, tarball) <- deletePair twoVersions leftpad (version "1.0.0")
+        (edit, tarball) <- deletePair twoVersions leftpadName (npmVersion "1.0.0")
         Client.method edit `shouldBe` "PUT"
         Client.path edit `shouldBe` "/leftpad/-rev/3-abc"
         headerOf "Content-Type" edit `shouldBe` Just "application/json"
@@ -84,26 +86,26 @@ deleteSequenceSpec = describe "the version delete verb" $ do
         Client.path tarball `shouldBe` "/leftpad/-/leftpad-1.0.0.tgz/-rev/3-abc"
 
     it "carries the origin's credential on both requests" $ do
-        (edit, tarball) <- deletePair twoVersions leftpad (version "1.0.0")
+        (edit, tarball) <- deletePair twoVersions leftpadName (npmVersion "1.0.0")
         headerOf "Authorization" edit `shouldBe` Just "Bearer write-token"
         headerOf "Authorization" tarball `shouldBe` Just "Bearer write-token"
 
     it "removes the version from versions, time, and dist-tags" $ do
-        edited <- editedPackument twoVersions leftpad (version "1.0.0")
-        keysUnder "versions" edited `shouldBe` ["2.0.0"]
-        keysUnder "time" edited `shouldBe` ["2.0.0"]
-        KeyMap.lookup "old" (objectUnder "dist-tags" edited) `shouldBe` Nothing
+        edited <- editedPackument twoVersions leftpadName (npmVersion "1.0.0")
+        keysAt "versions" edited `shouldBe` ["2.0.0"]
+        keysAt "time" edited `shouldBe` ["2.0.0"]
+        KeyMap.lookup "old" (objectAt "dist-tags" edited) `shouldBe` Nothing
 
     it "repoints latest at the greatest surviving version" $ do
-        edited <- editedPackument latestOnDeleted leftpad (version "2.0.0")
-        KeyMap.lookup "latest" (objectUnder "dist-tags" edited) `shouldBe` Just (String "10.0.0")
+        edited <- editedPackument latestOnDeleted leftpadName (npmVersion "2.0.0")
+        KeyMap.lookup "latest" (objectAt "dist-tags" edited) `shouldBe` Just (String "10.0.0")
 
-    forM_ [(leftpad, "/leftpad/-rev/3-abc"), (acmeTool, "/@acme%2Ftool/-rev/3-abc")] $ \(name, path) ->
+    forM_ [(leftpadName, "/leftpad/-rev/3-abc"), (acmeTool, "/@acme%2Ftool/-rev/3-abc")] $ \(name, path) ->
         it ("deletes the whole package for its only version at " <> decodeUtf8 path) $ do
             origin <- storeOrigin
             requests <-
                 either (fail . show) pure $
-                    versionDeleteRequestsFor origin name (version "1.0.0") (RegistryResponse 200 (encoded onlyVersion))
+                    versionDeleteRequestsFor origin name (npmVersion "1.0.0") (RegistryResponse 200 (encodeStrict onlyVersion))
             case requests of
                 request :| [] -> do
                     Client.method request `shouldBe` "DELETE"
@@ -114,95 +116,82 @@ deleteSequenceSpec = describe "the version delete verb" $ do
 
     it "keeps a malformed survivor instead of deleting the whole package" $ do
         let document = packument "leftpad" [] [("1.0.0", withTarball "leftpad-1.0.0.tgz"), ("broken", String "invalid")]
-        edited <- editedPackument document leftpad (version "1.0.0")
-        KeyMap.lookup "broken" (objectUnder "versions" edited) `shouldBe` Just (String "invalid")
+        edited <- editedPackument document leftpadName (npmVersion "1.0.0")
+        KeyMap.lookup "broken" (objectAt "versions" edited) `shouldBe` Just (String "invalid")
 
     it "refuses an absent version even when the package holds only one other version" $
-        refusalOf (encoded onlyVersion) (version "9.9.9") `shouldReturn` Just "VERSION_ABSENT"
+        refusalOf (encodeStrict onlyVersion) (npmVersion "9.9.9") `shouldReturn` Just "VERSION_ABSENT"
 
     it "leaves every other top-level key the store wrote" $ do
-        edited <- editedPackument twoVersions leftpad (version "1.0.0")
+        edited <- editedPackument twoVersions leftpadName (npmVersion "1.0.0")
         KeyMap.lookup "_id" edited `shouldBe` Just (String "leftpad")
         KeyMap.lookup "_rev" edited `shouldBe` Just (String "3-abc")
 
     it "addresses the tarball the store itself serves the version from" $ do
-        (_, tarball) <- deletePair renamedTarball leftpad (version "1.0.0")
+        (_, tarball) <- deletePair renamedTarball leftpadName (npmVersion "1.0.0")
         Client.path tarball `shouldBe` "/leftpad/-/leftpad-1.0.0-rc.tgz/-rev/3-abc"
 
     it "falls back to npm's conventional unscoped filename when the manifest names none" $ do
-        (_, tarball) <- deletePair (noDist "@acme/tool") acmeTool (version "1.0.0")
+        (_, tarball) <- deletePair (noDist "@acme/tool") acmeTool (npmVersion "1.0.0")
         Client.path tarball `shouldBe` "/@acme%2Ftool/-/tool-1.0.0.tgz/-rev/3-abc"
 
     it "refuses a document that is not a JSON object" $
-        refusalOf "not a packument" (version "1.0.0") `shouldReturn` Just "UNREADABLE_DOCUMENT"
+        refusalOf "not a packument" (npmVersion "1.0.0") `shouldReturn` Just "UNREADABLE_DOCUMENT"
 
     it "refuses a packument carrying no revision to address the edit at" $
-        refusalOf (encoded (without "_rev" twoVersions)) (version "1.0.0")
+        refusalOf (encodeStrict (without "_rev" twoVersions)) (npmVersion "1.0.0")
             `shouldReturn` Just "NO_REVISION"
 
     it "refuses a packument carrying no versions object" $
-        refusalOf (encoded (without "versions" twoVersions)) (version "1.0.0")
+        refusalOf (encodeStrict (without "versions" twoVersions)) (npmVersion "1.0.0")
             `shouldReturn` Just "UNREADABLE_DOCUMENT"
 
     it "refuses a version the packument does not hold" $
-        refusalOf (encoded twoVersions) (version "9.9.9") `shouldReturn` Just "VERSION_ABSENT"
+        refusalOf (encodeStrict twoVersions) (npmVersion "9.9.9") `shouldReturn` Just "VERSION_ABSENT"
 
     it "ignores a dist.tarball segment that is a traversal, addressing the conventional name" $ do
-        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/..") leftpad (version "1.0.0")
+        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/..") leftpadName (npmVersion "1.0.0")
         Client.path tarball `shouldBe` "/leftpad/-/leftpad-1.0.0.tgz/-rev/3-abc"
 
     it "ignores a dist.tarball segment carrying a control character" $ do
-        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/a\rb.tgz") leftpad (version "1.0.0")
+        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/a\rb.tgz") leftpadName (npmVersion "1.0.0")
         Client.path tarball `shouldBe` "/leftpad/-/leftpad-1.0.0.tgz/-rev/3-abc"
 
     it "neutralises a percent-encoded separator on the way out rather than at the gate" $ do
-        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/..%2Fx") leftpad (version "1.0.0")
+        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/..%2Fx") leftpadName (npmVersion "1.0.0")
         Client.path tarball `shouldBe` "/leftpad/-/..%252Fx/-rev/3-abc"
 
     for_ [("%2e", "%252e"), ("%2e%2e", "%252e%252e"), ("a%5cb", "a%255cb"), ("a%00b", "a%2500b"), ("name+tag.tgz", "name%2Btag.tgz")] $ \(filename, encodedFilename) ->
         it ("targets the stored literal filename after encoding " <> toString filename) $ do
-            (_, tarball) <- deletePair (tarballAt ("http://store.test/leftpad/-/" <> filename <> "?sig=/other#hash")) leftpad (version "1.0.0")
+            (_, tarball) <- deletePair (tarballAt ("http://store.test/leftpad/-/" <> filename <> "?sig=/other#hash")) leftpadName (npmVersion "1.0.0")
             Client.path tarball `shouldBe` "/leftpad/-/" <> encodedFilename <> "/-rev/3-abc"
 
     it "reads the filename off a tarball URL carrying a query or fragment" $ do
-        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/leftpad-1.0.0.tgz?sig=abc") leftpad (version "1.0.0")
+        (_, tarball) <- deletePair (tarballAt "http://store.test/leftpad/-/leftpad-1.0.0.tgz?sig=abc") leftpadName (npmVersion "1.0.0")
         Client.path tarball `shouldBe` "/leftpad/-/leftpad-1.0.0.tgz/-rev/3-abc"
 
     it "refuses a revision that is no safe path component" $
-        refusalOf (encoded (withRevision ".." twoVersions)) (version "1.0.0")
+        refusalOf (encodeStrict (withRevision ".." twoVersions)) (npmVersion "1.0.0")
             `shouldReturn` Just "NO_REVISION"
 
 storeOrigin :: IO OriginClient
-storeOrigin = originOver <$> newManager defaultManagerSettings
+storeOrigin = storeOriginOver <$> newManager defaultManagerSettings
 
-originOver :: Manager -> OriginClient
-originOver manager =
-    OriginClient
-        { ocBaseUrl = loopbackRegistryUrl "http://store.test"
-        , ocManager = manager
-        , ocToken = Just (bareCredential (mkSecret "write-token"))
-        , ocLimits = defaultLimits
-        }
-
-formed :: (Show e) => IO (Either e Request) -> IO Request
-formed action = action >>= either (fail . show) pure
+-- The shared mirror-write client, against the fixture store's own base URL.
+storeOriginOver :: Manager -> OriginClient
+storeOriginOver manager =
+    writeTokenNpmConfig (loopbackRegistryUrl "http://store.test") manager defaultLimits
 
 headerOf :: ByteString -> Request -> Maybe ByteString
 headerOf header = lookup (fromString (decodeUtf8 header)) . Client.requestHeaders
 
-leftpad :: PackageName
-leftpad = unscopedNpm "leftpad"
-
 acmeTool :: PackageName
 acmeTool = mkPackageName Npm (Just (mkScope "acme")) "tool"
-
-version :: Text -> Version
-version = mkVersion Npm
 
 deletePair :: Value -> PackageName -> Version -> IO (Request, Request)
 deletePair document name subject = do
     origin <- storeOrigin
-    case versionDeleteRequestsFor origin name subject (RegistryResponse 200 (encoded document)) of
+    case versionDeleteRequestsFor origin name subject (RegistryResponse 200 (encodeStrict document)) of
         Left refusal -> fail ("the delete verb refused: " <> toString (refusalCode refusal))
         Right (edit :| [tarball]) -> pure (edit, tarball)
         Right other -> fail ("expected two requests, got " <> show (length other))
@@ -217,21 +206,7 @@ editedPackument document name subject = do
 refusalOf :: ByteString -> Version -> IO (Maybe Text)
 refusalOf body subject = do
     origin <- storeOrigin
-    pure (refusalCode <$> leftToMaybe (versionDeleteRequestsFor origin leftpad subject (RegistryResponse 200 body)))
-
-listingBody :: [Text] -> ByteString
-listingBody names = encoded (object [Key.fromText raw .= object [] | raw <- names])
-
-encoded :: Value -> ByteString
-encoded = toStrict . encode
-
-objectUnder :: Key.Key -> Object -> Object
-objectUnder key document = case KeyMap.lookup key document of
-    Just (Object inner) -> inner
-    _ -> KeyMap.empty
-
-keysUnder :: Key.Key -> Object -> [Text]
-keysUnder key = map Key.toText . KeyMap.keys . objectUnder key
+    pure (refusalCode <$> leftToMaybe (versionDeleteRequestsFor origin leftpadName subject (RegistryResponse 200 body)))
 
 without :: Key.Key -> Value -> Value
 without key = \case

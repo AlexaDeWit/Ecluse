@@ -48,9 +48,9 @@ import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
 import Ecluse.Core.Registry.Npm.Route.Internal (NpmCap (NpmFilename, NpmPackage), npmRoutes, takePackage)
 import Ecluse.Core.Server.Path (isSafeComponent)
-import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
+import Ecluse.Core.Server.Route (RouteName (RouteName))
 import Ecluse.Test.Registry.Npm (genPathSegments)
-import Ecluse.Test.Server.Route (claimsEveryRendering)
+import Ecluse.Test.Server.Route (claimedBy, claimsEveryRendering)
 
 {- | The route a request takes: the name of the first route to claim it, or 'Nothing' when
 none does (the deny-by-default @404@). These examples assert only which route claimed the
@@ -58,7 +58,7 @@ request, never what its closure serves.
 -}
 matchedId :: Method -> [Text] -> Maybe RouteName
 -- npm's routes negotiate no media type, so the reference routes with no Accept header.
-matchedId method segments = routeName . fst <$> matchRoute npmRoutes method [] segments
+matchedId method = claimedBy npmRoutes method []
 
 spec :: Spec
 spec = do
