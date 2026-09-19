@@ -8,7 +8,6 @@ A helper that belongs to one subsystem lives in that subsystem's @Ecluse.Test.*@
 module instead.
 -}
 module Ecluse.Test.Support (
-    supportLinkageSpec,
     testServeAdmission,
     newTestClock,
     expectRight,
@@ -22,19 +21,7 @@ import Data.Aeson (FromJSON, eitherDecodeStrict)
 import Data.Time (UTCTime)
 import Network.HTTP.Client qualified as Client
 
-import Ecluse.Core.Package (HashAlg (SHA256), renderHashAlg)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
-import Test.Hspec (Spec, describe, it, shouldBe)
-
-{- | A trivial spec that touches a stable export of the library under test. A suite
-that runs this spec compiled and linked against both this support library and
-@ecluse@.
--}
-supportLinkageSpec :: Spec
-supportLinkageSpec =
-    describe "ecluse-test-support" $
-        it "is linked into the suite and can see the library under test" $
-            renderHashAlg SHA256 `shouldBe` "sha256"
 
 {- | A serve admission for suites that do not test overload. Its capacity sits far above any
 test's in-flight load, so it never sheds.

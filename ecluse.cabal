@@ -862,7 +862,6 @@ test-suite ecluse-core-unit
     Ecluse.Test.Registry.PyPI.WireSpec
     Ecluse.Test.Registry.RubyGems.WireSpec
     Ecluse.Test.RegistryCaptureSpec
-    Ecluse.Test.SupportLinkageSpec
     Ecluse.Worker.Support
     Ecluse.Worker.Support.Fixtures
     Ecluse.Worker.Support.Runtime
@@ -1144,7 +1143,6 @@ test-suite ecluse-integration
     Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec
     Ecluse.Runtime.Telemetry.TracingIntegrationSpec
     Ecluse.Server.Pipeline.TestSupport
-    Ecluse.Test.SupportLinkageIntegrationSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
@@ -1236,7 +1234,6 @@ test-suite ecluse-smoke
     Ecluse.Core.VersionSmokeSpec
     Ecluse.PilotSmokeSpec
     Ecluse.Runtime.Credential.CodeArtifactSmokeSpec
-    Ecluse.Test.SupportLinkageSmokeSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
@@ -1290,7 +1287,6 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness.Types
     Ecluse.E2E.Harness.Verdaccio
     Ecluse.E2ESpec
-    Ecluse.Test.SupportLinkageE2ESpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
