@@ -67,10 +67,8 @@ data Projection a
       NameMismatch Text
     deriving stock (Eq, Show)
 
-{- | Check an upstream's self-reported 'PackageName' against the requested one through
-ecosystem-aware 'PackageName' equality, never a byte compare an encoding variant could slip past.
-A disagreement carries the reported name so the caller can drop that origin's contribution, and
-the proxy never substitutes the name.
+{- | Compare through ecosystem-aware 'PackageName' equality, never a byte compare an encoding
+variant could slip past. The proxy never substitutes the reported name for the requested one.
 -}
 checkNameAgreement :: PackageName -> PackageName -> a -> Projection a
 checkNameAgreement requestedName reportedName projected

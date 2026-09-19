@@ -52,7 +52,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 
-import Ecluse.Core.Clock (monoSecondsBetween, monotonicNow)
+import Ecluse.Core.Clock (MonoTime, monoSecondsBetween, monotonicNow)
 
 -- | The capacity pool a store's requests debit, which several stores can share.
 newtype QuotaScope = QuotaScope Text
@@ -279,43 +279,60 @@ data BudgetPort = BudgetPort
     , budgetPaced :: Map QuotaScope CyclePace -> IO ()
     }
 
+-- The cells one cycle's measurement runs over, shared by the port and every scope's gate.
+data BudgetMeter = BudgetMeter
+    { bmTallies :: IORef (Map QuotaScope RequestTally)
+    , bmWaited :: IORef Rational
+    , bmPaces :: IORef (Map QuotaScope CyclePace)
+    , bmOpened :: IORef MonoTime
+    }
+
 {- | One meter shared by every store a cycle touches, beside the gate each scope's requests pass
 through. The wait is injected, so a spec reads the pacing without serving it.
 -}
 newBudgetMeter :: (NominalDiffTime -> IO ()) -> IO (BudgetPort, QuotaScope -> RequestGate)
 newBudgetMeter wait = do
-    tallies <- newIORef Map.empty
-    waited <- newIORef 0
-    paces <- newIORef Map.empty
-    opened <- newIORef =<< monotonicNow
-    let port =
-            BudgetPort
-                { budgetOpen = do
-                    writeIORef tallies Map.empty
-                    writeIORef waited 0
-                    monotonicNow >>= writeIORef opened
-                , budgetClose = do
-                    elapsed <- monoSecondsBetween <$> readIORef opened <*> monotonicNow
-                    spent <- readIORef waited
-                    counted <- readIORef tallies
-                    pure CycleCost{ccRequests = counted, ccWorkSeconds = max 0 (toRational elapsed - spent)}
-                , budgetPaced = writeIORef paces
-                }
-        gateFor scope =
-            RequestGate
-                { gateSpend = \kind -> do
-                    atomicModifyIORef' tallies (\held -> (Map.insertWith (<>) scope (oneRequest kind) held, ()))
-                    pace <- Map.findWithDefault freePace scope <$> readIORef paces
-                    let seconds = paceSeconds pace kind
-                    when (seconds > 0) $ do
-                        -- The wait served, not the wait asked for, so the work time it comes out
-                        -- of stays right however the injected wait behaves.
-                        before <- monotonicNow
-                        wait seconds
-                        served <- monoSecondsBetween before <$> monotonicNow
-                        atomicModifyIORef' waited (\held -> (held + toRational (max 0 served), ()))
-                }
-    pure (port, gateFor)
+    meter <-
+        BudgetMeter
+            <$> newIORef Map.empty
+            <*> newIORef 0
+            <*> newIORef Map.empty
+            <*> (newIORef =<< monotonicNow)
+    pure (meterPort meter, meterGate wait meter)
+
+meterPort :: BudgetMeter -> BudgetPort
+meterPort meter =
+    BudgetPort
+        { budgetOpen = do
+            writeIORef (bmTallies meter) Map.empty
+            writeIORef (bmWaited meter) 0
+            monotonicNow >>= writeIORef (bmOpened meter)
+        , budgetClose = do
+            elapsed <- monoSecondsBetween <$> readIORef (bmOpened meter) <*> monotonicNow
+            spent <- readIORef (bmWaited meter)
+            counted <- readIORef (bmTallies meter)
+            pure CycleCost{ccRequests = counted, ccWorkSeconds = max 0 (toRational elapsed - spent)}
+        , budgetPaced = writeIORef (bmPaces meter)
+        }
+
+meterGate :: (NominalDiffTime -> IO ()) -> BudgetMeter -> QuotaScope -> RequestGate
+meterGate wait meter scope =
+    RequestGate
+        { gateSpend = \kind -> do
+            atomicModifyIORef' (bmTallies meter) (\held -> (Map.insertWith (<>) scope (oneRequest kind) held, ()))
+            pace <- Map.findWithDefault freePace scope <$> readIORef (bmPaces meter)
+            let seconds = paceSeconds pace kind
+            when (seconds > 0) (waitCharged wait meter seconds)
+        }
+
+-- The wait served, not the wait asked for, so the work time it comes out of stays right
+-- however the injected wait behaves.
+waitCharged :: (NominalDiffTime -> IO ()) -> BudgetMeter -> NominalDiffTime -> IO ()
+waitCharged wait meter seconds = do
+    before <- monotonicNow
+    wait seconds
+    served <- monoSecondsBetween before <$> monotonicNow
+    atomicModifyIORef' (bmWaited meter) (\held -> (held + toRational (max 0 served), ()))
 
 {- | Every dimension's rate as a boot or audit line spells them, in dimension order. An empty map
 renders as the empty string, so a caller with a "none" to say says it itself.
