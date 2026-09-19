@@ -5,7 +5,7 @@
 -- | Differential checks for full and selective npm metadata reads.
 module Ecluse.Core.Registry.Npm.MetadataSpec (spec) where
 
-import Data.Aeson (Value (Bool, Null, Object, String), encode, object, toJSON, (.=))
+import Data.Aeson (Value (Bool, Null, String), encode, object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
@@ -32,6 +32,7 @@ import Ecluse.Core.Security (
     defaultLimits,
  )
 import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Json (isObject)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Snapshot (readDetails)
 import Ecluse.Test.Support (expectRight)
@@ -282,11 +283,6 @@ versionObject name v =
         , "version" .= v
         , "dist" .= object ["tarball" .= ("https://example.test/" <> name <> "-" <> v <> ".tgz")]
         ]
-
-isObject :: Value -> Bool
-isObject = \case
-    Object _ -> True
-    _ -> False
 
 -- The details half of a selective read, for parity against the whole-document projection.
 selectedDetails :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)

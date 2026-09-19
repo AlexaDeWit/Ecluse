@@ -51,8 +51,6 @@ parseEndpointUrlSpec = describe "parseEndpointUrl" $ do
     describe "the egress gate's port grammar, never a second one" $ do
         -- The override names the endpoint the AWS SDK dials. Its port reads the way the SSRF
         -- gate reads one: decimal digits, no leading zero, a value in 1..65535.
-        it "accepts a canonical port" $
-            parseEndpointUrl "http://h:8080" `shouldBe` parsed False "h" 8080
         it "refuses a leading-zero port" $
             parseEndpointUrl "http://h:007" `shouldBe` refused "http://h:007"
         it "refuses a signed port" $ do

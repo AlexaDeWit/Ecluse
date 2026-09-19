@@ -33,7 +33,7 @@ import Ecluse.Core.Fault (
  )
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    FetchFault (FetchUrlUnformable),
     RegistryResponse (..),
     UrlFormationError (EmptyBaseUrl),
  )
@@ -44,6 +44,7 @@ import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (defaultLimits, maxBodyBytes)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Test.Registry (isBoundExceededFetch, isTransportFetch)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, isOdd, publicRegistryBaseUrl)
 
 import Ecluse.Test.Stub (
@@ -74,7 +75,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxBodyBytes = 64}}
             outcome <- fetchMetadataFormBounded config Full isOdd
-            outcome `shouldSatisfy` isBoundExceeded
+            outcome `shouldSatisfy` isBoundExceededFetch
 
     it "returns a body that is within maxBodyBytes verbatim" $
         -- The read returns a body within the cap whole and unchanged: no false refusal.
@@ -93,7 +94,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             -- decompressed-size bound can explain a refusal.
             BS.length gzippedOversizedBody `shouldSatisfy` (< 1024)
             outcome <- fetchMetadataFormBounded config Full isOdd
-            outcome `shouldSatisfy` isBoundExceeded
+            outcome `shouldSatisfy` isBoundExceededFetch
 
     it "reports an empty base URL as a FetchUrlUnformable value, never thrown" $ do
         -- The read-path URL-formation fault is a value (mirroring the write path's
@@ -138,7 +139,7 @@ transportFaultSpec = describe "transport faults as values" $ do
         manager <- newManager defaultManagerSettings
         let config = defaultNpmConfig (loopbackRegistryUrl "http://127.0.0.1:1") manager
         outcome <- fetchMetadataFormBounded config Full isOdd
-        outcome `shouldSatisfy` isTransportFault
+        outcome `shouldSatisfy` isTransportFetch
   where
     causeOf = tfCause . classifyTransport
 
@@ -174,15 +175,3 @@ data FakeInnerFault = FakeInnerFault
     deriving stock (Show)
 
 instance Exception FakeInnerFault
-
--- | Whether a bounded fetch returned the response-bound breach as a value.
-isBoundExceeded :: Either FetchFault RegistryResponse -> Bool
-isBoundExceeded = \case
-    Left (FetchBoundExceeded _) -> True
-    _ -> False
-
--- | Whether a bounded fetch returned a transport failure as a value.
-isTransportFault :: Either FetchFault RegistryResponse -> Bool
-isTransportFault = \case
-    Left (FetchTransport _) -> True
-    _ -> False

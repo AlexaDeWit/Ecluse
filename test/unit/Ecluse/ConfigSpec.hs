@@ -10,7 +10,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig)
+import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, npmMountDoc, pubUrlEnv)
 import Ecluse.Config (
     AppConfig (cfgQueue),
     Config (configApp, configMounts),
@@ -84,12 +84,12 @@ spec = do
 
     describe "mount modes (mirroring derived from the declared target)" $ do
         it "resolves a declared mirrorTarget to a mirrored mount" $ do
-            cfg <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://mirror.example.test")])
+            cfg <- configFor (registryMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://mirror.example.test")])
             modeOf cfg `shouldSatisfy` \case Just (Mirrored _) -> True; _ -> False
             mountPostureLines cfg `shouldSatisfy` any (T.isInfixOf "mirrored")
 
         it "resolves an absent mirrorTarget to a serve-only mount over the private merge" $ do
-            cfg <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test")])
+            cfg <- configFor (registryMountDoc [("privateUpstream", "https://priv.example.test")])
             modeOf cfg `shouldBe` (Just . ServeOnly . rightToMaybe . mkRegistryUrl) "https://priv.example.test"
             mountPostureLines cfg `shouldSatisfy` any (T.isInfixOf "serve-only")
 
@@ -106,7 +106,7 @@ spec = do
             Map.keys (configMounts cfg) `shouldBe` []
 
         it "requires the private upstream on a mirrored mount (the mirror must read back)" $
-            loadConfig pubUrlEnv (Just (npmMountDoc [("mirrorTarget", "https://mirror.example.test")]))
+            loadConfig pubUrlEnv (Just (registryMountDoc [("mirrorTarget", "https://mirror.example.test")]))
                 `shouldBe` Left [MountMissingPrivateUpstream Npm]
 
         it "requires server.publicUrl once any mount is active, aggregated with the mount errors" $ do
@@ -114,7 +114,7 @@ spec = do
             -- missing base URL fails here, not client by client at install time.
             loadConfig [] (Just "{\"mounts\":{\"npm\":{\"enabled\":true}}}")
                 `shouldBe` Left [PublicUrlRequired]
-            loadConfig [] (Just (npmMountDoc [("mirrorTarget", "https://mirror.example.test")]))
+            loadConfig [] (Just (registryMountDoc [("mirrorTarget", "https://mirror.example.test")]))
                 `shouldBe` Left [PublicUrlRequired, MountMissingPrivateUpstream Npm]
 
         it "prints the Verdaccio store's declared deletion consent in the mount posture" $ do
@@ -134,18 +134,14 @@ spec = do
                                ]
 
         it "adds no maintenance notice for registry targets or serve-only mounts" $ do
-            registry <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://mirror.example.test")])
-            private <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test")])
+            -- A mount with a private upstream carries the probe notice a boot makes and a
+            -- checker does not, and a pure public gate carries its posture line alone.
+            registry <- configFor (registryMountDoc [("privateUpstream", "https://priv.example.test"), ("mirrorTarget", "https://mirror.example.test")])
+            private <- configFor (registryMountDoc [("privateUpstream", "https://priv.example.test")])
             public <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
             forM_ [registry, private] $ \cfg ->
                 drop 1 (mountPostureLines cfg) `shouldBe` [upstreamProbeNotice]
             length (mountPostureLines public) `shouldBe` 1
-
-        it "names the private-upstream check a boot makes and a checker does not" $ do
-            private <- configFor (npmMountDoc [("privateUpstream", "https://priv.example.test")])
-            public <- configFor "{\"mounts\":{\"npm\":{\"enabled\":true}}}"
-            mountPostureLines private `shouldSatisfy` elem upstreamProbeNotice
-            mountPostureLines public `shouldSatisfy` notElem upstreamProbeNotice
 
     describe "the advisory push-age limit reported at boot" $ do
         it "derives six days from the shipped seven-day quarantine, naming the rule" $ do
@@ -216,10 +212,6 @@ spec = do
                 `shouldSatisfy` elem "config: mounts.npm.mirrorTarget.verdaccio.token = <redacted> (environment)"
             provenance `shouldSatisfy` (not . any (T.isInfixOf "hunter"))
 
--- | The client-facing base URL every active-mount load needs (server.publicUrl).
-pubUrlEnv :: [(String, String)]
-pubUrlEnv = [("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")]
-
 -- | An advisory store, which the age lines report only once one is configured.
 advisoryStoreEnv :: [(String, String)]
 advisoryStoreEnv = [("ECLUSE_ADVISORIES__URL", "s3://advisories")]
@@ -230,7 +222,7 @@ configFor doc = expectConfig pubUrlEnv (Just doc)
 
 -- | The serve-only npm mount the advisory-age cases load, which carries the shipped rule policy.
 privateMountDoc :: ByteString
-privateMountDoc = npmMountDoc [("privateUpstream", "https://priv.example.test")]
+privateMountDoc = registryMountDoc [("privateUpstream", "https://priv.example.test")]
 
 -- | The line a mount with a private upstream carries, which both entry points report.
 upstreamProbeNotice :: Text
@@ -238,9 +230,8 @@ upstreamProbeNotice =
     "mount \"npm\": the private upstream is asked at boot whether it, or a repository in its upstream chain, connects to a public registry. check-config does not make that call."
 
 -- | An npm mount document declaring each named endpoint at its URL under the @registry@ tag.
-npmMountDoc :: [(Text, Text)] -> ByteString
-npmMountDoc endpoints =
-    encodeUtf8 ("{\"mounts\":{\"npm\":{" <> T.intercalate "," (map endpoint endpoints) <> "}}}")
+registryMountDoc :: [(Text, Text)] -> ByteString
+registryMountDoc = npmMountDoc . map endpoint
   where
     endpoint (key, url) = "\"" <> key <> "\":{\"registry\":{\"url\":\"" <> url <> "\"" <> write key <> "}}"
     -- The registry tag requires a static write token on a mirror target and admits none elsewhere.

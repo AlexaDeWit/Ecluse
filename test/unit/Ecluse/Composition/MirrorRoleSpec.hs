@@ -16,7 +16,6 @@ import Ecluse.Composition.MirrorRole (
     enqueuesJobs,
     mirrorMintPlan,
     mirrorRoleRefusal,
-    runsWorker,
     spawnsWorker,
  )
 import Ecluse.Composition.Types (MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly))
@@ -31,16 +30,6 @@ sqsConfig = defaultSqsConfig "https://sqs.us-east-1.amazonaws.com/123456789012/m
 
 spec :: Spec
 spec = do
-    describe "runsWorker -- which roles want a consume loop at all" $ do
-        it "keeps the worker embedded in the default proxy role" $
-            runsWorker ServeAndMirror `shouldBe` True
-
-        it "spawns no worker under --no-worker, so the proxy scales apart from queue depth" $
-            runsWorker ServeOnly `shouldBe` False
-
-        it "runs the worker in the dedicated mirror role" $
-            runsWorker MirrorOnly `shouldBe` True
-
     describe "spawnsWorker -- the one fact the spawn decision and /livez both read" $ do
         it "spawns no worker under --no-worker, so the proxy scales apart from queue depth" $
             spawnsWorker ServeOnly durableQueue `shouldBe` False

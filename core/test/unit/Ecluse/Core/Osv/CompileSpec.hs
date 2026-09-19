@@ -21,7 +21,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Data.Version (showVersion)
 import Database.SQLite.Simple
-import Katip (LogEnv, closeScribes, runKatipContextT)
+import Katip (LogEnv, runKatipContextT)
 import OpenTelemetry.Attributes (fromAttribute, lookupAttribute)
 import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
 import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, forceFlushTracerProvider)
@@ -48,7 +48,7 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
  )
-import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv)
+import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvTestM, runOsvTestMWith)
 import Ecluse.Test.OsvDb (epssFixtureFile)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
@@ -153,7 +153,7 @@ spec = describe "SQLite OSV Compilation" $ do
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
         epssData <- LBS.readFile epssFixtureFile
         (metrics, _) <- recordingAdvisoryCompileMetricsPort
-        (dbFile, logged) <- captureStdout' $ \logEnv ->
+        (dbFile, logged) <- captureJsonLog $ \logEnv ->
             withCredentialSource "OSV" zipData $ \source ->
                 withCredentialSource "EPSS" epssData $ \epssSource -> do
                     path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (CompileSources source epssSource) testQuietTime)
@@ -232,7 +232,7 @@ spec = describe "SQLite OSV Compilation" $ do
                 ]
         epssData <- LBS.readFile epssFixtureFile
         (metrics, _) <- recordingAdvisoryCompileMetricsPort
-        (dbFile, logged) <- captureStdout' $ \logEnv ->
+        (dbFile, logged) <- captureJsonLog $ \logEnv ->
             withStub status200 zipData $ \stub ->
                 withStub status200 epssData $ \epssStub ->
                     runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip") testQuietTime)
@@ -279,12 +279,12 @@ spec = describe "SQLite OSV Compilation" $ do
                     previous <-
                         if hasPrevious
                             then do
-                                (path, _) <- captureStdout' (`compile` goodZip)
+                                (path, _) <- captureJsonLog (`compile` goodZip)
                                 setModificationTime path previousModified
                                 getModificationTime path >>= (`shouldBe` previousModified)
                                 Just <$> readFileBS path
                             else pure Nothing
-                    (_, logged) <- captureStdout' $ \logEnv ->
+                    (_, logged) <- captureJsonLog $ \logEnv ->
                         compile logEnv badZip `shouldThrow` (\(PilotIngestAborted _) -> True)
                     logged `shouldSatisfy` T.isInfixOf "zero relevant advisory rows"
                     logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
@@ -319,7 +319,7 @@ spec = describe "SQLite OSV Compilation" $ do
                         withCredentialSource "EPSS" epssData $ \epssSource -> do
                             let compile = compileOsvToSqlite metrics (Just tracerProvider) outDir (osvEcosystemFor ecosystem) (CompileSources source epssSource) testQuietTime
                                 runCompile logEnv = runKatipContextT logEnv () mempty (runResourceT compile)
-                            (_, logged) <- captureStdout' $ \logEnv -> case refusal of
+                            (_, logged) <- captureJsonLog $ \logEnv -> case refusal of
                                 Nothing -> void (runCompile logEnv)
                                 Just _ -> runCompile logEnv `shouldThrow` (\(PilotIngestAborted _) -> True)
                             let prefix = if isNothing refusal then "Compiled " else "Aborting OSV compile "
@@ -389,7 +389,7 @@ spec = describe "SQLite OSV Compilation" $ do
                     [ ("ok.json", datedAdvisory "GHSA-ok" "ok-pkg" (Just "2026-01-01T00:00:00Z"))
                     , ("ahead.json", datedAdvisory "GHSA-ahead" "ahead-pkg" (Just "2099-01-01T00:00:00Z"))
                     ]
-            (dbFile, logged) <- captureStdout' $ \logEnv -> compileZipWith logEnv zipData testQuietTime
+            (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith logEnv zipData testQuietTime
             meta <- metaOf dbFile
             Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-01-01T00:00:00Z"
             packagesOf dbFile `shouldReturn` ["ahead-pkg", "ok-pkg"]
@@ -403,7 +403,7 @@ spec = describe "SQLite OSV Compilation" $ do
                     [ ("ok.json", datedAdvisory "GHSA-ok" "ok-pkg" (Just "2026-01-01T00:00:00Z"))
                     , ("unreadable.json", datedAdvisory "GHSA-unreadable" "unreadable-pkg" (Just "the day before yesterday"))
                     ]
-            (dbFile, logged) <- captureStdout' $ \logEnv -> compileZipWith logEnv zipData testQuietTime
+            (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith logEnv zipData testQuietTime
             meta <- metaOf dbFile
             Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-01-01T00:00:00Z"
             packagesOf dbFile `shouldReturn` ["ok-pkg", "unreadable-pkg"]
@@ -413,7 +413,7 @@ spec = describe "SQLite OSV Compilation" $ do
 
         it "logs the quiet-time alarm at ERROR, naming the source, the age, and the threshold" $ do
             zipData <- osvZipOf [("old.json", datedAdvisory "GHSA-old" "old-pkg" (Just "2026-01-01T00:00:00Z"))]
-            (dbFile, logged) <- captureStdout' $ \logEnv -> compileZipWith logEnv zipData tightQuietTime
+            (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith logEnv zipData tightQuietTime
             logged `shouldSatisfy` T.isInfixOf "OSV export http://127.0.0.1:"
             logged `shouldSatisfy` T.isInfixOf "quiet-time threshold 1s"
             logged `shouldSatisfy` T.isInfixOf "so the source has gone quiet"
@@ -422,7 +422,7 @@ spec = describe "SQLite OSV Compilation" $ do
 
         it "logs the ages at INFO and raises nothing while every source is inside its threshold" $ do
             zipData <- osvZipOf [("old.json", datedAdvisory "GHSA-old" "old-pkg" (Just "2026-01-01T00:00:00Z"))]
-            (dbFile, logged) <- captureStdout' $ \logEnv -> compileZipWith logEnv zipData testQuietTime
+            (dbFile, logged) <- captureJsonLog $ \logEnv -> compileZipWith logEnv zipData testQuietTime
             logged `shouldSatisfy` T.isInfixOf "last changed "
             logged `shouldSatisfy` (not . T.isInfixOf "so the source has gone quiet")
             logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
@@ -450,16 +450,6 @@ systemicDropZip =
         ( [("mal-" <> show i <> ".json", "this is not valid json") | i <- [1 .. 20 :: Int]]
             <> [("good.json", "{\"id\":\"GHSA-ok\",\"affected\":[{\"package\":{\"name\":\"ok\",\"ecosystem\":\"npm\"},\"versions\":[\"1.0.0\"]}]}")]
         )
-
-captureStdout' :: (LogEnv -> IO a) -> IO (a, Text)
-captureStdout' body = do
-    resultRef <- newIORef Nothing
-    logged <- captureStdout $ do
-        logEnv <- jsonLogEnv
-        body logEnv >>= writeIORef resultRef . Just
-        void (closeScribes logEnv)
-    result <- readIORef resultRef
-    maybe (fail "the compile under capture produced no result") (pure . (,logged)) result
 
 sourcesOf :: Stub -> Stub -> String -> CompileSources
 sourcesOf osvStub epssStub osvPath =

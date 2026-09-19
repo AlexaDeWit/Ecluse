@@ -16,7 +16,9 @@ module Ecluse.Test.Registry.Npm (
     versionSpec,
     versionValue,
     packumentValue,
+    listingValue,
     publishedDaysAgo,
+    documentName,
 
     -- * Mirror-write fixtures
     isOdd,
@@ -30,17 +32,20 @@ module Ecluse.Test.Registry.Npm (
 
     -- * Client fixtures
     defaultNpmConfig,
+    writeTokenNpmConfig,
+    mirrorWriteToken,
     publicRegistryBaseUrl,
 
     -- * URL path generators
     genPathSegments,
 ) where
 
-import Data.Aeson (Value (Object), object, (.=))
+import Data.Aeson (Value (Object, String), object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair)
 import Data.List.NonEmpty qualified as NE
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Hedgehog (Gen)
@@ -48,12 +53,14 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Network.HTTP.Client (Manager)
 
-import Ecluse.Core.Package (Artifact (artHashes, artUrl), Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageName, renderPackageName)
+import Ecluse.Core.Credential (Secret, bareCredential, mkSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (Artifact (artHashes, artUrl), Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageDetails (pkgArtifacts, pkgName, pkgVersion), PackageName, mkPackageName, mkScope, renderPackageName)
 import Ecluse.Core.Registry (MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc, vdDetails, vdRaw))
 import Ecluse.Core.Registry.Origin (OriginClient (..))
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security (Limits, defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Package (unsafeFilename, unsafeHash, unscopedNpm, validSha1)
@@ -215,12 +222,39 @@ packumentValue name latest versions times =
         , "time" .= object times
         ]
 
+{- | An npm @\/-\/all@ listing body: one empty entry per package name. The registry's own
+@_updated@ bookkeeping key is a site-specific extra, so a case that exercises it adds it.
+-}
+listingValue :: [Text] -> Value
+listingValue names = object [(Key.fromText name, object []) | name <- names]
+
 {- | Render an npm @time@ instant the given number of whole days before the caller's
 fixture clock.
 -}
 publishedDaysAgo :: UTCTime -> Integer -> Text
 publishedDaysAgo now ageDays =
     toText (iso8601Show (addUTCTime (negate (fromInteger ageDays * nominalDay)) now))
+
+{- | The route-requested name for a document fixture: its own top-level @name@, split into scope
+and bare name. A projection's name check therefore passes, so a case exercises the rest only.
+-}
+documentName :: Value -> PackageName
+documentName doc = splitName (topLevelName doc)
+  where
+    topLevelName value = case value of
+        Object fields -> case KeyMap.lookup "name" fields of
+            Just (String raw) -> raw
+            _ -> ""
+        _ -> ""
+
+    splitName raw = case T.stripPrefix "@" raw of
+        Just afterAt
+            | (scopeText, rest) <- T.break (== '/') afterAt
+            , bare <- T.drop 1 rest
+            , not (T.null scopeText)
+            , not (T.null bare) ->
+                mkPackageName Npm (Just (mkScope scopeText)) bare
+        _ -> mkPackageName Npm Nothing raw
 
 -- Apply site-specific fields last so their exact representation wins.
 objectWithExtraPairs :: [Pair] -> [Pair] -> Value
@@ -246,6 +280,20 @@ defaultNpmConfig baseUrl manager =
         , ocToken = Nothing
         , ocLimits = defaultLimits
         }
+
+{- | 'defaultNpmConfig' carrying the mirror-write token as a bare credential, at caller-chosen
+response bounds. The maintenance verbs read the token off the origin, so a store fixture needs it.
+-}
+writeTokenNpmConfig :: RegistryUrl -> Manager -> Limits -> OriginClient
+writeTokenNpmConfig baseUrl manager limits =
+    (defaultNpmConfig baseUrl manager)
+        { ocToken = Just (bareCredential mirrorWriteToken)
+        , ocLimits = limits
+        }
+
+-- | The standing mirror-write secret the store fixtures present.
+mirrorWriteToken :: Secret
+mirrorWriteToken = mkSecret "write-token"
 
 -- | A URL path of arbitrary segments, at the length a router's property explores.
 genPathSegments :: Gen [Text]

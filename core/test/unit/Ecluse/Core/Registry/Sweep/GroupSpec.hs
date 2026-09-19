@@ -21,8 +21,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factBackend, factNameAlphabet),
     StoreFault (..),
     StoreObservation (..),
-    StoredVersion (StoredVersion),
-    VersionPresence (VersionServed),
+    StoredVersion,
     protocolFault,
  )
 import Ecluse.Core.Registry.Maintenance.NameSpace (
@@ -54,17 +53,16 @@ import Ecluse.Core.Registry.Sweep.Types (
 import Ecluse.Core.Registry.Sweep.Walk (bucketNameBudget)
 import Ecluse.Core.Rules (PreparedRule (prepEval), prepare)
 import Ecluse.Core.Rules.Types (PrecededRule (PrecededRule), Rule (AllowIfOlderThan, DenyByIdentity), RuleVerdict (Deny))
-import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
-import Ecluse.Test.Package (sampleManifest)
+import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore, seededStoreConfig, servedVersion, servedVersions)
+import Ecluse.Test.Package (leftPadName, npmVersion)
 import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPortsUnder, testPacing)
 
 spec :: Spec
 spec = describe "grouped preview" $ do
     it "finds mirror-only, cache-only and shared versions without origin data, counting three selections" $ do
-        mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0", "3.0.0"])]
-        cache <- seeded "privateUpstream" [(packageName, ["2.0.0", "3.0.0"])]
+        mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0", "3.0.0"])]
+        cache <- seeded "privateUpstream" [(leftPadName, ["2.0.0", "3.0.0"])]
         mount <- grouped mirror cache
         (recorded, outcome) <- runPreview mount
         tallyDeleted (outcomeTally outcome) `shouldBe` 3
@@ -73,14 +71,14 @@ spec = describe "grouped preview" $ do
         lines' <- recInfo recorded
         length (filter (T.isInfixOf "would delete") lines') `shouldBe` 4
         lines' `shouldSatisfy` any (T.isPrefixOf "privateUpstream:")
-        readFakeContents mirror `shouldReturn` contents [(packageName, ["1.0.0", "3.0.0"])]
-        readFakeContents cache `shouldReturn` contents [(packageName, ["2.0.0", "3.0.0"])]
+        readFakeContents mirror `shouldReturn` contents [(leftPadName, ["1.0.0", "3.0.0"])]
+        readFakeContents cache `shouldReturn` contents [(leftPadName, ["2.0.0", "3.0.0"])]
         readFakeCursor mirror `shouldReturn` Nothing
         readFakeCursor cache `shouldReturn` Nothing
 
     it "does not enumerate a package at a location whose actual name listing omitted it" $ do
         mirror <- seeded "mirrorTarget" []
-        cache <- seeded "privateUpstream" [(packageName, ["1.0.0"])]
+        cache <- seeded "privateUpstream" [(leftPadName, ["1.0.0"])]
         mount <- grouped mirror cache
         let original = smStore mount
             absent = (ssObserve original){obEnumerateVersions = \_ -> fail "an absent package must not be enumerated"}
@@ -89,26 +87,26 @@ spec = describe "grouped preview" $ do
         outcomeComplete outcome `shouldBe` True
 
     it "deduplicates repeated listing and version identities within both locations" $ do
-        mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0", "1.0.0"])]
-        cache <- seeded "privateUpstream" [(packageName, ["1.0.0", "1.0.0"])]
+        mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0", "1.0.0"])]
+        cache <- seeded "privateUpstream" [(leftPadName, ["1.0.0", "1.0.0"])]
         mount <- grouped mirror cache
-        let duplicated store = store{obListPackagesIn = \_ -> yield [packageName, packageName] >> yield [packageName] $> Nothing}
+        let duplicated store = store{obListPackagesIn = \_ -> yield [leftPadName, leftPadName] >> yield [leftPadName] $> Nothing}
             original = smStore mount
         (_, outcome) <- runPreview mount{smStore = original{ssObserve = duplicated (ssObserve original), ssPrivate = mapCache duplicated (ssPrivate original)}}
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
         tallyExamined (outcomeTally outcome) `shouldBe` 2
 
     it "reports each location's withheld consent without withholding its preview" $ do
-        mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
-        cache <- newFakeStore defaultFakeStoreConfig{fakeContents = contents [(packageName, ["1.0.0"])], fakeConsent = ConsentWithheld "cache consent absent"}
+        mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0"])]
+        cache <- newFakeStore defaultFakeStoreConfig{fakeContents = contents [(leftPadName, ["1.0.0"])], fakeConsent = ConsentWithheld "cache consent absent"}
         mount <- grouped mirror cache
         (_, outcome) <- runPreview mount
         map tpConsent (outcomePrerequisites outcome) `shouldContain` [PrerequisiteUnmet "cache consent absent"]
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
 
     it "protects first-party names before either metadata read or selection" $ do
-        mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
-        cache <- seeded "privateUpstream" [(packageName, ["1.0.0"])]
+        mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0"])]
+        cache <- seeded "privateUpstream" [(leftPadName, ["1.0.0"])]
         mount <- grouped mirror cache
         let original = smStore mount
         (_, outcome) <- runPreview mount{smFirstParty = const True, smStore = original{ssObserve = forbidMetadata (ssObserve original), ssPrivate = mapCache forbidMetadata (ssPrivate original)}}
@@ -116,8 +114,8 @@ spec = describe "grouped preview" $ do
         tallyGuardSkipped (outcomeTally outcome) `shouldBe` 2
 
     it "withholds selection when missing evidence could establish a higher-precedence allow" $ do
-        mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
-        cache <- newFakeStore defaultFakeStoreConfig{fakeContents = contents [(packageName, ["1.0.0"])]}
+        mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0"])]
+        cache <- newFakeStore defaultFakeStoreConfig{fakeContents = contents [(leftPadName, ["1.0.0"])]}
         mount <- grouped mirror cache
         rules <- prepare inertRuleDeps [PrecededRule 100 (AllowIfOlderThan 0), PrecededRule 0 (DenyByIdentity "left-pad")]
         let original = smStore mount
@@ -129,8 +127,8 @@ spec = describe "grouped preview" $ do
         outcomeComplete outcome `shouldBe` False
 
     it "keeps distinct decisions for differing metadata at the two locations" $ do
-        mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
-        cache <- seeded "privateUpstream" [(packageName, ["1.0.0"])]
+        mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0"])]
+        cache <- seeded "privateUpstream" [(leftPadName, ["1.0.0"])]
         mount <- grouped mirror cache
         rules <- prepare inertRuleDeps [PrecededRule 100 (AllowIfOlderThan 0), PrecededRule 0 (DenyByIdentity "left-pad")]
         let original = smStore mount
@@ -144,8 +142,8 @@ spec = describe "grouped preview" $ do
         lines' `shouldSatisfy` any (T.isPrefixOf "privateUpstream: dry run, would delete")
 
     it "reports one logical cap crossing and continues past it" $ do
-        mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0", "2.0.0"])]
-        cache <- seeded "privateUpstream" [(packageName, ["1.0.0", "2.0.0"])]
+        mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0", "2.0.0"])]
+        cache <- seeded "privateUpstream" [(leftPadName, ["1.0.0", "2.0.0"])]
         mount <- grouped mirror cache
         recorded <- recordingPortsUnder previewingReport Nothing
         outcome <- sweepCycle testPacing{swpDeletionCap = 1} (recPorts recorded) [mount]
@@ -156,8 +154,8 @@ spec = describe "grouped preview" $ do
 
     for_ [False, True] $ \shared ->
         it ("credits the first mirror selection at the cap, shared version: " <> show shared) $ do
-            mirror <- seeded "mirrorTarget" [(packageName, ["2.0.0"])]
-            cache <- seeded "privateUpstream" [(packageName, [if shared then "2.0.0" else "1.0.0"])]
+            mirror <- seeded "mirrorTarget" [(leftPadName, ["2.0.0"])]
+            cache <- seeded "privateUpstream" [(leftPadName, [if shared then "2.0.0" else "1.0.0"])]
             mount <- grouped mirror cache
             generation <- newIORef (DbEtag "initial")
             let mark etag store = store{obReadManifest = \name -> writeIORef generation (DbEtag etag) >> obReadManifest store name}
@@ -172,8 +170,8 @@ spec = describe "grouped preview" $ do
             capLines `shouldSatisfy` all (T.isInfixOf "mirror-denial")
 
     it "fails an oversized combined version union before reading metadata" $ do
-        mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
-        cache <- seeded "privateUpstream" [(packageName, ["2.0.0"])]
+        mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0"])]
+        cache <- seeded "privateUpstream" [(leftPadName, ["2.0.0"])]
         mount <- grouped mirror cache
         let original = smStore mount
         (_, outcome) <- runPreview mount{smStore = original{ssVersionLimit = 1, ssObserve = forbidMetadata (ssObserve original), ssPrivate = mapCache forbidMetadata (ssPrivate original)}}
@@ -237,10 +235,11 @@ spec = describe "grouped preview" $ do
     it "accepts a full version union while deduplicating each target's observations" $ do
         mirror <- seeded "mirrorTarget" []
         cache <- seeded "privateUpstream" []
-        let version = StoredVersion (mkVersion Npm "1.0.0") VersionServed Nothing
+        let version = servedVersion (npmVersion "1.0.0")
             locations = [(fakeObservation mirror, [version, version]), (fakeObservation cache, [version, version])]
         fmap (map (length . snd)) (boundedVersions 1 locations) `shouldBe` Right [1, 1]
-        fmap (map (length . snd)) (boundedVersions 0 locations) `shouldSatisfy` isLeft
+        first renderStoreFault (fmap (map (length . snd)) (boundedVersions 0 locations))
+            `shouldBe` Left (renderStoreFault (protocolFault "the combined inventory crossed limits.maxVersionCount"))
 
     it "splits a grouped parent bucket and preserves each copy through the completed narrower buckets" $ do
         let mirrorOnly = mkPackageName Npm Nothing "aa-mirror"
@@ -283,8 +282,8 @@ spec = describe "grouped preview" $ do
             length (filter (T.isPrefixOf (label <> ": dry run, would delete " <> name <> "@1.0.0:")) selected) `shouldBe` 1
 
     it "halts on a private version inventory fault before either location reads metadata or decides" $ do
-        mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
-        cache <- seeded "privateUpstream" [(packageName, ["1.0.0"])]
+        mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0"])]
+        cache <- seeded "privateUpstream" [(leftPadName, ["1.0.0"])]
         mount <- grouped mirror cache
         versionsRead <- newIORef ([] :: [Text])
         let fault = protocolFault "private version inventory unavailable"
@@ -311,12 +310,12 @@ spec = describe "grouped preview" $ do
         outcomeHalt outcome `shouldBe` Just (HaltStoreFault Npm "privateUpstream" (renderStoreFault fault))
 
     it "reports a private listing fault without treating that target as empty" $ do
-        mirror <- seeded "mirrorTarget" [(packageName, ["1.0.0"])]
+        mirror <- seeded "mirrorTarget" [(leftPadName, ["1.0.0"])]
         cache <- seeded "privateUpstream" []
         mount <- grouped mirror cache
         let fault = protocolFault "inventory unavailable"
             original = smStore mount
-            private = (fakeObservation cache){obListPackagesIn = \_ -> yield [packageName] $> Just fault}
+            private = (fakeObservation cache){obListPackagesIn = \_ -> yield [leftPadName] $> Just fault}
         (_, outcome) <- runPreview mount{smStore = original{ssObserve = forbidMetadata (ssObserve original), ssPrivate = previewCache (forbidMetadata private)}}
         outcomeComplete outcome `shouldBe` False
         outcomeTally outcome `shouldBe` mempty
@@ -324,7 +323,7 @@ spec = describe "grouped preview" $ do
 
     it "names the private target in prerequisite and retry output" $ do
         mirror <- seeded "mirrorTarget" []
-        cache <- seeded "privateUpstream" [(packageName, ["1.0.0"])]
+        cache <- seeded "privateUpstream" [(leftPadName, ["1.0.0"])]
         mount <- grouped mirror cache
         attempts <- newIORef (0 :: Int)
         let fault = StoreFault (transportFault TransportTimeout "no answer") RetryWorthwhile
@@ -347,26 +346,21 @@ spec = describe "grouped preview" $ do
 
     it "uses the same grouped inventory for a full walk" $ do
         mirror <- seeded "mirrorTarget" []
-        cache <- seeded "privateUpstream" [(packageName, ["1.0.0"])]
+        cache <- seeded "privateUpstream" [(leftPadName, ["1.0.0"])]
         mount <- grouped mirror cache
         recorded <- recordingPortsUnder previewingReport Nothing
         outcome <- sweepCycle testPacing{swpShape = SweepEverything} (recPorts recorded) [mount]
         tallyDeleted (outcomeTally outcome) `shouldBe` 1
         outcomeComplete outcome `shouldBe` True
 
-packageName :: PackageName
-packageName = mkPackageName Npm Nothing "left-pad"
-
 contents :: [(PackageName, [Text])] -> Map PackageName [StoredVersion]
-contents = Map.fromList . map (second (map (\raw -> StoredVersion (mkVersion Npm raw) VersionServed Nothing)))
+contents = Map.fromList . map (second (servedVersions . map npmVersion))
 
 seeded :: Text -> [(PackageName, [Text])] -> IO FakeStore
 seeded label packages =
     newFakeStore
-        defaultFakeStoreConfig
-            { fakeContents = contents packages
-            , fakeFacts = (fakeFacts defaultFakeStoreConfig){factBackend = label}
-            , fakeManifests = Map.fromList [(name, sampleManifest name (map (mkVersion Npm) versions)) | (name, versions) <- packages]
+        (seededStoreConfig [(name, map npmVersion versions) | (name, versions) <- packages])
+            { fakeFacts = (fakeFacts defaultFakeStoreConfig){factBackend = label}
             }
 
 grouped :: FakeStore -> FakeStore -> IO SweepMount

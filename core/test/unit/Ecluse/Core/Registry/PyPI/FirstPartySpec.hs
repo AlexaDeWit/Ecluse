@@ -6,8 +6,8 @@ module Ecluse.Core.Registry.PyPI.FirstPartySpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Registry.PyPI.FirstParty (
     PyPIFirstParty (PyPIOwnedName, PyPIOwnedPrefix),
     mkPyPIPrefix,
@@ -16,6 +16,7 @@ import Ecluse.Core.Registry.PyPI.FirstParty (
     underPyPIPrefix,
  )
 
+import Ecluse.Test.Package (unscopedPyPI)
 import Ecluse.Test.Registry.PyPI (pypiEntryVerdicts)
 
 spec :: Spec
@@ -30,7 +31,7 @@ spec = do
         it "covers a name under the prefix, at the separator and no further" $
             -- A prefix that ran past the separator would privilege acmeco, a name the
             -- deployment does not own. The bare prefix is a name, not a family.
-            map (maybe False (`underPyPIPrefix` pypiName "acme-tools") . mkPyPIPrefix) ["acme", "acme-", "acme-tools", "acmeco"]
+            map (maybe False (`underPyPIPrefix` unscopedPyPI "acme-tools") . mkPyPIPrefix) ["acme", "acme-", "acme-tools", "acmeco"]
                 `shouldBe` [True, True, False, False]
         it "covers only its own ecosystem" $
             maybe False (`underPyPIPrefix` mkPackageName Npm Nothing "acme-tools") (mkPyPIPrefix "acme")
@@ -43,7 +44,7 @@ spec = do
 
         it "canonicalises exact names with case and internal separator aliases" $
             map projectFirstPartyEntry ["Acme_Tools", "acme.tools", "ACME-TOOLS", "acme._-tools"]
-                `shouldBe` replicate 4 (Right (PyPIOwnedName (pypiName "acme-tools")))
+                `shouldBe` replicate 4 (Right (PyPIOwnedName (unscopedPyPI "acme-tools")))
 
         it "canonicalises all supported prefix spellings" $
             map projectFirstPartyEntry ["acme-*", "acme_*", "acme.*", "ACME-*"]
@@ -54,12 +55,12 @@ spec = do
                 Nothing -> expectationFailure "widgets is a valid prefix"
                 Just prefix ->
                     (projectFirstPartyEntry "Acme_Tools", projectFirstPartyEntry "widgets-*")
-                        `shouldBe` (Right (PyPIOwnedName (pypiName "Acme_Tools")), Right (PyPIOwnedPrefix prefix))
+                        `shouldBe` (Right (PyPIOwnedName (unscopedPyPI "Acme_Tools")), Right (PyPIOwnedPrefix prefix))
 
     describe "pypiFirstPartyName" $ do
         it "matches a declared name on its canonical form, so one spelling has one verdict" $
             map
-                (pypiFirstPartyName (PyPIOwnedName (pypiName "Acme_Tools") :| []) . pypiName)
+                (pypiFirstPartyName (PyPIOwnedName (unscopedPyPI "Acme_Tools") :| []) . unscopedPyPI)
                 ["acme-tools", "Acme.TOOLS", "acme_tools", "acme-toolsmith"]
                 `shouldBe` [True, True, True, False]
 
@@ -68,12 +69,8 @@ spec = do
             -- deployment does not own. The bare name is a separate declaration.
             maybe
                 (expectationFailure "acme is a valid prefix")
-                (\prefix -> map (pypiFirstPartyName (PyPIOwnedPrefix prefix :| []) . pypiName) ["acme-tools", "Acme.Tools", "acmeco", "acme"] `shouldBe` [True, True, False, False])
+                (\prefix -> map (pypiFirstPartyName (PyPIOwnedPrefix prefix :| []) . unscopedPyPI) ["acme-tools", "Acme.Tools", "acmeco", "acme"] `shouldBe` [True, True, False, False])
                 (mkPyPIPrefix "acme")
 
         it "denies every name a declaration does not cover" $
-            pypiFirstPartyName (PyPIOwnedName (pypiName "acme") :| []) (pypiName "beta") `shouldBe` False
-
--- A PyPI name, in the ecosystem whose canonical form is PEP 503's.
-pypiName :: Text -> PackageName
-pypiName = mkPackageName PyPI Nothing
+            pypiFirstPartyName (PyPIOwnedName (unscopedPyPI "acme") :| []) (unscopedPyPI "beta") `shouldBe` False

@@ -6,13 +6,10 @@ module Ecluse.Core.Registry.MaintenanceSpec (spec) where
 
 import Data.Conduit (fuseUpstream, runConduit, (.|))
 import Data.Conduit.List qualified as CL
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol, TransportTimeout), tfCause, tfDetail, transportFault)
-import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.Maintenance (
     DeleteCeiling (AtMost, NoCeiling),
@@ -20,9 +17,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreCursor (writeCursor),
     StoreFault (..),
     StoreMaintenance (classifyStore, deleteVersions, enumerateVersions, listPackagesIn, readStoreManifest, storeCursor, verifyConsent),
-    StoredVersion (StoredVersion, storedPresence, storedRevision, storedVersion),
     VersionOutcome (VersionRemoved, VersionUncertain, VersionUnreached),
-    VersionPresence (VersionServed),
     chunksOfCeiling,
     collectPages,
     collectPagesBounded,
@@ -46,14 +41,15 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
  )
 import Ecluse.Core.Security (LimitError (TooManyVersions))
-import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Maintenance (
     FakeStore (fakeMaintenance),
-    FakeStoreConfig (fakeContents, fakePageSize),
-    defaultFakeStoreConfig,
+    FakeStoreConfig (fakePageSize),
     newFakeStore,
+    seededStoreConfig,
     testDeleteGuard,
  )
+import Ecluse.Test.Package (npmVersion, unscopedNpm)
 
 spec :: Spec
 spec = do
@@ -123,7 +119,7 @@ vocabularySpec = do
 
     describe "unreachedBatch" $ do
         it "gives every version in the batch one outcome" $ do
-            let outcomes = unreachedBatch aFault (map version ["1.0.0", "1.1.0", "1.2.0"])
+            let outcomes = unreachedBatch aFault (map npmVersion ["1.0.0", "1.1.0", "1.2.0"])
             map (renderVersion . fst) outcomes `shouldBe` ["1.0.0", "1.1.0", "1.2.0"]
             map snd outcomes `shouldBe` replicate 3 (VersionUnreached aFault)
 
@@ -249,18 +245,18 @@ deleteDriveSpec = describe "deleteAll" $ do
 
     it "stops sending once a chunk faults, because the fault carries the backend's advice" $ do
         sent <- newIORef []
-        _ <- deleteAll testDeleteGuard (recordingSender sent (Just (version "1.0.0"))) chunks
+        _ <- deleteAll testDeleteGuard (recordingSender sent (Just (npmVersion "1.0.0"))) chunks
         map (map renderVersion) <$> readIORef sent `shouldReturn` [["1.0.0", "1.1.0"]]
 
     it "distinguishes the uncertain faulted chunk from later unsent chunks" $ do
         sent <- newIORef []
-        outcomes <- deleteAll testDeleteGuard (recordingSender sent (Just (version "1.0.0"))) chunks
+        outcomes <- deleteAll testDeleteGuard (recordingSender sent (Just (npmVersion "1.0.0"))) chunks
         map (renderVersion . fst) outcomes `shouldBe` ["1.0.0", "1.1.0", "1.2.0"]
         map snd outcomes `shouldBe` [VersionUncertain aFault, VersionUncertain aFault, VersionUnreached aFault]
 
     it "keeps the outcomes of the chunks that landed before the fault" $ do
         sent <- newIORef []
-        outcomes <- deleteAll testDeleteGuard (recordingSender sent (Just (version "1.2.0"))) chunks
+        outcomes <- deleteAll testDeleteGuard (recordingSender sent (Just (npmVersion "1.2.0"))) chunks
         map snd outcomes
             `shouldBe` [VersionRemoved, VersionRemoved, VersionUncertain aFault]
 
@@ -268,7 +264,7 @@ deleteDriveSpec = describe "deleteAll" $ do
         sent <- newIORef []
         deleteAll testDeleteGuard (recordingSender sent Nothing) [] `shouldReturn` []
   where
-    chunks = [[version "1.0.0", version "1.1.0"], [version "1.2.0"]]
+    chunks = [[npmVersion "1.0.0", npmVersion "1.1.0"], [npmVersion "1.2.0"]]
 
 {- A sender that records the chunks it was handed and faults on the chunk carrying the
 named version, so a spec can place the fault at any point in the run. -}
@@ -294,9 +290,6 @@ collectedPages = collectPages . pageSource
 faultEnding :: (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text]))) -> IO (Maybe StoreFault)
 faultEnding fetch = runConduit (fuseUpstream (pageSource fetch) CL.sinkNull)
 
-unscoped :: Text -> PackageName
-unscoped = mkPackageName Npm Nothing
-
 pagesFrom :: [(Maybe Text, [Text])] -> IO (Maybe Text -> IO (Either StoreFault (Maybe Text, [Text])))
 pagesFrom pages = do
     remaining <- newIORef pages
@@ -304,9 +297,6 @@ pagesFrom pages = do
         atomicModifyIORef' remaining $ \case
             [] -> ([], Right (Nothing, []))
             (page : rest) -> (rest, Right page)
-
-version :: Text -> Version
-version = mkVersion Npm
 
 aFault :: StoreFault
 aFault =
@@ -328,7 +318,7 @@ meteringSpec = describe "meteredMaintenance" $ do
     it "counts one request per batch the backend's own ceiling makes" $ do
         (gate, counted) <- recordingGate
         handle <- meteredMaintenance gate . fakeMaintenance <$> newFakeStore seededStore
-        _ <- deleteVersions handle testDeleteGuard (unscoped "left-pad") (map version ["1.0.0", "1.0.1", "1.0.2"])
+        _ <- deleteVersions handle testDeleteGuard (unscopedNpm "left-pad") (map npmVersion ["1.0.0", "1.0.1", "1.0.2"])
         (kinds DeleteBatch <$> counted) `shouldReturn` 2
 
     it "counts each read that answers directly exactly once" $ do
@@ -336,8 +326,8 @@ meteringSpec = describe "meteredMaintenance" $ do
         handle <- meteredMaintenance gate . fakeMaintenance <$> newFakeStore seededStore
         _ <- verifyConsent handle
         _ <- classifyStore handle
-        _ <- enumerateVersions handle (unscoped "left-pad")
-        _ <- readStoreManifest handle (unscoped "left-pad")
+        _ <- enumerateVersions handle (unscopedNpm "left-pad")
+        _ <- readStoreManifest handle (unscopedNpm "left-pad")
         traverse_ (`writeCursor` wholeNameSpace) (storeCursor handle)
         spent <- counted
         map (`kinds` spent) [PermissionRead, VersionPage, ManifestRead, CursorWrite] `shouldBe` [2, 1, 1, 1]
@@ -355,16 +345,10 @@ kinds kind = length . filter (== kind)
 batches. Its listing pages one name at a time, so a bucket takes two pages. -}
 seededStore :: FakeStoreConfig
 seededStore =
-    defaultFakeStoreConfig
-        { fakeContents =
-            Map.fromList
-                [ (unscoped "left-pad", map stored ["1.0.0", "1.0.1", "1.0.2"])
-                , (unscoped "lodash", [stored "4.0.0"])
-                ]
-        }
+    seededStoreConfig
+        [ (unscopedNpm "left-pad", map npmVersion ["1.0.0", "1.0.1", "1.0.2"])
+        , (unscopedNpm "lodash", [npmVersion "4.0.0"])
+        ]
 
 onePageEach :: FakeStoreConfig
 onePageEach = seededStore{fakePageSize = 1}
-
-stored :: Text -> StoredVersion
-stored raw = StoredVersion{storedVersion = version raw, storedPresence = VersionServed, storedRevision = Nothing}

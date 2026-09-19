@@ -7,7 +7,7 @@ The derivation reads one mount's own rules, so these cases fix both halves of th
 -}
 module Ecluse.Core.Rules.FreshnessSpec (spec) where
 
-import Data.Time (NominalDiffTime, UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
+import Data.Time (NominalDiffTime, addUTCTime, nominalDay)
 import Test.Hspec
 
 import Ecluse.Core.Package (mkScope)
@@ -26,9 +26,7 @@ import Ecluse.Core.Rules.Types (
     FailureAlignment (FailDeny),
     Rule (AllowIfOlderThan, AllowScope, DenyIfCve),
  )
-
-now :: UTCTime
-now = UTCTime (fromGregorian 2026 9 12) 0
+import Ecluse.Rules.Support (now, sixDayLimit)
 
 sixDays :: NominalDiffTime
 sixDays = 6 * nominalDay
@@ -124,6 +122,3 @@ alarmSpec = describe "ageAlarmStep" $ do
         ageAlarmStep False AdvisoryUndated `shouldBe` (False, Nothing)
   where
     aged days = assessAdvisoryAge sixDayLimit now (PublishedAt (addUTCTime (negate (days * nominalDay)) now))
-
-sixDayLimit :: MaxAdvisoryAge
-sixDayLimit = maxAdvisoryAgeFor Nothing [AllowIfOlderThan (7 * nominalDay)]

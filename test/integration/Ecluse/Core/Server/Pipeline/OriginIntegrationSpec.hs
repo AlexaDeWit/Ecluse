@@ -24,6 +24,7 @@ import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepGuardSkipped))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Runtime.Log (DdContext (DdContext), LogFormat (JsonLog), LogLevel (InfoLevel), newLogEnv)
 import Ecluse.Server.Pipeline.TestSupport
+import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Log (captureStdout, lineMessage)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, readFakeContents), FakeStoreConfig (fakeContents, fakeManifests), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Package (sampleManifest)
@@ -329,7 +330,7 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["2.0.0"]
-            topLevel "name" resp `shouldBe` Just (String "thing")
+            fieldAt "name" (decodedBody resp) `shouldBe` Just (String "thing")
 
     it "drops a public leg that self-reports a different package, serving the private set (200)" $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
@@ -340,4 +341,4 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
-            topLevel "name" resp `shouldBe` Just (String "thing")
+            fieldAt "name" (decodedBody resp) `shouldBe` Just (String "thing")

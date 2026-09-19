@@ -36,6 +36,7 @@ import Ecluse.Core.Credential.Refresh.Internal (
     refreshingProviderWith,
     releaseSingleFlight,
  )
+import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Support (newTestClock)
 
 -- | An arbitrary "epoch" the refresh tests advance their injected clock from.
@@ -61,15 +62,11 @@ testConfig clock mint =
         , rcBreakerCooldown = 30
         }
 
-{- | Poll a boolean action until it holds or a generous timeout elapses. It awaits a
+{- | Poll a boolean action until it holds or a generous budget elapses. It awaits a
 background refresh without a fixed, flaky sleep.
 -}
 waitUntil :: IO Bool -> IO Bool
-waitUntil check = fromMaybe False <$> timeout 2_000_000 loop
-  where
-    loop = do
-        ok <- check
-        if ok then pure True else threadDelay 1_000 >> loop
+waitUntil = awaitUntil 2_000_000 1_000
 
 -- | Spin until a counter reaches @n@, so a test can wait for a background mint to start.
 waitForCount :: IORef Int -> Int -> IO Bool
@@ -252,18 +249,22 @@ spec = do
         it "keeps serving the still-valid token when a background mint fails" $ do
             (clock, setClock) <- newTestClock t0
             failRef <- newIORef False
+            mintCount <- newIORef (0 :: Int)
             let mint = do
+                    _ <- atomicModifyIORef' mintCount (\n -> (n + 1, ()))
                     bad <- readIORef failRef
                     if bad then throwIO MintBoom else pure (tokenExpiringIn "tok-1" 1000)
             provider <- refreshingProvider (testConfig clock mint)
             -- From now on every mint fails.
             writeIORef failRef True
             setClock (addUTCTime 850 t0)
-            -- Background refresh fires and fails. The caller still gets the valid token.
             replicateM_ 3 (void (currentToken provider))
-            _ <- waitUntil (pure True)
+            -- The background refresh really fired on top of the seeding mint, and failed.
+            waitForCount mintCount 2 `shouldReturn` True
+            -- The failed refresh left the cached token and its expiry in place.
             tok <- currentToken provider
             unSecret (authSecret tok) `shouldBe` "tok-1"
+            authExpiresAt tok `shouldBe` Just (addUTCTime 1000 t0)
 
         it "surfaces failure to the caller only once the token has expired and mint still fails" $ do
             (clock, setClock) <- newTestClock t0
@@ -429,9 +430,9 @@ spec = do
         it "fails loudly when built from defaults without wiring the mint and clock" $ do
             -- defaultRefreshConfig leaves rcMint and rcClock unwired, so construction must fail
             -- loudly whichever leaf is the missing one.
-            refreshingProvider defaultRefreshConfig `shouldThrow` anyException
+            refreshingProvider defaultRefreshConfig `shouldThrow` (== Unconfigured "rcClock")
             (clock, _setClock) <- newTestClock t0
-            refreshingProvider defaultRefreshConfig{rcClock = clock} `shouldThrow` anyException
+            refreshingProvider defaultRefreshConfig{rcClock = clock} `shouldThrow` (== Unconfigured "rcMint")
 
         it "trips at the default breaker threshold and cooldown" $ do
             (clock, setClock) <- newTestClock t0

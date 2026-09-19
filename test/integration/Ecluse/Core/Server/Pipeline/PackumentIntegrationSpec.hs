@@ -10,12 +10,13 @@ import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Server.Pipeline.TestSupport
+import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Mount (withPrivateBaseUrl)
 import Ecluse.Test.Wai
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
-import UnliftIO.Exception (throwString)
+import UnliftIO.Exception (throwIO)
 
 spec :: Spec
 spec = do
@@ -114,7 +115,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "drops a hashless trusted-private version from the listing by default (uniform floor)" $ do
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", hashlessVersion "1.0.0")] "1.0.0"))
+                (encodePackument (privatePackument [("1.0.0", hashlessVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
@@ -155,7 +156,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "drops a SHA-1-only trusted-private version from the listing by default (trusted floor SHA-256)" $ do
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
+                (encodePackument (privatePackument [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
@@ -165,7 +166,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
         sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
+                (encodePackument (privatePackument [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMinTrustedIntegrity = sha1Floor}) $ \app _env _port -> do
@@ -176,7 +177,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "rejects a public SHA-256 version when the floor is raised to SHA-512 (the floor value is wired)" $ do
         sha512Floor <- either (fail . toString) pure (mkMinIntegrity SHA512)
         privateUp <-
-            servingUpstream (encodePackument (privatePackumentWith [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
+            servingUpstream (encodePackument (privatePackument [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -195,7 +196,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "drops a public SHA-1-only copy at the same key, serving the private SHA-256 (the weak digest never leaks)" $ do
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", versionObject "1.0.0" (sri256For "private") False)] "1.0.0"))
+                (encodePackument (privatePackument [("1.0.0", versionObject "1.0.0" (sri256For "private") False)] "1.0.0"))
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -214,7 +215,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "serves the private copy and latest tag on an integrity divergence" $ do
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", versionObject "1.0.0" (sriFor "private") False)] "1.0.0"))
+                (encodePackument (privatePackument [("1.0.0", versionObject "1.0.0" (sriFor "private") False)] "1.0.0"))
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -234,7 +235,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
         privateUp <-
             servingUpstream
                 ( encodePackument
-                    ( privatePackumentWith
+                    ( privatePackument
                         [ ("1.0.0", versionObject "1.0.0" (sriFor "private") False)
                         , ("2.0.0", versionObject "2.0.0" (sriFor "shared") False)
                         ]
@@ -461,7 +462,7 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
         (privateUp, publicUp) <- twoServingUpstreams
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing Nothing app
-            etag <- maybe (throwString "no ETag on the 200 response") pure (header "ETag" firstResp)
+            etag <- etagOf firstResp
             secondResp <- getThingWith [("If-None-Match", etag)] app
             status secondResp `shouldBe` 304
             simpleBody secondResp `shouldBe` ""
@@ -470,7 +471,7 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
         (privateUp, publicUp) <- twoServingUpstreams
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing (Just "client-token") app
-            etag <- maybe (throwString "no ETag on the 200 response") pure (header "ETag" firstResp)
+            etag <- etagOf firstResp
             secondResp <- getThingWith [("If-None-Match", etag), ("Authorization", "Bearer client-token")] app
             status secondResp `shouldBe` 304
             -- The 304 answers about content, never about a skipped authorisation. The pipeline
@@ -491,7 +492,7 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing Nothing app
             status firstResp `shouldBe` 200
-            etag <- maybe (throwString "no ETag on the 200 response") pure (header "ETag" firstResp)
+            etag <- etagOf firstResp
             secondResp <- getThingWith [("If-None-Match", etag)] app
             status secondResp `shouldBe` 200
             header "ETag" secondResp `shouldSatisfy` (/= Just etag)
@@ -515,7 +516,7 @@ packumentHeadSpec = describe "HEAD on a packument route (same gating as GET, no 
         (privateUp, publicUp) <- twoServingUpstreams
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing Nothing app
-            etag <- maybe (throwString "no ETag on the 200 response") pure (header "ETag" firstResp)
+            etag <- etagOf firstResp
             headResp <- headThingWith [("If-None-Match", etag)] app
             status headResp `shouldBe` 304
             simpleBody headResp `shouldBe` ""
@@ -583,7 +584,7 @@ losslessSpec = describe "lossless served surface (raw Value edited in place)" $ 
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
-            topLevel "_id" resp `shouldBe` Just (String "thing")
+            fieldAt "_id" (decodedBody resp) `shouldBe` Just (String "thing")
             servedVersionKey "1.0.0" "_unmodeled" resp `shouldBe` Just (String "kept")
 
     it "rewrites dist.tarball under the mount base so artifacts route back through the gate" $ do
@@ -600,3 +601,13 @@ losslessSpec = describe "lossless served surface (raw Value edited in place)" $ 
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedTarball "1.0.0" resp `shouldBe` Just "https://proxy.test/thing/-/thing-1.0.0.tgz"
+
+-- | A 200 that carries no validator, which every conditional case here builds on.
+data NoETag = NoETag
+    deriving stock (Show)
+
+instance Exception NoETag
+
+-- | The validator a conditional case echoes back on its second request.
+etagOf :: SResponse -> IO ByteString
+etagOf = maybe (throwIO NoETag) pure . header "ETag"

@@ -33,17 +33,11 @@ denialBody help message = encodeBody npmErrorCodec (npmError help message)
 spec :: Spec
 spec = do
     describe "the npm denial body -- the {\"error\": …} codec" $ do
-        it "is a JSON object with a string error field carrying the message" $
-            errorField (denialBody Nothing "denied because reasons")
-                `shouldBe` Right "denied because reasons"
         it "renders exactly the npm {\"error\": …} object" $
             denialBody Nothing "denied" `shouldBe` "{\"error\":\"denied\"}"
         it "appends a configured help message to the error text" $
             errorField (denialBody (Just (mkHelpMessage "Contact #platform-eng.")) "denied")
                 `shouldBe` Right "denied Contact #platform-eng."
-        it "appends nothing when no help message is configured" $
-            errorField (denialBody Nothing "denied")
-                `shouldBe` Right "denied"
         it "does not duplicate spacing when the message already ends in a space" $
             errorField (denialBody (Just (mkHelpMessage "Help.")) "denied ")
                 `shouldBe` Right "denied Help."

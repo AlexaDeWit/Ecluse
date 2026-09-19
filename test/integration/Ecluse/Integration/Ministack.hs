@@ -21,7 +21,6 @@ module Ecluse.Integration.Ministack (
     defaultQueueOptions,
     receiveUntil,
     receiveUntilWithin,
-    unwrapQ,
 
     -- * Endpoint
     endpointFor,
@@ -50,7 +49,7 @@ import System.Environment (setEnv)
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Runtime.Aws.Env (AwsEndpoint (..), newAwsEnv)
-import Ecluse.Runtime.Queue.Sqs (SqsConfig (..), defaultSqsConfig, newSqsQueue)
+import Ecluse.Runtime.Queue.Sqs.Internal (SqsConfig (..), defaultSqsConfig, newSqsQueue)
 import Ecluse.Test.Container.Image (PinnedImageRef, ministackImage, renderPinnedImageRef)
 import Ecluse.Test.Containers (testContainerLabels)
 import Ecluse.Test.Poll (pollUntil)
@@ -241,9 +240,3 @@ receiveUntilWithin attempts queue =
         Right [] -> fail "receiveUntilWithin: no message arrived within the retry budget"
   where
     arrived = either (const False) (not . null)
-
-{- | Unwrap a queue outcome from a backend the test expects to be healthy. A 'Left' fails
-the test with the classified fault.
--}
-unwrapQ :: (Show e) => IO (Either e a) -> IO a
-unwrapQ act = act >>= either (\fault -> fail ("queue operation faulted: " <> show fault)) pure

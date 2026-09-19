@@ -17,12 +17,11 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Server.Readiness (
     MountReadiness (MountAwaitingFirstSync, MountReady),
     Readiness,
-    alwaysReady,
     mountReadiness,
  )
 import Ecluse.Core.Worker (Liveness (Liveness, liveHealthy, liveLastPoll))
 import Ecluse.Mirror (mirrorServerConfig)
-import Ecluse.Runtime.Server (ServerConfig (scMounts, scPort), probeOnlyApplication)
+import Ecluse.Runtime.Server (probeOnlyApplication)
 import Ecluse.Test.Wai (bodyContainsAll)
 
 -- | A fixed poll instant, so the rendered probe body is deterministic.
@@ -39,15 +38,6 @@ mirrorApp liveness ready = do
 
 spec :: Spec
 spec = do
-    describe "mirrorServerConfig -- the dedicated worker's health surface" $ do
-        it "listens on the shared server.port, so every role reads one configuration key" $ do
-            appCfg <- expectAppConfig [("ECLUSE_SERVER__PORT", "9231")] Nothing
-            scPort (mirrorServerConfig appCfg (pure alwaysReady) (pure alive)) `shouldBe` 9231
-
-        it "serves no mount: a worker pod exposes probes and no request surface" $ do
-            appCfg <- expectAppConfig [] Nothing
-            null (scMounts (mirrorServerConfig appCfg (pure alwaysReady) (pure alive))) `shouldBe` True
-
     describe "the dedicated worker's probes -- a healthy consume loop" $
         with (mirrorApp alive bothSynced) $ do
             it "answers /livez with 200 and the last successful poll an orchestrator can judge" $

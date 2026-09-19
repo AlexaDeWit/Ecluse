@@ -7,8 +7,6 @@ module Ecluse.Core.Registry.Maintenance.NameSpaceSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Registry.Maintenance.NameSpace (
     extendBucket,
     inBucket,
@@ -20,6 +18,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
     wholeNameSpace,
  )
 import Ecluse.Test.Maintenance (withBucket)
+import Ecluse.Test.Package (babelCore, unscopedNpm)
 
 -- | Tests the name-space buckets: how an alphabet divides a store, and which bucket holds a name.
 spec :: Spec
@@ -72,8 +71,8 @@ bucketSpec = do
     describe "inBucket" $ do
         it "reads a name by its base component, so a namespace never decides the bucket" $
             withBucket "c" $ \prefix -> do
-                inBucket prefix scopedName `shouldBe` True
-                inBucket prefix (unscoped "banana") `shouldBe` False
+                inBucket prefix babelCore `shouldBe` True
+                inBucket prefix (unscopedNpm "banana") `shouldBe` False
 
         it "puts a name under exactly one of two buckets that do not overlap" $
             withBucket "a" $ \a -> withBucket "b" $ \b ->
@@ -84,15 +83,9 @@ bucketSpec = do
             withBucket "" $ \everything ->
                 map (inBucket everything) names `shouldBe` replicate (length names) True
   where
-    names = [unscoped "apple", unscoped "banana", scopedName]
+    names = [unscopedNpm "apple", unscopedNpm "banana", babelCore]
 
     -- The alphabet leads every one of those names, so the buckets it gives partition them.
     alphabet = mkNameAlphabet "abc"
 
     bucketsHolding name = length [() | b <- toList (initialBuckets alphabet), inBucket b name]
-
-unscoped :: Text -> PackageName
-unscoped = mkPackageName Npm Nothing
-
-scopedName :: PackageName
-scopedName = mkPackageName Npm (Just (mkScope "babel")) "core"

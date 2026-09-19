@@ -11,6 +11,7 @@ module Ecluse.Test.Snapshot (
     syntheticSnapshot,
     versionDocOf,
     versionReadOf,
+    untaggedRead,
     readDetails,
 ) where
 
@@ -43,6 +44,10 @@ versionDocOf details = VersionDoc{vdDetails = details, vdRaw = Nothing}
 -- | A version read carrying the given release and the document's own latest.
 versionReadOf :: Maybe PackageDetails -> Maybe Version -> VersionRead
 versionReadOf details upstreamLatest = VersionRead{vrVersion = versionDocOf <$> details, vrUpstreamLatest = upstreamLatest}
+
+-- | A version read with no upstream latest, for a case that decides nothing from the tag.
+untaggedRead :: Maybe PackageDetails -> VersionRead
+untaggedRead details = versionReadOf details Nothing
 
 -- | The typed side of a read, for parity against the whole-document projection.
 readDetails :: VersionRead -> Maybe PackageDetails

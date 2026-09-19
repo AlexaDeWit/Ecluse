@@ -11,6 +11,8 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
+import Ecluse.Composition.Support (gib, mib)
+
 import Ecluse.Composition.MemoryPlan (
     MemoryPlan (..),
     MirrorArtifactTenant (matMaxBytes),
@@ -272,9 +274,3 @@ spec = describe "resolveMemoryPlan" $ do
             , erpNurseryChunkBytes = Nothing
             , erpContainerMemoryBytes = Nothing
             }
-
-    mib :: Int
-    mib = 1024 * 1024
-
-    gib :: Int
-    gib = 1024 * mib

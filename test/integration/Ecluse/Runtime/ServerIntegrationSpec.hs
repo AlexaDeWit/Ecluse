@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Runtime.Server.GracefulShutdownIntegrationSpec (spec) where
+module Ecluse.Runtime.ServerIntegrationSpec (spec) where
 
 import Network.HTTP.Client (
     Manager,
@@ -26,7 +26,6 @@ import Network.Wai.Handler.Warp (
  )
 import Test.Hspec
 import UnliftIO.Async (Async, async, poll, wait)
-import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 import UnliftIO.Timeout (timeout)
 
@@ -89,7 +88,7 @@ spec = describe "graceful shutdown -- drain in-flight work" $ do
             stopped <- timeout 5_000_000 (wait serverThread)
             stopped `shouldBe` Just ()
 
-            -- And it served before stopping (not refused from the start).
+            -- And the port is gone once it stopped, so the stop really closed the socket.
             afterStop <- try (getStatusBody manager port) :: IO (Either SomeException (Int, LByteString))
             afterStop `shouldSatisfy` isLeft
 
@@ -113,10 +112,9 @@ withListener app drainTimeoutSeconds k = do
                 . setInstallShutdownHandler (putMVar closeSocketVar)
                 $ defaultSettings
     serverThread <- async (runSettings settings app)
-    -- The install handler runs as Warp starts. Await the captured close action, then
-    -- give the listener a beat to begin accepting before the test connects.
+    -- Warp listens before it installs the shutdown handler, so the captured close action
+    -- implies an accepting socket.
     closeSocket <- takeMVar closeSocketVar
-    threadDelay 200_000
     k port closeSocket serverThread
 
 {- Issue a GET to the loopback listener. The request carries @Connection: close@, as a

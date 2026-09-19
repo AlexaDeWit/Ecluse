@@ -6,7 +6,6 @@
 module Ecluse.Core.Registry.ServedDocumentSpec (spec) where
 
 import Data.Aeson (Value (Array, Number, Object, String), object, (.=))
-import Data.Aeson.Key (Key)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
@@ -32,6 +31,7 @@ import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl,
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (ecosystemArtifactAuthorities)
 import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
+import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Registry.Npm qualified as Npm
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Snapshot (jsonSnapshot, syntheticSnapshot)
@@ -60,7 +60,7 @@ droppedArtifactSpec = describe "served artifact filename refusals" $
             case mergePackuments [(GatedSource, kept <$ jsonSnapshot source)] of
                 Nothing -> expectationFailure "expected a merge plan for the empty listing"
                 Just plan ->
-                    field "versions" (assembleMergedPackument "https://ecluse.test/npm" (Map.singleton 0 (jsonSnapshot source)) plan source)
+                    fieldAt "versions" (assembleMergedPackument "https://ecluse.test/npm" (Map.singleton 0 (jsonSnapshot source)) plan source)
                         `shouldBe` Just (Object mempty)
 
         for_ ["absent", "distinct", "duplicate" :: Text] $ \siblingKind ->
@@ -80,18 +80,13 @@ droppedArtifactSpec = describe "served artifact filename refusals" $
                     Just plan -> do
                         let served = assembleSimpleIndex "https://ecluse.test/pypi" (Map.singleton 0 (jsonSnapshot source)) plan source
                             sibling = withFileKeys [("url", String ("https://ecluse.test/pypi/simple/requests/" <> siblingName))] (simpleFile siblingName)
-                        field "files" served `shouldBe` Just (Array (fromList [sibling | keepSibling]))
-                        field "versions" served `shouldBe` Just (Array (fromList [String "1" | keepSibling]))
+                        fieldAt "files" served `shouldBe` Just (Array (fromList [sibling | keepSibling]))
+                        fieldAt "versions" served `shouldBe` Just (Array (fromList [String "1" | keepSibling]))
 
 projectedInfo :: Projection a -> IO a
 projectedInfo = \case
     Projected info -> pure info
     NameMismatch name -> fail ("unexpected name mismatch: " <> toString name)
-
-field :: Key -> Value -> Maybe Value
-field key = \case
-    Object o -> KeyMap.lookup key o
-    _ -> Nothing
 
 overlaySpec :: Spec
 overlaySpec = describe "overlaySurvivors" $ do

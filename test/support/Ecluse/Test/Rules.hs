@@ -23,6 +23,14 @@ module Ecluse.Test.Rules (
     blockedBy,
     isApproved,
     isUndecidable,
+    isBlockedByDefault,
+
+    -- * Reading back a verdict
+    isAllow,
+    isDeny,
+    isNoDecision,
+    isCannotVet,
+    isUnavailable,
 
     -- * Shaping a version under test
     withInstallScripts,
@@ -46,14 +54,15 @@ import Ecluse.Core.Rules (
  )
 import Ecluse.Core.Rules.Freshness (AdvisoryFreshness (AdvisoryFresh))
 import Ecluse.Core.Rules.Types (
-    Decision (Admitted, Blocked, Undecidable),
+    Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     EvalContext,
     Fact (Known),
     FailureAlignment (FailDeny),
     PrecededRule (PrecededRule),
     Rule,
+    RuleEvaluation (Unavailable),
     RuleEvidence (evInstallCode),
-    RuleVerdict (Allow, CannotVet, Deny),
+    RuleVerdict (Allow, CannotVet, Deny, NoDecision),
     completeEvidence,
     defaultPrecedence,
  )
@@ -113,6 +122,33 @@ isApproved = \case
     _ -> False
 isUndecidable = \case
     Undecidable{} -> True
+    _ -> False
+
+-- | Whether the deny-by-default floor decided, rather than any rule.
+isBlockedByDefault :: Decision -> Bool
+isBlockedByDefault = \case
+    BlockedByDefault{} -> True
+    _ -> False
+
+-- | Which arm one rule's verdict took, for a case that decides on the arm and not its payload.
+isAllow, isDeny, isNoDecision, isCannotVet :: RuleVerdict -> Bool
+isAllow = \case
+    Allow{} -> True
+    _ -> False
+isDeny = \case
+    Deny{} -> True
+    _ -> False
+isNoDecision = \case
+    NoDecision{} -> True
+    _ -> False
+isCannotVet = \case
+    CannotVet{} -> True
+    _ -> False
+
+-- | Whether a resilient evaluation reported its source out rather than reaching a verdict.
+isUnavailable :: RuleEvaluation -> Bool
+isUnavailable = \case
+    Unavailable{} -> True
     _ -> False
 
 -- | Mark the version as running code on install, so the install-script deny fires.

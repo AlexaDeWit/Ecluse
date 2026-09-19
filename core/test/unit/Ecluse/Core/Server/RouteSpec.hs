@@ -11,114 +11,53 @@ imports no registry module: if one were needed, the glue would not be shared.
 module Ecluse.Core.Server.RouteSpec (spec) where
 
 import Network.HTTP.Types (status404)
-import Network.HTTP.Types.Method (
-    Method,
-    StdMethod (GET, HEAD, POST),
-    methodDelete,
-    methodGet,
-    methodHead,
-    methodPost,
-    methodPut,
- )
+import Network.HTTP.Types.Method (Method, methodGet)
 import Test.Hspec
 
 import Ecluse.Core.Server.Context (ResponseAction (AnswerLocally))
-import Ecluse.Core.Server.Contract (
-    BodySchema (SchemaEmpty, SchemaText),
-    ResponseContract,
-    ResponseDoc (responseBodySchema, responseStatus),
-    ResponseStatus (ExactResponse),
-    ResponseValue,
-    emptyContract,
-    mediaContract,
-    responseValue,
- )
+import Ecluse.Core.Server.Contract (emptyContract, responseValue)
 import Ecluse.Core.Server.Route (
     Capture (Capture),
     MediaNegotiation (AcceptsAnything),
     MethodMatch (MethodPost, MethodRead),
     PatternSeg (SegCap, SegLit),
-    Route (Route, routeName),
+    Route (Route),
     RouteName (RouteName),
     answering,
     isHead,
-    matchRoute,
     safeSegment,
  )
-import Ecluse.Core.Server.RouteDescription (
-    ParamSpec (ParamSpec),
-    PathSeg (Param),
-    RouteSpec (rsMethod, rsName, rsOutcomes, rsPattern),
-    catchAllSpecs,
-    specsOf,
- )
+import Ecluse.Test.Server.Route (claimedOn, everyMethod)
 
 spec :: Spec
 spec = do
-    describe "answering" $ do
-        it "claims its route whatever the read method" $ do
-            claimed methodGet ["-", "ping"] `shouldBe` Just (RouteName "ping")
-            claimed methodHead ["-", "ping"] `shouldBe` Just (RouteName "ping")
+    describe "matchRoute -- the route's method condition" $ do
+        it "claims a read route on GET and HEAD, and on no other method" $ do
+            let ping = Just (RouteName "ping")
+            map (`claimed` ["-", "ping"]) everyMethod
+                `shouldBe` [ping, ping, Nothing, Nothing, Nothing]
 
-        it "does not widen the route's method condition" $ do
-            claimed methodPut ["-", "ping"] `shouldBe` Nothing
-            claimed methodPost ["-", "ping"] `shouldBe` Nothing
-            claimed methodDelete ["-", "ping"] `shouldBe` Nothing
-
-    describe "methodMatches" $ do
-        it "claims a POST route on POST" $
-            claimed methodPost ["-", "upload"] `shouldBe` Just (RouteName "upload")
-
-        it "claims a POST route on no other method" $
-            map (`claimed` ["-", "upload"]) [methodGet, methodHead, methodPut, methodDelete]
-                `shouldBe` [Nothing, Nothing, Nothing, Nothing]
+        it "claims a POST route on POST, and on no other method" $ do
+            let upload = Just (RouteName "upload")
+            map (`claimed` ["-", "upload"]) everyMethod
+                `shouldBe` [Nothing, Nothing, upload, Nothing, Nothing]
 
     describe "safeSegment" $ do
         it "claims one leading segment and yields the tail" $
             safeSegment ToyFile ["report.txt", "rest"]
                 `shouldBe` Just (ToyFile "report.txt", ["rest"])
 
-        it "refuses a traversal, a separator, and a control character" $ do
-            safeSegment ToyFile [".."] `shouldBe` Nothing
-            safeSegment ToyFile ["a/b"] `shouldBe` Nothing
-            safeSegment ToyFile ["a\tb"] `shouldBe` Nothing
-
-        it "refuses an empty segment and an empty path" $ do
-            safeSegment ToyFile [""] `shouldBe` Nothing
-            safeSegment ToyFile [] `shouldBe` Nothing
+        it "refuses a traversal, a separator, a control character, an empty segment, and an empty path" $
+            map (safeSegment ToyFile) [[".."], ["a/b"], ["a\tb"], [""], []]
+                `shouldBe` replicate 5 Nothing
 
         it "keeps an unsafe component out of the table it guards" $ do
             claimed methodGet ["thing", "-", "file.txt"] `shouldBe` Just (RouteName "file")
             claimed methodGet ["thing", "-", ".."] `shouldBe` Nothing
 
     describe "isHead" $
-        it "holds for HEAD alone" $ do
-            isHead methodHead `shouldBe` True
-            map isHead [methodGet, methodPut, methodPost, methodDelete]
-                `shouldBe` [False, False, False, False]
-
-    describe "specsOf" $
-        it "projects a POST route to one POST operation and no derived HEAD" $ do
-            map rsMethod (specsOf uploadRoute) `shouldBe` [POST]
-            map rsName (specsOf uploadRoute) `shouldBe` [RouteName "upload"]
-
-    describe "catchAllSpecs" $ do
-        it "documents the pair a mount needs, GET and its bodiless HEAD" $ do
-            map rsMethod (toList catchAll) `shouldBe` [GET, HEAD]
-            map rsName (toList catchAll)
-                `shouldBe` [RouteName "unsupported", RouteName "unsupported.head"]
-
-        it "carries the caller's path parameter on both" $
-            map rsPattern (toList catchAll)
-                `shouldBe` [[Param catchAllParam], [Param catchAllParam]]
-
-        it "documents the refusal contract's status on both operations" $
-            map (map responseStatus . rsOutcomes) (toList catchAll)
-                `shouldBe` [[ExactResponse status404], [ExactResponse status404]]
-
-        it "keeps the GET's body and drops the HEAD's" $
-            map (map (isEmptyBody . responseBodySchema) . rsOutcomes) (toList catchAll)
-                `shouldBe` [[False], [True]]
+        it "holds for HEAD alone" $
+            map isHead everyMethod `shouldBe` [False, True, False, False, False]
 
 -- The table under test: three routes built from nothing but the engine's own builders.
 
@@ -181,21 +120,7 @@ capFile = Capture "file" "The file's name." (safeSegment ToyFile) toySegment
 
 -- The name of the route that claims a request, or 'Nothing' when none does.
 claimed :: Method -> [Text] -> Maybe RouteName
-claimed method segments = routeName . fst <$> matchRoute toyRoutes method [] segments
-
-catchAll :: NonEmpty RouteSpec
-catchAll = catchAllSpecs refusalContract catchAllParam
-
-refusalContract :: ResponseContract (ResponseValue LByteString)
-refusalContract = mediaContract status404 "Unrecognised path; deny by default." (SchemaText "text/plain")
-
-catchAllParam :: ParamSpec
-catchAllParam = ParamSpec "unsupportedPath" "Any path under this mount no route claims."
-
-isEmptyBody :: BodySchema -> Bool
-isEmptyBody = \case
-    SchemaEmpty -> True
-    _ -> False
+claimed = claimedOn toyRoutes
 
 -- | The one segment a toy capture claims, written back out.
 toySegment :: ToyCap -> [Text]

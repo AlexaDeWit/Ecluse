@@ -53,16 +53,9 @@ spec = do
     describe "compareVersions agrees with the live oracle on random inputs" $
         modifyMaxSuccess (const 60) $
             for_ [(Npm, npmish), (PyPI, pypiish), (RubyGems, gemish)] $ \(eco, gen) -> do
-                -- Probe once: without this every iteration would skip and the property would pass
-                -- vacuously, hiding a broken oracle.
-                available <- runIO (oracleAvailable eco)
                 let title = show eco <> " -- generative differential (both-accept only)"
-                if not available
-                    then
-                        it title $
-                            pendingWith
-                                ("reference oracle for " <> show eco <> " unavailable; run via `nix develop`")
-                    else it title $
+                withLiveOracle eco title $
+                    it title $
                         hedgehog $ do
                             raw1 <- H.forAll gen
                             raw2 <- H.forAll gen
@@ -80,49 +73,51 @@ spec = do
     -- accepts, and must never abstain on one. One subprocess per package, so this scales to
     -- thousands of versions. A registry, network, or tool failure pends rather than fails.
     describe "compareVersions agrees with the reference oracle on live registry versions" $
-        for_ (smokeRegistryPackages catalogue) $ \(eco, pkgs) -> do
-            -- Probe the oracle once. If its interpreter or library is missing, pend
-            -- the whole ecosystem rather than letting every package skip.
-            available <- runIO (oracleAvailable eco)
-            if not available
-                then
-                    it (show eco <> " -- live registry ordering") $
-                        pendingWith
-                            ("reference oracle for " <> show eco <> " unavailable; run via `nix develop`")
-                else do
-                    manager <- runIO (newManager tlsManagerSettings)
-                    for_ pkgs $ \pkg ->
-                        it (show eco <> " -- " <> toString pkg <> " (live registry versions)") $ do
-                            mVersions <- fetchVersions manager eco pkg
-                            case mVersions of
-                                Nothing ->
-                                    pendingWith
-                                        ( toString (ecosystemName eco)
-                                            <> " registry unreachable or undecodable for "
-                                            <> toString pkg
-                                            <> "; smoke test skipped"
-                                        )
-                                Just [] ->
-                                    pendingWith ("no versions published for " <> toString pkg <> "; smoke test skipped")
-                                Just versions -> do
-                                    mRef <- oracleSort eco versions
-                                    case mRef of
-                                        Nothing ->
-                                            pendingWith
-                                                ("reference oracle failed to sort versions for " <> toString pkg <> "; smoke test skipped")
-                                        Just [] ->
-                                            pendingWith
-                                                ("reference oracle accepted none of the published versions for " <> toString pkg <> "; smoke test skipped")
-                                        Just refSorted ->
-                                            case findDivergences eco refSorted of
-                                                [] ->
-                                                    -- Non-vacuous: we ordered a real, reference-valid set.
-                                                    length refSorted `shouldSatisfy` (> 0)
-                                                ds ->
-                                                    expectationFailure (renderDivergences eco pkg refSorted ds)
+        for_ (smokeRegistryPackages catalogue) $ \(eco, pkgs) ->
+            withLiveOracle eco (show eco <> " -- live registry ordering") $ do
+                manager <- runIO (newManager tlsManagerSettings)
+                for_ pkgs $ \pkg ->
+                    it (show eco <> " -- " <> toString pkg <> " (live registry versions)") $ do
+                        mVersions <- fetchVersions manager eco pkg
+                        case mVersions of
+                            Nothing ->
+                                pendingWith
+                                    ( toString (ecosystemName eco)
+                                        <> " registry unreachable or undecodable for "
+                                        <> toString pkg
+                                        <> "; smoke test skipped"
+                                    )
+                            Just [] ->
+                                pendingWith ("no versions published for " <> toString pkg <> "; smoke test skipped")
+                            Just versions -> do
+                                mRef <- oracleSort eco versions
+                                case mRef of
+                                    Nothing ->
+                                        pendingWith
+                                            ("reference oracle failed to sort versions for " <> toString pkg <> "; smoke test skipped")
+                                    Just [] ->
+                                        pendingWith
+                                            ("reference oracle accepted none of the published versions for " <> toString pkg <> "; smoke test skipped")
+                                    Just refSorted ->
+                                        case findDivergences eco refSorted of
+                                            [] ->
+                                                -- Non-vacuous: we ordered a real, reference-valid set.
+                                                refSorted `shouldNotBe` []
+                                            ds ->
+                                                expectationFailure (renderDivergences eco pkg refSorted ds)
   where
     generatorScript = "scripts/gen-version-fixtures.sh"
     committedFixture = "core/test/unit/fixtures/version-ordering.txt"
+
+{- | Build @body@ for an ecosystem whose live oracle answered the probe, and one pending case named
+@title@ for one that did not. Without the probe every iteration would skip and pass vacuously.
+-}
+withLiveOracle :: Ecosystem -> String -> Spec -> Spec
+withLiveOracle eco title body = do
+    available <- runIO (oracleAvailable eco)
+    if available
+        then body
+        else it title (pendingWith ("reference oracle for " <> show eco <> " unavailable; run via `nix develop`"))
 
 {- | Whether the live oracle for @eco@ is reachable, probed on @1.0.0 < 1.0.1@. 'False' means the
 interpreter or its library is missing, and the caller pends rather than running a vacuous property.

@@ -12,7 +12,6 @@ import Ecluse.BenchLoad.Normalise (BaselineSource (InjectedFallback, MeasuredRtt
 import Ecluse.BenchLoad.Selection (evictionEntries, fixtureBaseline, fixtureSection, selectScenario)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 
--- | Check identity isolation, ecosystem report groups, baseline sources, and eviction limits.
 spec :: Spec
 spec = do
     describe "scenario selection" $ do

@@ -10,8 +10,6 @@ module Ecluse.Core.Server.Pipeline.OriginSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Server.Pipeline.Origin (
     OriginMiss (MissAbsent, MissUnresolved),
     OriginResult (
@@ -25,14 +23,14 @@ import Ecluse.Core.Server.Pipeline.Origin (
     originManifest,
     originMiss,
  )
-import Ecluse.Test.Package (sampleManifest)
+import Ecluse.Test.Package (sampleManifest, thingName)
 
 spec :: Spec
 spec = describe "originMiss -- the outcomes that leave nothing to serve" $ do
     it "reports no miss for a document, an access refusal, or an identity refusal" $
         map
             originMiss
-            [ OriginResolved (sampleManifest thing [])
+            [ OriginResolved (sampleManifest thingName [])
             , OriginAuthorisationFailure 401
             , OriginAuthorisationFailure 403
             , OriginNameMismatch
@@ -49,6 +47,3 @@ spec = describe "originMiss -- the outcomes that leave nothing to serve" $ do
     it "contributes no manifest from any miss" $
         map (isNothing . originManifest) [OriginNotFound, OriginUnresolved, OriginAbsent]
             `shouldBe` [True, True, True]
-
-thing :: PackageName
-thing = mkPackageName Npm Nothing "thing"

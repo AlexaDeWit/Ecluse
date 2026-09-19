@@ -9,13 +9,9 @@ import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
 import Test.Hspec (Spec, describe, it, shouldBe)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     InvalidEntry (invalidKey, invalidKind, invalidValue),
     InvalidEntryKind (InvalidDistTag, InvalidIndexFile, InvalidVersionManifest),
-    PackageName,
-    mkPackageName,
-    mkScope,
  )
 import Ecluse.Core.Registry.WireSupport (
     NameRefusal (NameEmpty, NameNotAscii, NameUnsafeComponent),
@@ -25,7 +21,7 @@ import Ecluse.Core.Registry.WireSupport (
     partitionLenient,
     partitionLenientList,
  )
-import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Test.Package (scopedNpm, unscopedNpm)
 
 {- | Direct tests for the cross-ecosystem wire-projection helpers the npm projection builds on.
 "Ecluse.Core.Registry.Npm.ProjectSpec" covers the npm projection end to end.
@@ -89,7 +85,7 @@ checkNameAgreementSpec = describe "checkNameAgreement" $ do
     it "disagrees on a differing scope even when the bare name matches" $
         -- Ecosystem-aware equality compares the whole name, scope included, so the same
         -- bare name under a different scope is the anti-shadowing disagreement.
-        checkNameAgreement (scoped "one" "x") (scoped "two" "x") (1 :: Int)
+        checkNameAgreement (scopedNpm "one" "x") (scopedNpm "two" "x") (1 :: Int)
             `shouldBe` NameMismatch "@two/x"
 
 {- | The floor every ecosystem's name grammar sits on. Each ecosystem adds its own rules on
@@ -154,7 +150,3 @@ manyBad =
         , ("alpha", String "y")
         , ("bravo", Number 2)
         ]
-
--- | A scoped npm 'PackageName' @\@scope\/base@.
-scoped :: Text -> Text -> PackageName
-scoped scope = mkPackageName Npm (Just (mkScope scope))

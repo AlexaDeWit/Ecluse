@@ -6,17 +6,17 @@ module Ecluse.Runtime.EnvSpec (spec) where
 
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Test.Hspec
-import UnliftIO (evaluate, timeout, try)
-import UnliftIO.Exception (StringException, throwString)
+import UnliftIO (evaluate, throwIO, timeout, try)
 
-import Ecluse (mountBindingFor, runServer, runWorker)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (enqueue, msgJob, receive)
 import Ecluse.Core.Server.Cache (newMetadataCache)
+import Ecluse.Proxy (runServer)
 import Ecluse.Runtime.Env (Env (..), newWorkerHeartbeat, withEnvWithAdmission)
 import Ecluse.Runtime.Server (ServerConfig, mkServerConfig, scPort)
 import Ecluse.Runtime.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Runtime.Test.Support (newTestEnv)
+import Ecluse.Service (mountBindingFor, runWorker)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Queue (newTestMemoryQueue, sampleJob)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
@@ -29,41 +29,35 @@ resolved the way the composition root resolves it.
 npmTestConfig :: ServerConfig
 npmTestConfig = mkServerConfig (maybeToList (mountBindingFor Npm inertPackumentDeps Nothing))
 
+-- | The body's own fault, so the assertion names the exception the body raised.
+data BodyEscape = BodyEscape
+    deriving stock (Eq, Show)
+
+instance Exception BodyEscape
+
+{- | The handles the 'Env' carries with no 'Eq', no 'Show', and no network-free observable.
+Forcing each accessor to weak-head normal form without a bottom is all a case can assert.
+-}
+opaqueHandles :: [(String, Env -> IO ())]
+opaqueHandles =
+    [ ("shared HTTP manager", void . evaluate . envManager)
+    , ("trusted private-origin manager", void . evaluate . envPrivateManager)
+    , ("LogEnv", void . evaluate . envLogEnv)
+    ]
+
 spec :: Spec
 spec = do
     describe "newEnvWithAdmission" $ do
-        it "assembles an Env from injected handle doubles, with no network" $ do
-            -- Construction must not touch the network: it only gathers the handles
-            -- and the manager. A clean return is the assertion.
-            _env <- newTestEnv
-            pure ()
-
         it "wires the queue handle through (a job enqueued via Env is received via Env)" $ do
             env <- newTestEnv
             enqueue (envQueue env) sampleJob >>= (`shouldBe` Right ())
             msgs <- receive (envQueue env)
             fmap (map msgJob) msgs `shouldBe` Right [sampleJob]
 
-        it "exposes the shared HTTP manager it was built with" $ do
-            -- A 'Manager' has no 'Eq'\/'Show' and no network-free observable, so forcing
-            -- 'envManager' to weak-head normal form without a bottom is the assertion.
-            env <- newTestEnv
-            _ <- evaluate (envManager env)
-            pure ()
-
-        it "exposes the trusted private-origin manager it was built with" $ do
-            -- The trusted private-origin manager is likewise opaque, so forcing the accessor
-            -- to weak-head normal form is the assertion.
-            env <- newTestEnv
-            _ <- evaluate (envPrivateManager env)
-            pure ()
-
-        it "exposes the LogEnv it was built with" $ do
-            -- A 'LogEnv' is likewise opaque, so forcing 'envLogEnv' to weak-head normal form
-            -- is the assertion.
-            env <- newTestEnv
-            _ <- evaluate (envLogEnv env)
-            pure ()
+        for_ opaqueHandles $ \(handle, forceHandle) ->
+            it ("exposes the " <> handle <> " it was built with") $ do
+                env <- newTestEnv
+                forceHandle env
 
         it "wires the telemetry handle through (the off-by-default no-op)" $ do
             -- The default substrate is off, so the handle exposes no providers: telemetry is
@@ -90,11 +84,9 @@ spec = do
             heartbeat <- newWorkerHeartbeat
             admission <- testServeAdmission
             let body :: Env -> IO ()
-                body _ = throwString "boom"
+                body _ = throwIO BodyEscape
             outcome <- try (withEnvWithAdmission admission queue manager manager metadataCache logEnv telemetryDisabled heartbeat body)
-            case outcome of
-                Left (_ :: StringException) -> pure ()
-                Right () -> expectationFailure "expected the body's exception to propagate"
+            outcome `shouldBe` Left BodyEscape
 
     describe "split-ready services" $ do
         it "runServer over a ServerConfig and Env serves (blocks) rather than returning" $ do

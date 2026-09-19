@@ -96,11 +96,10 @@ import Ecluse.Test.Poll (pollUntil)
 or @ECLTEST_E2E_IMAGE@ unset. @task test-e2e@ and the CI e2e job build and name the image.
 -}
 e2eUnavailable :: IO (Maybe String)
-e2eUnavailable = do
-    useExisting <- lookupEnv "ECLTEST_E2E_USE_EXISTING"
-    case useExisting of
-        Just "1" -> pure Nothing
-        _ ->
+e2eUnavailable =
+    usingExistingPlane >>= \case
+        True -> pure Nothing
+        False ->
             lookupEnv imageVar >>= \case
                 Nothing -> pure (Just (imageVar <> " is unset -- run via `task test-e2e`"))
                 Just "" -> pure (Just (imageVar <> " is empty -- run via `task test-e2e`"))
@@ -110,6 +109,11 @@ e2eUnavailable = do
 
 imageVar :: String
 imageVar = "ECLTEST_E2E_IMAGE"
+
+{- Whether the local development escape hatch is on: the topology is already up on fixed
+localhost ports, so the harness neither builds nor starts anything. -}
+usingExistingPlane :: IO Bool
+usingExistingPlane = (== Just "1") <$> lookupEnv "ECLTEST_E2E_USE_EXISTING"
 
 dockerDaemonReachable :: IO Bool
 dockerDaemonReachable =
@@ -136,13 +140,11 @@ withFixtureDir = bracket acquire (handleAny (const pass) . removePathForcibly)
         pure workDir
 
 withGlobalDataPlane :: (GlobalDataPlane -> IO ()) -> IO ()
-withGlobalDataPlane action = do
-    useExisting <- lookupEnv "ECLTEST_E2E_USE_EXISTING"
-    case useExisting of
-        Just "1" -> do
-            -- Local development escape hatch: use existing ports on localhost.
+withGlobalDataPlane action =
+    usingExistingPlane >>= \case
+        True ->
             action GlobalDataPlane{gdpNet = "", gdpStub = "upstream", gdpVerd = "verdaccio", gdpMini = "ministack", gdpVerdPort = 4873, gdpMiniPort = 4566, gdpWorkDir = ""}
-        _ -> do
+        False -> do
             sfx <- uniqueSuffix
             -- Every container and the network carries the reaping labels, so `task test-clean` can
             -- sweep a run that is hard-killed past these brackets (see "Ecluse.Test.Containers").
@@ -221,10 +223,9 @@ withE2E = withE2EWith defaultE2EConfig
 stand up an OTLP collector at @otelcol@, up before the proxy so no export is missed.
 -}
 withE2EWith :: E2EConfig -> (E2E -> IO ()) -> GlobalDataPlane -> IO ()
-withE2EWith cfg action gdp = do
-    useExisting <- lookupEnv "ECLTEST_E2E_USE_EXISTING"
-    case useExisting of
-        Just "1" -> do
+withE2EWith cfg action gdp =
+    usingExistingPlane >>= \case
+        True -> do
             manager <- newManager defaultManagerSettings
             let base = "http://127.0.0.1:4873"
             action
@@ -239,7 +240,7 @@ withE2EWith cfg action gdp = do
                     , e2eCollectorContainer = if ecCollector cfg then Just "otelcol" else Nothing
                     , e2eManager = manager
                     }
-        _ -> do
+        False -> do
             image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
             sfx <- uniqueSuffix
             labelArgs <- dockerLabelArgs "e2e"
@@ -416,7 +417,7 @@ dockerRun name net image =
 fails the test loudly on a non-zero exit.
 -}
 runDetached :: [String] -> DockerRun -> IO ()
-runDetached labelArgs = dockerOk . runArgs ["-d"] labelArgs
+runDetached labelArgs = commandOk "docker" . runArgs ["-d"] labelArgs
 
 {- | The @docker run@ arguments one spec renders to, with whatever extra flags the caller needs.
 A detached run passes @-d@ and a run waited on passes none, so both render the same spec.
@@ -446,7 +447,7 @@ any containers on it. @createArgs@ carries extra @network create@ flags such as 
 -}
 withDockerNetwork :: [String] -> String -> [String] -> (String -> IO a) -> IO a
 withDockerNetwork labelArgs name createArgs =
-    bracket (dockerOk (["network", "create"] <> createArgs <> labelArgs <> [name]) >> pure name) removeNetwork
+    bracket (commandOk "docker" (["network", "create"] <> createArgs <> labelArgs <> [name]) >> pure name) removeNetwork
 
 {- | Bring up the OTLP collector for a scenario that asks for one, waited ready and torn
 down around the action. Any other scenario is a no-op yielding 'Nothing'.
@@ -628,12 +629,12 @@ dredgerEnv =
         <> mirrorTargetEnv
         <> ministackAwsEnv
 
--- | Run a docker command, failing the test loudly if it exits non-zero.
-dockerOk :: [String] -> IO ()
-dockerOk args = do
-    (code, _, err) <- readProcess (proc "docker" args)
+-- | Run a command, failing the test loudly with its own stderr if it exits non-zero.
+commandOk :: String -> [String] -> IO ()
+commandOk command args = do
+    (code, _, err) <- readProcess (proc command args)
     unless (code == ExitSuccess) $
-        fail ("docker command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
+        fail (command <> " command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
 
 {- | Generate a test CA and a server certificate into @dir@, carrying a SAN per stub alias plus
 @localhost@, and a @bundle.pem@ of system and test CAs for @SSL_CERT_FILE@.
@@ -648,10 +649,10 @@ generateCerts dir = do
         srvCsr = dir </> "server.csr"
         ext = dir </> "san.ext"
     writeFileText ext "subjectAltName=DNS:upstream,DNS:mirror,DNS:private-upstream,DNS:private-cache,DNS:pypi-upstream,DNS:localhost,IP:127.0.0.1\n"
-    opensslOk ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", caKey, "-out", caCrt, "-days", "2", "-subj", "/CN=Ecluse E2E Test CA"]
-    opensslOk ["genrsa", "-out", srvKey, "2048"]
-    opensslOk ["req", "-new", "-key", srvKey, "-out", srvCsr, "-subj", "/CN=ecluse-e2e"]
-    opensslOk ["x509", "-req", "-in", srvCsr, "-CA", caCrt, "-CAkey", caKey, "-CAcreateserial", "-out", srvCrt, "-days", "2", "-extfile", ext]
+    commandOk "openssl" ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", caKey, "-out", caCrt, "-days", "2", "-subj", "/CN=Ecluse E2E Test CA"]
+    commandOk "openssl" ["genrsa", "-out", srvKey, "2048"]
+    commandOk "openssl" ["req", "-new", "-key", srvKey, "-out", srvCsr, "-subj", "/CN=ecluse-e2e"]
+    commandOk "openssl" ["x509", "-req", "-in", srvCsr, "-CA", caCrt, "-CAkey", caKey, "-CAcreateserial", "-out", srvCrt, "-days", "2", "-extfile", ext]
     -- The system CAs plus the test CA, exactly the operator's "system store + my CA"
     -- extension. The system CAs keep an unmodified deployment trusting public TLS.
     systemCas <- lookupEnv "NIX_SSL_CERT_FILE" >>= maybe (pure "") readBytesOrEmpty
@@ -662,13 +663,6 @@ generateCerts dir = do
 -- proxy reaches only the test stubs over TLS in the e2e, so the test CA alone suffices.
 readBytesOrEmpty :: FilePath -> IO ByteString
 readBytesOrEmpty path = handleAny (\_ -> pure "") (readFileBS path)
-
--- | Run an openssl command, failing the test loudly if it exits non-zero.
-opensslOk :: [String] -> IO ()
-opensslOk args = do
-    (code, _, err) <- readProcess (proc "openssl" args)
-    unless (code == ExitSuccess) $
-        fail ("openssl command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
 
 -- | The host loopback port docker published a container's given @\<port\>\/tcp@ to.
 publishedPort :: String -> String -> IO Int
@@ -853,8 +847,8 @@ path. With the stub frozen, only the private mirror can answer an install.
 withUpstreamPaused :: E2E -> IO a -> IO a
 withUpstreamPaused e2e =
     bracket_
-        (dockerOk ["pause", e2eStubContainer e2e])
-        (dockerOk ["unpause", e2eStubContainer e2e])
+        (commandOk "docker" ["pause", e2eStubContainer e2e])
+        (commandOk "docker" ["unpause", e2eStubContainer e2e])
 
 {- | Refuse every write method on the private-cache route for the duration of the action, so that
 one target's deletes fail while its reads keep answering.
@@ -872,7 +866,7 @@ refuseCacheWrites = "    if ($request_method !~ ^(GET|HEAD)$) { return 503; }"
 reloadStub :: GlobalDataPlane -> Text -> IO ()
 reloadStub plane cacheGuard = do
     writeFileText (gdpWorkDir plane </> "nginx.conf") (nginxStubConfig cacheGuard)
-    dockerOk ["exec", gdpStub plane, "nginx", "-s", "reload"]
+    commandOk "docker" ["exec", gdpStub plane, "nginx", "-s", "reload"]
 
 {- | Withhold one public artifact for the duration of the action, leaving its metadata served, and
 put the file back on every exit path.

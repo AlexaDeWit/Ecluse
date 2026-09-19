@@ -4,7 +4,6 @@
 
 module Ecluse.Core.Registry.NpmSmokeSpec (spec) where
 
-import Control.Exception (try)
 import Data.Aeson (Value (Object, String), eitherDecodeStrict)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
@@ -13,7 +12,6 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.Process (readProcessWithExitCode)
 import Test.Hspec
-import UnliftIO.Exception (throwString)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
@@ -24,7 +22,7 @@ import Ecluse.Core.Package (
     mkPackageName,
     renderPackageName,
  )
-import Ecluse.Core.Registry (RegistryResponse (responseBody))
+import Ecluse.Core.Registry (FetchFault (FetchTransport), RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue, projectName)
@@ -34,43 +32,29 @@ import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, publicRegistryBaseUrl)
+import Ecluse.Test.Support (expectRightText)
 
-{- | Smoke tests make __live__ calls to public registries (npm, PyPI) to confirm our JSON decoding
-and protocol handling match reality. They depend on uncontrolled external services, so they never
-gate a merge, and each case __pends__ rather than fails when the network is unavailable.
+{- | Smoke tier: __live__ calls to the public npm registry, confirming that our decoding, our
+projection, and the default 'Limits' still match what the registry serves.
 -}
 spec :: Spec
-spec = describe "live registry protocol (npm / PyPI)" $ do
+spec = describe "live npm registry protocol" $ do
     it "decodes a real abbreviated packument from the public npm registry" $ do
-        (code, out, _err) <-
-            readProcessWithExitCode
-                "curl"
-                [ "-sf"
-                , "-H"
-                , "Accept: " <> abbreviatedAccept
-                , registryBase <> "/is-odd"
-                ]
-                ""
-        case code of
-            ExitFailure _ ->
-                pendingWith
-                    "npm registry unreachable (offline or curl unavailable); smoke test skipped"
-            ExitSuccess ->
-                case eitherDecodeStrict (encodeUtf8 out) :: Either String Value of
+        document <- liveRegistryDocument ["-H", "Accept: " <> abbreviatedAccept] "/is-odd"
+        case document of
+            Nothing -> pendingWith registryUnreadable
+            Just value ->
+                case parsePackageInfoFromValue (mkPackageName Npm Nothing "is-odd") value of
                     Left err ->
-                        expectationFailure ("abbreviated packument failed to decode: " <> err)
-                    Right value ->
-                        case parsePackageInfoFromValue (mkPackageName Npm Nothing "is-odd") value of
-                            Left err ->
-                                expectationFailure ("abbreviated packument failed to project: " <> show err)
-                            Right (NameMismatch reported) ->
-                                expectationFailure ("abbreviated packument self-reported a different name: " <> toString reported)
-                            Right (Projected info) -> do
-                                -- The live decoder still matches reality: the packument
-                                -- projects, and dist-tags always carries `latest`.
-                                renderPackageName (infoName info) `shouldBe` "is-odd"
-                                Map.member "latest" (infoDistTags info) `shouldBe` True
-                                Map.null (infoVersions info) `shouldBe` False
+                        expectationFailure ("abbreviated packument failed to project: " <> show err)
+                    Right (NameMismatch reported) ->
+                        expectationFailure ("abbreviated packument self-reported a different name: " <> toString reported)
+                    Right (Projected info) -> do
+                        -- The live decoder still matches reality: the packument
+                        -- projects, and dist-tags always carries `latest`.
+                        renderPackageName (infoName info) `shouldBe` "is-odd"
+                        Map.member "latest" (infoDistTags info) `shouldBe` True
+                        Map.null (infoVersions info) `shouldBe` False
 
     it "a bounded fetch of a real package projects to PackageInfo (full data plane)" $ do
         manager <- newManager tlsManagerSettings
@@ -96,23 +80,18 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
         -- would silently drop a legitimate version to "no integrity". The lodash packument spans
         -- the legacy `dist.shasum` (SHA-1) and modern `dist.integrity` (SRI) eras. This checks
         -- well-formedness, not the public floor.
-        (code, out, _err) <-
-            readProcessWithExitCode "curl" ["-sf", registryBase <> "/lodash"] ""
-        case code of
-            ExitFailure _ ->
-                pendingWith "npm registry unreachable (offline or curl unavailable); smoke test skipped"
-            ExitSuccess ->
-                case eitherDecodeStrict (encodeUtf8 out) :: Either String Value of
-                    Left err -> expectationFailure ("lodash packument failed to decode: " <> err)
-                    Right value -> do
-                        let digests = collectDistDigests value
-                        -- Non-vacuous: the packument carried both digest kinds, so the
-                        -- assertion spans both the legacy and modern eras.
-                        any ((== SHA1) . fst) digests `shouldBe` True
-                        any ((== SRI) . fst) digests `shouldBe` True
-                        -- Every real digest validates through the same mkHash the projection
-                        -- uses. A Left here is our validator false-rejecting a real format.
-                        [(alg, d) | (alg, d) <- digests, isLeft (mkHash alg d)] `shouldBe` []
+        document <- liveRegistryDocument [] "/lodash"
+        case document of
+            Nothing -> pendingWith registryUnreadable
+            Just value -> do
+                let digests = collectDistDigests value
+                -- Non-vacuous: the packument carried both digest kinds, so the
+                -- assertion spans both the legacy and modern eras.
+                any ((== SHA1) . fst) digests `shouldBe` True
+                any ((== SRI) . fst) digests `shouldBe` True
+                -- Every real digest validates through the same mkHash the projection
+                -- uses. A Left here is our validator false-rejecting a real format.
+                [(alg, d) | (alg, d) <- digests, isLeft (mkHash alg d)] `shouldBe` []
 
     -- The default Limits must not false-positive on real data: each large, widely-trusted
     -- package's full packument stays admissible under the defaults (security.md invariant 4).
@@ -122,39 +101,79 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
             manager <- newManager tlsManagerSettings
             -- The live splitter, not a harness copy: a pin the front door would refuse fails here.
             parsed <- either (fail . show) pure (projectName pkg)
-            outcome <- try (admissibleUnderDefaults manager parsed)
+            outcome <- admissibleUnderDefaults manager parsed
             case outcome of
-                Left (_ :: SomeException) ->
-                    pendingWith "npm registry unreachable (offline); smoke test skipped"
-                Right (name, versionCount) -> do
+                Unreachable fault ->
+                    pendingWith ("npm registry unreachable (" <> toString fault <> "); smoke test skipped")
+                Refused why ->
+                    expectationFailure ("the default Limits refused a real trusted packument: " <> toString why)
+                Admitted name versionCount -> do
                     name `shouldBe` pkg
                     versionCount `shouldSatisfy` (> 0)
                     versionCount `shouldSatisfy` (<= maxVersionCount defaultLimits)
-  where
-    registryBase = "https://registry.npmjs.org"
-    abbreviatedAccept = "application/vnd.npm.install-v1+json"
+
+registryBase :: String
+registryBase = "https://registry.npmjs.org"
+
+abbreviatedAccept :: String
+abbreviatedAccept = "application/vnd.npm.install-v1+json"
+
+-- Both curl reads pend for the same two causes, so they report them the same way.
+registryUnreadable :: String
+registryUnreadable = "npm registry unreachable (offline or curl unavailable); smoke test skipped"
+
+{- | A live registry document under 'registryBase'. 'Nothing' means curl or the registry was
+unavailable, while a document that arrives and does not decode fails the case.
+-}
+liveRegistryDocument :: [String] -> String -> IO (Maybe Value)
+liveRegistryDocument extraArgs path = do
+    (code, out, _err) <- readProcessWithExitCode "curl" (["-sf"] <> extraArgs <> [registryBase <> path]) ""
+    case code of
+        ExitFailure _ -> pure Nothing
+        ExitSuccess ->
+            either
+                (\err -> fail (path <> " failed to decode: " <> err))
+                (pure . Just)
+                (eitherDecodeStrict (encodeUtf8 out))
+
+{- | What the serve path's admissibility chain answered for a live packument. Only a transport
+fault is the registry's absence, so only that arm may pend a case.
+-}
+data Admissibility
+    = -- | The exchange never produced a document, so the case has nothing to judge.
+      Unreachable Text
+    | -- | A bound or the projection turned a real trusted package away.
+      Refused Text
+    | -- | The packument's own name, and the version count the bounds admitted.
+      Admitted Text Int
+    deriving stock (Eq, Show)
 
 {- | Run the bounded fetch, decode, nesting, projection, and version-count sequence the serve path
-applies, over a live full packument under the default 'Limits'. It throws when any bound refuses
-the document, so an accidentally too-tight default surfaces as a failure, not a silent pass.
+applies, over a live full packument under the default 'Limits'.
 -}
-admissibleUnderDefaults :: Manager -> PackageName -> IO (Text, Int)
+admissibleUnderDefaults :: Manager -> PackageName -> IO Admissibility
 admissibleUnderDefaults manager name = do
     config <- publicRegistryOrigin manager
-    -- 1. Body bound: fetchMetadataFormBounded reads through boundedRead against ocLimits,
-    -- reporting any fetch fault (a bound breach included) as a value this smoke helper renders.
-    response <-
-        fetchMetadataFormBounded config Full name
-            >>= either (\fault -> throwString ("bounded fetch refused: " <> show fault)) pure
-    -- 2. Decode, then 3. nesting bound, 4. projection, 5. version-count bound: the same
-    -- chain the serve-path projection runs. Any refusal throws and fails the smoke case.
-    value <- either (\e -> throwString ("decode failed: " <> e)) pure (eitherDecodeStrict (responseBody response))
-    bounded <- either (\e -> throwString ("nesting bound refused a real package: " <> show e)) pure (checkNestingDepth defaultLimits value)
+    -- Body bound: fetchMetadataFormBounded reads through boundedRead against ocLimits and reports
+    -- a bound breach as a fault value, which is a refusal of a real package rather than an outage.
+    fetched <- fetchMetadataFormBounded config Full name
+    pure $ case fetched of
+        Left (FetchTransport fault) -> Unreachable (show fault)
+        Left fault -> Refused ("the bounded fetch refused a real package: " <> show fault)
+        Right response -> either Refused (uncurry Admitted) (admittedChain name (responseBody response))
+
+{- | Decode, then the nesting bound, the projection, and the version-count bound: the same chain the
+serve-path projection runs, as a refusal reason or the admitted name and version count.
+-}
+admittedChain :: PackageName -> ByteString -> Either Text (Text, Int)
+admittedChain name body = do
+    value <- first (\e -> "decode failed: " <> toText e) (eitherDecodeStrict body)
+    bounded <- first (\e -> "nesting bound refused a real package: " <> show e) (checkNestingDepth defaultLimits value)
     info <- case parsePackageInfoFromValue name bounded of
-        Left e -> throwString ("projection failed: " <> show e)
-        Right (Projected i) -> pure i
-        Right (NameMismatch reported) -> throwString ("projection self-reported a different name: " <> toString reported)
-    admitted <- either (\e -> throwString ("version bound refused a real package: " <> show e)) pure (checkVersionCount defaultLimits info)
+        Left e -> Left ("projection failed: " <> show e)
+        Right (NameMismatch reported) -> Left ("projection self-reported a different name: " <> reported)
+        Right (Projected i) -> Right i
+    admitted <- first (\e -> "version bound refused a real package: " <> show e) (checkVersionCount defaultLimits info)
     pure (renderPackageName (infoName admitted), Map.size (infoVersions admitted))
 
 {- | Every @dist.shasum@ (as a 'SHA1' digest) and @dist.integrity@ (as an 'SRI') a packument
@@ -177,4 +196,4 @@ collectDistDigests value =
 -- the production former builds the witness and a refusal here is a broken constant.
 publicRegistryOrigin :: Manager -> IO OriginClient
 publicRegistryOrigin manager =
-    either (throwString . toString) (pure . (`defaultNpmConfig` manager)) (mkRegistryUrl publicRegistryBaseUrl)
+    (`defaultNpmConfig` manager) <$> expectRightText (mkRegistryUrl publicRegistryBaseUrl)

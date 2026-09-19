@@ -4,14 +4,9 @@
 
 module Ecluse.Core.Security.AuthoritySpec (spec) where
 
-import Data.Set qualified as Set
-
 import Test.Hspec
 
 import Ecluse.Core.Security (
-    AllowedHostPorts,
-    HostPort (HostPort),
-    allowedHostPorts,
     authorityLabel,
     credentialFreeUrl,
     hostAddress,
@@ -22,18 +17,7 @@ import Ecluse.Core.Security (
     refuseCredentialMaterial,
     splitHostPort,
  )
-
--- | The configured upstreams, normalised through 'allowedHostPorts'.
-upstreams :: AllowedHostPorts
-upstreams = allowedHostPorts (Set.fromList [hp "registry.npmjs.org", hp "Private.Internal.Example.com"])
-
--- | An authority on the https default port: what a URL with no written port dials.
-hp :: Text -> HostPort
-hp host = HostPort host 443
-
--- | An authority on an explicit port.
-hpAt :: Text -> Word16 -> HostPort
-hpAt = HostPort
+import Ecluse.Security.Support (hp, hpAt, upstreams)
 
 spec :: Spec
 spec = do

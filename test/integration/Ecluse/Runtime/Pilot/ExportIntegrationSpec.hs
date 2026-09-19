@@ -14,21 +14,22 @@ import Data.Text qualified as T
 import System.FilePath (takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
-import TestContainers (containerAddress)
+import TestContainers (Container, containerAddress)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Amazonka.S3.Lens qualified as S3L
 import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
-import Ecluse.Config.AdvisoryStore (advisoryObjectKey, advisoryStoreBucket, mkAdvisoryStoreUrl)
+import Ecluse.Config.AdvisoryStore (AdvisoryStoreUrl, advisoryObjectKey, advisoryStoreBucket, mkAdvisoryStoreUrl)
 import Ecluse.Config.Ambient (parseEndpointUrl)
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), currentAdvisorySource, generationInstalledAt, newCveSlot)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..))
 import Ecluse.Integration.Ministack (withMinistack)
+import Ecluse.Runtime.Aws.Env (AwsEndpoint)
 import Ecluse.Runtime.Aws.S3 (buildS3Env)
-import Ecluse.Runtime.Cve.Sync (SyncEnv (..), SyncOutcome (..), newS3CveSource, s3CveFetchFor, syncStep)
+import Ecluse.Runtime.Cve.Sync.Internal (SyncEnv (..), SyncOutcome (..), newS3CveSource, s3CveFetchFor, syncStep)
 import Ecluse.Runtime.Pilot.Export (exportToS3)
 import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
 import Ecluse.Test.Poll (pollUntil, retryingIO)
@@ -41,23 +42,9 @@ spec = do
         aroundAll withMinistack $ do
             it "uploads OSV databases to S3" $ \container -> do
                 withSystemTempDirectory "ecluse-osv-test" $ \tmpDir -> do
-                    let (host, port) = containerAddress container 4566
-                        endpointUrl = "http://" <> host <> ":" <> T.pack (show port)
-
-                    -- Bucket and object key both derive from the configured store, the way the
-                    -- export loop derives them, so the two cannot drift apart unnoticed.
-                    store <- either (fail . toString) pure (mkAdvisoryStoreUrl "advisories.url" "s3://test-osv-bucket")
+                    Store{stEndpoint = endpoint, stAws = base, stStore = store} <-
+                        createdBucket container "s3://test-osv-bucket"
                     let bucket = advisoryStoreBucket store
-
-                    -- The override is the ambient AWS_ENDPOINT_URL a released image carries,
-                    -- resolved through the same parser the boot uses.
-                    endpoint <- either (const (fail ("S3ExportSpec: unparseable endpoint for " <> toString host))) pure (parseEndpointUrl endpointUrl)
-                    base <- buildS3Env (Just endpoint)
-                    let regioned = base{AWS.region = AWS.Region' "us-east-1"}
-
-                    -- The readiness wait only proves the port accepts connections, so the S3
-                    -- gateway may still be warming when the first CreateBucket lands.
-                    retryingIO 21 500_000 (void (runResourceT (AWS.send regioned (S3.newCreateBucket (S3.BucketName bucket)))))
 
                     let dummyDb = tmpDir <> "/dummy.sqlite"
                     liftIO $ writeFile dummyDb "dummy sqlite data"
@@ -77,14 +64,9 @@ spec = do
             it "uploads again when the artifact's bytes have not changed" $ \container -> do
                 -- Republishing one accepted artifact preserves its bytes, including built_at.
                 withSystemTempDirectory "ecluse-osv-republish" $ \tmpDir -> do
-                    let (host, port) = containerAddress container 4566
-                        endpointUrl = "http://" <> host <> ":" <> T.pack (show port)
-                    store <- either (fail . toString) pure (mkAdvisoryStoreUrl "advisories.url" "s3://test-osv-republish-bucket")
+                    Store{stEndpoint = endpoint, stAws = base, stStore = store} <-
+                        createdBucket container "s3://test-osv-republish-bucket"
                     let bucket = advisoryStoreBucket store
-                    endpoint <- either (const (fail ("S3ExportSpec: unparseable endpoint for " <> toString host))) pure (parseEndpointUrl endpointUrl)
-                    base <- buildS3Env (Just endpoint)
-                    let regioned = base{AWS.region = AWS.Region' "us-east-1"}
-                    retryingIO 21 500_000 (void (runResourceT (AWS.send regioned (S3.newCreateBucket (S3.BucketName bucket)))))
 
                     let dbPath = tmpDir <> "/unchanged.sqlite"
                         objectKey = advisoryObjectKey store (takeFileName dbPath)
@@ -122,3 +104,30 @@ spec = do
                     (asPushedAt =<<) <$> currentAdvisorySource slot
                         `shouldReturn` (republished ^. S3L.headObjectResponse_lastModified)
                     generationInstalledAt slot `shouldReturn` installed
+
+{- | One case's advisory store on the emulator: the endpoint, an S3 environment over it, and the
+store URL the bucket and every object key derive from.
+-}
+data Store = Store
+    { stEndpoint :: AwsEndpoint
+    , stAws :: AWS.Env
+    , stStore :: AdvisoryStoreUrl
+    }
+
+{- | Resolve @url@ the way the boot does and create its bucket on the container's S3 emulator.
+Bucket and object key both derive from the store, so the two cannot drift apart unnoticed.
+-}
+createdBucket :: Container -> Text -> IO Store
+createdBucket container url = do
+    let (host, port) = containerAddress container 4566
+        endpointUrl = "http://" <> host <> ":" <> T.pack (show port)
+    store <- either (fail . toString) pure (mkAdvisoryStoreUrl "advisories.url" url)
+    -- The override is the ambient AWS_ENDPOINT_URL a released image carries, resolved
+    -- through the same parser the boot uses.
+    endpoint <- either (const (fail ("ExportIntegrationSpec: unparseable endpoint for " <> toString host))) pure (parseEndpointUrl endpointUrl)
+    base <- buildS3Env (Just endpoint)
+    let regioned = base{AWS.region = AWS.Region' "us-east-1"}
+    -- The readiness wait only proves the port accepts connections, so the S3 gateway may
+    -- still be warming when the first CreateBucket lands.
+    retryingIO 21 500_000 (void (runResourceT (AWS.send regioned (S3.newCreateBucket (S3.BucketName (advisoryStoreBucket store))))))
+    pure Store{stEndpoint = endpoint, stAws = base, stStore = store}

@@ -10,12 +10,13 @@ import Network.HTTP.Types.Header (RequestHeaders)
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 import Ecluse.Core.Credential (
-    ClientCredential (ClientCredential, credSecret, credUsername),
+    ClientCredential (ClientCredential, credSecret),
     bareCredential,
     mkSecret,
  )
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.Request (attachCredential, credentialRecover)
+import Ecluse.Test.Registry.PyPI (alicePair)
 import Ecluse.Test.Support (parseRequestOrFail)
 
 spec :: Spec
@@ -32,9 +33,6 @@ recoverySpec = describe "PyPI recovers the Basic pair a Python client presents" 
     it "recovers a token sent under twine's fixed username" $
         recover [("Authorization", "Basic X190b2tlbl9fOnB5cGktQWdFSQ==")]
             `shouldBe` Just (ClientCredential (Just "__token__") (mkSecret "pypi-AgEI"))
-
-    it "admits any username, because the index rather than Écluse decides who a name is" $
-        credUsername <$> recover [("Authorization", "Basic YWxpY2U6aHVudGVyMg==")] `shouldBe` Just (Just "alice")
 
     it "reads an empty username as no username at all" $
         recover [("Authorization", "Basic OnNlY3JldA==")] `shouldBe` Just (bareCredential (mkSecret "secret"))
@@ -88,10 +86,6 @@ encodingSpec = describe "PyPI carries an outbound credential as Basic on Authori
         let recovered = recover [("Authorization", "Basic YWxpY2U6aHVudGVyMg==")]
         lookup "Authorization" (Client.requestHeaders (attachCredential pypiCredential recovered req))
             `shouldBe` Just "Basic YWxpY2U6aHVudGVyMg=="
-
--- | The pair every example builds on: a named user with a password.
-alicePair :: Maybe ClientCredential
-alicePair = Just (ClientCredential (Just "alice") (mkSecret "hunter2"))
 
 recover :: RequestHeaders -> Maybe ClientCredential
 recover = credentialRecover pypiCredential

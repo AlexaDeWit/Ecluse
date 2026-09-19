@@ -44,7 +44,6 @@ module Ecluse.Server.Pipeline.TestSupport (
     packument,
     packumentNamed,
     privatePackument,
-    privatePackumentWith,
     admittingPublic,
     encodePackument,
     versionObject,
@@ -84,7 +83,6 @@ module Ecluse.Server.Pipeline.TestSupport (
     headTarball,
 
     -- * Reading a served document
-    topLevel,
     servedVersionKey,
     servedTarball,
     servedIntegrity,
@@ -115,7 +113,6 @@ import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMe
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse, defaultRequest, request, runSession, setPath)
 
-import Ecluse (mountBindingFor)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
@@ -143,6 +140,7 @@ import Ecluse.Runtime.Server (
  )
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Test.Support (newTestEnvLogging, newTestEnvWith)
+import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Log (newTestLogEnv)
 import Ecluse.Test.Package (sriSha256Of, sriSha512Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -664,12 +662,6 @@ drainJobs env = go []
             Right messages -> go (reverse (map msgJob messages) <> acc)
             Left fault -> fail ("drainJobs: the in-memory queue faulted: " <> show fault)
 
--- The value at a top-level key in the served body (for relayed unmodeled keys).
-topLevel :: Text -> SResponse -> Maybe Value
-topLevel key resp = case decodedBody resp of
-    Object o -> KeyMap.lookup (Key.fromText key) o
-    _ -> Nothing
-
 -- The value at a top-level @field@ within a served version object.
 servedVersionKey :: Text -> Text -> SResponse -> Maybe Value
 servedVersionKey version field resp = do
@@ -706,10 +698,6 @@ servedLatest resp = do
 privatePackument :: [(Text, Value)] -> Text -> Value
 privatePackument versions latest =
     packument versions latest [(v, publishedDaysAgo 1) | (v, _) <- versions]
-
--- A private packument with explicit version objects (used for the divergence test).
-privatePackumentWith :: [(Text, Value)] -> Text -> Value
-privatePackumentWith = privatePackument
 
 twoServingUpstreams :: IO (Upstream, Upstream)
 twoServingUpstreams = do

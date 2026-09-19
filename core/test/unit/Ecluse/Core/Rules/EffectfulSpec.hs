@@ -6,7 +6,7 @@
 module Ecluse.Core.Rules.EffectfulSpec (spec) where
 
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
+import Data.Time (UTCTime, addUTCTime)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (bracket_, throwIO)
 
@@ -20,7 +20,6 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..), noBreakerReporter)
 import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveLookup (cveAdvisoriesFor), CveQueryFault (CveQueryFault))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules (
@@ -40,11 +39,12 @@ import Ecluse.Core.Rules.Effectful (
     newBreaker,
  )
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Package (sampleDetails, v1_0_0)
 import Ecluse.Test.Rules (
     admittedBy,
     blockedBy,
     inertRuleDeps,
+    isApproved,
+    isUnavailable,
     isUndecidable,
     withInstallScripts,
  )
@@ -53,31 +53,7 @@ import Ecluse.Test.Support (TestContractEscape (TestContractEscape), newTestCloc
 -- The spec builds 'PreparedRule's directly with a fake 'prepEval', exercising the
 -- resilience harness and the parallel engine without a closure on the closed 'Rule' data.
 import Ecluse.Core.Rules.Types
-
--- | A fixed "now", so age and cooldown arithmetic stay deterministic.
-now :: UTCTime
-now = UTCTime (fromGregorian 2026 6 20) 0
-
-{- | An 'EvalContext' at a given instant, the request snapshot the age rules read. The
-breaker ignores it and takes its clock from 'newTestClock' instead.
--}
-ctxAt :: UTCTime -> EvalContext
-ctxAt t = EvalContext t Nothing
-
-ctx :: EvalContext
-ctx = ctxAt now
-
-{- | A package version under an optional npm scope, published @ageDays@ days before 'now'.
-Everything outside the scope, age, and install-code signals is fixed.
--}
-pkg :: Maybe Text -> Integer -> RuleEvidence
-pkg mScope ageDays = completeEvidence details
-  where
-    details =
-        (sampleDetails (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0)
-            { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
-            , pkgLicenses = ["MIT"]
-            }
+import Ecluse.Rules.Support (ctx, now, pkg)
 
 -- | A config with no retries, so a test never waits on a backoff.
 fastConfig :: EffectfulConfig
@@ -162,14 +138,6 @@ capturingBreakerReporter :: IO (IORef [Breaker], BreakerReporter)
 capturingBreakerReporter = do
     breakerLog <- newIORef []
     pure (breakerLog, BreakerReporter (\b -> modifyIORef' breakerLog (<> [b])))
-
-isAdmitted :: Decision -> Bool
-isAdmitted = isJust . admittedBy
-
-isUnavailable :: RuleEvaluation -> Bool
-isUnavailable = \case
-    Unavailable{} -> True
-    _ -> False
 
 {- | The three decisive outcomes that compete in an equal-precedence tie: an allow, a deny,
 and a fail-closed 'CannotVet'.
@@ -264,12 +232,12 @@ spec = do
             -- still falls back to deny-by-default, never admitted blind.
             rule <- failingRule "EffAllow" 300 fastConfig FailNoDecision
             decision <- evalRules ctx [rule] (pkg Nothing 0)
-            isAdmitted decision `shouldBe` False
+            isApproved decision `shouldBe` False
 
         it "a fail-closed undecidable is not admitted (no survivor)" $ do
             rule <- failingRule "EffDeny" 300 fastConfig FailDeny
             decision <- evalRules ctx [rule] (pkg Nothing 0)
-            isAdmitted decision `shouldBe` False
+            isApproved decision `shouldBe` False
 
     describe "evalRules -- the direct-rule never-throws absorption" $ do
         it "a throwing direct rule resolves fail-closed as Undecidable naming the rule" $ do

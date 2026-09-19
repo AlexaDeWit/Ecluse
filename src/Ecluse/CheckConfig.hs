@@ -41,7 +41,7 @@ returns (exit @0@) and a refused one aborts (exit @2@).
 runCheckConfig :: IO ()
 runCheckConfig = do
     {- The refusal suffix carries the verdict into the boot's own typed abort, which
-    'Ecluse.superviseProcess' maps to exit 2 and 'Ecluse.run' reports. -}
+    'Ecluse.Internal.superviseProcess' maps to exit 2 and 'Ecluse.run' reports. -}
     (envVars, docBlob, config) <- loadBootConfig (<> "\nconfiguration: refused")
     rts <- currentRtsPosture
     cgroup <- readCgroupLimits

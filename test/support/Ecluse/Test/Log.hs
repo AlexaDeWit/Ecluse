@@ -14,6 +14,9 @@ module Ecluse.Test.Log (
     jsonLogEnv,
     captureStdout,
     captureStderr,
+    captureStderrWith,
+    captureJsonLog,
+    runJsonLog,
     lineMessage,
 ) where
 
@@ -29,6 +32,7 @@ import Katip (
     Severity (DebugS),
     SimpleLogPayload,
     Verbosity (V2),
+    closeScribes,
     defaultScribeSettings,
     initLogEnv,
     permitItem,
@@ -62,28 +66,45 @@ jsonLogEnv = do
 'stdout' is restored on every exit path, so scribe output never leaks into the run.
 -}
 captureStdout :: IO () -> IO Text
-captureStdout = captureHandle stdout
+captureStdout = fmap snd . captureHandle stdout
 
 -- | 'captureStdout' over 'stderr', the stream a boot refusal reports on.
 captureStderr :: IO () -> IO Text
-captureStderr = captureHandle stderr
+captureStderr = fmap snd . captureHandle stderr
+
+{- | 'captureStderr' keeping the action's result, for a case that decides on both the refusal
+report and the status the run took.
+-}
+captureStderrWith :: IO a -> IO (a, Text)
+captureStderrWith = captureHandle stderr
 
 -- The stream is restored on every exit path, so output never leaks into the run.
-captureHandle :: Handle -> IO () -> IO Text
+captureHandle :: Handle -> IO a -> IO (a, Text)
 captureHandle stream act =
     withSystemTempFile "ecluse-log-capture.txt" $ \path tmpHandle ->
         bracket (hDuplicate stream) restore $ \_saved -> do
             hFlush stream
             hDuplicateTo tmpHandle stream
-            act
+            result <- act
             hFlush stream
             hClose tmpHandle
-            decodeUtf8 <$> readFileBS path
+            (result,) . decodeUtf8 <$> readFileBS path
   where
     restore saved = do
         hFlush stream
         hDuplicateTo saved stream
         hClose saved
+
+{- | Run an action against a 'jsonLogEnv' and return its result beside the captured JSONL.
+The scribes close before the capture is read, so every buffered line is in the returned text.
+-}
+captureJsonLog :: (LogEnv -> IO a) -> IO (a, Text)
+captureJsonLog body = captureHandle stdout (bracket jsonLogEnv (void . closeScribes) body)
+
+-- | 'captureJsonLog' over a @katip@-constrained action, at the empty context and namespace.
+runJsonLog :: KatipContextT IO () -> IO Text
+runJsonLog action =
+    snd <$> captureJsonLog (\logEnv -> runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty action)
 
 -- | Read a JSONL message, returning 'Nothing' for malformed JSON or a missing or non-text message.
 lineMessage :: Text -> Maybe Text

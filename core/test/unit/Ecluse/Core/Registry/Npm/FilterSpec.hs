@@ -22,7 +22,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageInfo, PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Package (PackageInfo, mkPackageName)
 import Ecluse.Core.Package.Entry (AdmittedEntry (admittedKey), EntryKey (..))
 import Ecluse.Core.Package.Filter (fpDecisions, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), Provenance (GatedSource), mergePackuments)
@@ -43,6 +43,7 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
 import Ecluse.Core.Text (joinUrlPath)
+import Ecluse.Test.Json (asObject, fieldAt, mapAt, objectAt, textAt)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isApproved)
 import Ecluse.Test.Snapshot (jsonSnapshot, projectJsonSnapshot)
@@ -65,7 +66,7 @@ entryIdentitySpec = describe "npm artifact-entry admission" $ do
         source <- projectJsonSnapshot (projectNpmManifest defaultLimits (mkPackageName Npm Nothing "thing")) raw
         plan <- expectRight (maybeToRight ("expected merge plan" :: Text) (mergePackuments [(GatedSource, fst <$> source)]))
         let rawSource = snd <$> source
-            assemble bySource selection = objKeys "versions" (asObject (assembleMergedPackument base bySource selection raw))
+            assemble bySource selection = mapAt "versions" (asObject (assembleMergedPackument base bySource selection raw))
             sources = Map.singleton 0 rawSource
             wrongKey entry = entry{admittedKey = ArrayEntry 0}
         Map.keys (assemble sources plan) `shouldBe` ["1.0.0"]
@@ -103,8 +104,6 @@ publishedDaysAgo = NpmFixture.publishedDaysAgo now
 base :: Text
 base = "https://proxy.test/npm"
 
--- | The @{base}\/{pkg}@ prefix the assembly derives for the unscoped fixture package.
-
 {- | The served-URL renderer the assembly hands the rewrite: the artifact route's own path for
 @thing@, joined onto the mount base.
 -}
@@ -130,7 +129,7 @@ rewriteSpec = describe "rewriteVersion" $ do
     it "preserves unmodelled keys on the version and dist objects" $ do
         v <- versionValue "https://upstream.test/thing/-/thing-1.0.0.tgz" [("customField", "\"kept\""), ("dist-extra-marker", "true")]
         let r = rewriteVersion thingPrefix v
-        bareVersionKey "customField" r `shouldBe` Just (String "kept")
+        fieldAt "customField" r `shouldBe` Just (String "kept")
         bareDistKey "fileCount" r `shouldBe` Just (Aeson.Number 7)
 
     it "leaves a version with no dist object untouched" $ do
@@ -176,7 +175,7 @@ filterSpec = describe "assembleMergedPackument (plan replay)" $ do
 
     it "preserves unmodelled keys on a surviving version and top-level" $ do
         filtered <- filterTo survivorWithExtras
-        topLevelKey "_id" (Object (rawObject filtered)) `shouldBe` Just (String "thing")
+        fieldAt "_id" (Object (rawObject filtered)) `shouldBe` Just (String "thing")
         versionKey "1.0.0" "customField" (Object (rawObject filtered)) `shouldBe` Just (String "kept")
 
     it "drops a denied version from time but keeps created/modified bookkeeping" $ do
@@ -205,7 +204,7 @@ filterSpec = describe "assembleMergedPackument (plan replay)" $ do
         applyTo ctx quarantine info (Array mempty) >>= \case
             NoSurvivors _ -> expectationFailure "expected an assembled document"
             Assembled out -> do
-                Map.keys (objKeys "versions" (asObject out)) `shouldBe` []
+                Map.keys (mapAt "versions" (asObject out)) `shouldBe` []
                 sort (map Key.toText (KeyMap.keys (asObject out))) `shouldBe` ["dist-tags", "time", "versions"]
 
     it "rewrites a surviving version's dist.tarball under the mount base in the assembly pass" $ do
@@ -288,7 +287,7 @@ propertiesSpec = describe "properties" $ do
             v <- decodeOrFail (renderPackument spec')
             b <- forAll genBase
             let p = servedUrlFor b (specName spec')
-                versions = objKeys "versions" (asObject v)
+                versions = mapAt "versions" (asObject v)
                 once = fmap (rewriteVersion p) versions
             fmap (rewriteVersion p) once === once
 
@@ -301,7 +300,7 @@ propertiesSpec = describe "properties" $ do
             liftIO (applyToAt b ctx quarantine info v) >>= \case
                 NoSurvivors _ -> success
                 Assembled out ->
-                    forM_ (Map.keys (objKeys "versions" (asObject out))) $ \ver ->
+                    forM_ (Map.keys (mapAt "versions" (asObject out))) $ \ver ->
                         case tarballAt ver out of
                             Just url -> H.diff prefix T.isPrefixOf url
                             Nothing -> annotateShow ver >> failure
@@ -315,8 +314,8 @@ propertiesSpec = describe "properties" $ do
                 NoSurvivors _ -> success
                 Assembled out -> do
                     let o = asObject out
-                        survivingKeys = Map.keysSet (objKeys "versions" o)
-                        timeKeys = Map.keysSet (objKeys "time" o)
+                        survivingKeys = Map.keysSet (mapAt "versions" o)
+                        timeKeys = Map.keysSet (mapAt "time" o)
                         tagTargets = distTagValues o
                     -- no denied version survives in versions or time
                     assert (Set.null (Set.intersection survivingKeys denied))
@@ -332,8 +331,8 @@ propertiesSpec = describe "properties" $ do
                 NoSurvivors _ -> success
                 Assembled out -> do
                     let o = asObject out
-                        survivingKeys = Map.keysSet (objKeys "versions" o)
-                    case lookupTag "latest" o of
+                        survivingKeys = Map.keysSet (mapAt "versions" o)
+                    case textAt "latest" (objectAt "dist-tags" o) of
                         Just l -> assert (Set.member l survivingKeys)
                         Nothing -> annotateShow out >> failure
 
@@ -477,13 +476,9 @@ unparseableSurvivorPackument =
         ]
         [("1.0.0", publishedDaysAgo 30), ("banana", publishedDaysAgo 30)]
 
--- | A surviving single version carrying extra (unmodelled) keys.
+-- | A surviving single version with a top-level @_id@ extra, a version extra, and a dist extra.
 survivorWithExtras :: ByteString
-survivorWithExtras = packumentWithExtras
-
--- | A packument with a top-level @_id@ extra, a version extra, and a dist extra.
-packumentWithExtras :: ByteString
-packumentWithExtras =
+survivorWithExtras =
     encodePackument
         "thing"
         (Just [("_id", "\"thing\"")])
@@ -496,7 +491,7 @@ raw interpolation would aim the rewritten @dist.tarball@ outside the package's o
 -}
 traversalNamePackument :: ByteString
 traversalNamePackument =
-    encode
+    encodeUtf8
         ( "{\"name\":\"../evil\",\"dist-tags\":{\"latest\":\"1.0.0\"},"
             <> "\"versions\":{\"1.0.0\":{\"name\":\"../evil\",\"version\":\"1.0.0\","
             <> "\"dist\":{\"tarball\":\"https://upstream.test/thing/-/thing-1.0.0.tgz\"}}},"
@@ -510,7 +505,7 @@ component-safety gate rejects. The rewrite leaves the version's tarball untouche
 -}
 controlCharNamePackument :: ByteString
 controlCharNamePackument =
-    encode
+    encodeUtf8
         ( "{\"name\":\"th\\u0001ing\",\"dist-tags\":{\"latest\":\"1.0.0\"},"
             <> "\"versions\":{\"1.0.0\":{\"name\":\"th\\u0001ing\",\"version\":\"1.0.0\","
             <> "\"dist\":{\"tarball\":\"https://upstream.test/thing/-/thing-1.0.0.tgz\"}}},"
@@ -522,7 +517,7 @@ controlCharNamePackument =
 -- | A packument with no @dist-tags@ object at all (a malformed-upstream edge).
 noDistTagsPackument :: ByteString
 noDistTagsPackument =
-    encode
+    encodeUtf8
         ( "{\"name\":\"thing\","
             <> "\"versions\":{\"1.0.0\":{\"name\":\"thing\",\"version\":\"1.0.0\","
             <> "\"dist\":{\"tarball\":\"https://upstream.test/thing/-/thing-1.0.0.tgz\"}}},"
@@ -536,7 +531,7 @@ the raw body still carries the null, so filtering must repair it.
 -}
 nullDistTagsPackument :: ByteString
 nullDistTagsPackument =
-    encode
+    encodeUtf8
         ( "{\"name\":\"thing\",\"dist-tags\":null,"
             <> "\"versions\":{\"1.0.0\":{\"name\":\"thing\",\"version\":\"1.0.0\","
             <> "\"dist\":{\"tarball\":\"https://upstream.test/thing/-/thing-1.0.0.tgz\"}}},"
@@ -556,7 +551,7 @@ encodePackument ::
     [(Text, Text)] ->
     ByteString
 encodePackument name extras tags versions times =
-    encode $
+    encodeUtf8 $
         "{"
             <> field "name" (quoted name)
             <> ", \"dist-tags\":"
@@ -667,36 +662,13 @@ upstreamTarball name ver = "https://upstream.test/" <> name <> "/-/" <> baseName
   where
     baseName n = snd (T.breakOnEnd "/" n)
 
-{- | The route-requested 'PackageName' for a fixture: the body's own top-level @name@. The
-projection's name validation therefore passes, so these tests exercise filtering only.
--}
-fixtureName :: Value -> PackageName
-fixtureName v = npmName (nameOf v)
-  where
-    nameOf :: Value -> Text
-    nameOf value = case value of
-        Object o -> case KeyMap.lookup "name" o of
-            Just (String t) -> t
-            _ -> ""
-        _ -> ""
-
-    npmName :: Text -> PackageName
-    npmName raw = case T.stripPrefix "@" raw of
-        Just afterAt
-            | (scopeText, rest) <- T.break (== '/') afterAt
-            , bare <- T.drop 1 rest
-            , not (T.null scopeText)
-            , not (T.null bare) ->
-                mkPackageName Npm (Just (mkScope scopeText)) bare
-        _ -> mkPackageName Npm Nothing raw
-
 {- | Project a fixture through 'projectNpmManifest' and keep the decoded 'Value' too, so the
 'PackageInfo' and the 'Value' the assembly edits come from the same parse.
 -}
 loadPackument :: ByteString -> IO (PackageInfo, Value)
 loadPackument bs = do
     v <- decodeJsonOrFail bs
-    info <- either (\e -> fail ("unexpected projection failure: " <> show e)) (pure . fst) (projectNpmManifest defaultLimits (fixtureName v) bs)
+    info <- either (\e -> fail ("unexpected projection failure: " <> show e)) (pure . fst) (projectNpmManifest defaultLimits (NpmFixture.documentName v) bs)
     pure (info, v)
 
 {- | The outcome of the serve composition under test: the assembled served document when survivors
@@ -749,13 +721,13 @@ filterTo bs = do
 newtype FilteredPackument = FilteredPackument {rawObject :: KeyMap Value}
 
 versionsOf :: FilteredPackument -> Map Text Value
-versionsOf = objKeys "versions" . rawObject
+versionsOf = mapAt "versions" . rawObject
 
 timeKeysOf :: FilteredPackument -> Map Text Value
-timeKeysOf = objKeys "time" . rawObject
+timeKeysOf = mapAt "time" . rawObject
 
 distTag :: Text -> FilteredPackument -> Maybe Text
-distTag tag = lookupTag tag . rawObject
+distTag tag = textAt (Key.fromText tag) . objectAt "dist-tags" . rawObject
 
 decodeOrFail :: ByteString -> H.PropertyT IO Value
 decodeOrFail bs = either (\e -> annotateShow e >> failure) pure (eitherDecodeStrict bs)
@@ -763,34 +735,17 @@ decodeOrFail bs = either (\e -> annotateShow e >> failure) pure (eitherDecodeStr
 loadOrFail :: ByteString -> H.PropertyT IO (PackageInfo, Value)
 loadOrFail bs = do
     v <- decodeOrFail bs
-    info <- either (\e -> annotateShow e >> failure) (pure . fst) (projectNpmManifest defaultLimits (fixtureName v) bs)
+    info <- either (\e -> annotateShow e >> failure) (pure . fst) (projectNpmManifest defaultLimits (NpmFixture.documentName v) bs)
     pure (info, v)
-
-asObject :: Value -> KeyMap Value
-asObject = \case
-    Object o -> o
-    _ -> KeyMap.empty
-
--- | The object at @key@ as a 'Map' from string key to value (empty if absent).
-objKeys :: Key.Key -> KeyMap Value -> Map Text Value
-objKeys key o = case KeyMap.lookup key o of
-    Just (Object inner) -> Map.fromList [(Key.toText k, v) | (k, v) <- KeyMap.toList inner]
-    _ -> Map.empty
-
--- | The @dist-tags@ value for @tag@ as text (if a string).
-lookupTag :: Text -> KeyMap Value -> Maybe Text
-lookupTag tag o = case Map.lookup tag (objKeys "dist-tags" o) of
-    Just (String s) -> Just s
-    _ -> Nothing
 
 -- | Every string-valued @dist-tags@ target.
 distTagValues :: KeyMap Value -> [Text]
-distTagValues o = [s | String s <- Map.elems (objKeys "dist-tags" o)]
+distTagValues o = [s | String s <- Map.elems (mapAt "dist-tags" o)]
 
 -- | The rewritten tarball URL of a version, if present.
 tarballAt :: Text -> Value -> Maybe Text
 tarballAt ver v = do
-    Object vo <- Map.lookup ver (objKeys "versions" (asObject v))
+    Object vo <- Map.lookup ver (mapAt "versions" (asObject v))
     Object dist <- KeyMap.lookup "dist" vo
     case KeyMap.lookup "tarball" dist of
         Just (String url) -> Just url
@@ -800,7 +755,7 @@ tarballAt ver v = do
 with the fixture name\/version and the given tarball URL and extras.
 -}
 versionValue :: Text -> [(Text, Text)] -> IO Value
-versionValue tarball extras = decodeJsonOrFail (encode (snd (versionLit "thing" "1.0.0" tarball extras)))
+versionValue tarball extras = decodeJsonOrFail (encodeUtf8 (snd (versionLit "thing" "1.0.0" tarball extras)))
 
 -- | The @dist.tarball@ of a bare version object.
 versionTarball :: Value -> Maybe Text
@@ -810,23 +765,11 @@ versionTarball v = do
         Just (String url) -> Just url
         _ -> Nothing
 
--- | A top-level key of a bare version object.
-bareVersionKey :: Key.Key -> Value -> Maybe Value
-bareVersionKey key v = KeyMap.lookup key (asObject v)
-
 -- | A key of a bare version object's @dist@.
 bareDistKey :: Key.Key -> Value -> Maybe Value
-bareDistKey key v = do
-    Object dist <- KeyMap.lookup "dist" (asObject v)
-    KeyMap.lookup key dist
+bareDistKey key v = KeyMap.lookup key (objectAt "dist" (asObject v))
 
 versionKey :: Text -> Key.Key -> Value -> Maybe Value
 versionKey ver key v = do
-    Object vo <- Map.lookup ver (objKeys "versions" (asObject v))
+    Object vo <- Map.lookup ver (mapAt "versions" (asObject v))
     KeyMap.lookup key vo
-
-topLevelKey :: Key.Key -> Value -> Maybe Value
-topLevelKey key v = KeyMap.lookup key (asObject v)
-
-encode :: Text -> ByteString
-encode = encodeUtf8

@@ -6,7 +6,6 @@ module Ecluse.Composition.ExecutableSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import System.Environment (setEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
@@ -41,7 +40,7 @@ import Ecluse.Composition.Executable (
  )
 import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl), StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, staticEnvVars, withObservablePrivate)
+import Ecluse.Composition.Support (NoCredentials (NoCredentials), codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, staticEnvVars, withObservablePrivate)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
@@ -49,7 +48,6 @@ import Ecluse.Composition.Types (
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Queue (noMirrorQueue)
-import Ecluse.Core.Registry.Maintenance (StoredVersion (StoredVersion), VersionPresence (VersionServed))
 import Ecluse.Core.Registry.Maintenance.Upstream (
     ExternalConnection (ExternalConnection),
     RepositoryName (RepositoryName),
@@ -68,9 +66,10 @@ import Ecluse.Cve.Sync (CveSyncHandle (csEnv))
 import Ecluse.Pilot.Plan (ExportLoopPlan (ExportIdle, ExportTo))
 import Ecluse.Runtime.Cve.Sync (SyncEnv (syncEpssRequirement))
 import Ecluse.Service (mountBindingFor)
+import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Log (newTestLogEnv)
-import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeContents, fakeManifests, fakeUpstream), defaultFakeStoreConfig, newFakeStore)
-import Ecluse.Test.Package (sampleManifest, unscopedNpm)
+import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation, readFakeContents), FakeStoreConfig (fakeUpstream), defaultFakeStoreConfig, newFakeStore, seededStoreConfig)
+import Ecluse.Test.Package (unscopedNpm)
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts), previewingReport, recordingPortsUnder, testPacing)
 
@@ -89,8 +88,7 @@ spec = describe "planExecutable" $ do
         null (mwCveSync mirror) `shouldBe` True
 
     it "qualifies advisory consumers in both the mirror and Dredger plans" $
-        withSystemTempDirectory "epss-role-plan" $ \dir -> do
-            for_ [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test"), ("AWS_REGION", "us-east-1")] $ uncurry setEnv
+        withSystemTempDirectory "epss-role-plan" $ \dir -> withAmbientAws $
             for_ [(BootMirrorPipeline ServeAndMirror, staticEnvVars), (BootStorePruner, codeArtifactEnvVars)] $ \(role, mountEnv) -> do
                 let envVars =
                         overrideEnv "ECLUSE_ADVISORIES__DATA_DIR" dir $
@@ -297,18 +295,18 @@ spec = describe "planExecutable" $ do
         it ("advises " <> show role <> ", and boots it, where the backend settled nothing") $ do
             (advisories, outcome) <- probedPlan role (Undecidable NoMechanism)
             advisories `shouldBe` [PrivateUpstreamUndecided Npm NoMechanism]
-            isRight outcome `shouldBe` True
+            armOf outcome `shouldReturn` "mirror pipeline"
 
         it ("says nothing to " <> show role <> " about a private upstream that aggregates nothing") $ do
             (advisories, outcome) <- probedPlan role Safe
             advisories `shouldBe` []
-            isRight outcome `shouldBe` True
+            armOf outcome `shouldReturn` "mirror pipeline"
 
-    it "reads no private upstream on the mirror worker or the pilot, which serve no client from one" $
-        for_ [BootMirrorPipeline MirrorOnly, BootWithoutPipeline] $ \role -> do
+    for_ [(BootMirrorPipeline MirrorOnly, "mirror pipeline"), (BootWithoutPipeline, "pilot")] $ \(role, arm) ->
+        it ("reads no private upstream on the " <> toString arm <> ", which serves no client from one") $ do
             (advisories, outcome) <- reportWith staticEnvVars role mountBindingFor inertQueue (neverProbing inertStore)
             advisories `shouldBe` []
-            isRight outcome `shouldBe` True
+            armOf outcome `shouldReturn` arm
 
     for_ [(BootStorePruner, privateDeleting), (BootStorePreview, privateObserving)] $ \(role, buildsAnswering) -> do
         it ("refuses " <> show role <> " through the private handle it already holds") $ do
@@ -322,12 +320,12 @@ spec = describe "planExecutable" $ do
         it ("advises " <> show role <> ", and boots it, where the backend settled nothing") $ do
             (advisories, outcome) <- storePlan role (buildsAnswering (Undecidable NoMechanism))
             advisories `shouldBe` [PrivateUpstreamUndecided Npm NoMechanism]
-            isRight outcome `shouldBe` True
+            armOf outcome `shouldReturn` "store pruner"
 
         it ("says nothing to " <> show role <> " about a private upstream that aggregates nothing") $ do
             (advisories, outcome) <- storePlan role (buildsAnswering Safe)
             advisories `shouldBe` []
-            isRight outcome `shouldBe` True
+            armOf outcome `shouldReturn` "store pruner"
 
 -- | Plan a store role over the CodeArtifact fixture, whose private cache the case's builds answer for.
 storePlan :: BootRole -> StoreBuilds -> IO ([Advisory], Either [BootError] ExecutablePlan)
@@ -337,6 +335,10 @@ storePlan role = reportWith codeArtifactEnvVars role (\_ _ _ -> Nothing) refusin
 probedPlan :: MirrorRole -> UpstreamSafety -> IO ([Advisory], Either [BootError] ExecutablePlan)
 probedPlan role answer =
     reportWith staticEnvVars (BootMirrorPipeline role) mountBindingFor inertQueue (probing answer inertStore)
+
+-- | The arm a settled plan came back through, failing the case on a refusal.
+armOf :: Either [BootError] ExecutablePlan -> IO Text
+armOf = either (\errs -> fail ("planning refused: " <> show errs)) (pure . plannedArm . epRoleWiring)
 
 -- | Which arm of the phase a plan came back through, so an assertion names it rather than a shape.
 plannedArm :: RoleWiring -> Text
@@ -403,10 +405,6 @@ answering answer backend =
         { fakeUpstream = if registryUrlText (cbUrl backend) == privateUpstreamUrl then answer else Safe
         }
 
--- | The private upstream the composition fixtures declare.
-privateUpstreamUrl :: Text
-privateUpstreamUrl = "https://private.example.test"
-
 -- | The evidence a backend reports when a repository in the chain connects to a public registry.
 publicConnection :: UnsafeReason
 publicConnection = ConfigurationEvidence (RepositoryName "shared") (ExternalConnection "public:npmjs")
@@ -418,12 +416,6 @@ inertCredentials _ _ = pure (Right noCredentialProviders)
 -- | A credential build that refuses, as a mint against an identity that cannot answer does.
 refusingCredentials :: BuildCredentials
 refusingCredentials _ _ = pure (Left [CodeArtifactMintFailed ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET" :| []) "no identity answered"])
-
--- | The typed stand-in for amazonka's credential-discovery failure.
-data NoCredentials = NoCredentials
-    deriving stock (Show)
-
-instance Exception NoCredentials
 
 {- | An advisory store over a data directory under a path that is not a directory, so preparing
 the sync throws where every host behaves alike, before it reaches a credential chain.
@@ -521,11 +513,4 @@ expectMirrorWiring plan = case epRoleWiring plan of
 
 previewFixture :: [Text] -> IO FakeStore
 previewFixture rawVersions =
-    newFakeStore
-        defaultFakeStoreConfig
-            { fakeContents = Map.singleton name [StoredVersion version VersionServed Nothing | version <- versions]
-            , fakeManifests = Map.singleton name (sampleManifest name versions)
-            }
-  where
-    name = unscopedNpm "left-pad"
-    versions = map (mkVersion Npm) rawVersions
+    newFakeStore (seededStoreConfig [(unscopedNpm "left-pad", map (mkVersion Npm) rawVersions)])

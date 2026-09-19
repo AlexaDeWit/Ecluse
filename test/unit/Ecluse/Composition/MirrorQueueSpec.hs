@@ -41,26 +41,23 @@ mirrorRuntimeSpec = describe "planMirrorRuntime" $ do
         -- The serve-only deployment boots with no ECLUSE_QUEUE__URL and no
         -- AWS_REGION: the queue selection never runs.
         cfg <- expectConfig [("ECLUSE_MOUNTS__NPM__ENABLED", "true"), ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")] Nothing
-        planMirrorRuntime noAmbient' cfg `shouldBe` Right NoMirroring
+        planMirrorRuntime noAmbient cfg `shouldBe` Right NoMirroring
 
     it "delegates to the queue selection when a mount mirrors, surfacing its errors" $ do
         -- The same shape failure as planMirrorQueue: the mirroring mount is what
         -- makes the queue configuration load-bearing.
         cfg <- expectConfig (overrideEnv "ECLUSE_QUEUE__URL" "https://queue.example.test/q" staticEnvVars) Nothing
-        planMirrorRuntime noAmbient' cfg `shouldBe` Left [QueueUrlUnrecognised "https://queue.example.test/q"]
+        planMirrorRuntime noAmbient cfg `shouldBe` Left [QueueUrlUnrecognised "https://queue.example.test/q"]
 
     it "plans the SQS backend from the queue URL alone when a mount mirrors (no AWS_REGION)" $ do
         cfg <- expectConfig staticEnvVars Nothing
-        case planMirrorRuntime noAmbient' cfg of
+        case planMirrorRuntime noAmbient cfg of
             Right (MirrorWith (SqsBackend _)) -> pass
             other -> expectationFailure ("expected an SQS mirror runtime, got: " <> show other)
 
     it "rolls a mirroring mount with no queue URL over to the in-memory queue" $ do
         cfg <- expectConfig (withoutQueueUrl staticEnvVars) Nothing
-        planMirrorRuntime noAmbient' cfg `shouldBe` Right (MirrorWith MemoryBackend)
-  where
-    noAmbient' :: AmbientAws
-    noAmbient' = AmbientAws Nothing Nothing Nothing
+        planMirrorRuntime noAmbient cfg `shouldBe` Right (MirrorWith MemoryBackend)
 
 mirrorQueueSpec :: Spec
 mirrorQueueSpec = describe "planMirrorQueue" $ do
@@ -78,7 +75,7 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
 
     it "refuses a Pub/Sub topic resource as not built in this binary (no silent fallback)" $ do
         -- The topic shape names the GCP backend, which has no implementation compiled in, so
-        -- boot must报 a clear "not built" error rather than route quietly to another queue.
+        -- boot must report a clear "not built" error rather than route quietly to another queue.
         env <- expectEnv (overrideEnv "ECLUSE_QUEUE__URL" "projects/acme/topics/mirror" staticEnvVars)
         planMirrorQueue noAmbient env `shouldBe` Left [QueueProviderUnavailable "pubsub"]
 
@@ -147,19 +144,21 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
         env <- expectEnv staticEnvVars
         cfg <- expectSqsBackend noAmbient env
         sqsMaxReceiveCount cfg `shouldBe` DeliveryBudget 5
-  where
-    -- Resolve the SQS config from a plan that must select the SQS backend, failing
-    -- the example with the actual plan / boot errors otherwise.
-    expectSqsBackend :: AmbientAws -> AppConfig -> IO SqsConfig
-    expectSqsBackend ambient env = case planMirrorQueue ambient env of
-        Right (SqsBackend cfg) -> pure cfg
-        other -> fail ("expected an SQS mirror-queue plan, got: " <> show other)
 
-    noAmbient :: AmbientAws
-    noAmbient = AmbientAws Nothing Nothing Nothing
+{- | Resolve the SQS config from a plan that must select the SQS backend, failing the example
+with the plan or the boot errors it settled instead.
+-}
+expectSqsBackend :: AmbientAws -> AppConfig -> IO SqsConfig
+expectSqsBackend ambient env = case planMirrorQueue ambient env of
+    Right (SqsBackend cfg) -> pure cfg
+    other -> fail ("expected an SQS mirror-queue plan, got: " <> show other)
 
-    withRegion :: Text -> AmbientAws
-    withRegion r = noAmbient{ambientAwsRegion = Just r}
+-- | No ambient AWS variables at all, the deployment both plans read by default.
+noAmbient :: AmbientAws
+noAmbient = AmbientAws Nothing Nothing Nothing
+
+withRegion :: Text -> AmbientAws
+withRegion r = noAmbient{ambientAwsRegion = Just r}
 
 deadLetterTerminusSpec :: Spec
 deadLetterTerminusSpec = describe "deadLetterTerminusWarning (issue #935)" $ do

@@ -30,7 +30,6 @@ import Test.Hspec
 import UnliftIO (async, wait)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse (mountBindingFor)
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkScope)
@@ -43,6 +42,7 @@ import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newB
 import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Runtime.Test.Support (newTestEnv)
+import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Stub (Captured (capBody), Stub, allCaptured, headerValue, stubPort, withStubHeaders)
 import Ecluse.Test.Wai (status)

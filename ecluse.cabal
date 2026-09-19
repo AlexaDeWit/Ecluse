@@ -130,6 +130,7 @@ library ecluse-core
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.Maintenance
     Ecluse.Core.Registry.Maintenance.Budget
+    Ecluse.Core.Registry.Maintenance.Budget.Internal
     Ecluse.Core.Registry.Maintenance.NameSpace
     Ecluse.Core.Registry.Maintenance.Protocol
     Ecluse.Core.Registry.Maintenance.Upstream
@@ -145,6 +146,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Publish
     Ecluse.Core.Registry.Npm.Request
     Ecluse.Core.Registry.Npm.Route
+    Ecluse.Core.Registry.Npm.Route.Internal
     Ecluse.Core.Registry.Npm.SelectiveDecode
     Ecluse.Core.Registry.Npm.Serve
     Ecluse.Core.Registry.Npm.Wire
@@ -156,6 +158,7 @@ library ecluse-core
     Ecluse.Core.Registry.Sweep.Group
     Ecluse.Core.Registry.Sweep.Outcome
     Ecluse.Core.Registry.Sweep.Pacing
+    Ecluse.Core.Registry.Sweep.Pacing.Internal
     Ecluse.Core.Registry.Sweep.Package
     Ecluse.Core.Registry.Sweep.Types
     Ecluse.Core.Registry.Sweep.Walk
@@ -167,6 +170,7 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Project
     Ecluse.Core.Registry.PyPI.Request
     Ecluse.Core.Registry.PyPI.Route
+    Ecluse.Core.Registry.PyPI.Route.Internal
     Ecluse.Core.Registry.PyPI.SelectiveDecode
     Ecluse.Core.Registry.PyPI.Wire
     Ecluse.Core.Registry.Request
@@ -176,6 +180,7 @@ library ecluse-core
     Ecluse.Core.Rules.Effectful
     Ecluse.Core.Rules.Freshness
     Ecluse.Core.Rules.Outage
+    Ecluse.Core.Rules.Outage.Internal
     Ecluse.Core.Rules.Types
     Ecluse.Core.Security
     Ecluse.Core.Security.Authority
@@ -321,6 +326,7 @@ library
   autogen-modules: Paths_ecluse
   exposed-modules:
     Ecluse
+    Ecluse.Internal
     Ecluse.Boot
     Ecluse.Proxy
     Ecluse.Mirror
@@ -425,28 +431,43 @@ library ecluse-runtime
     Ecluse.Runtime.Aws.Fault
     Ecluse.Runtime.Aws.S3
     Ecluse.Runtime.Credential.CodeArtifact
+    Ecluse.Runtime.Credential.CodeArtifact.Internal
     Ecluse.Runtime.Cve.Sync
+    Ecluse.Runtime.Cve.Sync.Internal
     Ecluse.Runtime.Env
     Ecluse.Runtime.Log
+    Ecluse.Runtime.Log.Internal
     Ecluse.Runtime.Maintenance.CodeArtifact
     Ecluse.Runtime.Maintenance.CodeArtifact.Decide
+    Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal
+    Ecluse.Runtime.Maintenance.CodeArtifact.Internal
     Ecluse.Runtime.Maintenance.CodeArtifact.Read
+    Ecluse.Runtime.Maintenance.CodeArtifact.Read.Internal
     Ecluse.Runtime.Pilot.Export
     Ecluse.Runtime.Queue.Sqs
+    Ecluse.Runtime.Queue.Sqs.Internal
     Ecluse.Runtime.Server
     Ecluse.Runtime.Server.Drain
     Ecluse.Runtime.Server.Halt
+    Ecluse.Runtime.Server.Internal
     Ecluse.Runtime.Server.Middleware
     Ecluse.Runtime.Telemetry
     Ecluse.Runtime.Telemetry.Correlation
+    Ecluse.Runtime.Telemetry.Correlation.Internal
     Ecluse.Runtime.Telemetry.ExportFailure
+    Ecluse.Runtime.Telemetry.ExportFailure.Internal
     Ecluse.Runtime.Telemetry.Instruments
+    Ecluse.Runtime.Telemetry.Instruments.Internal
+    Ecluse.Runtime.Telemetry.Internal
     Ecluse.Runtime.Telemetry.Reporters
     Ecluse.Runtime.Telemetry.Resolve
+    Ecluse.Runtime.Telemetry.Resolve.Internal
     Ecluse.Runtime.Telemetry.Scrape
+    Ecluse.Runtime.Telemetry.Scrape.Internal
     Ecluse.Runtime.Telemetry.Tracing
+    Ecluse.Runtime.Telemetry.Tracing.Internal
 
-  -- The generated version module. Ecluse.Runtime.Telemetry.Resolve falls back to the
+  -- The generated version module. Ecluse.Runtime.Telemetry.Resolve.Internal falls back to the
   -- running binary's own build version for the telemetry identity.
   other-modules:   Paths_ecluse
   autogen-modules: Paths_ecluse
@@ -598,6 +619,7 @@ library ecluse-test-support
     Ecluse.Test.Cve
     Ecluse.Test.EcosystemBench
     Ecluse.Test.EcosystemBench.Types
+    Ecluse.Test.Env
     Ecluse.Test.Json
     Ecluse.Test.Log
     Ecluse.Test.Maintenance
@@ -609,6 +631,7 @@ library ecluse-test-support
     Ecluse.Test.Poll
     Ecluse.Test.Port
     Ecluse.Test.Queue
+    Ecluse.Test.Registry
     Ecluse.Test.Registry.Npm
     Ecluse.Test.Registry.PyPI
     Ecluse.Test.Registry.PyPI.Wire
@@ -706,7 +729,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.ClockSpec
     Ecluse.Core.Credential.Refresh.InternalSpec
     Ecluse.Core.CredentialSpec
-    Ecluse.Core.Cve.AcceptanceSpec
+    Ecluse.Core.Cve.InternalSpec
     Ecluse.Core.Cve.SlotSpec
     Ecluse.Core.CveSpec
     Ecluse.Core.EcosystemSpec
@@ -721,6 +744,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Osv.ProvenanceSpec
     Ecluse.Core.Osv.RetrySpec
     Ecluse.Core.Osv.SchemaSpec
+    Ecluse.Core.Osv.StreamSpec
     Ecluse.Core.Package.AdmissionSpec
     Ecluse.Core.Package.FilterSpec
     Ecluse.Core.Package.HashSpec
@@ -761,7 +785,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.PublishSpec
     Ecluse.Core.Registry.Npm.RequestSpec
     Ecluse.Core.Registry.Npm.RouteSpec
-    Ecluse.Core.Registry.Npm.RouteTableSpec
     Ecluse.Core.Registry.Npm.ServeSpec
     Ecluse.Core.Registry.Npm.WireSpec
     Ecluse.Core.Registry.NpmSpec
@@ -781,6 +804,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.WireSupportSpec
     Ecluse.Core.Rules.EffectfulSpec
     Ecluse.Core.Rules.FreshnessSpec
+    Ecluse.Core.Rules.Outage.InternalSpec
     Ecluse.Core.Rules.OutageSpec
     Ecluse.Core.Rules.TypesSpec
     Ecluse.Core.RulesSpec
@@ -789,7 +813,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Security.HostSpec
     Ecluse.Core.Security.IpLiteralSpec
     Ecluse.Core.Security.LimitsSpec
-    Ecluse.Core.SecuritySpec
     Ecluse.Core.Server.Admission.BytesSpec
     Ecluse.Core.Server.AcceptSpec
     Ecluse.Core.Server.AdmissionSpec
@@ -805,11 +828,14 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Pipeline.InternalSpec
     Ecluse.Core.Server.Pipeline.OriginSpec
     Ecluse.Core.Server.Pipeline.PackumentSpec
+    Ecluse.Core.Server.Pipeline.Tarball.PrivateSpec
+    Ecluse.Core.Server.Pipeline.Tarball.PublicSpec
+    Ecluse.Core.Server.Pipeline.Tarball.RefusalSpec
     Ecluse.Core.Server.Pipeline.Tarball.RelaySpec
-    Ecluse.Core.Server.Pipeline.TarballSpec
     Ecluse.Core.Server.PipelineSpec
     Ecluse.Core.Server.ReadinessSpec
     Ecluse.Core.Server.ResponseSpec
+    Ecluse.Core.Server.RouteDescriptionSpec
     Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.StreamSpec
     Ecluse.Core.Server.UpstreamSpec
@@ -819,7 +845,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Telemetry.MetricsSpec
     Ecluse.Core.TextSpec
     Ecluse.Core.Version.TokenSpec
-    Ecluse.Core.VersionOrderingSpec
     Ecluse.Core.VersionSpec
     Ecluse.Core.WireSpec
     Ecluse.Core.Worker.IntegritySpec
@@ -828,14 +853,15 @@ test-suite ecluse-core-unit
     Ecluse.Core.Worker.LivenessSpec
     Ecluse.Core.Worker.LoopSpec
     Ecluse.Core.Worker.RealiseSpec
-    Ecluse.Queue.Support
+    Ecluse.Rules.Outage.Support
+    Ecluse.Rules.Support
+    Ecluse.Security.Support
     Ecluse.Test.Container.ImageSpec
     Ecluse.Test.LogSpec
     Ecluse.Test.MaintenanceSpec
     Ecluse.Test.Registry.PyPI.WireSpec
     Ecluse.Test.Registry.RubyGems.WireSpec
     Ecluse.Test.RegistryCaptureSpec
-    Ecluse.Test.SupportLinkageSpec
     Ecluse.Worker.Support
     Ecluse.Worker.Support.Fixtures
     Ecluse.Worker.Support.Runtime
@@ -904,6 +930,7 @@ test-suite ecluse-unit
     Ecluse.BenchReportSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
+    Ecluse.InternalSpec
     Ecluse.DredgerSpec
     Ecluse.Dredger.PlanSpec
     Ecluse.Composition.BootErrorSpec
@@ -942,7 +969,6 @@ test-suite ecluse-unit
     Ecluse.PilotSpec
     Ecluse.RtsSpec
     Ecluse.Runtime.EnvSpec
-    Ecluse.Runtime.ServerMountSpec
     Ecluse.Runtime.ServerSpec
     Ecluse.ServiceSpec
     Ecluse.Site.MarkdownSpec
@@ -1027,6 +1053,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.LogSpec
     Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec
     Ecluse.Runtime.Maintenance.CodeArtifact.ReadSpec
+    Ecluse.Runtime.Maintenance.CodeArtifact.Support
     Ecluse.Runtime.Maintenance.CodeArtifactSpec
     Ecluse.Runtime.Queue.SqsSpec
     Ecluse.Runtime.Server.DrainSpec
@@ -1111,12 +1138,11 @@ test-suite ecluse-integration
     Ecluse.Runtime.Cve.SyncIntegrationSpec
     Ecluse.Runtime.Pilot.ExportIntegrationSpec
     Ecluse.Runtime.Queue.SqsIntegrationSpec
-    Ecluse.Runtime.Server.GracefulShutdownIntegrationSpec
+    Ecluse.Runtime.ServerIntegrationSpec
     Ecluse.Runtime.Telemetry.InstrumentsIntegrationSpec
     Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec
     Ecluse.Runtime.Telemetry.TracingIntegrationSpec
     Ecluse.Server.Pipeline.TestSupport
-    Ecluse.Test.SupportLinkageIntegrationSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
@@ -1208,7 +1234,6 @@ test-suite ecluse-smoke
     Ecluse.Core.VersionSmokeSpec
     Ecluse.PilotSmokeSpec
     Ecluse.Runtime.Credential.CodeArtifactSmokeSpec
-    Ecluse.Test.SupportLinkageSmokeSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
@@ -1262,7 +1287,6 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness.Types
     Ecluse.E2E.Harness.Verdaccio
     Ecluse.E2ESpec
-    Ecluse.Test.SupportLinkageE2ESpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:

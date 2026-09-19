@@ -4,19 +4,9 @@
 
 module Ecluse.Core.Registry.Npm.RequestSpec (spec) where
 
-import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Network.HTTP.Client qualified as Client
-import Network.HTTP.Types.Status (status200)
-import Test.Hspec (
-    Spec,
-    around,
-    describe,
-    it,
-    shouldBe,
-    shouldNotSatisfy,
-    shouldSatisfy,
- )
+import Test.Hspec (Spec, describe, it, shouldBe, shouldNotSatisfy, shouldSatisfy)
 
 import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -33,10 +23,6 @@ import Ecluse.Core.Registry.Npm.Request (
  )
 
 import Ecluse.Test.Registry.Npm (isOdd)
-import Ecluse.Test.Stub (
-    stubBaseUrl,
-    withStub,
- )
 
 spec :: Spec
 spec = do
@@ -50,16 +36,14 @@ spec = do
 
 requestShapingSpec :: Spec
 requestShapingSpec =
-    around (withStub status200 "{}") $
-        describe "fetchMetadata request shaping" $ do
-            it "sends no conditional-GET validators" $ \stub -> do
-                let req = metadataRequest (stubBaseUrl stub) Nothing Abbreviated isOdd
-                case req of
-                    Right r -> do
-                        let hs = Client.requestHeaders r
-                        lookup "If-None-Match" hs `shouldBe` Nothing
-                        lookup "If-Modified-Since" hs `shouldBe` Nothing
-                    Left e -> fail (show e)
+    describe "fetchMetadata request shaping" $
+        it "sends no conditional-GET validators" $
+            case metadataRequest "https://reg.test" Nothing Abbreviated isOdd of
+                Right r -> do
+                    let hs = Client.requestHeaders r
+                    lookup "If-None-Match" hs `shouldBe` Nothing
+                    lookup "If-Modified-Since" hs `shouldBe` Nothing
+                Left e -> fail (show e)
 
 pathEncodingSpec :: Spec
 pathEncodingSpec =
@@ -72,11 +56,6 @@ pathEncodingSpec =
         it "leaves an unscoped name unencoded" $ do
             case metadataRequest "https://reg.test" Nothing Abbreviated isOdd of
                 Right r -> Client.path r `shouldBe` "/is-odd"
-                Left e -> fail (show e)
-
-        it "does not encode the leading @ of a scoped name" $ do
-            case metadataRequest "https://reg.test" Nothing Abbreviated babelCodeFrame of
-                Right r -> BS.isPrefixOf "/@babel" (Client.path r) `shouldBe` True
                 Left e -> fail (show e)
 
         it "re-encodes a literal '%' in a once-decoded name so a live escape never reaches the upstream" $ do
@@ -175,7 +154,9 @@ urlFailureSpec = describe "URL-formation failures" $ do
         metadataRequest "not a url" Nothing Abbreviated isOdd `shouldSatisfy` isUnparseable
 
     it "builds a metadata request against a well-formed base URL" $ do
-        metadataRequest "https://reg.test/" Nothing Abbreviated isOdd `shouldNotSatisfy` isLeft
+        -- The base carries a trailing slash, which must not double against the package path.
+        fmap Client.path (metadataRequest "https://reg.test/" Nothing Abbreviated isOdd)
+            `shouldBe` Right "/is-odd"
 
 babelCodeFrame :: PackageName
 babelCodeFrame = mkPackageName Npm (Just (mkScope "babel")) "code-frame"

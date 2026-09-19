@@ -11,7 +11,7 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
-import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesLater),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
@@ -34,16 +34,17 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
     wholeNameSpace,
  )
 import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo))
-import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Maintenance (
     FakeStore (..),
     FakeStoreConfig (..),
     defaultFakeStoreConfig,
     newFakeStore,
+    servedVersion,
     testDeleteGuard,
     withBucket,
  )
-import Ecluse.Test.Package (sampleManifest)
+import Ecluse.Test.Package (babelCore, lodashName, npmVersion, sampleManifest)
 
 {- The fake is the handle's third implementation, so these cases assert the contract carries a backend
 nothing like CodeArtifact: a two-version ceiling, a late-finishing delete, and no re-publication. -}
@@ -52,22 +53,22 @@ spec = do
     describe "the fake store's enumeration" $ do
         it "lists the packages it was seeded with" $ do
             handle <- seeded
-            listWholeStore handle `shouldReturn` Right [plainName, scopedName]
+            listWholeStore handle `shouldReturn` Right [lodashName, babelCore]
 
         it "cuts the listing into pages, so nothing downstream holds the store whole" $ do
             store <- newFakeStore seededConfig{fakePageSize = 1}
             pages <- pagesOf (fakeMaintenance store)
-            pages `shouldBe` [[plainName], [scopedName]]
+            pages `shouldBe` [[lodashName], [babelCore]]
 
         it "buckets by the name's base component, so a namespace never decides the bucket" $ do
             handle <- seeded
-            listBucketOf handle "l" `shouldReturn` Right [plainName]
-            listBucketOf handle "c" `shouldReturn` Right [scopedName]
+            listBucketOf handle "l" `shouldReturn` Right [lodashName]
+            listBucketOf handle "c" `shouldReturn` Right [babelCore]
             listBucketOf handle "b" `shouldReturn` Right []
 
         it "lists a package's versions with what the store still serves" $ do
             handle <- seeded
-            versions <- enumerateVersions handle plainName
+            versions <- enumerateVersions handle lodashName
             fmap (map (renderVersion . storedVersion)) versions `shouldBe` Right ["1.0.0", "1.1.0"]
             fmap (map storedPresence) versions `shouldBe` Right [VersionServed, VersionWithdrawn]
 
@@ -78,36 +79,36 @@ spec = do
     describe "the fake store's manifest read" $ do
         it "answers the manifest it was seeded with, projected as the rules engine reads one" $ do
             handle <- seeded
-            outcome <- readStoreManifest handle plainName
+            outcome <- readStoreManifest handle lodashName
             fmap (Map.keys . infoVersions . manifestInfo) outcome `shouldBe` Right ["1.0.0", "1.1.0"]
 
         it "faults for a package it holds no manifest for, which keeps every version" $ do
             handle <- seeded
-            (fmap faultRetry . leftToMaybe <$> readStoreManifest handle scopedName)
+            (fmap faultRetry . leftToMaybe <$> readStoreManifest handle babelCore)
                 `shouldReturn` Just RetryFutile
 
         it "answers the configured fault ahead of anything it holds" $ do
             store <- newFakeStore seededConfig{fakeFault = Just aFault}
-            (leftToMaybe <$> readStoreManifest (fakeMaintenance store) plainName)
+            (leftToMaybe <$> readStoreManifest (fakeMaintenance store) lodashName)
                 `shouldReturn` Just aFault
 
     describe "the fake store's deletion" $ do
         it "removes a held version and reports the operation still running" $ do
             store <- newFakeStore seededConfig
-            outcomes <- deleteVersions (fakeMaintenance store) testDeleteGuard plainName [version "1.0.0"]
+            outcomes <- deleteVersions (fakeMaintenance store) testDeleteGuard lodashName [npmVersion "1.0.0"]
             map snd outcomes `shouldBe` [VersionRemoving "fake-operation"]
             remaining <- readFakeContents store
-            map (renderVersion . storedVersion) (Map.findWithDefault [] plainName remaining)
+            map (renderVersion . storedVersion) (Map.findWithDefault [] lodashName remaining)
                 `shouldBe` ["1.1.0"]
 
         it "refuses a version it does not hold rather than report it gone" $ do
             handle <- seeded
-            outcomes <- deleteVersions handle testDeleteGuard plainName [version "9.9.9"]
+            outcomes <- deleteVersions handle testDeleteGuard lodashName [npmVersion "9.9.9"]
             map (isRefusal . snd) outcomes `shouldBe` [True]
 
         it "reports one outcome per version whatever the batch size" $ do
             handle <- seeded
-            outcomes <- deleteVersions handle testDeleteGuard plainName (map version ["1.0.0", "1.1.0", "9.9.9"])
+            outcomes <- deleteVersions handle testDeleteGuard lodashName (map npmVersion ["1.0.0", "1.1.0", "9.9.9"])
             map (renderVersion . fst) outcomes `shouldBe` ["1.0.0", "1.1.0", "9.9.9"]
 
     describe "the fake store's verdicts" $ do
@@ -157,9 +158,9 @@ spec = do
         it "reads the same seeded state the handle does" $ do
             store <- newFakeStore seededConfig
             let observed = fakeObservation store
-            collectPages (obListPackagesIn observed wholeNameSpace) `shouldReturn` Right [plainName, scopedName]
-            fmap (map storedVersion) <$> obEnumerateVersions observed plainName
-                `shouldReturn` Right (map version ["1.0.0", "1.1.0"])
+            collectPages (obListPackagesIn observed wholeNameSpace) `shouldReturn` Right [lodashName, babelCore]
+            fmap (map storedVersion) <$> obEnumerateVersions observed lodashName
+                `shouldReturn` Right (map npmVersion ["1.0.0", "1.1.0"])
             obVerifyConsent observed `shouldReturn` Right ConsentGranted
             obClassifyStore observed `shouldReturn` Right StoreDestroyable
 
@@ -167,23 +168,23 @@ spec = do
             store <- newFakeStore seededConfig
             held <- readFakeContents store
             void (collectPages (obListPackagesIn (fakeObservation store) wholeNameSpace))
-            void (obEnumerateVersions (fakeObservation store) plainName)
+            void (obEnumerateVersions (fakeObservation store) lodashName)
             readFakeContents store `shouldReturn` held
 
     describe "the fake store under a fault" $ do
         it "faults every read" $ do
             store <- newFakeStore seededConfig{fakeFault = Just aFault}
             listWholeStore (fakeMaintenance store) `shouldReturn` Left aFault
-            enumerateVersions (fakeMaintenance store) plainName `shouldReturn` Left aFault
+            enumerateVersions (fakeMaintenance store) lodashName `shouldReturn` Left aFault
             verifyConsent (fakeMaintenance store) `shouldReturn` Left aFault
             classifyStore (fakeMaintenance store) `shouldReturn` Left aFault
 
         it "marks every version of a faulted delete unreached, and deletes nothing" $ do
             store <- newFakeStore seededConfig{fakeFault = Just aFault}
-            outcomes <- deleteVersions (fakeMaintenance store) testDeleteGuard plainName (map version ["1.0.0", "1.1.0"])
+            outcomes <- deleteVersions (fakeMaintenance store) testDeleteGuard lodashName (map npmVersion ["1.0.0", "1.1.0"])
             map snd outcomes `shouldBe` replicate 2 (VersionUncertain aFault)
             remaining <- readFakeContents store
-            map (renderVersion . storedVersion) (Map.findWithDefault [] plainName remaining)
+            map (renderVersion . storedVersion) (Map.findWithDefault [] lodashName remaining)
                 `shouldBe` ["1.0.0", "1.1.0"]
   where
     seeded = fakeMaintenance <$> newFakeStore seededConfig
@@ -201,15 +202,15 @@ seededConfig =
     defaultFakeStoreConfig
         { fakeContents =
             Map.fromList
-                [ (plainName, [served "1.0.0", withdrawn "1.1.0"])
-                , (scopedName, [served "7.0.0"])
+                [ (lodashName, [served "1.0.0", withdrawn "1.1.0"])
+                , (babelCore, [served "7.0.0"])
                 ]
         , -- Only one of the two seeded packages carries a manifest, so both read arms are drivable.
-          fakeManifests = Map.singleton plainName (sampleManifest plainName (map version ["1.0.0", "1.1.0"]))
+          fakeManifests = Map.singleton lodashName (sampleManifest lodashName (map npmVersion ["1.0.0", "1.1.0"]))
         }
   where
-    served raw = StoredVersion (version raw) VersionServed Nothing
-    withdrawn raw = StoredVersion (version raw) VersionWithdrawn Nothing
+    served = servedVersion . npmVersion
+    withdrawn raw = StoredVersion (npmVersion raw) VersionWithdrawn Nothing
 
 -- The one bucket a store with no alphabet offers, which covers everything it holds.
 listWholeStore :: StoreMaintenance -> IO (Either StoreFault [PackageName])
@@ -222,15 +223,6 @@ pagesOf :: StoreMaintenance -> IO [[PackageName]]
 pagesOf handle =
     withBucket "" $ \everything ->
         runConduit (void (listPackagesIn handle everything) .| CL.consume)
-
-scopedName :: PackageName
-scopedName = mkPackageName Npm (Just (mkScope "babel")) "core"
-
-plainName :: PackageName
-plainName = mkPackageName Npm Nothing "lodash"
-
-version :: Text -> Version
-version = mkVersion Npm
 
 aFault :: StoreFault
 aFault =

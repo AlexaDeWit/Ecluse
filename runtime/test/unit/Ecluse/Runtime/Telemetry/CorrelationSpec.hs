@@ -7,8 +7,8 @@ module Ecluse.Runtime.Telemetry.CorrelationSpec (spec) where
 import Test.Hspec
 
 import Ecluse.Runtime.Log (DdContext (DdContext))
-import Ecluse.Runtime.Telemetry.Correlation (activeDdSpan, ddContextNow, ddIdentity)
-import Ecluse.Runtime.Telemetry.Resolve (
+import Ecluse.Runtime.Telemetry.Correlation.Internal (activeDdSpan, ddContextNow, ddIdentity)
+import Ecluse.Runtime.Telemetry.Resolve.Internal (
     EndpointSource (DefaultedEndpoint),
     ResolvedTelemetry (..),
     TelemetryEndpoint (TelemetryEndpoint),

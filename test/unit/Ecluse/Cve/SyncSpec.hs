@@ -14,7 +14,6 @@ import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, getCurrentTime, 
 import Database.SQLite.Simple (close, execute_, open)
 import Katip (closeScribes)
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
-import System.Environment (setEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
@@ -47,9 +46,10 @@ import Ecluse.Core.Server.Readiness (
  )
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Cve.Sync (AdvisoryNeed (..), CveSyncHandle (..), advisoryFreshnessFor, cveRuleDepsFor, cveSyncReadiness, cveSyncScheduleFor, katipOutageReporter, outageReportPeriod, planCveSync, reportPushAge, sweepStaleTemps, sweepStep)
-import Ecluse.Runtime.Cve.Sync (FetchedObject (..), SyncEnv (..), SyncHooks (..), SyncOutcome (..), SyncSchedule (..), absentReportInterval, bootBackoffDelays, runCveSync, syncStep)
+import Ecluse.Runtime.Cve.Sync.Internal (FetchedObject (..), SyncEnv (..), SyncHooks (..), SyncOutcome (..), SyncSchedule (..), absentReportInterval, bootBackoffDelays, runCveSync, syncStep)
 import Ecluse.Runtime.Test.Cve (fetchServingAt, headOnlyFetch, refusingFetch)
 import Ecluse.Test.Cve (fakeCveDb)
+import Ecluse.Test.Env (withAmbientAws)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv, runQuietKatip)
 import Ecluse.Test.Osv (mkMinimalValidDbWithMeta)
 import Ecluse.Test.Package (sampleDetails, v1_0_0)
@@ -65,8 +65,7 @@ spec = do
             Map.keys plan `shouldBe` []
 
         it "plans one handle per configured mount ecosystem and prepares the data dir" $
-            withSystemTempDirectory "ecluse-cve-sync-plan" $ \dir -> do
-                setDummyAwsCredentials
+            withSystemTempDirectory "ecluse-cve-sync-plan" $ \dir -> withAmbientAws $ do
                 let dataDir = dir </> "osv"
                 -- A stale in-progress download and a canonical artifact from a
                 -- previous run: the sweep removes the former and keeps the latter.
@@ -426,14 +425,6 @@ isStale :: AdvisoryFreshness -> Bool
 isStale = \case
     AdvisoryStale{} -> True
     _ -> False
-
--- The S3 env discovers credentials from the process environment. The plan only wires
--- the transport and makes no request, so dummies satisfy it.
-setDummyAwsCredentials :: IO ()
-setDummyAwsCredentials = do
-    setEnv "AWS_ACCESS_KEY_ID" "test"
-    setEnv "AWS_SECRET_ACCESS_KEY" "test"
-    setEnv "AWS_REGION" "us-east-1"
 
 mountedNpmDoc :: ByteString
 mountedNpmDoc =

@@ -13,7 +13,7 @@ module Ecluse.Runtime.Test.Cve (
 import Data.Time (UTCTime)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Runtime.Cve.Sync (CveFetch (..), DbEtag (DbEtag), FetchedObject (FetchedObject), OsvDbFetchFault)
+import Ecluse.Runtime.Cve.Sync.Internal (CveFetch (..), DbEtag (DbEtag), FetchedObject (FetchedObject), OsvDbFetchFault)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 -- | A HEAD response whose download arm throws if the test unexpectedly reaches it.

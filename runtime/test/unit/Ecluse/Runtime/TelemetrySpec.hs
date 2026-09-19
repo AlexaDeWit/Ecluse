@@ -25,7 +25,8 @@ import OpenTelemetry.Trace (
     emptyTracerProviderOptions,
  )
 
-import Ecluse.Runtime.Telemetry (
+import Ecluse.Runtime.Telemetry.ExportFailure.Internal (newExportFailureSink)
+import Ecluse.Runtime.Telemetry.Internal (
     Telemetry (..),
     TelemetryProviders (..),
     TelemetrySwitch (..),
@@ -38,7 +39,6 @@ import Ecluse.Runtime.Telemetry (
     telemetryTracerProvider,
     withTelemetry,
  )
-import Ecluse.Runtime.Telemetry.ExportFailure (newExportFailureSink)
 
 {- | Tests the OpenTelemetry substrate: the @ECLUSE_OBSERVABILITY__TELEMETRY@ switch parses
 strictly, the off handle initialises no SDK, and 'telemetryEnabled' wires the SDK providers
@@ -64,23 +64,16 @@ switchSpec = describe "TelemetrySwitch" $ do
         parseTelemetrySwitch "maybe"
             `shouldBe` Left "unknown telemetry switch \"maybe\" (expected one of: on, off)"
 
-    it "shows each mode without erroring (derived Show)" $ do
-        show TelemetryOff `shouldBe` ("TelemetryOff" :: String)
-        show TelemetryOn `shouldBe` ("TelemetryOn" :: String)
-
 handleSpec :: Spec
-handleSpec = describe "telemetryDisabled" $ do
-    -- A 'TracerProvider'/'MeterProvider' has no 'Show', so the provider absence is
-    -- asserted through 'isNothing' rather than 'shouldSatisfy' (which would print).
-    it "exposes no tracer provider (nothing to emit through)" $
-        isNothing (telemetryTracerProvider telemetryDisabled) `shouldBe` True
-
-    it "exposes no meter provider (nothing to emit through)" $
-        isNothing (telemetryMeterProvider telemetryDisabled) `shouldBe` True
-
-    it "is the TelemetryDisabled constructor" $ case telemetryDisabled of
-        TelemetryDisabled -> pure ()
-        TelemetryEnabled{} -> expectationFailure "expected the disabled no-op handle"
+handleSpec =
+    describe "telemetryDisabled" $
+        -- A provider has no 'Show', so absence is asserted through 'isNothing'.
+        it "is the disabled constructor and exposes neither provider to emit through" $ do
+            case telemetryDisabled of
+                TelemetryDisabled -> pass
+                TelemetryEnabled{} -> expectationFailure "expected the disabled no-op handle"
+            isNothing (telemetryTracerProvider telemetryDisabled) `shouldBe` True
+            isNothing (telemetryMeterProvider telemetryDisabled) `shouldBe` True
 
 {- | An 'OTelSignals' of inert providers, so a test drives 'telemetryEnabled' without the real
 SDK. It reads only the tracer and meter fields, the rest keep the value total.
@@ -99,28 +92,19 @@ offlineSignals = do
             }
 
 enabledHandleSpec :: Spec
-enabledHandleSpec = describe "telemetryEnabled" $ do
-    -- A 'TracerProvider'/'MeterProvider' has no 'Eq' or 'Show', so the assertion is the
-    -- constructor shape plus a forced projection rather than value equality.
-    it "carries the SDK providers into the TelemetryEnabled handle" $ do
-        signals <- offlineSignals
-        case telemetryEnabled signals of
-            TelemetryDisabled ->
-                expectationFailure "expected the enabled handle from telemetryEnabled"
-            TelemetryEnabled TelemetryProviders{} -> pure ()
-
-    it "wires the signals' tracer provider through to the tracer accessor" $ do
-        signals <- offlineSignals
-        present <- forceProvider (telemetryTracerProvider (telemetryEnabled signals))
-        present `shouldBe` True
-
-    it "wires the signals' meter provider through to the meter accessor" $ do
-        signals <- offlineSignals
-        present <- forceProvider (telemetryMeterProvider (telemetryEnabled signals))
-        present `shouldBe` True
+enabledHandleSpec =
+    describe "telemetryEnabled" $
+        -- A provider has no 'Eq' or 'Show', so the assertion is the constructor shape plus a
+        -- forced projection, which proves each accessor yielded a value rather than a thunk.
+        it "carries the SDK providers into the enabled handle and projects both through" $ do
+            handle <- telemetryEnabled <$> offlineSignals
+            case handle of
+                TelemetryDisabled ->
+                    expectationFailure "expected the enabled handle from telemetryEnabled"
+                TelemetryEnabled TelemetryProviders{} -> pass
+            forceProvider (telemetryTracerProvider handle) `shouldReturn` True
+            forceProvider (telemetryMeterProvider handle) `shouldReturn` True
   where
-    -- Force the projected provider to WHNF and report whether it was present. A provider has no
-    -- 'Eq'/'Show', so this proves the projection yielded a real value, not a dropped thunk.
     forceProvider :: Maybe a -> IO Bool
     forceProvider = \case
         Nothing -> pure False

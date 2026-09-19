@@ -7,7 +7,6 @@ module Ecluse.CompositionSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse (mountBindingFor)
 import Ecluse.Composition (
     BootWiring (bwBindings),
     PublishBudget (..),
@@ -20,6 +19,7 @@ import Ecluse.Composition.BootError (BootError (..), renderBootError)
 import Ecluse.Composition.Credential (initTargetCredentialProviders)
 import Ecluse.Composition.MirrorRole (MirrorMintPlan (MintMirrorWrite, SkipMirrorWrite))
 import Ecluse.Composition.Support (
+    completeMountDoc,
     expectConfig,
     expectEnv,
     expectProviders,
@@ -44,7 +44,7 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (unSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (SHA1, SHA512), PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkScope)
 import Ecluse.Core.Package.Integrity (
     mkMinIntegrity,
     mkMinTrustedIntegrity,
@@ -68,8 +68,9 @@ import Ecluse.Core.Server.Upstream (
     mountUpstreams,
     upstreamTarballHostGate,
  )
+import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Credential (noCredentialReporters)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, thingName)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, thingName, unscopedPyPI)
 import Ecluse.Test.Rules (inertRuleDeps)
 
 {- | Tests the composition root's boot-time wiring. Every boot problem is a fail-fast,
@@ -84,19 +85,6 @@ spec = do
 
 expectDoc :: ByteString -> IO ByteString
 expectDoc = pure
-
-{- | A complete document mount keyed by the given ecosystem. Its non-CodeArtifact mirror target
-and static write token resolve, so the no-adapter case fails on the adapter alone.
--}
-mountDoc :: Text -> ByteString
-mountDoc eco =
-    encodeUtf8
-        ( "{\"mounts\":{\""
-            <> eco
-            <> "\":{\"privateUpstream\":{\"registry\":{\"url\":\"https://priv\"}},\
-               \\"publicUpstream\":{\"registry\":{\"url\":\"https://pub\"}},\
-               \\"mirrorTarget\":{\"registry\":{\"url\":\"https://mir\",\"token\":\"t\"}}}}}"
-        )
 
 {- The ports a unit test injects into the environment-dependent tier: the real adapter resolver,
 a fixed clock, inert rule deps, and reporters that record nothing. -}
@@ -322,8 +310,8 @@ bootErrorSpec = describe "resolveBootWiring (fail fast at boot)" $ do
                     : ("ECLUSE_MOUNTS__RUBYGEMS__MIRROR_TARGET__REGISTRY__TOKEN", "t")
                     : staticEnvVars
         _ <- expectEnv unservedEnv
-        _ <- expectDoc (mountDoc "rubygems")
-        planFrom unservedEnv (Just (mountDoc "rubygems")) >>= \case
+        _ <- expectDoc (completeMountDoc "rubygems")
+        planFrom unservedEnv (Just (completeMountDoc "rubygems")) >>= \case
             Left errs -> errs `shouldBe` [MissingAdapter RubyGems]
             Right _ -> expectationFailure "expected boot failure"
 
@@ -472,7 +460,7 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
     it "dispatches the PyPI arm to PyPI's own predicate" $
         -- The arm's matching rules are pinned in "Ecluse.Core.Registry.PyPI.FirstPartySpec". This row
         -- proves the root hands the declaration to it rather than deciding anything itself.
-        map (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . pypiName) ["acme-tools", "beta"]
+        map (firstPartyName (pypiFirstParty ("Acme_Tools" :| [])) . unscopedPyPI) ["acme-tools", "beta"]
             `shouldBe` [True, False]
 
     it "wires the same predicate onto the mount's serve deps, deny by default" $ do
@@ -493,10 +481,6 @@ firstPartySpec = describe "firstPartyName (the derived first-party predicate)" $
                     `shouldBe` [False, False]
             _ -> expectationFailure "expected a single wired binding"
 
--- A PyPI name, in the ecosystem whose canonical form is PEP 503's.
-pypiName :: Text -> PackageName
-pypiName = mkPackageName PyPI Nothing
-
 -- A PyPI declaration of exact names.
 pypiFirstParty :: NonEmpty Text -> FirstParty
-pypiFirstParty = FirstPartyPyPI . fmap (PyPIOwnedName . pypiName)
+pypiFirstParty = FirstPartyPyPI . fmap (PyPIOwnedName . unscopedPyPI)

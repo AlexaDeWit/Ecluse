@@ -9,19 +9,16 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import Katip (SimpleLogPayload, closeScribes, toObject)
-import Katip.Monadic (runKatipContextT)
+import Katip (toObject)
 import Test.Hspec
 
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Types (DbEtag (..))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     Hash,
     HashAlg (SHA1, SHA256),
     PackageDetails,
     PackageInfo (..),
-    PackageName,
  )
 import Ecluse.Core.Rules (
     PreparedRule (..),
@@ -61,9 +58,8 @@ import Ecluse.Core.Server.Response (
     Transience (WillResolve, WontResolve),
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Log (captureStdout, jsonLogEnv)
-import Ecluse.Test.Package (defaultMinIntegrity, detailsWith, unsafeHash, unscopedNpm, validSha1, validSha256)
+import Ecluse.Test.Log (runJsonLog)
+import Ecluse.Test.Package (defaultMinIntegrity, detailsWith, leftpadName, npmVersion, unsafeHash, unscopedNpm, validSha1, validSha256)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
 
@@ -150,21 +146,16 @@ spec = do
                     VersionVerdict
                         "1.0.0"
                         (Reject (Rejection (Unavailable (WillResolve Nothing)) "DenyIfCve: the rule could not be evaluated"))
-            logged <- captureStdout $ do
-                logEnv <- jsonLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logDenials (unscopedNpm "is-odd") Nothing [denied])
-                void (closeScribes logEnv)
+            logged <- runJsonLog (logDenials (unscopedNpm "is-odd") Nothing [denied])
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
             logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
 
     describe "logSkippedChecks" $ do
         it "records a check skipped for unavailability once, at WARNING, with the package, version, rule, and cause" $ do
-            logged <- captureStdout $ do
-                logEnv <- jsonLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty $
+            logged <-
+                runJsonLog $
                     logSkippedChecks (unscopedNpm "is-odd") "1.0.0" (Just (DbEtag "etag-xyz")) [SkippedUnavailable "DenyIfCve" "no advisory database loaded", Unreached "DenyIfEpss"]
-                void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
             logged `shouldSatisfy` T.isInfixOf "\"package\":\"is-odd\""
@@ -177,10 +168,7 @@ spec = do
             length (filter (T.isInfixOf "skipped for unavailability") (lines logged)) `shouldBe` 1
 
         it "records nothing for an admission that skipped no check" $ do
-            logged <- captureStdout $ do
-                logEnv <- jsonLogEnv
-                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logSkippedChecks (unscopedNpm "is-odd") "1.0.0" Nothing [])
-                void (closeScribes logEnv)
+            logged <- runJsonLog (logSkippedChecks (unscopedNpm "is-odd") "1.0.0" Nothing [])
             logged `shouldBe` ""
 
     describe "denialAuditPayload" $ do
@@ -228,7 +216,7 @@ pins the bucket order and not the key order.
 mixedIntegrityInfo :: PackageInfo
 mixedIntegrityInfo =
     PackageInfo
-        { infoName = mixedPkg
+        { infoName = leftpadName
         , infoVersions =
             Map.fromList
                 [ ("0.9.0", versionWith "0.9.0" []) -- missing integrity
@@ -241,10 +229,6 @@ mixedIntegrityInfo =
         , infoInvalidEntries = []
         }
 
--- | The package the admission fixture is built around. Its identity is inert to the gate.
-mixedPkg :: PackageName
-mixedPkg = unscopedNpm "leftpad"
-
 {- | The two context-worded refusals admitByIntegrity projects the dropped versions to.
 They stay distinct, so the bucket order is observable in the refusal list.
 -}
@@ -252,8 +236,8 @@ belowFloorMarker, missingMarker :: ServeDecision
 belowFloorMarker = Reject (Rejection BelowIntegrityFloor "below the integrity floor")
 missingMarker = Reject (Rejection MissingIntegrity "no integrity digest")
 
-{- | A snapshot of 'mixedPkg' at the given version carrying exactly the given digests.
+{- | A snapshot of 'leftpadName' at the given version carrying exactly the given digests.
 Everything else is an inert default, since admitByIntegrity reads only the artifacts.
 -}
 versionWith :: Text -> [Hash] -> PackageDetails
-versionWith raw = detailsWith mixedPkg (mkVersion Npm raw)
+versionWith raw = detailsWith leftpadName (npmVersion raw)

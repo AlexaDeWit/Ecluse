@@ -42,8 +42,6 @@ spec = do
         it "normalises PyPI names per PEP 503" $
             pkgCanonical (mkPackageName PyPI Nothing "Flask_Thing.X")
                 `shouldBe` "flask-thing-x"
-        it "treats PyPI names equal up to normalisation" $
-            mkPackageName PyPI Nothing "Flask" `shouldBe` mkPackageName PyPI Nothing "flask"
 
     describe "isAsciiNameComponent" $ do
         it "accepts an ordinary ASCII component" $
@@ -68,11 +66,13 @@ spec = do
         it "reads the stored base field (no display-slicing round-trip)" $
             pkgBaseName (mkPackageName Npm (Just (mkScope "babel")) "code-frame")
                 `shouldBe` "code-frame"
-        it "does not enter identity: two names differing only in base are still equatable by identity" $
-            -- Identity is (ecosystem, namespace, canonical). 'nameKey' excludes the base name,
-            -- so the base name alone cannot make two names differ.
-            mkPackageName Npm (Just (mkScope "babel")) "code-frame"
-                `shouldBe` mkPackageName Npm (Just (mkScope "babel")) "code-frame"
+        it "does not enter identity: two names differing only in base are equal" $ do
+            -- Identity is (ecosystem, namespace, canonical). PEP 503 folds both spellings to one
+            -- canonical key, so this pair differs in the base name alone.
+            let published = mkPackageName PyPI Nothing "Flask_Thing"
+                normalised = mkPackageName PyPI Nothing "flask-thing"
+            unscopedName published `shouldNotBe` unscopedName normalised
+            published `shouldBe` normalised
 
     describe "PackageInfo" $ do
         let name = mkPackageName Npm Nothing "thing"

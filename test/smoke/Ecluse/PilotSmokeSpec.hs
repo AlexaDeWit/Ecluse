@@ -2,20 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Smoke tier: compile the /live/ osv.dev npm export through the same one-shot
-path operators script ('Ecluse.Pilot.runPilotCompile'), and sanity-check the
-artifact's advisory population. This is the drift alarm for the upstream feed. A
-schema change at osv.dev that our parser silently drops collapses the row count
-here. That happens long before a production sync would surface it.
-
-Non-gating by design (the smoke tier): osv.dev is an uncontrolled external
-service, so the test pends rather than fails when it is unreachable. A red
-here is a real disagreement with the live oracle worth investigating.
+{- | Smoke tier: compile the /live/ osv.dev npm export through the same one-shot path operators
+script ('Ecluse.Pilot.runPilotCompile'), then check the artifact's advisory population. It is the
+drift alarm for the upstream feed: a schema change osv.dev makes that our parser silently drops
+collapses the row counts here, long before a production sync would surface it.
 -}
 module Ecluse.PilotSmokeSpec (spec) where
 
 import Control.Exception (try)
-import Database.SQLite.Simple (Only (..), close, open, query_)
+import Database.SQLite.Simple (Connection, Only (Only), Query, close, open, query_)
 import Katip (Environment (..), initLogEnv)
 import Network.HTTP.Client (HttpException)
 import System.IO.Temp (withSystemTempDirectory)
@@ -50,17 +45,27 @@ spec = describe "osv.dev npm export (live oracle)" $
                     pendingWith ("osv.dev unreachable: " <> show e)
                 Right dbFile -> do
                     conn <- open dbFile
-                    total <- query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges" :: IO [Only Int]
-                    lodash <- query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges WHERE package_name = 'lodash'" :: IO [Only Int]
-                    scored <- query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges WHERE epss_score IS NOT NULL" :: IO [Only Int]
+                    total <- countOf conn "SELECT COUNT(*) FROM package_vulnerability_ranges"
+                    lodash <- countOf conn "SELECT COUNT(*) FROM package_vulnerability_ranges WHERE package_name = 'lodash'"
+                    scored <- countOf conn "SELECT COUNT(*) FROM package_vulnerability_ranges WHERE epss_score IS NOT NULL"
                     close conn
                     -- Floors, not exact counts: the live dataset only grows. Dropping below
-                    -- either floor means the parser and the feed no longer agree.
-                    map fromOnly total `shouldSatisfy` any (>= 1000)
-                    map fromOnly lodash `shouldSatisfy` any (>= 1)
+                    -- a floor means the parser and the feed no longer agree.
+                    total `shouldSatisfy` (>= 1000)
+                    lodash `shouldSatisfy` (>= 1)
                     -- The live EPSS join: the npm feed always carries CVE-aliased advisories,
                     -- so a zero here means the feed's shape and our parse no longer agree.
-                    map fromOnly scored `shouldSatisfy` any (>= 1)
+                    scored `shouldSatisfy` (>= 1)
+
+{- | The one row a @COUNT@ query answers, so a floor assertion reads the count itself and a
+failure prints it rather than a list.
+-}
+countOf :: Connection -> Query -> IO Int
+countOf conn sql = do
+    rows <- query_ conn sql
+    case rows of
+        [Only n] -> pure n
+        _ -> fail ("expected one count row, got " <> show (length rows))
 
 defaultAppConfig :: IO AppConfig
 defaultAppConfig = case loadConfig [] Nothing of

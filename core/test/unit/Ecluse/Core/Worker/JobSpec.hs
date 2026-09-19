@@ -4,17 +4,16 @@
 
 module Ecluse.Core.Worker.JobSpec (spec) where
 
-import Data.Aeson (Value (String), eitherDecodeStrict', object, (.=))
-import Data.ByteArray.Encoding (Base (Base64), convertToBase)
+import Data.Aeson (Value (String), object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
-import UnliftIO.Exception (try)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
 import Ecluse.Core.Package (
     Artifact (artFilename, artHashes),
+    Hash,
     HashAlg (Blake2b, SHA1, SHA256, SRI),
     PackageDetails (pkgArtifacts),
     PackageName,
@@ -30,34 +29,33 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (
-    MetadataError (MetadataFetch, MetadataUndecodable),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
-    fetchVersionDetails,
  )
-import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
-    PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
+    PublishPlan (ppLatest, ppMetadata),
     newMirrorPublish,
  )
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     RetryLeg (AfterPublish, BeforePublish),
+    WorkerPolicies,
     WorkerPolicy (wpArtifact, wpPublish),
     processJob,
  )
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
-import Ecluse.Test.Package (unsafeFilename, unsafeHash)
+import Ecluse.Test.Package (npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admitRule, cannotVetRule, denyRule)
-import Ecluse.Test.Snapshot (versionDocOf, versionReadOf)
+import Ecluse.Test.Snapshot (versionDocOf)
 import Ecluse.Test.Stub (allCaptured, capMethod, stubBaseUrl, withStub)
 import Ecluse.Worker.Support
 import Network.HTTP.Client (defaultManagerSettings, newManager)
@@ -102,62 +100,18 @@ spec = do
                 Left (Dropped reason) -> reason `shouldSatisfy` T.isInfixOf "the advisory index is corrupt"
                 other -> expectationFailure ("expected a drop for an unclearable inability, got " <> show other)
 
-    describe "npmPublishDocument" $ do
-        it "assembles a PUT document with the version, dist integrity, and base64 attachment" $ do
-            let document =
-                    npmPublishDocument pkg (PublishPlan{ppVersion = ver, ppLatest = ver, ppMetadata = admissionObject}) "thing-1.0.0.tgz" (Just trueSri) (Just trueSha1) tarballBytes
-                decoded :: Either String Value
-                decoded = first show document >>= eitherDecodeStrict'
-            case decoded of
-                Left err -> expectationFailure ("publish document is not valid JSON: " <> err)
-                Right value -> do
-                    stringAt ["name"] value `shouldBe` Just "thing"
-                    stringAt ["dist-tags", "latest"] value `shouldBe` Just "1.0.0"
-                    stringAt ["versions", "1.0.0", "dist", "integrity"] value `shouldBe` Just trueSri
-                    stringAt ["_attachments", "thing-1.0.0.tgz", "data"] value
-                        `shouldBe` Just (decodeUtf8 (convertToBase Base64 tarballBytes :: ByteString))
     describe "processJob -- the integrity gate" $ do
-        it "publishes and reports success when the bytes match the re-admitted digest" $
-            withUpstream $ \url ->
-                withRuntime (Right ()) $ \runtime queue logRef -> do
-                    job <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob job)
-                    outcome `shouldBe` Succeeded
-                    published <- plDocuments <$> readIORef logRef
-                    length published `shouldBe` 1
-
-        it "publishes a sha384-only version end to end (fetch, compute sha384, verify, publish)" $
-            -- Current metadata carries only the sha384, so this proves a sha384-admitted artifact
-            -- is not admit-but-uncomputable.
-            withUpstream $ \url ->
-                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SRI trueSha384Sri]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                    job <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob job)
-                    outcome `shouldBe` Succeeded
-                    published <- plDocuments <$> readIORef logRef
-                    length published `shouldBe` 1
-
-        it "publishes a sha256-only version end to end (the #409 fix on the default floor)" $
-            -- A worker that could not compute sha256 would drop an artifact the default public
-            -- floor had already admitted.
-            withUpstream $ \url ->
-                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash SHA256 trueSha256]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                    job <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob job)
-                    outcome `shouldBe` Succeeded
-                    published <- plDocuments <$> readIORef logRef
-                    length published `shouldBe` 1
-
-        it "publishes a blake2b-only version end to end (the #409 fix, the top tier)" $
-            -- The floor admits a blake2b-only artifact, and the worker recomputes
-            -- blake2b-512, matches, and publishes it.
-            withUpstream $ \url ->
-                withRuntimePolicies (admitPoliciesWithDigests [unsafeHash Blake2b trueBlake2b]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                    job <- enqueueAndReceive queue (jobWith url)
-                    outcome <- runWM runtime (processJob job)
-                    outcome `shouldBe` Succeeded
-                    published <- plDocuments <$> readIORef logRef
-                    length published `shouldBe` 1
+        -- The worker recomputes whichever digest current metadata carries, so an artifact the
+        -- floor admitted is never admit-but-uncomputable.
+        for_ soleAdmittedDigests $ \(label, hash) ->
+            it ("publishes a version whose current metadata carries only " <> label) $
+                withUpstream $ \url ->
+                    withRuntimePolicies (admitPoliciesWithDigests [hash]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                        job <- enqueueAndReceive queue (jobWith url)
+                        outcome <- runWM runtime (processJob job)
+                        outcome `shouldBe` Succeeded
+                        published <- plDocuments <$> readIORef logRef
+                        length published `shouldBe` 1
 
         it "refuses to publish (no publish) when the bytes do not match the re-admitted digest" $
             withUpstream $ \url ->
@@ -253,16 +207,16 @@ spec = do
                     outcome <- runWM runtime (processJob job)
                     outcome `shouldSatisfy` isDropped
     describe "processJob: ingest-time policy re-evaluation" $ do
-        it "drops a job whose version current policy denies, without publishing" $
-            -- Current policy denies a version admitted at serve time, so the worker retires it
-            -- unmirrored. 'unreachableUrl' guards the re-evaluation: skipping it would surface a
-            -- Retried, not this Dropped.
-            withRuntimePolicies (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                job <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob job)
-                outcome `shouldSatisfy` isDropped
-                published <- plDocuments <$> readIORef logRef
-                published `shouldBe` []
+        -- Every row drives 'unreachableUrl': skipping the re-evaluation would surface a Retried
+        -- from the artifact fetch instead of the verdict the row names.
+        for_ reEvaluationVerdicts $ \(label, policies, expected) ->
+            it label $
+                withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    job <- enqueueAndReceive queue (jobWith unreachableUrl)
+                    outcome <- runWM runtime (processJob job)
+                    outcome `shouldSatisfy` expected
+                    published <- plDocuments <$> readIORef logRef
+                    published `shouldBe` []
 
         it "hands the publish step the version object current metadata carried at admission, never the enqueue-time one" $
             withUpstream $ \url ->
@@ -322,34 +276,6 @@ spec = do
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
-
-        it "drops a job whose version the upstream no longer offers (withdrawn), without publishing" $
-            -- A version the upstream withdrew must not be mirrored, so the drop is non-retryable.
-            withRuntimePolicies (npmPolicies (\_ _ -> pure VersionMissing) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                job <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob job)
-                outcome `shouldSatisfy` isDropped
-                published <- plDocuments <$> readIORef logRef
-                published `shouldBe` []
-
-        it "retries a job when the re-evaluation metadata cannot be re-fetched, without publishing" $
-            -- A transient metadata outage maps to the serve path's transient degrade: leave the
-            -- job for redelivery rather than dropping it or publishing it unvetted.
-            withRuntimePolicies (npmPolicies (\_ _ -> pure VersionMetadataUnavailable) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                job <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob job)
-                outcome `shouldSatisfy` isRetried
-                published <- plDocuments <$> readIORef logRef
-                published `shouldBe` []
-
-        it "drops a job whose ecosystem has no configured policy (fail-closed), without publishing" $
-            -- A job for an ecosystem with no bundle is fail-closed: never mirrored unvetted.
-            withRuntimePolicies mempty noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                job <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob job)
-                outcome `shouldSatisfy` isDropped
-                published <- plDocuments <$> readIORef logRef
-                published `shouldBe` []
 
         it "fetches through the request formation keyed by the job's own ecosystem" $
             -- The policies map also carries a PyPI bundle whose request formation
@@ -412,48 +338,6 @@ spec = do
                         reason `shouldSatisfy` T.isInfixOf "127.0.0.1:1"
                         reason `shouldSatisfy` (not . T.isInfixOf "/thing/-/thing-1.0.0.tgz")
                     other -> expectationFailure ("expected a Dropped outcome, got " <> show other)
-                published <- plDocuments <$> readIORef logRef
-                published `shouldBe` []
-
-        it "drops a job whose artifact's current digests fall below the integrity floor" $
-            -- The upstream now serves only a legacy SHA-1. The shared oracle refuses it at ingest
-            -- exactly as the serve gate would, so a no-longer-admissible artifact never enters the
-            -- mirror.
-            withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artHashes = [unsafeHash SHA1 trueSha1]}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                job <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob job)
-                outcome `shouldSatisfy` isDropped
-                published <- plDocuments <$> readIORef logRef
-                published `shouldBe` []
-
-        it "drops a job whose version no longer carries any integrity digest" $
-            -- The stripped-digest degrade: current metadata offers nothing to tie the
-            -- bytes to. The serve gate 403s it as MissingIntegrity, and the worker drops it.
-            withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artHashes = []}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                job <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob job)
-                outcome `shouldSatisfy` isDropped
-                published <- plDocuments <$> readIORef logRef
-                published `shouldBe` []
-
-        it "drops a job whose admitted artifact file the current metadata no longer carries" $
-            -- The version survives upstream but its file set no longer names the admitted artifact.
-            -- Redelivery cannot restore the file, so the drop is non-retryable.
-            withRuntimePolicies (npmPolicies (resolverWithArtifact sampleArtifact{artFilename = "renamed-9.9.9.tgz"}) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                job <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob job)
-                outcome `shouldSatisfy` isDropped
-                published <- plDocuments <$> readIORef logRef
-                published `shouldBe` []
-
-        it "retries a job when a fail-closed rule cannot be computed (undecidable), without publishing" $
-            -- The advisory-outage degrade: the serve path renders the same cause as a
-            -- transient 503 status. The worker leaves the job for redelivery rather than
-            -- dropping a serviceable job or publishing it unvetted.
-            withRuntimePolicies (npmPolicies presentResolver [cannotVetRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
-                job <- enqueueAndReceive queue (jobWith unreachableUrl)
-                outcome <- runWM runtime (processJob job)
-                outcome `shouldSatisfy` isRetried
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 
@@ -571,34 +455,34 @@ spec = do
         -- upstream tag as chosen, and the store's post-write inventory as survivors.
         it "keeps a present upstream latest, whatever this job publishes" $
             -- 2.0.0 mirrored first, then an older 1.0.0 job: completion order must not retag.
-            mirrorLatest (Just (npmVer "2.0.0")) [npmVer "2.0.0"] (npmVer "1.0.0")
-                `shouldBe` npmVer "2.0.0"
+            mirrorLatest (Just (npmVersion "2.0.0")) [npmVersion "2.0.0"] (npmVersion "1.0.0")
+                `shouldBe` npmVersion "2.0.0"
 
         it "converges on the same tag when the two jobs complete in the reverse order" $ do
             -- 1.0.0 lands first with its target absent, so it is the only version to name.
-            mirrorLatest (Just (npmVer "2.0.0")) [] (npmVer "1.0.0") `shouldBe` npmVer "1.0.0"
-            mirrorLatest (Just (npmVer "2.0.0")) [npmVer "1.0.0"] (npmVer "2.0.0") `shouldBe` npmVer "2.0.0"
+            mirrorLatest (Just (npmVersion "2.0.0")) [] (npmVersion "1.0.0") `shouldBe` npmVersion "1.0.0"
+            mirrorLatest (Just (npmVersion "2.0.0")) [npmVersion "1.0.0"] (npmVersion "2.0.0") `shouldBe` npmVersion "2.0.0"
 
         it "falls back to the highest stable version when the upstream target is not mirrored" $
-            mirrorLatest (Just (npmVer "9.9.9")) [npmVer "2.0.0"] (npmVer "1.0.0")
-                `shouldBe` npmVer "2.0.0"
+            mirrorLatest (Just (npmVersion "9.9.9")) [npmVersion "2.0.0"] (npmVersion "1.0.0")
+                `shouldBe` npmVersion "2.0.0"
 
         it "falls back the same way when no upstream latest is known" $
-            mirrorLatest Nothing [npmVer "2.0.0"] (npmVer "1.0.0") `shouldBe` npmVer "2.0.0"
+            mirrorLatest Nothing [npmVersion "2.0.0"] (npmVersion "1.0.0") `shouldBe` npmVersion "2.0.0"
 
         it "prefers a stable version over a higher prerelease" $
-            mirrorLatest Nothing [npmVer "2.0.0"] (npmVer "3.0.0-beta.1") `shouldBe` npmVer "2.0.0"
+            mirrorLatest Nothing [npmVersion "2.0.0"] (npmVersion "3.0.0-beta.1") `shouldBe` npmVersion "2.0.0"
 
         it "names a prerelease only when no stable version is present" $
-            mirrorLatest Nothing [npmVer "3.0.0-beta.1"] (npmVer "3.0.0-beta.2")
-                `shouldBe` npmVer "3.0.0-beta.2"
+            mirrorLatest Nothing [npmVersion "3.0.0-beta.1"] (npmVersion "3.0.0-beta.2")
+                `shouldBe` npmVersion "3.0.0-beta.2"
 
         it "keeps an explicit upstream prerelease latest that is present" $
-            mirrorLatest (Just (npmVer "3.0.0-beta.1")) [npmVer "2.0.0"] (npmVer "3.0.0-beta.1")
-                `shouldBe` npmVer "3.0.0-beta.1"
+            mirrorLatest (Just (npmVersion "3.0.0-beta.1")) [npmVersion "2.0.0"] (npmVersion "3.0.0-beta.1")
+                `shouldBe` npmVersion "3.0.0-beta.1"
 
         it "names the published version when the store held nothing" $
-            mirrorLatest Nothing [] (npmVer "1.0.0") `shouldBe` npmVer "1.0.0"
+            mirrorLatest Nothing [] (npmVersion "1.0.0") `shouldBe` npmVersion "1.0.0"
 
     describe "processJob: the release tag the write declares" $ do
         it "declares the upstream's latest, not the version this job publishes" $
@@ -621,38 +505,39 @@ spec = do
                     plans <- plPlans <$> readIORef logRef
                     map ppLatest plans `shouldBe` [ver]
 
-    describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
-        -- The serve-time tarball gate and the worker both resolve a version through this one
-        -- function, so these cases pin its classification directly.
-        it "classifies a resolved version as present" $
-            fetchVersionDetails (versionClient (Right (versionReadOf (Just (sampleDetails pkg ver)) (Just otherVer)))) pkg ver
-                `shouldReturn` VersionPresent (versionDocOf (sampleDetails pkg ver)) (Just otherVer)
+{- | Each digest the worker recomputes, as the only one current metadata carries. A row the
+worker could not compute would drop an artifact the public floor had already admitted.
+-}
+soleAdmittedDigests :: [(String, Hash)]
+soleAdmittedDigests =
+    [ ("a sha512 SRI", unsafeHash SRI trueSri)
+    , ("a sha384 SRI", unsafeHash SRI trueSha384Sri)
+    , ("a sha256 digest", unsafeHash SHA256 trueSha256)
+    , ("a blake2b-512 digest", unsafeHash Blake2b trueBlake2b)
+    ]
 
-        it "carries the document's own latest onto the present verdict" $
-            fetchVersionDetails (versionClient (Right (versionReadOf (Just (sampleDetails pkg ver)) Nothing))) pkg ver
-                `shouldReturn` VersionPresent (versionDocOf (sampleDetails pkg ver)) Nothing
-
-        it "classifies an absent version (resolved, but no such version) as missing" $
-            fetchVersionDetails (versionClient (Right (versionReadOf Nothing Nothing))) pkg ver
-                `shouldReturn` VersionMissing
-
-        it "classifies a metadata error as unavailable (the transient degrade)" $
-            fetchVersionDetails (versionClient (Left MetadataUndecodable)) pkg ver
-                `shouldReturn` VersionMetadataUnavailable
-
-        it "classifies an unreachable upstream as unavailable (transport in the typed channel)" $
-            fetchVersionDetails (versionClient (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))) pkg ver
-                `shouldReturn` VersionMetadataUnavailable
-
-        it "propagates a client that escapes its total contract (the invariant channel)" $ do
-            -- The typed channel reports every real failure, so a throw out of the fetch is an
-            -- invariant break. It must reach the caller's supervision, never be laundered into the
-            -- transient degrade.
-            outcome <- try (fetchVersionDetails throwingVersionClient pkg ver) :: IO (Either SomeException VersionEvaluation)
-            outcome `shouldSatisfy` isLeft
-
-npmVer :: Text -> Version
-npmVer = mkVersion Npm
+-- | What ingest re-evaluation decides, per reason the job is no longer mirrorable as enqueued.
+reEvaluationVerdicts :: [(String, WorkerPolicies, JobOutcome -> Bool)]
+reEvaluationVerdicts =
+    [ ("drops a job whose version current policy denies, without publishing", npmPolicies presentResolver [denyRule], isDropped)
+    , -- A version the upstream withdrew must not be mirrored, so the drop is non-retryable.
+      ("drops a job whose version the upstream no longer offers (withdrawn), without publishing", npmPolicies (\_ _ -> pure VersionMissing) [admitRule], isDropped)
+    , -- A transient metadata outage maps to the serve path's transient degrade: leave the job
+      -- for redelivery rather than dropping it or publishing it unvetted.
+      ("retries a job when the re-evaluation metadata cannot be re-fetched, without publishing", npmPolicies (\_ _ -> pure VersionMetadataUnavailable) [admitRule], isRetried)
+    , -- A job for an ecosystem with no bundle is fail-closed: never mirrored unvetted.
+      ("drops a job whose ecosystem has no configured policy (fail-closed), without publishing", mempty, isDropped)
+    , -- The upstream now serves only a legacy SHA-1. The shared oracle refuses it at ingest
+      -- exactly as the serve gate would.
+      ("drops a job whose artifact's current digests fall below the integrity floor", npmPolicies (resolverWithArtifact sampleArtifact{artHashes = [unsafeHash SHA1 trueSha1]}) [admitRule], isDropped)
+    , -- The stripped-digest degrade: current metadata offers nothing to tie the bytes to.
+      ("drops a job whose version no longer carries any integrity digest", npmPolicies (resolverWithArtifact sampleArtifact{artHashes = []}) [admitRule], isDropped)
+    , -- The version survives upstream but its file set no longer names the admitted artifact,
+      -- which no redelivery can restore.
+      ("drops a job whose admitted artifact file the current metadata no longer carries", npmPolicies (resolverWithArtifact sampleArtifact{artFilename = "renamed-9.9.9.tgz"}) [admitRule], isDropped)
+    , -- The advisory-outage degrade: the serve path renders the same cause as a transient 503.
+      ("retries a job when a fail-closed rule cannot be computed (undecidable), without publishing", npmPolicies presentResolver [cannotVetRule], isRetried)
+    ]
 
 -- The version object current metadata carries, marked so a case can tell it from any other.
 admissionObject :: CachedDoc

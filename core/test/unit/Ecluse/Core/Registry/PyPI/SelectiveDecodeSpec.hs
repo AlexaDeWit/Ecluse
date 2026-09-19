@@ -7,13 +7,12 @@ Skipped values still obey JSON syntax and depth limits.
 -}
 module Ecluse.Core.Registry.PyPI.SelectiveDecodeSpec (spec) where
 
-import Data.Aeson (Value (Array, Object, String), encode, object, (.=))
-import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteString.Lazy qualified as BL
+import Data.Aeson (Value (Array, String), object, (.=))
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Test.Registry.PyPI (simpleFile)
+import Ecluse.Test.Json (encodeStrict, fieldAt)
+import Ecluse.Test.Registry.PyPI (filesNamed, simpleIndexWith)
 
 import Ecluse.Core.Registry.PyPI.SelectiveDecode (
     SelectedFiles (sfFileCount, sfFiles, sfMeta, sfName),
@@ -30,7 +29,7 @@ spec = do
 selectionSpec :: Spec
 selectionSpec = describe "selectFilesFromIndex" $ do
     it "retains only the API declaration from a large metadata object" $ do
-        selected <- shouldSelect (const True) (BL.toStrict (encode (object ["meta" .= object ["api-version" .= ("1.4" :: Text), "unrelated" .= replicate 400 (rawIndexValue [])]])))
+        selected <- shouldSelect (const True) (encodeStrict (object ["meta" .= object ["api-version" .= ("1.4" :: Text), "unrelated" .= replicate 400 (rawIndexValue [])]]))
         sfMeta selected `shouldBe` Just (object ["api-version" .= ("1.4" :: Text)])
 
     it "skips the contents of a malformed metadata array" $ do
@@ -51,7 +50,7 @@ selectionSpec = describe "selectFilesFromIndex" $ do
 
     it "keeps a selected entry whole, unmodelled keys and all" $ do
         selected <- shouldSelect (belongsTo "2.34.2") (indexOf ["requests-2.34.2.tar.gz"])
-        (entryKey "provenance" . snd =<< listToMaybe (sfFiles selected)) `shouldBe` Just (String "https://pypi.org/integrity/x/provenance")
+        (fieldAt "provenance" . snd =<< listToMaybe (sfFiles selected)) `shouldBe` Just (String "https://pypi.org/integrity/x/provenance")
 
     it "selects nothing for a release the index does not carry" $ do
         selected <- shouldSelect (belongsTo "9.9.9") (indexOf ["requests-2.34.2.tar.gz"])
@@ -93,7 +92,7 @@ faithfulnessSpec = describe "faithful to a whole-document decode" $ do
             `shouldBe` Left SelectiveUndecodable
 
     it "refuses trailing non-whitespace after the top-level object" $
-        selectFilesFromIndex 64 (const True) (BL.toStrict (encode (rawIndexValue [])) <> "junk")
+        selectFilesFromIndex 64 (const True) (encodeStrict (rawIndexValue []) <> "junk")
             `shouldBe` Left SelectiveUndecodable
 
     it "refuses a body that is not a JSON object" $
@@ -114,13 +113,13 @@ belongsTo :: Text -> Text -> Bool
 belongsTo version filename = T.isInfixOf ("-" <> version <> ".") filename || T.isInfixOf ("-" <> version <> "-") filename
 
 indexOf :: [Text] -> ByteString
-indexOf = rawIndex . map simpleFile
+indexOf = rawIndex . filesNamed
 
 rawIndex :: [Value] -> ByteString
-rawIndex = BL.toStrict . encode . rawIndexValue
+rawIndex = encodeStrict . rawIndexValue
 
 rawIndexValue :: [Value] -> Value
-rawIndexValue files = object ["name" .= ("requests" :: Text), "meta" .= object ["api-version" .= ("1.4" :: Text)], "files" .= files]
+rawIndexValue = simpleIndexWith "requests" ["meta" .= object ["api-version" .= ("1.4" :: Text)]]
 
 duplicateFilesIndex :: ByteString
 duplicateFilesIndex =
@@ -133,13 +132,8 @@ manyFileIndex :: ByteString
 manyFileIndex = indexOf (["requests-1.0.0.tar.gz", "requests-1.0.0-py3-none-any.whl"] <> [T.pack ("requests-2." <> show n <> ".0.tar.gz") | n <- [1 .. 398 :: Int]])
 
 selectedNames :: SelectedFiles -> [Text]
-selectedNames selected = mapMaybe stringOf (mapMaybe (entryKey "filename" . snd) (sfFiles selected))
+selectedNames selected = mapMaybe stringOf (mapMaybe (fieldAt "filename" . snd) (sfFiles selected))
   where
     stringOf = \case
         String s -> Just s
         _ -> Nothing
-
-entryKey :: Text -> Value -> Maybe Value
-entryKey key = \case
-    Object entry -> KeyMap.lookup (fromString (toString key)) entry
-    _ -> Nothing

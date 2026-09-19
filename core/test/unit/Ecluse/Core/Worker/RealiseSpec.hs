@@ -10,7 +10,6 @@ that retires a message no dead-letter terminus captures. The decision half's cov
 module Ecluse.Core.Worker.RealiseSpec (spec) where
 
 import Data.Text qualified as T
-import Katip (closeScribes)
 import Test.Hspec
 
 import Ecluse.Core.Package (HashAlg (SRI), PackageName)
@@ -20,7 +19,7 @@ import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Discarded, Failed, Published))
 import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker (processBatch)
-import Ecluse.Test.Log (captureStdout, jsonLogEnv)
+import Ecluse.Test.Log (captureJsonLog)
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort, recordingWorkerMetricsPort)
 import Ecluse.Test.Rules (admitRule, denyRule)
@@ -107,10 +106,7 @@ spec = do
                 withRuntimeQueue queue (`recordingPublish` Left (PublishRejected (PublishError "503"))) admitPolicies noopWorkerMetricsPort $ \runtime _logRef -> do
                     enqueue_ queue (jobWith url)
                     messages <- receive_ queue
-                    logged <- captureStdout $ do
-                        logEnv <- jsonLogEnv
-                        runWMWith logEnv runtime (processBatch messages)
-                        void (closeScribes logEnv)
+                    logged <- snd <$> captureJsonLog (\logEnv -> runWMWith logEnv runtime (processBatch messages))
                     logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
                     logged `shouldSatisfy` T.isInfixOf "leaving mirror job un-acked for retry"
                     logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
@@ -139,10 +135,7 @@ spec = do
                 withRuntimeQueue queue (`recordingPublish` Right ()) (npmPolicies rawlessResolver [admitRule]) metricsPort $ \runtime logRef -> do
                     enqueue_ queue (jobWith url)
                     messages <- receive_ queue
-                    logged <- captureStdout $ do
-                        logEnv <- jsonLogEnv
-                        runWMWith logEnv runtime (processBatch messages)
-                        void (closeScribes logEnv)
+                    logged <- snd <$> captureJsonLog (\logEnv -> runWMWith logEnv runtime (processBatch messages))
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
                     acked <- ackedReceipts

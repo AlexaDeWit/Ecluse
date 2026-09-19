@@ -23,16 +23,16 @@ import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Version (mkVersion, versionKey)
 import Ecluse.Test.Package (sampleArtifact, sampleDetails, thingName, unsafeHash, v1_0_0, validSha256)
-import Ecluse.Test.Snapshot (versionReadOf)
+import Ecluse.Test.Snapshot (untaggedRead)
 
 spec :: Spec
 spec = describe "selected-release accounting" $ do
     it "keeps a cached absence smaller than a present release" $ do
-        weighVersion (untagged Nothing) `shouldBe` 1024
-        weighVersion (untagged (Just baseline)) `shouldSatisfy` (> weighVersion (untagged Nothing))
+        weighVersion (untaggedRead Nothing) `shouldBe` 1024
+        weighVersion (untaggedRead (Just baseline)) `shouldSatisfy` (> weighVersion (untaggedRead Nothing))
 
     it "charges a retained raw version object on top of the release" $
-        weighVersion (carrying (toJSON (T.replicate 4096 "x"))) `shouldSatisfy` (> weighVersion (untagged (Just baseline)) + 4096)
+        weighVersion (carrying (toJSON (T.replicate 4096 "x"))) `shouldSatisfy` (> weighVersion (untaggedRead (Just baseline)) + 4096)
 
     it "weighs the raw object by one walk of its structure, never by encoding it" $ do
         -- Each added key costs exactly its structural allowance under the shared expansion, so
@@ -41,11 +41,11 @@ spec = describe "selected-release accounting" $ do
             wireOf n = 2 + n * (4 + T.length "dep-100" + 2 + T.length "^1.0.0")
         weighVersion (withKeys 100) - weighVersion (withKeys 0) `shouldBe` expandWireBytes (wireOf 100) - expandWireBytes (wireOf 0)
         weighVersion (withKeys 1000) `shouldSatisfy` (> weighVersion (withKeys 100))
-        weighVersion (withKeys 0) `shouldSatisfy` (> weighVersion (untagged (Just baseline)))
+        weighVersion (withKeys 0) `shouldSatisfy` (> weighVersion (untaggedRead (Just baseline)))
 
     it "charges the retained upstream release tag on top of the release" $ do
-        let tagged = (untagged (Just baseline)){vrUpstreamLatest = Just (mkVersion Npm "1.0.0")}
-        weighVersion tagged `shouldSatisfy` (> weighVersion (untagged (Just baseline)))
+        let tagged = (untaggedRead (Just baseline)){vrUpstreamLatest = Just (mkVersion Npm "1.0.0")}
+        weighVersion tagged `shouldSatisfy` (> weighVersion (untaggedRead (Just baseline)))
 
     it "charges each artifact even when its fields share allocations" $ do
         let singleWeight = weight baseline{pkgArtifacts = oneArtifact :| []}
@@ -89,14 +89,11 @@ spec = describe "selected-release accounting" $ do
             expandedWeight - compactWeight - payloadGrowth `shouldSatisfy` (>= minimumParsedGrowth)
 
 weight :: PackageDetails -> Int
-weight = weighVersion . untagged . Just
+weight = weighVersion . untaggedRead . Just
 
 -- The baseline release read carrying the given raw version object.
 carrying :: Value -> VersionRead
-carrying raw = (untagged (Just baseline)){vrVersion = (\doc -> doc{vdRaw = Just (fst npmCached raw)}) <$> vrVersion (untagged (Just baseline))}
-
-untagged :: Maybe PackageDetails -> VersionRead
-untagged details = versionReadOf details Nothing
+carrying raw = (untaggedRead (Just baseline)){vrVersion = (\doc -> doc{vdRaw = Just (fst npmCached raw)}) <$> vrVersion (untaggedRead (Just baseline))}
 
 oneArtifact :: Artifact
 oneArtifact = sampleArtifact{artHashes = [], artInterpreter = Nothing, artProvenance = Nothing}

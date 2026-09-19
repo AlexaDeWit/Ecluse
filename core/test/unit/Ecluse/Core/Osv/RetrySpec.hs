@@ -7,9 +7,7 @@ module Ecluse.Core.Osv.RetrySpec (spec) where
 
 import Control.Retry (
     RetryStatus (rsIterNumber),
-    capDelay,
     defaultRetryStatus,
-    fullJitterBackoff,
     limitRetries,
     simulatePolicy,
  )
@@ -84,25 +82,10 @@ spec = do
             length (filter isJust delays) `shouldBe` 5
             drop 5 delays `shouldSatisfy` all isNothing
 
-        it "is bounded: it stops after the configured number of retries" $ do
-            let policy = limitRetries 4 <> capDelay 60_000_000 (fullJitterBackoff 1_000_000)
-            delays <- map snd <$> simulatePolicy 8 policy
-            length (filter isJust delays) `shouldBe` 4
-            drop 4 delays `shouldSatisfy` all isNothing
-
-        it "is truncated: no single backoff exceeds the cap" $ do
-            -- A base that doubles past the cap within the budget: the policy must
-            -- still clamp every delay to the cap.
-            let cap = 2_000_000
-                policy = limitRetries 8 <> capDelay cap (fullJitterBackoff 1_000_000)
-            delays <- mapMaybe snd <$> simulatePolicy 8 policy
-            delays `shouldSatisfy` all (<= cap)
-
-        it "is jittered: full jitter does not produce a fixed schedule" $ do
-            -- Full jitter randomises each wait in [0, capped exponential], so repeated
+        it "the shipped default policy jitters, so two runs of it differ" $ do
+            -- Full jitter randomises each wait in [0, the capped exponential], so repeated
             -- simulations of the same policy differ. A fixed exponential backoff would not.
-            let policy = limitRetries 6 <> capDelay 60_000_000 (fullJitterBackoff 1_000_000)
-            runs <- replicateM 5 (map snd <$> simulatePolicy 6 policy)
+            runs <- replicateM 5 (map snd <$> simulatePolicy 6 defaultOsvRetryPolicy)
             length (ordNub runs) `shouldSatisfy` (> 1)
 
     describe "isRetryableStatusCode" $

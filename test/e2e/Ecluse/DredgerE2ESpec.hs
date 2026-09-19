@@ -16,7 +16,6 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
-import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.E2E.Fixtures.Npm (
     PkgSpec,
@@ -65,7 +64,7 @@ identityScenarios = describe "identity denies with no advisory database" $ do
         initial <- verdaccioSnapshot e2e
         privateInitial <- verdaccioSnapshot cache
         run <- runDredgerOnce plane ["--once"] (sweepEnv dredgerPkg)
-        assertFullSweep "deleting " dredgerPkg initial run
+        assertFullSweep dredgerPkg initial run
         verdaccioVersions e2e (psName dredgerPkg) `shouldReturn` []
         finalStore <- verdaccioSnapshot e2e
         finalStore `shouldBe` Map.delete (psName dredgerPkg) initial
@@ -177,14 +176,12 @@ identityEntry :: Int -> Text -> Pair
 identityEntry position revoked =
     fromString ("revoke-" <> show position) .= object ["type" .= ("DenyByIdentity" :: Text), "identity" .= revoked]
 
-assertFullSweep :: Text -> PkgSpec -> Map Text [Text] -> RoleRun -> Expectation
-assertFullSweep opening pkg initial run = do
+{- | A full walk over the seeded store: it exits clean, deletes every version of @pkg@, and
+closes with the cycle tally those deletions imply.
+-}
+assertFullSweep :: PkgSpec -> Map Text [Text] -> RoleRun -> Expectation
+assertFullSweep pkg initial run = do
     (roleExit run, roleOutput run) `shouldSatisfy` ((== ExitSuccess) . fst)
-    assertSweepLines opening pkg initial run
-
--- | The lines a full walk over the seeded store wrote, for a run whose own status the case asserts.
-assertSweepLines :: Text -> PkgSpec -> Map Text [Text] -> RoleRun -> Expectation
-assertSweepLines opening pkg initial run = do
     let versions = Map.findWithDefault [] (psName pkg) initial
         guardCount = length (Map.findWithDefault [] publishDredgerName initial)
         examined = sum (map length (Map.elems initial)) - guardCount
@@ -198,7 +195,7 @@ assertSweepLines opening pkg initial run = do
     sweepMessages run `shouldMatchList` (map auditLine versions <> [cycleLine fields])
   where
     auditLine version =
-        opening
+        "deleting "
             <> psName pkg
             <> "@"
             <> version
@@ -328,8 +325,7 @@ assertVulnerableRefused e2e = do
     void $ npmInstall e2e (revokedName <> "@" <> vulnerableVersion) >>= shouldFail
     (status, body) <- proxyGet e2e (npmTarballPath revokedName vulnerableVersion)
     (status, decodeUtf8 body :: Text) `shouldSatisfy` ((== 403) . fst)
-    -- Give the worker a 1.5s window to erroneously re-mirror the refused version, then assert absence.
-    threadDelay 1500000
+    awaitMirrorWindow
     verdaccioVersions e2e revokedName `shouldReturn` [fixedVersion]
 
 -- The fix survives the sweep in the store, and its metadata and artifact both still serve.
@@ -418,8 +414,7 @@ recoveryScenarios = describe "next private reads and recovery after a grouped cl
             withRelaxedProxy plane $ \relaxed -> do
                 (fst <$> proxyGet relaxed (npmTarballPath name version)) `shouldReturn` 404
                 withNpmProject relaxed (\project -> void (npmInstallIn project name >>= shouldFail))
-                -- Give the worker a 1.5s window to mirror bytes it never obtained, then read both stores.
-                threadDelay 1500000
+                awaitMirrorWindow
                 verdaccioVersions relaxed name `shouldReturn` []
                 verdaccioVersions cache name `shouldReturn` []
 
@@ -615,8 +610,7 @@ rolloutScenarios = describe "eventual cleanup after out-of-order role updates" $
             -- bytes, so the request fails for want of a source rather than by a policy refusal.
             (fst <$> proxyGet proxy (npmTarballPath name version)) `shouldReturn` 404
             withNpmProject proxy (\project -> void (npmInstallIn project name >>= shouldFail))
-            -- Give the worker a 1.5s window to mirror bytes it never obtained, then read both stores.
-            threadDelay 1500000
+            awaitMirrorWindow
             assertRolloutRemoved proxy cache name
 
 {- The rollout group's stores: the shared mirror the newer roles fill through a real install, and a

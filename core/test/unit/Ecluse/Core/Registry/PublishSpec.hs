@@ -15,7 +15,7 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable),
+    FetchFault (FetchUrlUnformable),
     PublishFault (PublishFetch),
     UrlFormationError (UnparseableUrl),
  )
@@ -30,6 +30,7 @@ import Ecluse.Core.Registry.Publish (
 import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Package (v1_0_0)
+import Ecluse.Test.Registry (isBoundExceededFetch, isBoundExceededPublish, isTransportFetch, isUrlUnformableFetch, isUrlUnformablePublish)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc)
 import Ecluse.Test.Stub (
     Captured (capPath),
@@ -203,28 +204,3 @@ publishWith codec targetUrl = do
     manager <- Client.newManager Client.defaultManagerSettings
     let transport = MirrorTransport{ptManager = manager, ptMintToken = pure Nothing, ptLimits = defaultLimits}
     pure (newMirrorPublish transport (loopbackRegistryUrl targetUrl) codec)
-
-isUrlUnformableFetch :: Either FetchFault a -> Bool
-isUrlUnformableFetch = \case
-    Left (FetchUrlUnformable _) -> True
-    _ -> False
-
-isTransportFetch :: Either FetchFault a -> Bool
-isTransportFetch = \case
-    Left (FetchTransport _) -> True
-    _ -> False
-
-isBoundExceededFetch :: Either FetchFault a -> Bool
-isBoundExceededFetch = \case
-    Left (FetchBoundExceeded _) -> True
-    _ -> False
-
-isUrlUnformablePublish :: Either PublishFault a -> Bool
-isUrlUnformablePublish = \case
-    Left (PublishFetch (FetchUrlUnformable _)) -> True
-    _ -> False
-
-isBoundExceededPublish :: Either PublishFault a -> Bool
-isBoundExceededPublish = \case
-    Left (PublishFetch (FetchBoundExceeded _)) -> True
-    _ -> False

@@ -13,7 +13,11 @@ module Ecluse.Test.Maintenance (
     FakeStore (..),
     FakeStoreConfig (..),
     defaultFakeStoreConfig,
+    seededStoreConfig,
+    servedVersion,
+    servedVersions,
     newFakeStore,
+    heldVersions,
     withBucket,
     testDeleteGuard,
 ) where
@@ -37,6 +41,7 @@ import Ecluse.Core.Registry.Maintenance (
     StoreObservation (..),
     StoredVersion (..),
     VersionOutcome (VersionRefused, VersionRemoving),
+    VersionPresence (VersionServed),
     chunksOfCeiling,
     deleteAll,
     storeFaultOfMetadata,
@@ -53,6 +58,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
 import Ecluse.Core.Registry.Maintenance.Upstream (UndecidabilityReason (NoMechanism), UpstreamSafety (Undecidable))
 import Ecluse.Core.Registry.Metadata (Manifest, MetadataError (MetadataUndecodable))
 import Ecluse.Core.Version (Version)
+import Ecluse.Test.Package (sampleManifest)
 
 -- | What a fake store holds and answers with.
 data FakeStoreConfig = FakeStoreConfig
@@ -107,6 +113,29 @@ data FakeStore = FakeStore
     , writeFakeContents :: Map PackageName [StoredVersion] -> IO ()
     , readFakeCursor :: IO (Maybe NamePrefix)
     }
+
+{- | A store holding the given versions of the given packages, each with a matching manifest.
+A case that serves no metadata for a package empties 'fakeManifests' again.
+-}
+seededStoreConfig :: [(PackageName, [Version])] -> FakeStoreConfig
+seededStoreConfig packages =
+    defaultFakeStoreConfig
+        { fakeContents = Map.fromList [(name, servedVersions versions) | (name, versions) <- packages]
+        , fakeManifests = Map.fromList [(name, sampleManifest name versions) | (name, versions) <- packages]
+        }
+
+-- | A version the store serves, carrying no backend revision.
+servedVersion :: Version -> StoredVersion
+servedVersion version = StoredVersion version VersionServed Nothing
+
+-- | The listing a store hands a sweep: every named version served, none of them retained.
+servedVersions :: [Version] -> [StoredVersion]
+servedVersions = map servedVersion
+
+-- | The versions a fake store still holds for one package, after whatever deletes have run.
+heldVersions :: PackageName -> FakeStore -> IO [Version]
+heldVersions name store =
+    map storedVersion . Map.findWithDefault [] name <$> readFakeContents store
 
 -- | Build a fake store over its seeded contents, with no walk in progress.
 newFakeStore :: FakeStoreConfig -> IO FakeStore

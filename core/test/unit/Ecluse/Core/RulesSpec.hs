@@ -8,7 +8,7 @@ Advisory regressions preserve ecosystem identity and display spelling.
 module Ecluse.Core.RulesSpec (spec) where
 
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, fromGregorian, nominalDay)
+import Data.Time (NominalDiffTime, addUTCTime, nominalDay)
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
@@ -31,6 +31,11 @@ import Ecluse.Test.Rules (
     atDefaultPrecedence,
     blockedBy,
     inertRuleDeps,
+    isAllow,
+    isBlockedByDefault,
+    isCannotVet,
+    isDeny,
+    isNoDecision,
     isUndecidable,
     withInstallScripts,
  )
@@ -40,49 +45,11 @@ import Ecluse.Core.Rules
 import Ecluse.Core.Rules.Effectful (EffectfulConfig (ecBreakerCooldown, ecBreakerThreshold))
 import Ecluse.Core.Rules.Freshness
 import Ecluse.Core.Rules.Types
-
--- | A fixed "now" so age-based tests are deterministic.
-now :: UTCTime
-now = UTCTime (fromGregorian 2026 6 20) 0
-
-ctx :: EvalContext
-ctx = EvalContext now Nothing
-
-{- | A package version under an optional npm scope, published @ageDays@ days before 'now'.
-The rules under test read only the scope, the publish age, and the install-code signal.
--}
-pkg :: Maybe Text -> Integer -> RuleEvidence
-pkg mScope ageDays = completeEvidence details
-  where
-    details =
-        (sampleDetails (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0)
-            { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
-            , pkgLicenses = ["MIT"]
-            }
-
-isAllow :: RuleVerdict -> Bool
-isAllow (Allow _) = True
-isAllow _ = False
-
-isNoDecision :: RuleVerdict -> Bool
-isNoDecision (NoDecision _) = True
-isNoDecision _ = False
-
-isDeny :: RuleVerdict -> Bool
-isDeny (Deny _ _) = True
-isDeny _ = False
-
-isCannotVet :: RuleVerdict -> Bool
-isCannotVet (CannotVet _ _) = True
-isCannotVet _ = False
+import Ecluse.Rules.Support (ctx, now, pkg, sixDayLimit)
 
 -- | Identity alone for the fixture package, the evidence an authenticated store listing carries.
 listed :: Maybe Text -> RuleEvidence
 listed mScope = identityEvidence (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0
-
-isBlockedByDefault :: Decision -> Bool
-isBlockedByDefault (BlockedByDefault _) = True
-isBlockedByDefault _ = False
 
 -- | Put a rule at an explicit precedence (the operator-override form).
 at :: Int -> Rule -> PrecededRule
@@ -151,12 +118,6 @@ genFiringRule scopeTxt =
 canonical :: Decision -> Decision
 canonical (BlockedByDefault reasons) = BlockedByDefault (sort reasons)
 canonical d = d
-
-{- | The maximum a mount deriving from a seven-day quarantine gets: six days. Every reading
-below is taken against it, so the boundary cases read as an operator's would.
--}
-sixDayLimit :: MaxAdvisoryAge
-sixDayLimit = maxAdvisoryAgeFor Nothing [AllowIfOlderThan (7 * nominalDay)]
 
 -- | Capabilities whose serving artifact was pushed the given age before 'now'.
 pushedAgo :: NominalDiffTime -> RuleDeps -> RuleDeps
@@ -627,9 +588,6 @@ spec = do
             let pr = PrecededRule 250 DenyInstallTimeExecution
             rulePrecedence pr `shouldBe` 250
             prRule pr `shouldBe` DenyInstallTimeExecution
-        it "shows both fields" $
-            show (PrecededRule 250 DenyInstallTimeExecution)
-                `shouldBe` ("PrecededRule {rulePrecedence = 250, prRule = DenyInstallTimeExecution}" :: String)
 
     describe "defaultPrecedence" $ do
         it "ranks DenyInstallTimeExecution strictly above every allow default" $ do
@@ -922,16 +880,20 @@ spec = do
                 >>= (`shouldSatisfy` isBlockedByDefault)
 
     describe "renderDecision" $ do
+        -- The whole line, not a substring: it reaches an operator, so the subject, the verb,
+        -- the rule, and the reason each have to stay where they are.
         let pd = pkg (Just "myorg") 0
         it "renders an admission naming the rule and its reason" $
             renderDecision pd (Admitted "AllowScope" "scope @myorg is allow-listed" [])
-                `shouldSatisfy` (\t -> T.isInfixOf "AllowScope" t && T.isInfixOf "approved" t)
+                `shouldBe` "@myorg/thing@1.0.0 was approved by AllowScope: scope @myorg is allow-listed"
         it "renders a block naming the rule and its reason" $
             renderDecision pd (Blocked "DenyAdvisory" Nothing "affected by an advisory")
-                `shouldSatisfy` (\t -> T.isInfixOf "DenyAdvisory" t && T.isInfixOf "affected by an advisory" t)
-        it "renders a deny-by-default explaining no rule allowed it" $
-            renderDecision pd (BlockedByDefault ["scope is not the allow-listed @myorg"])
-                `shouldSatisfy` (\t -> T.isInfixOf "no rule allowed it" t && T.isInfixOf "allow-listed" t)
+                `shouldBe` "@myorg/thing@1.0.0 was denied by DenyAdvisory: affected by an advisory"
+        it "renders a deny-by-default explaining no rule allowed it, then every reason" $
+            renderDecision pd (BlockedByDefault ["scope is not the allow-listed @myorg", "published only 1 day ago"])
+                `shouldBe` "@myorg/thing@1.0.0 was denied (no rule allowed it): scope is not the allow-listed @myorg; published only 1 day ago"
+        it "renders a deny-by-default with no reasons as the verdict alone" $
+            renderDecision pd (BlockedByDefault []) `shouldBe` "@myorg/thing@1.0.0 was denied (no rule allowed it)"
         it "renders an undecidable outcome explaining it could not be evaluated" $
             renderDecision pd (Undecidable (WillResolve Nothing) "the advisory source is down")
-                `shouldSatisfy` (\t -> T.isInfixOf "could not be evaluated" t && T.isInfixOf "advisory source is down" t)
+                `shouldBe` "@myorg/thing@1.0.0 could not be evaluated: the advisory source is down"

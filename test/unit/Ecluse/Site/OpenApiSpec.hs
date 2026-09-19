@@ -43,11 +43,7 @@ spec = do
             rendered `carries` "| `https://registry.example` | The externally-reachable base URL. |"
 
     describe "endpoints" $ do
-        it "sections one heading per path and method, anchored on the operation id" $ do
-            rendered `carries` "### GET `/npm/-/ping` {#op-npm-ping}"
-            rendered `carries` "### GET `/npm/{package}` {#op-npm-packument}"
-            rendered `carries` "### PUT `/npm/{package}` {#op-npm-publish}"
-        it "orders the paths and, within a path, the methods" $
+        it "sections one heading per path and method, anchored on the operation id, in path then method order" $
             sectionOrder rendered
                 `shouldBe` [ "### GET `/npm/-/ping` {#op-npm-ping}"
                            , "### GET `/npm/{package}` {#op-npm-packument}"
@@ -91,7 +87,8 @@ rendered :: Text
 rendered = renderOpenApiPage document
 
 carries :: Text -> Text -> Expectation
-carries page fragment = (fragment `T.isInfixOf` page) `shouldBe` True
+carries page fragment =
+    unless (fragment `T.isInfixOf` page) (expectationFailure (toString ("the page carries no " <> fragment)))
 
 occurrences :: Text -> Text -> Int
 occurrences fragment page = length (filter (== fragment) (T.lines page))

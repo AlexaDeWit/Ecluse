@@ -465,7 +465,7 @@ dropRedactionSpec = describe "drop-tracking redaction (a credentialed tarball UR
 totalitySpec :: Spec
 totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ do
     it "the live packument projection is total over an arbitrary decoded Value (every version projected through it)" $
-        hedgehog (projectionValueIsTotal (\v -> showResult (parsePackageInfoFromValue (routeNameOf v) v)))
+        hedgehog (projectionValueIsTotal (\v -> showResult (parsePackageInfoFromValue (NpmFixture.documentName v) v)))
 
     it "the version-list read is total over an arbitrary Value body" $
         hedgehog (projectionIsTotal (showResult . parseVersionList))
@@ -478,7 +478,7 @@ totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ 
             v <- forAll genBody
             -- Validate against the body's own self-reported name, so a packument-shaped body
             -- reaches the success arm while arbitrary JSON still rejects.
-            let decoded = parsePackageInfoFromValue (routeNameOf v) v
+            let decoded = parsePackageInfoFromValue (NpmFixture.documentName v) v
             annotateShow v
             _ <- H.eval (showResult decoded)
             -- Non-vacuity: 'genBody' must reach both the projects-to-domain arm and the rejected-
@@ -703,29 +703,6 @@ readFixture name = readFileBS ("core/test/unit/fixtures/npm/" <> name)
 packumentValueNamed :: Text -> Value
 packumentValueNamed nm = object ["name" .= nm, "versions" .= object []]
 
--- | Use the body's scoped identity as the requested name for projection fixtures.
-routeNameOf :: Value -> PackageName
-routeNameOf v = npmName (nameOf v)
-  where
-    nameOf :: Value -> Text
-    nameOf value = case value of
-        Object o -> case KeyMap.lookup "name" o of
-            Just (String t) -> t
-            _ -> ""
-        _ -> ""
-
-    npmName :: Text -> PackageName
-    npmName raw = case T.stripPrefix "@" raw of
-        Just afterAt
-            | (scopeText, rest) <- T.break (== '/') afterAt
-            , bare <- T.drop 1 rest
-            , not (T.null scopeText)
-            , not (T.null bare) ->
-                mkPackageName Npm (Just (mkScope scopeText)) bare
-        _ -> mkPackageName Npm Nothing raw
-
--- | Validate fixtures against their own reported package identity through the production projection.
-
 -- | The refusal text 'projectName' gives a name, or 'Nothing' when the name parses.
 refusalOf :: Text -> Maybe Text
 refusalOf raw = case projectName raw of
@@ -738,7 +715,7 @@ projectInfoOf body = decodeJsonOrFail body >>= projectedInfo
 -- | Project an already-decoded packument 'Value' into its 'PackageInfo' through the live 'parsePackageInfoFromValue', validating against the value's own self-reported name.
 projectedInfo :: Value -> IO PackageInfo
 projectedInfo value =
-    case parsePackageInfoFromValue (routeNameOf value) value of
+    case parsePackageInfoFromValue (NpmFixture.documentName value) value of
         Right (Projected info) -> pure info
         Right (NameMismatch reported) -> fail ("unexpected name mismatch: " <> toString reported)
         Left e -> fail ("unexpected ParseError: " <> show e)

@@ -8,6 +8,7 @@ import Prelude hiding (universe)
 
 import Data.Text qualified as T
 import Data.Universe.Class (universe)
+import OpenTelemetry.Attributes (Attribute (AttributeValue), PrimitiveAttribute (TextAttribute), lookupAttribute)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
@@ -67,7 +68,7 @@ labelKeySpec = describe "label keys (the cardinality guard)" $ do
         filter (`elem` highCardinalityKeys) (map labelKeyName allLabelKeys) `shouldBe` []
 
     it "files every bounded label under a key in the closed set" $
-        all (\l -> labelKey l `elem` (allLabelKeys :: [LabelKey])) allBoundedLabels `shouldBe` True
+        filter (\l -> labelKey l `notElem` (allLabelKeys :: [LabelKey])) allBoundedLabels `shouldBe` []
 
 boundedDomainSpec :: Spec
 boundedDomainSpec = describe "bounded label value domains" $ do
@@ -77,17 +78,20 @@ boundedDomainSpec = describe "bounded label value domains" $ do
         length allBoundedLabels `shouldSatisfy` (< 64)
 
     it "renders every bounded label to a non-empty value under a closed key" $
-        all
+        filter
             ( \l ->
                 let (key, value) = renderLabel l
-                 in key `elem` map labelKeyName allLabelKeys && not (T.null value)
+                 in key `notElem` map labelKeyName allLabelKeys || T.null value
             )
             allBoundedLabels
-            `shouldBe` True
+            `shouldBe` []
 
-    it
-        "materialises OpenTelemetry attributes for every bounded label without error"
-        (traverse_ (evaluateWHNF . metricAttributes . (: [])) allBoundedLabels :: IO ())
+    it "materialises every bounded label as the attribute renderLabel names, under that key" $
+        -- An instrument reads its series back by this key, so a label that renders one way and
+        -- materialises another would split the series without failing anything.
+        for_ allBoundedLabels $ \label -> do
+            let (key, value) = renderLabel label
+            lookupAttribute (metricAttributes [label]) key `shouldBe` Just (AttributeValue (TextAttribute value))
 
     it "encodes breaker state as a small ordinal gauge value, not a label" $
         map breakerStateCode [Closed, HalfOpen, Open] `shouldBe` [0, 1, 2]

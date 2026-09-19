@@ -37,6 +37,7 @@ import Network.HTTP.Types (hContentLength, statusCode)
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec (expectationFailure)
 
+import Ecluse.E2E.Harness.Client (clientReport)
 import Ecluse.E2E.Harness.Docker (awaitContainerLog, containerLogs)
 import Ecluse.E2E.Harness.Types
 
@@ -90,11 +91,7 @@ shouldSucceedThroughProxy e2e res = case crExit res of
 -- The client's own output, then the two logs that decided the status it saw.
 clientRefusal :: ClientResult -> Text -> Text -> Text
 clientRefusal res proxyLog mirrorLog =
-    crCommand res
-        <> " failed!\nSTDOUT:\n"
-        <> crStdout res
-        <> "\nSTDERR:\n"
-        <> crStderr res
+    clientReport res "failed"
         <> tailSection "proxy" proxyLog
         <> tailSection "mirror store" mirrorLog
 
