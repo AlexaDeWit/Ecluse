@@ -87,7 +87,8 @@ rendered :: Text
 rendered = renderOpenApiPage document
 
 carries :: Text -> Text -> Expectation
-carries page fragment = (fragment `T.isInfixOf` page) `shouldBe` True
+carries page fragment =
+    unless (fragment `T.isInfixOf` page) (expectationFailure (toString ("the page carries no " <> fragment)))
 
 occurrences :: Text -> Text -> Int
 occurrences fragment page = length (filter (== fragment) (T.lines page))
