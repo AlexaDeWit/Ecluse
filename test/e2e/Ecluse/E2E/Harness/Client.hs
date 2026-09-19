@@ -13,6 +13,7 @@ module Ecluse.E2E.Harness.Client (
     -- * Assertions
     shouldSucceed,
     shouldFail,
+    clientReport,
 ) where
 
 import Data.ByteString.Lazy qualified as LBS
@@ -55,20 +56,23 @@ runClient dir env command args = do
 shouldSucceed :: (MonadIO m) => ClientResult -> m ClientResult
 shouldSucceed res = liftIO $ case crExit res of
     ExitSuccess -> pure res
-    _ -> expectationFailure (report res "failed") >> pure res
+    _ -> expectationFailure (toString (clientReport res "failed")) >> pure res
 
 -- | Fail the assertion with the client's output when the command unexpectedly succeeded.
 shouldFail :: (MonadIO m) => ClientResult -> m ClientResult
 shouldFail res = liftIO $ case crExit res of
-    ExitSuccess -> expectationFailure (report res "incorrectly succeeded") >> pure res
+    ExitSuccess -> expectationFailure (toString (clientReport res "incorrectly succeeded")) >> pure res
     _ -> pure res
 
-report :: ClientResult -> String -> String
-report res outcome =
-    toString (crCommand res)
+{- | What the client ran, what its exit code meant, and everything it printed. A caller with
+more evidence than the client's own output appends its sections to this.
+-}
+clientReport :: ClientResult -> Text -> Text
+clientReport res outcome =
+    crCommand res
         <> " "
         <> outcome
         <> "!\nSTDOUT:\n"
-        <> toString (crStdout res)
+        <> crStdout res
         <> "\nSTDERR:\n"
-        <> toString (crStderr res)
+        <> crStderr res
