@@ -52,7 +52,7 @@ data WorkerRuntime = WorkerRuntime
     , wrManager :: Manager
     -- ^ The validating-TLS manager for the __untrusted__ artifact fetch.
     , wrHeartbeat :: WorkerHeartbeat
-    -- ^ Advanced on every poll and every completed job, and read by the liveness probe.
+    -- ^ Advanced on every successful poll and every completed job, and read by the liveness probe.
     , wrMetrics :: WorkerMetricsPort
     -- ^ The port the @ecluse.mirror.*@ job signals are emitted through.
     , wrTracing :: WorkerTracingPort
@@ -73,7 +73,7 @@ data WorkerPolicy = WorkerPolicy
     -- ^ Whether a name belongs to a namespace this deployment owns.
     , wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
     {- ^ Resolve one version's metadata through the guarded public origin. Total by type:
-    every failure, transport included, classifies as a 'VersionEvaluation' value.
+    every failure, transport included, classifies as a 'VersionMetadataUnavailable' value.
     -}
     , wpRules :: [PreparedRule]
     -- ^ The prepared rule set re-evaluated against the resolved version.
@@ -126,8 +126,8 @@ runWorkerM :: LogEnv -> SimpleLogPayload -> WorkerRuntime -> WorkerM a -> IO a
 runWorkerM logEnv initialContext runtime action =
     runKatipContextT logEnv initialContext mempty (runReaderT (unWorkerM action) runtime)
 
-{- | Record a unit of demonstrated progress. The loop beats on every poll, an empty long-poll
-included, and after every completed job, so the staleness bound covers one job.
+{- | Record a unit of demonstrated progress. The loop beats on every successful poll, an empty
+long-poll included, and after every completed job, so the staleness bound covers one job.
 -}
 recordWorkerProgress :: WorkerM ()
 recordWorkerProgress = do
