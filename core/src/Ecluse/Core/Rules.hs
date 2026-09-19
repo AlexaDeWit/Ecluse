@@ -67,16 +67,14 @@ data RuleDeps = RuleDeps
     { rdWithCveLookup :: forall a. (Maybe (DbEtag, CveLookup) -> IO a) -> IO a
     -- ^ Bracketed access to the lookup and ETag acquired together, if a database is loaded.
     , rdCurrentAdvisoryEtag :: IO (Maybe DbEtag)
-    {- ^ A non-pinning read of the active advisory database's 'DbEtag', or 'Nothing' when none
-    is loaded. It holds no generation open, so it never delays a shadow-swap.
+    {- ^ A non-pinning read of the active 'DbEtag'. It holds no generation open, so it never
+    delays a shadow-swap.
     -}
     , rdBreakerReporter :: BreakerReporter
-    {- ^ The observer that effectful rules report their breaker transitions to, as
-    @ecluse.rule.breaker.state@. 'Ecluse.Core.Breaker.noBreakerReporter' when unobserved.
-    -}
+    -- ^ Where effectful rules report breaker transitions, as @ecluse.rule.breaker.state@.
     , rdSourceReporter :: SourceReporter
-    {- ^ Where every advisory-reading evaluation reports whether it could consult the source, so an
-    outage is observed as a transition rather than once per request.
+    {- ^ Where every advisory-reading evaluation reports whether it could consult the source, so
+    an outage is observed as a transition rather than once per request.
     -}
     , rdAdvisoryFreshness :: IO AdvisoryFreshness
     {- ^ How old the serving artifact's push is, read again at every evaluation. The wall clock
@@ -99,24 +97,7 @@ evalRule _ ctx (AllowIfOlderThan minAge) ev =
     pure $ case evPublishedAt ev of
         Unread -> needsFact "AllowIfOlderThan" "the publish time"
         Known Nothing -> NoDecision "publish time is unknown"
-        Known (Just publishedAt) ->
-            let age = diffUTCTime (ctxNow ctx) publishedAt
-             in if age >= minAge
-                    then
-                        Allow
-                            ( "published "
-                                <> renderDuration age
-                                <> " ago (at least "
-                                <> renderDuration minAge
-                                <> " old)"
-                            )
-                    else
-                        NoDecision
-                            ( "published only "
-                                <> renderDuration age
-                                <> " ago, minimum age is "
-                                <> renderDuration minAge
-                            )
+        Known (Just publishedAt) -> ageVerdict minAge (diffUTCTime (ctxNow ctx) publishedAt)
 evalRule _ _ DenyInstallTimeExecution ev =
     pure $ case evInstallCode ev of
         Unread -> needsFact "DenyInstallTimeExecution" "the install-time execution signal"
@@ -145,6 +126,15 @@ evalRule deps _ (DenyIfEpss params) ev =
     rdWithCveLookup deps $ \case
         Nothing -> pure (noAdvisoryDbVerdict "DenyIfEpss" (dieOnUnavailable params))
         Just (etag, cve) -> advisoryDenyVerdict etag AbstainMissingScore "EPSS" (dieMinEpss params) arEpss cve ev
+
+{- The minimum-age verdict for a version whose publish time the evidence carries. The quarantine
+holds a new version until the registry has had time to yank a malicious publish. -}
+ageVerdict :: NominalDiffTime -> NominalDiffTime -> RuleVerdict
+ageVerdict minAge age
+    | age >= minAge =
+        Allow ("published " <> renderDuration age <> " ago (at least " <> renderDuration minAge <> " old)")
+    | otherwise =
+        NoDecision ("published only " <> renderDuration age <> " ago, minimum age is " <> renderDuration minAge)
 
 {- The verdict when the evidence carries no reading of a fact the rule consults. It is fail-closed so
 the fold stops here, rather than letting a lower-precedence rule decide past an unresolved one. -}
@@ -228,20 +218,16 @@ matchesIdentity ident ev =
 -- | Config obtains evaluators only through 'prepare', never from arbitrary code.
 data PreparedRule = PreparedRule
     { prepName :: Text
-    {- ^ The stable, human-facing name. It is the boot-order tiebreak and the credited
-    identity.
-    -}
+    -- ^ The stable, human-facing name: the boot-order tiebreak and the credited identity.
     , prepPrecedence :: Int
     -- ^ The precedence at which this rule competes. Higher wins in the boot order.
     , prepResilience :: Maybe Resilience
     -- ^ The resilience policy, or 'Nothing' for a rule run directly.
     , prepAdvisoryGate :: Maybe AdvisoryGate
-    {- ^ The push-age gate an advisory-reading rule answers to, or 'Nothing' for a rule that
-    reads no advisory database.
-    -}
+    -- ^ The push-age gate, or 'Nothing' for a rule that reads no advisory database.
     , prepEval :: EvalContext -> RuleEvidence -> IO RuleVerdict
-    {- ^ The rule's raw verdict for one version. For a resilient rule it may do IO that
-    fails or hangs, and 'runEffectfulRule' wraps it.
+    {- ^ The rule's raw verdict for one version. For a resilient rule it may do IO that fails
+    or hangs, and 'runEffectfulRule' wraps it.
     -}
     }
 
@@ -393,8 +379,8 @@ withEvidence passed unreached = \case
 bareCause :: Text -> Reason -> Reason
 bareCause name reason = fromMaybe reason (T.stripPrefix (name <> ": ") reason)
 
--- A resilient block's result: the earliest decisive winner, what the block evaluated ahead of it
--- (reverse boot order), and the rules it pre-empted (boot order); or every evaluation when nothing decided.
+-- A resilient block's result: the earliest decisive winner with what ran ahead of it (reverse boot
+-- order) and what it pre-empted (boot order), or every evaluation when nothing decided.
 data BlockOutcome
     = BlockDecided Decision [Passed] [PreparedRule]
     | BlockPassed [Passed]
