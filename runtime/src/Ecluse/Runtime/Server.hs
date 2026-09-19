@@ -1,7 +1,6 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
-{-# LANGUAGE TupleSections #-}
 
 {- | The HTTP front door: the raw @wai@ 'Application', its dispatch, the middleware stack, and
 'runWarp'. It is a raw 'Application' rather than a framework because matching on @pathInfo@
@@ -48,21 +47,22 @@ module Ecluse.Runtime.Server (
 ) where
 
 import Data.List (dropWhileEnd)
-import Katip (Severity (ErrorS), katipAddContext, logFM, sl)
+import Katip (Severity (ErrorS), SimpleLogPayload, katipAddContext, logFM, sl)
 import Network.HTTP.Types (Method, status500)
 import Network.HTTP.Types.Header (RequestHeaders)
 import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, pathInfo, rawPathInfo, requestHeaders, requestMethod)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
 import Network.Wai.Middleware.Timeout (timeout)
-import System.Posix.Signals (Handler (CatchOnce), installHandler, sigINT, sigTERM)
+import System.Posix.Signals qualified as Posix
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Async (race_)
 import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Server.Context (
+    Handler,
     MountBinding (..),
-    RequestCtx (RequestCtx),
+    RequestCtx (RequestCtx, ctxRuntime),
     ResponseAction (AnswerLocally, AnswerRefusal, RunPipeline),
     RouteAction (RouteAction),
     ServeRuntime (srMetrics),
@@ -159,8 +159,11 @@ application cfg env = serverMiddleware cfg (dispatch cfg env)
 path outside @\/livez@ and @\/readyz@ is the neutral @404@.
 -}
 probeOnlyApplication :: ServerConfig -> IO Application
-probeOnlyApplication cfg =
-    pure (serverMiddleware cfg (probeApplication (scDrain cfg) (scCheckReady cfg) (scCheckLive cfg)))
+probeOnlyApplication cfg = pure (serverMiddleware cfg (probesOf cfg))
+
+-- The health probes over one config's drain signal and injected checks.
+probesOf :: ServerConfig -> Application
+probesOf cfg = probeApplication (scDrain cfg) (scCheckReady cfg) (scCheckLive cfg)
 
 {- | 'application' with the OpenTelemetry server-span middleware wrapped __outermost__, so
 one server span covers the whole request. The wrapper is 'id' when telemetry is off.
@@ -177,7 +180,7 @@ dispatch :: ServerConfig -> Env -> Application
 dispatch cfg env request respond =
     case matchMount (requestMethod request) (requestHeaders request) (scMounts cfg) (pathInfo request) of
         Just (binding, action) -> serve env binding action request respond
-        Nothing -> probeApplication (scDrain cfg) (scCheckReady cfg) (scCheckLive cfg) request respond
+        Nothing -> probesOf cfg request respond
 
 {- Carry out the action the matched mount's router named. A 'RunPipeline' action runs
 under the typed request perimeter, over the 'RequestCtx' this function builds once.
@@ -189,34 +192,41 @@ serve env binding (RouteAction contract action) request respond =
         -- This is where a route's own refusal meets the mount's help message: the table decides
         -- the refusal, and the binding beside it renders the body.
         AnswerRefusal render -> send (render (pdHelp (bindingPackumentDeps binding)))
-        RunPipeline fallback handler -> perimeterGuard observeFault send fallback (run . handler request)
+        RunPipeline fallback handler ->
+            perimeterGuard
+                (observePerimeterFault env ctx request)
+                send
+                fallback
+                (runInRequest env ctx . handler request)
   where
     send value = respond (responseToWai contract value)
 
-    observeFault fault = do
-        mpRequestPerimeterFault (srMetrics runtime) (rqCause fault)
-        run . katipAddContext (perimeterPayload fault) $
-            logFM ErrorS "the request perimeter answered an escaped pre-commit fault with the neutral 500"
-
-    -- The fields mirror the denial audit line, so an operator triages both surfaces with one
-    -- vocabulary.
-    perimeterPayload fault =
-        sl "module" ("Ecluse.Runtime.Server" :: Text)
-            <> sl "path" (decodeUtf8 (rawPathInfo request) :: Text)
-            <> sl "perimeterCause" (show (rqCause fault) :: Text)
-            <> sl "perimeterDetail" (rqDetail fault)
-
-    -- Discharge a 'Handler' to 'IO' over the per-request context. Resolving @dd@ here is what
-    -- makes every serve-path log line carry its trace correlation.
-    run handlerAction = do
-        dd <- ddPayloadNow (envDdContext env)
-        runHandler (envLogEnv env) dd ctx handlerAction
-
-    runtime :: ServeRuntime
-    runtime = serveRuntimeOf env
-
     ctx :: RequestCtx
-    ctx = RequestCtx runtime binding
+    ctx = RequestCtx (serveRuntimeOf env) binding
+
+-- Discharge a 'Handler' to 'IO' over the per-request context. Resolving @dd@ here is what makes
+-- every serve-path log line carry its trace correlation.
+runInRequest :: Env -> RequestCtx -> Handler a -> IO a
+runInRequest env ctx action = do
+    dd <- ddPayloadNow (envDdContext env)
+    runHandler (envLogEnv env) dd ctx action
+
+-- Record an escaped pre-commit fault on the metric and the audit line, both before the
+-- perimeter answers its neutral fallback.
+observePerimeterFault :: Env -> RequestCtx -> Request -> RequestFault -> IO ()
+observePerimeterFault env ctx request fault = do
+    mpRequestPerimeterFault (srMetrics (ctxRuntime ctx)) (rqCause fault)
+    runInRequest env ctx . katipAddContext (perimeterPayload request fault) $
+        logFM ErrorS "the request perimeter answered an escaped pre-commit fault with the neutral 500"
+
+-- The fields mirror the denial audit line, so an operator triages both surfaces with one
+-- vocabulary.
+perimeterPayload :: Request -> RequestFault -> SimpleLogPayload
+perimeterPayload request fault =
+    sl "module" ("Ecluse.Runtime.Server" :: Text)
+        <> sl "path" (decodeUtf8 (rawPathInfo request) :: Text)
+        <> sl "perimeterCause" (show (rqCause fault) :: Text)
+        <> sl "perimeterDetail" (rqDetail fault)
 
 {- | Run one route's handler behind a commit-tracking respond, catching __synchronous__ escapes
 only. Pre-commit one answers the neutral fallback with no detail, post-commit it rethrows.
@@ -310,9 +320,9 @@ responses carry @Connection: close@ first. 'CatchOnce' leaves the second to the 
 -}
 installShutdownHandler :: DrainSignal -> IO () -> IO ()
 installShutdownHandler drain closeSocket =
-    traverse_ install [sigTERM, sigINT]
+    traverse_ install [Posix.sigTERM, Posix.sigINT]
   where
-    install sig = installHandler sig (CatchOnce (beginDrain drain >> closeSocket)) Nothing
+    install sig = Posix.installHandler sig (Posix.CatchOnce (beginDrain drain >> closeSocket)) Nothing
 
 {- | Race a server arm against a never-returning background loop, the single-process shutdown
 shape. 'race_' is the invariant: 'concurrently_' would wait forever, brackets un-unwound.
