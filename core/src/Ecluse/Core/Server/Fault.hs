@@ -31,9 +31,8 @@ data RequestFault = RequestFault
     }
     deriving stock (Eq, Show)
 
-{- | The confined marker wrapping an exception that escaped the response-assembly render, which is
-total by contract. It never crosses the perimeter, which folds it to 'RenderFault' and answers the
-neutral 500.
+{- | The confined marker wrapping an exception that escaped the response-assembly render, which
+is total by contract. It never crosses the perimeter, which folds it to 'RenderFault'.
 -}
 newtype RenderEscape = RenderEscape SomeException
     deriving stock (Show)
