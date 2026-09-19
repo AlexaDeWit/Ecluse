@@ -47,9 +47,8 @@ import Ecluse.Core.Registry.Npm.Request (
     parseRequestEither,
     withToken,
  )
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Request (joinPath, noValidators)
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (nonBlank, urlFilenameComponent)
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, renderVersion)
@@ -76,7 +75,7 @@ npmMaintenance =
 -- | Read the store listing. The caller classifies any response other than @200@.
 listingRequestFor :: OriginClient -> Either UrlFormationError Request
 listingRequestFor origin = do
-    url <- joinPath (originBase origin) "-/all"
+    url <- joinPath (originBaseUrl origin) "-/all"
     base <- parseRequestEither url
     pure . withToken (ocToken origin) $
         base{requestHeaders = (hAccept, "application/json") : requestHeaders base}
@@ -97,7 +96,7 @@ parsePackageListing body = case decodeStrict body :: Maybe Object of
 -- | Read the full packument, because the install view omits @_rev@ and @time@.
 packumentRequestFor :: OriginClient -> PackageName -> Either UrlFormationError Request
 packumentRequestFor origin =
-    metadataRequest (originBase origin) (ocToken origin) Full noValidators
+    metadataRequest (originBaseUrl origin) (ocToken origin) Full noValidators
 
 -- | Refuse absent versions and unreadable revisions. Delete the whole package only for its last version.
 versionDeleteRequestsFor ::
@@ -116,19 +115,16 @@ versionDeleteRequestsFor origin name version response = do
             (KeyMap.lookup (Key.fromText raw) versions)
     if KeyMap.size versions == 1
         then do
-            request <- unformable (packageUrl (originBase origin) name >>= deleteAtRevision origin revision)
+            request <- unformable (packageUrl (originBaseUrl origin) name >>= deleteAtRevision origin revision)
             pure (request :| [])
         else do
             let filename = tarballFilename name version manifest
                 edited = removeVersion raw versions packument
             editRequest <- unformable (packumentPutRequest origin name revision edited)
-            tarballRequest <- unformable (artifactFileUrl (originBase origin) name filename >>= deleteAtRevision origin revision)
+            tarballRequest <- unformable (artifactFileUrl (originBaseUrl origin) name filename >>= deleteAtRevision origin revision)
             pure (editRequest :| [tarballRequest])
   where
     raw = renderVersion version
-
-originBase :: OriginClient -> Text
-originBase = registryUrlText . ocBaseUrl
 
 -- A URL that will not form is this one version's refusal, with the URL reduced to its authority.
 unformable :: Either UrlFormationError a -> Either StoreRefusal a
@@ -156,7 +152,7 @@ versionsOf packument = case KeyMap.lookup "versions" packument of
 -- A spec-compliant registry answers 415 unless the edited body is declared application/json.
 packumentPutRequest :: OriginClient -> PackageName -> Text -> Object -> Either UrlFormationError Request
 packumentPutRequest origin name revision packument = do
-    url <- atRevision revision <$> packageUrl (originBase origin) name
+    url <- atRevision revision <$> packageUrl (originBaseUrl origin) name
     base <- parseRequestEither url
     pure
         . withToken (ocToken origin)

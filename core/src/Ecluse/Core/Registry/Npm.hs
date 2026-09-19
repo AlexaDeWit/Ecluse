@@ -55,9 +55,8 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Exchange (boundedFetch, boundedRelay, formThen)
 import Ecluse.Core.Registry.Npm.Publish (publishRequest)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Request (Validators)
-import Ecluse.Core.Security.Egress (registryUrlText)
 
 {- | Fetch a package's metadata in the requested 'MetadataForm', relaying any conditional-GET
 'Validators'. Every failure, the body read included, comes back as a 'FetchFault' value, never
@@ -74,7 +73,7 @@ fetchMetadataFormBounded origin form validators name =
     formThen
         FetchUrlUnformable
         (boundedFetch (ocManager origin) (ocLimits origin))
-        (metadataRequest (registryUrlText (ocBaseUrl origin)) (ocToken origin) form validators name)
+        (metadataRequest (originBaseUrl origin) (ocToken origin) form validators name)
 
 {- | Relay a client's npm publish document to the publication target and return the
 target's own response. It is the first-party publish primitive behind the
@@ -89,4 +88,4 @@ relayPublishDocument origin name document =
     formThen
         FetchUrlUnformable
         (boundedRelay (ocManager origin) (ocLimits origin))
-        (publishRequest (registryUrlText (ocBaseUrl origin)) (ocToken origin) name document)
+        (publishRequest (originBaseUrl origin) (ocToken origin) name document)

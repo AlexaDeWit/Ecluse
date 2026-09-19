@@ -29,8 +29,7 @@ import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Publish (declaredNames, npmPublishCodec)
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Registry.Npm.Route qualified as NpmRoute
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocToken))
-import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 
 -- | npm's capability record.
 npmAdapter :: RegistryAdapter
@@ -52,7 +51,7 @@ npmAdapter =
                 }
         , adapterArtifact =
             AdapterArtifact
-                { artifactByFile = \origin -> NpmRequest.artifactRequestByFile (registryUrlText (ocBaseUrl origin)) (ocToken origin)
+                { artifactByFile = \origin -> NpmRequest.artifactRequestByFile (originBaseUrl origin) (ocToken origin)
                 , artifactByUrl = NpmRequest.artifactRequestByUrl
                 , artifactHosts = NpmRequest.npmArtifactHosts
                 }

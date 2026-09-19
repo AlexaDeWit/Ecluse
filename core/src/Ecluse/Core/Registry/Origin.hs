@@ -14,6 +14,7 @@ pipeline are the only builders: nothing here is derived, and nothing is cached.
 module Ecluse.Core.Registry.Origin (
     OriginClient (..),
     originClient,
+    originBaseUrl,
 
     -- * Credential posture, carried in the type
     OriginFor,
@@ -28,7 +29,7 @@ import Network.HTTP.Client (Manager)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Security (Limits)
-import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 
 -- | One origin's coordinates, credential posture, and response bound.
 data OriginClient = OriginClient
@@ -54,6 +55,10 @@ caller usually holds one bound and reaches several origins under it.
 originClient :: Limits -> Manager -> RegistryUrl -> Maybe ClientCredential -> OriginClient
 originClient limits manager baseUrl token =
     OriginClient{ocBaseUrl = baseUrl, ocManager = manager, ocToken = token, ocLimits = limits}
+
+-- | The origin's base URL as text, which is how every request builder takes it.
+originBaseUrl :: OriginClient -> Text
+originBaseUrl = registryUrlText . ocBaseUrl
 
 {- | An 'OriginClient' whose credential posture its builder fixed. No caller can retag one: the
 constructor stays here, and the role annotation below forbids reaching the parameter through 'coerce'.

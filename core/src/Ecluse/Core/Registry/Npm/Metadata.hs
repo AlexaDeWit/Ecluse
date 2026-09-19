@@ -55,7 +55,7 @@ import Ecluse.Core.Registry.Npm.SelectiveDecode (
     SelectedVersion (svDistTagLatest, svName, svTime, svVersion, svVersionCount),
     selectVersionFromPackument,
  )
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits), OriginFor)
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (
@@ -65,7 +65,6 @@ import Ecluse.Core.Security (
     ecosystemArtifactAuthorities,
     maxNestingDepth,
  )
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -112,9 +111,6 @@ fetchNpmVersion tracing origin name version =
 -- npm artifacts must use the authority that served the packument.
 npmArtifactAuthorities :: AllowedHostPorts
 npmArtifactAuthorities = ecosystemArtifactAuthorities npmArtifactHosts
-
-originBaseUrl :: OriginClient -> Text
-originBaseUrl = registryUrlText . ocBaseUrl
 
 {- | Project one version without decoding its siblings. Absent or unprojectable versions yield
 'Nothing'. The pair carries the selected object as decoded, never a re-rendering of the typed view.

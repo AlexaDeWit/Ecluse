@@ -25,14 +25,13 @@ import Ecluse.Core.Registry.Adapter.Types (
     RegistryAdapter (..),
  )
 import Ecluse.Core.Registry.Maintenance (mkNameAlphabet)
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleDocument, serialiseSimpleDocument)
 import Ecluse.Core.Registry.PyPI.Metadata (fetchPyPIManifest, newPyPIMetadataReads)
 import Ecluse.Core.Registry.PyPI.Project (projectName, pypiNameLeadChars)
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPIRequest
 import Ecluse.Core.Registry.PyPI.Route qualified as PyPIRoute
-import Ecluse.Core.Security.Egress (registryUrlText)
 
 -- | PyPI's capability record.
 pypiAdapter :: RegistryAdapter
@@ -54,7 +53,7 @@ pypiAdapter =
                 }
         , adapterArtifact =
             AdapterArtifact
-                { artifactByFile = \origin -> PyPIRequest.artifactRequestByFile (registryUrlText (ocBaseUrl origin)) (ocToken origin)
+                { artifactByFile = \origin -> PyPIRequest.artifactRequestByFile (originBaseUrl origin) (ocToken origin)
                 , artifactByUrl = PyPIRequest.artifactRequestByUrl
                 , artifactHosts = PyPIRequest.pypiArtifactHosts
                 }

@@ -41,7 +41,7 @@ import Ecluse.Core.Registry.Metadata (
     fetchThenProject,
  )
 import Ecluse.Core.Registry.Metadata.Projection (projectMetadata, projectionResult, selectiveError, validateReportedName)
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken), OriginFor)
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Project (
     fileVersionKey,
     projectName,
@@ -63,7 +63,6 @@ import Ecluse.Core.Security (
     ecosystemArtifactAuthorities,
     maxNestingDepth,
  )
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
@@ -87,7 +86,7 @@ fetchSimpleIndex origin name =
     formThen
         FetchUrlUnformable
         (boundedFetch (ocManager origin) (ocLimits origin))
-        (simpleIndexRequest (registryUrlText (ocBaseUrl origin)) (ocToken origin) noValidators name)
+        (simpleIndexRequest (originBaseUrl origin) (ocToken origin) noValidators name)
 
 -- | Fetch a bounded Simple index with the digest that scopes its cached document.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
@@ -137,6 +136,3 @@ projectPyPIVersion limits name version body = do
 
 pypiArtifactAuthorities :: AllowedHostPorts
 pypiArtifactAuthorities = ecosystemArtifactAuthorities pypiArtifactHosts
-
-originBaseUrl :: OriginClient -> Text
-originBaseUrl = registryUrlText . ocBaseUrl

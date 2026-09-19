@@ -46,7 +46,7 @@ import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchFullManifest),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataNameMismatch),
  )
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl), OriginFor, anonymousOrigin, originClient, originClientOf, perCallerOrigin)
+import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, anonymousOrigin, originBaseUrl, originClient, originClientOf, perCallerOrigin)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
@@ -170,7 +170,7 @@ withMetadataClient rt deps settle origin k =
                 (\nm -> runInIO (logFM DebugS (ls ("fetching packument from origin for " <> renderPackageName nm))))
                 origin
   where
-    baseUrl = registryUrlText (ocBaseUrl (originClientOf origin))
+    baseUrl = originBaseUrl (originClientOf origin)
 
 -- | Bypass shared caching so the private upstream authorises each caller's credential.
 withPrivateMetadataClient :: ServeRuntime -> PackumentDeps -> RegistryUrl -> Maybe ClientCredential -> (MetadataClient -> IO a) -> Handler a

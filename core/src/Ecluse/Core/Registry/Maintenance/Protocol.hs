@@ -67,9 +67,8 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     undeclaredBudget,
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
-import Ecluse.Core.Registry.Origin (OriginClient (ocBaseUrl, ocLimits, ocManager, ocToken))
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcParseVersionList, pcProbeRequest))
-import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Version (Version)
 
 {- | One protocol-only store as a reader reaches it: where it is, how its protocol enumerates it,
@@ -264,7 +263,7 @@ sendFormed :: ProtocolRead -> Either UrlFormationError Request -> IO (Either Sto
 sendFormed store = formThen unformableFault (send store)
 
 originBase :: ProtocolRead -> Text
-originBase = registryUrlText . ocBaseUrl . prOrigin
+originBase = originBaseUrl . prOrigin
 
 originToken :: ProtocolRead -> Maybe Secret
 originToken = fmap credSecret . ocToken . prOrigin
