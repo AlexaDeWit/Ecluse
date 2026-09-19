@@ -55,7 +55,6 @@ module Ecluse.Core.Registry.Sweep.Types (
     -- * The cycle's running state
     SweepState (..),
     newSweepState,
-    labelAudit,
     record,
     recordMetric,
     recordTally,
@@ -97,37 +96,29 @@ data SweepMount = SweepMount
     -- ^ The mount's own prepared rule set, the one the serve and ingest gates evaluate.
     , smConfigured :: [Rule]
     {- ^ The same rules as configured values, which a prepared rule no longer carries. The
-    candidate set reads the names an identity deny pins out of these.
+    candidate set reads an identity deny's names out of these.
     -}
     , smRuleDeps :: RuleDeps
-    {- ^ The mount's dependencies for candidate discovery and per-rule lookup acquisition.
-    Candidate discovery and a later verdict can use different generations.
-    -}
+    -- ^ Lookup acquisition, which candidate discovery and a later verdict may take at different generations.
     , smProjectName :: ProjectName
     -- ^ The ecosystem's own name parser, which both halves of the candidate set are read through.
     , smFirstParty :: PackageName -> Bool
-    {- ^ Whether a name belongs to a namespace this deployment owns, the shared predicate
-    derived once at the composition root.
-    -}
+    -- ^ Whether a name belongs to a namespace this deployment owns, derived once at the composition root.
     }
 
-{- | One mount's store as the booting role holds it: the calls that observe it, what this run
-executes against a condemned version, and the cache the mount pairs it with.
--}
+-- | One mount's sweepable store, with the private cache it is always swept beside.
 data SweepStore = SweepStore
     { ssObserve :: StoreObservation
     , ssExecute :: SweepExecution
     , ssPrivate :: SweepCache
-    {- ^ The mount's private cache. Every view of the mount's stores carries it, because the
-    pairing is a fact about the mount rather than about the store in hand.
+    {- ^ Carried by every view of the mount's stores, because the pairing is a fact about the
+    mount rather than about the store in hand.
     -}
     , ssVersionLimit :: Int
     -- ^ Maximum distinct versions held for one package across both observations.
     }
 
-{- | One store's own two halves: what observes it, and what this run executes against a condemned
-version. A cache is paired with no further store, so it carries none.
--}
+-- | One store's own two halves. A cache is paired with no further store, so it carries none.
 data SweepCache = SweepCache
     { scObserve :: StoreObservation
     , scExecute :: SweepExecution
@@ -148,9 +139,7 @@ deletingCache handle = SweepCache{scObserve = observationOf handle, scExecute = 
 previewCache :: StoreObservation -> SweepCache
 previewCache observation = SweepCache{scObserve = observation, scExecute = SweepCounts}
 
-{- | A mount's store: the mirror target's own halves, the private cache it is swept with, and the
-bound the two inventories share.
--}
+-- | A mount's store: the mirror target's halves, its private cache, and the bound they share.
 pairedStore :: Int -> SweepCache -> SweepCache -> SweepStore
 pairedStore limit mirror cache =
     SweepStore{ssObserve = scObserve mirror, ssExecute = scExecute mirror, ssPrivate = cache, ssVersionLimit = limit}
@@ -180,17 +169,15 @@ data SweepPacing = SweepPacing
     , swpChunkPause :: NominalDiffTime
     -- ^ The wait between chunks, and the wait a fault whose advice names no delay takes.
     , swpCyclePause :: NominalDiffTime
-    {- ^ The wait between the end of one cycle and the start of the next, a halted one
-    included. The role's own loop applies it, so a cycle is one supervised step.
+    {- ^ The wait between the end of one cycle and the start of the next, a halted one included.
+    The role's own loop applies it, so a cycle is one supervised step.
     -}
     , swpCycleWindow :: NominalDiffTime
     {- ^ The window an advisory is paced to reach every affected mirrored version inside. It
     covers the rest of the running cycle, the cycle pause, and the next whole cycle.
     -}
     , swpBudgetFraction :: Maybe Rational
-    {- ^ The share of a store's request capacity one sweep may take. Unset, each scope's share
-    is computed from its own tightest quota.
-    -}
+    -- ^ The share of a store's request capacity one sweep may take, else computed per scope.
     , swpDeletionCap :: Int
     -- ^ Versions one cycle may hand over for deletion before it halts for good.
     , swpShape :: SweepShape
@@ -218,8 +205,8 @@ data SweepShape
       bounded by the listing for store size and by advisory hits for reads.
       -}
       SweepCandidates
-    | {- | Every name in the store, bucket by bucket, resuming from the store's own cursor.
-      It covers a rule-configuration change, which no candidate set can see.
+    | {- | Every name in the store, bucket by bucket, resuming from the store's own cursor. It
+      covers a rule-configuration change, which no candidate set can see.
       -}
       SweepEverything
     deriving stock (Eq, Show)
@@ -233,9 +220,7 @@ data SweepReport = SweepReport
     , reportOpening :: Text
     -- ^ How a removal's audit line opens.
     , reportCapHalts :: Bool
-    {- ^ Whether reaching the cap stops the cycle. A preview counts past it instead, so it
-    reports the full reach a real run would have.
-    -}
+    -- ^ Whether reaching the cap stops the cycle. A preview counts past it instead.
     }
 
 {- | Where the sweep reports. The two severities are separate fields rather than a level
@@ -269,6 +254,33 @@ data SweepPorts = SweepPorts
     -- ^ Where the cycle's own request counts are measured and the next cycle's rate installed.
     }
 
+{- | Which of a mount's two locations a store is. The decision keys on the backend name, so a
+mount whose mirror store and private cache report one name reads as the mirror at both.
+-}
+sweepTargetOf :: SweepMount -> StoreObservation -> SweepTarget
+sweepTargetOf mount store
+    | factBackend (obFacts store) == factBackend (obFacts (ssObserve (smStore mount))) = SweepMirror
+    | otherwise = SweepPrivate
+
+-- | The ports an audit line from one located store is written through, labelled and targeted.
+locatedPorts :: SweepMount -> StoreObservation -> SweepPorts -> SweepPorts
+locatedPorts mount store ports =
+    ports
+        { sweepAudit = labelAudit (factBackend (obFacts store)) (sweepAudit ports)
+        , sweepTarget = sweepTargetOf mount store
+        }
+
+-- Keep per-target audit messages distinct when one cycle sweeps associated stores.
+labelAudit :: Text -> SweepAudit -> SweepAudit
+labelAudit target audit =
+    SweepAudit
+        { auditInfo = labelled (auditInfo audit)
+        , auditWarn = labelled (auditWarn audit)
+        , auditError = labelled (auditError audit)
+        }
+  where
+    labelled write = write . ((target <> ": ") <>)
+
 -- | What one cycle did with the versions it examined.
 data SweepTally = SweepTally
     { tallyExamined :: Int
@@ -297,13 +309,13 @@ data CycleHalt
     | -- | The store refills itself from elsewhere, so deleting from it changes nothing.
       HaltStorePreserved Ecosystem Text Text
     | {- | The cycle reached its deletion cap, carrying the cap, what it handed over, and the
-      advisory generation of the exact denial that reached the cap. No later cycle runs.
+      advisory generation of the denial that reached it. No later cycle runs.
       -}
       HaltDeletionCap Int Int (Maybe DbEtag)
     | -- | A store call produced no answer and its retry advice ran out, carrying the fault.
       HaltStoreFault Ecosystem Text Text
     | {- | A bucket outgrew the memory budget and nothing narrows it further, so the walk cannot
-      read it without holding more than the budget allows.
+      read it within the budget.
       -}
       HaltBucketUnsplittable Ecosystem Text Text
     deriving stock (Eq, Show)
@@ -328,17 +340,66 @@ outcomeComplete :: CycleOutcome -> Bool
 outcomeComplete outcome =
     isNothing (outcomeHalt outcome) && evidenceComplete (outcomeEvidence outcome)
 
-{- | What a preview could see of one standing permission. A preview exercises none of them, so an
-unmet one is reported and never acted on.
+{- | Whether a halt stops the Dredger for the life of the process. Only the cap does, because a
+breaker that re-closes itself is not a breaker; every other halt is re-read next cycle.
 -}
-data PrerequisiteStatus
-    = -- | The store answered, and a real sweep would pass this one.
-      PrerequisiteMet
-    | -- | The store answered, and a real sweep would stop here, carrying the backend's own text.
-      PrerequisiteUnmet Text
-    | -- | The store did not answer, so nothing the preview read settles it.
-      PrerequisiteUnread Text
-    deriving stock (Eq, Show)
+latches :: CycleHalt -> Bool
+latches = \case
+    HaltDeletionCap{} -> True
+    HaltConsentWithheld{} -> False
+    HaltStorePreserved{} -> False
+    HaltStoreFault{} -> False
+    HaltBucketUnsplittable{} -> False
+
+-- | The operator-facing text of a halt, naming the backend that raised it and what to fix.
+renderCycleHalt :: CycleHalt -> Text
+renderCycleHalt = \case
+    HaltConsentWithheld eco backend descriptor ->
+        storeSubject eco backend <> " carries no deletion consent marker: " <> descriptor
+    HaltStorePreserved eco backend why ->
+        storeSubject eco backend <> " refills itself, so a delete changes nothing: " <> why
+    HaltDeletionCap cap issued etag ->
+        "the cycle handed over "
+            <> show issued
+            <> " versions and reached its deletion cap of "
+            <> show cap
+            <> " under advisory generation "
+            <> renderGeneration etag
+            <> ", so the Dredger runs no further cycle until it is restarted deliberately"
+    HaltStoreFault eco backend fault ->
+        "a call against " <> storeSubject eco backend <> " produced no answer: " <> fault
+    HaltBucketUnsplittable eco backend bucket ->
+        "the walk over "
+            <> storeSubject eco backend
+            <> " cannot read the bucket of names beginning \""
+            <> bucket
+            <> "\": it holds more names than one bucket may, and no narrower bucket divides them"
+
+-- | The advisory generation an audit line names, or that none was loaded.
+renderGeneration :: Maybe DbEtag -> Text
+renderGeneration = maybe "none" (\(DbEtag etag) -> etag)
+
+-- | One cycle's counts, as its closing line reports them.
+renderTally :: SweepTally -> Text
+renderTally tally =
+    "examined "
+        <> show (tallyExamined tally)
+        <> ", deleted "
+        <> show (tallyDeleted tally)
+        <> ", kept "
+        <> show (tallyKept tally)
+        <> ", guard-skipped "
+        <> show (tallyGuardSkipped tally)
+
+-- | A store fault as an operator reads it: the transport's own cause and its bounded detail.
+renderStoreFault :: StoreFault -> Text
+renderStoreFault fault = renderTransportCause (tfCause transport) <> ": " <> tfDetail transport
+  where
+    transport = faultTransport fault
+
+-- | Name a store without assuming whether it is the mirror or private target.
+storeSubject :: Ecosystem -> Text -> Text
+storeSubject eco backend = "the " <> ecosystemName eco <> " store on " <> backend
 
 -- | One target's standing permissions as a preview found them.
 data TargetPrerequisites = TargetPrerequisites
@@ -349,6 +410,18 @@ data TargetPrerequisites = TargetPrerequisites
     , tpClassification :: PrerequisiteStatus
     -- ^ Whether deleting from the store destroys anything.
     }
+    deriving stock (Eq, Show)
+
+{- | What a preview could see of one standing permission. A preview exercises none of them, so an
+unmet one is reported and never acted on.
+-}
+data PrerequisiteStatus
+    = -- | The store answered, and a real sweep would pass this one.
+      PrerequisiteMet
+    | -- | The store answered, and a real sweep would stop here, carrying the backend's own text.
+      PrerequisiteUnmet Text
+    | -- | The store did not answer, so nothing the preview read settles it.
+      PrerequisiteUnread Text
     deriving stock (Eq, Show)
 
 -- | Whether a real sweep of this target would pass both standing permissions.
@@ -422,67 +495,6 @@ renderEvidenceGaps gaps =
         | count == 1 = Just ("1 " <> noun <> " " <> what)
         | otherwise = Just (show count <> " " <> noun <> "s " <> what)
 
-{- | Whether a halt stops the Dredger for the life of the process. Only the cap does, because a
-breaker that re-closes itself is not a breaker; every other halt is re-read next cycle.
--}
-latches :: CycleHalt -> Bool
-latches = \case
-    HaltDeletionCap{} -> True
-    HaltConsentWithheld{} -> False
-    HaltStorePreserved{} -> False
-    HaltStoreFault{} -> False
-    HaltBucketUnsplittable{} -> False
-
--- | The operator-facing text of a halt, naming the backend that raised it and what to fix.
-renderCycleHalt :: CycleHalt -> Text
-renderCycleHalt = \case
-    HaltConsentWithheld eco backend descriptor ->
-        storeSubject eco backend <> " carries no deletion consent marker: " <> descriptor
-    HaltStorePreserved eco backend why ->
-        storeSubject eco backend <> " refills itself, so a delete changes nothing: " <> why
-    HaltDeletionCap cap issued etag ->
-        "the cycle handed over "
-            <> show issued
-            <> " versions and reached its deletion cap of "
-            <> show cap
-            <> " under advisory generation "
-            <> renderGeneration etag
-            <> ", so the Dredger runs no further cycle until it is restarted deliberately"
-    HaltStoreFault eco backend fault ->
-        "a call against " <> storeSubject eco backend <> " produced no answer: " <> fault
-    HaltBucketUnsplittable eco backend bucket ->
-        "the walk over "
-            <> storeSubject eco backend
-            <> " cannot read the bucket of names beginning \""
-            <> bucket
-            <> "\": it holds more names than one bucket may, and no narrower bucket divides them"
-
--- | The advisory generation an audit line names, or that none was loaded.
-renderGeneration :: Maybe DbEtag -> Text
-renderGeneration = maybe "none" (\(DbEtag etag) -> etag)
-
--- | Name a store without assuming whether it is the mirror or private target.
-storeSubject :: Ecosystem -> Text -> Text
-storeSubject eco backend = "the " <> ecosystemName eco <> " store on " <> backend
-
--- | One cycle's counts, as its closing line reports them.
-renderTally :: SweepTally -> Text
-renderTally tally =
-    "examined "
-        <> show (tallyExamined tally)
-        <> ", deleted "
-        <> show (tallyDeleted tally)
-        <> ", kept "
-        <> show (tallyKept tally)
-        <> ", guard-skipped "
-        <> show (tallyGuardSkipped tally)
-
--- | A store fault as an operator reads it: the transport's own cause and its bounded detail.
-renderStoreFault :: StoreFault -> Text
-renderStoreFault fault = renderTransportCause (tfCause transport) <> ": " <> tfDetail transport
-  where
-    transport = faultTransport fault
-
 -- | Cycle totals and pacing. The issued count bounds attempts, while the tally records outcomes.
 data SweepState = SweepState
     { stTally :: IORef SweepTally
@@ -504,14 +516,6 @@ newSweepState =
         <*> newIORef 0
         <*> newIORef mempty
         <*> newIORef []
-
--- | Record one gap in what this cycle could read.
-recordGap :: SweepState -> EvidenceGaps -> IO ()
-recordGap counters gaps = modifyIORef' (stEvidence counters) (<> gaps)
-
--- | Record one target's standing permissions, which only a preview reads rather than acts on.
-recordPrerequisites :: SweepState -> TargetPrerequisites -> IO ()
-recordPrerequisites counters target = modifyIORef' (stPrerequisites counters) (target :)
 
 -- | Count one version's disposition, in the cycle tally and at the metrics port together.
 record :: SweepPorts -> SweepState -> SweepResult -> IO ()
@@ -537,29 +541,10 @@ tallyOf = \case
     SweepKept -> mempty{tallyKept = 1}
     SweepGuardSkipped -> mempty{tallyGuardSkipped = 1}
 
-{- | Which of a mount's two locations a store is. The decision keys on the backend name, so a
-mount whose mirror store and private cache report one name reads as the mirror at both.
--}
-sweepTargetOf :: SweepMount -> StoreObservation -> SweepTarget
-sweepTargetOf mount store
-    | factBackend (obFacts store) == factBackend (obFacts (ssObserve (smStore mount))) = SweepMirror
-    | otherwise = SweepPrivate
+-- | Record one gap in what this cycle could read.
+recordGap :: SweepState -> EvidenceGaps -> IO ()
+recordGap counters gaps = modifyIORef' (stEvidence counters) (<> gaps)
 
--- | The ports an audit line from one located store is written through, labelled and targeted.
-locatedPorts :: SweepMount -> StoreObservation -> SweepPorts -> SweepPorts
-locatedPorts mount store ports =
-    ports
-        { sweepAudit = labelAudit (factBackend (obFacts store)) (sweepAudit ports)
-        , sweepTarget = sweepTargetOf mount store
-        }
-
--- | Keep per-target audit messages distinct when one cycle sweeps associated stores.
-labelAudit :: Text -> SweepAudit -> SweepAudit
-labelAudit target audit =
-    SweepAudit
-        { auditInfo = labelled (auditInfo audit)
-        , auditWarn = labelled (auditWarn audit)
-        , auditError = labelled (auditError audit)
-        }
-  where
-    labelled write = write . ((target <> ": ") <>)
+-- | Record one target's standing permissions, which only a preview reads rather than acts on.
+recordPrerequisites :: SweepState -> TargetPrerequisites -> IO ()
+recordPrerequisites counters target = modifyIORef' (stPrerequisites counters) (target :)
