@@ -90,11 +90,11 @@ budgetFraction pacing budget = fromMaybe computed (swpBudgetFraction pacing)
         | smallest <= 0 = fractionCeiling
         | otherwise = min fractionCeiling (pacingPace pacing / smallest)
 
--- The nominal pace of this pacing's own chunk keys.
+-- The nominal pace of this pacing's own chunk size and chunk pause.
 pacingPace :: SweepPacing -> Rational
 pacingPace pacing = nominalPackagePace (swpChunkSize pacing) (swpChunkPause pacing)
 
--- | The largest share of a store's capacity a sweep takes, leaving the rest to the proxy's calls.
+-- The largest share of a store's capacity a sweep takes, leaving the rest to the proxy's calls.
 fractionCeiling :: Rational
 fractionCeiling = 1 % 2
 
@@ -161,19 +161,20 @@ decidePace pacing budget sample
         PaceDecision
             { pdScope = bgScope budget
             , pdFraction = fraction
-            , pdPace = paceAt share
+            , pdPace = paceAtShare pacing budget ceilings share
             , pdShortfall = shortfall
             }
 
-    -- A share below one stretches every request's own cost by the same factor.
-    paceAt share =
-        paceOf (Map.fromList [(kind, held (seconds kind / share)) | kind <- requestKinds, seconds kind > 0])
+-- A share below one stretches every request's own cost by the same factor.
+paceAtShare :: SweepPacing -> StoreBudget -> Map QuotaDimension Rational -> Rational -> CyclePace
+paceAtShare pacing budget ceilings share =
+    paceOf (Map.fromList [(kind, held (seconds kind / share)) | kind <- requestKinds, seconds kind > 0])
+  where
     held = min (paceBound pacing)
     seconds kind = cycleDemand ceilings budget (oneRequest kind)
 
-{- | The longest one request is ever held. A wait past a whole cycle's allowance cannot land that
-cycle inside the window, and an unbounded one would overrun the thread delay.
--}
+{- The longest one request is ever held. A wait past a whole cycle's allowance cannot land that
+cycle inside the window, and an unbounded one would overrun the thread delay. -}
 paceBound :: SweepPacing -> Rational
 paceBound pacing = max 1 (cycleAllowance pacing)
 

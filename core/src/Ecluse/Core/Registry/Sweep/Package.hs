@@ -50,11 +50,73 @@ import Ecluse.Core.Server.Metadata (selectVersion)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept))
 import Ecluse.Core.Version (Version, renderVersion)
 
-selectPackage :: SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [StoredVersion] -> IO [Condemned]
-selectPackage = selectPackageWith True
+{- | One version a named decisive deny condemned, with the rule that named it. Its audit line
+and its deletion both read this, so neither can credit a rule the other did not.
+-}
+data Condemned = Condemned
+    { cdVersion :: Version
+    , cdRule :: Text
+    , cdAdvisoryEtag :: Maybe DbEtag
+    , cdReason :: Reason
+    }
 
-selectPackageWith :: Bool -> SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [StoredVersion] -> IO [Condemned]
-selectPackageWith counting ports counters mount ctx name stored
+-- | Evaluate each copy with its own evidence and count each selected version once for the mount.
+previewPackageGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [(StoreObservation, [StoredVersion])] -> IO (Maybe CycleHalt)
+previewPackageGroup pacing ports counters mount ctx name locations = do
+    selections <- traverse (previewLocation ports counters mount ctx name) locations
+    chargePreview pacing ports counters (nubOrdOn (renderVersion . cdVersion) (concat selections))
+    pure Nothing
+
+previewLocation :: SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> (StoreObservation, [StoredVersion]) -> IO [Condemned]
+previewLocation ports counters mount ctx name (store, versions) = do
+    selected <-
+        selectPackage True located counters locatedMount ctx name versions
+            >>= stillEligible located counters locatedMount name
+    traverse_ (announce located name) selected
+    traverse_ (const (recordMetric located (reportRemoval (sweepReport ports)))) selected
+    announceKept located name (stillServed versions selected)
+    pure selected
+  where
+    locatedMount = mount{smStore = countingAt (smStore mount) store}
+    located = locatedPorts mount store ports
+
+-- The served versions a preview leaves behind, which it reports one line each.
+stillServed :: [StoredVersion] -> [Condemned] -> [Version]
+stillServed stored selected =
+    [ storedVersion version
+    | version <- stored
+    , storedPresence version == VersionServed
+    , Set.notMember (renderVersion (storedVersion version)) condemnedKeys
+    ]
+  where
+    condemnedKeys = Set.fromList (map (renderVersion . cdVersion) selected)
+
+{- A preview charges the cap once per distinct version, however many of the mount's stores hold it,
+and counts past the cap rather than halting, so the closing tally names the full reach. -}
+chargePreview :: SweepPacing -> SweepPorts -> SweepState -> [Condemned] -> IO ()
+chargePreview pacing ports counters logical = do
+    issued <- readIORef (stIssued counters)
+    let reached = issued + length logical
+        cap = swpDeletionCap pacing
+        etag = cdAdvisoryEtag =<< listToMaybe (drop (cap - issued - 1) logical)
+    writeIORef (stIssued counters) reached
+    when (issued < cap && reached >= cap) (announceCap ports cap reached etag)
+    traverse_ (const (recordTally counters (reportRemoval (sweepReport ports)))) logical
+
+-- | The grouped executor reuses the complete evaluator with fresh context for every backend batch.
+sweepPackageGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> PackageName -> [(SweepStore, [StoredVersion])] -> IO (Maybe CycleHalt)
+sweepPackageGroup pacing ports counters mount name =
+    deleteGroup pacing ports counters mount name select (\located -> recordOutcome located counters name)
+  where
+    select counting located stored = do
+        ctx <- mkEvalContext (sweepNow ports) (sweepAdvisoryEtag ports (smEcosystem mount))
+        let store = ssObserve (smStore located)
+            targetPorts = locatedPorts mount store ports
+        selected <- selectPackage counting targetPorts counters located ctx name stored >>= stillEligible targetPorts counters located name
+        pure [Selection (cdVersion item) (condemnationMessage ports name item) (cdAdvisoryEtag item) | item <- selected]
+
+selectPackage :: Bool -> SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [StoredVersion] -> IO [Condemned]
+selectPackage counting ports counters mount ctx name stored
     | smFirstParty mount name = [] <$ when counting (traverse_ (const (record ports counters SweepGuardSkipped)) served)
     | null served = pure []
     | otherwise =
@@ -68,82 +130,11 @@ selectPackageWith counting ports counters mount ctx name stored
     served = [storedVersion s | s <- stored, storedPresence s == VersionServed]
     decideAll evidence = catMaybes <$> traverse (decideVersion counting ports counters mount ctx evidence) served
 
--- | Evaluate each copy with its own evidence and count each selected version once for the mount.
-previewPackageGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [(StoreObservation, [StoredVersion])] -> IO (Maybe CycleHalt)
-previewPackageGroup pacing ports counters mount ctx name locations = do
-    selections <- forM locations $ \(store, versions) -> do
-        let locatedMount = mount{smStore = countingAt (smStore mount) store}
-            located = locatedPorts mount store ports
-        selected <-
-            selectPackage located counters locatedMount ctx name versions
-                >>= stillEligible located counters locatedMount name
-        traverse_ (announce located name) selected
-        traverse_ (const (recordMetric located (reportRemoval (sweepReport ports)))) selected
-        let selectedKeys = Set.fromList (map (renderVersion . cdVersion) selected)
-            kept =
-                [ storedVersion version
-                | version <- versions
-                , storedPresence version == VersionServed
-                , Set.notMember (renderVersion (storedVersion version)) selectedKeys
-                ]
-        traverse_
-            ( \version ->
-                auditInfo
-                    (sweepAudit located)
-                    ("dry run, keeping " <> renderPackageName name <> "@" <> renderVersion version)
-            )
-            kept
-        pure selected
-    let logical = nubOrdOn (renderVersion . cdVersion) (concat selections)
-    issued <- readIORef (stIssued counters)
-    let reached = issued + length logical
-        cap = swpDeletionCap pacing
-        etag = cdAdvisoryEtag =<< listToMaybe (drop (cap - issued - 1) logical)
-    writeIORef (stIssued counters) reached
-    when (issued < cap && reached >= cap) (announceCap ports cap reached etag)
-    traverse_ (const (recordTally counters (reportRemoval (sweepReport ports)))) logical
-    pure Nothing
-
--- | The grouped executor reuses the complete evaluator with fresh context for every backend batch.
-sweepPackageGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> PackageName -> [(SweepStore, [StoredVersion])] -> IO (Maybe CycleHalt)
-sweepPackageGroup pacing ports counters mount name =
-    deleteGroup pacing ports counters mount name select (\located -> recordOutcome located counters name)
-  where
-    select counting located stored = do
-        ctx <- mkEvalContext (sweepNow ports) (sweepAdvisoryEtag ports (smEcosystem mount))
-        let store = ssObserve (smStore located)
-            targetPorts = locatedPorts mount store ports
-        selected <- selectPackageWith counting targetPorts counters located ctx name stored >>= stillEligible targetPorts counters located name
-        pure [Selection (cdVersion item) (condemnationMessage ports name item) (cdAdvisoryEtag item) | item <- selected]
-
-{- The store served no metadata, so each version is decided on the identity the listing carries. The
-shared fetch discards the response status, so a package the store no longer serves arrives here too. -}
-announceUnread :: SweepPorts -> PackageName -> [Version] -> StoreFault -> IO ()
-announceUnread ports name served fault =
-    auditError
-        (sweepAudit ports)
-        ( renderPackageName name
-            <> ": the store served no metadata this cycle, so its "
-            <> show (length served)
-            <> " versions are decided on identity alone: "
-            <> renderStoreFault fault
-        )
-
 {- The manifest's own entry for a version, or identity alone where it projects none. A listing can
 name a version the manifest omits, and identity is established either way. -}
 evidenceIn :: PackageName -> Manifest -> Version -> RuleEvidence
 evidenceIn name manifest version =
     maybe (identityEvidence name version) completeEvidence (selectVersion version (manifestInfo manifest))
-
-{- | One version a named decisive deny condemned, with the rule that named it. Its audit line
-and its deletion both read this, so neither can credit a rule the other did not.
--}
-data Condemned = Condemned
-    { cdVersion :: Version
-    , cdRule :: Text
-    , cdAdvisoryEtag :: Maybe DbEtag
-    , cdReason :: Reason
-    }
 
 {- Decide one version from whatever evidence it has and count it. Only a named decisive deny
 condemns, so this runs 'evalRules' rather than the wrapper that folds in deny-by-default. -}
@@ -169,15 +160,34 @@ stillEligible ports counters mount name condemned =
     rdAdvisoryFreshness (smRuleDeps mount) >>= \freshness -> case renderIneligible freshness of
         Nothing -> pure condemned
         Just why -> do
-            let (withheld, keeping) = partition (advisoryNamed mount . cdRule) condemned
+            let advisoryRules = [ruleName r | r <- smConfigured mount, readsAdvisories r]
+                (withheld, keeping) = partition ((`elem` advisoryRules) . cdRule) condemned
             unless (null withheld) $ do
                 traverse_ (const (record ports counters SweepGuardSkipped)) withheld
                 announceIneligible ports name why withheld
             pure keeping
 
--- Whether a rule name credited to a condemnation is one of this mount's advisory-reading rules.
-advisoryNamed :: SweepMount -> Text -> Bool
-advisoryNamed mount credited = credited `elem` [ruleName r | r <- smConfigured mount, readsAdvisories r]
+{- The store served no metadata, so each version is decided on the identity the listing carries. The
+shared fetch discards the response status, so a package the store no longer serves arrives here too. -}
+announceUnread :: SweepPorts -> PackageName -> [Version] -> StoreFault -> IO ()
+announceUnread ports name served fault =
+    auditError
+        (sweepAudit ports)
+        ( renderPackageName name
+            <> ": the store served no metadata this cycle, so its "
+            <> show (length served)
+            <> " versions are decided on identity alone: "
+            <> renderStoreFault fault
+        )
+
+announceKept :: SweepPorts -> PackageName -> [Version] -> IO ()
+announceKept ports name =
+    traverse_
+        ( \version ->
+            auditInfo
+                (sweepAudit ports)
+                ("dry run, keeping " <> renderPackageName name <> "@" <> renderVersion version)
+        )
 
 -- The versions the unusable evidence spared, so an operator sees what a recovered Pilot would act on.
 announceIneligible :: SweepPorts -> PackageName -> Text -> [Condemned] -> IO ()
@@ -191,8 +201,7 @@ announceIneligible ports name why withheld =
             <> why
         )
 
-{- The cap as a run that does not halt on it reports it: where a halting run would have stopped,
-and that this one carries on, so the closing tally names the full reach. -}
+-- Where a halting run would have stopped, for a run that carries on past the cap instead.
 announceCap :: SweepPorts -> Int -> Int -> Maybe DbEtag -> IO ()
 announceCap ports cap reached etag =
     auditInfo (sweepAudit ports) $
@@ -204,11 +213,11 @@ announceCap ports cap reached etag =
             <> renderGeneration etag
             <> ". This run counts past the cap rather than halting, so its closing tally reports the full reach"
 
-{- Every deletion's audit line: the package, the version, the rule that denied it, and the
-advisory generation pinned when it was decided. -}
 announce :: SweepPorts -> PackageName -> Condemned -> IO ()
 announce ports name condemned = auditInfo (sweepAudit ports) (condemnationMessage ports name condemned)
 
+{- Every deletion's audit line: the package, the version, the rule that denied it, and the
+advisory generation pinned when it was decided. -}
 condemnationMessage :: SweepPorts -> PackageName -> Condemned -> Text
 condemnationMessage ports name condemned =
     reportOpening (sweepReport ports)
@@ -228,8 +237,8 @@ recordOutcome :: SweepPorts -> SweepState -> PackageName -> (Version, VersionOut
 recordOutcome ports counters name (version, outcome) = case outcome of
     VersionRemoved -> record ports counters removal
     VersionRemoving reference -> do
-        -- No backend completes later today. The next cycle's listing shows whether it finished,
-        -- and a version still served is decided and deleted again, which is idempotent.
+        -- No backend completes a removal later, so the next cycle's listing settles it: a version
+        -- still served is decided and deleted again, which is idempotent.
         auditInfo (sweepAudit ports) (subject <> ": the backend is removing it under " <> reference)
         record ports counters removal
     VersionRefused refusal -> do
