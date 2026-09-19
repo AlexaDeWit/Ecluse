@@ -1,6 +1,6 @@
 name: Cache cleanup
 
-# Keep the repo's Actions cache under the 10 GB quota. ci.yml saves only on main, so
+# Keep the repo's Actions cache under the 15 GiB quota. ci.yml saves only on main, so
 # this is the backstop for what that cannot reach: off-main stragglers, superseded
 # epochs, and keys no workflow writes. scripts/prune-caches.sh owns the retention rules
 # and the allow-list.
@@ -91,5 +91,5 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$REPO/actions/cache/usage" \
-            --jq '"Active caches: \(.active_caches_count), \(.active_caches_size_in_bytes / 1e9 | (.*100|floor)/100) GB / 10 GB"' \
+            --jq '"Active caches: \(.active_caches_count), \(.active_caches_size_in_bytes / 1073741824 | (.*100|floor)/100) GiB / 15 GiB"' \
             >> "$GITHUB_STEP_SUMMARY"

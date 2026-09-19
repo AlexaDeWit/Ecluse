@@ -6,7 +6,7 @@ description: >-
 
   Caching policy: restore everywhere, save only on main, one writer per key. A PR
   restores main's entries through GitHub's base-branch fallback and never saves. That
-  rule is what holds the repo under the 10 GB Actions-cache quota.
+  rule is what holds the repo under the 15 GiB Actions-cache quota.
 
   The release image builds never use this action, because a Nix store restored from the
   unsigned Actions cache would undermine their provenance attestation. See
@@ -15,34 +15,24 @@ description: >-
 inputs:
   cabal-cache:
     description: >-
-      Also restore the cabal store and dist-newstyle. Enable it for a job that builds
-      Haskell. The format, lint, Semgrep, and workflow checks build nothing and leave
-      it off.
+      Also restore the cabal store. Enable it for a job that builds Haskell. The
+      format, lint, Semgrep, and workflow checks build nothing and leave it off.
     default: "false"
+  dist-cache:
+    description: >-
+      Also restore dist-newstyle, the regular-variant build directory. Needs
+      cabal-cache. Set "false" for a job that builds into its own directory under its
+      own flags, because a restore it never reads is a download it never uses:
+      `coverage` builds instrumented into dist-coverage, `weeder` and `stan` build
+      with -fwrite-ide-info into dist-analysis.
+    default: "true"
   save-nix-store:
     description: >-
-      Whether this job may save the Nix-store cache (only ever on main). Set "false"
-      for a job that restores a prefix another job writes, so the two never race for
-      the one entry.
-    default: "true"
-  nix-cache-prefix:
-    description: >-
-      The Nix-store cache key prefix, one entry per distinct closure. "nix" is the
-      shared `.#ci` dev-shell store, written by ci.yml's build job. "nix-docs" is the
-      Nix-built Haskell closure, the ~188-package dependency set that both
-      `checks.docs` and `.#dockerImage` link against: the docs job writes it and the
-      e2e job reads it. A job that realises neither closure needs its own prefix and
-      must be its sole writer. prune-caches.sh keeps one epoch per prefix.
-    default: "nix"
-  nix-gc-max-store-size:
-    description: >-
-      The size cache-nix-action trims the Nix store to before saving. The trim is a
-      `nix store gc`, so an unrooted closure is absent from the saved entry and every
-      later run re-substitutes it. Size the cap above the store the job accumulates
-      (restored epoch plus build inputs plus outputs), and root what the entry must
-      carry. The cap is on the uncompressed store, which compresses about 5x into the
-      entry the quota counts.
-    default: "10G"
+      Whether this job may save the one shared Nix-store cache (only ever on main).
+      The default is "false", so a job opts in to being the writer. ci.yml's docs job
+      is that writer, and no other job may set it, because GitHub caches are immutable
+      per key and two savers would race for the one entry.
+    default: "false"
 
 outputs:
   cabal-cache-hit:
@@ -62,7 +52,7 @@ outputs:
       "true" only on an exact key match on the dist-newstyle restore below, which happens
       when a main run meets its own commit's entry: a re-run, or a scheduled run on an
       unchanged head. "false" on a version-family prefix fallback or a miss, and empty
-      when cabal-cache is "false".
+      when the restore is off.
     value: ${{ steps.restore-dist.outputs.cache-hit }}
 
 runs:
@@ -121,15 +111,19 @@ runs:
         echo "setup-toolchain: the Nix database stayed locked for 60 s" >&2
         exit 1
 
-    # Keyed on the flake. Two conditions gate the save, main and the save-nix-store
-    # input, so exactly one job writes each prefix and no two race for one entry.
+    # One entry for every job in every workflow, keyed on the flake. The prefix
+    # restore-key keeps a lockfile bump warm: the run takes the previous epoch and
+    # rebuilds only the delta. An entry is immutable, so widening what it holds takes a
+    # fresh epoch: v2 is the first to carry the dev shell and the Haskell closure both.
     - name: Cache Nix store
       uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
       with:
-        primary-key: ${{ inputs.nix-cache-prefix }}-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
-        restore-prefixes-first-match: ${{ inputs.nix-cache-prefix }}-${{ runner.os }}-
+        primary-key: nix-v2-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-prefixes-first-match: nix-v2-${{ runner.os }}-
         save: ${{ inputs.save-nix-store == 'true' && github.ref == 'refs/heads/main' }}
-        gc-max-store-size-linux: ${{ inputs.nix-gc-max-store-size }}
+        # Sits under the rooted store on purpose, so the trim sheds every unrooted build
+        # product and keeps both roots. The entry compresses to roughly a fifth of it.
+        gc-max-store-size-linux: 14G
 
     # Read once here, so every workflow keys its build-product caches the same way.
     - name: Read the package version
@@ -161,7 +155,7 @@ runs:
     # exists. A restore takes the newest entry of the version family through the prefix
     # and recompiles only the changed local modules, never the closure.
     - name: Restore dist-newstyle
-      if: inputs.cabal-cache == 'true'
+      if: inputs.cabal-cache == 'true' && inputs.dist-cache == 'true'
       id: restore-dist
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:

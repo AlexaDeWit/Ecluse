@@ -294,10 +294,30 @@ its floor blocks the merge. Among the always-on jobs, only `smoke` is non-gating
 The Haskell work runs as parallel jobs, so no job waits on another's steps. `build` compiles every
 target and then runs the residency suite, the doctests, and `cabal check`. `coverage` is a matrix
 with one runner per instrumented suite. `docs`, `e2e`, `weeder`, `stan`, and `static-checks` each
-hold their own runner. `build` compiles the widest plan, so it is the sole writer of the shared Nix
-and cabal caches that the other jobs restore. Each `coverage` leg writes its own `dist-coverage`
-cache key, so no two legs race for one entry. `codecov-notify` follows the coverage legs and
-releases the Codecov statuses.
+hold their own runner. `codecov-notify` follows the coverage legs and releases the Codecov statuses.
+
+Every job restores caches and only a main run ever saves one, so a pull request reads the default
+branch's entries and adds none of its own. Each cache key has exactly one writer, because GitHub
+caches are immutable per key and two savers would race for the one entry.
+
+There is **one Nix-store cache** for the whole repository, keyed on `flake.nix` and `flake.lock`.
+The `docs` job writes it, because it realises the widest closure. It roots the `.#ci` dev shell and
+the flake checks, so the saved store carries both, and every other job in every workflow restores
+that one entry. Two entries, one per closure, cost more than they saved: the two build graphs shared
+about nine tenths of their derivations, so each entry held mostly the same store paths, and the job
+that restored the Haskell one then refetched the whole dev shell before it could run.
+
+The cabal side keeps two families, because a documentation build wants a doc-variant of every
+dependency and cannot reuse the regular one. `build` writes the regular `cabal-store` and
+`dist-newstyle`. The Pages job writes the doc-variant `cabal-store-docs-v2` and `dist-docs`. A job
+that builds into its own directory under its own flags skips the `dist-newstyle` restore: `coverage`
+builds instrumented into `dist-coverage`, and `weeder` and `stan` build with `-fwrite-ide-info` into
+`dist-analysis`. Each `coverage` leg writes its own `dist-coverage` key, so no two legs race and
+each leg starts warm for the suite it owns.
+
+[`scripts/prune-caches.sh`](../scripts/prune-caches.sh) lists the key families the workflows write.
+A family missing from that list is reaped on the next sweep, which is how a retired key stops
+occupying the quota.
 
 A PR that edits documentation only skips the Haskell jobs. The `changes` job classifies it
 against an allow-list of documentation paths in

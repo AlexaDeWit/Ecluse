@@ -51,10 +51,6 @@ jobs:
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
-        with:
-          # Restore-only for the shared Nix store: the CI build job is its single
-          # writer.
-          save-nix-store: "false"
 
       # grype scans the sbomnix SBOM of .#ecluse-bin into grype.sarif, and prints a
       # table in the log.
@@ -85,10 +81,6 @@ jobs:
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
-        with:
-          # Restore-only for the shared Nix store: the CI build job is its single
-          # writer.
-          save-nix-store: "false"
 
       # osv-scanner (from the pinned nixpkgs, like grype) reads the freeze
       # natively. Findings are report-only, so only a scanner error fails here.
