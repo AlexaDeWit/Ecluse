@@ -895,16 +895,20 @@ spec = do
                 >>= (`shouldSatisfy` isBlockedByDefault)
 
     describe "renderDecision" $ do
+        -- The whole line, not a substring: it reaches an operator, so the subject, the verb,
+        -- the rule, and the reason each have to stay where they are.
         let pd = pkg (Just "myorg") 0
         it "renders an admission naming the rule and its reason" $
             renderDecision pd (Admitted "AllowScope" "scope @myorg is allow-listed" [])
-                `shouldSatisfy` (\t -> T.isInfixOf "AllowScope" t && T.isInfixOf "approved" t)
+                `shouldBe` "@myorg/thing@1.0.0 was approved by AllowScope: scope @myorg is allow-listed"
         it "renders a block naming the rule and its reason" $
             renderDecision pd (Blocked "DenyAdvisory" Nothing "affected by an advisory")
-                `shouldSatisfy` (\t -> T.isInfixOf "DenyAdvisory" t && T.isInfixOf "affected by an advisory" t)
-        it "renders a deny-by-default explaining no rule allowed it" $
-            renderDecision pd (BlockedByDefault ["scope is not the allow-listed @myorg"])
-                `shouldSatisfy` (\t -> T.isInfixOf "no rule allowed it" t && T.isInfixOf "allow-listed" t)
+                `shouldBe` "@myorg/thing@1.0.0 was denied by DenyAdvisory: affected by an advisory"
+        it "renders a deny-by-default explaining no rule allowed it, then every reason" $
+            renderDecision pd (BlockedByDefault ["scope is not the allow-listed @myorg", "published only 1 day ago"])
+                `shouldBe` "@myorg/thing@1.0.0 was denied (no rule allowed it): scope is not the allow-listed @myorg; published only 1 day ago"
+        it "renders a deny-by-default with no reasons as the verdict alone" $
+            renderDecision pd (BlockedByDefault []) `shouldBe` "@myorg/thing@1.0.0 was denied (no rule allowed it)"
         it "renders an undecidable outcome explaining it could not be evaluated" $
             renderDecision pd (Undecidable (WillResolve Nothing) "the advisory source is down")
-                `shouldSatisfy` (\t -> T.isInfixOf "could not be evaluated" t && T.isInfixOf "advisory source is down" t)
+                `shouldBe` "@myorg/thing@1.0.0 could not be evaluated: the advisory source is down"
