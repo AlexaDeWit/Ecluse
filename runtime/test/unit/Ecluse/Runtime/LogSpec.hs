@@ -134,6 +134,7 @@ spec = do
             parseLogLevel "trace"
                 `shouldBe` Left "unknown log level \"trace\" (expected one of: debug, info, warn, error)"
 
+    describe "severityFloor" $
         it "maps each level onto the katip severity floor it admits" $ do
             severityFloor DebugLevel `shouldBe` DebugS
             severityFloor InfoLevel `shouldBe` InfoS
