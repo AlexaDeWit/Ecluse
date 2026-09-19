@@ -46,7 +46,7 @@ import UnliftIO.Async (Async, async, cancel, uninterruptibleCancel, wait)
 import UnliftIO.Exception (bracket)
 
 import Ecluse.Core.Breaker (BreakerReporter (..))
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), MissingScorePolicy (..), insideAffectedVersion, scoreAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), MissingScorePolicy (..), insideAffectedRange, scoreAtLeast)
 import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
@@ -61,7 +61,7 @@ import Ecluse.Core.Rules.Freshness (AdvisoryAge (..), AdvisoryFreshness (Advisor
 import Ecluse.Core.Rules.Outage (SourceHealth (..), SourceReporter (..), noSourceReporter)
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Text (displayExceptionT, renderIso8601Utc)
-import Ecluse.Core.Version (mkVersion, renderVersion)
+import Ecluse.Core.Version (renderVersion)
 
 -- | Pin one advisory generation for an evaluation, or supply 'Nothing' before the first sync.
 data RuleDeps = RuleDeps
@@ -154,7 +154,7 @@ advisoryDenyVerdict etag missing metric threshold scoreOf cve ev = do
             ordNub
                 [ arCveId ar
                 | ar <- ranges
-                , insideAffectedVersion eco parsed ar
+                , insideAffectedRange eco version ar
                 , scoreAtLeast missing threshold (scoreOf ar)
                 ]
     pure $ case blocking of
@@ -164,9 +164,6 @@ advisoryDenyVerdict etag missing metric threshold scoreOf cve ev = do
     eco = pkgEcosystem (evName ev)
     name = TS.toText (pkgCanonical (evName ev))
     version = renderVersion (evVersion ev)
-    -- Parsed once for the whole range list: the grammar is per-ecosystem and every range
-    -- tests the same string.
-    parsed = mkVersion eco version
 
 -- | Read the advisory identifiers from a scored denial reason, or return none.
 cveIdsInReason :: Text -> [Text]
@@ -209,8 +206,7 @@ classifyRanges eco version ranges =
         (ids, []) -> Allow ("remediates " <> T.intercalate ", " ids)
   where
     remediated = ordNub [arCveId ar | ar <- ranges, arUpperBound ar == FixedBefore version]
-    stillOpen = ordNub [arCveId ar | ar <- ranges, insideAffectedVersion eco parsed ar]
-    parsed = mkVersion eco version
+    stillOpen = ordNub [arCveId ar | ar <- ranges, insideAffectedRange eco version ar]
 
 -- The one identity test the by-identity twins share: the exact rendered package
 -- name, or the exact package@version.

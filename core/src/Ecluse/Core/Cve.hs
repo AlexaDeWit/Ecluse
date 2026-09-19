@@ -18,7 +18,6 @@ module Ecluse.Core.Cve (
 
     -- * Pure range matching
     insideAffectedRange,
-    insideAffectedVersion,
     MissingScorePolicy (..),
     scoreAtLeast,
 ) where
@@ -30,7 +29,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance, decodeProvenance)
 import Ecluse.Core.Osv.Schema (EpssRequirement)
 import Ecluse.Core.Osv.Types (UpperBound (..))
-import Ecluse.Core.Version (Version, compareVersions, mkVersion, parseVersionKey, renderVersion)
+import Ecluse.Core.Version (compareVersions, mkVersion, parseVersionKey)
 
 import Database.SQLite.Simple (Connection, SQLError, close)
 
@@ -113,16 +112,12 @@ taggedQuery tag act = act `catch` \(err :: SQLError) -> throwIO (CveQueryFault t
 ordering? __Fail-closed:__ an unprovable comparison counts as __inside__, bar an 'unorderablePoint'.
 -}
 insideAffectedRange :: Ecosystem -> Text -> AdvisoryRange -> Bool
-insideAffectedRange eco versionText = insideAffectedVersion eco (mkVersion eco versionText)
-
-{- | 'insideAffectedRange' over a version already parsed, for a caller testing one version
-against many ranges. The ecosystem must be the one the version was built under.
--}
-insideAffectedVersion :: Ecosystem -> Version -> AdvisoryRange -> Bool
-insideAffectedVersion eco v ar = case unorderablePoint eco ar of
-    Just only -> renderVersion v == only
+insideAffectedRange eco versionText ar = case unorderablePoint eco ar of
+    Just only -> versionText == only
     Nothing -> atOrAboveIntroduced && withinUpperBound
   where
+    v = mkVersion eco versionText
+
     atOrAboveIntroduced = case arIntroduced ar of
         -- No introduced bound: the range starts at the beginning.
         Nothing -> True
