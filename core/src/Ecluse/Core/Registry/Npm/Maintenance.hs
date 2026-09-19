@@ -21,8 +21,8 @@ module Ecluse.Core.Registry.Npm.Maintenance (
 import Data.Aeson (Object, Value (Object, String), decodeStrict, encode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
-import Network.HTTP.Types.Header (hAccept, hContentType)
+import Network.HTTP.Client (Request (method, requestHeaders))
+import Network.HTTP.Types.Header (hAccept)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, unscopedName)
@@ -42,6 +42,7 @@ import Ecluse.Core.Registry.Npm.Project (npmNameLeadChars, projectName)
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Full),
     artifactFileUrl,
+    jsonPutRequest,
     metadataRequest,
     packageUrl,
     parseRequestEither,
@@ -149,21 +150,10 @@ versionsOf packument = case KeyMap.lookup "versions" packument of
     _ ->
         Left (storeRefusal "UNREADABLE_DOCUMENT" "the store's packument carries no versions object")
 
--- A spec-compliant registry answers 415 unless the edited body is declared application/json.
 packumentPutRequest :: OriginClient -> PackageName -> Text -> Object -> Either UrlFormationError Request
 packumentPutRequest origin name revision packument = do
     url <- atRevision revision <$> packageUrl (originBaseUrl origin) name
-    base <- parseRequestEither url
-    pure
-        . withToken (ocToken origin)
-        $ base
-            { method = "PUT"
-            , requestBody = RequestBodyBS (toStrict (encode packument))
-            , requestHeaders =
-                (hContentType, "application/json")
-                    : (hAccept, "application/json")
-                    : requestHeaders base
-            }
+    jsonPutRequest (ocToken origin) url (toStrict (encode packument))
 
 deleteAtRevision :: OriginClient -> Text -> Text -> Either UrlFormationError Request
 deleteAtRevision origin revision url = do

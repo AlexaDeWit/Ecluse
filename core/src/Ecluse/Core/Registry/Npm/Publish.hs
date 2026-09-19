@@ -27,8 +27,7 @@ import Data.Text qualified as T
 
 import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
-import Network.HTTP.Client (Request (method, requestBody, requestHeaders), RequestBody (RequestBodyBS))
-import Network.HTTP.Types.Header (hAccept, hContentType)
+import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential, bareCredential)
 import Ecluse.Core.Package (HashAlg (SHA1, SRI), PackageName, Scope, hashAlg, hashValue, pkgNamespace, renderPackageName)
@@ -44,7 +43,7 @@ import Ecluse.Core.Registry (
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
-import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), metadataRequest, packageUrl, parseRequestEither, withToken)
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), jsonPutRequest, metadataRequest, packageUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest, ppMetadata, ppVersion))
 import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Server.Path (unFilename)
@@ -84,18 +83,7 @@ publishRequest ::
     Either UrlFormationError Request
 publishRequest baseUrl credential name document = do
     url <- packageUrl baseUrl name
-    base <- parseRequestEither url
-    pure
-        . withToken credential
-        $ base
-            { method = "PUT"
-            , requestBody = RequestBodyBS document
-            , -- npm registries reject a publish without the JSON content type with HTTP 415.
-              requestHeaders =
-                (hContentType, "application/json")
-                    : (hAccept, "application/json")
-                    : requestHeaders base
-            }
+    jsonPutRequest credential url document
 
 {- | Assemble one version from the plan's metadata, under local authority for the name, version,
 and verified @dist@ fields. The declared @latest@ is the plan's: a registry left to choose can retag.

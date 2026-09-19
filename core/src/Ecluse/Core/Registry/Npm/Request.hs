@@ -41,12 +41,16 @@ module Ecluse.Core.Registry.Npm.Request (
     packageUrl,
 
     -- * Shared internals
+    jsonPutRequest,
     withToken,
     parseRequestEither,
 ) where
 
-import Network.HTTP.Client (Request (decompress, requestHeaders))
-import Network.HTTP.Types.Header (hAccept, hAcceptEncoding)
+import Network.HTTP.Client (
+    Request (decompress, method, requestBody, requestHeaders),
+    RequestBody (RequestBodyBS),
+ )
+import Network.HTTP.Types.Header (hAccept, hAcceptEncoding, hContentType)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, unScope, unscopedName)
@@ -171,6 +175,23 @@ encodePackagePath :: PackageName -> Text
 encodePackagePath name = case pkgNamespace name of
     Just scope -> "@" <> encodeComponent (unScope scope) <> "%2F" <> encodeComponent (unscopedName name)
     Nothing -> encodeComponent (renderPackageName name)
+
+{- | Build the JSON @PUT@ at @url@ carrying @document@, under the injected credential. An npm
+registry answers 415 unless the body declares @application\/json@.
+-}
+jsonPutRequest :: Maybe ClientCredential -> Text -> ByteString -> Either UrlFormationError Request
+jsonPutRequest credential url document = do
+    base <- parseRequestEither url
+    pure
+        . withToken credential
+        $ base
+            { method = "PUT"
+            , requestBody = RequestBodyBS document
+            , requestHeaders =
+                (hContentType, "application/json")
+                    : (hAccept, "application/json")
+                    : requestHeaders base
+            }
 
 -- Attach the injected credential under npm's presentation. The redirect pin and the proxy
 -- identity belong to Ecluse.Core.Registry.Request, which seals every request it parses.
