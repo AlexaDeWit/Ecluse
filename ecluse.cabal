@@ -321,6 +321,7 @@ library
   autogen-modules: Paths_ecluse
   exposed-modules:
     Ecluse
+    Ecluse.Internal
     Ecluse.Boot
     Ecluse.Proxy
     Ecluse.Mirror
@@ -904,6 +905,7 @@ test-suite ecluse-unit
     Ecluse.BenchReportSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
+    Ecluse.InternalSpec
     Ecluse.DredgerSpec
     Ecluse.Dredger.PlanSpec
     Ecluse.Composition.BootErrorSpec

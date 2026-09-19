@@ -7,7 +7,6 @@ module Ecluse.CompositionSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse (mountBindingFor)
 import Ecluse.Composition (
     BootWiring (bwBindings),
     PublishBudget (..),
@@ -68,6 +67,7 @@ import Ecluse.Core.Server.Upstream (
     mountUpstreams,
     upstreamTarballHostGate,
  )
+import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Credential (noCredentialReporters)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, thingName)
 import Ecluse.Test.Rules (inertRuleDeps)

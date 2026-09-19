@@ -9,29 +9,15 @@ before any dependency reaches a build. It hosts no packages: the operator's own 
 and Écluse governs only what may be fetched from, and mirrored to, those backends. The rules engine
 is __deny by default__ and mirroring is demand-driven, so a mirror write never runs on a request's critical path.
 'run', the entry point the @ecluse@ executable invokes, lives here rather than in @app\/Main.hs@ so
-the composition root is one importable unit. This module also holds the typed process perimeter.
+the composition root is one importable unit. "Ecluse.Internal" holds the typed process perimeter it
+runs under.
 -}
 module Ecluse (
     -- * Entry point
     run,
-
-    -- * The typed process supervisor
-    ProcessOutcome (..),
-    superviseProcess,
-    exitCodeFor,
-
-    -- * The separately deployable services
-    runServer,
-    runWorker,
-
-    -- * npm front door
-    mountBindingFor,
 ) where
 
-import Control.Exception (AsyncException (ThreadKilled, UserInterrupt), SomeAsyncException)
-import Control.Exception qualified as Exception
 import Data.Text.IO qualified as TIO
-import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
@@ -51,9 +37,9 @@ import Ecluse.Composition.Types (
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
  )
 import Ecluse.Config (Config (configApp))
-import Ecluse.Core.Text (displayExceptionT)
 import Ecluse.Dredger (runDredger)
 import Ecluse.Dredger.Plan (DredgerOptions (doMode), dredgerBootRole)
+import Ecluse.Internal (ProcessOutcome (ServiceExited, ShutdownRequested), exitCodeFor, exitReasonFor, superviseProcess)
 import Ecluse.Mirror
 import Ecluse.Pilot
 import Ecluse.Proxy
@@ -64,8 +50,8 @@ run :: IO ()
 run = do
     cmd <- execCLI
     outcome <- superviseProcess (runCommand cmd)
-    -- A non-zero status is representable only beside its reason ('ProcessExit'), so reporting
-    -- here covers every one of them.
+    -- A non-zero status is representable only beside its reason, so reporting here covers
+    -- every one of them.
     traverse_ (TIO.hPutStrLn stderr) (exitReasonFor outcome)
     exitWith (exitCodeFor outcome)
 
@@ -127,64 +113,3 @@ runMirrorPipeline runtime = case svcRole runtime of
     MirrorOnly -> runMirror runtime
     ServeAndMirror -> runProxy runtime
     ServeOnly -> runProxy runtime
-
-{- | How one whole service run ended. Each constructor owns one exit code ('exitCodeFor'), so
-an orchestrator reads the ending from the status alone.
--}
-data ProcessOutcome
-    = -- | The services drained and returned (a graceful shutdown): exit 0.
-      ShutdownRequested
-    | -- | A service failed up with the carried rendered fault: exit 1.
-      ServiceExited Text
-    | -- | The boot aborted ('BootAborted') with the carried rendered refusal: exit 2.
-      BootFault Text
-    | -- | The run was cancelled from outside (a kill, an interrupt): exit 3.
-      RunCancelled
-    deriving stock (Eq, Show)
-
-{- | Run the service under the typed process perimeter and classify its ending. The base
-'Exception.try' and 'Exception.throwIO' are deliberate: what leaves here async must leave async.
--}
-superviseProcess :: IO ProcessOutcome -> IO ProcessOutcome
-superviseProcess service =
-    Exception.try service >>= \case
-        Right outcome -> pure outcome
-        Left err
-            | Just (BootAborted rendered) <- fromException err -> pure (BootFault rendered)
-            | Just (code :: ExitCode) <- fromException err -> Exception.throwIO code
-            | Just (killed :: AsyncException) <- fromException err ->
-                pure $ case killed of
-                    ThreadKilled -> RunCancelled
-                    UserInterrupt -> RunCancelled
-                    -- StackOverflow / HeapOverflow: resource exhaustion is a
-                    -- fault of the run, not a cancellation.
-                    other -> ServiceExited (displayExceptionT other)
-            | Just (_ :: SomeAsyncException) <- fromException err -> Exception.throwIO err
-            | otherwise -> pure (ServiceExited (displayExceptionT err))
-
-{- How a run ends. A failing status is representable only beside the reason it reports, so
-'run' cannot exit non-zero in silence. -}
-data ProcessExit
-    = ExitedCleanly
-    | ExitedWith ExitCode Text
-
--- The status and the report one outcome owns. Both 'run' and 'exitCodeFor' read the ending here.
-processExitFor :: ProcessOutcome -> ProcessExit
-processExitFor = \case
-    ShutdownRequested -> ExitedCleanly
-    ServiceExited detail -> ExitedWith (ExitFailure 1) ("ecluse: service exited: " <> detail)
-    -- The boot phase rendered the whole aggregated block, which reports here unprefixed.
-    BootFault rendered -> ExitedWith (ExitFailure 2) rendered
-    RunCancelled -> ExitedWith (ExitFailure 3) "ecluse: run cancelled"
-
--- | The process exit status each 'ProcessOutcome' owns.
-exitCodeFor :: ProcessOutcome -> ExitCode
-exitCodeFor outcome = case processExitFor outcome of
-    ExitedCleanly -> ExitSuccess
-    ExitedWith code _ -> code
-
--- What an outcome reports before exiting. A graceful shutdown is the only one with nothing to say.
-exitReasonFor :: ProcessOutcome -> Maybe Text
-exitReasonFor outcome = case processExitFor outcome of
-    ExitedCleanly -> Nothing
-    ExitedWith _ reason -> Just reason
