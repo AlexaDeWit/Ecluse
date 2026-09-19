@@ -267,9 +267,8 @@ matchMount method headers mounts segments = asum (map match mounts)
         (binding,) . bindingRouter binding method headers
             <$> stripPrefixSegments (toList (bindingPrefix binding)) segments
 
-{- Strip a mount's prefix segments off the front of a request path. The root mount (an
-empty prefix) consumes nothing and always matches.
--}
+-- Strip a mount's prefix segments off the front of a request path. The first equation is the
+-- base case a fully-consumed prefix reaches, which is where the trailing slash is dropped.
 stripPrefixSegments :: [Text] -> [Text] -> Maybe [Text]
 stripPrefixSegments [] segs = Just (dropTrailingSlashes segs)
 stripPrefixSegments (p : ps) (s : ss)
