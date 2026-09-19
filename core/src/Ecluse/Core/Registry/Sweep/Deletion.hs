@@ -17,7 +17,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance
 import Ecluse.Core.Registry.Sweep.Group (boundedVersions)
 import Ecluse.Core.Registry.Sweep.Types
-import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepGuardSkipped), SweepTarget (SweepMirror, SweepPrivate))
+import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepGuardSkipped), SweepTarget (SweepMirror))
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- | A current named denial carries the generation credited when the logical cap fills.
@@ -188,7 +188,7 @@ backend :: SweepStore -> Text
 backend = factBackend . obFacts . ssObserve
 
 isSource :: DeletionRun -> SweepStore -> Bool
-isSource run store = backend store == backend (smStore (runMount run))
+isSource run store = sweepTargetOf (runMount run) (ssObserve store) == SweepMirror
 
 inventory :: SweepStore -> Map Text [StoredVersion] -> [StoredVersion]
 inventory store = Map.findWithDefault [] (backend store)
@@ -200,4 +200,4 @@ unchanged :: Version -> [StoredVersion] -> [StoredVersion] -> Bool
 unchanged version before after = maybe False (`elem` after) (entry version before)
 
 labelled :: DeletionRun -> SweepStore -> SweepPorts
-labelled run store = (runPorts run){sweepAudit = labelAudit (backend store) (sweepAudit (runPorts run)), sweepTarget = if isSource run store then SweepMirror else SweepPrivate}
+labelled run store = locatedPorts (runMount run) (ssObserve store) (runPorts run)

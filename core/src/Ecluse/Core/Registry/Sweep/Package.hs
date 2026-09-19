@@ -15,9 +15,8 @@ import Data.Set qualified as Set
 import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
-    StoreFacts (factBackend),
     StoreFault,
-    StoreObservation (obFacts, obReadManifest),
+    StoreObservation (obReadManifest),
     StoredVersion (storedPresence, storedVersion),
     VersionOutcome (VersionRefused, VersionRemoved, VersionRemoving, VersionUncertain, VersionUnreached),
     VersionPresence (VersionServed),
@@ -31,12 +30,12 @@ import Ecluse.Core.Registry.Sweep.Types (
     SweepAudit (auditError, auditInfo),
     SweepMount (smConfigured, smEcosystem, smFirstParty, smRuleDeps, smRules, smStore),
     SweepPacing (swpDeletionCap),
-    SweepPorts (sweepAdvisoryEtag, sweepAudit, sweepNow, sweepReport, sweepTarget),
+    SweepPorts (sweepAdvisoryEtag, sweepAudit, sweepNow, sweepReport),
     SweepReport (reportOpening, reportRemoval),
     SweepState (stIssued),
     SweepStore (ssObserve),
     countingAt,
-    labelAudit,
+    locatedPorts,
     record,
     recordGap,
     recordMetric,
@@ -48,7 +47,7 @@ import Ecluse.Core.Registry.Sweep.Types (
 import Ecluse.Core.Rules (RuleDeps (rdAdvisoryFreshness), evalRules, renderIneligible)
 import Ecluse.Core.Rules.Types (Decision (Blocked), EvalContext, Reason, RuleEvidence, completeEvidence, identityEvidence, mkEvalContext, readsAdvisories, ruleName)
 import Ecluse.Core.Server.Metadata (selectVersion)
-import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept), SweepTarget (..))
+import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepExamined, SweepGuardSkipped, SweepKept))
 import Ecluse.Core.Version (Version, renderVersion)
 
 selectPackage :: SweepPorts -> SweepState -> SweepMount -> EvalContext -> PackageName -> [StoredVersion] -> IO [Condemned]
@@ -74,12 +73,12 @@ previewPackageGroup :: SweepPacing -> SweepPorts -> SweepState -> SweepMount -> 
 previewPackageGroup pacing ports counters mount ctx name locations = do
     selections <- forM locations $ \(store, versions) -> do
         let locatedMount = mount{smStore = countingAt (smStore mount) store}
-            locatedPorts = ports{sweepAudit = labelAudit (factBackend (obFacts store)) (sweepAudit ports), sweepTarget = targetOf mount store}
+            located = locatedPorts mount store ports
         selected <-
-            selectPackage locatedPorts counters locatedMount ctx name versions
-                >>= stillEligible locatedPorts counters locatedMount name
-        traverse_ (announce locatedPorts name) selected
-        traverse_ (const (recordMetric locatedPorts (reportRemoval (sweepReport ports)))) selected
+            selectPackage located counters locatedMount ctx name versions
+                >>= stillEligible located counters locatedMount name
+        traverse_ (announce located name) selected
+        traverse_ (const (recordMetric located (reportRemoval (sweepReport ports)))) selected
         let selectedKeys = Set.fromList (map (renderVersion . cdVersion) selected)
             kept =
                 [ storedVersion version
@@ -90,7 +89,7 @@ previewPackageGroup pacing ports counters mount ctx name locations = do
         traverse_
             ( \version ->
                 auditInfo
-                    (sweepAudit locatedPorts)
+                    (sweepAudit located)
                     ("dry run, keeping " <> renderPackageName name <> "@" <> renderVersion version)
             )
             kept
@@ -113,14 +112,9 @@ sweepPackageGroup pacing ports counters mount name =
     select counting located stored = do
         ctx <- mkEvalContext (sweepNow ports) (sweepAdvisoryEtag ports (smEcosystem mount))
         let store = ssObserve (smStore located)
-            targetPorts = ports{sweepTarget = targetOf mount store, sweepAudit = labelAudit (factBackend (obFacts store)) (sweepAudit ports)}
+            targetPorts = locatedPorts mount store ports
         selected <- selectPackageWith counting targetPorts counters located ctx name stored >>= stillEligible targetPorts counters located name
         pure [Selection (cdVersion item) (condemnationMessage ports name item) (cdAdvisoryEtag item) | item <- selected]
-
-targetOf :: SweepMount -> StoreObservation -> SweepTarget
-targetOf mount store
-    | factBackend (obFacts store) == factBackend (obFacts (ssObserve (smStore mount))) = SweepMirror
-    | otherwise = SweepPrivate
 
 {- The store served no metadata, so each version is decided on the identity the listing carries. The
 shared fetch discards the response status, so a package the store no longer serves arrives here too. -}

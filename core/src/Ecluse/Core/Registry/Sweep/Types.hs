@@ -24,6 +24,8 @@ module Ecluse.Core.Registry.Sweep.Types (
     SweepReport (..),
     SweepPorts (..),
     SweepAudit (..),
+    sweepTargetOf,
+    locatedPorts,
 
     -- * What one cycle did
     SweepTally (..),
@@ -72,16 +74,17 @@ import Ecluse.Core.Registry.Adapter.Capability (ProjectName)
 import Ecluse.Core.Registry.Maintenance (
     StoreCursor,
     StoreDeletion (dlCursor),
+    StoreFacts (factBackend),
     StoreFault (faultTransport),
     StoreMaintenance,
-    StoreObservation,
+    StoreObservation (obFacts),
     deletionOf,
     observationOf,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps)
 import Ecluse.Core.Rules.Types (Rule)
-import Ecluse.Core.Telemetry.Metrics (SweepResult (..), SweepTarget)
+import Ecluse.Core.Telemetry.Metrics (SweepResult (..), SweepTarget (SweepMirror, SweepPrivate))
 import Ecluse.Core.Telemetry.Record (DredgerMetricsPort (dmpSweptVersion))
 
 -- | One mount's sweepable store, and everything that decides for it.
@@ -533,6 +536,22 @@ tallyOf = \case
     SweepWouldDelete -> mempty{tallyDeleted = 1}
     SweepKept -> mempty{tallyKept = 1}
     SweepGuardSkipped -> mempty{tallyGuardSkipped = 1}
+
+{- | Which of a mount's two locations a store is. The decision keys on the backend name, so a
+mount whose mirror store and private cache report one name reads as the mirror at both.
+-}
+sweepTargetOf :: SweepMount -> StoreObservation -> SweepTarget
+sweepTargetOf mount store
+    | factBackend (obFacts store) == factBackend (obFacts (ssObserve (smStore mount))) = SweepMirror
+    | otherwise = SweepPrivate
+
+-- | The ports an audit line from one located store is written through, labelled and targeted.
+locatedPorts :: SweepMount -> StoreObservation -> SweepPorts -> SweepPorts
+locatedPorts mount store ports =
+    ports
+        { sweepAudit = labelAudit (factBackend (obFacts store)) (sweepAudit ports)
+        , sweepTarget = sweepTargetOf mount store
+        }
 
 -- | Keep per-target audit messages distinct when one cycle sweeps associated stores.
 labelAudit :: Text -> SweepAudit -> SweepAudit
