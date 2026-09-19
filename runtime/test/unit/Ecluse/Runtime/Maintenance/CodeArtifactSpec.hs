@@ -18,7 +18,7 @@ import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Fault (TransportCause (TransportProtocol), tfDetail, transportFault)
+import Ecluse.Core.Fault (TransportCause (TransportProtocol), transportFault)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
@@ -59,13 +59,6 @@ import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smStore), SweepPacing (swpDeletionCap), SweepState (stIssued), newSweepState)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepExamined, SweepKept))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
-import Ecluse.Maintenance.CodeArtifact.Support (
-    connectedTo,
-    describing,
-    routedTo,
-    serviceError,
-    withNpmStore,
- )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     CodeArtifactStore (..),
     consentTagKey,
@@ -84,6 +77,14 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (
     probeUpstreamSafety,
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (ReadPlane (..))
+import Ecluse.Runtime.Maintenance.CodeArtifact.Support (
+    connectedTo,
+    describing,
+    detailOf,
+    routedTo,
+    serviceError,
+    withNpmStore,
+ )
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
 import Ecluse.Test.Package (lodashName, sampleManifest)
 import Ecluse.Test.Rules (denyRule)
@@ -607,10 +608,6 @@ describedWithoutArn = describing CA.newRepositoryDescription
 
 routedDescription :: CA.RepositoryDescription
 routedDescription = routedTo ["shared"]
-
--- What a fault says, so an assertion reads the refusal rather than only that one happened.
-detailOf :: StoreFault -> Text
-detailOf = tfDetail . faultTransport
 
 refusalCodeOf :: VersionOutcome -> Maybe Text
 refusalCodeOf = \case

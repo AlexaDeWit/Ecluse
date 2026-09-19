@@ -16,7 +16,6 @@ import Ecluse.Core.Registry.Maintenance (
     VersionPresence (VersionServed, VersionWithdrawn),
  )
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Maintenance.CodeArtifact.Support (withNpmStore)
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read.Internal (
     RepositoryIdentity (..),
@@ -26,6 +25,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Read.Internal (
     observationsOfPage,
     versionsOfPage,
  )
+import Ecluse.Runtime.Maintenance.CodeArtifact.Support (withNpmStore)
 import Ecluse.Test.Package (babelCore, npmVersion)
 
 {- | The read-only CodeArtifact layer: what one observation of a listing preserves. The coordinates

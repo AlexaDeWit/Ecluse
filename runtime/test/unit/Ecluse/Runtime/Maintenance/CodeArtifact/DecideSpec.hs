@@ -21,7 +21,7 @@ import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
-import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportTimeout), tfCause, tfDetail)
+import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportTimeout), tfCause)
 import Ecluse.Core.Package (renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
@@ -48,14 +48,6 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UpstreamSafety (Undecidable, Unsafe),
  )
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Maintenance.CodeArtifact.Support (
-    connectedTo,
-    describing,
-    npmStore,
-    routedTo,
-    serviceError,
-    withNpmStore,
- )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     CodeArtifactStore (..),
     arnOfDescription,
@@ -89,6 +81,15 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     repositoryOfResponse,
     repositoryOfStore,
     upstreamLinksOf,
+ )
+import Ecluse.Runtime.Maintenance.CodeArtifact.Support (
+    connectedTo,
+    describing,
+    detailOf,
+    npmStore,
+    routedTo,
+    serviceError,
+    withNpmStore,
  )
 import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Package (babelCore, lodashName, npmVersion)
@@ -454,10 +455,6 @@ cursorSpec = describe "the walk cursor's tag" $ do
     alphabet = mkNameAlphabet "abc"
     consentTag = CA.newTag consentTagKey consentTagValue
     cursorTag = CA.newTag (cursorTagKey Npm)
-
--- What a store fault says, so an assertion reads the refusal rather than only that one happened.
-detailOf :: StoreFault -> Text
-detailOf = tfDetail . faultTransport
 
 repositoryArn :: Text
 repositoryArn = "arn:aws:codeartifact:eu-west-1:111122223333:repository/acme/mirror"

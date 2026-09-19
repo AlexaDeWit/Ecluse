@@ -120,9 +120,8 @@ spec = do
                     stringAt ["_attachments", "thing-1.0.0.tgz", "data"] value
                         `shouldBe` Just (decodeUtf8 (convertToBase Base64 tarballBytes :: ByteString))
     describe "processJob -- the integrity gate" $ do
-        -- The worker recomputes whichever digest current metadata carries and verifies the
-        -- fetched bytes against it, so an artifact the floor admitted is never
-        -- admit-but-uncomputable.
+        -- The worker recomputes whichever digest current metadata carries, so an artifact the
+        -- floor admitted is never admit-but-uncomputable.
         for_ soleAdmittedDigests $ \(label, hash) ->
             it ("publishes a version whose current metadata carries only " <> label) $
                 withUpstream $ \url ->
@@ -227,9 +226,8 @@ spec = do
                     outcome <- runWM runtime (processJob job)
                     outcome `shouldSatisfy` isDropped
     describe "processJob: ingest-time policy re-evaluation" $ do
-        -- Every row here re-evaluates a job the serve path once admitted, and every row drives
-        -- 'unreachableUrl': skipping the re-evaluation would surface a Retried from the artifact
-        -- fetch instead of the verdict the row names.
+        -- Every row drives 'unreachableUrl': skipping the re-evaluation would surface a Retried
+        -- from the artifact fetch instead of the verdict the row names.
         for_ reEvaluationVerdicts $ \(label, policies, expected) ->
             it label $
                 withRuntimePolicies policies noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do

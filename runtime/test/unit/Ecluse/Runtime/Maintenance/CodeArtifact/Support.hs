@@ -5,7 +5,7 @@
 {- | The CodeArtifact repository the three maintenance specs address, and the @amazonka@ answers
 they build over it. The coordinates are one value, so a spec cannot drift from its siblings.
 -}
-module Ecluse.Maintenance.CodeArtifact.Support (
+module Ecluse.Runtime.Maintenance.CodeArtifact.Support (
     -- * The repository under test
     npmStore,
     withNpmStore,
@@ -17,6 +17,9 @@ module Ecluse.Maintenance.CodeArtifact.Support (
 
     -- * Service refusals
     serviceError,
+
+    -- * Fault detail
+    detailOf,
 ) where
 
 import Lens.Micro ((?~))
@@ -29,6 +32,8 @@ import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Fault (tfDetail)
+import Ecluse.Core.Registry.Maintenance (StoreFault (..))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     CodeArtifactStore (..),
     codeArtifactFormat,
@@ -80,3 +85,7 @@ routedTo upstreams =
 serviceError :: Status -> Text -> [Header] -> AWS.Error
 serviceError status code headers =
     AWS.ServiceError (AWS.ServiceError' "CodeArtifact" status headers (AWS.newErrorCode code) Nothing Nothing)
+
+-- | What a store fault says, so an assertion reads the refusal rather than only that one happened.
+detailOf :: StoreFault -> Text
+detailOf = tfDetail . faultTransport
