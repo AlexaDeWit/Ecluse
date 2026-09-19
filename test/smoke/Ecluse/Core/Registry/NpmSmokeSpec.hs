@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, publicRegistryBaseUrl)
-import Ecluse.Test.Support (expectRight)
+import Ecluse.Test.Support (expectRightText)
 
 {- | Smoke tier: __live__ calls to the public npm registry, confirming that our decoding, our
 projection, and the default 'Limits' still match what the registry serves.
@@ -196,4 +196,4 @@ collectDistDigests value =
 -- the production former builds the witness and a refusal here is a broken constant.
 publicRegistryOrigin :: Manager -> IO OriginClient
 publicRegistryOrigin manager =
-    (`defaultNpmConfig` manager) <$> expectRight (mkRegistryUrl publicRegistryBaseUrl)
+    (`defaultNpmConfig` manager) <$> expectRightText (mkRegistryUrl publicRegistryBaseUrl)

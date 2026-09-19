@@ -44,7 +44,6 @@ module Ecluse.Server.Pipeline.TestSupport (
     packument,
     packumentNamed,
     privatePackument,
-    privatePackumentWith,
     admittingPublic,
     encodePackument,
     versionObject,
@@ -699,10 +698,6 @@ servedLatest resp = do
 privatePackument :: [(Text, Value)] -> Text -> Value
 privatePackument versions latest =
     packument versions latest [(v, publishedDaysAgo 1) | (v, _) <- versions]
-
--- A private packument with explicit version objects (used for the divergence test).
-privatePackumentWith :: [(Text, Value)] -> Text -> Value
-privatePackumentWith = privatePackument
 
 twoServingUpstreams :: IO (Upstream, Upstream)
 twoServingUpstreams = do

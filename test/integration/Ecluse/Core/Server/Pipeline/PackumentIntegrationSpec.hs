@@ -115,7 +115,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "drops a hashless trusted-private version from the listing by default (uniform floor)" $ do
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", hashlessVersion "1.0.0")] "1.0.0"))
+                (encodePackument (privatePackument [("1.0.0", hashlessVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
@@ -156,7 +156,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "drops a SHA-1-only trusted-private version from the listing by default (trusted floor SHA-256)" $ do
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
+                (encodePackument (privatePackument [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
@@ -166,7 +166,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
         sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
+                (encodePackument (privatePackument [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         queue <- newTestMemoryQueue
         withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMinTrustedIntegrity = sha1Floor}) $ \app _env _port -> do
@@ -177,7 +177,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "rejects a public SHA-256 version when the floor is raised to SHA-512 (the floor value is wired)" $ do
         sha512Floor <- either (fail . toString) pure (mkMinIntegrity SHA512)
         privateUp <-
-            servingUpstream (encodePackument (privatePackumentWith [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
+            servingUpstream (encodePackument (privatePackument [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -196,7 +196,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "drops a public SHA-1-only copy at the same key, serving the private SHA-256 (the weak digest never leaks)" $ do
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", versionObject "1.0.0" (sri256For "private") False)] "1.0.0"))
+                (encodePackument (privatePackument [("1.0.0", versionObject "1.0.0" (sri256For "private") False)] "1.0.0"))
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -215,7 +215,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "serves the private copy and latest tag on an integrity divergence" $ do
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", versionObject "1.0.0" (sriFor "private") False)] "1.0.0"))
+                (encodePackument (privatePackument [("1.0.0", versionObject "1.0.0" (sriFor "private") False)] "1.0.0"))
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -235,7 +235,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
         privateUp <-
             servingUpstream
                 ( encodePackument
-                    ( privatePackumentWith
+                    ( privatePackument
                         [ ("1.0.0", versionObject "1.0.0" (sriFor "private") False)
                         , ("2.0.0", versionObject "2.0.0" (sriFor "shared") False)
                         ]

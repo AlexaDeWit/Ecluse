@@ -53,7 +53,7 @@ import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
-import Ecluse.Test.Support (expectRight)
+import Ecluse.Test.Support (expectRightText)
 
 {- | Wait out the window a worker would need to mirror a version, so an absence read after it is
 an absence rather than a race.
@@ -139,7 +139,7 @@ verdaccioNamesUnder :: E2E -> Text -> IO [Text]
 verdaccioNamesUnder e2e raw = do
     store <- verdaccioObservation e2e
     result <- withBucket raw (collectPages . obListPackagesIn store)
-    names <- expectRight (first (\fault -> "Verdaccio bucket " <> raw <> ": " <> show fault) result)
+    names <- expectRightText (first (\fault -> "Verdaccio bucket " <> raw <> ": " <> show fault) result)
     pure (sort (map renderPackageName names))
 
 {- | Preserve every raw version key, rejecting unreadable or malformed packuments.
@@ -168,8 +168,8 @@ storedObject field e2e name = do
         decoded = eitherDecodeStrict body >>= parseEither (.: field) :: Either String Object
     case status of
         404 -> pure Nothing
-        200 -> Just <$> expectRight (first (\err -> name <> ": " <> toText err) decoded)
-        _ -> expectRight (Left (name <> ": packument returned HTTP " <> show status) :: Either Text (Maybe Object))
+        200 -> Just <$> expectRightText (first (\err -> name <> ": " <> toText err) decoded)
+        _ -> fail (toString name <> ": packument returned HTTP " <> show status)
 
 {- | Poll until the store serves exactly the wanted versions, sorted as 'verdaccioVersions' returns
 them. It yields what it last read, so a failure names the versions the store actually held.
@@ -212,7 +212,7 @@ verdaccioSnapshot e2e = do
 
 verdaccioObservation :: E2E -> IO StoreObservation
 verdaccioObservation e2e = do
-    listing <- expectRight (maybeToRight ("npm has no listing capability" :: Text) (maintenanceListing npmMaintenance))
+    listing <- expectRightText (maybeToRight "npm has no listing capability" (maintenanceListing npmMaintenance))
     let origin = originClient defaultLimits (e2eManager e2e) (loopbackRegistryUrl (e2eVerdaccio e2e)) Nothing
     pure . newProtocolObservation $
         ProtocolRead

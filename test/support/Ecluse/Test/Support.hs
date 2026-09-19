@@ -11,6 +11,7 @@ module Ecluse.Test.Support (
     testServeAdmission,
     newTestClock,
     expectRight,
+    expectRightText,
     expectRightIO,
     decodeJsonOrFail,
     parseRequestOrFail,
@@ -40,6 +41,12 @@ newTestClock start = do
 -- | Assert a 'Right' and return its value, failing the running example otherwise.
 expectRight :: (Show e) => Either e a -> IO a
 expectRight = either (\e -> fail ("expected Right, got Left " <> show e)) pure
+
+{- | 'expectRight' for a Left that already reads as a sentence. 'Show' would quote and escape
+it, which buries the message the fixture wrote.
+-}
+expectRightText :: Either Text a -> IO a
+expectRightText = either (fail . toString) pure
 
 {- | 'expectRight' over an action that answers a typed outcome, the shape a queue, a store,
 or a request former reports through.
