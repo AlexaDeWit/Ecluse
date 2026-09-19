@@ -36,11 +36,12 @@ import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLoca
 import Ecluse.Core.Registry (FetchFault, RegistryResponse)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (
-    Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
+    Manifest,
+    ManifestProjection (ManifestProjection, prjDecode, prjInject, prjLocations),
     MetadataError (MetadataBoundExceeded),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
-    digestOf,
+    fetchManifestWith,
     fetchThenProject,
  )
 import Ecluse.Core.Registry.Metadata.Projection (projectMetadata, projectionResult, selectiveError, validateReportedName)
@@ -87,12 +88,15 @@ fetchNpmPackument origin = fetchMetadataFormBounded origin Full noValidators
 
 -- | Fetch a bounded full packument with the digest that scopes its cached document.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
-fetchNpmManifest tracing origin name =
-    fetchThenProject tracing (fetchNpmPackument origin) name $ \body ->
-        manifestOf (digestOf body) . first (enforceArtifactLocations npmArtifactAuthorities (originBaseUrl origin))
-            <$> projectNpmManifest (ocLimits origin) name body
-  where
-    manifestOf digest (info, raw) = Manifest{manifestInfo = info, manifestRaw = fst npmCached raw, manifestDigest = digest}
+fetchNpmManifest tracing origin =
+    fetchManifestWith
+        tracing
+        (fetchNpmPackument origin)
+        ManifestProjection
+            { prjDecode = projectNpmManifest (ocLimits origin)
+            , prjLocations = enforceArtifactLocations npmArtifactAuthorities (originBaseUrl origin)
+            , prjInject = fst npmCached
+            }
 
 -- | Project a nesting-checked packument and retain its raw document for assembly.
 projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)

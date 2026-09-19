@@ -33,11 +33,12 @@ import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
 import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
 import Ecluse.Core.Registry.Metadata (
-    Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
+    Manifest,
+    ManifestProjection (ManifestProjection, prjDecode, prjInject, prjLocations),
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
-    digestOf,
+    fetchManifestWith,
     fetchThenProject,
  )
 import Ecluse.Core.Registry.Metadata.Projection (projectMetadata, projectionResult, selectiveError, validateReportedName)
@@ -90,16 +91,14 @@ fetchSimpleIndex origin name =
 
 -- | Fetch a bounded Simple index with the digest that scopes its cached document.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
-fetchPyPIManifest tracing origin name =
-    fetchThenProject tracing (fetchSimpleIndex origin) name $ \body ->
-        manifestOf (digestOf body) . first (enforceArtifactLocations pypiArtifactAuthorities (originBaseUrl origin))
-            <$> projectPyPIIndex (ocLimits origin) name body
-  where
-    manifestOf digest (info, raw) =
-        Manifest
-            { manifestInfo = info
-            , manifestRaw = fst pypiSimpleCached raw
-            , manifestDigest = digest
+fetchPyPIManifest tracing origin =
+    fetchManifestWith
+        tracing
+        (fetchSimpleIndex origin)
+        ManifestProjection
+            { prjDecode = projectPyPIIndex (ocLimits origin)
+            , prjLocations = enforceArtifactLocations pypiArtifactAuthorities (originBaseUrl origin)
+            , prjInject = fst pypiSimpleCached
             }
 
 -- | Project a nesting-checked index and retain its raw document for assembly.
