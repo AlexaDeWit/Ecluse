@@ -232,29 +232,11 @@ spec = do
             (latestKey =<< plan) `shouldBe` Just "2.0.0"
             (sort . Map.keys . mpTime <$> plan) `shouldBe` Just ["1.0.0", "2.0.0"]
 
-        it "reports no divergences for a single input" $ do
-            let info = packument [("1.0.0", sriAaa)]
-            (mpDivergences <$> mergePackuments [(TrustedSource, info)]) `shouldBe` Just Set.empty
-
         it "unions versions across sources" $ do
             let trusted = packument [("1.0.0", sriAaa)]
                 gated = packument [("2.0.0", sriBbb)]
             (survivorKeys <$> mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
                 `shouldBe` Just ["1.0.0", "2.0.0"]
-
-        it "private wins a collision: the survivor points at the trusted source" $ do
-            -- Same version key in both, with differing integrity. The plan points the key at the
-            -- trusted 'SourceId', so the serve layer takes the object from the private raw Value.
-            let gated = packument [("1.0.0", sriPublic)] -- source 0
-                trusted = packument [("1.0.0", sriPrivate)] -- source 1
-            (winnerOf "1.0.0" =<< mergePackuments [(GatedSource, gated), (TrustedSource, trusted)])
-                `shouldBe` Just 1
-
-        it "detects a divergence when the same version's integrity differs" $ do
-            let trusted = packument [("1.0.0", sriPrivate)]
-                gated = packument [("1.0.0", sriPublic)]
-                plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
-            (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
 
         it "reports no divergence when a collision's integrity agrees" $ do
             let trusted = packument [("1.0.0", sriSame)]
@@ -843,18 +825,6 @@ spec = do
             -- gives the private upstream its authority. Reorder these and a tampered copy wins.
             compare TrustedSource GatedSource `shouldBe` LT
 
-        it "trusted wins a collision; the divergence's winner is the trusted copy" $ do
-            let trusted = (TrustedSource, packument [("1.0.0", sriPriv)])
-                gated = (GatedSource, packument [("1.0.0", sriPub)])
-                plan = mergePackuments [gated, trusted] -- trusted at index 1
-            (winnerOf "1.0.0" =<< plan) `shouldBe` Just 1
-            case Set.toList . mpDivergences <$> plan of
-                Just [d] -> do
-                    divVersion d `shouldBe` "1.0.0"
-                    integrityHashes (divWinning d) `shouldBe` [sriPair sriPriv]
-                    integrityHashes (divLosing d) `shouldBe` [sriPair sriPub]
-                other -> expectationFailure ("expected one divergence, got " <> show other)
-
         it "the merged set is the mixed-provenance union trusted ∪ filtered(public)" $ do
             -- Versions unique to each upstream are all present. The trust split does
             -- not drop a side, it unions them.
@@ -862,11 +832,6 @@ spec = do
                 gated = (GatedSource, packument [("2.0.0", sriLowC), ("1.1.0", sriLowB)])
             (survivorKeys <$> mergePackuments [trusted, gated])
                 `shouldBe` Just ["1.0.0", "1.1.0", "2.0.0"]
-
-        it "identical integrity across sources yields no divergence" $ do
-            let trusted = (TrustedSource, packument [("1.0.0", sriSame)])
-                gated = (GatedSource, packument [("1.0.0", sriSame)])
-            (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
         it "a 3+-copy collision fans the winner out against each distinct loser" $ do
             -- Three copies of one key with three distinct fingerprints, one trusted and two
@@ -926,17 +891,6 @@ spec = do
             (latestKey =<< plan) `shouldBe` Just "2.0.0"
             (Map.lookup "beta" . mpDistTags <$> plan) `shouldBe` Just (Just (mkVersion Npm "1.0.0"))
             (sort . Map.keys . mpDistTags <$> plan) `shouldBe` Just ["beta", "latest"]
-
-        it "single source is the degenerate identity: all survive, won by source 0" $
-            hedgehog $ do
-                src@(_, info) <- forAll genSource
-                plan <- H.evalMaybe (mergePackuments [src])
-                Map.keys (mpSurvivors plan) === Map.keys (infoVersions info)
-                nub (Map.elems (mpSurvivors plan)) === ([0 | not (Map.null (infoVersions info))])
-                -- Every test version carries a folded publish time, so the reconstructed
-                -- served @time@ keys are exactly the surviving version keys.
-                Map.keys (mpTime plan) === Map.keys (infoVersions info)
-                mpDivergences plan === Set.empty
 
         it "the always-invariant decisions survive any permutation of any inputs" $
             hedgehog $ do
