@@ -27,6 +27,7 @@ module Ecluse.Core.Registry.Request (
     addValidators,
 
     -- * Request building
+    metadataRequestFor,
     artifactRequestByUrl,
     joinPath,
     parseRequestEither,
@@ -34,7 +35,15 @@ module Ecluse.Core.Registry.Request (
 
 import Data.Text qualified as T
 import Network.HTTP.Client (Request (decompress, redirectCount, requestHeaders), parseRequest)
-import Network.HTTP.Types.Header (HeaderName, RequestHeaders, hIfModifiedSince, hIfNoneMatch, hUserAgent)
+import Network.HTTP.Types.Header (
+    HeaderName,
+    RequestHeaders,
+    hAccept,
+    hAcceptEncoding,
+    hIfModifiedSince,
+    hIfNoneMatch,
+    hUserAgent,
+ )
 
 import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Credential (ClientCredential)
@@ -134,6 +143,28 @@ addValidators validators request =
             [ (,) hIfNoneMatch <$> validatorIfNoneMatch validators
             , (,) hIfModifiedSince <$> validatorIfModifiedSince validators
             ]
+
+{- | Build the conditional metadata @GET@ at an already-formed @url@, so the path grammar stays
+with the adapter: its @Accept@ media type, @gzip@, the relayed validators, then its credential.
+-}
+metadataRequestFor ::
+    CredentialMapping ->
+    ByteString ->
+    Maybe ClientCredential ->
+    Validators ->
+    Text ->
+    Either UrlFormationError Request
+metadataRequestFor mapping accept credential validators url = do
+    base <- parseRequestEither url
+    pure
+        . attachCredential mapping credential
+        . addValidators validators
+        $ base
+            { requestHeaders =
+                (hAccept, accept)
+                    : (hAcceptEncoding, "gzip")
+                    : requestHeaders base
+            }
 
 {- | Build the artifact @GET@ addressing a tarball at the absolute @url@ a projection preserved
 from the upstream's @dist.tarball@, never a rebuild from a @(base, package, file)@ coordinate.

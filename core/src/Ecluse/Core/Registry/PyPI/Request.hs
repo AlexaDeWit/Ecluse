@@ -27,8 +27,7 @@ module Ecluse.Core.Registry.PyPI.Request (
     artifactPath,
 ) where
 
-import Network.HTTP.Client (Request (decompress, requestHeaders))
-import Network.HTTP.Types.Header (hAccept, hAcceptEncoding)
+import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName)
@@ -36,7 +35,7 @@ import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName)
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
-import Ecluse.Core.Registry.Request (Validators, addValidators, attachCredential, joinPath, parseRequestEither)
+import Ecluse.Core.Registry.Request (Validators, joinPath)
 import Ecluse.Core.Registry.Request qualified as Request
 import Ecluse.Core.Server.Path (encodeComponent)
 
@@ -56,18 +55,9 @@ simpleIndexRequest ::
     Validators ->
     PackageName ->
     Either UrlFormationError Request
-simpleIndexRequest baseUrl credential validators name = do
-    url <- simpleIndexUrl baseUrl name
-    base <- parseRequestEither url
-    pure
-        . attachCredential pypiCredential credential
-        . addValidators validators
-        $ base
-            { requestHeaders =
-                (hAccept, simpleIndexMediaType)
-                    : (hAcceptEncoding, "gzip")
-                    : requestHeaders base
-            }
+simpleIndexRequest baseUrl credential validators name =
+    simpleIndexUrl baseUrl name
+        >>= Request.metadataRequestFor pypiCredential simpleIndexMediaType credential validators
 
 {- | Build the artifact @GET@ at @{baseUrl}\/simple\/{canonical-name}\/{filename}@, the spelling
 this mount serves and a private index addresses its own files under.
@@ -78,12 +68,8 @@ artifactRequestByFile ::
     PackageName ->
     Text ->
     Either UrlFormationError Request
-artifactRequestByFile baseUrl credential name filename = do
-    url <- artifactFileUrl baseUrl name filename
-    base <- parseRequestEither url
-    pure
-        . attachCredential pypiCredential credential
-        $ base{decompress = const False}
+artifactRequestByFile baseUrl credential name filename =
+    artifactFileUrl baseUrl name filename >>= Request.artifactRequestByUrl pypiCredential credential
 
 {- | Build PyPI's artifact @GET@ for the absolute @url@ the projection preserved from the index's
 own @files[].url@, so it names no base URL of its own.
