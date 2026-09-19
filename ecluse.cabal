@@ -832,6 +832,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.PipelineSpec
     Ecluse.Core.Server.ReadinessSpec
     Ecluse.Core.Server.ResponseSpec
+    Ecluse.Core.Server.RouteDescriptionSpec
     Ecluse.Core.Server.RouteSpec
     Ecluse.Core.Server.StreamSpec
     Ecluse.Core.Server.UpstreamSpec

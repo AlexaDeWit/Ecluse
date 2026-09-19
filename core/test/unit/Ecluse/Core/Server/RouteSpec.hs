@@ -13,7 +13,6 @@ module Ecluse.Core.Server.RouteSpec (spec) where
 import Network.HTTP.Types (status404)
 import Network.HTTP.Types.Method (
     Method,
-    StdMethod (GET, HEAD, POST),
     methodDelete,
     methodGet,
     methodHead,
@@ -23,16 +22,7 @@ import Network.HTTP.Types.Method (
 import Test.Hspec
 
 import Ecluse.Core.Server.Context (ResponseAction (AnswerLocally))
-import Ecluse.Core.Server.Contract (
-    BodySchema (SchemaEmpty, SchemaText),
-    ResponseContract,
-    ResponseDoc (responseBodySchema, responseStatus),
-    ResponseStatus (ExactResponse),
-    ResponseValue,
-    emptyContract,
-    mediaContract,
-    responseValue,
- )
+import Ecluse.Core.Server.Contract (emptyContract, responseValue)
 import Ecluse.Core.Server.Route (
     Capture (Capture),
     MediaNegotiation (AcceptsAnything),
@@ -43,13 +33,6 @@ import Ecluse.Core.Server.Route (
     answering,
     isHead,
     safeSegment,
- )
-import Ecluse.Core.Server.RouteDescription (
-    ParamSpec (ParamSpec),
-    PathSeg (Param),
-    RouteSpec (rsMethod, rsName, rsOutcomes, rsPattern),
-    catchAllSpecs,
-    specsOf,
  )
 import Ecluse.Test.Server.Route (claimedBy)
 
@@ -96,29 +79,6 @@ spec = do
             isHead methodHead `shouldBe` True
             map isHead [methodGet, methodPut, methodPost, methodDelete]
                 `shouldBe` [False, False, False, False]
-
-    describe "specsOf" $
-        it "projects a POST route to one POST operation and no derived HEAD" $ do
-            map rsMethod (specsOf uploadRoute) `shouldBe` [POST]
-            map rsName (specsOf uploadRoute) `shouldBe` [RouteName "upload"]
-
-    describe "catchAllSpecs" $ do
-        it "documents the pair a mount needs, GET and its bodiless HEAD" $ do
-            map rsMethod (toList catchAll) `shouldBe` [GET, HEAD]
-            map rsName (toList catchAll)
-                `shouldBe` [RouteName "unsupported", RouteName "unsupported.head"]
-
-        it "carries the caller's path parameter on both" $
-            map rsPattern (toList catchAll)
-                `shouldBe` [[Param catchAllParam], [Param catchAllParam]]
-
-        it "documents the refusal contract's status on both operations" $
-            map (map responseStatus . rsOutcomes) (toList catchAll)
-                `shouldBe` [[ExactResponse status404], [ExactResponse status404]]
-
-        it "keeps the GET's body and drops the HEAD's" $
-            map (map (isEmptyBody . responseBodySchema) . rsOutcomes) (toList catchAll)
-                `shouldBe` [[False], [True]]
 
 -- The table under test: three routes built from nothing but the engine's own builders.
 
@@ -182,20 +142,6 @@ capFile = Capture "file" "The file's name." (safeSegment ToyFile) toySegment
 -- The name of the route that claims a request, or 'Nothing' when none does.
 claimed :: Method -> [Text] -> Maybe RouteName
 claimed method = claimedBy toyRoutes method []
-
-catchAll :: NonEmpty RouteSpec
-catchAll = catchAllSpecs refusalContract catchAllParam
-
-refusalContract :: ResponseContract (ResponseValue LByteString)
-refusalContract = mediaContract status404 "Unrecognised path; deny by default." (SchemaText "text/plain")
-
-catchAllParam :: ParamSpec
-catchAllParam = ParamSpec "unsupportedPath" "Any path under this mount no route claims."
-
-isEmptyBody :: BodySchema -> Bool
-isEmptyBody = \case
-    SchemaEmpty -> True
-    _ -> False
 
 -- | The one segment a toy capture claims, written back out.
 toySegment :: ToyCap -> [Text]
