@@ -78,8 +78,8 @@ data ResolvedTelemetry = ResolvedTelemetry
     }
     deriving stock (Eq, Show)
 
-{- | Resolve the telemetry identity, each field falling __Datadog value → vanilla OpenTelemetry →
-default__. The resolver never reads @DD_API_KEY@ or @DD_SITE@.
+{- | Resolve the telemetry identity, each field falling __Datadog value, then vanilla
+OpenTelemetry, then the default__. The resolver never reads @DD_API_KEY@ or @DD_SITE@.
 
 >>> rtServiceName (resolveTelemetry [("DD_SERVICE", "api"), ("OTEL_SERVICE_NAME", "ignored")])
 "api"
