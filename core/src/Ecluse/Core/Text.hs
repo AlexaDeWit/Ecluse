@@ -139,14 +139,6 @@ renderIso8601Utc t@(UTCTime day dt)
     (hh, rem') = secondsOfDay `divMod` 3600
     (mm, ss) = rem' `divMod` 60
 
-    -- A non-negative integer, zero-padded to at least the given width (the
-    -- inputs here never exceed it).
-    digits :: Int -> Integer -> TB.Builder
-    digits width n =
-        let body = show n :: String
-            pad = width - length body
-         in TB.fromString (replicate pad '0') <> TBI.decimal n
-
     -- The fractional second as @iso8601Show@ renders it: nothing when zero,
     -- else a dot and the 12 picosecond digits with trailing zeros trimmed.
     fraction :: TB.Builder
@@ -154,6 +146,14 @@ renderIso8601Utc t@(UTCTime day dt)
         | frac == 0 = mempty
         | otherwise =
             TB.fromText ("." <> T.dropWhileEnd (== '0') (T.justifyRight 12 '0' (show frac)))
+
+-- A non-negative integer, zero-padded to at least the given width (the inputs here never
+-- exceed it).
+digits :: Int -> Integer -> TB.Builder
+digits width n =
+    let body = show n :: String
+        pad = width - length body
+     in TB.fromString (replicate pad '0') <> TBI.decimal n
 
 -- | Render an exception as 'Text' for a log line or error value.
 displayExceptionT :: (Exception e) => e -> Text
