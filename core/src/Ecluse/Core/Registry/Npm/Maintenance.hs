@@ -49,6 +49,7 @@ import Ecluse.Core.Registry.Npm.Request (
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Request (joinPath, noValidators, parseRequestEither)
+import Ecluse.Core.Registry.ServedDocument (stringField)
 import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (nonBlank, urlFilenameComponent)
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, renderVersion)
@@ -109,22 +110,31 @@ versionDeleteRequestsFor origin name version response = do
     packument <- decodePackument (responseBody response)
     revision <- revisionOf packument
     versions <- versionsOf packument
-    manifest <-
-        maybeToRight
-            (storeRefusal "VERSION_ABSENT" "the store's packument holds no such version")
-            (KeyMap.lookup (Key.fromText raw) versions)
+    manifest <- manifestOf raw versions
     if KeyMap.size versions == 1
-        then do
-            request <- unformable (packageUrl (originBaseUrl origin) name >>= deleteAtRevision origin revision)
-            pure (request :| [])
-        else do
-            let filename = tarballFilename name version manifest
-                edited = removeVersion raw versions packument
-            editRequest <- unformable (packumentPutRequest origin name revision edited)
-            tarballRequest <- unformable (artifactFileUrl (originBaseUrl origin) name filename >>= deleteAtRevision origin revision)
-            pure (editRequest :| [tarballRequest])
+        then deleteWholePackage origin revision name
+        else
+            deleteOneVersion
+                origin
+                revision
+                name
+                (tarballFilename name version manifest)
+                (removeVersion raw versions packument)
   where
     raw = renderVersion version
+
+deleteWholePackage :: OriginClient -> Text -> PackageName -> Either StoreRefusal (NonEmpty Request)
+deleteWholePackage origin revision name = do
+    request <- unformable (packageUrl (originBaseUrl origin) name >>= deleteAtRevision origin revision)
+    pure (request :| [])
+
+-- The requests run in order, so the packument edit goes first and a refused tarball delete
+-- cannot leave the version still served.
+deleteOneVersion :: OriginClient -> Text -> PackageName -> Text -> Object -> Either StoreRefusal (NonEmpty Request)
+deleteOneVersion origin revision name filename edited = do
+    editRequest <- unformable (packumentPutRequest origin name revision edited)
+    tarballRequest <- unformable (artifactFileUrl (originBaseUrl origin) name filename >>= deleteAtRevision origin revision)
+    pure (editRequest :| [tarballRequest])
 
 -- A URL that will not form is this one version's refusal, with the URL reduced to its authority.
 unformable :: Either UrlFormationError a -> Either StoreRefusal a
@@ -148,6 +158,12 @@ versionsOf packument = case KeyMap.lookup "versions" packument of
     Just (Object versions) -> Right versions
     _ ->
         Left (storeRefusal "UNREADABLE_DOCUMENT" "the store's packument carries no versions object")
+
+manifestOf :: Text -> Object -> Either StoreRefusal Value
+manifestOf raw versions =
+    maybeToRight
+        (storeRefusal "VERSION_ABSENT" "the store's packument holds no such version")
+        (KeyMap.lookup (Key.fromText raw) versions)
 
 packumentPutRequest :: OriginClient -> PackageName -> Text -> Object -> Either UrlFormationError Request
 packumentPutRequest origin name revision packument = do
@@ -188,13 +204,17 @@ adjustObject key edit document = case KeyMap.lookup key document of
     Just (Object inner) -> KeyMap.insert key (Object (edit inner)) document
     _ -> document
 
--- Non-semver pairs use text ordering to keep the choice deterministic.
 greatestVersion :: [Text] -> Maybe Text
 greatestVersion = foldl' keepGreater Nothing
   where
-    keepGreater held candidate = Just (maybe candidate (greater candidate) held)
-    greater a b = if ordering a b == GT then a else b
-    ordering a b = fromMaybe (compare a b) (compareVersions (mkVersion Npm a) (mkVersion Npm b))
+    keepGreater held candidate = Just (maybe candidate (greaterOf candidate) held)
+
+greaterOf :: Text -> Text -> Text
+greaterOf a b = if npmVersionOrdering a b == GT then a else b
+
+-- Non-semver pairs fall back to text ordering, so the choice stays deterministic.
+npmVersionOrdering :: Text -> Text -> Ordering
+npmVersionOrdering a b = fromMaybe (compare a b) (compareVersions (mkVersion Npm a) (mkVersion Npm b))
 
 tarballFilename :: PackageName -> Version -> Value -> Text
 tarballFilename name version manifest =
@@ -207,9 +227,7 @@ distTarballSegment manifest = urlFilenameComponent <$> tarballUrl manifest
 
 tarballUrl :: Value -> Maybe Text
 tarballUrl = \case
-    Object manifest -> case KeyMap.lookup "dist" manifest of
-        Just (Object dist) -> case KeyMap.lookup "tarball" dist of
-            Just (String url) -> Just url
-            _ -> Nothing
-        _ -> Nothing
+    Object manifest
+        | Just (Object dist) <- KeyMap.lookup "dist" manifest ->
+            stringField "tarball" dist
     _ -> Nothing
