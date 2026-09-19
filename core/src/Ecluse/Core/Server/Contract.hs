@@ -3,27 +3,13 @@
 -- SPDX-License-Identifier: MIT
 {-# LANGUAGE ExistentialQuantification #-}
 
-{- | The response-contract algebra: one value interpreted as both wire behaviour and
-OpenAPI documentation.
-
-A 'ResponseContract' is indexed by the value a handler must produce. Its constructor is
-private: callers can only build one from the leaf contracts in this module and combine
-those leaves with 'chooseContract'. Each leaf owns both its 'ResponseDoc' and the function
-that renders its payload, so those two interpretations cannot be supplied separately. The
-served media type is one of them: a leaf reads it off the 'BodySchema' it documents, so the
-type on the wire and the type in the manifest are one spelling.
-
-The route layer existentially packages a contract with a handler producing that
-contract's response type. The runtime gives the handler only the corresponding typed
-responder. A handler therefore cannot reach WAI with a status or body outside its route's
-contract. 'bodilessContract' is the same interpretation for @HEAD@: statuses and headers
-are preserved while every documented and emitted body is removed.
-
-Owned JSON bodies use the same @autodocodec@ 'JSONCodec' for encoding here and schema
-generation in the manifest tier. An intentionally transparent upstream relay is
-different. Its status, media type, and bytes are not Écluse's to constrain. The relay's
-contract ('passthroughContract') therefore documents an explicit OpenAPI @default@
-response, rather than claiming a false closed set.
+{- | The response-contract algebra: one value read as both wire behaviour and OpenAPI
+documentation. The constructor is private, so a route builds a 'ResponseContract' only from
+this module's leaves and 'chooseContract', and cannot supply the docs and the renderer
+separately. A leaf reads its media type off the 'BodySchema' it documents, so the wire type
+and the manifest type are one spelling. A transparent upstream relay
+('passthroughContract') documents an OpenAPI @default@ response rather than a closed status
+set it cannot honour.
 -}
 module Ecluse.Core.Server.Contract (
     -- * Documented body shapes
@@ -117,10 +103,17 @@ data ResponseDoc = ResponseDoc
     -- ^ The body shape this response carries.
     }
 
-{- | A response contract indexed by the only value its handler may answer with. The constructor is
-private, so the docs and the renderer extend together through this module's leaves and
-'chooseContract'.
--}
+-- The concrete response is deliberately private: pipeline modules can select only a
+-- value admitted by their route's public 'ResponseContract'.
+data Answer = Answer Status [Header] AnswerBody
+
+data AnswerBody
+    = MediaAnswer ByteString LByteString
+    | RawAnswer LByteString
+    | RawStreamAnswer StreamingBody
+    | NoAnswerBody
+
+-- | A response contract indexed by the only value its handler may answer with.
 data ResponseContract response = ResponseContract
     { contractDocs :: [ResponseDoc]
     , contractRender :: response -> Answer
@@ -184,7 +177,7 @@ mediaContract status description schema =
     ResponseContract
         { contractDocs = [ResponseDoc (ExactResponse status) description schema]
         , contractRender = \(ResponseValue headers bytes) ->
-            Answer status headers (maybe NoAnswerBody (`MediaAnswer` bytes) (bodyMediaType schema))
+            Answer status headers (mediaAnswer schema bytes)
         }
 
 {- | One exact response whose body is optional, the refusal shape of an ecosystem whose upstream
@@ -197,8 +190,10 @@ optionalBodyContract status description schema =
         , contractRender = \(ResponseValue headers body) ->
             Answer status headers (maybe NoAnswerBody (mediaAnswer schema) body)
         }
-  where
-    mediaAnswer bodySchema bytes = maybe NoAnswerBody (`MediaAnswer` bytes) (bodyMediaType bodySchema)
+
+-- The body an exact leaf puts on the wire: absent for a schema that names no media type.
+mediaAnswer :: BodySchema -> LByteString -> AnswerBody
+mediaAnswer schema bytes = maybe NoAnswerBody (`MediaAnswer` bytes) (bodyMediaType schema)
 
 -- The media type a body is served under, absent for a body this leaf does not put on the wire.
 bodyMediaType :: BodySchema -> Maybe ByteString
@@ -292,16 +287,6 @@ responseToWai contract = answerToResponse . contractRender contract
 -- | Encode a JSON value to bytes through its @autodocodec@ codec.
 encodeBody :: JSONCodec a -> a -> LByteString
 encodeBody codec = Aeson.encode . toJSONVia codec
-
--- The concrete response is deliberately private: pipeline modules can select only a
--- value admitted by their route's public 'ResponseContract'.
-data Answer = Answer Status [Header] AnswerBody
-
-data AnswerBody
-    = MediaAnswer ByteString LByteString
-    | RawAnswer LByteString
-    | RawStreamAnswer StreamingBody
-    | NoAnswerBody
 
 withoutAnswerBody :: Answer -> Answer
 withoutAnswerBody (Answer status headers body) =
