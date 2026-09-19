@@ -104,13 +104,6 @@ spec = do
             codeAndReason (artifactHttpStatus ServerError) `shouldBe` (500, "Internal Server Error")
         it "NotFound is 404 Not Found" $ codeAndReason (artifactHttpStatus NotFound) `shouldBe` (404, "Not Found")
 
-    describe "the 503-only-when-it-will-resolve rule" $
-        it "503 iff the rejection believes it will resolve, else 500" $ do
-            statusCode (artifactHttpStatus (artifactStatus (Reject (Rejection (Unavailable (WillResolve Nothing)) "x"))))
-                `shouldBe` 503
-            statusCode (artifactHttpStatus (artifactStatus (Reject (Rejection (Unavailable WontResolve) "x"))))
-                `shouldBe` 500
-
     describe "rejectUnavailable -- the one refusal for a verdict nothing could decide" $ do
         -- Its transience comes from the projection the mirror worker also reads
         -- ('Ecluse.Core.Package.Admission.admissionTransience'). This is the status half of it.

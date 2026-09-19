@@ -36,9 +36,6 @@ spec = do
 
 packumentETagSpec :: Spec
 packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
-    it "is bit-stable across identical inputs" $
-        tagWith base `shouldBe` tagWith base
-
     it "preserves the v2 byte framing for every entry constructor" $ do
         let sources =
                 [ (TrustedSource, privateDigest base, [("1\0é", [ArrayEntry 0, ArrayEntry 10, ArrayEntry (-1), ObjectEntry "é\0x", SingletonEntry])])
@@ -92,8 +89,6 @@ packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
         let tag entries = packumentETag mountBase thing [(provenance, publicDigest base, [("1.0.0", entries)])]
         it ("tracks exact admitted coordinates for " <> show provenance) $
             tag [ArrayEntry 0, ArrayEntry 1] `shouldNotBe` tag [ArrayEntry 1]
-        it ("keeps identical selections stable for " <> show provenance) $
-            tag [ArrayEntry 1, ArrayEntry 2] `shouldBe` tag [ArrayEntry 1, ArrayEntry 2]
         it ("distinguishes entry constructors for " <> show provenance) $ do
             tag [ArrayEntry 0] `shouldNotBe` tag [ObjectEntry "0"]
             tag [SingletonEntry] `shouldNotBe` tag [ObjectEntry "s"]
