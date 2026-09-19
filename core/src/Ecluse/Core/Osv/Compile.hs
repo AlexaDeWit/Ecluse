@@ -193,20 +193,11 @@ passProvenance sources feed attempt =
 
 concludeCompile :: (KatipContext m) => AdvisoryCompileMetricsPort -> Maybe Span -> Connection -> CompileConclusion -> m ()
 concludeCompile metrics mSpan conn conclusion = do
-    forM_ mSpan $ \sp -> do
-        addAttribute sp "ecluse.osv.accepted" (show (statAccepted stats) :: Text)
-        addAttribute sp "ecluse.osv.dropped_oversize" (show (statDroppedOversize stats) :: Text)
-        addAttribute sp "ecluse.osv.dropped_malformed" (show (statDroppedMalformed stats) :: Text)
-        addAttribute sp "ecluse.osv.unorderable" (show (statUnorderable stats) :: Text)
+    recordCompileSpan mSpan stats
     liftIO (recordTallies metrics stats)
     counted <- liftIO (query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges" :: IO [Only Int])
     let rowCount = maybe 0 fromOnly (listToMaybe counted)
-    forM_ (compileRefusal stats rowCount) $ \reason -> do
-        forM_ mSpan $ \sp -> setStatus sp (Error (reason <> ", compile abandoned"))
-        liftIO (acmpCompileRun metrics CompileAborted)
-        katipAddContext (dropFields ecosystem stats) $
-            logFM ErrorS (ls ("Aborting OSV compile for " <> ecosystem <> ": " <> reason <> " (" <> renderDrops stats <> ")"))
-        throwIO (PilotIngestAborted stats)
+    forM_ (compileRefusal stats rowCount) (refuseCompile metrics mSpan ecosystem stats)
 
     liftIO $ writeMeta conn conclusion rowCount
     liftIO (acmpCompileRun metrics CompileCompleted)
@@ -218,6 +209,23 @@ concludeCompile metrics mSpan conn conclusion = do
   where
     ecosystem = ccEcosystem conclusion
     stats = ccStats conclusion
+
+recordCompileSpan :: (MonadIO m) => Maybe Span -> IngestStats -> m ()
+recordCompileSpan mSpan stats = forM_ mSpan $ \sp -> do
+    addAttribute sp "ecluse.osv.accepted" (show (statAccepted stats) :: Text)
+    addAttribute sp "ecluse.osv.dropped_oversize" (show (statDroppedOversize stats) :: Text)
+    addAttribute sp "ecluse.osv.dropped_malformed" (show (statDroppedMalformed stats) :: Text)
+    addAttribute sp "ecluse.osv.unorderable" (show (statUnorderable stats) :: Text)
+
+-- The refusal throws, so nothing after it in 'concludeCompile' runs: no metadata is written and
+-- the candidate file is discarded unrenamed.
+refuseCompile :: (KatipContext m) => AdvisoryCompileMetricsPort -> Maybe Span -> Text -> IngestStats -> Text -> m ()
+refuseCompile metrics mSpan ecosystem stats reason = do
+    forM_ mSpan $ \sp -> setStatus sp (Error (reason <> ", compile abandoned"))
+    liftIO (acmpCompileRun metrics CompileAborted)
+    katipAddContext (dropFields ecosystem stats) $
+        logFM ErrorS (ls ("Aborting OSV compile for " <> ecosystem <> ": " <> reason <> " (" <> renderDrops stats <> ")"))
+    throwIO (PilotIngestAborted stats)
 
 compileRefusal :: IngestStats -> Int -> Maybe Text
 compileRefusal stats rowCount
