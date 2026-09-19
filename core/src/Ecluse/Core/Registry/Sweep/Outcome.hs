@@ -255,4 +255,3 @@ renderEvidenceGaps gaps =
         | count <= 0 = Nothing
         | count == 1 = Just ("1 " <> noun <> " " <> what)
         | otherwise = Just (show count <> " " <> noun <> "s " <> what)
-

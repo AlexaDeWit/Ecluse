@@ -27,7 +27,6 @@ module Ecluse.Core.Registry.Sweep.Types (
     sweepTargetOf,
     locatedPorts,
 
-
     -- * The cycle's running state
     SweepState (..),
     newSweepState,
@@ -44,7 +43,6 @@ import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Adapter.Capability (ProjectName)
-import Ecluse.Core.Registry.Sweep.Outcome (EvidenceGaps, SweepTally (..), TargetPrerequisites)
 import Ecluse.Core.Registry.Maintenance (
     StoreCursor,
     StoreDeletion (dlCursor),
@@ -55,6 +53,7 @@ import Ecluse.Core.Registry.Maintenance (
     observationOf,
  )
 import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort)
+import Ecluse.Core.Registry.Sweep.Outcome (EvidenceGaps, SweepTally (..), TargetPrerequisites)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps)
 import Ecluse.Core.Rules.Types (Rule)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (..), SweepTarget (SweepMirror, SweepPrivate))
