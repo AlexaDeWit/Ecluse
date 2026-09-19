@@ -32,7 +32,7 @@ import Ecluse.Core.Telemetry.Metrics (
  )
 import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (acmpCompileAccepted, acmpCompileDropped, acmpCompileRun), timedSeconds)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
-import Ecluse.Runtime.Telemetry.Instruments (
+import Ecluse.Runtime.Telemetry.Instruments.Internal (
     advisoryCompileMetricsPortOf,
     newMetrics,
     recordAdvisoryCompileAccepted,

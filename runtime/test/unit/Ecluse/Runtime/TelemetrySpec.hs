@@ -25,7 +25,8 @@ import OpenTelemetry.Trace (
     emptyTracerProviderOptions,
  )
 
-import Ecluse.Runtime.Telemetry (
+import Ecluse.Runtime.Telemetry.ExportFailure.Internal (newExportFailureSink)
+import Ecluse.Runtime.Telemetry.Internal (
     Telemetry (..),
     TelemetryProviders (..),
     TelemetrySwitch (..),
@@ -38,7 +39,6 @@ import Ecluse.Runtime.Telemetry (
     telemetryTracerProvider,
     withTelemetry,
  )
-import Ecluse.Runtime.Telemetry.ExportFailure.Internal (newExportFailureSink)
 
 {- | Tests the OpenTelemetry substrate: the @ECLUSE_OBSERVABILITY__TELEMETRY@ switch parses
 strictly, the off handle initialises no SDK, and 'telemetryEnabled' wires the SDK providers

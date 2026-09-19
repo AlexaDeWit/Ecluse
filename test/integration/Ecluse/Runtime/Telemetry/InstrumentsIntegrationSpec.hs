@@ -28,7 +28,7 @@ import Ecluse.Runtime.Telemetry (
     telemetryMeterProvider,
     withTelemetry,
  )
-import Ecluse.Runtime.Telemetry.Instruments (
+import Ecluse.Runtime.Telemetry.Instruments.Internal (
     newMetrics,
     recordCacheRequest,
     recordMirrorJobProcessed,

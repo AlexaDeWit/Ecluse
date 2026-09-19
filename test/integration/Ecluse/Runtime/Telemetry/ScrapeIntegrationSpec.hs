@@ -31,7 +31,7 @@ import Ecluse.Integration.Collector (withSdkEnv)
 import Ecluse.Runtime.Env (Env)
 import Ecluse.Runtime.Server (mkServerConfig, tracedApplication)
 import Ecluse.Runtime.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
-import Ecluse.Runtime.Telemetry.Instruments (
+import Ecluse.Runtime.Telemetry.Instruments.Internal (
     newMetrics,
     recordMirrorJobProcessed,
     recordRuleDenial,

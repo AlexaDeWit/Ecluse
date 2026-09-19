@@ -55,12 +55,12 @@ import Ecluse.Core.Server.Response (
  )
 import Ecluse.Core.Telemetry.Metrics (AdvisorySyncResult (AdvisoryRefused))
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Runtime.Telemetry (
+import Ecluse.Runtime.Telemetry.Internal (
     Telemetry (TelemetryEnabled),
     TelemetryProviders (TelemetryProviders),
     telemetryDisabled,
  )
-import Ecluse.Runtime.Telemetry.Tracing (
+import Ecluse.Runtime.Telemetry.Tracing.Internal (
     JobSpanOutcome (JobSpanOutcome),
     dataPlaneInstrumentationConfig,
     ruleVerdictFields,

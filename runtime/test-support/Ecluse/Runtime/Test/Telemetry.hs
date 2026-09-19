@@ -20,7 +20,7 @@ import OpenTelemetry.Resource (emptyMaterializedResources)
 import OpenTelemetry.Trace (createTracerProvider, emptyTracerProviderOptions, shutdownTracerProvider)
 import UnliftIO (bracket)
 
-import Ecluse.Runtime.Telemetry (Telemetry (TelemetryEnabled), TelemetryProviders (TelemetryProviders))
+import Ecluse.Runtime.Telemetry.Internal (Telemetry (TelemetryEnabled), TelemetryProviders (TelemetryProviders))
 
 -- | Keep both SDK providers alive until all measurements and assertions finish.
 withTestTelemetry :: (Telemetry -> SdkMeterEnv -> IO a) -> IO a

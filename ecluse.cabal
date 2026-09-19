@@ -444,14 +444,17 @@ library ecluse-runtime
     Ecluse.Runtime.Telemetry.ExportFailure
     Ecluse.Runtime.Telemetry.ExportFailure.Internal
     Ecluse.Runtime.Telemetry.Instruments
+    Ecluse.Runtime.Telemetry.Instruments.Internal
+    Ecluse.Runtime.Telemetry.Internal
     Ecluse.Runtime.Telemetry.Reporters
     Ecluse.Runtime.Telemetry.Resolve
     Ecluse.Runtime.Telemetry.Resolve.Internal
     Ecluse.Runtime.Telemetry.Scrape
     Ecluse.Runtime.Telemetry.Scrape.Internal
     Ecluse.Runtime.Telemetry.Tracing
+    Ecluse.Runtime.Telemetry.Tracing.Internal
 
-  -- The generated version module. Ecluse.Runtime.Telemetry.Resolve falls back to the
+  -- The generated version module. Ecluse.Runtime.Telemetry.Resolve.Internal falls back to the
   -- running binary's own build version for the telemetry identity.
   other-modules:   Paths_ecluse
   autogen-modules: Paths_ecluse
