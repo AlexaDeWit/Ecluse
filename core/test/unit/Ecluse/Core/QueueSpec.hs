@@ -20,6 +20,8 @@ import Ecluse.Core.Queue (
     deliveryBudgetSpent,
     effectiveDeliveryBudget,
     mkReceiptHandle,
+ )
+import Ecluse.Core.Queue.Buffer (
     newEnqueueBuffer,
  )
 import Ecluse.Queue.Support (otherJob, thirdJob, unwrap)

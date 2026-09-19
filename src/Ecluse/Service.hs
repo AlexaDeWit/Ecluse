@@ -51,7 +51,8 @@ import Ecluse.Composition.Worker (workerPoliciesFor)
 import Ecluse.Config (AppConfig)
 import Ecluse.Core.Credential.Refresh (CredentialError (Unconfigured))
 import Ecluse.Core.Ecosystem (Ecosystem, prefixFor)
-import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer, reportWorthy)
+import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Queue.Buffer (newEnqueueBuffer, reportWorthy)
 import Ecluse.Core.Registry.Adapter (
     RegistryAdapter,
     adapterEcosystem,

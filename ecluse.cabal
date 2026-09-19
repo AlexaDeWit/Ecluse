@@ -120,6 +120,7 @@ library ecluse-core
     Ecluse.Core.Package.Pep503
     Ecluse.Core.Queue
     Ecluse.Core.Snapshot
+    Ecluse.Core.Queue.Buffer
     Ecluse.Core.Queue.Lease
     Ecluse.Core.Queue.Memory
     Ecluse.Core.Registry

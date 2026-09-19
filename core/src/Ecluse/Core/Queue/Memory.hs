@@ -27,6 +27,8 @@ import Ecluse.Core.Queue (
     QueueMessage (..),
     defaultDeliveryBudget,
     mkReceiptHandle,
+ )
+import Ecluse.Core.Queue.Buffer (
     reportWorthy,
     writeOrDrop,
  )
