@@ -43,7 +43,7 @@ import Ecluse.Integration.WorkerLoop (
  )
 import Ecluse.Runtime.Aws.Env (AwsEndpoint (endpointHost, endpointPort))
 import Ecluse.Runtime.Env (Env)
-import Ecluse.Runtime.Queue.Sqs (SqsConfig (sqsWaitSeconds), newSqsQueue)
+import Ecluse.Runtime.Queue.Sqs.Internal (SqsConfig (sqsWaitSeconds), newSqsQueue)
 import Ecluse.Runtime.Server (MountBinding, application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (getPath)
 import Ecluse.Service (mountBindingFor)

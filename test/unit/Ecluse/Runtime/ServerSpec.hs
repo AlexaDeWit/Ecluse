@@ -41,7 +41,7 @@ import Ecluse.Core.Server.Readiness (Readiness (Latched))
 import Ecluse.Core.Telemetry.Metrics (RequestFaultCause (UnclassifiedFault))
 import Ecluse.Core.Worker (Liveness (Liveness, liveHealthy, liveLastPoll), heartbeatLivenessNow, workerHeartbeatStaleAfter)
 import Ecluse.Runtime.Env (envWorkerHeartbeat, recordPoll)
-import Ecluse.Runtime.Server (
+import Ecluse.Runtime.Server.Internal (
     DrainSignal,
     MountBinding (..),
     ServerConfig (..),

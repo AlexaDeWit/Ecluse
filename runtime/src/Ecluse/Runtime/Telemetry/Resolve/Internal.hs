@@ -326,6 +326,7 @@ prepareTelemetry logEnv environment = do
     mapM_ (moduleLog logEnv resolveModule WarningS) (telemetryWarnings environment)
     mapM_ (uncurry setEnv) (otelEnvironmentOverrides environment)
 
--- The module name every line this module raises is tagged with.
+-- The operator filter key every line raised here is tagged with. It names the public module,
+-- not this one, because operators filter on it.
 resolveModule :: Text
 resolveModule = "Ecluse.Runtime.Telemetry.Resolve"

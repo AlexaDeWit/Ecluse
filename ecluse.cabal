@@ -437,9 +437,11 @@ library ecluse-runtime
     Ecluse.Runtime.Maintenance.CodeArtifact.Read.Internal
     Ecluse.Runtime.Pilot.Export
     Ecluse.Runtime.Queue.Sqs
+    Ecluse.Runtime.Queue.Sqs.Internal
     Ecluse.Runtime.Server
     Ecluse.Runtime.Server.Drain
     Ecluse.Runtime.Server.Halt
+    Ecluse.Runtime.Server.Internal
     Ecluse.Runtime.Server.Middleware
     Ecluse.Runtime.Telemetry
     Ecluse.Runtime.Telemetry.Correlation

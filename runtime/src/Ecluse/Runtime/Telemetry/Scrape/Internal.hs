@@ -172,6 +172,7 @@ runScrapeListener logEnv listener scrape bound =
     say :: Severity -> Text -> IO ()
     say = scrapeLog logEnv
 
+-- The @module@ key names the public module, not this one, because operators filter on it.
 scrapeLog :: LogEnv -> Severity -> Text -> IO ()
 scrapeLog logEnv = moduleLog logEnv "Ecluse.Runtime.Telemetry.Scrape"
 
