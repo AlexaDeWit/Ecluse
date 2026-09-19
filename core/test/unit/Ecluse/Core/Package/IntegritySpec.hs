@@ -78,19 +78,16 @@ spec = do
             meetsFloor defaultMinIntegrity SHA512 `shouldBe` True
             meetsFloor defaultMinIntegrity Blake2b `shouldBe` True
 
-        it "rejects SHA-384 and Blake2b when the floor is raised to SHA-512" $ do
-            sha512Floor <- expectRight (mkMinIntegrity SHA512)
-            meetsFloor sha512Floor SHA384 `shouldBe` False
-            meetsFloor sha512Floor Blake2b `shouldBe` False
-
         it "rejects an algorithm below the default floor (SHA-1, MD5)" $ do
             meetsFloor defaultMinIntegrity SHA1 `shouldBe` False
             meetsFloor defaultMinIntegrity MD5 `shouldBe` False
 
-        it "rejects SHA-256 when the floor is raised to SHA-512" $ do
+        it "admits only SHA-512 once the floor is raised to it" $ do
             sha512Floor <- expectRight (mkMinIntegrity SHA512)
-            meetsFloor sha512Floor SHA256 `shouldBe` False
             meetsFloor sha512Floor SHA512 `shouldBe` True
+            meetsFloor sha512Floor SHA384 `shouldBe` False
+            meetsFloor sha512Floor Blake2b `shouldBe` False
+            meetsFloor sha512Floor SHA256 `shouldBe` False
 
     describe "mkMinIntegrity / parseMinIntegrity" $ do
         it "defaults to SHA-256" $
@@ -172,21 +169,18 @@ spec = do
         let classify floorAlg hs =
                 classifyArtifacts floorAlg (artifactWith hs :| [])
 
-        it "MeetsFloor when a digest clears the floor (SHA-256, sha512-SRI)" $ do
-            classify defaultMinIntegrity [unsafeHash SHA256 validSha256] `shouldBe` MeetsFloor
-            classify defaultMinIntegrity [unsafeHash SRI validSha512Sri] `shouldBe` MeetsFloor
-
-        it "MeetsFloor when the only digest is a sha384 SRI (clears the SHA-256 floor)" $
-            classify defaultMinIntegrity [unsafeHash SRI validSha384Sri] `shouldBe` MeetsFloor
-
-        it "MeetsFloor when a strong digest sits beside a weak one" $
-            classify defaultMinIntegrity [unsafeHash SHA1 validSha1, unsafeHash SHA256 validSha256] `shouldBe` MeetsFloor
-
-        it "BelowFloor for a SHA-1-only version (a digest, but too weak)" $
-            classify defaultMinIntegrity [unsafeHash SHA1 validSha1] `shouldBe` BelowFloor
-
-        it "NoIntegrity for a version carrying no digest at all" $
-            classify defaultMinIntegrity [] `shouldBe` NoIntegrity
+        for_
+            -- sha384 is the middle SRI algorithm: it clears the SHA-256 floor as sha512 does.
+            [ ("a plain SHA-256 digest", [unsafeHash SHA256 validSha256], MeetsFloor)
+            , ("a sha512 SRI", [unsafeHash SRI validSha512Sri], MeetsFloor)
+            , ("a sha384 SRI", [unsafeHash SRI validSha384Sri], MeetsFloor)
+            , ("a strong digest beside a weak one", [unsafeHash SHA1 validSha1, unsafeHash SHA256 validSha256], MeetsFloor)
+            , ("a SHA-1 digest alone", [unsafeHash SHA1 validSha1], BelowFloor)
+            , ("no digest at all", [], NoIntegrity)
+            ]
+            $ \(label, hashes, expected) ->
+                it ("reads " <> label <> " as " <> show expected <> " at the default floor") $
+                    classify defaultMinIntegrity hashes `shouldBe` expected
 
         it "BelowFloor for a SHA-256-only version when the floor is SHA-512" $ do
             sha512Floor <- expectRight (mkMinIntegrity SHA512)

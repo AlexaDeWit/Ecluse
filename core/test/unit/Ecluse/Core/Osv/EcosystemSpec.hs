@@ -23,22 +23,13 @@ spec = do
         it "spells npm the same on both halves" $
             osvEcosystemFor Npm `shouldBe` OsvEcosystem{osvExportDirectory = "npm", osvWireName = "npm", osvEcosystemTag = Just Npm, osvMaxAdvisoryFanOut = 256}
 
-        it "reads PyPI's export from osv.dev's capitalised directory" $
-            osvExportDirectory (osvEcosystemFor PyPI) `shouldBe` "PyPI"
-
-        it "names PyPI's artifact by the wire spelling, which is what the sync reads" $
-            osvWireName (osvEcosystemFor PyPI) `shouldBe` "pypi"
+        it "reads PyPI's export from a capitalised directory under a lower-case wire name" $
+            -- The largest PyPI advisory measured names 2459 ranges, so the 4096 bound leaves
+            -- an ordinary compile quiet and still lets a genuinely anomalous one speak.
+            osvEcosystemFor PyPI `shouldBe` OsvEcosystem{osvExportDirectory = "PyPI", osvWireName = "pypi", osvEcosystemTag = Just PyPI, osvMaxAdvisoryFanOut = 4096}
 
         it "splits RubyGems the same way" $
             osvEcosystemFor RubyGems `shouldBe` OsvEcosystem{osvExportDirectory = "RubyGems", osvWireName = "rubygems", osvEcosystemTag = Just RubyGems, osvMaxAdvisoryFanOut = 256}
-
-        it "sizes the PyPI fan-out bound above the widest advisory that feed publishes" $
-            -- The largest PyPI advisory measured names 2459 ranges, so an ordinary compile
-            -- stays quiet and a genuinely anomalous one still speaks.
-            osvMaxAdvisoryFanOut (osvEcosystemFor PyPI) `shouldBe` 4096
-
-        it "keeps npm on the bound its own export was measured against" $
-            osvMaxAdvisoryFanOut (osvEcosystemFor Npm) `shouldBe` 256
 
         it "keeps every ecosystem's wire half equal to the tag's own name, so the two cannot drift" $
             map (osvWireName . osvEcosystemFor) universe `shouldBe` map ecosystemName (universe :: [Ecosystem])
