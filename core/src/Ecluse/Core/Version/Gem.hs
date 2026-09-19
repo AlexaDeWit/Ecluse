@@ -61,7 +61,7 @@ compareGemTokens [] (y : ys) = compare (VNum 0) y <> compareGemTokens [] ys
 from the prerelease tail separately, which is why @2.t > 2.0.a@ and @2.0.a == 2.a@. -}
 canonicalSegments :: [VToken] -> [VToken]
 canonicalSegments toks =
-    let (release, prerelease) = break (not . isNumeric) toks
+    let (release, prerelease) = span isNumeric toks
      in dropTrailingZeros release <> dropTrailingZeros prerelease
   where
     dropTrailingZeros = dropWhileEnd (== VNum 0)
