@@ -64,8 +64,6 @@ module Ecluse.Worker.Support.Fixtures (
 
     -- * Reading an outcome back
     stringAt,
-    isMismatch,
-    mismatchDetail,
     isDropped,
     isSourceUnavailable,
     isRetried,
@@ -104,7 +102,6 @@ import Ecluse.Core.Supervision (
  )
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
-    IntegrityResult (IntegrityMismatch, IntegrityVerified),
     JobOutcome (DeadLettered, Dropped, Retried, SourceUnavailable),
     WorkerPolicies,
     WorkerPolicy (wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpFirstParty, wpPublish),
@@ -367,17 +364,6 @@ stringAt :: [Key] -> Value -> Maybe Text
 stringAt [] (String t) = Just t
 stringAt (k : ks) (Object o) = KeyMap.lookup k o >>= stringAt ks
 stringAt _ _ = Nothing
-
-isMismatch :: IntegrityResult -> Bool
-isMismatch = \case
-    IntegrityMismatch _ -> True
-    IntegrityVerified -> False
-
--- The operator-facing detail of an integrity mismatch, or 'Nothing' when verified.
-mismatchDetail :: IntegrityResult -> Maybe Text
-mismatchDetail = \case
-    IntegrityMismatch detail -> Just detail
-    IntegrityVerified -> Nothing
 
 isDropped :: JobOutcome -> Bool
 isDropped = \case
