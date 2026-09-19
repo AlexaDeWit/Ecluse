@@ -2,37 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The egress posture for registry traffic: https-only by construction, with TLS
-certificate validation as the endpoint-authentication boundary.
+{- | The egress posture for registry traffic: https-only by construction.
 
-Every outbound registry URL the proxy dials is an 'RegistryUrl', built through the
-https-only 'mkRegistryUrl'. A non-https registry endpoint cannot be represented. A
-plain-HTTP target is therefore refused at the configuration boundary: a non-https
-configured upstream fails closed at boot. A packument's @dist.tarball@ goes through
-'resolveTarballUrl' before the proxy ever dials it. An __operator-configured__ endpoint
-goes through 'mkConfiguredRegistryUrl', which also refuses userinfo, a query string,
-and a fragment. A configured registry URL therefore holds no credential for the boot
-log to echo. The data-plane 'Network.HTTP.Client.Manager' is the standard validating
-@tls@ manager. It checks the certificate the dialled host presents against the system
-trust store, for the requested name. An attacker who can steer a name to an internal or
-rebound address cannot make that address present a CA-trusted certificate for the host.
-Certificate validation therefore closes the credential-exfiltration and
-resolve-to-internal SSRF class, rather than a resolved-IP pin.
-
-Two complementary controls live alongside this and are not part of this module. The
-outbound host allowlist ('Ecluse.Core.Security.isAllowedUpstreamHost') is the
-load-bearing egress-policy control: the proxy dials only configured upstream
-@host:port@ pairs. The pure literal internal-range block
-('Ecluse.Core.Security.isBlockedTarget') is cheap defence-in-depth on the
-@dist.tarball@ host gate. No data-plane request follows an upstream redirect, because
-the shared 'Ecluse.Core.Registry.Request.finaliseRequest' pins @redirectCount = 0@ on
-every request. No hop can therefore downgrade the scheme or escape the allowlist after
-the URL is built.
-
-A test- and dev-only loopback constructor lives in "Ecluse.Core.Security.Egress.DevHttp",
-compiled only under the @dev-http-egress@ Cabal flag. The loopback test suites can then
-dial an in-process @http:\/\/127.0.0.1@ server without weakening the production posture.
-A release build does not compile it.
+Every outbound registry URL is a 'RegistryUrl', so a plain-HTTP target cannot be represented
+and a non-https configured upstream fails closed at boot. TLS certificate validation, not a
+resolved-IP pin, is the endpoint-authentication boundary: an attacker who steers a name to an
+internal address cannot make it present a CA-trusted certificate for the requested host. The
+host allowlist ('Ecluse.Core.Security.isAllowedUpstreamHost'), the literal internal-range
+block, and the @redirectCount = 0@ every request carries are complementary controls owned
+elsewhere.
 -}
 module Ecluse.Core.Security.Egress (
     -- * The https-only egress URL
@@ -50,16 +28,10 @@ import Data.Text qualified as T
 import Ecluse.Core.Security (authorityLabel, hostAddress)
 import Ecluse.Core.Security.Egress.Internal (RegistryUrl, mkConfiguredRegistryUrl, mkRegistryUrl, registryUrlText)
 
-{- | Resolve a packument's @dist.tarball@ URL against the https-only egress policy, given the bare
-host the packument was served from.
-
-An @http:\/\/@ target on the packument's own host is upgraded to https, the legacy case of a
-registry that still advertises plaintext artifact URLs on its own host. Any other plaintext target
-is refused. This normalises a scheme and authorises nothing: the @host:port@ allowlist and the
-same-authority tarball policy still gate the resolved target at serve time.
-
-A refusal names the offending URL's authority alone, never the URL, because the reason reaches an
-operator log line and an upstream-supplied @dist.tarball@ can carry a credential.
+{- | Resolve a packument's @dist.tarball@ against the https-only posture, given the bare host
+the packument came from: plaintext upgrades to https only on that same host, any other
+plaintext target is refused, and a refusal names the authority, never the URL, because an
+upstream-supplied @dist.tarball@ can carry a credential. It authorises nothing on its own.
 -}
 resolveTarballUrl :: Text -> Text -> Either Text RegistryUrl
 resolveTarballUrl upstreamHost url
