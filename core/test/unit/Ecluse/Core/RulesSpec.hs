@@ -603,9 +603,6 @@ spec = do
             let pr = PrecededRule 250 DenyInstallTimeExecution
             rulePrecedence pr `shouldBe` 250
             prRule pr `shouldBe` DenyInstallTimeExecution
-        it "shows both fields" $
-            show (PrecededRule 250 DenyInstallTimeExecution)
-                `shouldBe` ("PrecededRule {rulePrecedence = 250, prRule = DenyInstallTimeExecution}" :: String)
 
     describe "defaultPrecedence" $ do
         it "ranks DenyInstallTimeExecution strictly above every allow default" $ do

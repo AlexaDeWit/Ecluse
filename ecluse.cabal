@@ -812,7 +812,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Security.HostSpec
     Ecluse.Core.Security.IpLiteralSpec
     Ecluse.Core.Security.LimitsSpec
-    Ecluse.Core.SecuritySpec
     Ecluse.Core.Server.Admission.BytesSpec
     Ecluse.Core.Server.AcceptSpec
     Ecluse.Core.Server.AdmissionSpec

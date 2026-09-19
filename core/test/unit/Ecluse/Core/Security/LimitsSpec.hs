@@ -56,12 +56,27 @@ runBounded limits = evalState (boundedRead limits next)
 
 spec :: Spec
 spec = do
+    defaultLimitsSpec
     boundedReadSpec
     versionCountSpec
     artifactCountSpec
     nestingDepthSpec
     realPackumentSpec
     propertiesSpec
+
+{- | The shipped budget an operator inherits. Every case below that names a ceiling
+overrides one field of it, so the values it starts from are pinned once here.
+-}
+defaultLimitsSpec :: Spec
+defaultLimitsSpec =
+    describe "defaultLimits" $
+        it "ships a 12 MiB body, 100k version and artifact ceilings, and 64 nesting levels" $
+            ( maxBodyBytes defaultLimits
+            , maxVersionCount defaultLimits
+            , maxArtifactCount defaultLimits
+            , maxNestingDepth defaultLimits
+            )
+                `shouldBe` (12 * 1024 * 1024, 100_000, 100_000, 64)
 
 boundedReadSpec :: Spec
 boundedReadSpec = describe "boundedRead" $ do
