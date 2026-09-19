@@ -21,7 +21,7 @@ import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
-import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportTimeout), tfCause)
+import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportTimeout), tfCause, tfDetail)
 import Ecluse.Core.Package (renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
@@ -267,8 +267,10 @@ faultSpec :: Spec
 faultSpec = describe "classifyStoreFault" $ do
     it "reads a missing package as an empty local inventory and preserves access failures" $ do
         fmap (^. CAL.listPackageVersionsResponse_versions) (listVersionsResult (Left (serviceError status404 "ResourceNotFoundException" []))) `shouldBe` Right Nothing
-        listVersionsResult (Left (serviceError status403 "AccessDeniedException" [])) `shouldSatisfy` isLeft
-        listVersionsResult (Left (serviceError status404 "OtherException" [])) `shouldSatisfy` isLeft
+        -- A preserved failure keeps the classified fault, so the sweep reads its own advice
+        -- rather than an empty inventory it would take for a cleared package.
+        preservedAdvice (serviceError status403 "AccessDeniedException" []) `shouldBe` Just RetryFutile
+        preservedAdvice (serviceError status404 "OtherException" []) `shouldBe` Just RetryFutile
 
     it "reads a throttle as worth another attempt" $
         adviceFor (serviceError status429 "ThrottlingException" []) `shouldBe` RetryWorthwhile
@@ -300,6 +302,9 @@ faultSpec = describe "classifyStoreFault" $ do
   where
     adviceFor = faultRetry . classifyStoreFault
 
+    -- The retry advice a preserved listing failure carries, 'Nothing' when it was not preserved.
+    preservedAdvice = either (Just . faultRetry) (const Nothing) . listVersionsResult . Left
+
 verdictSpec :: Spec
 verdictSpec = describe "the verdicts a sweep reads before it deletes" $ do
     it "refuses a repository with an external connection, which refills itself" $
@@ -321,13 +326,16 @@ verdictSpec = describe "the verdicts a sweep reads before it deletes" $ do
         consentOfTags [] `shouldSatisfy` describesAttachment
 
     it "reads the described repository, and faults when the store described none" $ do
-        repositoryOfResponse (describing CA.newRepositoryDescription) `shouldSatisfy` isRight
-        repositoryOfResponse (CA.newDescribeRepositoryResponse 200) `shouldSatisfy` isLeft
+        repositoryOfResponse (describing CA.newRepositoryDescription)
+            `shouldBe` Right CA.newRepositoryDescription
+        first detailOf (repositoryOfResponse (CA.newDescribeRepositoryResponse 200))
+            `shouldBe` Left "the store described no repository"
 
     it "reads the ARN a tag call needs, and faults when the description carries none" $ do
         let arned = CA.newRepositoryDescription & CAL.repositoryDescription_arn ?~ "arn:aws:codeartifact:::repository/acme/mirror"
         arnOfDescription arned `shouldBe` Right "arn:aws:codeartifact:::repository/acme/mirror"
-        arnOfDescription CA.newRepositoryDescription `shouldSatisfy` isLeft
+        first detailOf (arnOfDescription CA.newRepositoryDescription)
+            `shouldBe` Left "the store described the repository without an ARN"
 
     it "reads a blank ARN as absent, so no tag call is addressed to it" $
         arnOfDescription (CA.newRepositoryDescription & CAL.repositoryDescription_arn ?~ "")
@@ -446,6 +454,10 @@ cursorSpec = describe "the walk cursor's tag" $ do
     alphabet = mkNameAlphabet "abc"
     consentTag = CA.newTag consentTagKey consentTagValue
     cursorTag = CA.newTag (cursorTagKey Npm)
+
+-- What a store fault says, so an assertion reads the refusal rather than only that one happened.
+detailOf :: StoreFault -> Text
+detailOf = tfDetail . faultTransport
 
 repositoryArn :: Text
 repositoryArn = "arn:aws:codeartifact:eu-west-1:111122223333:repository/acme/mirror"

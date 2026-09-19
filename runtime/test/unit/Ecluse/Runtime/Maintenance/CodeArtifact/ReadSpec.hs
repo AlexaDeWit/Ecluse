@@ -24,7 +24,6 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Read.Internal (
     VersionOrigin (..),
     identityOfStore,
     observationsOfPage,
-    storedOfObservation,
     versionsOfPage,
  )
 import Ecluse.Test.Package (babelCore, npmVersion)
@@ -59,8 +58,7 @@ pageSpec store = describe "observationsOfPage" $ do
     it "keeps CodeArtifact's own status beside the served or withdrawn projection" $ do
         let page = observed store [summaryOf raw status | (raw, status) <- statusRun]
         map obsStatus page `shouldBe` map snd statusRun
-        map obsPresence page
-            `shouldBe` [VersionServed, VersionServed] <> replicate 5 VersionWithdrawn
+        map obsPresence page `shouldBe` statusPresences
 
     it "keeps the raw version as published, and the package the listing was read for" $ do
         let page = observed store [published "1.0.0-rc.1+build"]
@@ -112,17 +110,15 @@ pageSpec store = describe "observationsOfPage" $ do
 
 projectionSpec :: CodeArtifactStore -> Spec
 projectionSpec store = describe "versionsOfPage" $ do
-    it "projects exactly the observations of the same page" $ do
-        let page = [summaryOf raw status | (raw, status) <- statusRun]
-        stored store page `shouldBe` map storedOfObservation (observed store page)
+    it "projects one stored version per listing entry, carrying the version and its presence" $
+        stored store [summaryOf raw status | (raw, status) <- statusRun]
+            `shouldBe` [ StoredVersion{storedVersion = npmVersion raw, storedPresence = presence, storedRevision = Nothing}
+                       | (raw, presence) <- zip (map fst statusRun) statusPresences
+                       ]
 
     it "preserves the opaque revision without turning origin into deletion authority" $ do
         let evidenced = revised "rev-1" (originating (originTyped CA.PackageVersionOriginType_INTERNAL) (published "1.0.0"))
         map storedRevision (stored store [evidenced]) `shouldBe` [Just "rev-1"]
-
-    it "reads a served version as one the store still holds" $
-        stored store [published "1.0.0"]
-            `shouldBe` [StoredVersion{storedVersion = npmVersion "1.0.0", storedPresence = VersionServed, storedRevision = Nothing}]
 
 observed :: CodeArtifactStore -> [CA.PackageVersionSummary] -> [VersionObservation]
 observed store = observationsOfPage (identityOfStore store) babelCore
@@ -141,6 +137,10 @@ statusRun =
     , ("1.5.0", CA.PackageVersionStatus_Unfinished)
     , ("1.6.0", CA.PackageVersionStatus' "SOME_LATER_STATUS")
     ]
+
+-- What 'statusRun' projects to: published and unlisted are served, every other status is not.
+statusPresences :: [VersionPresence]
+statusPresences = [VersionServed, VersionServed] <> replicate 5 VersionWithdrawn
 
 laterOriginType :: CA.PackageVersionOriginType
 laterOriginType = CA.PackageVersionOriginType' "SOME_LATER_ORIGIN"
