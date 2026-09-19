@@ -13,8 +13,9 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Advisory
-import Ecluse.Core.Osv.Epss (EpssScores, mkEpssScores)
+import Ecluse.Core.Osv.Epss (mkEpssScores)
 import Ecluse.Core.Osv.Types (UpperBound (..))
+import Ecluse.Test.Osv (noScores)
 import Ecluse.Test.Osv.Withdrawal (withdrawalBytes)
 
 advisory :: [OsvSeverityEntry] -> Maybe Text -> OsvAdvisory
@@ -28,9 +29,6 @@ advisory entries label =
         , osvWithdrawn = Nothing
         , osvModified = Nothing
         }
-
-noScores :: EpssScores
-noScores = mkEpssScores []
 
 decodeWithdrawal :: Maybe Value -> IO OsvAdvisory
 decodeWithdrawal withdrawn = withdrawalBytes withdrawn >>= either fail pure . eitherDecodeStrict

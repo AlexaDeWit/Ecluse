@@ -28,6 +28,11 @@ module Ecluse.Test.Osv (
     OsvTestM,
     runOsvTestM,
     runOsvTestMWith,
+    runOsvJsonLog,
+
+    -- * Ingest inputs a case does not decide from
+    noScores,
+    npmFeed,
 ) where
 
 import Codec.Archive.Zip.Conduit.Zip (ZipData (..), ZipEntry (..), defaultZipOptions, zipStream)
@@ -40,8 +45,19 @@ import Katip (Katip (..), KatipContext (..), LogEnv)
 import System.FilePath (takeFileName, (</>))
 import System.IO (SeekMode (AbsoluteSeek), hSeek, withBinaryFile)
 
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Osv.Ecosystem (OsvEcosystem, osvEcosystemFor)
+import Ecluse.Core.Osv.Epss (EpssScores, mkEpssScores)
 import Ecluse.Core.Osv.Schema (metaTableDdl, osvSchemaEpoch, rangesTableDdl)
-import Ecluse.Test.Log (newTestLogEnv)
+import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
+
+-- | No EPSS enrichment, for a case that decides nothing from a score.
+noScores :: EpssScores
+noScores = mkEpssScores []
+
+-- | The npm advisory feed, the subject of the ingest fixtures.
+npmFeed :: OsvEcosystem
+npmFeed = osvEcosystemFor Npm
 
 -- | A committed advisory corpus generation.
 data CorpusVersion = CorpusV1 | CorpusV2
@@ -259,3 +275,9 @@ runOsvTestM action = newTestLogEnv >>= \logEnv -> runOsvTestMWith logEnv action
 -- | 'runOsvTestM' over a caller-supplied 'LogEnv', so a spec reads back what the ingest logged.
 runOsvTestMWith :: LogEnv -> OsvTestM a -> IO a
 runOsvTestMWith logEnv action = runResourceT (runReaderT (unOsvTestM action) logEnv)
+
+{- | Drive an ingest under log capture and keep the JSONL only, for a case that decides on what
+the ingest reported rather than on what it returned.
+-}
+runOsvJsonLog :: OsvTestM a -> IO Text
+runOsvJsonLog action = snd <$> captureJsonLog (\logEnv -> runOsvTestMWith logEnv action)

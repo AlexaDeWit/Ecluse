@@ -15,14 +15,13 @@ import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Network.HTTP.Types.Status (status200)
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Ecosystem (
     OsvEcosystem (osvExportDirectory, osvMaxAdvisoryFanOut, osvWireName),
     osvEcosystemFor,
     osvEcosystemNamed,
  )
-import Ecluse.Core.Osv.Epss (EpssScores, mkEpssScores)
 import Ecluse.Core.Osv.Stream (
     IngestLimits (..),
     IngestStats (..),
@@ -34,21 +33,14 @@ import Ecluse.Core.Osv.Stream (
     systemicDrop,
  )
 import Ecluse.Core.Osv.Types (UpperBound (..))
-import Ecluse.Test.Log (captureJsonLog)
-import Ecluse.Test.Osv (OsvTestM, osvZipOf, runOsvTestM, runOsvTestMWith)
+import Ecluse.Test.Osv (OsvTestM, noScores, npmFeed, osvZipOf, runOsvJsonLog, runOsvTestM)
 import Ecluse.Test.Osv.Withdrawal (withdrawalZip)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
-
-noScores :: EpssScores
-noScores = mkEpssScores []
 
 -- The run clock every ingest here is built with. Nothing in this module reads the record
 -- dates it judges, so its only job is to be a clock.
 ingestClock :: UTCTime
 ingestClock = UTCTime (fromGregorian 2026 9 1) 0
-
-npmFeed :: OsvEcosystem
-npmFeed = osvEcosystemFor Npm
 
 fanOutFlag :: Text
 fanOutFlag = "exceeding the sanity threshold"
@@ -97,7 +89,7 @@ fanOutRows feed n = osvZipOf [("fan.json", fanOutAdvisory feed n)] >>= ingestedR
 fanOutLog :: OsvEcosystem -> Int -> IO Text
 fanOutLog feed n = do
     zipData <- osvZipOf [("fan.json", fanOutAdvisory feed n)]
-    snd <$> captureJsonLog (\logEnv -> runOsvTestMWith logEnv (void (ingestArchive defaultIngestLimits feed zipData)))
+    runOsvJsonLog (void (ingestArchive defaultIngestLimits feed zipData))
 
 -- The one row the sample archive carries, asserted wherever that archive is streamed.
 theSampleRow :: [ExtractedOsv] -> IO ()
@@ -182,7 +174,7 @@ spec = describe "the OSV ingest stream" $ do
                     ]
             let limits = defaultIngestLimits{ilMaxAdvisoryBytes = 5000}
             logged <-
-                snd <$> captureJsonLog (\logEnv -> runOsvTestMWith logEnv (void (ingestArchive limits npmFeed zipData)))
+                runOsvJsonLog (void (ingestArchive limits npmFeed zipData))
             logged `shouldSatisfy` T.isInfixOf "Dropping oversized OSV entry"
             logged `shouldSatisfy` T.isInfixOf "Failed to parse OSV advisory JSON"
             logged `shouldSatisfy` T.isInfixOf fanOutFlag
