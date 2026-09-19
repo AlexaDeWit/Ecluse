@@ -33,8 +33,8 @@ import Ecluse.Security.Support (hp, hpAt, upstreamHosts, upstreams)
 spec :: Spec
 spec = do
     hostAllowlistSpec
-    internalRangeSpec
     classificationCorpusSpec
+    additionalRangesSpec
     ssrfGateSpec
     tarballHostPolicySpec
     ecosystemHostSpec
@@ -78,226 +78,31 @@ hostAllowlistSpec = describe "isAllowedUpstreamHost" $ do
             isAllowedUpstreamHost (allowedHostPorts (Set.singleton (hpAt "0:0:0:0:0:0:0:1" 8443))) (hpAt "::1" 8443)
                 `shouldBe` True
 
-internalRangeSpec :: Spec
-internalRangeSpec = describe "isBlockedTarget" $ do
-    let noOptIn = []
+{- | The operator's own additional ranges, the one dimension the classification corpus below
+does not reach: every corpus row runs against the fixed set alone.
+-}
+additionalRangesSpec :: Spec
+additionalRangesSpec = describe "isBlockedTarget (operator-configured additional ranges)" $ do
+    let testNet3 = ["203.0.113.0/24"] :: [IPRange]
+    it "blocks a host matched by an additional range not in the fixed set" $
+        isBlockedTarget testNet3 "203.0.113.5" `shouldBe` True
+    it "leaves a host outside every additional range unblocked" $ do
+        isBlockedTarget testNet3 "8.8.8.8" `shouldBe` False
+        isBlockedTarget testNet3 "203.0.114.1" `shouldBe` False
+    it "unions the additional ranges with the fixed set rather than replacing it" $
+        -- The block still catches a fixed-range address (10/8) alongside an
+        -- unrelated additional range: additional ranges only ever widen the block.
+        isBlockedTarget testNet3 "10.1.2.3" `shouldBe` True
+    it "blocks an IPv6 host matched by an additional range" $
+        isBlockedTarget ["2001:db8::/32"] "2001:db8::1" `shouldBe` True
+    it "does not block a DNS name even when it lexically resembles a blocked range" $
+        isBlockedTarget testNet3 "203.0.113.example.com" `shouldBe` False
 
-    describe "blocks internal IPv4 ranges" $ do
-        it "blocks the cloud instance-metadata address 169.254.169.254" $
-            isBlockedTarget noOptIn "169.254.169.254" `shouldBe` True
-        it "blocks the rest of link-local 169.254.0.0/16" $
-            isBlockedTarget noOptIn "169.254.1.1" `shouldBe` True
-        it "blocks loopback 127.0.0.1" $
-            isBlockedTarget noOptIn "127.0.0.1" `shouldBe` True
-        it "blocks the whole 127.0.0.0/8 loopback block" $
-            isBlockedTarget noOptIn "127.255.255.254" `shouldBe` True
-        it "blocks RFC1918 10.0.0.0/8" $
-            isBlockedTarget noOptIn "10.1.2.3" `shouldBe` True
-        it "blocks RFC1918 172.16.0.0/12 (low edge)" $
-            isBlockedTarget noOptIn "172.16.0.1" `shouldBe` True
-        it "blocks RFC1918 172.16.0.0/12 (high edge)" $
-            isBlockedTarget noOptIn "172.31.255.254" `shouldBe` True
-        it "blocks RFC1918 192.168.0.0/16" $
-            isBlockedTarget noOptIn "192.168.1.1" `shouldBe` True
-        it "blocks the unspecified / this-host address 0.0.0.0 (loopback-equivalent on Linux)" $
-            isBlockedTarget noOptIn "0.0.0.0" `shouldBe` True
-        it "blocks the rest of the 0.0.0.0/8 this-host block" $
-            isBlockedTarget noOptIn "0.1.2.3" `shouldBe` True
-        it "blocks CGNAT shared 100.64.0.0/10 (low edge)" $
-            isBlockedTarget noOptIn "100.64.0.0" `shouldBe` True
-        it "blocks CGNAT shared 100.64.0.0/10 (high edge)" $
-            isBlockedTarget noOptIn "100.127.255.254" `shouldBe` True
-
-    describe "blocks internal IPv6 addresses" $ do
-        it "blocks the IPv6 unspecified address ::" $
-            isBlockedTarget noOptIn "::" `shouldBe` True
-        it "blocks IPv6 loopback ::1" $
-            isBlockedTarget noOptIn "::1" `shouldBe` True
-        it "blocks IPv6 link-local fe80::/10" $
-            isBlockedTarget noOptIn "fe80::1" `shouldBe` True
-        it "blocks IPv6 link-local at the top of fe80::/10 (febf)" $
-            isBlockedTarget noOptIn "febf::1" `shouldBe` True
-        it "blocks fully-expanded IPv6 loopback" $
-            isBlockedTarget noOptIn "0:0:0:0:0:0:0:1" `shouldBe` True
-        it "blocks IPv6 unique-local fc00::/7 (low edge, fc00)" $
-            isBlockedTarget noOptIn "fc00::1" `shouldBe` True
-        it "blocks IPv6 unique-local fc00::/7 (high edge, fdff)" $
-            isBlockedTarget noOptIn "fdff::1" `shouldBe` True
-        it "blocks the AWS IMDSv6 metadata endpoint fd00:ec2::254" $
-            -- The IPv6 analogue of 169.254.169.254. The block must catch an SSRF
-            -- aimed at IPv6 instance metadata alongside the IPv4 endpoint.
-            isBlockedTarget noOptIn "fd00:ec2::254" `shouldBe` True
-        it "does not block a public IPv6 address just below the ULA range (fbff)" $
-            isBlockedTarget noOptIn "fbff::1" `shouldBe` False
-        it "does not block a public IPv6 address just above the ULA range (fe00)" $
-            -- fe00 is above fc00::/7 (fc00..fdff) and below link-local fe80::/10.
-            isBlockedTarget noOptIn "fe00::1" `shouldBe` False
-
-    describe "blocks IPv4-mapped IPv6 (::ffff:0:0/96)" $ do
-        it "blocks the cloud instance-metadata address in mapped form (::ffff:169.254.169.254)" $
-            isBlockedTarget noOptIn "::ffff:a9fe:a9fe" `shouldBe` True
-        it "blocks mapped loopback (::ffff:127.0.0.1)" $
-            isBlockedTarget noOptIn "::ffff:7f00:1" `shouldBe` True
-        it "blocks mapped RFC1918 10/8 (::ffff:10.0.0.1)" $
-            isBlockedTarget noOptIn "::ffff:a00:1" `shouldBe` True
-        it "does not block a mapped public address (::ffff:1.1.1.1)" $
-            isBlockedTarget noOptIn "::ffff:101:101" `shouldBe` False
-
-    describe "blocks IPv4-mapped IPv6 in canonical dotted form (RFC 4291 §2.2.3)" $ do
-        -- A tool or an attacker emits the dotted spelling, so the block must decode it as
-        -- well as the all-hex spelling above.
-        it "blocks the instance-metadata address (::ffff:169.254.169.254)" $
-            isBlockedTarget noOptIn "::ffff:169.254.169.254" `shouldBe` True
-        it "blocks mapped loopback (::ffff:127.0.0.1)" $
-            isBlockedTarget noOptIn "::ffff:127.0.0.1" `shouldBe` True
-        it "blocks the fully-expanded mapped loopback (0:0:0:0:0:ffff:127.0.0.1)" $
-            isBlockedTarget noOptIn "0:0:0:0:0:ffff:127.0.0.1" `shouldBe` True
-        it "does not block a mapped public address (::ffff:1.1.1.1)" $
-            isBlockedTarget noOptIn "::ffff:1.1.1.1" `shouldBe` False
-
-    describe "blocks IPv4-compatible IPv6 (::/96)" $ do
-        -- RFC 4291 2.5.5.1 deprecates IPv4-compatible addresses, but many stacks still accept
-        -- them, Ecluse's parser included, so the block decodes them to their embedded IPv4.
-        it "blocks the instance-metadata address (::169.254.169.254)" $
-            isBlockedTarget noOptIn "::169.254.169.254" `shouldBe` True
-        it "blocks compatible loopback (::127.0.0.1)" $
-            isBlockedTarget noOptIn "::127.0.0.1" `shouldBe` True
-        it "blocks the fully-expanded compatible loopback (0:0:0:0:0:0:127.0.0.1)" $
-            isBlockedTarget noOptIn "0:0:0:0:0:0:127.0.0.1" `shouldBe` True
-        it "does not block a compatible public address (::1.1.1.1)" $
-            isBlockedTarget noOptIn "::1.1.1.1" `shouldBe` False
-
-    describe "blocks NAT64-embedded IPv4 under the well-known prefix (64:ff9b::/96, RFC 6052)" $ do
-        -- On a fabric that runs NAT64, an address under the well-known prefix routes to its
-        -- embedded IPv4, so the block decodes and tests that address against the IPv4 ranges.
-        it "blocks the instance-metadata address (64:ff9b::a9fe:a9fe)" $
-            isBlockedTarget noOptIn "64:ff9b::a9fe:a9fe" `shouldBe` True
-        it "blocks the instance-metadata address in dotted form (64:ff9b::169.254.169.254)" $
-            isBlockedTarget noOptIn "64:ff9b::169.254.169.254" `shouldBe` True
-        it "blocks NAT64 loopback (64:ff9b::127.0.0.1)" $
-            isBlockedTarget noOptIn "64:ff9b::127.0.0.1" `shouldBe` True
-        it "blocks the fully-expanded NAT64 metadata address (64:ff9b:0:0:0:0:a9fe:a9fe)" $
-            isBlockedTarget noOptIn "64:ff9b:0:0:0:0:a9fe:a9fe" `shouldBe` True
-        it "does not block a NAT64 embedding of a public address (64:ff9b::1.1.1.1)" $
-            isBlockedTarget noOptIn "64:ff9b::1.1.1.1" `shouldBe` False
-
-    describe "blocks NAT64-embedded IPv4 under the local-use prefix (64:ff9b:1::/48, RFC 8215)" $ do
-        -- The local-use prefix is a /48. Any /96 within it embeds the IPv4 in the
-        -- low 32 bits, so the decode holds across the middle bits.
-        it "blocks the instance-metadata address (64:ff9b:1::169.254.169.254)" $
-            isBlockedTarget noOptIn "64:ff9b:1::169.254.169.254" `shouldBe` True
-        it "blocks an internal embedding under a non-zero /96 within the /48 (64:ff9b:1:aaaa::10.0.0.1)" $
-            isBlockedTarget noOptIn "64:ff9b:1:aaaa::10.0.0.1" `shouldBe` True
-        it "does not block a local-use embedding of a public address (64:ff9b:1::1.1.1.1)" $
-            isBlockedTarget noOptIn "64:ff9b:1::1.1.1.1" `shouldBe` False
-
-    describe "treats malformed IPv6 literals as names (not blocked)" $ do
-        -- Each malformed form must fail to parse as an IP, so nothing mistakes it
-        -- for an internal literal. The allowlist would still gate a real name.
-        it "rejects more than one '::'" $
-            isBlockedTarget noOptIn "1::2::3" `shouldBe` False
-        it "rejects a compressed literal that already has eight groups" $
-            isBlockedTarget noOptIn "1:2:3:4:5:6:7:8::" `shouldBe` False
-        it "rejects an out-of-range 16-bit group" $
-            isBlockedTarget noOptIn "fe80::1ffff" `shouldBe` False
-        it "rejects a non-hex group" $
-            isBlockedTarget noOptIn "fe80::zz" `shouldBe` False
-        it "rejects an uncompressed literal with the wrong group count" $
-            isBlockedTarget noOptIn "1:2:3" `shouldBe` False
-        it "does not block a non-internal compressed IPv6 address" $
-            isBlockedTarget noOptIn "2001:db8::1" `shouldBe` False
-
-    describe "permits public and non-IP targets" $ do
-        it "does not block a public IPv4 address" $
-            isBlockedTarget noOptIn "93.184.216.34" `shouldBe` False
-        it "does not block 172.32.0.1 (just above the /12)" $
-            isBlockedTarget noOptIn "172.32.0.1" `shouldBe` False
-        it "does not block 11.0.0.1 (just above 10/8)" $
-            isBlockedTarget noOptIn "11.0.0.1" `shouldBe` False
-        it "does not block 1.0.0.0 (just above the 0/8 this-host block)" $
-            isBlockedTarget noOptIn "1.0.0.0" `shouldBe` False
-        it "does not block 100.63.255.255 (just below CGNAT 100.64/10)" $
-            isBlockedTarget noOptIn "100.63.255.255" `shouldBe` False
-        it "does not block 100.128.0.1 (just above CGNAT 100.64/10)" $
-            isBlockedTarget noOptIn "100.128.0.1" `shouldBe` False
-        it "does not block a DNS name (the allowlist constrains those)" $
-            isBlockedTarget noOptIn "registry.npmjs.org" `shouldBe` False
-        it "does not block a public IPv6 address" $
-            isBlockedTarget noOptIn "2606:2800:220:1:248:1893:25c8:1946" `shouldBe` False
-        it "treats a malformed octet (256) as a name, not an internal IP" $
-            -- "10.0.0.256" is not a valid dotted-quad, so the parser does not read
-            -- it as the 10/8 literal it resembles.
-            isBlockedTarget noOptIn "10.0.0.256" `shouldBe` False
-        it "treats a non-numeric octet as a name, not an internal IP" $
-            isBlockedTarget noOptIn "10.0.0.x" `shouldBe` False
-        it "treats a dotted-quad with too few octets as a name" $
-            isBlockedTarget noOptIn "10.0.0" `shouldBe` False
-        it "treats an empty octet as a name" $
-            isBlockedTarget noOptIn "10..0.1" `shouldBe` False
-        it "does not block the empty host" $
-            -- The empty string parses as no IP literal, so it is not internal. The
-            -- host allowlist rejects it independently.
-            isBlockedTarget noOptIn "" `shouldBe` False
-
-    describe "deliberately treats RFC 5737 documentation ranges as external" $ do
-        -- A tripwire, not plain coverage. The e2e suite runs on a docker network in TEST-NET-3
-        -- (203.0.113.0/24) and needs these ranges reachable. A documentation range never
-        -- aliases a real service, so blocking it adds no SSRF protection.
-        it "does not block TEST-NET-3 203.0.113.0/24 (the e2e network subnet)" $
-            isBlockedTarget noOptIn "203.0.113.2" `shouldBe` False
-        it "does not block TEST-NET-1 192.0.2.0/24" $
-            isBlockedTarget noOptIn "192.0.2.1" `shouldBe` False
-        it "does not block TEST-NET-2 198.51.100.0/24" $
-            isBlockedTarget noOptIn "198.51.100.1" `shouldBe` False
-
-    describe "operator-configured additional blocked ranges" $ do
-        let testNet3 = ["203.0.113.0/24"] :: [IPRange]
-        it "blocks a host matched by an additional range not in the fixed set" $
-            isBlockedTarget testNet3 "203.0.113.5" `shouldBe` True
-        it "leaves a host outside every additional range unblocked" $ do
-            isBlockedTarget testNet3 "8.8.8.8" `shouldBe` False
-            isBlockedTarget testNet3 "203.0.114.1" `shouldBe` False
-        it "unions the additional ranges with the fixed set rather than replacing it" $
-            -- The block still catches a fixed-range address (10/8) alongside an
-            -- unrelated additional range: additional ranges only ever widen the block.
-            isBlockedTarget testNet3 "10.1.2.3" `shouldBe` True
-        it "blocks an IPv6 host matched by an additional range" $
-            isBlockedTarget ["2001:db8::/32"] "2001:db8::1" `shouldBe` True
-        it "does not block a DNS name even when it lexically resembles a blocked range" $
-            isBlockedTarget testNet3 "203.0.113.example.com" `shouldBe` False
-
-    describe "coerces an IPv4 octet as inet_aton does (leading-zero octal, 0x hex)" $ do
-        -- The block reads each octet in the base a libc resolver would, so it tests the
-        -- address actually dialled. The smoke oracle ("Ecluse.Core.Security.HostSmokeSpec")
-        -- validates these expectations against the real 'getAddrInfo'.
-        it "blocks 0012.0.0.1 -- octal 0012 = 10.0.0.1, an RFC1918 address" $
-            -- The reported under-block: a decimal reading sees 12 (public) and lets it
-            -- through. Octal reads 10, the internal address the resolver actually dials.
-            isBlockedTarget noOptIn "0012.0.0.1" `shouldBe` True
-        it "blocks 0177.0.0.1 -- octal 0177 = 127.0.0.1, loopback" $
-            isBlockedTarget noOptIn "0177.0.0.1" `shouldBe` True
-        it "blocks 0x7f.0.0.1 -- hex 0x7f = 127.0.0.1, loopback" $
-            isBlockedTarget noOptIn "0x7f.0.0.1" `shouldBe` True
-        it "does not block 010.0.0.1 -- octal 010 = 8.0.0.1, a public address" $
-            -- A decimal misreading over-blocks this as 10.0.0.1. Octal is 8.0.0.1, which
-            -- the resolver confirms is public, so the literal layer must not block it.
-            isBlockedTarget noOptIn "010.0.0.1" `shouldBe` False
-        it "does not block 0127.0.0.1 -- octal 0127 = 87.0.0.1, a public address" $
-            isBlockedTarget noOptIn "0127.0.0.1" `shouldBe` False
-        it "treats 08.0.0.1 as a name -- 8 is not an octal digit (a resolver rejects it)" $
-            isBlockedTarget noOptIn "08.0.0.1" `shouldBe` False
-        it "treats 0400.0.0.1 as a name -- octal 0400 = 256 overflows an octet" $
-            isBlockedTarget noOptIn "0400.0.0.1" `shouldBe` False
-        it "does not block the short 32-bit form 2130706433 (not a four-part literal here)" $
-            -- inet_aton resolves this to 127.0.0.1, but the four-part recogniser does not model
-            -- the short forms. The allowlist and certificate validation constrain such names.
-            isBlockedTarget noOptIn "2130706433" `shouldBe` False
-
-{- | The blocked-vs-allowed classification of 'isBlockedTarget', pinned against an explicit
-expected table rather than any prior implementation. A leading-zero octet coerces as octal, as a
-libc resolver does: @0012.0.0.1@ is @10.0.0.1@ and blocks, while @010.0.0.1@ (@8.0.0.1@) and
-@0127.0.0.1@ (@87.0.0.1@) are public and do not. A @0x@ octet is hexadecimal. @fe80::1ffff@
-overflows 16 bits, so it stays a name the allowlist constrains.
+{- | Every blocked-vs-allowed classification 'isBlockedTarget' owes under the fixed range set,
+pinned against an explicit expected table rather than any prior implementation. A leading-zero
+octet coerces as octal, as a libc resolver does: @0012.0.0.1@ is @10.0.0.1@ and blocks, while
+@010.0.0.1@ (@8.0.0.1@) and @0127.0.0.1@ (@87.0.0.1@) are public and do not. A @0x@ octet is
+hexadecimal. @fe80::1ffff@ overflows 16 bits, so it stays a name the allowlist constrains.
 -}
 classificationCorpusSpec :: Spec
 classificationCorpusSpec =
@@ -321,6 +126,7 @@ classificationCorpusSpec =
             <> mappedV4
             <> nat64Embedded
             <> lenientBoundary
+            <> documentationRanges
             <> externals
             <> names
 
@@ -354,8 +160,11 @@ classificationCorpusSpec =
         [ ("::ffff:169.254.169.254", True) -- IMDSv4 mapped, dotted spelling
         , ("::ffff:a9fe:a9fe", True) -- IMDSv4 mapped, hex spelling
         , ("::ffff:127.0.0.1", True) -- mapped loopback
+        , ("::ffff:7f00:1", True) -- mapped loopback, hex spelling
         , ("0:0:0:0:0:ffff:127.0.0.1", True) -- mapped loopback, fully expanded
+        , ("::ffff:a00:1", True) -- mapped RFC1918 10/8, hex spelling
         , ("::ffff:1.1.1.1", False) -- mapped public stays permitted
+        , ("::ffff:101:101", False) -- mapped public, hex spelling
         , ("::169.254.169.254", True) -- IMDSv4 compatible
         , ("::127.0.0.1", True) -- compatible loopback
         , ("0:0:0:0:0:0:127.0.0.1", True) -- compatible loopback, fully expanded
@@ -383,28 +192,45 @@ classificationCorpusSpec =
         , ("fe80::1ffff", False) -- over-16-bit group is not a literal
         ]
 
+    -- A tripwire, not plain coverage. The e2e suite runs on a docker network in TEST-NET-3
+    -- and needs these ranges reachable. A documentation range never aliases a real service,
+    -- so blocking it adds no SSRF protection.
+    documentationRanges =
+        [ ("203.0.113.2", False) -- TEST-NET-3 203.0.113.0/24, the e2e network subnet
+        , ("192.0.2.1", False) -- TEST-NET-1 192.0.2.0/24
+        , ("198.51.100.1", False) -- TEST-NET-2 198.51.100.0/24
+        ]
+
     externals =
         [ ("8.8.8.8", False)
         , ("1.1.1.1", False)
         , ("93.184.216.34", False)
         , ("172.32.0.1", False) -- just above the 172.16/12 block
         , ("11.0.0.1", False) -- just above 10/8
+        , ("1.0.0.0", False) -- just above the 0/8 this-host block
         , ("100.63.255.255", False) -- just below CGNAT
         , ("100.128.0.1", False) -- just above CGNAT
         , ("2606:4700::1111", False)
+        , ("2606:2800:220:1:248:1893:25c8:1946", False) -- a fully written public IPv6 address
         , ("2001:db8::1", False)
         , ("fbff::1", False) -- just below fc00::/7
         , ("fe00::1", False) -- between fc00::/7 and fe80::/10
         ]
 
+    -- Each of these must fail to parse as an IP, so nothing mistakes it for an internal
+    -- literal. The allowlist still gates a real name.
     names =
         [ ("registry.npmjs.org", False) -- a DNS name
         , ("", False) -- empty
         , ("10.0.0.256", False) -- octet out of range → not a literal
         , ("10.0.0.x", False) -- non-numeric octet → not a literal
         , ("10.0.0", False) -- too few octets → not a literal
+        , ("10..0.1", False) -- empty octet → not a literal
         , ("2130706433", False) -- a bare 32-bit number: a short inet_aton form, not modelled here
         , ("1::2::3", False) -- two "::" → malformed
+        , ("1:2:3:4:5:6:7:8::", False) -- compressed though eight groups are already written
+        , ("1:2:3", False) -- uncompressed with the wrong group count
+        , ("fe80::zz", False) -- a non-hex group
         , ("::ffff:1.2.3.4.5", False) -- mapped form with a bad embedded IPv4
         ]
 
