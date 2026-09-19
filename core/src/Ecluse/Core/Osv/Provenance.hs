@@ -21,6 +21,7 @@ module Ecluse.Core.Osv.Provenance (
     -- * Source timestamps
     parseSourceTime,
     parseHttpDate,
+    lastModifiedOf,
 
     -- * The quiet-time reading
     QuietTime (..),
@@ -134,6 +135,10 @@ parseSourceTime raw = rfc3339 <|> offsetWithoutColon <|> startOfDay
 -- | The instant an HTTP @Last-Modified@ header names, or 'Nothing' when it is unreadable.
 parseHttpDate :: Text -> Maybe UTCTime
 parseHttpDate raw = parseTimeM True defaultTimeLocale "%a, %d %b %Y %H:%M:%S %Z" (toString (T.strip raw))
+
+-- | The instant a response's @Last-Modified@ names. An absent or unreadable header records nothing.
+lastModifiedOf :: [ByteString] -> Maybe UTCTime
+lastModifiedOf = (parseHttpDate . decodeUtf8 =<<) . listToMaybe
 
 {- | How old each source may be before Pilot raises its alarm. Loud ecosystems take a short
 threshold and slow ones a long threshold, so a quiet feed is not read as a stalled one.

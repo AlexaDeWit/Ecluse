@@ -47,7 +47,7 @@ import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv, OsvAdvisory, extPackage, extractFromAdvisory, orderableBounds, osvId, osvModified, unorderableBounds)
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvEcosystemTag, osvMaxAdvisoryFanOut))
 import Ecluse.Core.Osv.Epss (EpssScores)
-import Ecluse.Core.Osv.Provenance (parseHttpDate, parseSourceTime)
+import Ecluse.Core.Osv.Provenance (lastModifiedOf, parseSourceTime)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Telemetry.Span (closeOptionalSpan, openOptionalSpan)
 
@@ -259,12 +259,11 @@ warnOnFanOut ingest adv extracted =
     n = length extracted
     limit = osvMaxAdvisoryFanOut (ingestEcosystem ingest)
 
--- The export's own @Last-Modified@, from the response that carried the rows. An absent or
--- unreadable header records nothing.
+-- The export's own @Last-Modified@, from the response that carried the rows.
 recordResponseDate :: (MonadIO m) => OsvIngest -> [ByteString] -> m ()
 recordResponseDate ingest headers =
     modifyIORef' (ingestAttempt ingest) $ \attempt ->
-        attempt{oaLastModified = parseHttpDate . decodeUtf8 =<< listToMaybe headers}
+        attempt{oaLastModified = lastModifiedOf headers}
 
 -- A date no grammar reads, and a date the source cannot know yet, are both counted and both
 -- dropped from the reading, never clamped. The record's rows are kept either way.

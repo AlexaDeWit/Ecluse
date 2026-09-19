@@ -39,7 +39,7 @@ import Katip (KatipContext, Severity (InfoS), logFM, ls)
 import Network.HTTP.Simple (getResponseBody, getResponseHeader, httpSource, parseRequest, setRequestCheckStatus)
 import Network.HTTP.Types.Header (hLastModified)
 
-import Ecluse.Core.Osv.Provenance (parseHttpDate, parseSourceTime)
+import Ecluse.Core.Osv.Provenance (lastModifiedOf, parseSourceTime)
 import Ecluse.Core.Security.Authority (authorityLabel)
 import Ecluse.Core.Stream (boundBytes)
 
@@ -165,7 +165,7 @@ fetchEpssScores cap urlStr = do
     -- describe one fetch.
     (decoded, served) <- runConduit $ httpSource req $ \res -> do
         accumulated <- getResponseBody res .| decodeEpssFeed cap
-        pure (accumulated, responseDate res)
+        pure (accumulated, lastModifiedOf (getResponseHeader hLastModified res))
     let scores = faScores decoded
     when (epssScoreCount scores == 0) (throwM EpssFeedEmpty)
     logFM InfoS (ls ("Ingested " <> show (epssScoreCount scores) <> " EPSS scores from " <> authorityLabel (toText urlStr)))
@@ -176,8 +176,6 @@ fetchEpssScores cap urlStr = do
             , efScoreDate = epScoreDate (faPreamble decoded)
             , efModelVersion = epModelVersion (faPreamble decoded)
             }
-  where
-    responseDate res = parseHttpDate . decodeUtf8 =<< listToMaybe (getResponseHeader hLastModified res)
 
 -- The running decode of one feed: the preamble the first line carries, and the scores the
 -- rest of them do.
