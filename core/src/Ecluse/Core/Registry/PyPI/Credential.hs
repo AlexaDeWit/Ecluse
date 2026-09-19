@@ -20,7 +20,7 @@ import Data.Text qualified as T
 import Network.HTTP.Types.Header (RequestHeaders, hAuthorization)
 
 import Ecluse.Core.Credential (ClientCredential (ClientCredential, credSecret, credUsername), mkSecret, unSecret)
-import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
+import Ecluse.Core.Registry.Request (CredentialMapping, authorizationUnder, credentialMapping)
 
 {- | PyPI's credential mapping: HTTP Basic over @Authorization@ in both directions. The PyPI adapter
 registers it on 'Ecluse.Core.Registry.Adapter.Types.serveCredential'.
@@ -32,10 +32,8 @@ pypiCredential = credentialMapping recoverBasic hAuthorization renderBasic
 -- undecodable base64, no colon, an empty password, or no header yields 'Nothing'.
 recoverBasic :: RequestHeaders -> Maybe ClientCredential
 recoverBasic headers = do
-    (_, raw) <- find ((== hAuthorization) . fst) headers
-    let (scheme, rest) = T.break (== ' ') (decodeUtf8 raw)
-    guard (T.toLower scheme == "basic")
-    decoded <- decodeBase64 (encodeUtf8 (T.dropWhile (== ' ') rest))
+    encoded <- authorizationUnder "basic" headers
+    decoded <- decodeBase64 (encodeUtf8 encoded)
     let (username, afterUser) = T.break (== ':') (decodeUtf8 decoded)
     password <- T.stripPrefix ":" afterUser
     guard (not (T.null password))

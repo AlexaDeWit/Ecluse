@@ -20,7 +20,7 @@ import Data.Text qualified as T
 import Network.HTTP.Types.Header (RequestHeaders, hAuthorization)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), bareCredential, mkSecret, unSecret)
-import Ecluse.Core.Registry.Request (CredentialMapping, credentialMapping)
+import Ecluse.Core.Registry.Request (CredentialMapping, authorizationUnder, credentialMapping)
 
 {- | npm's credential mapping: @Bearer@ over @Authorization@ in both directions. The npm
 adapter registers it on 'Ecluse.Core.Registry.Adapter.Types.serveCredential'.
@@ -32,11 +32,7 @@ npmCredential = credentialMapping recoverBearer hAuthorization renderBearer
 -- empty token, or no header yields 'Nothing'.
 recoverBearer :: RequestHeaders -> Maybe ClientCredential
 recoverBearer headers = do
-    (_, raw) <- find ((== hAuthorization) . fst) headers
-    let value = decodeUtf8 raw
-        (scheme, rest) = T.break (== ' ') value
-    guard (T.toLower scheme == "bearer")
-    let token = T.dropWhile (== ' ') rest
+    token <- authorizationUnder "bearer" headers
     guard (not (T.null token))
     pure (bareCredential (mkSecret token))
 

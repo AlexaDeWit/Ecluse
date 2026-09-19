@@ -20,6 +20,7 @@ module Ecluse.Core.Registry.Request (
     credentialMapping,
     credentialRecover,
     attachCredential,
+    authorizationUnder,
 
     -- * Conditional-GET validators
     Validators (..),
@@ -34,7 +35,14 @@ module Ecluse.Core.Registry.Request (
 
 import Data.Text qualified as T
 import Network.HTTP.Client (Request (decompress, redirectCount, requestHeaders), parseRequest)
-import Network.HTTP.Types.Header (HeaderName, RequestHeaders, hIfModifiedSince, hIfNoneMatch, hUserAgent)
+import Network.HTTP.Types.Header (
+    HeaderName,
+    RequestHeaders,
+    hAuthorization,
+    hIfModifiedSince,
+    hIfNoneMatch,
+    hUserAgent,
+ )
 
 import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Credential (ClientCredential)
@@ -106,6 +114,16 @@ attachCredential mapping credential = finaliseRequest $ case credential of
             { requestHeaders =
                 (credentialHeader mapping, credentialRender mapping presented) : requestHeaders request
             }
+
+{- | The first @Authorization@ header's remainder when it carries @scheme@ (compared without
+case), with the separating spaces dropped. Another scheme or no header yields 'Nothing'.
+-}
+authorizationUnder :: Text -> RequestHeaders -> Maybe Text
+authorizationUnder scheme headers = do
+    (_, raw) <- find ((== hAuthorization) . fst) headers
+    let (presented, rest) = T.break (== ' ') (decodeUtf8 raw)
+    guard (T.toLower presented == T.toLower scheme)
+    pure (T.dropWhile (== ' ') rest)
 
 {- | The conditional-GET validators to relay on a metadata fetch. Replaying them lets the
 upstream answer @304 Not Modified@ with no body on a cache revalidation.
