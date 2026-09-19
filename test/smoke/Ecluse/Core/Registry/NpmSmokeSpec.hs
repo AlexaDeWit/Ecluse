@@ -42,35 +42,21 @@ gate a merge, and each case __pends__ rather than fails when the network is unav
 spec :: Spec
 spec = describe "live registry protocol (npm / PyPI)" $ do
     it "decodes a real abbreviated packument from the public npm registry" $ do
-        (code, out, _err) <-
-            readProcessWithExitCode
-                "curl"
-                [ "-sf"
-                , "-H"
-                , "Accept: " <> abbreviatedAccept
-                , registryBase <> "/is-odd"
-                ]
-                ""
-        case code of
-            ExitFailure _ ->
-                pendingWith
-                    "npm registry unreachable (offline or curl unavailable); smoke test skipped"
-            ExitSuccess ->
-                case eitherDecodeStrict (encodeUtf8 out) :: Either String Value of
+        document <- liveRegistryDocument ["-H", "Accept: " <> abbreviatedAccept] "/is-odd"
+        case document of
+            Nothing -> pendingWith registryUnreadable
+            Just value ->
+                case parsePackageInfoFromValue (mkPackageName Npm Nothing "is-odd") value of
                     Left err ->
-                        expectationFailure ("abbreviated packument failed to decode: " <> err)
-                    Right value ->
-                        case parsePackageInfoFromValue (mkPackageName Npm Nothing "is-odd") value of
-                            Left err ->
-                                expectationFailure ("abbreviated packument failed to project: " <> show err)
-                            Right (NameMismatch reported) ->
-                                expectationFailure ("abbreviated packument self-reported a different name: " <> toString reported)
-                            Right (Projected info) -> do
-                                -- The live decoder still matches reality: the packument
-                                -- projects, and dist-tags always carries `latest`.
-                                renderPackageName (infoName info) `shouldBe` "is-odd"
-                                Map.member "latest" (infoDistTags info) `shouldBe` True
-                                Map.null (infoVersions info) `shouldBe` False
+                        expectationFailure ("abbreviated packument failed to project: " <> show err)
+                    Right (NameMismatch reported) ->
+                        expectationFailure ("abbreviated packument self-reported a different name: " <> toString reported)
+                    Right (Projected info) -> do
+                        -- The live decoder still matches reality: the packument
+                        -- projects, and dist-tags always carries `latest`.
+                        renderPackageName (infoName info) `shouldBe` "is-odd"
+                        Map.member "latest" (infoDistTags info) `shouldBe` True
+                        Map.null (infoVersions info) `shouldBe` False
 
     it "a bounded fetch of a real package projects to PackageInfo (full data plane)" $ do
         manager <- newManager tlsManagerSettings
@@ -96,23 +82,18 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
         -- would silently drop a legitimate version to "no integrity". The lodash packument spans
         -- the legacy `dist.shasum` (SHA-1) and modern `dist.integrity` (SRI) eras. This checks
         -- well-formedness, not the public floor.
-        (code, out, _err) <-
-            readProcessWithExitCode "curl" ["-sf", registryBase <> "/lodash"] ""
-        case code of
-            ExitFailure _ ->
-                pendingWith "npm registry unreachable (offline or curl unavailable); smoke test skipped"
-            ExitSuccess ->
-                case eitherDecodeStrict (encodeUtf8 out) :: Either String Value of
-                    Left err -> expectationFailure ("lodash packument failed to decode: " <> err)
-                    Right value -> do
-                        let digests = collectDistDigests value
-                        -- Non-vacuous: the packument carried both digest kinds, so the
-                        -- assertion spans both the legacy and modern eras.
-                        any ((== SHA1) . fst) digests `shouldBe` True
-                        any ((== SRI) . fst) digests `shouldBe` True
-                        -- Every real digest validates through the same mkHash the projection
-                        -- uses. A Left here is our validator false-rejecting a real format.
-                        [(alg, d) | (alg, d) <- digests, isLeft (mkHash alg d)] `shouldBe` []
+        document <- liveRegistryDocument [] "/lodash"
+        case document of
+            Nothing -> pendingWith registryUnreadable
+            Just value -> do
+                let digests = collectDistDigests value
+                -- Non-vacuous: the packument carried both digest kinds, so the
+                -- assertion spans both the legacy and modern eras.
+                any ((== SHA1) . fst) digests `shouldBe` True
+                any ((== SRI) . fst) digests `shouldBe` True
+                -- Every real digest validates through the same mkHash the projection
+                -- uses. A Left here is our validator false-rejecting a real format.
+                [(alg, d) | (alg, d) <- digests, isLeft (mkHash alg d)] `shouldBe` []
 
     -- The default Limits must not false-positive on real data: each large, widely-trusted
     -- package's full packument stays admissible under the defaults (security.md invariant 4).
@@ -130,9 +111,30 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
                     name `shouldBe` pkg
                     versionCount `shouldSatisfy` (> 0)
                     versionCount `shouldSatisfy` (<= maxVersionCount defaultLimits)
-  where
-    registryBase = "https://registry.npmjs.org"
-    abbreviatedAccept = "application/vnd.npm.install-v1+json"
+
+registryBase :: String
+registryBase = "https://registry.npmjs.org"
+
+abbreviatedAccept :: String
+abbreviatedAccept = "application/vnd.npm.install-v1+json"
+
+-- Both curl reads pend for the same two causes, so they report them the same way.
+registryUnreadable :: String
+registryUnreadable = "npm registry unreachable (offline or curl unavailable); smoke test skipped"
+
+{- | A live registry document under 'registryBase'. 'Nothing' means curl or the registry was
+unavailable, while a document that arrives and does not decode fails the case.
+-}
+liveRegistryDocument :: [String] -> String -> IO (Maybe Value)
+liveRegistryDocument extraArgs path = do
+    (code, out, _err) <- readProcessWithExitCode "curl" (["-sf"] <> extraArgs <> [registryBase <> path]) ""
+    case code of
+        ExitFailure _ -> pure Nothing
+        ExitSuccess ->
+            either
+                (\err -> fail (path <> " failed to decode: " <> err))
+                (pure . Just)
+                (eitherDecodeStrict (encodeUtf8 out))
 
 {- | Run the bounded fetch, decode, nesting, projection, and version-count sequence the serve path
 applies, over a live full packument under the default 'Limits'. It throws when any bound refuses
