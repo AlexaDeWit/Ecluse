@@ -851,6 +851,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Worker.LoopSpec
     Ecluse.Core.Worker.RealiseSpec
     Ecluse.Queue.Support
+    Ecluse.Rules.Support
+    Ecluse.Security.Support
     Ecluse.Test.Container.ImageSpec
     Ecluse.Test.LogSpec
     Ecluse.Test.MaintenanceSpec

@@ -8,7 +8,7 @@ Advisory regressions preserve ecosystem identity and display spelling.
 module Ecluse.Core.RulesSpec (spec) where
 
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, fromGregorian, nominalDay)
+import Data.Time (NominalDiffTime, addUTCTime, nominalDay)
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
@@ -40,25 +40,7 @@ import Ecluse.Core.Rules
 import Ecluse.Core.Rules.Effectful (EffectfulConfig (ecBreakerCooldown, ecBreakerThreshold))
 import Ecluse.Core.Rules.Freshness
 import Ecluse.Core.Rules.Types
-
--- | A fixed "now" so age-based tests are deterministic.
-now :: UTCTime
-now = UTCTime (fromGregorian 2026 6 20) 0
-
-ctx :: EvalContext
-ctx = EvalContext now Nothing
-
-{- | A package version under an optional npm scope, published @ageDays@ days before 'now'.
-The rules under test read only the scope, the publish age, and the install-code signal.
--}
-pkg :: Maybe Text -> Integer -> RuleEvidence
-pkg mScope ageDays = completeEvidence details
-  where
-    details =
-        (sampleDetails (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0)
-            { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
-            , pkgLicenses = ["MIT"]
-            }
+import Ecluse.Rules.Support (ctx, now, pkg, sixDayLimit)
 
 isAllow :: RuleVerdict -> Bool
 isAllow (Allow _) = True
@@ -151,12 +133,6 @@ genFiringRule scopeTxt =
 canonical :: Decision -> Decision
 canonical (BlockedByDefault reasons) = BlockedByDefault (sort reasons)
 canonical d = d
-
-{- | The maximum a mount deriving from a seven-day quarantine gets: six days. Every reading
-below is taken against it, so the boundary cases read as an operator's would.
--}
-sixDayLimit :: MaxAdvisoryAge
-sixDayLimit = maxAdvisoryAgeFor Nothing [AllowIfOlderThan (7 * nominalDay)]
 
 -- | Capabilities whose serving artifact was pushed the given age before 'now'.
 pushedAgo :: NominalDiffTime -> RuleDeps -> RuleDeps

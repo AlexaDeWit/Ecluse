@@ -19,8 +19,9 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Queue.Buffer (
     newEnqueueBuffer,
  )
-import Ecluse.Queue.Support (otherJob, thirdJob, unwrap)
+import Ecluse.Queue.Support (otherJob, thirdJob)
 import Ecluse.Test.Queue (sampleJob)
+import Ecluse.Test.Support (expectRightIO)
 
 -- | Tests the contract module's buffered producer hand-off.
 spec :: Spec
@@ -30,7 +31,7 @@ spec = do
             delivered <- newIORef []
             (q, drainLoop) <- newEnqueueBuffer 8 (const pass) (\_ _ -> pass) (recordingBackend delivered)
             withAsync drainLoop $ \_ -> do
-                traverse_ (unwrap . enqueue q) [sampleJob, otherJob, thirdJob]
+                traverse_ (expectRightIO . enqueue q) [sampleJob, otherJob, thirdJob]
                 awaitUntil ((== (3 :: Int)) . length <$> readIORef delivered)
             readIORef delivered `shouldReturn` [sampleJob, otherJob, thirdJob]
 
@@ -41,7 +42,7 @@ spec = do
             delivered <- newIORef []
             drops <- newIORef []
             (q, _drainLoop) <- newEnqueueBuffer 2 (\n -> modifyIORef' drops (<> [n])) (\_ _ -> pass) (recordingBackend delivered)
-            traverse_ (unwrap . enqueue q) [sampleJob, otherJob, thirdJob, thirdJob]
+            traverse_ (expectRightIO . enqueue q) [sampleJob, otherJob, thirdJob, thirdJob]
             readIORef drops `shouldReturn` [1, 2]
             readIORef delivered `shouldReturn` [] -- nothing drained, nothing delivered
         it "keeps draining past a backend delivery fault, reporting its total and detail" $ do
@@ -60,7 +61,7 @@ spec = do
                     (\n detail -> modifyIORef' failures (<> [(n, detail)]))
                     (recordingBackend delivered){enqueue = flaky}
             withAsync drainLoop $ \_ -> do
-                traverse_ (unwrap . enqueue q) [sampleJob, otherJob]
+                traverse_ (expectRightIO . enqueue q) [sampleJob, otherJob]
                 awaitUntil ((== (1 :: Int)) . length <$> readIORef delivered)
             -- The typed fault's detail arrives verbatim on the failure callback.
             readIORef failures `shouldReturn` [(1, "backend unavailable")]

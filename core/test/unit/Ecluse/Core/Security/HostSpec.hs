@@ -16,7 +16,6 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Security (
-    AllowedHostPorts,
     HostPort (HostPort, hpHost),
     Origin (TrustedOrigin, UntrustedOrigin),
     allowedHostPorts,
@@ -29,27 +28,7 @@ import Ecluse.Core.Security (
     thgAllowlist,
     thgEcosystemHosts,
  )
-
-{- | The raw configured upstream authorities, mixed case on purpose, so a case can extend them
-before normalising through 'allowedHostPorts'. Every entry is portless, so each authorises 443
-alone.
--}
-upstreamHosts :: Set.Set HostPort
-upstreamHosts = Set.fromList [hp "registry.npmjs.org", hp "Private.Internal.Example.com"]
-
-{- | The configured upstreams, normalised through 'allowedHostPorts', the only way to
-obtain the 'AllowedHostPorts' the host guards take.
--}
-upstreams :: AllowedHostPorts
-upstreams = allowedHostPorts upstreamHosts
-
--- | An authority on the https default port: what a URL with no written port dials.
-hp :: Text -> HostPort
-hp host = HostPort host 443
-
--- | An authority on an explicit port.
-hpAt :: Text -> Word16 -> HostPort
-hpAt = HostPort
+import Ecluse.Security.Support (hp, hpAt, upstreamHosts, upstreams)
 
 spec :: Spec
 spec = do
