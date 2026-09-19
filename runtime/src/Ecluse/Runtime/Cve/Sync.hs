@@ -210,8 +210,8 @@ then the burst concedes to the steady poll. The poll interval, not this, is the 
 bootBackoffDelays :: [Int]
 bootBackoffDelays = [1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000]
 
-{- | The shipped gap, in microseconds, between repeats of the unloaded-database and
-fetch-failure reports, so a stuck rollout keeps saying so without filling the log.
+{- | The shipped gap, in microseconds, between repeats of the unloaded-database and fetch-failure
+reports. The rules' outage reminder paces on the same gap.
 -}
 absentReportInterval :: Int
 absentReportInterval = 900_000_000

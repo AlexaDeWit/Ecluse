@@ -9,14 +9,6 @@ and 'ConsoleLog' the human-readable bracketed form for local development. Colour
 either way, so a captured JSON line stays valid JSON. A bearer token reaches no field here: it
 is the redacted @Secret@ of "Ecluse.Core.Credential", and a URL is reduced to its authority
 before it names anything in a line.
-
-== The JSON line
-
-'jsonLine' renders the reserved attributes a Datadog-class collector reads without a custom
-pipeline: @timestamp@, @status@, @message@, the @service@\/@env@\/@version@ identity resolved
-once at boot, @dd.trace_id@ and @dd.span_id@ when a span is in scope, @data@ for the per-call
-payload, and @katip@ for the emitter's own fields, nested so they cannot collide with a
-reserved top-level attribute.
 -}
 module Ecluse.Runtime.Log (
     -- * Log format
@@ -210,7 +202,8 @@ jsonLineFormat :: (LogItem a) => DdContext -> ItemFormatter a
 jsonLineFormat logIdentity _colourise verb logItem =
     TB.fromLazyText (encodeToLazyText (jsonLine logIdentity verb logItem))
 
--- The rendered JSON log line, assembled from the reserved attributes and the optional ones.
+{- The emitter's own @katip@ fields nest under @katip@, so they cannot collide with a reserved
+top-level attribute a log backend reads. -}
 jsonLine :: (LogItem a) => DdContext -> Verbosity -> Item a -> Value
 jsonLine logIdentity verb logItem =
     Object (KeyMap.fromList (reservedFields context logItem structured katipObject <> whenPresent context))

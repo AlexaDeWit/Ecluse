@@ -95,9 +95,8 @@ data SqsConfig = SqsConfig
     processing window, so the worker does not re-fetch an unmirrorable artifact in a hot loop.
     -}
     , sqsMaxReceiveCount :: DeliveryBudget
-    {- ^ The configured __floor__ on deliveries before the worker retires a message.
-    'newSqsQueue' raises the effective budget past an attached redrive policy's own count,
-    so this floor never pre-empts a dead-letter queue's capture.
+    {- ^ The configured __floor__ on deliveries before the worker retires a message. 'newSqsQueue'
+    raises the budget past a redrive policy's count, so it never pre-empts a dead-letter capture.
     -}
     }
     deriving stock (Eq, Show)
