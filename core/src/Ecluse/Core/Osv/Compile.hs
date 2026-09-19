@@ -148,6 +148,15 @@ ingestAdvisories run ingest conn =
                 .| CL.chunksOf 2000
                 .| sinkSqlite conn
 
+data CompileConclusion = CompileConclusion
+    { ccEcosystem :: Text
+    , ccSources :: CompileSources
+    , ccStats :: IngestStats
+    , ccProvenance :: AdvisoryProvenance
+    , ccQuietTime :: QuietTime
+    , ccNow :: UTCTime
+    }
+
 conclusionOf :: CompileRun -> UTCTime -> EpssFeed -> OsvAttempt -> IngestStats -> CompileConclusion
 conclusionOf run now feed attempt stats =
     CompileConclusion
@@ -167,15 +176,6 @@ newCandidate outDir = do
 
 removeCandidate :: FilePath -> IO ()
 removeCandidate path = catchIOError (removeFile path) (const $ pure ())
-
-data CompileConclusion = CompileConclusion
-    { ccEcosystem :: Text
-    , ccSources :: CompileSources
-    , ccStats :: IngestStats
-    , ccProvenance :: AdvisoryProvenance
-    , ccQuietTime :: QuietTime
-    , ccNow :: UTCTime
-    }
 
 -- The sources one finished pass read, as they described themselves. The identities are
 -- credential-free, because the artifact travels to every consumer.

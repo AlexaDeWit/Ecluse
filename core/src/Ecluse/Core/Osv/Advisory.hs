@@ -37,10 +37,6 @@ import Ecluse.Core.Package (canonicalise)
 import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Core.Version (parseVersionKey)
 
--- | Build the ecosystem archive URL under a configured OSV export base.
-osvExportUrl :: Text -> Text -> String
-osvExportUrl baseUrl ecosystem = toString (joinUrlPath baseUrl (ecosystem <> "/all.zip"))
-
 -- | The OSV fields used to select and score active advisory evidence.
 data OsvAdvisory = OsvAdvisory
     { osvId :: Text
@@ -287,3 +283,7 @@ extractRange = go Nothing
         | Just f <- eventFixed e = rangeSegment current (FixedBefore f) : go Nothing es
         | Just la <- eventLastAffected e = rangeSegment current (LastAffected la) : go Nothing es
         | otherwise = go current es
+
+-- | Build the ecosystem archive URL under a configured OSV export base.
+osvExportUrl :: Text -> Text -> String
+osvExportUrl baseUrl ecosystem = toString (joinUrlPath baseUrl (ecosystem <> "/all.zip"))
