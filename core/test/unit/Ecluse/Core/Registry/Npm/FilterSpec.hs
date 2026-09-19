@@ -104,8 +104,6 @@ publishedDaysAgo = NpmFixture.publishedDaysAgo now
 base :: Text
 base = "https://proxy.test/npm"
 
--- | The @{base}\/{pkg}@ prefix the assembly derives for the unscoped fixture package.
-
 {- | The served-URL renderer the assembly hands the rewrite: the artifact route's own path for
 @thing@, joined onto the mount base.
 -}
@@ -478,13 +476,9 @@ unparseableSurvivorPackument =
         ]
         [("1.0.0", publishedDaysAgo 30), ("banana", publishedDaysAgo 30)]
 
--- | A surviving single version carrying extra (unmodelled) keys.
+-- | A surviving single version with a top-level @_id@ extra, a version extra, and a dist extra.
 survivorWithExtras :: ByteString
-survivorWithExtras = packumentWithExtras
-
--- | A packument with a top-level @_id@ extra, a version extra, and a dist extra.
-packumentWithExtras :: ByteString
-packumentWithExtras =
+survivorWithExtras =
     encodePackument
         "thing"
         (Just [("_id", "\"thing\"")])

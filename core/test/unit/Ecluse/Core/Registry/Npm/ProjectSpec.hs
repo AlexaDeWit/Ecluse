@@ -724,8 +724,6 @@ routeNameOf v = npmName (nameOf v)
                 mkPackageName Npm (Just (mkScope scopeText)) bare
         _ -> mkPackageName Npm Nothing raw
 
--- | Validate fixtures against their own reported package identity through the production projection.
-
 -- | The refusal text 'projectName' gives a name, or 'Nothing' when the name parses.
 refusalOf :: Text -> Maybe Text
 refusalOf raw = case projectName raw of
