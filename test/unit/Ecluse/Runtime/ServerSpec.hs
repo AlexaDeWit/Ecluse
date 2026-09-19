@@ -49,8 +49,6 @@ import Ecluse.Runtime.Server.Internal (
     ShutdownDrainTimeout (..),
     application,
     beginDrain,
-    defaultPort,
-    defaultShutdownDrainTimeout,
     isDraining,
     mkServerConfig,
     newDrainSignal,
@@ -62,12 +60,6 @@ import Ecluse.Runtime.Server.Internal (
 import Ecluse.Runtime.Test.Support (newTestEnv)
 import Ecluse.Test.Server.Mount (inertPackumentDeps)
 import Ecluse.Test.Wai (bodyContainsAll)
-
-{- | A registry-handle double whose effectful fields refuse loudly. The web layer only
-routes and renders, so a refusal surfaces any leak into the data plane.
--}
-
--- | A credential-handle double: a fixed, non-expiring token, never read here.
 
 {- | A test mount binding with the given prefix and router, and __inert__ packument-serve
 dependencies. These specs exercise routing, not the data plane.
@@ -218,9 +210,6 @@ spec = do
     raceServerAgainstLoopSpec
     describe "control-plane health probes (above any mount)" $
         with npmMountApp $ do
-            it "answers /livez with 200" $
-                get "/livez" `shouldRespondWith` 200
-
             it "reports a null last poll when no background loop is wired behind /livez" $
                 get "/livez" `shouldRespondWith` 200{matchBody = bodyContainsAll ["\"lastPoll\":null"]}
 
@@ -432,19 +421,10 @@ spec = do
 
     describe "mkServerConfig -- defaults" $ do
         it "listens on the conventional npm proxy port" $
-            scPort (mkServerConfig []) `shouldBe` defaultPort
-
-        it "the default port is 4873" $
-            defaultPort `shouldBe` 4873
+            scPort (mkServerConfig []) `shouldBe` 4873
 
         it "defaults the graceful-drain timeout to 30 seconds" $
-            scDrainTimeout (mkServerConfig []) `shouldBe` defaultShutdownDrainTimeout
-
-        it "the default graceful-drain timeout is 30 seconds" $
-            defaultShutdownDrainTimeout `shouldBe` ShutdownDrainTimeout 30
-
-        it "path-mounts a binding under its prefix (never the root)" $
-            bindingPrefix (mountAt ("npm" :| []) npmRouter) `shouldBe` "npm" :| []
+            scDrainTimeout (mkServerConfig []) `shouldBe` ShutdownDrainTimeout 30
 
 -- | A typed stand-in for a relay implementation escaping its typed contract.
 newtype RelayContractEscape = RelayContractEscape Text

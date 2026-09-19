@@ -92,7 +92,9 @@ resolutionSpec = describe "resolveRuntimePlan precedence" $ do
         planCapabilities plan `shouldBe` (2, FromConfig)
         planMaxHeapBytes plan `shouldBe` (Just (400 * mib), FromConfig)
 
-    it "derives from the cgroup when config is omitted" $ do
+    it "derives from the cgroup when config is omitted, sizing the heap from the planned capabilities" $ do
+        -- The cgroup grants 2 cores while the RTS claimed 4, so the nursery the process
+        -- runs with is 2 x the allocation area, not 4 x.
         let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
             plan = resolveRuntimePlan noOverrides cgroup unpinned
         planCapabilities plan `shouldBe` (2, FromCgroup)
@@ -119,14 +121,6 @@ resolutionSpec = describe "resolveRuntimePlan precedence" $ do
         let live = unpinned{rpMaxHeapBytes = Just (300 * mib)}
             plan = resolveRuntimePlan noOverrides noCgroup live
         planMaxHeapBytes plan `shouldBe` (Just (300 * mib), FromRts)
-
-    it "sizes the derived heap ceiling from the planned capabilities, not the live count" $ do
-        -- The cgroup grants 2 cores while the RTS claimed 4, so the nursery the
-        -- process runs with is 2 x allocation area.
-        let cgroup = CgroupLimits{cgCpuCores = Just 2, cgMemoryMaxBytes = Just (512 * mib)}
-            plan = resolveRuntimePlan noOverrides cgroup unpinned
-        planMaxHeapBytes plan
-            `shouldBe` (Just (deriveMaxHeapBytes (512 * mib) 2 (64 * mib)), FromCgroup)
 
 ladderSpec :: Spec
 ladderSpec = describe "the capability ladder below the cgroup CPU quota" $ do
