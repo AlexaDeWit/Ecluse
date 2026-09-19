@@ -146,6 +146,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Publish
     Ecluse.Core.Registry.Npm.Request
     Ecluse.Core.Registry.Npm.Route
+    Ecluse.Core.Registry.Npm.Route.Internal
     Ecluse.Core.Registry.Npm.SelectiveDecode
     Ecluse.Core.Registry.Npm.Serve
     Ecluse.Core.Registry.Npm.Wire
@@ -169,6 +170,7 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Project
     Ecluse.Core.Registry.PyPI.Request
     Ecluse.Core.Registry.PyPI.Route
+    Ecluse.Core.Registry.PyPI.Route.Internal
     Ecluse.Core.Registry.PyPI.SelectiveDecode
     Ecluse.Core.Registry.PyPI.Wire
     Ecluse.Core.Registry.Request

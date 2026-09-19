@@ -35,7 +35,7 @@ import Test.Hspec
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, prefixFor)
 import Ecluse.Core.Registry.Adapter (adapterFor)
 import Ecluse.Core.Registry.Adapter.Types (AdapterServe (serveRoutes), RegistryAdapter (adapterServe))
-import Ecluse.Core.Registry.Npm.Route (npmRoutes)
+import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
 import Ecluse.Core.Server.Contract (ResponseDoc (responseStatus))
 import Ecluse.Core.Server.Route (matchRoute)
 import Ecluse.Core.Server.RouteDescription (RouteSpec (rsMethod, rsOutcomes))

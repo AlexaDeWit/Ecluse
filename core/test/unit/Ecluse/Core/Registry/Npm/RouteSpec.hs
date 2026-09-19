@@ -22,7 +22,7 @@ import Ecluse.Core.Package (
  )
 import Network.HTTP.Types.Method (Method, methodDelete, methodGet, methodPut)
 
-import Ecluse.Core.Registry.Npm.Route (npmRoutes, takePackage, tarballCoordinate)
+import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes, takePackage, tarballCoordinate)
 import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (Version, mkVersion)

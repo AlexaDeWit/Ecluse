@@ -19,10 +19,10 @@ import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName, renderPackageName)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName, projectName)
-import Ecluse.Core.Registry.PyPI.Route (
+import Ecluse.Core.Registry.PyPI.Route (distributionPath)
+import Ecluse.Core.Registry.PyPI.Route.Internal (
     PyPICap (PyPIFile, PyPIProject),
     artifactCoordinate,
-    distributionPath,
     pypiRoutes,
     takeProject,
  )
