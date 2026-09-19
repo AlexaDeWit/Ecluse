@@ -426,9 +426,12 @@ library ecluse-runtime
     Ecluse.Runtime.Aws.Fault
     Ecluse.Runtime.Aws.S3
     Ecluse.Runtime.Credential.CodeArtifact
+    Ecluse.Runtime.Credential.CodeArtifact.Internal
     Ecluse.Runtime.Cve.Sync
+    Ecluse.Runtime.Cve.Sync.Internal
     Ecluse.Runtime.Env
     Ecluse.Runtime.Log
+    Ecluse.Runtime.Log.Internal
     Ecluse.Runtime.Maintenance.CodeArtifact
     Ecluse.Runtime.Maintenance.CodeArtifact.Decide
     Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal

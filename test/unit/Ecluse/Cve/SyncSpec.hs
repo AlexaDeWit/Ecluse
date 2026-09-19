@@ -47,7 +47,7 @@ import Ecluse.Core.Server.Readiness (
  )
 import Ecluse.Core.Supervision (delayListPolicy)
 import Ecluse.Cve.Sync (AdvisoryNeed (..), CveSyncHandle (..), advisoryFreshnessFor, cveRuleDepsFor, cveSyncReadiness, cveSyncScheduleFor, katipOutageReporter, outageReportPeriod, planCveSync, reportPushAge, sweepStaleTemps, sweepStep)
-import Ecluse.Runtime.Cve.Sync (FetchedObject (..), SyncEnv (..), SyncHooks (..), SyncOutcome (..), SyncSchedule (..), absentReportInterval, bootBackoffDelays, runCveSync, syncStep)
+import Ecluse.Runtime.Cve.Sync.Internal (FetchedObject (..), SyncEnv (..), SyncHooks (..), SyncOutcome (..), SyncSchedule (..), absentReportInterval, bootBackoffDelays, runCveSync, syncStep)
 import Ecluse.Runtime.Test.Cve (fetchServingAt, headOnlyFetch, refusingFetch)
 import Ecluse.Test.Cve (fakeCveDb)
 import Ecluse.Test.Log (captureStdout, jsonLogEnv, newTestLogEnv, runQuietKatip)
