@@ -1137,7 +1137,7 @@ test-suite ecluse-integration
     Ecluse.Runtime.Cve.SyncIntegrationSpec
     Ecluse.Runtime.Pilot.ExportIntegrationSpec
     Ecluse.Runtime.Queue.SqsIntegrationSpec
-    Ecluse.Runtime.Server.GracefulShutdownIntegrationSpec
+    Ecluse.Runtime.ServerIntegrationSpec
     Ecluse.Runtime.Telemetry.InstrumentsIntegrationSpec
     Ecluse.Runtime.Telemetry.ScrapeIntegrationSpec
     Ecluse.Runtime.Telemetry.TracingIntegrationSpec

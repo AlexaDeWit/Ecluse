@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Runtime.Server.GracefulShutdownIntegrationSpec (spec) where
+module Ecluse.Runtime.ServerIntegrationSpec (spec) where
 
 import Network.HTTP.Client (
     Manager,
