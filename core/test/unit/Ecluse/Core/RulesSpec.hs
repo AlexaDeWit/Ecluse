@@ -31,6 +31,11 @@ import Ecluse.Test.Rules (
     atDefaultPrecedence,
     blockedBy,
     inertRuleDeps,
+    isAllow,
+    isBlockedByDefault,
+    isCannotVet,
+    isDeny,
+    isNoDecision,
     isUndecidable,
     withInstallScripts,
  )
@@ -42,29 +47,9 @@ import Ecluse.Core.Rules.Freshness
 import Ecluse.Core.Rules.Types
 import Ecluse.Rules.Support (ctx, now, pkg, sixDayLimit)
 
-isAllow :: RuleVerdict -> Bool
-isAllow (Allow _) = True
-isAllow _ = False
-
-isNoDecision :: RuleVerdict -> Bool
-isNoDecision (NoDecision _) = True
-isNoDecision _ = False
-
-isDeny :: RuleVerdict -> Bool
-isDeny (Deny _ _) = True
-isDeny _ = False
-
-isCannotVet :: RuleVerdict -> Bool
-isCannotVet (CannotVet _ _) = True
-isCannotVet _ = False
-
 -- | Identity alone for the fixture package, the evidence an authenticated store listing carries.
 listed :: Maybe Text -> RuleEvidence
 listed mScope = identityEvidence (mkPackageName Npm (mkScope <$> mScope) "thing") v1_0_0
-
-isBlockedByDefault :: Decision -> Bool
-isBlockedByDefault (BlockedByDefault _) = True
-isBlockedByDefault _ = False
 
 -- | Put a rule at an explicit precedence (the operator-override form).
 at :: Int -> Rule -> PrecededRule

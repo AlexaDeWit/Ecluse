@@ -43,6 +43,8 @@ import Ecluse.Test.Rules (
     admittedBy,
     blockedBy,
     inertRuleDeps,
+    isApproved,
+    isUnavailable,
     isUndecidable,
     withInstallScripts,
  )
@@ -137,14 +139,6 @@ capturingBreakerReporter = do
     breakerLog <- newIORef []
     pure (breakerLog, BreakerReporter (\b -> modifyIORef' breakerLog (<> [b])))
 
-isAdmitted :: Decision -> Bool
-isAdmitted = isJust . admittedBy
-
-isUnavailable :: RuleEvaluation -> Bool
-isUnavailable = \case
-    Unavailable{} -> True
-    _ -> False
-
 {- | The three decisive outcomes that compete in an equal-precedence tie: an allow, a deny,
 and a fail-closed 'CannotVet'.
 -}
@@ -238,12 +232,12 @@ spec = do
             -- still falls back to deny-by-default, never admitted blind.
             rule <- failingRule "EffAllow" 300 fastConfig FailNoDecision
             decision <- evalRules ctx [rule] (pkg Nothing 0)
-            isAdmitted decision `shouldBe` False
+            isApproved decision `shouldBe` False
 
         it "a fail-closed undecidable is not admitted (no survivor)" $ do
             rule <- failingRule "EffDeny" 300 fastConfig FailDeny
             decision <- evalRules ctx [rule] (pkg Nothing 0)
-            isAdmitted decision `shouldBe` False
+            isApproved decision `shouldBe` False
 
     describe "evalRules -- the direct-rule never-throws absorption" $ do
         it "a throwing direct rule resolves fail-closed as Undecidable naming the rule" $ do
