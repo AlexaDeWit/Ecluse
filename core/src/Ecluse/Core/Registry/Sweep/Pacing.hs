@@ -27,7 +27,6 @@ module Ecluse.Core.Registry.Sweep.Pacing (
 
 import Data.Map.Strict qualified as Map
 import Data.Ratio ((%))
-import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 
 import Ecluse.Core.Registry.Maintenance.Budget (
@@ -40,8 +39,8 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     budgetDeclared,
     oneRequest,
     paceOf,
-    quotaDimensionName,
     renderQuotaScope,
+    renderRates,
     renderStoreBudget,
     requestKinds,
     smallestQuota,
@@ -239,9 +238,3 @@ renderScopeBudget pacing budget =
         | Map.null resolved = "none"
         | otherwise = renderRates resolved
     resolved = ceilingsFor fraction budget
-
-renderRates :: Map QuotaDimension Rational -> Text
-renderRates rates =
-    T.intercalate
-        ", "
-        [quotaDimensionName dimension <> " " <> show (toHundredths rate) <> "/s" | (dimension, rate) <- Map.toAscList rates]

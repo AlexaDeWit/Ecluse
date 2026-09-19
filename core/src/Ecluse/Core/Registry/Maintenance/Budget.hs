@@ -22,6 +22,7 @@ module Ecluse.Core.Registry.Maintenance.Budget (
     narrowestBudget,
     smallestQuota,
     renderStoreBudget,
+    renderRates,
     toHundredths,
 
     -- * What a cycle spends
@@ -176,12 +177,7 @@ renderStoreBudget budget = origin <> " (" <> quotas <> ")"
         QuotaUndeclared -> "no capacity at all"
     quotas
         | Map.null (bgQuotas budget) = "none"
-        | otherwise =
-            T.intercalate
-                ", "
-                [ quotaDimensionName dimension <> " " <> renderRate rate
-                | (dimension, rate) <- Map.toAscList (bgQuotas budget)
-                ]
+        | otherwise = renderRates (bgQuotas budget)
 
 -- | One request a cycle makes against the store being dredged.
 data RequestKind
@@ -320,6 +316,13 @@ newBudgetMeter wait = do
                         atomicModifyIORef' waited (\held -> (held + toRational (max 0 served), ()))
                 }
     pure (port, gateFor)
+
+{- | Every dimension's rate as a boot or audit line spells them, in dimension order. An empty map
+renders as the empty string, so a caller with a "none" to say says it itself.
+-}
+renderRates :: Map QuotaDimension Rational -> Text
+renderRates rates =
+    T.intercalate ", " [quotaDimensionName dimension <> " " <> renderRate rate | (dimension, rate) <- Map.toAscList rates]
 
 -- A rate as a boot or audit line spells it.
 renderRate :: Rational -> Text
