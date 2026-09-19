@@ -38,11 +38,10 @@ import Ecluse.Core.Server.Route (
     MediaNegotiation (AcceptsAnything),
     MethodMatch (MethodPost, MethodRead),
     PatternSeg (SegCap, SegLit),
-    Route (Route, routeName),
+    Route (Route),
     RouteName (RouteName),
     answering,
     isHead,
-    matchRoute,
     safeSegment,
  )
 import Ecluse.Core.Server.RouteDescription (
@@ -52,6 +51,7 @@ import Ecluse.Core.Server.RouteDescription (
     catchAllSpecs,
     specsOf,
  )
+import Ecluse.Test.Server.Route (claimedBy)
 
 spec :: Spec
 spec = do
@@ -181,7 +181,7 @@ capFile = Capture "file" "The file's name." (safeSegment ToyFile) toySegment
 
 -- The name of the route that claims a request, or 'Nothing' when none does.
 claimed :: Method -> [Text] -> Maybe RouteName
-claimed method segments = routeName . fst <$> matchRoute toyRoutes method [] segments
+claimed method = claimedBy toyRoutes method []
 
 catchAll :: NonEmpty RouteSpec
 catchAll = catchAllSpecs refusalContract catchAllParam
