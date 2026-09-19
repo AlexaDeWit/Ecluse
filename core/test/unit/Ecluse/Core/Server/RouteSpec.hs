@@ -38,47 +38,33 @@ import Ecluse.Test.Server.Route (claimedBy)
 
 spec :: Spec
 spec = do
-    describe "answering" $ do
-        it "claims its route whatever the read method" $ do
-            claimed methodGet ["-", "ping"] `shouldBe` Just (RouteName "ping")
-            claimed methodHead ["-", "ping"] `shouldBe` Just (RouteName "ping")
+    describe "matchRoute -- the route's method condition" $ do
+        it "claims a read route on GET and HEAD, and on no other method" $ do
+            let ping = Just (RouteName "ping")
+            map (`claimed` ["-", "ping"]) everyMethod
+                `shouldBe` [ping, ping, Nothing, Nothing, Nothing]
 
-        it "does not widen the route's method condition" $ do
-            claimed methodPut ["-", "ping"] `shouldBe` Nothing
-            claimed methodPost ["-", "ping"] `shouldBe` Nothing
-            claimed methodDelete ["-", "ping"] `shouldBe` Nothing
-
-    describe "methodMatches" $ do
-        it "claims a POST route on POST" $
-            claimed methodPost ["-", "upload"] `shouldBe` Just (RouteName "upload")
-
-        it "claims a POST route on no other method" $
-            map (`claimed` ["-", "upload"]) [methodGet, methodHead, methodPut, methodDelete]
-                `shouldBe` [Nothing, Nothing, Nothing, Nothing]
+        it "claims a POST route on POST, and on no other method" $ do
+            let upload = Just (RouteName "upload")
+            map (`claimed` ["-", "upload"]) everyMethod
+                `shouldBe` [Nothing, Nothing, upload, Nothing, Nothing]
 
     describe "safeSegment" $ do
         it "claims one leading segment and yields the tail" $
             safeSegment ToyFile ["report.txt", "rest"]
                 `shouldBe` Just (ToyFile "report.txt", ["rest"])
 
-        it "refuses a traversal, a separator, and a control character" $ do
-            safeSegment ToyFile [".."] `shouldBe` Nothing
-            safeSegment ToyFile ["a/b"] `shouldBe` Nothing
-            safeSegment ToyFile ["a\tb"] `shouldBe` Nothing
-
-        it "refuses an empty segment and an empty path" $ do
-            safeSegment ToyFile [""] `shouldBe` Nothing
-            safeSegment ToyFile [] `shouldBe` Nothing
+        it "refuses a traversal, a separator, a control character, an empty segment, and an empty path" $
+            map (safeSegment ToyFile) [[".."], ["a/b"], ["a\tb"], [""], []]
+                `shouldBe` replicate 5 Nothing
 
         it "keeps an unsafe component out of the table it guards" $ do
             claimed methodGet ["thing", "-", "file.txt"] `shouldBe` Just (RouteName "file")
             claimed methodGet ["thing", "-", ".."] `shouldBe` Nothing
 
     describe "isHead" $
-        it "holds for HEAD alone" $ do
-            isHead methodHead `shouldBe` True
-            map isHead [methodGet, methodPut, methodPost, methodDelete]
-                `shouldBe` [False, False, False, False]
+        it "holds for HEAD alone" $
+            map isHead everyMethod `shouldBe` [False, True, False, False, False]
 
 -- The table under test: three routes built from nothing but the engine's own builders.
 
@@ -142,6 +128,10 @@ capFile = Capture "file" "The file's name." (safeSegment ToyFile) toySegment
 -- The name of the route that claims a request, or 'Nothing' when none does.
 claimed :: Method -> [Text] -> Maybe RouteName
 claimed method = claimedBy toyRoutes method []
+
+-- Every method a route is held against, the two reads first.
+everyMethod :: [Method]
+everyMethod = [methodGet, methodHead, methodPost, methodPut, methodDelete]
 
 -- | The one segment a toy capture claims, written back out.
 toySegment :: ToyCap -> [Text]

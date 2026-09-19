@@ -58,11 +58,13 @@ spec = do
             pumpBody (srcNext src) (\b -> modifyIORef' out (builtBytes b :)) (pure ())
             (reverse <$> readIORef out) `shouldReturn` chunks
             readIORef (srcProduced src) `shouldReturn` 3 -- the terminator pull produces nothing
-        it "writes nothing for an empty body" $ do
+        it "writes nothing and flushes nothing for an empty body" $ do
             src <- newSource []
-            out <- newIORef (0 :: Int)
-            pumpBody (srcNext src) (const (modifyIORef' out (+ 1))) (pure ())
-            readIORef out `shouldReturn` 0
+            writes <- newIORef (0 :: Int)
+            flushes <- newIORef (0 :: Int)
+            pumpBody (srcNext src) (const (modifyIORef' writes (+ 1))) (modifyIORef' flushes (+ 1))
+            readIORef writes `shouldReturn` 0
+            readIORef flushes `shouldReturn` 0
         it "flushes the first chunk only, coalescing the rest in the sink's buffer" $ do
             -- One explicit flush pushes the status, headers, and opening bytes out promptly (time
             -- to first byte). Flushing every chunk would pay a socket send per upstream read.
@@ -70,11 +72,6 @@ spec = do
             flushes <- newIORef (0 :: Int)
             pumpBody (srcNext src) (const (pure ())) (modifyIORef' flushes (+ 1))
             readIORef flushes `shouldReturn` 1
-        it "does not flush an empty body" $ do
-            src <- newSource []
-            flushes <- newIORef (0 :: Int)
-            pumpBody (srcNext src) (const (pure ())) (modifyIORef' flushes (+ 1))
-            readIORef flushes `shouldReturn` 0
 
     describe "withUpstreamWhen -- large body, end to end over an in-process upstream" $
         it "relays a large body through with the upstream status" $ do
@@ -111,21 +108,14 @@ spec = do
             responseBody resp `shouldBe` ""
             headerOf hETag resp `shouldBe` Just "\"v1\""
 
-    describe "withUpstreamWhen -- bodiless relay (HEAD, no pump)" $ do
+    describe "withUpstreamWhen -- bodiless relay (HEAD, no pump)" $
         it "relays the upstream status and content headers with no body on a hit" $ do
             -- The helper never pumps the body on a HEAD, which is the amplification a HEAD must
-            -- never trigger.
+            -- never trigger. A miss decides before the body mode is read, so the conditional
+            -- relay's own miss cases above cover the bodiless relay too.
             resp <- throughProxy headLengthUpstream probeProxy
             responseBody resp `shouldBe` ""
             headerOf hContentType resp `shouldBe` Just "application/octet-stream"
-
-        it "returns a clean miss when the status fails accept" $ do
-            resp <- throughProxy missingUpstream probeProxy
-            responseBody resp `shouldBe` fellThroughMarker
-
-        it "returns a clean miss when the upstream connection cannot be opened" $ do
-            resp <- throughDeadUpstream probeProxy
-            responseBody resp `shouldBe` fellThroughMarker
 
 -- The proxy under test, over the manager it relays with and the upstream's port.
 type ProxyApp = HTTP.Manager -> Int -> Application
