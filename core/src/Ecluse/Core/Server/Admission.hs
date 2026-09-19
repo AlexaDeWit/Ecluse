@@ -2,18 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Brief-wait admission control for metadata-bearing serve work: the unit-slot
-instance of the shared "Ecluse.Core.Server.Admission.Weighted" core (weight one, room
-equal to the capacity).
-
-The handle caps concurrent operations and keeps a bounded room of waiters, so it
-bounds aggregate metadata residency by construction. A burst that merely brushes the cap
-is absorbed: near-capacity load degrades into short queueing delay rather than a refusal
-the client retries at once. The core owns the door discipline, the fairness properties,
-and the mask reasoning that keeps a slot from leaking between acquisition and the
-protected run. This module supplies only the unit weight and the serve-path metric hooks
-(the in-flight gauge and the queued signal). A refused request is silently 'Nothing'
-here: the serve path records its unavailability itself.
+{- | Brief-wait admission for metadata-bearing serve work: the unit-slot instance of
+"Ecluse.Core.Server.Admission.Weighted", at weight one with the room equal to the capacity.
+It adds only the serve-path metric hooks. A refused request is silently 'Nothing' here,
+because the serve path records its own unavailability.
 -}
 module Ecluse.Core.Server.Admission (
     ServeAdmission,
@@ -40,11 +32,8 @@ checked acquire\/wait\/release operations can mutate its capacity and waiting ro
 -}
 newtype ServeAdmission = ServeAdmission WeightedAdmission
 
-{- | Allocate a bounded handle with the given positive capacity, a waiting room of the same
-size, and the shared 'admissionWaitMicros' budget.
-
-The room equals the capacity, so a burst of twice the cap queues briefly and anything deeper
-is refused at once. That bounds both the waiting memory and the worst-case latency.
+{- | Allocate a handle with the given positive capacity, a waiting room of the same size, and
+the shared 'admissionWaitMicros' budget, so a burst of twice the cap queues briefly.
 -}
 
 -- The configuration parser guarantees capacity > 0. This bounds check is defence in depth.
@@ -54,18 +43,15 @@ newServeAdmission capacity
     | capacity <= 0 = error "ServeAdmission capacity must be positive"
     | otherwise = newServeAdmissionTuned capacity capacity admissionWaitMicros
 
-{- | Allocate a bounded handle with an explicit waiting-room bound and wait budget
-(microseconds), so a test can exercise the queueing behaviour without real-second sleeps.
-Production goes through 'newServeAdmission'. A room of zero is pure acquire-or-refuse admission.
+{- | Allocate a handle with an explicit room bound and wait budget (microseconds), so a test
+exercises the queueing without real-second sleeps. A room of zero is acquire-or-refuse.
 -}
 newServeAdmissionTuned :: Int -> Int -> Int -> IO ServeAdmission
 newServeAdmissionTuned capacity room waitMicros =
     ServeAdmission <$> newWeightedAdmission capacity room waitMicros
 
-{- | Run an action within the admission bound. 'Nothing' means the request was refused because
-the waiting room was full or no slot freed within the wait budget. The caller should shed it.
-
-A request that had to wait records @ecluse.serve.admission.queued@ on admission.
+{- | Run an action within the admission bound. 'Nothing' means the caller should shed it: the
+room was full, or no slot freed within the wait budget.
 -}
 {-# INLINE withServeAdmission #-}
 withServeAdmission :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> m a -> m (Maybe a)

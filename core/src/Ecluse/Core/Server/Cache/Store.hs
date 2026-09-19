@@ -247,8 +247,7 @@ lookupWeightedSTM eager sf key nowT = do
             pure Nothing
         _ -> pure held
 
--- The one atomic resolve decision: a fresh hit, follow an in-flight fetch, or lead a new
--- one. A hit carries the weighted entry so the caller can bump its recency.
+-- A hit carries the weighted entry, so the caller can bump its recency without a second read.
 data Decision e v
     = Hit (Weighted v)
     | Follow (TMVar (FlightOutcome e v))

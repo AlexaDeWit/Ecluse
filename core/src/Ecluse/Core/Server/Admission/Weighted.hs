@@ -2,48 +2,15 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The shared brief-wait admission core: a weighted door\/wait\/shed machine both
-serve admission ("Ecluse.Core.Server.Admission") and byte-weighted publish admission
-("Ecluse.Core.Server.Admission.Bytes") are built from. The unit-slot version is this
-core at weight one with the room equal to the capacity.
+{- | The weighted door\/wait\/shed admission core behind serve admission
+("Ecluse.Core.Server.Admission") and byte-weighted publish admission
+("Ecluse.Core.Server.Admission.Bytes").
 
-A handle caps the aggregate __weight__ concurrently held and keeps a __bounded room
-of waiters__. An acquisition takes its weight at once, waits briefly for room, or is
-refused. That bounds aggregate residency by construction and still absorbs a burst
-that merely brushes the capacity. Near-capacity load degrades into short queueing delay
-rather than a refusal the client retries at once. Refusal is reserved for genuine
-overload: a waiting room already at its bound, or a wait that outlives its budget. A
-room at its bound is the deep-overflow band, refused instantly and cheaply.
-
-Instant shedding is self-amplifying under a hammering client. Each refusal is answered
-in microseconds, so the client comes straight back, and the refusal work competes for
-the cores the admitted work needs. Waiting in-process is a blocked green thread, which
-is nearly free, and every release goes to work that has already arrived. The wait budget
-('admissionWaitMicros') equals the shed path's @Retry-After: 1@ hint. A request is
-therefore never refused faster than the interval the client was told to wait.
-
-Two fairness properties, one deliberate limit:
-
-* __A newcomer never jumps a non-empty waiting room__. Capacity is taken directly only
-  when no one is waiting, so the door respects arrival order.
-* Within the room, __wake-up order is not FIFO__ (STM retry semantics: all waiters
-  race, first commit wins). With the room bounded and turnover far faster than the
-  budget, starvation is not a practical concern. Strict ticketing is complexity this
-  surface has not earned.
-
-Held weight is released across normal completion, failure, and asynchronous
-cancellation. The waits run masked. A blocked STM retry stays interruptible: a
-cancellation lands and aborts the transaction, taking nothing. A committed acquire
-returns with exceptions still masked. Weight can therefore never be lost between
-acquisition and the protected run. Release publishes the in-flight gauge decrement
-before it returns capacity to the door. A newly admitted request therefore cannot push
-the observable gauge past the configured bound. Capacity is still returned if that
-observer throws.
-
-The two instances differ only in their construction policy and in the observer callbacks
-they supply. The serve handle errors on a non-positive capacity. The byte handle clamps
-to one byte, and clamps each call's weight to the capacity. The door discipline lives
-here, so a fix to the slot-leak-prone reasoning is made once for both.
+A handle caps the aggregate weight held at once and keeps a bounded room of waiters.
+Capacity is taken directly only when the room is empty, so a newcomer never jumps a
+non-empty room, though wake order within the room is not FIFO (an STM retry races every
+waiter). The wait budget equals the shed path's @Retry-After: 1@ hint, so nothing is
+refused faster than the interval the client was told to wait.
 -}
 module Ecluse.Core.Server.Admission.Weighted (
     WeightedAdmission,
@@ -81,24 +48,19 @@ data AdmissionObservers = AdmissionObservers
     budget. Byte admission records its shed metric here. Serve admission is silent.
     -}
     , onInFlightDelta :: Int -> IO ()
-    {- ^ Move the in-flight gauge by the signed weight: @+weight@ on admission,
-    @-weight@ on release. Both calls run under the acquire mask, so the gauge is
-    paired on every path.
+    {- ^ Move the in-flight gauge by the signed weight. Both calls run under the
+    acquire mask, so the gauge is paired on every path.
     -}
     }
 
-{- | The wait budget (microseconds) an acquisition finding the capacity busy waits
-before it is shed: deliberately equal to the shed path's @Retry-After: 1@ hint. A
-refusal therefore only reaches a client that has already waited one full retry interval
-in-process. That wait is a blocked green thread, not a wire round trip.
+{- | The wait budget (microseconds) before a busy acquisition is shed, deliberately equal to
+the shed path's @Retry-After: 1@ hint, so nothing is refused faster than the client was told.
 -}
 admissionWaitMicros :: Int
 admissionWaitMicros = 1_000_000
 
-{- | Allocate a bounded handle over the given capacity, a waiter-room bound, and a wait
-budget (microseconds). The capacity is taken verbatim: the caller (the serve or byte
-wrapper) owns the positive-capacity policy. The room and budget are floored at zero, so
-a room of zero reproduces pure acquire-or-refuse admission.
+{- | Allocate a handle over a capacity, a waiter-room bound, and a wait budget (microseconds).
+The capacity is verbatim, the wrapper owning that policy, and the other two floor at zero.
 -}
 newWeightedAdmission :: Int -> Int -> Int -> IO WeightedAdmission
 newWeightedAdmission capacity room waitMicros = do
@@ -140,14 +102,11 @@ acquireOrExpire wa weight deadline = do
             expired <- readTVar deadline
             if expired then pure False else retry
 
-{- | Run an action holding the given weight against the aggregate. 'Nothing' means the request
-was shed: the room was full, or the weight did not fit within the wait budget. The weight is
-used as given, so a per-instance clamp is the wrapper's responsibility. Held weight is released
-on every exit path, including a synchronous throw and asynchronous cancellation.
-
-Marked @INLINE@, with its arm helpers, so each wrapper's literal 'AdmissionObservers' is
-eliminated at the call site and the admitted hot path stays allocation-neutral.
+{- | Run an action holding the given weight. 'Nothing' is a shed, at a full room or an expired
+wait. The weight is used as given, and released on every exit path, cancellation included.
 -}
+
+-- Inlined with its arm helpers so each wrapper's literal observers vanish at the call site.
 {-# INLINE withWeightedAdmission #-}
 withWeightedAdmission ::
     (MonadUnliftIO m) =>
@@ -170,10 +129,8 @@ withWeightedAdmission obs wa weight action =
 shedRecording :: (MonadIO m) => AdmissionObservers -> m (Maybe a)
 shedRecording obs = liftIO (onShed obs) $> Nothing
 
--- The wait runs masked. A blocked STM retry stays interruptible, so a cancellation aborts the
--- transaction taking nothing, and a committed acquire returns masked with the weight held. The
--- room place is surrendered on every path. 'onQueued' is passed to 'admittedRun' so a throwing
--- observer releases the held weight instead of leaking it.
+-- A blocked STM retry stays interruptible under the mask, so a cancellation aborts it taking
+-- nothing while a committed acquire returns with the weight held and exceptions still masked.
 {-# INLINE queuedWait #-}
 queuedWait ::
     (MonadUnliftIO m) =>
@@ -192,11 +149,8 @@ queuedWait obs wa weight restore action = do
         then admittedRun obs wa weight (onQueued obs) restore action
         else shedRecording obs
 
--- The in-flight increment runs under the enclosing mask, before 'restore', so it pairs with
--- the 'releaseWeight' decrement on every path. Inside 'restore' it would be interruptible: a
--- cancellation delivered after unmasking but before it ran would still trigger the 'finally',
--- decrementing a gauge that was never incremented and drifting it negative. 'afterArm' runs in
--- that same masked step after the increment, so a throwing observer cannot leak the weight.
+-- The gauge increment runs under the enclosing mask, before 'restore'. Inside 'restore' a
+-- cancellation could fire the finaliser's decrement without it, drifting the gauge negative.
 {-# INLINE admittedRun #-}
 admittedRun ::
     (MonadUnliftIO m) =>
@@ -213,10 +167,8 @@ admittedRun obs wa weight afterArm restore action =
                 `UE.finally` releaseWeight obs wa weight
             )
 
--- Publish the gauge decrement before waking a waiter. Returning capacity first would let
--- that waiter publish its increment while the departing holder was still observable,
--- transiently putting the gauge above the configured bound. The STM release is the
--- finaliser, so a throwing observer cannot leak capacity.
+-- Publish the gauge decrement before returning capacity. The other order would let a woken
+-- waiter increment while the departing holder is still observable, breaching the bound.
 {-# INLINE releaseWeight #-}
 releaseWeight :: (MonadUnliftIO m) => AdmissionObservers -> WeightedAdmission -> Int -> m ()
 releaseWeight obs wa weight =

@@ -2,36 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Conditional-GET / ETag handling, split by how the served body relates to
-upstream's.
+{- | Conditional-GET and @ETag@ handling, split by how the served body relates to upstream's.
 
-The proxy serves two kinds of body, and they validate differently (see
-@docs\/architecture\/web-layer.md@ → "Middleware and helper libraries"):
-
-* __Pass-through bodies__ (artifacts, and unfiltered private-upstream metadata)
-  are byte-identical to upstream's, so upstream's own validator is authoritative.
-  The client's validators are __relayed upstream__ ('forwardValidators') and an
-  upstream @304@ is passed straight back ('isNotModified'). Relaying is correct
-  precisely because we do not change the bytes.
-
-* __Transformed bodies__ differ from any single upstream's body, so an upstream
-  validator would validate the wrong bytes. Every packument is transformed: merged
-  across upstreams and filtered by the rules. We instead serve our __own__ strong 'ETag'
-  ('mkStrongETag') and answer the client's conditional request against it
-  ('evaluateETag').
-
-The own-ETag is __derived from the serve's inputs__, not hashed over its output. It is
-a SHA-256 over the origin bodies' digests, the per-source surviving version sets, and
-the assembly's identity (see 'Ecluse.Core.Server.Pipeline.Packument.packumentETag').
-The served document is a deterministic function of exactly those inputs. The tag can
-therefore never validate a stale body as fresh, the direction correctness needs. It may
-occasionally change when the re-assembled bytes would not have: a spurious @200@,
-never a wrong @304@. Deriving it from inputs lets the serve path answer a @304@
-__without assembling, encoding, or hashing the document at all__. It also lets the
-path stream a @200@ body without materialising it for a hash pass first.
-
-The functions here are pure. Turning a 'Conditional' or relayed status into a WAI
-response is the serving layer's job.
+A pass-through body (an artifact, unfiltered private metadata) is byte-identical to
+upstream's, so the client's validators are relayed upstream ('forwardValidators') and an
+upstream @304@ is passed back ('isNotModified'). A transformed body (every packument is
+merged and filtered) takes our own strong 'ETag' instead, derived from the serve's inputs
+rather than hashed over its output. It can therefore be stale only in the safe direction, a
+spurious @200@ and never a wrong @304@, and a @304@ costs no assembly at all.
 -}
 module Ecluse.Core.Server.Conditional (
     -- * Our own ETag (transformed bodies)
@@ -59,9 +37,8 @@ import Network.HTTP.Types.Header (hETag, hIfModifiedSince, hIfNoneMatch)
 newtype ETag = ETag Text
     deriving stock (Eq, Ord, Show)
 
-{- | Quote a SHA-256 digest as a strong 'ETag', hex-encoded in the quoted wire form. The
-digest is whatever fingerprint the serving layer stands behind. For packuments that is
-'Ecluse.Core.Server.Pipeline.Packument.packumentETag'.
+{- | Quote a SHA-256 digest as a strong 'ETag', hex-encoded. The digest is whatever
+fingerprint the serving layer stands behind.
 -}
 mkStrongETag :: Digest SHA256 -> ETag
 mkStrongETag digest = ETag ("\"" <> hex <> "\"")
@@ -91,13 +68,8 @@ data Conditional
       Modified ETag
     deriving stock (Eq, Show)
 
-{- | Evaluate a conditional request against our own 'ETag' for a transformed body. A @*@
-wildcard in @If-None-Match@, or any listed tag whose opaque value equals ours, gives
-'NotModified'. Anything else is 'Modified'. The comparison is __weak__ (RFC 7232), so a
-@W/@ prefix on either side is ignored.
-
-@If-Modified-Since@ is deliberately not consulted here. A merged packument has no single
-upstream @Last-Modified@ to compare to, and the strong ETag is the precise validator.
+{- | Evaluate a conditional request against our own 'ETag'. The comparison is __weak__ (RFC
+7232), and @If-Modified-Since@ is not consulted: a merge has no single upstream timestamp.
 -}
 evaluateETag :: RequestHeaders -> ETag -> Conditional
 evaluateETag headers etag
@@ -127,9 +99,8 @@ splitTags = filter (not . T.null) . map T.strip . T.splitOn ","
 normaliseTag :: Text -> Text
 normaliseTag t = fromMaybe t (T.stripPrefix "W/" t)
 
-{- | The client's conditional validators to relay upstream for a __pass-through__ body.
-Only @If-None-Match@ and @If-Modified-Since@ are forwarded, so upstream can answer @304@
-without receiving any other client header.
+{- | The client's conditional validators to relay upstream for a __pass-through__ body. Only
+these two are forwarded, so upstream answers @304@ without receiving any other client header.
 -}
 forwardValidators :: RequestHeaders -> RequestHeaders
 forwardValidators = filter (isValidator . fst)

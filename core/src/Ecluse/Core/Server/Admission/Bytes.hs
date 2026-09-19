@@ -2,25 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Brief-wait __byte-weighted__ admission: the Content-Length-weighted instance of the
-shared "Ecluse.Core.Server.Admission.Weighted" core, capping the aggregate bytes
-concurrently held rather than a count of unit slots.
+{- | Brief-wait __byte-weighted__ admission: the Content-Length-weighted instance of
+"Ecluse.Core.Server.Admission.Weighted", capping the aggregate bytes held rather than a count
+of slots.
 
-The publish path buffers whole request bodies: base64-inflated tarballs bounded only by
-the per-request cap. A burst of concurrent publishes could therefore hold many caps'
-worth of heap at once, with no aggregate bound. An acquisition here reserves the
-request's weight against a fixed byte capacity before the body is read, and releases it
-on every exit path. The weight is the declared Content-Length, or the per-request cap
-when the body is chunked and declares nothing. Reservation precedes buffering, and the
-publish route's bounded read refuses a body past the cap. The reserved weight is
-therefore always at least the bytes buffered, so the aggregate holds by construction.
-
-The door discipline is the core's: take the weight at once when the capacity holds it
-and no one is waiting. Otherwise wait briefly in a bounded room, and shed past the room
-or past the wait budget. This module supplies only the byte capacity for the
-per-call weight clamp and the publish-path metric hooks (the in-flight byte gauge and
-the shed signal). Unlike serve admission, a shed here records
-@ecluse.publish.body.shed@ on both the door refusal and the expired wait.
+The publish path buffers whole request bodies, bounded only per request, so concurrent
+publishes could otherwise hold many caps' worth of heap at once. The weight is the declared
+Content-Length, or the per-request cap for a chunked body, and it is reserved before the body
+is read, so the reservation is always at least the bytes buffered.
 -}
 module Ecluse.Core.Server.Admission.Bytes (
     ByteAdmission,
@@ -42,9 +31,8 @@ import Ecluse.Core.Server.Admission.Weighted (
  )
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 
-{- | A process-wide byte-admission handle: the shared bounded core plus the byte
-capacity the per-call weight is clamped to. The constructor is hidden so only the
-checked acquire\/wait\/release operations can mutate it.
+{- | A process-wide byte-admission handle. The constructor is hidden so only the checked
+acquire\/wait\/release operations can mutate it.
 -}
 data ByteAdmission = ByteAdmission
     { baCore :: WeightedAdmission
@@ -63,9 +51,8 @@ shared 'admissionWaitMicros' budget.
 newByteAdmission :: Int -> IO ByteAdmission
 newByteAdmission capacity = newByteAdmissionTuned capacity byteAdmissionWaiterRoom admissionWaitMicros
 
-{- | Allocate a handle with an explicit waiter-room bound and wait budget (microseconds),
-so a test can exercise the queueing behaviour without real-second sleeps. Production
-goes through 'newByteAdmission'.
+{- | Allocate a handle with an explicit waiter-room bound and wait budget (microseconds), so a
+test exercises the queueing without real-second sleeps.
 -}
 newByteAdmissionTuned :: Int -> Int -> Int -> IO ByteAdmission
 newByteAdmissionTuned capacity room waitMicros = do
@@ -73,12 +60,8 @@ newByteAdmissionTuned capacity room waitMicros = do
     core <- newWeightedAdmission cap room waitMicros
     pure ByteAdmission{baCore = core, baCapacity = cap}
 
-{- | Run an action holding the given weight against the aggregate. 'Nothing' means the request
-was shed: the room was full, or the weight did not fit within the wait budget.
-
-The weight is clamped to the capacity defensively, since a bound must never deadlock on
-arithmetic it did not make. The in-flight gauge @ecluse.publish.body.in_flight_bytes@ moves
-with the reserved weight, and a shed records @ecluse.publish.body.shed@.
+{- | Run an action holding the given weight. 'Nothing' is a shed. The weight is clamped to the
+capacity, because a bound must never deadlock on arithmetic it did not make.
 -}
 {-# INLINE withByteAdmission #-}
 withByteAdmission :: (MonadUnliftIO m) => MetricsPort -> ByteAdmission -> Int -> m a -> m (Maybe a)
