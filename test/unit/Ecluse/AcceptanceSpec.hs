@@ -188,9 +188,8 @@ spec = do
             rendered `shouldSatisfy` T.isInfixOf "100.0 / 30.0"
             rendered `shouldSatisfy` T.isInfixOf "10.0 / 2.0"
 
-{- | Each pairing of a measured leg with the verdict it earns and the status the driver exits
-with. The ecosystem is a label on the report and no input to either decision, so one ecosystem
-settles these and the separation case decides what crossing them would break.
+{- | Each measured leg with the verdict it earns and the status the driver exits with. The
+ecosystem is a label neither decision reads, so one ecosystem settles these.
 -}
 verdictRows :: [(String, [Either (Text, Text) Sample], Bool, ExitCode)]
 verdictRows =

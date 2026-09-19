@@ -347,9 +347,8 @@ spec = do
                 Left (BootAborted rendered) -> rendered `shouldBe` "boot rejected"
                 Right () -> expectationFailure "expected the boot to abort"
 
-{- | Run one case with every key any case here sets cleared, then exactly its own entries, and
-clear them all again afterwards. Another spec in the suite can leave one of these behind, so
-the clearing is what keeps each case a function of the entries it names alone.
+{- | Run one case with every key any case here sets cleared, then its own entries alone.
+Another spec can leave one behind, so the clearing is what scopes the case.
 -}
 withEnvVars :: [(String, String)] -> IO a -> IO a
 withEnvVars envVars = bracket_ enter (traverse_ unsetEnv caseKeys)
