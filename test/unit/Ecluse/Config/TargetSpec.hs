@@ -10,7 +10,7 @@ import Test.Hspec
 
 import Ecluse.Composition.BootError (BootError (StoreTagConflict))
 import Ecluse.Composition.Endpoints (vetEndpoints)
-import Ecluse.Composition.Support (codeArtifactDomain, npmMountDoc, pubUrlEnv)
+import Ecluse.Composition.Support (codeArtifactDomain, expectConfig, npmMountDoc, pubUrlEnv)
 import Ecluse.Composition.Types (RegistryRole (MirrorPruner, MirrorWriter))
 import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (
@@ -408,8 +408,7 @@ mountsFor endpoints = cfgMounts . configApp <$> expectLoad pubUrlEnv endpoints
 
 -- Load one npm mount under an environment layer, failing the test on a refusal.
 expectLoad :: [(String, String)] -> [Text] -> IO Config
-expectLoad env endpoints =
-    either (fail . show . map renderConfigError) pure (loadConfig env (Just (npmMountDoc endpoints)))
+expectLoad env endpoints = expectConfig env (Just (npmMountDoc endpoints))
 
 -- The tag-conflict refusals one role's endpoint pass earns, with its other findings dropped.
 tagConflicts :: RegistryRole -> Map Ecosystem MountConfig -> [BootError]
