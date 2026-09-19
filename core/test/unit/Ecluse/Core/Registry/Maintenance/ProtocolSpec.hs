@@ -465,7 +465,7 @@ answerSingleVersion status body captured = case capMethod captured of
     _ -> (status, body)
 
 {- The store answers the tarball delete with a body past the bound. The delete reached it, so
-the npmVersion's fate is unknown, which is what the sequence's fault arm must report.  -}
+the version's fate is unknown, which is what the sequence's fault arm must report.  -}
 answerOversizedDelete :: Captured -> (Status, LBS.ByteString)
 answerOversizedDelete captured = case capMethod captured of
     "GET" -> (status200, encode (packumentDocumentOn (capAuthority captured)))

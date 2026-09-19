@@ -6,6 +6,7 @@
 
 {- | npm's routing, on the two axes a route record exposes: which route claims a request, and
 what that route's captures parse to. A route's action is a closure with nothing to compare.
+The path arrives percent-decoded, so each scoped case appears in both wire encodings.
 
 The worked examples run first, then the differential properties, which hold the table against
 the __independent reference__ at the foot of this file: a hand-written implementation of the
@@ -290,6 +291,28 @@ spec = do
         it "accepts the @types scope" $
             classify ["@types", "node"] `shouldBe` ToPackument (scopedNpm "types" "node")
 
+    describe "the routes it claims" $ do
+        it "a HEAD reads like a GET" $
+            matchedId methodHead ["lodash"] `shouldBe` Just (RouteName "packument")
+
+        -- Path confusion is a denial: the router fabricates no coordinate from a mismatched
+        -- artifact basename.
+        it "an artifact whose basename is for another package is not claimed (path confusion)" $
+            matchedId methodGet ["lodash", "-", "evil-1.0.0.tgz"] `shouldBe` Nothing
+
+        -- "-" is the reserved meta-route prefix, and npm cannot hold a package named "-".
+        it "a lone \"-\" is never a package, on any method" $ do
+            matchedId methodPut ["-"] `shouldBe` Nothing
+            matchedId methodGet ["-"] `shouldBe` Nothing
+
+        -- A POST reaches no route, and a DELETE only the dist-tag removal, so either over a
+        -- package path matches nothing and denies rather than serving a packument.
+        it "a method the front door does not answer denies" $ do
+            matchedId methodDelete ["lodash"] `shouldBe` Nothing
+            matchedId methodPost ["lodash"] `shouldBe` Nothing
+            matchedId methodDelete ["lodash", "-", "lodash-1.0.0.tgz"] `shouldBe` Nothing
+            matchedId methodPost ["-", "package", "lodash", "dist-tags", "latest"] `shouldBe` Nothing
+
     describe "properties" $
         -- The invariant: no hostile path yields an accepted route with an unsafe component.
         -- The coverage classification below proves the generator reaches both arms.
@@ -342,8 +365,8 @@ spec = do
                     segments <- forAll NpmFixture.genPathSegments
                     takePackage segments === refTakePackage segments
 
-        -- 'genPathSegments' explores arbitrary paths, and a dist-tag path is four or five
-        -- specific segments, so it never reaches one. This generator shapes the request instead.
+        -- 'NpmFixture.genPathSegments' explores arbitrary paths, and a dist-tag path is four or
+        -- five specific segments, so it never reaches one. This generator shapes it instead.
         modifyMaxSuccess (const 2000) $
             it "claims the same route as the reference, over generated dist-tag requests" $
                 hedgehog $ do
@@ -354,28 +377,6 @@ spec = do
                     cover 2 "claims the dist-tag removal" (claimed == Just (RouteName "distTagRemove"))
                     cover 20 "falls through to the 404" (isNothing claimed)
                     claimed === referenceRouteId method segments
-
-    describe "the routes it claims" $ do
-        it "a HEAD reads like a GET" $
-            matchedId methodHead ["lodash"] `shouldBe` Just (RouteName "packument")
-
-        -- Path confusion is a denial: the router fabricates no coordinate from a mismatched
-        -- artifact basename.
-        it "an artifact whose basename is for another package is not claimed (path confusion)" $
-            matchedId methodGet ["lodash", "-", "evil-1.0.0.tgz"] `shouldBe` Nothing
-
-        -- "-" is the reserved meta-route prefix, and npm cannot hold a package named "-".
-        it "a lone \"-\" is never a package, on any method" $ do
-            matchedId methodPut ["-"] `shouldBe` Nothing
-            matchedId methodGet ["-"] `shouldBe` Nothing
-
-        -- A POST reaches no route, and a DELETE only the dist-tag removal, so either over a
-        -- package path matches nothing and denies rather than serving a packument.
-        it "a method the front door does not answer denies" $ do
-            matchedId methodDelete ["lodash"] `shouldBe` Nothing
-            matchedId methodPost ["lodash"] `shouldBe` Nothing
-            matchedId methodDelete ["lodash", "-", "lodash-1.0.0.tgz"] `shouldBe` Nothing
-            matchedId methodPost ["-", "package", "lodash", "dist-tags", "latest"] `shouldBe` Nothing
 
 -- | Whether a route is an accepted package route (the arms the invariant binds).
 isAccepted :: Routed -> Bool
@@ -412,7 +413,7 @@ genMethod :: Gen Method
 genMethod = Gen.element [methodGet, methodPut, methodHead, methodPost, methodDelete]
 
 {- | A request shaped like a dist-tag route, every part perturbed, so the property reaches
-all three routes and the near misses that must deny. 'genPathSegments' reaches none of them.
+all three routes and the near misses that must deny. 'NpmFixture.genPathSegments' reaches none.
 -}
 genDistTagRequest :: Gen (Method, [Text])
 genDistTagRequest = do
