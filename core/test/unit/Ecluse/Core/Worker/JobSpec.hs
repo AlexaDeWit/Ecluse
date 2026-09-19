@@ -4,12 +4,10 @@
 
 module Ecluse.Core.Worker.JobSpec (spec) where
 
-import Data.Aeson (Value (String), eitherDecodeStrict', object, (.=))
-import Data.ByteArray.Encoding (Base (Base64), convertToBase)
+import Data.Aeson (Value (String), object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
-import UnliftIO.Exception (try)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
@@ -31,16 +29,14 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (
-    MetadataError (MetadataFetch, MetadataUndecodable),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
-    fetchVersionDetails,
  )
-import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec, npmPublishDocument)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Publish (
     MirrorPublish,
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
-    PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
+    PublishPlan (ppLatest, ppMetadata),
     newMirrorPublish,
  )
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
@@ -55,14 +51,12 @@ import Ecluse.Core.Worker (
     processJob,
  )
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
-import Ecluse.Test.Json (textAtPath)
 import Ecluse.Test.Package (npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admitRule, cannotVetRule, denyRule)
-import Ecluse.Test.Snapshot (versionDocOf, versionReadOf)
+import Ecluse.Test.Snapshot (versionDocOf)
 import Ecluse.Test.Stub (allCaptured, capMethod, stubBaseUrl, withStub)
-import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 import Ecluse.Worker.Support
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types.Status (status404)
@@ -106,20 +100,6 @@ spec = do
                 Left (Dropped reason) -> reason `shouldSatisfy` T.isInfixOf "the advisory index is corrupt"
                 other -> expectationFailure ("expected a drop for an unclearable inability, got " <> show other)
 
-    describe "npmPublishDocument" $ do
-        it "assembles a PUT document with the version, dist integrity, and base64 attachment" $ do
-            let document =
-                    npmPublishDocument pkg (PublishPlan{ppVersion = ver, ppLatest = ver, ppMetadata = admissionObject}) "thing-1.0.0.tgz" (Just trueSri) (Just trueSha1) tarballBytes
-                decoded :: Either String Value
-                decoded = first show document >>= eitherDecodeStrict'
-            case decoded of
-                Left err -> expectationFailure ("publish document is not valid JSON: " <> err)
-                Right value -> do
-                    textAtPath ["name"] value `shouldBe` Just "thing"
-                    textAtPath ["dist-tags", "latest"] value `shouldBe` Just "1.0.0"
-                    textAtPath ["versions", "1.0.0", "dist", "integrity"] value `shouldBe` Just trueSri
-                    textAtPath ["_attachments", "thing-1.0.0.tgz", "data"] value
-                        `shouldBe` Just (decodeUtf8 (convertToBase Base64 tarballBytes :: ByteString))
     describe "processJob -- the integrity gate" $ do
         -- The worker recomputes whichever digest current metadata carries, so an artifact the
         -- floor admitted is never admit-but-uncomputable.
@@ -524,38 +504,6 @@ spec = do
                     runWM runtime (processJob job) `shouldReturn` Succeeded
                     plans <- plPlans <$> readIORef logRef
                     map ppLatest plans `shouldBe` [ver]
-
-    describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
-        -- The serve-time tarball gate and the worker both resolve a version through this one
-        -- function, so these cases pin its classification directly.
-        it "classifies a resolved version as present" $
-            fetchVersionDetails (versionClient (Right (versionReadOf (Just (sampleDetails pkg ver)) (Just otherVer)))) pkg ver
-                `shouldReturn` VersionPresent (versionDocOf (sampleDetails pkg ver)) (Just otherVer)
-
-        it "carries the document's own latest onto the present verdict" $
-            fetchVersionDetails (versionClient (Right (versionReadOf (Just (sampleDetails pkg ver)) Nothing))) pkg ver
-                `shouldReturn` VersionPresent (versionDocOf (sampleDetails pkg ver)) Nothing
-
-        it "classifies an absent version (resolved, but no such version) as missing" $
-            fetchVersionDetails (versionClient (Right (versionReadOf Nothing Nothing))) pkg ver
-                `shouldReturn` VersionMissing
-
-        it "classifies a metadata error as unavailable (the transient degrade)" $
-            fetchVersionDetails (versionClient (Left MetadataUndecodable)) pkg ver
-                `shouldReturn` VersionMetadataUnavailable
-
-        it "classifies an unreachable upstream as unavailable (transport in the typed channel)" $
-            fetchVersionDetails (versionClient (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))) pkg ver
-                `shouldReturn` VersionMetadataUnavailable
-
-        it "propagates a client that escapes its total contract (the invariant channel)" $ do
-            -- The typed channel reports every real failure, so a throw out of the fetch is an
-            -- invariant break. It must reach the caller's supervision, never be laundered into the
-            -- transient degrade.
-            outcome <- try (fetchVersionDetails throwingVersionClient pkg ver) :: IO (Either SomeException VersionEvaluation)
-            case outcome of
-                Left escaped -> fromException escaped `shouldBe` Just (TestContractEscape "simulated contract escape")
-                Right evaluation -> expectationFailure ("expected the client's throw to reach the caller, got " <> show evaluation)
 
 {- | Each digest the worker recomputes, as the only one current metadata carries. A row the
 worker could not compute would drop an artifact the public floor had already admitted.

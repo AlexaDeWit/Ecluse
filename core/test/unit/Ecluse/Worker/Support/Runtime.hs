@@ -28,10 +28,6 @@ module Ecluse.Worker.Support.Runtime (
     runWM,
     runWMWith,
 
-    -- * Metadata-client doubles
-    versionClient,
-    throwingVersionClient,
-
     -- * Queues that fault, throw, or record
     faultingReceiveQueue,
     throwingReceiveQueue,
@@ -66,11 +62,6 @@ import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishFault,
     RegistryResponse (RegistryResponse),
- )
-import Ecluse.Core.Registry.Metadata (
-    MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
-    MetadataError,
-    VersionRead,
  )
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), PublishPlan)
 import Ecluse.Core.Security (LimitError (BodyTooLarge))
@@ -211,22 +202,6 @@ runWM runtime action = newTestLogEnv >>= \logEnv -> runWMWith logEnv runtime act
 -- | 'runWM' over a caller-supplied 'LogEnv', so a spec reads back what the worker logged.
 runWMWith :: LogEnv -> WorkerRuntime -> WorkerM a -> IO a
 runWMWith logEnv = runWorkerM logEnv mempty
-
--- | A 'MetadataClient' double whose single-version op returns a fixed result (the full-manifest op is unused here and refuses loudly).
-versionClient :: Either MetadataError VersionRead -> MetadataClient
-versionClient result =
-    MetadataClient
-        { fetchFullManifest = const (throwIO (TestContractEscape "versionClient: fetchFullManifest is unused"))
-        , fetchVersionMetadata = \_ _ -> pure result
-        }
-
--- | Break the metadata handle's value-error contract to test exception propagation.
-throwingVersionClient :: MetadataClient
-throwingVersionClient =
-    MetadataClient
-        { fetchFullManifest = const (throwIO (TestContractEscape "throwingVersionClient: fetchFullManifest is unused"))
-        , fetchVersionMetadata = \_ _ -> throwIO (TestContractEscape "simulated contract escape")
-        }
 
 -- | Count typed receive failures so tests can verify that polling continues.
 faultingReceiveQueue :: IORef Int -> IO MirrorQueue

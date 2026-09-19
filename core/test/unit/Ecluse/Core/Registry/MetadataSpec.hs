@@ -12,17 +12,22 @@ import Network.HTTP.Types (mkStatus)
 import Network.Wai (responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
+import UnliftIO.Exception (throwIO, try)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Fault (TransportCause (TransportUnreachable), transportFault)
+import Ecluse.Core.Package (PackageDetails, PackageName, mkPackageName)
 import Ecluse.Core.Registry (
-    FetchFault (FetchBoundExceeded),
+    FetchFault (FetchBoundExceeded, FetchTransport),
     RegistryResponse (RegistryResponse),
  )
 import Ecluse.Core.Registry.Metadata (
-    MetadataClient (fetchFullManifest, fetchVersionMetadata),
+    MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
+    VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
+    VersionRead,
     fetchThenProject,
+    fetchVersionDetails,
  )
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataReads)
 import Ecluse.Core.Registry.Origin (perCallerOrigin)
@@ -31,15 +36,18 @@ import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Metadata (privateMetadataClient)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
-import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Test.Package (sampleDetails, thingName, unscopedNpm, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort)
+import Ecluse.Test.Snapshot (versionDocOf, versionReadOf)
+import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
 
 -- | Exercise error preservation and projection through the adapters' shared read step.
 spec :: Spec
 spec = do
     fetchStepSpec
     rawReadersSpec
+    versionEvaluationSpec
 
 fetchStepSpec :: Spec
 fetchStepSpec = describe "fetchThenProject" $ do
@@ -94,6 +102,67 @@ rawReadersSpec = describe "raw metadata readers" $
   where
     bodyFor PyPI = "{\"meta\":{\"api-version\":\"1.0\"},\"name\":\"thing\",\"files\":[]}"
     bodyFor _ = "{\"name\":\"thing\",\"versions\":{}}"
+
+versionEvaluationSpec :: Spec
+versionEvaluationSpec = describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
+    -- The serve-time tarball gate and the worker both resolve a version through this one
+    -- function, so these cases pin its classification directly.
+    it "classifies a resolved version as present" $
+        fetchVersionDetails (versionClient (Right (versionReadOf (Just theDetails) (Just otherVersion)))) thingName v1_0_0
+            `shouldReturn` VersionPresent (versionDocOf theDetails) (Just otherVersion)
+
+    it "carries the document's own latest onto the present verdict" $
+        fetchVersionDetails (versionClient (Right (versionReadOf (Just theDetails) Nothing))) thingName v1_0_0
+            `shouldReturn` VersionPresent (versionDocOf theDetails) Nothing
+
+    it "classifies an absent version (resolved, but no such version) as missing" $
+        fetchVersionDetails (versionClient (Right (versionReadOf Nothing Nothing))) thingName v1_0_0
+            `shouldReturn` VersionMissing
+
+    it "classifies a metadata error as unavailable (the transient degrade)" $
+        fetchVersionDetails (versionClient (Left MetadataUndecodable)) thingName v1_0_0
+            `shouldReturn` VersionMetadataUnavailable
+
+    it "classifies an unreachable upstream as unavailable (transport in the typed channel)" $
+        fetchVersionDetails (versionClient (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))) thingName v1_0_0
+            `shouldReturn` VersionMetadataUnavailable
+
+    it "propagates a client that escapes its total contract (the invariant channel)" $ do
+        -- The typed channel reports every real failure, so a throw out of the fetch is an
+        -- invariant break. It must reach the caller's supervision, never be laundered into the
+        -- transient degrade.
+        outcome <- try (fetchVersionDetails throwingVersionClient thingName v1_0_0) :: IO (Either SomeException VersionEvaluation)
+        case outcome of
+            Left escaped -> fromException escaped `shouldBe` Just (TestContractEscape "simulated contract escape")
+            Right evaluation -> expectationFailure ("expected the client's throw to reach the caller, got " <> show evaluation)
+
+-- | The release a resolved read carries. Nothing here decides from its contents.
+theDetails :: PackageDetails
+theDetails = sampleDetails thingName v1_0_0
+
+{- | A different version of the same package, so a present verdict's own latest is
+distinguishable from the version that was asked for.
+-}
+otherVersion :: Version
+otherVersion = mkVersion Npm "0.9.0"
+
+{- | A 'MetadataClient' whose single-version read returns a fixed result. The full-manifest read
+is unused here and refuses loudly.
+-}
+versionClient :: Either MetadataError VersionRead -> MetadataClient
+versionClient result =
+    MetadataClient
+        { fetchFullManifest = const (throwIO (TestContractEscape "versionClient: fetchFullManifest is unused"))
+        , fetchVersionMetadata = \_ _ -> pure result
+        }
+
+-- | Break the metadata handle's value-error contract, to pin exception propagation.
+throwingVersionClient :: MetadataClient
+throwingVersionClient =
+    MetadataClient
+        { fetchFullManifest = const (throwIO (TestContractEscape "throwingVersionClient: fetchFullManifest is unused"))
+        , fetchVersionMetadata = \_ _ -> throwIO (TestContractEscape "simulated contract escape")
+        }
 
 statusOutcomes :: [(Int, Either MetadataError ())]
 statusOutcomes =
