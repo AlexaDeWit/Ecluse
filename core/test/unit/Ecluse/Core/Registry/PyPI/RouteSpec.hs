@@ -110,7 +110,7 @@ negotiationSpec = describe "the index route serves the PEP 691 JSON form alone" 
 captureSpec :: Spec
 captureSpec = describe "takeProject" $ do
     it "peels a canonical project name off the path" $
-        fmap (first renderProject) (takeProject ["requests", "more"])
+        fmap (first renderPackageName) (takeProject ["requests", "more"])
             `shouldBe` Just ("requests", ["more"])
 
     it "refuses a spelling the upstream index would redirect" $ do
@@ -165,9 +165,6 @@ htmlOnlyAccept = [("Accept", "text/html")]
 
 azureStorageBlob :: PackageName
 azureStorageBlob = unscopedPyPI "azure-storage-blob"
-
-renderProject :: PackageName -> Text
-renderProject = renderPackageName
 
 renderCoordinate :: (Version, Filename) -> (Text, Text)
 renderCoordinate (version, file) = (renderVersion version, unFilename file)

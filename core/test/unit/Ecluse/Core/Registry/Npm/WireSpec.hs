@@ -96,13 +96,7 @@ distSpec = describe "Dist" $ do
     it "tolerates a dist with only the required tarball field" $
         decodesTo @Dist
             "{\"tarball\":\"https://example.test/x.tgz\"}"
-            ( Dist
-                { distTarball = "https://example.test/x.tgz"
-                , distShasum = Nothing
-                , distIntegrity = Nothing
-                , distUnpackedSize = Nothing
-                }
-            )
+            (bareDist "https://example.test/x.tgz")
 
 {- | A regression guard on advisory-field leniency. The __advisory__ @unpackedSize@ field
 decides no rule and no serve. A single hostile value must degrade that field alone, never

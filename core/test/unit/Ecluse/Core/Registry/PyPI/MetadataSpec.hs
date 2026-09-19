@@ -41,8 +41,71 @@ spec = do
     indexSpec
     versionSpec
     paritySpec
-    releaseAgeSpec
     protocolSpec
+    releaseAgeSpec
+
+indexSpec :: Spec
+indexSpec = describe "projectPyPIIndex" $ do
+    it "projects a well-formed index into the manifest paired with its raw document" $
+        case projectPyPIIndex defaultLimits requestsName (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"]) of
+            Right (info, raw) -> do
+                renderPackageName (infoName info) `shouldBe` "requests"
+                Map.keys (infoVersions info) `shouldBe` ["2.34.1", "2.34.2"]
+                raw `shouldBe` simpleIndex "requests" (filesNamed ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"])
+            other -> expectationFailure ("expected a projection, got: " <> show other)
+
+    it "reports an undecodable body" $
+        projectPyPIIndex defaultLimits requestsName "{not json" `shouldBe` Left MetadataUndecodable
+
+    it "reports an absent top-level name as undecodable" $
+        projectPyPIIndex defaultLimits requestsName (encodeStrict (object ["files" .= ([] :: [Value])]))
+            `shouldBe` Left MetadataUndecodable
+
+    it "reports an index self-reporting another project as a name mismatch, not a decode failure" $
+        projectPyPIIndex defaultLimits requestsName (indexNamed "urllib3" [])
+            `shouldBe` Left (MetadataNameMismatch "urllib3")
+
+    it "reports a release count past the bound as a bound breach" $
+        projectPyPIIndex defaultLimits{maxVersionCount = 1} requestsName (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"])
+            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
+
+versionSpec :: Spec
+versionSpec = describe "projectPyPIVersion" $ do
+    it "projects one release's files out of an index carrying several" $
+        artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl", "requests-2.34.1.tar.gz"]))
+            `shouldBe` Right (Just ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl"])
+
+    it "yields nothing for a release a sound index does not carry, a forwarded miss" $
+        artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion "9.9.9") (indexOf ["requests-2.34.2.tar.gz"]))
+            `shouldBe` Right Nothing
+
+    it "reports an undecodable body" $
+        artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") "{not json")
+            `shouldBe` Left MetadataUndecodable
+
+    it "reports an index self-reporting another project as a name mismatch" $
+        artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") (indexNamed "urllib3" ["urllib3-2.34.2.tar.gz"]))
+            `shouldBe` Left (MetadataNameMismatch "urllib3")
+
+    it "reports a file count past the bound as a bound breach" $
+        artifactNames (projectPyPIVersion defaultLimits{maxVersionCount = 1} requestsName (pypiVersion "2.34.2") (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"]))
+            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
+
+paritySpec :: Spec
+paritySpec = describe "the two decode paths agree on what they serve" $ do
+    it "retains original entry positions across skipped releases and malformed entries" $ do
+        let filename = "requests-1.0.0.tar.gz"
+            body = encodeStrict (simpleIndex "requests" [simpleFile "requests-2.0.0.tar.gz", Number 1, object ["filename" .= filename], simpleFile filename, simpleFile filename])
+        (info, _) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
+        selected <- expectRight (projectPyPIVersion defaultLimits requestsName (pypiVersion "1") body)
+        selected `shouldBe` Map.lookup "1" (infoVersions info)
+        (map artEntryKey . toList . pkgArtifacts <$> selected) `shouldBe` Just [ArrayEntry 3, ArrayEntry 4]
+
+    for_ ["2.34.2", "2.34", "1.0.post1"] $ \version ->
+        it ("resolves " <> toString version <> " to the same files as the whole-index path") $ do
+            let body = indexOf ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl", "requests-2.34.tar.gz", "requests-1.0-1.tar.gz"]
+            artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion version) body)
+                `shouldBe` Right (wholeIndexArtifacts version body)
 
 protocolSpec :: Spec
 protocolSpec = describe "protocol envelope parity" $ do
@@ -109,69 +172,6 @@ assertProtocolAcceptance body = do
 
 protocolIndex :: Maybe Value -> ByteString
 protocolIndex meta = encodeStrict (object (["name" .= ("requests" :: Text), "files" .= [simpleFile "requests-2.34.2.tar.gz"]] <> maybe [] (\value -> ["meta" .= value]) meta))
-
-indexSpec :: Spec
-indexSpec = describe "projectPyPIIndex" $ do
-    it "projects a well-formed index into the manifest paired with its raw document" $
-        case projectPyPIIndex defaultLimits requestsName (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"]) of
-            Right (info, raw) -> do
-                renderPackageName (infoName info) `shouldBe` "requests"
-                Map.keys (infoVersions info) `shouldBe` ["2.34.1", "2.34.2"]
-                raw `shouldBe` simpleIndex "requests" (filesNamed ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"])
-            other -> expectationFailure ("expected a projection, got: " <> show other)
-
-    it "reports an undecodable body" $
-        projectPyPIIndex defaultLimits requestsName "{not json" `shouldBe` Left MetadataUndecodable
-
-    it "reports an absent top-level name as undecodable" $
-        projectPyPIIndex defaultLimits requestsName (encodeStrict (object ["files" .= ([] :: [Value])]))
-            `shouldBe` Left MetadataUndecodable
-
-    it "reports an index self-reporting another project as a name mismatch, not a decode failure" $
-        projectPyPIIndex defaultLimits requestsName (indexNamed "urllib3" [])
-            `shouldBe` Left (MetadataNameMismatch "urllib3")
-
-    it "reports a release count past the bound as a bound breach" $
-        projectPyPIIndex defaultLimits{maxVersionCount = 1} requestsName (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"])
-            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
-
-versionSpec :: Spec
-versionSpec = describe "projectPyPIVersion" $ do
-    it "projects one release's files out of an index carrying several" $
-        artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl", "requests-2.34.1.tar.gz"]))
-            `shouldBe` Right (Just ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl"])
-
-    it "yields nothing for a release a sound index does not carry, a forwarded miss" $
-        artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion "9.9.9") (indexOf ["requests-2.34.2.tar.gz"]))
-            `shouldBe` Right Nothing
-
-    it "reports an undecodable body" $
-        artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") "{not json")
-            `shouldBe` Left MetadataUndecodable
-
-    it "reports an index self-reporting another project as a name mismatch" $
-        artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion "2.34.2") (indexNamed "urllib3" ["urllib3-2.34.2.tar.gz"]))
-            `shouldBe` Left (MetadataNameMismatch "urllib3")
-
-    it "reports a file count past the bound as a bound breach" $
-        artifactNames (projectPyPIVersion defaultLimits{maxVersionCount = 1} requestsName (pypiVersion "2.34.2") (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"]))
-            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
-
-paritySpec :: Spec
-paritySpec = describe "the two decode paths agree on what they serve" $ do
-    it "retains original entry positions across skipped releases and malformed entries" $ do
-        let filename = "requests-1.0.0.tar.gz"
-            body = encodeStrict (simpleIndex "requests" [simpleFile "requests-2.0.0.tar.gz", Number 1, object ["filename" .= filename], simpleFile filename, simpleFile filename])
-        (info, _) <- expectRight (projectPyPIIndex defaultLimits requestsName body)
-        selected <- expectRight (projectPyPIVersion defaultLimits requestsName (pypiVersion "1") body)
-        selected `shouldBe` Map.lookup "1" (infoVersions info)
-        (map artEntryKey . toList . pkgArtifacts <$> selected) `shouldBe` Just [ArrayEntry 3, ArrayEntry 4]
-
-    for_ ["2.34.2", "2.34", "1.0.post1"] $ \version ->
-        it ("resolves " <> toString version <> " to the same files as the whole-index path") $ do
-            let body = indexOf ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl", "requests-2.34.tar.gz", "requests-1.0-1.tar.gz"]
-            artifactNames (projectPyPIVersion defaultLimits requestsName (pypiVersion version) body)
-                `shouldBe` Right (wholeIndexArtifacts version body)
 
 releaseAgeSpec :: Spec
 releaseAgeSpec = describe "release age and artifact admission" $
