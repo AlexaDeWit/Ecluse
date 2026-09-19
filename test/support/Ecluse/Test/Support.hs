@@ -12,6 +12,7 @@ module Ecluse.Test.Support (
     testServeAdmission,
     newTestClock,
     expectRight,
+    expectRightIO,
     decodeJsonOrFail,
     parseRequestOrFail,
     TestContractEscape (..),
@@ -52,6 +53,12 @@ newTestClock start = do
 -- | Assert a 'Right' and return its value, failing the running example otherwise.
 expectRight :: (Show e) => Either e a -> IO a
 expectRight = either (\e -> fail ("expected Right, got Left " <> show e)) pure
+
+{- | 'expectRight' over an action that answers a typed outcome, the shape a queue, a store,
+or a request former reports through.
+-}
+expectRightIO :: (Show e) => IO (Either e a) -> IO a
+expectRightIO action = action >>= expectRight
 
 -- | Decode JSON, failing the running example with the aeson error rather than crashing.
 decodeJsonOrFail :: (FromJSON a) => ByteString -> IO a
