@@ -4,8 +4,8 @@
 
 {- | npm's client-facing error body, as a codec.
 
-The agnostic serve layer decides a refusal's HTTP status. The body shape is npm's own
-@{"error": …}@ object, which its clients read the human-facing reason from. One
+The agnostic serve layer decides a refusal's HTTP status. The body is npm's own
+@{"error": ...}@ object, which its clients read the human-facing reason from. One
 @autodocodec@ codec backs both the wire body and the OpenAPI schema, so the served denial
 and its documentation cannot diverge. The manifest runs in its own tier, so @openapi3@
 never reaches the proxy.

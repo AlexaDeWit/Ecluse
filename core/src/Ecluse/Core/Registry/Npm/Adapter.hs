@@ -2,10 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm's entry in the ecosystem adapter registry: the
-'Ecluse.Core.Registry.Adapter.Types.RegistryAdapter' assembled from the existing npm modules.
-Pure assembly, with no protocol logic of its own: every field names a function one of the
-@Ecluse.Core.Registry.Npm.*@ modules already exports.
+{- | npm's entry in the ecosystem adapter registry. Every field names a function the
+@Ecluse.Core.Registry.Npm.*@ modules export, so no protocol decision is made here.
 -}
 module Ecluse.Core.Registry.Npm.Adapter (
     npmAdapter,

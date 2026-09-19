@@ -93,7 +93,7 @@ npmPublishDocument ::
     PublishPlan ->
     -- | The tarball's filename: the @_attachments@ key and tarball file segment.
     Text ->
-    -- | The @dist.integrity@ SRI string, if known (e.g. @"sha512-…"@).
+    -- | The @dist.integrity@ SRI string, if known (e.g. @"sha512-..."@).
     Maybe Text ->
     -- | The @dist.shasum@ (SHA-1, hex), if known.
     Maybe Text ->

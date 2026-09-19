@@ -2,15 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | npm's credential presentation: the @Bearer@ token an npm client presents on
-@Authorization@. This module recovers that token from the headers a client sends, and
-attaches it under the same scheme to a request Écluse makes upstream.
+{- | npm's credential presentation: the @Bearer@ token an npm client sends on
+@Authorization@, recovered at the edge and attached under the same scheme upstream.
 
-The npm CLI turns an @.npmrc@ @\/\/host\/:_authToken=…@ entry into
-@Authorization: Bearer …@. A mount serving npm therefore accepts that one form at its
-edge, and presents that one form to an npm upstream. One 'CredentialMapping' declares
-both directions, so the token text recovered from a client and the header it travels on
-upstream cannot drift apart.
+The npm CLI turns an @.npmrc@ @\/\/host\/:_authToken=...@ entry into that one header, so a
+mount serving npm accepts and presents that form alone. One 'CredentialMapping' declares
+both directions, so the recovered token and the header it travels on cannot drift apart.
 -}
 module Ecluse.Core.Registry.Npm.Credential (
     npmCredential,

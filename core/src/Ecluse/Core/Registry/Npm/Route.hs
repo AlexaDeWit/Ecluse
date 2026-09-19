@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 -- TupleSections: local convenience for pairing a parsed name with its trailing
--- segments in 'takePackage' and 'takeScoped' ((,rest) / (,more)). See STYLE.md §2.
+-- segments in 'takePackage' and 'takeScoped' ((,rest) / (,more)). See docs/style.md §2.
 {-# LANGUAGE TupleSections #-}
 
 {- | The npm router and OpenAPI description share one route table.
@@ -285,7 +285,7 @@ distTagContract = jsonContract status501 "Not implemented: dist-tags are not sup
 unsupportedContract :: ResponseContract (ResponseValue NpmError)
 unsupportedContract = jsonContract status404 "Unrecognised path; deny by default." npmErrorCodec
 
--- | The closed packument response sum. 'npmPackumentReplies' is the only interface the pipeline receives for selecting one of its constructors.
+-- | The closed packument response sum. The pipeline selects a constructor only through 'npmPackumentReplies'.
 type NpmPackumentResponse =
     ResponseChoice
         (ResponseValue LByteString)
@@ -397,7 +397,7 @@ buildPackument method = \case
     [NpmPackage name] -> Just (packumentAction npmPackumentReplies method name)
     _ -> Nothing
 
-{- @PUT \/{package}@: a bare package unit under the write method is a publish. -}
+-- @PUT \/{package}@: a bare package unit under the write method is a publish.
 buildPublish :: Method -> [NpmCap] -> Maybe (ResponseAction NpmPublishResponse)
 buildPublish _method = \case
     [NpmPackage name] ->
@@ -475,7 +475,7 @@ takePackage (seg : rest)
     | T.isPrefixOf "@" seg = takeScoped seg rest
     | otherwise = (,rest) <$> rightToMaybe (projectName seg)
 
-{- Peel a scoped package unit off the leading @\@…@ segment. Both wire encodings, one decoded
+{- Peel a scoped package unit off the leading @\@@ segment. Both wire encodings, one decoded
 segment or two, join into the one wire name 'projectName' reads. -}
 takeScoped :: Text -> [Text] -> Maybe (PackageName, [Text])
 takeScoped seg rest
