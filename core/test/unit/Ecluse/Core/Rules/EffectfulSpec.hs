@@ -18,7 +18,8 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..), noBreakerReporter)
-import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveLookup (cveAdvisoriesFor), CveQueryFault (CveQueryFault), DbEtag (DbEtag))
+import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), CveLookup (cveAdvisoriesFor), CveQueryFault (CveQueryFault))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))
 import Ecluse.Core.Package

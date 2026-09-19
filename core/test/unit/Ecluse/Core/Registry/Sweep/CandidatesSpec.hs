@@ -10,7 +10,8 @@ module Ecluse.Core.Registry.Sweep.CandidatesSpec (spec) where
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup, DbEtag (DbEtag))
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup)
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)

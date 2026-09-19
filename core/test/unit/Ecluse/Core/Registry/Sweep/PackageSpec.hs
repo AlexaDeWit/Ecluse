@@ -12,7 +12,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Test.Hspec
 
-import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange), DbEtag (DbEtag))
+import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package (PackageName, mkPackageName)

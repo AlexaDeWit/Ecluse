@@ -10,7 +10,6 @@ module Ecluse.Core.Cve (
     CveDb (..),
     openCveDb,
     CveDbRejected (..),
-    DbEtag (..),
 
     -- * The consumer view
     CveLookup (..),
@@ -34,12 +33,6 @@ import Ecluse.Core.Osv.Types (UpperBound (..))
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, parseVersionKey, renderVersion)
 
 import Database.SQLite.Simple (Connection, SQLError, close)
-
-{- | An artifact version marker: S3's ETag, opaque text compared for equality only.
-Two objects with equal ETags carry equal bytes, so an unchanged ETag means nothing to do.
--}
-newtype DbEtag = DbEtag Text
-    deriving stock (Eq, Show)
 
 {- | Query canonical package keys, with npm scopes inline, and raw version strings.
 Display names must not be used as query keys.

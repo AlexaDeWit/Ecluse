@@ -12,7 +12,7 @@ import Data.Containers.ListUtils (nubOrdOn)
 import Data.List (partition)
 import Data.Set qualified as Set
 
-import Ecluse.Core.Cve (DbEtag)
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     StoreFault,

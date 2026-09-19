@@ -10,7 +10,7 @@ import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 import Test.Hspec
 
-import Ecluse.Core.Cve (DbEtag (DbEtag))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Package (PackageName, mkPackageName)

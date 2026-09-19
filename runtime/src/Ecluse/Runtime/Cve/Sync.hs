@@ -48,8 +48,9 @@ import Amazonka.S3 qualified as S3
 import Amazonka.S3.Lens qualified as S3L
 import Lens.Micro ((^.))
 
-import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, DbEtag (..), openCveDb)
+import Ecluse.Core.Cve (CveDb (cveDbClose, cveDbMeta), CveDbRejected, openCveDb)
 import Ecluse.Core.Cve.Slot (AdvisorySource (..), CveSlot, currentAdvisoryEtag, currentAdvisorySource, observeAdvisoryPublication, swapIn)
+import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Fault (TransportFault)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance (apEpssScoreDate, apOsvNewestModified, apOsvSource))

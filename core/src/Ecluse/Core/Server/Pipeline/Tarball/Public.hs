@@ -17,7 +17,7 @@ module Ecluse.Core.Server.Pipeline.Tarball.Public (
 
 import Network.Wai (ResponseReceived)
 
-import Ecluse.Core.Cve (DbEtag)
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Fault (TransportFault, tfDetail)
 import Ecluse.Core.Package (Artifact (artUrl), PackageDetails)
 import Ecluse.Core.Package.Admission (

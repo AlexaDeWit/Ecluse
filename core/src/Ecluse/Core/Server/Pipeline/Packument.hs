@@ -34,7 +34,7 @@ import UnliftIO (concurrently)
 import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Credential (ClientCredential)
-import Ecluse.Core.Cve (DbEtag)
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Package (
     PackageDetails,
     PackageInfo (infoVersions),

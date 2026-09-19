@@ -11,7 +11,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
-import Ecluse.Core.Cve (DbEtag (DbEtag))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions), PackageName, mkPackageName)

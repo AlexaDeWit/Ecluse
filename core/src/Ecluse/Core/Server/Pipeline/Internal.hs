@@ -43,7 +43,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Katip (KatipContext, Severity (WarningS), SimpleLogPayload, katipAddContext, logFM, ls, sl)
 
-import Ecluse.Core.Cve (DbEtag (..))
+import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Package (
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoVersions),

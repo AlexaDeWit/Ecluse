@@ -65,7 +65,7 @@ module Ecluse.Core.Registry.Sweep.Types (
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime)
 
-import Ecluse.Core.Cve (DbEtag (DbEtag))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 import Ecluse.Core.Fault (TransportFault (tfCause, tfDetail), renderTransportCause)
 import Ecluse.Core.Package (PackageName)

@@ -93,6 +93,7 @@ library ecluse-core
     Ecluse.Core.Cve
     Ecluse.Core.Cve.Internal
     Ecluse.Core.Cve.Slot
+    Ecluse.Core.Cve.Types
     Ecluse.Core.Ecosystem
     Ecluse.Core.Fault
     Ecluse.Core.Fault.Http

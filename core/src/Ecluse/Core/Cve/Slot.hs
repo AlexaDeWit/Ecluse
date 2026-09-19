@@ -21,7 +21,8 @@ import Data.Time (UTCTime)
 import GHC.Clock (getMonotonicTime)
 import UnliftIO.Exception (bracket, mask_, uninterruptibleMask_)
 
-import Ecluse.Core.Cve (CveDb (..), CveLookup, DbEtag)
+import Ecluse.Core.Cve (CveDb (..), CveLookup)
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Osv.Provenance (AdvisoryProvenance)
 
 data Generation = Generation

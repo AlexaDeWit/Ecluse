@@ -10,7 +10,8 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Core.Cve (AdvisoryRange (..), DbEtag (DbEtag))
+import Ecluse.Core.Cve (AdvisoryRange (..))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportTimeout), transportFault)
 import Ecluse.Core.Osv.Types (UpperBound (Unbounded))

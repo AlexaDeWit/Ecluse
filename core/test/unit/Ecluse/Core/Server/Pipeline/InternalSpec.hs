@@ -14,7 +14,7 @@ import Katip.Monadic (runKatipContextT)
 import Test.Hspec
 
 import Ecluse.Core.Breaker (noBreakerReporter)
-import Ecluse.Core.Cve (DbEtag (..))
+import Ecluse.Core.Cve.Types (DbEtag (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     Hash,

@@ -7,7 +7,7 @@ module Ecluse.Core.Registry.Sweep.TypesSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Core.Cve (DbEtag (DbEtag))
+import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Registry.Sweep.Types (
     CycleHalt (HaltBucketUnsplittable, HaltConsentWithheld, HaltDeletionCap, HaltStoreFault, HaltStorePreserved),

@@ -46,7 +46,8 @@ import UnliftIO.Async (Async, async, cancel, uninterruptibleCancel, wait)
 import UnliftIO.Exception (bracket)
 
 import Ecluse.Core.Breaker (BreakerReporter (..))
-import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), DbEtag, MissingScorePolicy (..), insideAffectedVersion, scoreAtLeast)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), MissingScorePolicy (..), insideAffectedVersion, scoreAtLeast)
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
 import Ecluse.Core.Package

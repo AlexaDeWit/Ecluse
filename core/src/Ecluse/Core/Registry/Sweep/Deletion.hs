@@ -11,7 +11,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 
-import Ecluse.Core.Cve (DbEtag)
+import Ecluse.Core.Cve.Types (DbEtag)
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance
