@@ -79,7 +79,7 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Queue (MirrorQueue, noMirrorQueue)
 import Ecluse.Core.Registry.Adapter (ProjectName, adapterProjectName)
 import Ecluse.Core.Registry.Maintenance (StoreFacts (factBackend), StoreObservation (obFacts, obProbeUpstream))
-import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort, newBudgetMeter)
+import Ecluse.Core.Registry.Maintenance.Budget (BudgetPort, QuotaScope, RequestGate, newBudgetMeter)
 import Ecluse.Core.Registry.Sweep.Pacing (nominalPackagePace)
 import Ecluse.Core.Registry.Sweep.Types (SweepCache (..), SweepMount (..), SweepStore, deletingCache, pairedStore, previewCache)
 import Ecluse.Core.Rules (PreparedRule, RuleDeps, prepare)
@@ -235,12 +235,7 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     credentials <- buildCredentials (credentialReportersOver deferredMetrics) credentialBackends
     -- 'waitSeconds' keeps the sub-second part: every pace this budget produces is well under one.
     (budgetPort, gateFor) <- newBudgetMeter waitSeconds
-    let budget =
-            BudgetPorts
-                { bpGateFor = gateFor
-                , bpOverrides = drgQuotaOverrides dredger
-                , bpNominalPace = nominalPackagePace (drgChunkSize dredger) (drgChunkPause dredger)
-                }
+    let budget = budgetPortsFor dredger gateFor
     stores <-
         planStoreMaintenance
             buildStore
@@ -265,13 +260,14 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
                 (fromRight mempty cveSync)
                 (deferredBreakerReporter deferredMetrics EffectfulRule)
                 (katipOutageReporter logEnv)
+        heldCaches = fromRight mempty caches
     policies <- Map.fromList <$> traverse (sweepPolicyFor ruleDepsFor) (vpMounts validated)
-    (advisories, probed) <- probeHeldCaches (fromRight mempty caches)
+    (advisories, probed) <- probeHeldCaches heldCaches
     pure . (advisories,) . validationToEither $
         prunerWiringFrom deferredMetrics budgetPort policies
             <$> eitherToValidation cveSync
             <* eitherToValidation credentials
-            <*> eitherToValidation (stores >>= pairEach (fromRight mempty caches))
+            <*> eitherToValidation (stores >>= pairStoresWithCaches validated (bpLimits bootPlan) heldCaches)
             <* eitherToValidation caches
             <* eitherToValidation probed
   where
@@ -281,19 +277,36 @@ planPrunerWiring logEnv tracing buildCredentials buildStore bootPlan = do
     credentialBackends =
         [((eco, MirrorCredential), backend) | (eco, backend) <- mirrorBackends prunerMounts]
             <> [((eco, PrivateCacheCredential), backend) | (eco, (Just backend, _)) <- Map.toAscList (vpPrivateCaches validated)]
-    -- Every mirror store beside the cache it is swept with, reporting each that has none.
-    pairEach caches = validationToEither . Map.traverseWithKey (pairWithCache caches)
 
-    {- Both of a mount's stores under the bound they share. A mirrored mount is vetted with its
-    private cache, so a mirror store with none here is a refusal rather than a mount swept alone. -}
-    pairWithCache caches eco mirror =
+-- What a sweep's requests are counted and paced through, over the pace its chunk size and pause imply.
+budgetPortsFor :: DredgerSettings -> (QuotaScope -> RequestGate) -> BudgetPorts
+budgetPortsFor dredger gateFor =
+    BudgetPorts
+        { bpGateFor = gateFor
+        , bpOverrides = drgQuotaOverrides dredger
+        , bpNominalPace = nominalPackagePace (drgChunkSize dredger) (drgChunkPause dredger)
+        }
+
+{- Every mirror store beside the cache it is swept with, under the bound they share. A mirrored
+mount is vetted with its private cache, so a mirror store with none here is a refusal rather than
+a mount swept alone. -}
+pairStoresWithCaches ::
+    ValidatedPlan ->
+    Limits ->
+    Map Ecosystem SweepCache ->
+    Map Ecosystem SweepCache ->
+    Either [BootError] (Map Ecosystem SweepStore)
+pairStoresWithCaches validated limits caches =
+    validationToEither . Map.traverseWithKey pairOne
+  where
+    pairOne eco mirror =
         maybe (Failure [unpaired eco]) pure $ do
             cache <- Map.lookup eco caches
             clearedCache <- snd <$> Map.lookup eco (vpPrivateCaches validated)
             clearedMirror <- Map.lookup eco (vpMirrorStores validated)
             pure $
                 pairedStore
-                    (maxVersionCount (bpLimits bootPlan))
+                    (maxVersionCount limits)
                     (labelCache "mirrorTarget" clearedMirror mirror)
                     (labelCache "privateUpstream" clearedCache cache)
 

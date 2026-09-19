@@ -21,12 +21,13 @@ module Ecluse.Composition.Vet (
     -- * Rules and their severity
     Severity (..),
     rule,
+    byStoreRole,
 ) where
 
 import Validation (Validation (Failure, Success), validationToEither)
 
 import Ecluse.Composition.BootError (Advisory, BootError)
-import Ecluse.Composition.Types (RegistryRole)
+import Ecluse.Composition.Types (RegistryRole (MirrorPreviewer, MirrorPruner, MirrorWriter))
 
 {- | A boot check awaiting its role: the advisories it logs, beside either every refusal it earned
 or the value it vetted.
@@ -75,6 +76,16 @@ data Severity finding
       one only another role acts on ignores, which @ecluse check-config@ names that role for.
       -}
       Ignore
+
+{- | The severity split the store roles share: the deleting role and its preview read a finding
+alike, and the writing role reads it its own way. Spelling the preview arm separately is how the
+two store roles drift apart.
+-}
+byStoreRole :: Severity finding -> Severity finding -> RegistryRole -> Severity finding
+byStoreRole stores writer = \case
+    MirrorPruner -> stores
+    MirrorPreviewer -> stores
+    MirrorWriter -> writer
 
 {- | One rule: its severity per role, the condition it detects in an input, and that input. One
 detection feeds both the refusal and the advisory, so the two cannot describe different rules.
