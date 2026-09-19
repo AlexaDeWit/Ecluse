@@ -36,6 +36,7 @@ import Ecluse.Core.Credential.Refresh.Internal (
     refreshingProviderWith,
     releaseSingleFlight,
  )
+import Ecluse.Test.Poll (awaitUntil)
 import Ecluse.Test.Support (newTestClock)
 
 -- | An arbitrary "epoch" the refresh tests advance their injected clock from.
@@ -61,15 +62,11 @@ testConfig clock mint =
         , rcBreakerCooldown = 30
         }
 
-{- | Poll a boolean action until it holds or a generous timeout elapses. It awaits a
+{- | Poll a boolean action until it holds or a generous budget elapses. It awaits a
 background refresh without a fixed, flaky sleep.
 -}
 waitUntil :: IO Bool -> IO Bool
-waitUntil check = fromMaybe False <$> timeout 2_000_000 loop
-  where
-    loop = do
-        ok <- check
-        if ok then pure True else threadDelay 1_000 >> loop
+waitUntil = awaitUntil 2_000_000 1_000
 
 -- | Spin until a counter reaches @n@, so a test can wait for a background mint to start.
 waitForCount :: IORef Int -> Int -> IO Bool

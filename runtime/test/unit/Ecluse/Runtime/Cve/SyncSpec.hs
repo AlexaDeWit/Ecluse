@@ -64,6 +64,7 @@ import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinim
 import Ecluse.Test.Osv.Withdrawal (withdrawalBytes, withdrawalZip)
 import Ecluse.Test.OsvDb (compileOsvZipDbTo, withOsvZipDb)
 import Ecluse.Test.Package (sampleDetails, sampleManifest, unscopedNpm)
+import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (
     noopAdvisorySyncMetricsPort,
     passthroughAdvisorySyncTracingPort,
@@ -135,13 +136,9 @@ pollBudget :: Int
 pollBudget = 60_000_000
 
 waitFor :: Text -> IO Bool -> IO ()
-waitFor what ready = go (pollBudget `div` pollInterval)
-  where
-    go 0 = expectationFailure ("timed out waiting for " <> toString what)
-    go n =
-        ready >>= \case
-            True -> pass
-            False -> threadDelay pollInterval >> go (n - 1)
+waitFor what ready =
+    pollUntil (pollBudget `div` pollInterval) pollInterval id ready
+        >>= (`unless` expectationFailure ("timed out waiting for " <> toString what))
 
 awaitCount :: Text -> TVar Int -> Int -> IO ()
 awaitCount what counter wanted =
