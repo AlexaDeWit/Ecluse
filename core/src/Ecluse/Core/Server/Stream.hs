@@ -61,12 +61,12 @@ data RelayResponder response = RelayResponder
 
 -- | Whether a relay pumps the upstream body through, or answers bodiless.
 data UpstreamBody
-    = {- | Stream the body through. A @304@ still answers bodiless, because it carries
-      no body (RFC 9110 §15.4.5) and upstream's reader is never read.
+    = {- | Stream the body through. A @304@ still answers bodiless, because it carries no body
+      (RFC 9110 15.4.5) and upstream's reader is never read.
       -}
       StreamBody
-    | {- | Answer bodiless and never read upstream's body reader. A @HEAD@ takes this,
-      so a client cannot make the proxy stream a whole artifact to nowhere.
+    | {- | Answer bodiless and never read upstream's body reader, so a @HEAD@ cannot make the
+      proxy stream a whole artifact to nowhere.
       -}
       NoBody
     deriving stock (Eq, Show)
@@ -80,8 +80,8 @@ withUpstreamWhen ::
     UpstreamBody ->
     -- | Whether upstream's status is a hit. A rejected status is a clean miss.
     (Status -> Bool) ->
-    {- | Run once, pre-commit, on the accepted status and headers: the client-facing status
-    and headers, plus the caller's own verdict on the relay.
+    {- | Run once, pre-commit, on the accepted status and headers: the client-facing status and
+    headers, plus the caller's own verdict on the relay.
     -}
     (Status -> ResponseHeaders -> IO (Status, ResponseHeaders, verdict)) ->
     RelayResponder response ->

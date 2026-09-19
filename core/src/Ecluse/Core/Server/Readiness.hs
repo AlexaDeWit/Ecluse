@@ -3,20 +3,25 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The verdict behind @\/readyz@, and the per-mount advisory state it was decided from.
-One configured ecosystem awaiting its advisory database does not take the whole listener out
-of rotation, so a router keeps sending the healthy mounts their traffic. Only a mount whose
-rules deny on the database waits for one: the rest are ready before any artifact loads.
-The constructors are exported for matching and 'mountReadiness' is the sanctioned builder,
-so a verdict a producer makes agrees with its own map. Readiness routes traffic. It gates no
-request: a mount with no advisory database refuses what needs one through its own rule policy.
+
+One configured ecosystem awaiting its advisory database does not take the whole listener out of
+rotation, so a router keeps sending the healthy mounts their traffic. Only a mount whose rules
+deny on the database waits for one. Readiness routes traffic and gates no request: a mount with
+no advisory database refuses what needs one through its own rule policy. The constructors are
+exported for matching, and 'mountReadiness' is the only builder.
 -}
 module Ecluse.Core.Server.Readiness (
+    -- * One mount's advisory state
     DatabaseRequirement (..),
     MountReadiness (..),
     mountStateFor,
+
+    -- * The verdict
     Readiness (..),
     mountReadiness,
     alwaysReady,
+
+    -- * Reading the verdict
     routable,
     allMountsReady,
 ) where
