@@ -112,8 +112,7 @@ spec = do
     describe "withUpstreamWhen -- bodiless relay (HEAD, no pump)" $
         it "relays the upstream status and content headers with no body on a hit" $ do
             -- The helper never pumps the body on a HEAD, which is the amplification a HEAD must
-            -- never trigger. A miss decides before the body mode is read, so the conditional
-            -- relay's own miss cases above cover the bodiless relay too.
+            -- never trigger.
             resp <- throughProxy headLengthUpstream probeProxy
             responseBody resp `shouldBe` ""
             headerOf hContentType resp `shouldBe` Just "application/octet-stream"
@@ -228,9 +227,8 @@ waiRelayResponder respond =
         (\status headers body -> respond (responseStream status headers body))
         (\status headers -> respond (responseLBS status headers ""))
 
-{- | A chunk source over a fixed list: each pull returns the next chunk, then an empty
-'ByteString' once exhausted (the @http-client@ @BodyReader@ contract). It records the
-high-water mark of chunks produced but not yet consumed.
+{- | A chunk source: each pull returns the next chunk, then an empty 'ByteString' once
+exhausted (the @http-client@ @BodyReader@ contract). It records the outstanding high-water mark.
 -}
 data Source = Source
     { srcNext :: IO ByteString

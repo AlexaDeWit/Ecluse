@@ -94,11 +94,7 @@ The scribes close before the capture is read, so every buffered line is in the r
 captureJsonLog :: (LogEnv -> IO a) -> IO (a, Text)
 captureJsonLog body = do
     slot <- newEmptyMVar
-    captured <- captureStdout $ do
-        logEnv <- jsonLogEnv
-        result <- body logEnv
-        void (closeScribes logEnv)
-        putMVar slot result
+    captured <- captureStdout $ bracket jsonLogEnv (void . closeScribes) (body >=> putMVar slot)
     (,captured) <$> takeMVar slot
 
 -- | 'captureJsonLog' over a @katip@-constrained action, at the empty context and namespace.
