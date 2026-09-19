@@ -107,25 +107,22 @@ handleCases store = do
 
 factCases :: CodeArtifactStore -> Spec
 factCases store = describe "the CodeArtifact handle's standing facts" $ do
-    it "names the backend the Dredger's boot line records" $ do
-        facts <- factsFor store
-        factBackend facts `shouldBe` "codeArtifact"
+    -- The handle holds a real amazonka env, and these cases only read what it was built with.
+    beforeAll (factsFor store) $ do
+        it "names the backend the Dredger's boot line records" $ \facts ->
+            factBackend facts `shouldBe` "codeArtifact"
 
-    it "accepts 100 versions per destructive call" $ do
-        facts <- factsFor store
-        factDeleteCeiling facts `shouldBe` AtMost 100
+        it "accepts 100 versions per destructive call" $ \facts ->
+            factDeleteCeiling facts `shouldBe` AtMost 100
 
-    it "records that CodeArtifact re-admits a version published again after a delete" $ do
-        facts <- factsFor store
-        factRefill facts `shouldBe` RefillPermitted
+        it "records that CodeArtifact re-admits a version published again after a delete" $ \facts ->
+            factRefill facts `shouldBe` RefillPermitted
 
-    it "records that the delete is done by the time the call answers" $ do
-        facts <- factsFor store
-        factCompletion facts `shouldBe` CompletesOnCall
+        it "records that the delete is done by the time the call answers" $ \facts ->
+            factCompletion facts `shouldBe` CompletesOnCall
 
-    it "carries the alphabet it was built with, which is the mount ecosystem's own" $ do
-        facts <- factsFor store
-        factNameAlphabet facts `shouldBe` testAlphabet
+        it "carries the alphabet it was built with, which is the mount ecosystem's own" $ \facts ->
+            factNameAlphabet facts `shouldBe` testAlphabet
 
     it "reads a manifest through the read it was handed, never through the control plane" $ do
         outcome <- readStoreManifest (handleOver store inertPlane) lodashName

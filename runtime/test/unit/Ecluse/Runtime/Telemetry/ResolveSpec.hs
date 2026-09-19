@@ -10,7 +10,7 @@ import Data.Version (showVersion)
 import Paths_ecluse (version)
 import System.Environment (unsetEnv)
 import Test.Hspec
-import UnliftIO (bracket_)
+import UnliftIO (finally)
 
 import OpenTelemetry.Attributes (Attribute, fromAttribute)
 import OpenTelemetry.Resource.Detect (detectResourceAttributes)
@@ -277,10 +277,10 @@ detectedResourceAttributes environment = do
     textAttribute :: (Text, Attribute) -> Maybe (Text, Text)
     textAttribute (key, attribute) = (key,) <$> fromAttribute attribute
 
--- Run an action, then clear the OTEL_* variables prepareTelemetry writes, so a
--- mutated process environment never leaks into another spec.
+-- Clear the OTEL_* variables prepareTelemetry writes, so a mutated process environment
+-- never leaks into another spec.
 withCleanOtelEnv :: IO a -> IO a
-withCleanOtelEnv = bracket_ (pure ()) (mapM_ unsetEnv otelVars)
+withCleanOtelEnv act = act `finally` mapM_ unsetEnv otelVars
 
 otelVars :: [String]
 otelVars =
