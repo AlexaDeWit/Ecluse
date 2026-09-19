@@ -2,63 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Telemetry configuration resolution and export-failure routing: the boot-time
-substrate that sits between the operator's environment and the OpenTelemetry SDK.
-
-Écluse's maintainer runs Datadog, but the project is vendor-neutral, so an operator
-may describe the same telemetry identity in either dialect. A Datadog shop sets the
-@DD_*@ variables. A plain OpenTelemetry shop sets the @OTEL_*@ ones. This module is
-the __self-aligning resolver__ that collapses both into one answer, so logs and
-traces share a single identity whichever dialect was provided.
-
-== The resolver
-
-'resolveTelemetry' is a bounded precedence table over exactly four fields: @service.name@,
-@deployment.environment.name@ and its deprecated @deployment.environment@ spelling,
-@service.version@, and the OTLP export endpoint. Each resolves __Datadog-value-wins → vanilla
-OpenTelemetry → default__. It is deliberately /not/ a general per-variable merge: only these
-four cross between the dialects. The @DD_API_KEY@ \/ @DD_SITE@ agentless-SaaS credentials are
-__never read__. The exporter targets an __operator-declared__, node-local collector\/Agent,
-never a vendor's cloud directly, so no key in the environment can turn into off-cluster
-egress. This module normalises the endpoint and uses it as given, never classified or gated.
-
-@OTEL_RESOURCE_ATTRIBUTES@ is read with the __W3C baggage grammar the SDK itself
-uses__. One grammar reads the variable, so a percent-encoded value decodes the same
-way for the @dd@ log object and for the span resource. Blank members are dropped
-first, because operator-authored configuration carries a stray comma often enough.
-A value the grammar still rejects warns at boot and contributes nothing. The
-projection then overwrites the variable with the resolved identity alone. Both the
-@dd@ log object and the span resource carry that identity, and in that rejected case
-neither carries the operator's attributes.
-
-The exported header carries the operator's own attributes plus @deployment.environment.name@
-and @service.version@. It never carries @service.name@, because @OTEL_SERVICE_NAME@ in
-the same projection already does and every SDK signal path prefers that variable. The
-W3C baggage limits cap the header, and the SDK's encoder sheds whatever overflows them in
-hash order. 'resourceAttributes' therefore makes the choice first: the resolved identity
-is admitted ahead of the operator's own keys, and a key the limits exclude warns once at
-boot, by name.
-
-The resolved 'ResolvedTelemetry' is the __single source of truth__ for both halves of
-the telemetry stack. 'otelEnvironmentOverrides' projects it back to the canonical
-@OTEL_*@ variables the env-driven SDK reads, so a @DD_*@-only deployment still
-configures the exporter. The same record feeds the @dd@ log object that stitches a log
-line to its trace.
-
-== Export-failure routing
-
-Telemetry failures must stay off the request path and out of raw stderr. The SDK's
-batch exporter runs asynchronously, so an unreachable collector never touches a served
-request. This module owns the __shared throttle__ those failures coalesce through. An
-'ExportFailureSink' carries one throttle plus a @katip@ target. 'routeExportFailure'
-surfaces the first failure plainly, then a periodic heartbeat carrying the suppressed
-count. A persistently unreachable endpoint is then one visible warning and a heartbeat,
-not a per-flush flood. The exporter wrappers ("Ecluse.Runtime.Telemetry") feed the sink
-through 'observeExportResult'. 'installExportErrorHandler' routes the SDK's own
-diagnostic stream through the same sink.
-
-@docs\/architecture\/observability.md@ describes the configuration model and the
-export-failure mechanism.
+{- | Resolve the telemetry identity from the environment, collapsing the Datadog and the vanilla
+OpenTelemetry dialect into one answer that logs and traces share. @DD_API_KEY@ and @DD_SITE@ are
+never read, and the OTLP endpoint is an operator-declared destination used as given, so no key in
+the environment can turn into off-cluster egress. @OTEL_RESOURCE_ATTRIBUTES@ is read with the W3C
+baggage grammar the SDK itself uses, so a percent-encoded value decodes the same way for the @dd@
+log object and for the span resource. @docs\/architecture\/observability.md@ describes the
+configuration model.
 -}
 module Ecluse.Runtime.Telemetry.Resolve (
     -- * The resolved telemetry identity
@@ -66,24 +16,12 @@ module Ecluse.Runtime.Telemetry.Resolve (
     TelemetryEndpoint (..),
     EndpointSource (..),
     resolveTelemetry,
+    declaredEnv,
 
     -- * Canonical @OTEL_*@ projection
     otelEnvironmentOverrides,
     ResourceAttributes (..),
     resourceAttributes,
-
-    -- * Export-failure throttle (pure core)
-    ThrottleState (..),
-    ThrottleEmit (..),
-    initialThrottle,
-    throttleStep,
-
-    -- * Export-failure routing
-    ExportFailureSink,
-    newExportFailureSink,
-    exportFailureSink,
-    observeExportResult,
-    installExportErrorHandler,
 
     -- * Boot wiring
     telemetryWarnings,
@@ -93,22 +31,19 @@ module Ecluse.Runtime.Telemetry.Resolve (
 import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import GHC.Exts qualified as Exts
 import System.Environment (setEnv)
 
 import Katip (LogEnv, Severity (WarningS))
 import OpenTelemetry.Baggage (Baggage, Element, Token)
 import OpenTelemetry.Baggage qualified as Baggage
-import OpenTelemetry.Exporter.Span (ExportResult (..))
-import OpenTelemetry.Internal.Logging (setGlobalErrorHandler)
 
 import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Runtime.Log (moduleLog)
 
-{- | Where a resolved OTLP endpoint came from, so the boot path can distinguish a
-deliberately-configured target from the silent default and warn on the latter.
+{- | Where a resolved OTLP endpoint came from, so the boot path can tell a configured target from
+the silent default.
 -}
 data EndpointSource
     = -- | Derived from @DD_AGENT_HOST@ (as @http:\/\/{host}:4318@).
@@ -128,9 +63,8 @@ data TelemetryEndpoint = TelemetryEndpoint
     }
     deriving stock (Eq, Show)
 
-{- | The telemetry identity resolved from the environment: the single source of truth for the
-SDK configuration and the @dd@ log object. The process cannot know its own deployment
-environment, so 'rtEnvironment' stays optional and never carries a placeholder.
+{- | The telemetry identity the SDK configuration and the @dd@ log object share. The process
+cannot know its own deployment environment, so 'rtEnvironment' stays optional.
 -}
 data ResolvedTelemetry = ResolvedTelemetry
     { rtServiceName :: Text
@@ -144,17 +78,8 @@ data ResolvedTelemetry = ResolvedTelemetry
     }
     deriving stock (Eq, Show)
 
-{- | Resolve the telemetry identity from an environment list, each field
-__Datadog value wins → vanilla OpenTelemetry → default__.
-
-@service.name@ falls @DD_SERVICE@ → @OTEL_SERVICE_NAME@ → the @OTEL_RESOURCE_ATTRIBUTES@ key →
-@ecluse@. The environment falls @DD_ENV@ → @deployment.environment.name@ → the deprecated
-@deployment.environment@ → unset. @service.version@ falls @DD_VERSION@ → the matching attribute
-key → the build version. The endpoint falls @DD_AGENT_HOST@ (as @http:\/\/{host}:4318@) →
-@OTEL_EXPORTER_OTLP_ENDPOINT@ → @http:\/\/localhost:4318@.
-
-A present but blank value counts as unset, so an empty @DD_ENV=@ stamps no environment onto a
-signal. The resolver never reads @DD_API_KEY@ or @DD_SITE@.
+{- | Resolve the telemetry identity, each field falling __Datadog value → vanilla OpenTelemetry →
+default__. The resolver never reads @DD_API_KEY@ or @DD_SITE@.
 
 >>> rtServiceName (resolveTelemetry [("DD_SERVICE", "api"), ("OTEL_SERVICE_NAME", "ignored")])
 "api"
@@ -167,12 +92,12 @@ resolveTelemetry environment =
     ResolvedTelemetry
         { rtServiceName = fromMaybe defaultServiceName serviceName
         , rtEnvironment = deploymentEnvironment
-        , rtVersion = lk "DD_VERSION" <|> attr "service.version" <|> Just productVersion
+        , rtVersion = declared "DD_VERSION" <|> attr "service.version" <|> Just productVersion
         , rtEndpoint = endpoint
         }
   where
-    lk :: String -> Maybe Text
-    lk name = nonBlank . toText =<< lookup name environment
+    declared :: String -> Maybe Text
+    declared name = declaredEnv name environment
 
     attributes :: Baggage
     attributes = fromRight Baggage.empty (decodeResourceAttributes environment)
@@ -183,20 +108,24 @@ resolveTelemetry environment =
         nonBlank =<< Baggage.getValue name attributes
 
     serviceName :: Maybe Text
-    serviceName = lk "DD_SERVICE" <|> lk "OTEL_SERVICE_NAME" <|> attr "service.name"
+    serviceName = declared "DD_SERVICE" <|> declared "OTEL_SERVICE_NAME" <|> attr "service.name"
 
     -- The SDK deprecates deployment.environment for deployment.environment.name. Both spellings
     -- are read, so an operator on either one resolves, and only the current spelling is emitted.
     deploymentEnvironment :: Maybe Text
     deploymentEnvironment =
-        lk "DD_ENV" <|> attr "deployment.environment.name" <|> attr "deployment.environment"
+        declared "DD_ENV" <|> attr "deployment.environment.name" <|> attr "deployment.environment"
 
     endpoint :: TelemetryEndpoint
-    endpoint = case lk "DD_AGENT_HOST" of
+    endpoint = case declared "DD_AGENT_HOST" of
         Just host -> TelemetryEndpoint (agentHostUrl host) FromDdAgentHost
-        Nothing -> case lk "OTEL_EXPORTER_OTLP_ENDPOINT" of
+        Nothing -> case declared "OTEL_EXPORTER_OTLP_ENDPOINT" of
             Just url -> TelemetryEndpoint url FromOtelEndpoint
             Nothing -> TelemetryEndpoint defaultEndpointUrl DefaultedEndpoint
+
+-- | Read one environment variable, counting a present but blank value as unset.
+declaredEnv :: String -> [(String, String)] -> Maybe Text
+declaredEnv name environment = nonBlank . toText =<< lookup name environment
 
 defaultServiceName :: Text
 defaultServiceName = "ecluse"
@@ -204,10 +133,8 @@ defaultServiceName = "ecluse"
 defaultEndpointUrl :: Text
 defaultEndpointUrl = "http://localhost:4318"
 
-{- The Datadog Agent's OTLP receiver listens on 4318 for HTTP\/protobuf, the only transport we
-build. A literal IPv6 host is bracketed so the authority is well-formed: @http:\/\/[fd00::1]:4318@,
-not the invalid @http:\/\/fd00::1:4318@. A host that already carries a scheme or a port goes
-through unchanged, so a deliberately-qualified @DD_AGENT_HOST@ is never mangled. -}
+{- The Datadog Agent's OTLP receiver listens on 4318 for HTTP\/protobuf. A literal IPv6 host is
+bracketed so the authority stays well-formed, and a host with a scheme or a port passes unchanged. -}
 agentHostUrl :: Text -> Text
 agentHostUrl raw
     | "://" `T.isInfixOf` host = host
@@ -221,9 +148,7 @@ agentHostUrl raw
         | otherwise = host <> ":4318"
 
 {- | Project the resolved identity back to the canonical @OTEL_*@ variables the env-driven SDK
-reads, so a @DD_*@-only deployment still configures the exporter. The protocol is pinned to
-@http\/protobuf@ because gRPC sits behind a disabled cabal flag. 'prepareTelemetry' sets these
-before the SDK initialises.
+reads. The protocol is pinned to @http\/protobuf@ because gRPC sits behind a disabled cabal flag.
 -}
 otelEnvironmentOverrides :: [(String, String)] -> [(String, String)]
 otelEnvironmentOverrides environment =
@@ -331,9 +256,8 @@ encodedMemberBytes tok el =
 memberKey :: Token -> Text
 memberKey = decodeUtf8 . Baggage.tokenValue
 
-{- Decode @OTEL_RESOURCE_ATTRIBUTES@ with the SDK's own W3C baggage parser, which percent-decodes
-every value. Blank members are dropped first, so a trailing comma or stray spacing still parses
-where the grammar alone would reject the whole value. -}
+{- Decode @OTEL_RESOURCE_ATTRIBUTES@ with the SDK's own W3C baggage parser. Blank members are
+dropped first, so a trailing comma parses where the grammar alone would reject the whole value. -}
 decodeResourceAttributes :: [(String, String)] -> Either Text Baggage
 decodeResourceAttributes environment = case members of
     [] -> Right Baggage.empty
@@ -350,9 +274,7 @@ decodeResourceAttributes environment = case members of
 renderResourceAttributes :: Baggage -> String
 renderResourceAttributes = decodeUtf8 . Baggage.encodeBaggageHeader
 
-{- | The boot warnings the environment raises, in the order 'prepareTelemetry' surfaces them.
-Exposed as values so a test pins each message without a @katip@ scribe.
--}
+-- | The boot warnings the environment raises, in the order 'prepareTelemetry' surfaces them.
 telemetryWarnings :: [(String, String)] -> [Text]
 telemetryWarnings environment = endpointWarning <> attributeWarning <> droppedWarning
   where
@@ -399,129 +321,14 @@ droppedAttributesMessage dropped =
         <> T.intercalate ", " dropped
         <> " from the exported resource attributes."
 
-{- | The throttle state for SDK export-error routing. Exposed so a test asserts the throttle
-decision without wall-clock timing.
--}
-data ThrottleState = ThrottleState
-    { tsLastLogged :: Maybe UTCTime
-    -- ^ When an error was last surfaced ('Nothing' before the first).
-    , tsSuppressed :: Int
-    -- ^ Errors suppressed since the last surfaced one.
-    }
-    deriving stock (Eq, Show)
-
--- | What 'throttleStep' decided to do with an export error.
-data ThrottleEmit
-    = -- | The first error: surface it plainly.
-      EmitFirst
-    | {- | The throttle window elapsed: surface a heartbeat carrying the count of
-      errors since the last surfaced one (this one included).
-      -}
-      EmitHeartbeat Int
-    | -- | Within the window: suppress and count.
-      EmitSuppress
-    deriving stock (Eq, Show)
-
--- | The initial throttle state: nothing logged, nothing suppressed.
-initialThrottle :: ThrottleState
-initialThrottle = ThrottleState Nothing 0
-
--- How long export errors are coalesced between surfaced heartbeats.
-throttleInterval :: NominalDiffTime
-throttleInterval = 60
-
-{- | Advance the throttle for one export error at @now@: the first error surfaces, then a
-heartbeat once @interval@ has elapsed since the last surfaced error, and anything between is
-suppressed and counted.
--}
-throttleStep :: NominalDiffTime -> UTCTime -> ThrottleState -> (ThrottleState, ThrottleEmit)
-throttleStep interval now st = case tsLastLogged st of
-    Nothing -> (ThrottleState (Just now) 0, EmitFirst)
-    Just lastLogged
-        | diffUTCTime now lastLogged >= interval ->
-            (ThrottleState (Just now) 0, EmitHeartbeat (tsSuppressed st + 1))
-        | otherwise ->
-            (st{tsSuppressed = tsSuppressed st + 1}, EmitSuppress)
-
-{- | Prepare the telemetry substrate at boot, before the SDK initialises: resolve the identity
-and normalise the canonical @OTEL_*@ environment the SDK reads. "Ecluse.Runtime.Telemetry" wires
-the export-failure observation later, when the substrate stands up.
-
-Every 'telemetryWarnings' message goes through @katip@ first. A defaulted endpoint, with neither
-@DD_AGENT_HOST@ nor @OTEL_EXPORTER_OTLP_ENDPOINT@ set, falls back to @http:\/\/localhost:4318@.
-That is never a failure, since the OTLP endpoint is an operator-declared destination this module
-never classifies or gates.
+{- | Surface the boot warnings and set the canonical @OTEL_*@ environment, before the SDK reads it.
+A defaulted endpoint is a warning and never a failure: the destination is the operator's to declare.
 -}
 prepareTelemetry :: LogEnv -> [(String, String)] -> IO ()
 prepareTelemetry logEnv environment = do
     mapM_ (moduleLog logEnv resolveModule WarningS) (telemetryWarnings environment)
     mapM_ (uncurry setEnv) (otelEnvironmentOverrides environment)
 
-{- | The shared export-failure sink: one throttle and one @katip@ target for the span exporter,
-the metric exporter, and the SDK's own diagnostics, so an unreachable collector produces one
-coalesced stream instead of several independent floods. The clock and the surfacing action are
-injected, so a test asserts the throttle decision without wall-clock timing.
--}
-data ExportFailureSink = ExportFailureSink
-    { sinkNow :: IO UTCTime
-    , sinkState :: IORef ThrottleState
-    , sinkSurface :: Severity -> Text -> IO ()
-    }
-
--- | Build an export-failure sink over an injected clock and surfacing action.
-newExportFailureSink :: IO UTCTime -> (Severity -> Text -> IO ()) -> IO ExportFailureSink
-newExportFailureSink now surface = do
-    throttleRef <- newIORef initialThrottle
-    pure ExportFailureSink{sinkNow = now, sinkState = throttleRef, sinkSurface = surface}
-
--- | The production sink: the wall clock and the composition-root 'LogEnv' as the @katip@ target.
-exportFailureSink :: LogEnv -> IO ExportFailureSink
-exportFailureSink logEnv = newExportFailureSink getCurrentTime (moduleLog logEnv resolveModule)
-
 -- The module name every line this module raises is tagged with.
 resolveModule :: Text
 resolveModule = "Ecluse.Runtime.Telemetry.Resolve"
-
-{- Route one export-failure diagnostic through the shared throttle into @katip@. The first
-error surfaces plainly and later ones fold into a heartbeat carrying the suppressed count.
--}
-routeExportFailure :: ExportFailureSink -> Text -> IO ()
-routeExportFailure sink diagnostic = do
-    now <- sinkNow sink
-    emit <- atomicModifyIORef' (sinkState sink) (throttleStep throttleInterval now)
-    case emit of
-        EmitFirst -> sinkSurface sink WarningS (firstErrorMessage diagnostic)
-        EmitHeartbeat suppressed -> sinkSurface sink WarningS (heartbeatMessage suppressed diagnostic)
-        EmitSuppress -> pass
-
-{- | Observe one exporter's 'ExportResult', routing a 'Failure' through the sink. It only
-observes, so export semantics stay untouched and a failed export never reaches the request
-path. @signal@ names the failing exporter (@span@ \/ @metric@).
--}
-observeExportResult :: ExportFailureSink -> Text -> ExportResult -> IO ()
-observeExportResult sink signal = \case
-    Success -> pass
-    Failure mErr -> routeExportFailure sink (signal <> " export failed" <> maybe "" ((": " <>) . show) mErr)
-
-{- | Install a process-global handler for the SDK's own diagnostic stream, routed through the
-shared sink. In @hs-opentelemetry 1.0.0.0@ the SDK drops a failed OTLP export instead of routing
-it here, so 'observeExportResult' carries the export-failure feed and this handler serves only
-SDK-internal diagnostics.
-
-The forwarded diagnostic is the SDK's own text. This module never reads the credential-bearing
-inputs (@OTEL_EXPORTER_OTLP_HEADERS@, @DD_API_KEY@, @DD_SITE@), so the only residual leak channel
-is whatever the SDK itself logs.
--}
-installExportErrorHandler :: ExportFailureSink -> IO ()
-installExportErrorHandler sink = setGlobalErrorHandler (routeExportFailure sink . toText)
-
-firstErrorMessage :: Text -> Text
-firstErrorMessage diagnostic =
-    "telemetry export error (subsequent identical errors are throttled): " <> diagnostic
-
-heartbeatMessage :: Int -> Text -> Text
-heartbeatMessage suppressed diagnostic =
-    "telemetry export still failing: "
-        <> show suppressed
-        <> " export errors since the last report. Latest: "
-        <> diagnostic

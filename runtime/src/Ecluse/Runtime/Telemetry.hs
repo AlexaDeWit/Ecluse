@@ -57,7 +57,7 @@ import OpenTelemetry.Trace (TracerProvider, initializeGlobalTracerProvider, shut
 import UnliftIO (bracket)
 import UnliftIO.Exception (catchAny)
 
-import Ecluse.Runtime.Telemetry.Resolve (
+import Ecluse.Runtime.Telemetry.ExportFailure (
     ExportFailureSink,
     exportFailureSink,
     installExportErrorHandler,

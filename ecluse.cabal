@@ -430,6 +430,7 @@ library ecluse-runtime
     Ecluse.Runtime.Server.Middleware
     Ecluse.Runtime.Telemetry
     Ecluse.Runtime.Telemetry.Correlation
+    Ecluse.Runtime.Telemetry.ExportFailure
     Ecluse.Runtime.Telemetry.Instruments
     Ecluse.Runtime.Telemetry.Reporters
     Ecluse.Runtime.Telemetry.Resolve
@@ -1019,6 +1020,7 @@ test-suite ecluse-runtime-unit
     Ecluse.Runtime.Server.DrainSpec
     Ecluse.Runtime.Server.HaltSpec
     Ecluse.Runtime.Telemetry.CorrelationSpec
+    Ecluse.Runtime.Telemetry.ExportFailureSpec
     Ecluse.Runtime.Telemetry.InstrumentsSpec
     Ecluse.Runtime.Telemetry.ReportersSpec
     Ecluse.Runtime.Telemetry.ResolveSpec
