@@ -84,10 +84,6 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
             setClock (addUTCTime 100 start)
             points `shouldReturn` expected 0
 
-    it "builds the instrument handle against the no-op meter when telemetry is disabled" $ do
-        _ <- newMetrics telemetryDisabled
-        pure () :: Expectation
-
     it "records every catalogue signal as an inert no-op without throwing" $ do
         m <- newMetrics telemetryDisabled
         -- One representative call per instrument, spanning the bounded label domains,
@@ -123,13 +119,9 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         recordAdvisoryCompileAccepted m Npm 12000
         traverse_ (\cause -> recordAdvisoryCompileDropped m Npm cause 3) [DropOversize, DropMalformed]
         traverse_ (recordAdvisoryCompileRun m Npm) [CompileCompleted, CompileAborted]
-        pure () :: Expectation
-
-    it "registers the advisory-age callback against the inert instrument without throwing" $ do
-        m <- newMetrics telemetryDisabled
         stamp <- getMonotonicTime
-        registerAdvisoryDatabaseAge m Npm (pure (Just stamp))
-        registerAdvisoryDatabaseAge m PyPI (pure (Just stamp))
+        traverse_ (\eco -> registerAdvisoryDatabaseAge m eco (pure (Just stamp))) [Npm, PyPI]
+        registerAdvisorySourceAge m Npm (pure Nothing)
         pure () :: Expectation
 
     it "reports the advisory database's age as whole seconds since its generation was installed" $ do
@@ -150,11 +142,6 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         reported <- newIORef []
         reportAdvisoryDatabaseAge Npm (pure Nothing) (capture reported)
         readIORef reported `shouldReturn` []
-
-    it "registers the advisory source-age callback against the inert instrument without throwing" $ do
-        m <- newMetrics telemetryDisabled
-        registerAdvisorySourceAge m Npm (pure Nothing)
-        pure () :: Expectation
 
     it "reports the advisory source's age as whole seconds since the artifact was published" $ do
         reported <- newIORef []
