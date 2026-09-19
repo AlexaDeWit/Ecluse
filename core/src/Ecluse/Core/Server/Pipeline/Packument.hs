@@ -8,6 +8,7 @@ First-party names consult only the private origin.
 -}
 module Ecluse.Core.Server.Pipeline.Packument (
     PackumentReplies (..),
+    packumentAction,
     servePackument,
     headPackument,
 
@@ -27,7 +28,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Katip (Severity (DebugS, InfoS), logFM, ls)
-import Network.HTTP.Types (ResponseHeaders, hContentLength)
+import Network.HTTP.Types (Method, ResponseHeaders, hContentLength)
 import Network.Wai (Request, ResponseReceived, requestHeaders)
 import UnliftIO (concurrently)
 import UnliftIO.Exception (catchAny, throwIO)
@@ -66,6 +67,7 @@ import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps),
     PackumentDeps (..),
+    ResponseAction (RunPipeline),
     ServeRuntime (..),
     ctxMount,
     ctxRuntime,
@@ -104,6 +106,7 @@ import Ecluse.Core.Server.Response (
     packumentStatus,
     serveDecisionOf,
  )
+import Ecluse.Core.Server.Route (isHead)
 import Ecluse.Core.Snapshot (Snapshot (..))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
@@ -120,6 +123,16 @@ data PackumentReplies response = PackumentReplies
     , packumentBadGateway :: ResponseHeaders -> Refusal -> response
     , packumentUnavailable :: ResponseHeaders -> Refusal -> response
     }
+
+{- | The action a read route names for a package unit. A @HEAD@ takes the head-mode handler,
+which runs the identical gating and merge but withholds the body.
+-}
+packumentAction :: PackumentReplies response -> Method -> PackageName -> ResponseAction response
+packumentAction replies method name
+    | isHead method = RunPipeline perimeterFallback (headPackument replies name)
+    | otherwise = RunPipeline perimeterFallback (servePackument replies name)
+  where
+    perimeterFallback = packumentInternal replies [] (mkRefusal Nothing "internal server error")
 
 -- | Serve merged metadata while retaining private access authority and package identity checks.
 servePackument ::

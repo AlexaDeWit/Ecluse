@@ -56,7 +56,7 @@ import Ecluse.Core.Registry.PyPI.Project (FileCoordinate (fcVersionKey), canonic
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
 import Ecluse.Core.Server.Context (
     MountRouter,
-    ResponseAction (AnswerRefusal, RunPipeline),
+    ResponseAction (AnswerRefusal),
     RouteAction (RouteAction),
  )
 import Ecluse.Core.Server.Contract (
@@ -75,8 +75,8 @@ import Ecluse.Core.Server.Contract (
     responseValue,
  )
 import Ecluse.Core.Server.Path (Filename, mkFilename)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), headPackument, servePackument)
-import Ecluse.Core.Server.Pipeline.Tarball (TarballReplies (..), headTarball, serveTarball)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), packumentAction)
+import Ecluse.Core.Server.Pipeline.Tarball (TarballReplies (..), tarballAction)
 import Ecluse.Core.Server.Response (HelpMessage, Refusal, mkRefusal, refusalHelp)
 import Ecluse.Core.Server.Route (
     Capture (Capture),
@@ -85,13 +85,12 @@ import Ecluse.Core.Server.Route (
     PatternSeg (SegCap, SegLit),
     Route (Route),
     RouteName (RouteName),
-    isHead,
     refusing,
     renderRoute,
     routerOf,
     safeSegment,
  )
-import Ecluse.Core.Server.RouteDescription (ParamSpec (ParamSpec), RouteSpec, catchAllSpecs, specsOf)
+import Ecluse.Core.Server.RouteDescription (RouteSpec, catchAllSpecs, specsOf, unsupportedPathParam)
 import Ecluse.Core.Version (Version, mkVersion)
 
 -- | Match the first applicable route, otherwise answer 'pypiNotFound'.
@@ -278,16 +277,11 @@ artifactRefusalBody refusal = maybe PassthroughEmpty PassthroughBytes (helpBytes
 helpBytes :: Refusal -> Maybe LByteString
 helpBytes = fmap (fromStrict . encodeUtf8) . refusalHelp
 
-{- @GET \/simple\/{project}@: a project unit is an index read. A @HEAD@ takes the head-mode
-handler, which runs the identical gating and merge but withholds the body. -}
+-- @GET \/simple\/{project}@: a project unit is an index read.
 buildIndex :: Method -> [PyPICap] -> Maybe (ResponseAction PyPIIndexResponse)
 buildIndex method = \case
-    [PyPIProject name]
-        | isHead method -> Just (RunPipeline perimeterFallback (headPackument pypiIndexReplies name))
-        | otherwise -> Just (RunPipeline perimeterFallback (servePackument pypiIndexReplies name))
+    [PyPIProject name] -> Just (packumentAction pypiIndexReplies method name)
     _ -> Nothing
-  where
-    perimeterFallback = packumentInternal pypiIndexReplies [] (mkRefusal Nothing "internal server error")
 
 -- 'artifactCoordinate' applies the cross-capture path-confusion check, so a file naming another
 -- project falls through to the @404@ rather than having a coordinate fabricated for it.
@@ -295,13 +289,8 @@ buildArtifact :: Method -> [PyPICap] -> Maybe (ResponseAction PassthroughRespons
 buildArtifact method = \case
     [PyPIProject name, PyPIFile file] -> do
         (version, filename) <- artifactCoordinate name file
-        pure $
-            if isHead method
-                then RunPipeline perimeterFallback (headTarball pypiArtifactReplies name version filename)
-                else RunPipeline perimeterFallback (serveTarball pypiArtifactReplies name version filename)
+        pure (tarballAction pypiArtifactReplies method name version filename)
     _ -> Nothing
-  where
-    perimeterFallback = tarballError pypiArtifactReplies status500 [] (mkRefusal Nothing "internal server error")
 
 -- | Positional captures distinguish parsed projects from checked distribution filenames.
 data PyPICap
@@ -351,8 +340,5 @@ distributionPath name file = T.intercalate "/" <$> renderRoute artifactRoute [Py
 -- | Describe the live router and its deny-by-default catch-all for OpenAPI.
 pypiRouteSpecs :: NonEmpty RouteSpec
 pypiRouteSpecs =
-    catchAllSpecs unsupportedContract unsupportedParam
+    catchAllSpecs unsupportedContract unsupportedPathParam
         `NE.appendList` concatMap specsOf pypiRoutes
-
-unsupportedParam :: ParamSpec
-unsupportedParam = ParamSpec "unsupportedPath" "Any path under this mount matched by none of the routes above."

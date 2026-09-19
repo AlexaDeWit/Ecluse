@@ -11,6 +11,7 @@ module Ecluse.Core.Server.Pipeline.Tarball (
     TarballReplies (..),
 
     -- * The tarball handler
+    tarballAction,
     serveTarball,
     headTarball,
 
@@ -27,7 +28,7 @@ module Ecluse.Core.Server.Pipeline.Tarball (
 ) where
 
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, status401, status403, status500, statusCode)
+import Network.HTTP.Types (Method, RequestHeaders, ResponseHeaders, Status, status401, status403, status500, statusCode)
 import Network.Wai (Request, ResponseReceived, StreamingBody, requestHeaders)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -90,6 +91,7 @@ import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps),
     PackumentDeps (..),
+    ResponseAction (RunPipeline),
     ServeRuntime (..),
     ctxMount,
     ctxRuntime,
@@ -139,6 +141,7 @@ import Ecluse.Core.Server.Response (
     rejectUnavailable,
     serveDecisionOf,
  )
+import Ecluse.Core.Server.Route (isHead)
 import Ecluse.Core.Server.Stream (RelayResponder (RelayResponder))
 import Ecluse.Core.Server.Upstream (MirrorServePlan (MirrorOnAdmit, NoMirrorWrite))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -155,6 +158,22 @@ data TarballReplies response = TarballReplies
     , tarballEmpty :: Status -> ResponseHeaders -> response
     -- ^ A transparent bodiless upstream response (@304@ or @HEAD@).
     }
+
+{- | The action a read route names for an artifact coordinate. A @HEAD@ runs the same policy as
+@GET@ without pumping upstream bytes.
+-}
+tarballAction ::
+    TarballReplies response ->
+    Method ->
+    PackageName ->
+    Version ->
+    Filename ->
+    ResponseAction response
+tarballAction replies method name version filename
+    | isHead method = RunPipeline perimeterFallback (headTarball replies name version filename)
+    | otherwise = RunPipeline perimeterFallback (serveTarball replies name version filename)
+  where
+    perimeterFallback = tarballError replies status500 [] (mkRefusal Nothing "internal server error")
 
 -- | Serve an artifact with the caller's credential confined to the private origin.
 serveTarball ::

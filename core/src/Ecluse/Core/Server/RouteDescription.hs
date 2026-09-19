@@ -21,6 +21,7 @@ module Ecluse.Core.Server.RouteDescription (
 
     -- * The synthetic catch-all
     catchAllSpecs,
+    unsupportedPathParam,
 ) where
 
 import Network.HTTP.Types.Method (StdMethod (DELETE, GET, HEAD, POST, PUT))
@@ -138,3 +139,7 @@ catchAllSpecs contract param = catchAllGet :| [catchAllHead]
             \and no response body."
             Nothing
             (responseDocs (bodilessContract contract))
+
+-- | The catch-all's path parameter, as every mount's route table documents it.
+unsupportedPathParam :: ParamSpec
+unsupportedPathParam = ParamSpec "unsupportedPath" "Any path under this mount matched by none of the routes above."

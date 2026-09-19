@@ -79,10 +79,10 @@ import Ecluse.Core.Server.Contract (
     variableResponse,
  )
 import Ecluse.Core.Server.Path (Filename, mkFilename)
-import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), headPackument, servePackument)
+import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), packumentAction)
 import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
-import Ecluse.Core.Server.Pipeline.Tarball (TarballReplies (..), headTarball, serveTarball)
-import Ecluse.Core.Server.Response (mkRefusal, renderRefusal)
+import Ecluse.Core.Server.Pipeline.Tarball (TarballReplies (..), tarballAction)
+import Ecluse.Core.Server.Response (renderRefusal)
 import Ecluse.Core.Server.Route (
     Capture (Capture),
     MediaNegotiation (AcceptsAnything),
@@ -91,12 +91,11 @@ import Ecluse.Core.Server.Route (
     Route (Route),
     RouteName (RouteName),
     answering,
-    isHead,
     renderRoute,
     routerOf,
     safeSegment,
  )
-import Ecluse.Core.Server.RouteDescription (ParamSpec (ParamSpec), RouteSpec, catchAllSpecs, specsOf)
+import Ecluse.Core.Server.RouteDescription (RouteSpec, catchAllSpecs, specsOf, unsupportedPathParam)
 import Ecluse.Core.Version (Version, mkVersion)
 
 -- | Match the first applicable route, otherwise answer 'npmNotFound'.
@@ -392,16 +391,11 @@ distTagAnswer :: ResponseValue NpmError
 distTagAnswer =
     responseValue [] (npmError Nothing "dist-tags are not supported by this proxy; a package's tags are in the metadata document it serves, and a publisher sets them at the publication target")
 
-{- @GET \/{package}@: a bare package unit is a packument read. A @HEAD@ takes the
-head-mode handler, which runs the identical gating and merge but withholds the body. -}
+-- @GET \/{package}@: a bare package unit is a packument read.
 buildPackument :: Method -> [NpmCap] -> Maybe (ResponseAction NpmPackumentResponse)
 buildPackument method = \case
-    [NpmPackage name]
-        | isHead method -> Just (RunPipeline perimeterFallback (headPackument npmPackumentReplies name))
-        | otherwise -> Just (RunPipeline perimeterFallback (servePackument npmPackumentReplies name))
+    [NpmPackage name] -> Just (packumentAction npmPackumentReplies method name)
     _ -> Nothing
-  where
-    perimeterFallback = packumentInternal npmPackumentReplies [] (mkRefusal Nothing "internal server error")
 
 {- @PUT \/{package}@: a bare package unit under the write method is a publish. -}
 buildPublish :: Method -> [NpmCap] -> Maybe (ResponseAction NpmPublishResponse)
@@ -418,13 +412,8 @@ buildTarball :: Method -> [NpmCap] -> Maybe (ResponseAction PassthroughResponse)
 buildTarball method = \case
     [NpmPackage name, NpmFilename file] -> do
         (version, filename) <- tarballCoordinate name file
-        pure $
-            if isHead method
-                then RunPipeline perimeterFallback (headTarball npmTarballReplies name version filename)
-                else RunPipeline perimeterFallback (serveTarball npmTarballReplies name version filename)
+        pure (tarballAction npmTarballReplies method name version filename)
     _ -> Nothing
-  where
-    perimeterFallback = tarballError npmTarballReplies status500 [] (mkRefusal Nothing "internal server error")
 
 -- | Positional captures distinguish parsed package identities from checked path segments.
 data NpmCap
@@ -510,8 +499,5 @@ tarballPath name file = T.intercalate "/" <$> renderRoute tarballRoute [NpmPacka
 -- | Describe the live router and its deny-by-default catch-all for OpenAPI.
 npmRouteSpecs :: NonEmpty RouteSpec
 npmRouteSpecs =
-    catchAllSpecs unsupportedContract unsupportedParam
+    catchAllSpecs unsupportedContract unsupportedPathParam
         `NE.appendList` concatMap specsOf npmRoutes
-
-unsupportedParam :: ParamSpec
-unsupportedParam = ParamSpec "unsupportedPath" "Any path under this mount matched by none of the routes above."
