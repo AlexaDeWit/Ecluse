@@ -84,7 +84,7 @@ cveRuleDepsFor plan reporter reportOutage eco =
         , rdCurrentAdvisoryEtag = maybe (pure Nothing) (currentAdvisoryEtag . syncSlot . csEnv) handle
         , rdBreakerReporter = reporter
         , rdSourceReporter = maybe noSourceReporter (sourceReporterOf (reportOutage eco)) handle
-        , rdAdvisoryFreshness = advisoryFreshnessOrFresh handle
+        , rdAdvisoryFreshness = advisoryFreshnessFor plan eco
         }
   where
     handle = Map.lookup eco plan
@@ -103,11 +103,7 @@ outageReportPeriod = fromIntegral absentReportInterval / 1_000_000
 has no advisory stack at all, so nothing ages and the absent-database path decides instead.
 -}
 advisoryFreshnessFor :: Map.Map Ecosystem CveSyncHandle -> Ecosystem -> IO AdvisoryFreshness
-advisoryFreshnessFor plan eco = advisoryFreshnessOrFresh (Map.lookup eco plan)
-
--- The same reading over a handle already looked up, so one lookup serves every rule capability.
-advisoryFreshnessOrFresh :: Maybe CveSyncHandle -> IO AdvisoryFreshness
-advisoryFreshnessOrFresh = maybe (pure AdvisoryFresh) advisoryFreshnessOf
+advisoryFreshnessFor plan eco = maybe (pure AdvisoryFresh) advisoryFreshnessOf (Map.lookup eco plan)
 
 {- | One handle's reading: the slot's publication time against this mount's maximum, on the
 handle's own clock. A failed poll never swaps, so a warm process keeps the last time it read.

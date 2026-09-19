@@ -11,9 +11,6 @@ import Data.Universe.Class (universe)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
-import Ecluse.Core.Telemetry.Catalogue (
-    metricName,
- )
 import Ecluse.Core.Telemetry.Metrics (
     AdvisoryCompileResult (CompileAborted, CompileCompleted),
     AdvisoryDropCause (DropMalformed, DropOversize),
@@ -33,66 +30,17 @@ import Ecluse.Core.Telemetry.Metrics (
     metricAttributes,
     renderLabel,
  )
-import Ecluse.Test.Metrics (allLabelKeys, allMetricNames, highCardinalityKeys)
+import Ecluse.Test.Metrics (allLabelKeys, highCardinalityKeys)
 
-{- | Tests for the @ecluse.*@ catalogue and the bounded-label discipline. The crux is the
-cardinality guard: package, version, scope, and message must never become metric labels.
+{- | Tests the bounded-label discipline. The crux is the cardinality guard: package, version,
+scope, and message must never become metric labels. The instrument catalogue's own names are
+tested in "Ecluse.Core.Telemetry.CatalogueSpec".
 -}
 spec :: Spec
 spec = do
-    catalogueSpec
     labelKeySpec
     boundedDomainSpec
     renderSpec
-
-catalogueSpec :: Spec
-catalogueSpec = describe "metric-name catalogue" $ do
-    it "renders the ecluse.* catalogue and the HTTP semantic convention to their wire names" $ do
-        let names = map metricName allMetricNames
-        names
-            `shouldContain` [ "ecluse.serve.decision"
-                            , "ecluse.rule.denials"
-                            , "ecluse.rule.eval.duration"
-                            , "ecluse.rule.effectful.failures"
-                            , "ecluse.rule.breaker.state"
-                            , "ecluse.serve.admission.in_flight"
-                            , "ecluse.serve.admission.queued"
-                            , "ecluse.publish.body.in_flight_bytes"
-                            , "ecluse.publish.body.shed"
-                            , "ecluse.registry.merge.divergence"
-                            , "ecluse.upstream.fetch.duration"
-                            , "ecluse.upstream.fetch.errors"
-                            , "ecluse.metadata_cache.requests"
-                            , "ecluse.metadata_cache.entries"
-                            , "ecluse.metadata_cache.resident_bytes"
-                            , "ecluse.metadata_cache.version.resident_bytes"
-                            , "ecluse.metadata_cache.assembled.resident_bytes"
-                            , "ecluse.serve.perimeter.faults"
-                            , "ecluse.serve.relay.anomalies"
-                            , "ecluse.mirror.enqueued"
-                            , "ecluse.mirror.enqueue.failures"
-                            , "ecluse.mirror.jobs.processed"
-                            , "ecluse.mirror.publish.duration"
-                            , "ecluse.dredger.versions"
-                            , "ecluse.credential.refresh"
-                            , "ecluse.credential.token.ttl.seconds"
-                            , "ecluse.advisory.sync.attempts"
-                            , "ecluse.advisory.sync.duration"
-                            , "ecluse.advisory.database.age.seconds"
-                            , "ecluse.advisory.source.age.seconds"
-                            , "ecluse.advisory.compile.accepted"
-                            , "ecluse.advisory.compile.dropped"
-                            , "ecluse.advisory.compile.runs"
-                            ]
-        names `shouldContain` ["http.server.request.duration"]
-
-    it "namespaces every metric under ecluse.* or the OTel http.* convention" $ do
-        let names = map metricName allMetricNames
-        all (\n -> "ecluse." `T.isPrefixOf` n || "http." `T.isPrefixOf` n) names `shouldBe` True
-
-    it "does not re-emit cloud-native queue metrics" $
-        map metricName allMetricNames
-            `shouldNotContain` ["ecluse.queue.backlog", "ecluse.mirror.queue.depth", "ecluse.mirror.dlq.depth"]
 
 labelKeySpec :: Spec
 labelKeySpec = describe "label keys (the cardinality guard)" $ do

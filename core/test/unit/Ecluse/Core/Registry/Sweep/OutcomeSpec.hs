@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-module Ecluse.Core.Registry.Sweep.TypesSpec (spec) where
+module Ecluse.Core.Registry.Sweep.OutcomeSpec (spec) where
 
 import Data.Text qualified as T
 import Test.Hspec

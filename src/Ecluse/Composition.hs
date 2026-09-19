@@ -226,7 +226,7 @@ mountPublishDeps ctx plan vetted =
 packumentDepsFor :: WiringContext -> RegistryAdapter -> Mount -> MountConfig -> IO PackumentDeps
 packumentDepsFor ctx adapter mount mcfg = do
     -- 'prepare' allocates an effectful rule's resilience policy and breaker once per mount.
-    -- The deps below bridge that same 'RuleDeps' non-pinning advisory-ETag reader.
+    -- 'pdAdvisoryEtag' reads the current ETag through those same 'RuleDeps', so no generation is pinned at boot.
     let ruleDeps = wcRuleDeps ctx (mountEcosystem mount)
     prepared <- prepare ruleDeps (mountPolicy mount)
     let regs = mountRegistries mount
