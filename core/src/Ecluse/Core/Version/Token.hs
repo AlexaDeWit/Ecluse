@@ -4,10 +4,9 @@
 
 {- | The lexical atoms and the length bound the per-ecosystem version grammars share.
 
-A 'VToken' is a single numeric or textual run. Its ordering rule is the one the RubyGems
-and PEP 440-local grammars have in common: numeric tokens outrank textual ones, numerics
-compare numerically, and text compares lexically. The semver prerelease rule is the
-opposite, so it lives with the semver grammar. Everything here is purely lexical.
+A 'VToken' is a single numeric or textual run, ordered by the rule the RubyGems and PEP
+440-local grammars have in common. The semver prerelease rule is the opposite, so it lives
+with the semver grammar. Everything here is purely lexical.
 -}
 module Ecluse.Core.Version.Token (
     VToken (..),
@@ -24,10 +23,8 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Text (readDecimalText)
 
-{- | A version token: a numeric run or a textual run. Its 'Ord' is the RubyGems
-\/ PEP 440-local rule: numeric tokens outrank textual ones, numerics compare
-numerically, and text compares lexically. Semver prerelease ordering is the
-opposite, and "Ecluse.Core.Version.Semver" handles it.
+{- | A version token: a numeric or a textual run. Numeric tokens outrank textual ones,
+numerics compare numerically, and text compares lexically.
 -}
 data VToken = VNum Integer | VStr Text
     deriving stock (Eq, Show)
@@ -57,9 +54,8 @@ parseNumSeg = readDecimalText
 numOr0 :: Text -> Integer
 numOr0 = fromMaybe 0 . readDecimalText
 
-{- | An ASCII letter or ASCII digit. The PEP 440 and @Gem::Version@ grammars gate \"alphanumeric\"
-with this, not the Unicode-aware 'Data.Char.isAlphaNum'. Python's @packaging@ and Ruby's
-@Gem::Version@ are ASCII-only, so a Unicode gate over-accepts and mis-orders a non-ASCII digit.
+{- | An ASCII letter or ASCII digit. The PEP 440 and @Gem::Version@ grammars are ASCII-only,
+so the Unicode-aware 'Data.Char.isAlphaNum' would over-accept and mis-order a non-ASCII digit.
 -}
 isAsciiAlphaNum :: Char -> Bool
 isAsciiAlphaNum c = isAsciiUpper c || isAsciiLower c || isDigit c
