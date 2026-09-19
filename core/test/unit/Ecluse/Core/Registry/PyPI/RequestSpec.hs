@@ -9,7 +9,6 @@ import Network.HTTP.Client qualified as Client
 import Test.Hspec
 
 import Ecluse.Core.BuildIdentity (userAgent)
-import Ecluse.Core.Credential (ClientCredential (ClientCredential), mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl))
@@ -22,6 +21,7 @@ import Ecluse.Core.Registry.PyPI.Request (
     simpleIndexUrl,
  )
 import Ecluse.Test.Package (requestsName)
+import Ecluse.Test.Registry.PyPI (alicePair)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -117,7 +117,3 @@ sealSpec = describe "every request carries the shared outbound seal" $ do
 -- | A project whose published spelling is not its canonical one.
 zopeInterface :: PackageName
 zopeInterface = mkPackageName PyPI Nothing "Zope.Interface"
-
--- | The Basic pair a passthrough read carries.
-alicePair :: Maybe ClientCredential
-alicePair = Just (ClientCredential (Just "alice") (mkSecret "hunter2"))

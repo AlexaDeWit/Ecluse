@@ -16,6 +16,7 @@ import Ecluse.Core.Credential (
  )
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.Request (attachCredential, credentialRecover)
+import Ecluse.Test.Registry.PyPI (alicePair)
 import Ecluse.Test.Support (parseRequestOrFail)
 
 spec :: Spec
@@ -85,10 +86,6 @@ encodingSpec = describe "PyPI carries an outbound credential as Basic on Authori
         let recovered = recover [("Authorization", "Basic YWxpY2U6aHVudGVyMg==")]
         lookup "Authorization" (Client.requestHeaders (attachCredential pypiCredential recovered req))
             `shouldBe` Just "Basic YWxpY2U6aHVudGVyMg=="
-
--- | The pair every example builds on: a named user with a password.
-alicePair :: Maybe ClientCredential
-alicePair = Just (ClientCredential (Just "alice") (mkSecret "hunter2"))
 
 recover :: RequestHeaders -> Maybe ClientCredential
 recover = credentialRecover pypiCredential

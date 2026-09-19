@@ -13,6 +13,7 @@ module Ecluse.Test.Registry.PyPI (
     simpleIndex,
     simpleIndexWith,
     separatorHeavySdist,
+    alicePair,
 ) where
 
 import Data.Aeson (Value, object, (.=))
@@ -20,8 +21,15 @@ import Data.Aeson.Key (Key)
 import Data.Aeson.Types (Pair)
 import Data.Text qualified as T
 
+import Ecluse.Core.Credential (ClientCredential (ClientCredential), mkSecret)
 import Ecluse.Test.Json (withKeys)
 import Ecluse.Test.Package (validSha256)
+
+{- | The Basic pair every PyPI credential example builds on: a named user with a password.
+It renders as @Basic YWxpY2U6aHVudGVyMg==@.
+-}
+alicePair :: Maybe ClientCredential
+alicePair = Just (ClientCredential (Just "alice") (mkSecret "hunter2"))
 
 -- | A PEP 691 entry on the declared files host with a SHA-256 digest.
 simpleFile :: Text -> Value

@@ -22,7 +22,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageInfo, PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Package (PackageInfo, mkPackageName)
 import Ecluse.Core.Package.Entry (AdmittedEntry (admittedKey), EntryKey (..))
 import Ecluse.Core.Package.Filter (fpDecisions, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), Provenance (GatedSource), mergePackuments)
@@ -662,36 +662,13 @@ upstreamTarball name ver = "https://upstream.test/" <> name <> "/-/" <> baseName
   where
     baseName n = snd (T.breakOnEnd "/" n)
 
-{- | The route-requested 'PackageName' for a fixture: the body's own top-level @name@. The
-projection's name validation therefore passes, so these tests exercise filtering only.
--}
-fixtureName :: Value -> PackageName
-fixtureName v = npmName (nameOf v)
-  where
-    nameOf :: Value -> Text
-    nameOf value = case value of
-        Object o -> case KeyMap.lookup "name" o of
-            Just (String t) -> t
-            _ -> ""
-        _ -> ""
-
-    npmName :: Text -> PackageName
-    npmName raw = case T.stripPrefix "@" raw of
-        Just afterAt
-            | (scopeText, rest) <- T.break (== '/') afterAt
-            , bare <- T.drop 1 rest
-            , not (T.null scopeText)
-            , not (T.null bare) ->
-                mkPackageName Npm (Just (mkScope scopeText)) bare
-        _ -> mkPackageName Npm Nothing raw
-
 {- | Project a fixture through 'projectNpmManifest' and keep the decoded 'Value' too, so the
 'PackageInfo' and the 'Value' the assembly edits come from the same parse.
 -}
 loadPackument :: ByteString -> IO (PackageInfo, Value)
 loadPackument bs = do
     v <- decodeJsonOrFail bs
-    info <- either (\e -> fail ("unexpected projection failure: " <> show e)) (pure . fst) (projectNpmManifest defaultLimits (fixtureName v) bs)
+    info <- either (\e -> fail ("unexpected projection failure: " <> show e)) (pure . fst) (projectNpmManifest defaultLimits (NpmFixture.documentName v) bs)
     pure (info, v)
 
 {- | The outcome of the serve composition under test: the assembled served document when survivors
@@ -758,7 +735,7 @@ decodeOrFail bs = either (\e -> annotateShow e >> failure) pure (eitherDecodeStr
 loadOrFail :: ByteString -> H.PropertyT IO (PackageInfo, Value)
 loadOrFail bs = do
     v <- decodeOrFail bs
-    info <- either (\e -> annotateShow e >> failure) (pure . fst) (projectNpmManifest defaultLimits (fixtureName v) bs)
+    info <- either (\e -> annotateShow e >> failure) (pure . fst) (projectNpmManifest defaultLimits (NpmFixture.documentName v) bs)
     pure (info, v)
 
 -- | Every string-valued @dist-tags@ target.

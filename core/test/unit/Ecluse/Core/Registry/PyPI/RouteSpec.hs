@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.PyPI.Route.Internal (
 import Ecluse.Core.Server.Path (Filename, unFilename)
 import Ecluse.Core.Server.Route (RouteName (RouteName))
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Test.Package (requestsName, unscopedPyPI)
+import Ecluse.Test.Package (azureStorageBlob, requestsName)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
 import Ecluse.Test.Server.Route (claimedBy, claimsEveryRendering)
 
@@ -162,9 +162,6 @@ jsonAccept = [("Accept", "application/vnd.pypi.simple.v1+json, application/vnd.p
 
 htmlOnlyAccept :: RequestHeaders
 htmlOnlyAccept = [("Accept", "text/html")]
-
-azureStorageBlob :: PackageName
-azureStorageBlob = unscopedPyPI "azure-storage-blob"
 
 renderCoordinate :: (Version, Filename) -> (Text, Text)
 renderCoordinate (version, file) = (renderVersion version, unFilename file)

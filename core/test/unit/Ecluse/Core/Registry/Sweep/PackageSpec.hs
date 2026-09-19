@@ -16,7 +16,6 @@ import Ecluse.Core.Cve (AdvisoryRange (AdvisoryRange))
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Types (UpperBound (FixedBefore))
-import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry.Maintenance (
     StoreFacts (factDeleteCeiling),
     StoreMaintenance (deleteVersions, readStoreManifest, storeFacts),
@@ -63,7 +62,7 @@ import Ecluse.Core.Telemetry.Metrics (SweepResult (..))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Maintenance (FakeStore (fakeMaintenance, fakeObservation), FakeStoreConfig (..), heldVersions, newFakeStore, seededStoreConfig, servedVersions)
-import Ecluse.Test.Package (npmVersion, sampleManifest)
+import Ecluse.Test.Package (leftPadName, npmVersion, sampleManifest)
 import Ecluse.Test.Rules (admitRule, atDefaultPrecedence, cannotVetRule, denyRule, inertRuleDeps)
 import Ecluse.Test.Sweep (RecordedSweep (..), previewMount, previewingReport, recordingPorts, recordingPortsUnder, testMount, testPacing)
 
@@ -106,7 +105,7 @@ verdictSpec = describe "the delete verdict" $ do
     it "deletes a version the manifest omits but a deny names by identity, so the next request 404s" $ do
         -- The store lists it and its own metadata does not. The listing establishes identity anyway.
         rules <- identityDeny
-        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest packageName []))
+        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest leftPadName []))
         rec' <- recordingPorts generation
         void (runStep rec' testPacing (mount store rules) (served ["1.0.0"]))
         recResults rec' `shouldReturn` [SweepExamined, SweepDeleted]
@@ -120,7 +119,7 @@ verdictSpec = describe "the delete verdict" $ do
     it "never decides a version the store lists but no longer serves" $ do
         -- A backend keeps listing a deleted version, so a sweep blind to this would re-issue a
         -- destructive call for it every cycle.
-        store <- storeWith [] (Just (sampleManifest packageName [npmVersion "1.0.0"]))
+        store <- storeWith [] (Just (sampleManifest leftPadName [npmVersion "1.0.0"]))
         rec' <- recordingPorts generation
         halt <- runStep rec' testPacing (mount store [denyRule]) [StoredVersion (npmVersion "1.0.0") VersionWithdrawn Nothing]
         halt `shouldBe` Nothing
@@ -203,7 +202,7 @@ identityOnlySpec = describe "a manifest the store did not serve" $ do
 beltSpec :: Spec
 beltSpec = describe "the first-party belt" $
     it "serves an identity-denied first-party version until the guard is removed, then 404s" $ do
-        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest packageName [npmVersion "1.0.0"]))
+        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest leftPadName [npmVersion "1.0.0"]))
         manifestReads <- newIORef (0 :: Int)
         rules <- identityDeny
         rec' <- recordingPorts generation
@@ -213,7 +212,7 @@ beltSpec = describe "the first-party belt" $
                     { fakeMaintenance =
                         handle{readStoreManifest = \name -> modifyIORef' manifestReads (+ 1) >> readStoreManifest handle name}
                     }
-            shielded = (mount tracked rules){smFirstParty = (== packageName)}
+            shielded = (mount tracked rules){smFirstParty = (== leftPadName)}
         halt <- runStep rec' testPacing shielded (served ["1.0.0"])
         halt `shouldBe` Nothing
         recResults rec' `shouldReturn` [SweepGuardSkipped]
@@ -262,7 +261,7 @@ capSpec = describe "the per-cycle deletion cap" $ do
         it ("hands the selected batch over once and charges unreached versions after " <> show successful <> " successes") $ do
             let versions = map npmVersion ["1.0.0", "2.0.0", "3.0.0"]
                 fault = protocolFault "the store never answered"
-            store <- storeWith versions (Just (sampleManifest packageName versions))
+            store <- storeWith versions (Just (sampleManifest leftPadName versions))
             calls <- newIORef []
             rec' <- recordingPorts generation
             counters <- newSweepState
@@ -292,7 +291,7 @@ capSpec = describe "the per-cycle deletion cap" $ do
                 `shouldReturn` (replicate 3 SweepExamined <> [SweepGuardSkipped] <> replicate successful SweepDeleted <> replicate (2 - successful) SweepKept)
 
     it "hands over what the cap allows, holds the rest back, and halts" $ do
-        store <- storeWith (map npmVersion ["1.0.0", "2.0.0"]) (Just (sampleManifest packageName (map npmVersion ["1.0.0", "2.0.0"])))
+        store <- storeWith (map npmVersion ["1.0.0", "2.0.0"]) (Just (sampleManifest leftPadName (map npmVersion ["1.0.0", "2.0.0"])))
         rec' <- recordingPorts generation
         halt <- runStep rec' testPacing{swpDeletionCap = 1} (mount store [denyRule]) (served ["1.0.0", "2.0.0"])
         case halt of
@@ -305,7 +304,7 @@ capSpec = describe "the per-cycle deletion cap" $ do
     it "latches on reaching the cap even when nothing was held back" $ do
         -- The breaker is the count handed over, not whether this package had more to give, so a
         -- cycle that fills the cap exactly still stops.
-        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest packageName [npmVersion "1.0.0"]))
+        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest leftPadName [npmVersion "1.0.0"]))
         rec' <- recordingPorts generation
         halt <- runStep rec' testPacing{swpDeletionCap = 1} (mount store [denyRule]) (served ["1.0.0"])
         case halt of
@@ -350,7 +349,7 @@ dryRunSpec = describe "a dry run" $ do
 alone. Nothing here asks which run it is in: the execution it was handed is what differs. -}
 previewOne :: SweepPacing -> [Text] -> IO (RecordedSweep, FakeStore)
 previewOne pacing stored = do
-    store <- storeWith (map npmVersion stored) (Just (sampleManifest packageName (map npmVersion stored)))
+    store <- storeWith (map npmVersion stored) (Just (sampleManifest leftPadName (map npmVersion stored)))
     rec' <- recordingPortsUnder previewingReport generation
     void (runStep rec' pacing (previewMount (fakeObservation store) [denyRule] []) (served stored))
     pure (rec', store)
@@ -371,7 +370,7 @@ identityDeny = prepare inertRuleDeps [atDefaultPrecedence (DenyByIdentity "left-
 -- One package's step over a store seeded with those versions and a manifest carrying those.
 sweepOne :: [PreparedRule] -> [Text] -> [Text] -> IO (RecordedSweep, FakeStore)
 sweepOne rules stored inManifest = do
-    store <- storeWith (map npmVersion stored) (Just (sampleManifest packageName (map npmVersion inManifest)))
+    store <- storeWith (map npmVersion stored) (Just (sampleManifest leftPadName (map npmVersion inManifest)))
     rec' <- recordingPorts generation
     void (runStep rec' testPacing (mount store rules) (served stored))
     pure (rec', store)
@@ -391,10 +390,10 @@ dispatch is the one a cycle makes: a preview counts its selections and a real ru
 -}
 stepUnder :: RecordedSweep -> SweepPacing -> SweepState -> SweepMount -> [StoredVersion] -> IO (Maybe CycleHalt)
 stepUnder rec' pacing counters mount' stored = case ssExecute (smStore mount') of
-    SweepRemoves _ -> sweepPackageGroup pacing ports counters mount' packageName [(smStore mount', stored)]
+    SweepRemoves _ -> sweepPackageGroup pacing ports counters mount' leftPadName [(smStore mount', stored)]
     SweepCounts -> do
         ctx <- mkEvalContext (sweepNow ports) (sweepAdvisoryEtag ports Npm)
-        previewPackageGroup pacing ports counters mount' ctx packageName [(ssObserve (smStore mount'), stored)]
+        previewPackageGroup pacing ports counters mount' ctx leftPadName [(ssObserve (smStore mount'), stored)]
   where
     ports = recPorts rec'
 
@@ -402,14 +401,14 @@ stepUnder rec' pacing counters mount' stored = case ssExecute (smStore mount') o
 storeWith :: [Version] -> Maybe Manifest -> IO FakeStore
 storeWith stored manifest =
     newFakeStore
-        (seededStoreConfig [(packageName, stored)])
-            { fakeManifests = maybe Map.empty (Map.singleton packageName) manifest
+        (seededStoreConfig [(leftPadName, stored)])
+            { fakeManifests = maybe Map.empty (Map.singleton leftPadName) manifest
             }
 
 {- A store whose delete reports the given outcome and changes nothing, so the refusal and the
 unreached arms are both drivable without a fault that would stop the whole cycle. -}
 refusingStore :: VersionOutcome -> IO FakeStore
-refusingStore = refusingStore' (Just (sampleManifest packageName [npmVersion "1.0.0"]))
+refusingStore = refusingStore' (Just (sampleManifest leftPadName [npmVersion "1.0.0"]))
 
 -- | As 'refusingStore', over the given manifest, so the identity-only path drives the same arms.
 refusingStore' :: Maybe Manifest -> VersionOutcome -> IO FakeStore
@@ -422,16 +421,13 @@ mount :: FakeStore -> [PreparedRule] -> SweepMount
 mount store rules = testMount (fakeMaintenance store) rules []
 
 held :: FakeStore -> IO [Version]
-held = heldVersions packageName
+held = heldVersions leftPadName
 
 served :: [Text] -> [StoredVersion]
 served = servedVersions . map npmVersion
 
 generation :: Maybe DbEtag
 generation = Just (DbEtag "etag-1")
-
-packageName :: PackageName
-packageName = mkPackageName Npm Nothing "left-pad"
 
 {- An expired advisory push is not authority to delete. The rule refuses rather than denying, and
 a push that expires after the verdict is read again before the batch leaves. -}
@@ -457,7 +453,7 @@ expirySpec = describe "an expired advisory push" $ do
     it "withholds rather than counting it, on a run whose execution only counts" $ do
         -- A preview reaches no delete, so this is the arm where a stale condemnation would
         -- otherwise be reported as a would-delete an operator sizes a real run from.
-        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest packageName [npmVersion "1.0.0"]))
+        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest leftPadName [npmVersion "1.0.0"]))
         crossing <- newIORef [AdvisoryFresh]
         let deps = advisoryDeps (nextReading expiredReading crossing)
         rules <- prepare deps [atDefaultPrecedence denyCveRule]
@@ -470,7 +466,7 @@ expirySpec = describe "an expired advisory push" $ do
         held store `shouldReturn` [npmVersion "1.0.0"]
 
     it "lets an identity deny act, because it reads no advisory database" $ do
-        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest packageName [npmVersion "1.0.0"]))
+        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest leftPadName [npmVersion "1.0.0"]))
         let deps = advisoryDeps (pure expiredReading)
         rules <- prepare deps [atDefaultPrecedence (DenyByIdentity "left-pad@1.0.0")]
         rec' <- recordingPorts generation
@@ -482,7 +478,7 @@ expirySpec = describe "an expired advisory push" $ do
 -- One package swept by the real advisory deny over a database that affects its only version.
 advisorySweep :: IO AdvisoryFreshness -> IO (RecordedSweep, FakeStore)
 advisorySweep freshness = do
-    store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest packageName [npmVersion "1.0.0"]))
+    store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest leftPadName [npmVersion "1.0.0"]))
     let deps = advisoryDeps freshness
     rules <- prepare deps [atDefaultPrecedence denyCveRule]
     rec' <- recordingPorts generation
@@ -524,7 +520,7 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
         it ("credits the middle selected denial with an existing charge, preview=" <> show preview) $ do
             let versions = ["1.0.0", "2.0.0", "3.0.0"]
                 generations = map (Just . DbEtag) ["first", "threshold", "last"]
-            store <- storeWith (map npmVersion versions) (Just (sampleManifest packageName (map npmVersion versions)))
+            store <- storeWith (map npmVersion versions) (Just (sampleManifest leftPadName (map npmVersion versions)))
             queuedGenerations <- newIORef generations
             -- The queue cycles, because the grouped executor reassesses every version before it
             -- hands the batch over, and each pass acquires the same evidence in the same order.
@@ -554,7 +550,7 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
                     `shouldSatisfy` (\lines' -> length lines' == 1 && all (T.isInfixOf "threshold") lines')
 
     it "credits no advisory when an identity denial reaches the cap" $ do
-        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest packageName [npmVersion "1.0.0"]))
+        store <- storeWith [npmVersion "1.0.0"] (Just (sampleManifest leftPadName [npmVersion "1.0.0"]))
         rules <- identityDeny
         rec' <- recordingPorts generation
         runStep rec' testPacing{swpDeletionCap = 1} (mount store rules) (served ["1.0.0"])
@@ -565,7 +561,7 @@ generationCapSpec = describe "the generation that reaches the cap" $ do
     it "selects the threshold after withholding stale advisory evidence" $ do
         let versions = ["1.0.0", "2.0.0"]
             configured = [DenyByIdentity "left-pad@2.0.0", denyCveRule]
-        store <- storeWith (map npmVersion versions) (Just (sampleManifest packageName (map npmVersion versions)))
+        store <- storeWith (map npmVersion versions) (Just (sampleManifest leftPadName (map npmVersion versions)))
         freshness <- newIORef [AdvisoryFresh]
         let deps = advisoryDeps (nextReading expiredReading freshness)
         rules <- prepare deps (map atDefaultPrecedence configured)

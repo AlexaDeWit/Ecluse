@@ -40,7 +40,7 @@ import Ecluse.Core.Registry.PyPI.Project (
  )
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Test.Package (requestsName, unscopedPyPI, validSha256)
+import Ecluse.Test.Package (azureStorageBlob, requestsName, unscopedPyPI, validSha256)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist, simpleFile, simpleIndex, withFileKeys)
 import Ecluse.Test.Support (expectRight)
 
@@ -248,9 +248,6 @@ versionFoldSpec = describe "the version-level folds over a release's files" $ do
         pkgAvailability <$> Map.lookup "2.34.2" (infoVersions partly) `shouldBe` Just Available
         wholly <- shouldProject requestsName (indexOf [yanked (sdistFile "2.34.2"), yanked (wheelFile "2.34.2")])
         pkgAvailability <$> Map.lookup "2.34.2" (infoVersions wholly) `shouldBe` Just (Yanked (Just "withdrawn"))
-
-azureStorageBlob :: PackageName
-azureStorageBlob = unscopedPyPI "azure-storage-blob"
 
 shouldProject :: PackageName -> Value -> IO PackageInfo
 shouldProject name value = case projectSimpleIndexFromValue name value of

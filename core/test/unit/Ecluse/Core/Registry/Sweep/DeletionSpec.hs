@@ -13,7 +13,7 @@ import Test.Hspec
 import Ecluse.Core.Cve.Types (DbEtag (DbEtag))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (RetryAfter (RetryAfter))
-import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Maintenance
 import Ecluse.Core.Registry.Sweep (sweepCycle)
 import Ecluse.Core.Registry.Sweep.Outcome
@@ -23,7 +23,7 @@ import Ecluse.Core.Rules.Types (Rule (DenyByIdentity), RuleVerdict (Allow, Deny)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepGuardSkipped), SweepTarget (..))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Maintenance
-import Ecluse.Test.Package (npmVersion)
+import Ecluse.Test.Package (leftPadName, npmVersion)
 import Ecluse.Test.Rules (atDefaultPrecedence, denyRule, inertRuleDeps)
 import Ecluse.Test.Sweep
 
@@ -269,7 +269,7 @@ spec = describe "grouped deletion" $ do
                     )
                     (smStore mount)
         recorded <- recordingPorts Nothing
-        let ports = (recPorts recorded){sweepDelay = \_ -> writeFakeContents mirror (Map.singleton packageName [StoredVersion (npmVersion "1.0.0") VersionServed (Just "retained-again")])}
+        let ports = (recPorts recorded){sweepDelay = \_ -> writeFakeContents mirror (Map.singleton leftPadName [StoredVersion (npmVersion "1.0.0") VersionServed (Just "retained-again")])}
         outcome <- sweepCycle testPacing{swpDeletionCap = 1} ports [mount{smStore = source}]
         outcomeHalt outcome `shouldBe` Just (HaltDeletionCap 1 1 Nothing)
         readIORef attempts `shouldReturn` 2
@@ -308,7 +308,7 @@ spec = describe "grouped deletion" $ do
 seeded :: Text -> [Text] -> IO FakeStore
 seeded backend raw =
     newFakeStore
-        (seededStoreConfig [(packageName, map npmVersion raw)])
+        (seededStoreConfig [(leftPadName, map npmVersion raw)])
             { fakeFacts = (fakeFacts defaultFakeStoreConfig){factBackend = backend, factCompletion = CompletesOnCall}
             }
 
@@ -320,7 +320,7 @@ grouped mirror cache = do
     pure (withPrivateCache (deletingCache (fakeMaintenance cache)) mount)
 
 held :: FakeStore -> IO [Version]
-held = heldVersions packageName
+held = heldVersions leftPadName
 
 mapDeletion :: ((DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]) -> DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]) -> SweepStore -> SweepStore
 mapDeletion f store = case ssExecute store of
@@ -331,6 +331,3 @@ mapCacheDeletion :: ((DeleteGuard -> PackageName -> [Version] -> IO [(Version, V
 mapCacheDeletion f cache = case scExecute cache of
     SweepCounts -> cache
     SweepRemoves deletion -> cache{scExecute = SweepRemoves deletion{dlDeleteVersions = f (dlDeleteVersions deletion)}}
-
-packageName :: PackageName
-packageName = mkPackageName Npm Nothing "left-pad"

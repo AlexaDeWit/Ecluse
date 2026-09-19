@@ -45,9 +45,11 @@ module Ecluse.Test.Package (
     pypiVersion,
     thingName,
     leftpadName,
+    leftPadName,
     lodashName,
     babelCore,
     requestsName,
+    azureStorageBlob,
     v1_0_0,
 
     -- * Shared package fixtures
@@ -202,17 +204,19 @@ pypiVersion = mkVersion PyPI
 thingName :: PackageName
 thingName = unscopedNpm "thing"
 
-{- | The npm subject packages the maintenance, sweep, and serve fixtures address. The sweep
-fixtures address @left-pad@ instead, a different name, so they keep their own.
+{- | The npm subject packages the maintenance, sweep, and serve fixtures address. @leftpad@ and
+@left-pad@ are different names, and a fixture that pins a rendered path depends on which it holds.
 -}
-leftpadName, lodashName, babelCore :: PackageName
+leftpadName, leftPadName, lodashName, babelCore :: PackageName
 leftpadName = unscopedNpm "leftpad"
+leftPadName = unscopedNpm "left-pad"
 lodashName = unscopedNpm "lodash"
 babelCore = scopedNpm "babel" "core"
 
--- | The PyPI subject project the projection, routing, and request fixtures address.
-requestsName :: PackageName
+-- | The PyPI subject projects the projection, routing, and request fixtures address.
+requestsName, azureStorageBlob :: PackageName
 requestsName = unscopedPyPI "requests"
+azureStorageBlob = unscopedPyPI "azure-storage-blob"
 
 v1_0_0 :: Version
 v1_0_0 = npmVersion "1.0.0"

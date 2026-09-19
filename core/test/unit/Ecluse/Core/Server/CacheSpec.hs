@@ -40,7 +40,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Package (npmVersion, pypiVersion, sampleArtifact, sampleDetails, thingName, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
-import Ecluse.Test.Snapshot (readDetails, versionReadOf)
+import Ecluse.Test.Snapshot (readDetails, untaggedRead)
 
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
 resolveMetadata c source name fetch =
@@ -48,10 +48,6 @@ resolveMetadata c source name fetch =
 
 unwrapResolved :: Either MetadataError a -> IO a
 unwrapResolved = either (throwIO . UnexpectedFault) pure
-
--- A version read from an ecosystem that declares no release tag.
-untagged :: Maybe PackageDetails -> VersionRead
-untagged details = versionReadOf details Nothing
 
 newtype UnexpectedFault = UnexpectedFault MetadataError
     deriving stock (Show)
@@ -136,7 +132,7 @@ pypiName = unscopedPyPI "auditdemo"
 
 selectedRelease :: Int -> Int -> Either MetadataError VersionRead
 selectedRelease count padding =
-    fmap untagged
+    fmap untaggedRead
         . projectPyPIVersion defaultLimits pypiName (pypiVersion "1")
         . BL.toStrict
         . encode
@@ -180,10 +176,10 @@ spec = do
             let absentVersion = pypiVersion "2"
                 fetch = modifyIORef' calls (+ 1) $> Right release
             c <- newMetadataCache (configBytes 60 100 16384)
-            _ <- Cache.resolveVersion port c publicSource pypiName absentVersion (pure (Right (untagged Nothing)))
+            _ <- Cache.resolveVersion port c publicSource pypiName absentVersion (pure (Right (untaggedRead Nothing)))
             replicateM_ 2 $ Cache.resolveVersion port c publicSource pypiName (pypiVersion "1") fetch `shouldReturn` Right release
             Cache.cachedVersion c publicSource pypiName (pypiVersion "1") `shouldReturn` Nothing
-            Cache.cachedVersion c publicSource pypiName absentVersion `shouldReturn` Just (untagged Nothing)
+            Cache.cachedVersion c publicSource pypiName absentVersion `shouldReturn` Just (untaggedRead Nothing)
             readIORef calls `shouldReturn` 2
             readResidency `shouldReturn` Just 1024
 
@@ -342,7 +338,7 @@ spec = do
             let name = unscopedNpm "hot-head"
             _ <- resolveMetadata c publicSource name (pure (entry name "raw"))
             for_ ([1 .. 5] :: [Int]) $ \i ->
-                Cache.resolveVersion noopMetricsPort c publicSource name (npmVersion (show i <> ".0.0")) (pure (Right (untagged Nothing)))
+                Cache.resolveVersion noopMetricsPort c publicSource name (npmVersion (show i <> ".0.0")) (pure (Right (untaggedRead Nothing)))
 
             Cache.cachedVersion c publicSource name (npmVersion "1.0.0") `shouldReturn` Nothing
 
@@ -373,7 +369,7 @@ spec = do
             for_ ([1 .. 10] :: [Int]) $ \i -> do
                 let name = unscopedNpm ("filler-" <> show i)
                 _ <- Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
-                _ <- Cache.resolveVersion port c publicSource name (npmVersion "1.0.0") (pure (Right (untagged Nothing)))
+                _ <- Cache.resolveVersion port c publicSource name (npmVersion "1.0.0") (pure (Right (untaggedRead Nothing)))
                 _ <- Cache.resolveAssembled port c (show i) (pure (mkBytes 2048 'x'))
                 pass
             total <- sum <$> traverse readIORef [fullSeen, versionSeen, assembledSeen]
@@ -391,12 +387,12 @@ spec = do
                         }
             let name = unscopedNpm "recency"
                 v n = npmVersion (show (n :: Int) <> ".0.0")
-            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 1) (pure (Right (untagged Nothing)))
-            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 2) (pure (Right (untagged Nothing)))
+            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 1) (pure (Right (untaggedRead Nothing)))
+            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 2) (pure (Right (untaggedRead Nothing)))
 
             _ <- Cache.cachedVersion c publicSource name (v 1)
 
-            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 3) (pure (Right (untagged Nothing)))
+            _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 3) (pure (Right (untaggedRead Nothing)))
 
-            Cache.cachedVersion c publicSource name (v 1) `shouldReturn` Just (untagged Nothing)
+            Cache.cachedVersion c publicSource name (v 1) `shouldReturn` Just (untaggedRead Nothing)
             Cache.cachedVersion c publicSource name (v 2) `shouldReturn` Nothing
