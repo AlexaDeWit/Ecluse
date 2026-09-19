@@ -49,7 +49,7 @@ import Ecluse.Core.Registry.Npm.Request (
     withToken,
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
-import Ecluse.Core.Registry.Request (joinPath, noValidators, parseRequestEither)
+import Ecluse.Core.Registry.Request (joinPath, parseRequestEither)
 import Ecluse.Core.Registry.ServedDocument (adjustField, stringField)
 import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (nonBlank, urlFilenameComponent)
@@ -98,7 +98,7 @@ parsePackageListing body = case decodeStrict body :: Maybe Object of
 -- | Read the full packument, because the install view omits @_rev@ and @time@.
 packumentRequestFor :: OriginClient -> PackageName -> Either UrlFormationError Request
 packumentRequestFor origin =
-    metadataRequest (originBaseUrl origin) (ocToken origin) Full noValidators
+    metadataRequest (originBaseUrl origin) (ocToken origin) Full
 
 -- | Refuse absent versions and unreadable revisions. Delete the whole package only for its last version.
 versionDeleteRequestsFor ::

@@ -57,7 +57,6 @@ import Ecluse.Core.Registry.Npm.SelectiveDecode (
     selectVersionFromPackument,
  )
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits), OriginFor, originBaseUrl)
-import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (
     AllowedHostPorts,
@@ -84,7 +83,7 @@ newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing) selectNpmVersionDoc
 
 fetchNpmPackument :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
-fetchNpmPackument origin = fetchMetadataFormBounded origin Full noValidators
+fetchNpmPackument origin = fetchMetadataFormBounded origin Full
 
 -- | Fetch a bounded full packument with the digest that scopes its cached document.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)

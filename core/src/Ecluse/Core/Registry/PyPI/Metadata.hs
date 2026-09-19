@@ -55,7 +55,6 @@ import Ecluse.Core.Registry.PyPI.SelectiveDecode (
     selectFilesFromIndex,
  )
 import Ecluse.Core.Registry.PyPI.Wire (checkApiVersion)
-import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (
     AllowedHostPorts,
@@ -87,7 +86,7 @@ fetchSimpleIndex origin name =
     formThen
         FetchUrlUnformable
         (boundedFetch (ocManager origin) (ocLimits origin))
-        (simpleIndexRequest (originBaseUrl origin) (ocToken origin) noValidators name)
+        (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name)
 
 -- | Fetch a bounded Simple index with the digest that scopes its cached document.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)

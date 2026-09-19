@@ -35,7 +35,7 @@ import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)
 import Ecluse.Core.Registry.PyPI.Project (canonicalName)
 import Ecluse.Core.Registry.PyPI.Wire (simpleIndexMediaType)
-import Ecluse.Core.Registry.Request (Validators, addValidators, attachCredential, joinPath, parseRequestEither)
+import Ecluse.Core.Registry.Request (attachCredential, joinPath, parseRequestEither)
 import Ecluse.Core.Registry.Request qualified as Request
 import Ecluse.Core.Server.Path (encodeComponent)
 
@@ -51,15 +51,13 @@ which here means an empty base URL.
 simpleIndexRequest ::
     Text ->
     Maybe ClientCredential ->
-    Validators ->
     PackageName ->
     Either UrlFormationError Request
-simpleIndexRequest baseUrl credential validators name = do
+simpleIndexRequest baseUrl credential name = do
     url <- simpleIndexUrl baseUrl name
     base <- parseRequestEither url
     pure
         . attachCredential pypiCredential credential
-        . addValidators validators
         $ base
             { requestHeaders =
                 (hAccept, simpleIndexMediaType)

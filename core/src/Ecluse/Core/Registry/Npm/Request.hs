@@ -4,7 +4,7 @@
 
 {- | Request shaping and URL building for the npm data plane, composed over the
 ecosystem-agnostic mechanics in "Ecluse.Core.Registry.Request" (the outbound seal,
-conditional-GET validators, URL parsing, the path join, the opaque-artifact request core).
+URL parsing, the path join, the opaque-artifact request core).
 
 Three of npm's protocol facts are load-bearing here. Metadata comes in two forms chosen by
 @Accept@, a scoped name travels as the single segment @\@scope%2Fname@, and an artifact
@@ -40,7 +40,7 @@ import Ecluse.Core.Credential (ClientCredential)
 import Ecluse.Core.Package (PackageName, pkgNamespace, renderPackageName, unScope, unscopedName)
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
-import Ecluse.Core.Registry.Request (Validators, addValidators, attachCredential, joinPath, parseRequestEither)
+import Ecluse.Core.Registry.Request (attachCredential, joinPath, parseRequestEither)
 import Ecluse.Core.Registry.Request qualified as Request
 import Ecluse.Core.Server.Path (encodeComponent)
 
@@ -70,15 +70,13 @@ metadataRequest ::
     Text ->
     Maybe ClientCredential ->
     MetadataForm ->
-    Validators ->
     PackageName ->
     Either UrlFormationError Request
-metadataRequest baseUrl token form validators name = do
+metadataRequest baseUrl token form name = do
     url <- packageUrl baseUrl name
     base <- parseRequestEither url
     pure
         . withToken token
-        . addValidators validators
         $ base
             { requestHeaders =
                 (hAccept, metadataAccept form)
