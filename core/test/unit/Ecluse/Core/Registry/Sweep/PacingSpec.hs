@@ -23,18 +23,20 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     undeclaredBudget,
  )
 import Ecluse.Core.Registry.Sweep.Pacing (
-    BudgetShortfall (NeedsFraction, WorkFillsAllowance),
     PaceDecision (pdFraction, pdPace, pdShortfall),
-    budgetFraction,
-    ceilingsFor,
-    cycleAllowance,
-    cycleDemand,
     decidePace,
     defaultCycleWindow,
     derivedCapacity,
     nominalPackagePace,
     renderPaceDecision,
     renderScopeBudget,
+ )
+import Ecluse.Core.Registry.Sweep.Pacing.Internal (
+    BudgetShortfall (NeedsFraction, WorkFillsAllowance),
+    budgetFraction,
+    ceilingsFor,
+    cycleAllowance,
+    cycleDemand,
  )
 import Ecluse.Core.Registry.Sweep.Types (
     SweepPacing (SweepPacing, swpBudgetFraction, swpChunkPause, swpChunkSize, swpCyclePause, swpCycleWindow, swpDeletionCap, swpShape),
