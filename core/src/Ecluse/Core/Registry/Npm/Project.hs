@@ -309,9 +309,10 @@ usableComponent component =
 -- 'projectName' and 'scopedName' read, so a part carries neither.
 npmNameChar :: Char -> Bool
 npmNameChar ch = isAsciiUpper ch || isAsciiLower ch || isDigit ch || ch `elem` npmNameSpecials
-  where
-    npmNameSpecials :: [Char]
-    npmNameSpecials = "-_.!~*'()"
+
+-- The punctuation npm's own name grammar admits outside the alphanumerics.
+npmNameSpecials :: [Char]
+npmNameSpecials = "-_.!~*'()"
 
 {- | Every character an npm package name may begin with, sieved out of ASCII by the grammar
 above so the store walk's bucket alphabet cannot drift from what this module parses.
