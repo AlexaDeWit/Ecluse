@@ -238,46 +238,28 @@ runCveSync ::
     SyncSchedule ->
     SyncHooks ->
     m ()
-runCveSync metrics tracing env schedule hooks = burst initialPacing 0 (schedBootBackoff schedule) >>= uncurry poll
+runCveSync metrics tracing env schedule hooks =
+    burstCycle loop initialPacing 0 (schedBootBackoff schedule) >>= uncurry (pollCycle loop)
   where
-    eco = show (syncEcosystem env) :: Text
-    interval = schedAbsentReport schedule
+    loop =
+        SyncLoop
+            { slMetrics = metrics
+            , slTracing = tracing
+            , slEnv = env
+            , slSchedule = schedule
+            , slHooks = hooks
+            , slEcosystem = show (syncEcosystem env)
+            }
 
-    step lastSeen = do
-        stepped <- observedStep metrics tracing env eco (hookFirstSync hooks) lastSeen
-        liftIO (hookPushAge hooks)
-        pure stepped
-
-    -- Each attempt reads 'Nothing' as last seen, because a not-settled outcome never advances it.
-    -- The burst concedes to the steady poll once its delays are spent.
-    burst pacing delta delays = do
-        stepped <- step Nothing
-        pacing' <- reportFetch delta stepped pacing
-        case delays of
-            _ | stSettled stepped -> pure (pacing', stSeen stepped)
-            [] -> (pacing', stSeen stepped) <$ reportUnloaded eco (syncStoreRef env) (stResult stepped)
-            delay : rest -> threadDelay delay >> burst pacing' delay rest
-
-    poll pacing lastSeen = do
-        threadDelay (schedPollDelay schedule)
-        stepped <- step lastSeen
-        pacing' <- reportFetch (schedPollDelay schedule) stepped pacing
-        unloaded <- repeatUnloaded (stResult stepped) (pacUnloaded pacing' + schedPollDelay schedule)
-        poll pacing'{pacUnloaded = unloaded} (stSeen stepped)
-
-    -- The report repeats only while the slot has never been filled, so the first swap ends it
-    -- and a later outage starts the interval again.
-    repeatUnloaded result elapsed =
-        liftIO (currentAdvisoryEtag (syncSlot env)) >>= \case
-            Just _ -> pure 0
-            Nothing
-                | elapsed < interval -> pure elapsed
-                | otherwise -> 0 <$ reportUnloaded eco (syncStoreRef env) result
-
-    reportFetch delta stepped pacing = do
-        let (fetching, report) = paceFetchFailure interval delta (stFault stepped) (pacFetchFailure pacing)
-        traverse_ (reportFetchHealth eco) report
-        pure pacing{pacFetchFailure = fetching}
+-- Everything the loop's arms read. The ecosystem label is rendered once, at the top of the task.
+data SyncLoop = SyncLoop
+    { slMetrics :: AdvisorySyncMetricsPort
+    , slTracing :: AdvisorySyncTracingPort
+    , slEnv :: SyncEnv
+    , slSchedule :: SyncSchedule
+    , slHooks :: SyncHooks
+    , slEcosystem :: Text
+    }
 
 {- The loop's pacing of its two repeating reports, both on 'schedAbsentReport': the time since the
 unloaded-database report, and the time since the fetch-failure report while fetches keep failing. -}
@@ -288,6 +270,60 @@ data Pacing = Pacing
 
 initialPacing :: Pacing
 initialPacing = Pacing{pacUnloaded = 0, pacFetchFailure = Nothing}
+
+loopStep :: (MonadUnliftIO m, KatipContext m) => SyncLoop -> Maybe DbEtag -> m Stepped
+loopStep loop lastSeen = do
+    stepped <-
+        observedStep
+            (slMetrics loop)
+            (slTracing loop)
+            (slEnv loop)
+            (slEcosystem loop)
+            (hookFirstSync (slHooks loop))
+            lastSeen
+    liftIO (hookPushAge (slHooks loop))
+    pure stepped
+
+-- Each attempt reads 'Nothing' as last seen, because a not-settled outcome never advances it.
+-- The burst concedes to the steady poll once its delays are spent.
+burstCycle :: (MonadUnliftIO m, KatipContext m) => SyncLoop -> Pacing -> Int -> [Int] -> m (Pacing, Maybe DbEtag)
+burstCycle loop pacing delta delays = do
+    stepped <- loopStep loop Nothing
+    pacing' <- reportFetch loop delta stepped pacing
+    case delays of
+        _ | stSettled stepped -> pure (pacing', stSeen stepped)
+        [] -> (pacing', stSeen stepped) <$ reportLoopUnloaded loop (stResult stepped)
+        delay : rest -> threadDelay delay >> burstCycle loop pacing' delay rest
+
+pollCycle :: (MonadUnliftIO m, KatipContext m) => SyncLoop -> Pacing -> Maybe DbEtag -> m ()
+pollCycle loop pacing lastSeen = do
+    threadDelay pollDelay
+    stepped <- loopStep loop lastSeen
+    pacing' <- reportFetch loop pollDelay stepped pacing
+    unloaded <- repeatUnloaded loop (stResult stepped) (pacUnloaded pacing' + pollDelay)
+    pollCycle loop pacing'{pacUnloaded = unloaded} (stSeen stepped)
+  where
+    pollDelay = schedPollDelay (slSchedule loop)
+
+reportFetch :: (KatipContext m) => SyncLoop -> Int -> Stepped -> Pacing -> m Pacing
+reportFetch loop delta stepped pacing = do
+    let (fetching, report) =
+            paceFetchFailure (schedAbsentReport (slSchedule loop)) delta (stFault stepped) (pacFetchFailure pacing)
+    traverse_ (reportFetchHealth (slEcosystem loop)) report
+    pure pacing{pacFetchFailure = fetching}
+
+-- The report repeats only while the slot has never been filled, so the first swap ends it
+-- and a later outage starts the interval again.
+repeatUnloaded :: (KatipContext m) => SyncLoop -> AdvisorySyncResult -> Int -> m Int
+repeatUnloaded loop result elapsed =
+    liftIO (currentAdvisoryEtag (syncSlot (slEnv loop))) >>= \case
+        Just _ -> pure 0
+        Nothing
+            | elapsed < schedAbsentReport (slSchedule loop) -> pure elapsed
+            | otherwise -> 0 <$ reportLoopUnloaded loop result
+
+reportLoopUnloaded :: (KatipContext m) => SyncLoop -> AdvisorySyncResult -> m ()
+reportLoopUnloaded loop = reportUnloaded (slEcosystem loop) (syncStoreRef (slEnv loop))
 
 -- What one paced fetch outcome reports, if anything.
 data FetchHealth
