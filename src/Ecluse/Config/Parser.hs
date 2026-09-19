@@ -2,8 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Shared configuration decoders. Key declarations define both accepted keys and reads.
-Aeson paths retain the location of type errors through nested groups.
+{- | The key vocabulary every configuration group decodes through ("Ecluse.Config.Aeson").
+
+One declaration list is both the accepted-key list and the read list, so a key no field reads
+cannot pass unnoticed and must be declared with 'unreadKey'. Each refusal carries the group-
+qualified label and the Aeson path, so a nested type error names the setting an operator wrote.
 -}
 module Ecluse.Config.Parser (
     -- * Group decoding
@@ -59,7 +62,7 @@ data GroupInput = GroupInput
     , giObject :: KeyMap.KeyMap Value
     }
 
--- | A group whose key declarations define both accepted keys and reads.
+-- | An applicative group decoder: each key it declares is one it accepts and one it reads.
 data GroupDecoder a = GroupDecoder
     { gdKeys :: [Key.Key]
     , gdRead :: GroupInput -> Parser a
@@ -150,13 +153,14 @@ taggedTarget cases field = \case
 
     admitted = "exactly one store tag (" <> intercalate ", " (map (\(TagCase k _) -> Key.toString k) cases) <> ")"
 
-    writtenTags = \case
-        [] -> "no tag"
-        tags -> intercalate ", " (map (show . Key.toText) tags)
-
     tagGroup tag decoder = \case
         Object inner -> decodeGroup (field <> "." <> Key.toString tag) decoder inner
         other -> fail (field <> "." <> Key.toString tag <> " must be an object, but encountered " <> valueKind other)
+
+writtenTags :: [Key.Key] -> String
+writtenTags = \case
+    [] -> "no tag"
+    tags -> intercalate ", " (map (show . Key.toText) tags)
 
 parseAt :: (FromJSON a) => String -> Value -> Parser a
 parseAt label = modifyFailure ((label <> ": ") <>) . parseJSON

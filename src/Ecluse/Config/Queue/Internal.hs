@@ -31,8 +31,8 @@ with the backend its shape names, or no backend when only the SQS endpoint overr
 data QueueUrl = QueueUrl Text (Maybe QueueTarget)
     deriving stock (Eq, Show)
 
--- The two halves are positional rather than record fields, and these accessors are hand-written,
--- because record-update syntax needs only a field label in scope to rebuild a value past 'mkQueueUrl'.
+-- The two halves are positional rather than record fields, and these accessors hand-written,
+-- because record-update syntax needs only a field label in scope to bypass 'mkQueueUrl'.
 
 -- | The value as written, trimmed.
 queueUrlText :: QueueUrl -> Text
