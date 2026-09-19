@@ -34,12 +34,11 @@ import Ecluse.Core.Security.Egress (mkRegistryUrl)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, publicRegistryBaseUrl)
 import Ecluse.Test.Support (expectRight)
 
-{- | Smoke tests make __live__ calls to public registries (npm, PyPI) to confirm our JSON decoding
-and protocol handling match reality. They depend on uncontrolled external services, so they never
-gate a merge, and each case __pends__ rather than fails when the network is unavailable.
+{- | Smoke tier: __live__ calls to the public npm registry, confirming that our decoding, our
+projection, and the default 'Limits' still match what the registry serves.
 -}
 spec :: Spec
-spec = describe "live registry protocol (npm / PyPI)" $ do
+spec = describe "live npm registry protocol" $ do
     it "decodes a real abbreviated packument from the public npm registry" $ do
         document <- liveRegistryDocument ["-H", "Accept: " <> abbreviatedAccept] "/is-odd"
         case document of
