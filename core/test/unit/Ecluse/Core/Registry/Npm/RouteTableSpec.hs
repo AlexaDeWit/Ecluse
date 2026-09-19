@@ -19,9 +19,10 @@ compare directly:
   the @404@.
 
 * __What a route's captures parse to__ ('takePackage', and the artifact coordinate the
-  tarball route's capture reads). The reference parses both for itself, so the generated
-  requests hold the scoped-name decoding, the component-safety gate, and the coordinate
-  against it. The worked examples of each parse live in
+  tarball route's capture reads). The reference parses a package unit for itself, so the
+  generated requests hold the scoped-name decoding and the component-safety gate against
+  it. The coordinate is reached only through a claimed tarball route, so its denial is
+  asserted directly below. The worked examples of each parse live in
   "Ecluse.Core.Registry.Npm.RouteSpec".
 
 The reference encodes the grammar exactly, including the two rules asserted directly
@@ -108,6 +109,11 @@ spec = do
     describe "the routes it claims" $ do
         it "a HEAD reads like a GET" $
             matchedId methodHead ["lodash"] `shouldBe` Just (RouteName "packument")
+
+        -- Path confusion is a denial: the router fabricates no coordinate from a mismatched
+        -- artifact basename.
+        it "an artifact whose basename is for another package is not claimed (path confusion)" $
+            matchedId methodGet ["lodash", "-", "evil-1.0.0.tgz"] `shouldBe` Nothing
 
         -- "-" is the reserved meta-route prefix, and npm cannot hold a package named "-".
         it "a lone \"-\" is never a package, on any method" $ do
