@@ -53,7 +53,7 @@ import Ecluse.Runtime.Telemetry (
     telemetryTracerProvider,
     withTelemetry,
  )
-import Ecluse.Runtime.Telemetry.Correlation (ddContextNow, ddIdentity)
+import Ecluse.Runtime.Telemetry.Correlation.Internal (ddContextNow, ddIdentity)
 import Ecluse.Runtime.Telemetry.Resolve (resolveTelemetry)
 import Ecluse.Runtime.Test.Support (newTestEnvWith)
 import Ecluse.Service (mountBindingFor)
