@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Generate a coverage report for ONE test suite, in Codecov's native JSON format,
-# for the Codecov action to upload. See CONTRIBUTING.md -> "Coverage".
+# for the Codecov action to upload. See docs/testing.md -> "Coverage: Codecov".
 #
 # This is a PARTIAL view: a single tier is only one of the flags Codecov merges
 # into the project total (unit ∪ integration). CI uses this per-tier form on
@@ -99,9 +99,11 @@ hpc-codecov "${mix_args[@]}" \
 # library module the suite never imports is therefore silently *absent* from the
 # report rather than reported as 0%, which quietly inflates the percentage. This
 # guard fails loudly on a missing module instead of hiding it. The fix is a test
-# that exercises the module, so that it links. For a module with genuinely nothing
-# to cover yet, add an entry to the suite's `unscoped` list below. See
-# CONTRIBUTING.md -> "Coverage".
+# that exercises the module, so that it links. A module that declares no
+# expression of its own is absent for a second reason: HPC has no tick box to
+# emit for it, so no test can bring it into the report. For that module, and for
+# one with genuinely nothing to cover yet, add an entry to the suite's `unscoped`
+# list below. See docs/testing.md -> "Coverage: Codecov".
 #
 # The whole-library expectation holds only for the two unit suites. Each must link
 # every module in its own source tree:
@@ -119,10 +121,13 @@ case "$suite" in
     # executable logic yet. Each entry states why and when it returns, so this
     # stays a reviewed decision and not a silent escape hatch.
     unscoped=(
-      # pure re-export shim: the curated public surface only. The implementation
-      # and its coverage live in Ecluse.Core.Credential.Refresh.Internal.
+      # re-export only: the curated public surface over an .Internal or sibling
+      # module (docs/style.md 4.6). Such a module declares no expression, so HPC
+      # has no tick box for it and the report names it under no suite. The
+      # implementation and its coverage sit in the modules it re-exports.
       ./core/src/Ecluse/Core/Credential/Refresh.hs
-      # pure re-export shims
+      ./core/src/Ecluse/Core/Registry/Npm/Route.hs
+      ./core/src/Ecluse/Core/Registry/PyPI/Route.hs
       ./core/src/Ecluse/Core/Security.hs
       ./core/src/Ecluse/Core/Server/Pipeline.hs
       ./core/src/Ecluse/Core/Worker.hs
@@ -151,11 +156,30 @@ case "$suite" in
     # Runtime modules the runtime-unit suite intentionally does not link. Another
     # gating tier covers each one, merged into the Codecov total under its flag.
     unscoped=(
-      # Ecluse.Runtime.Server and Ecluse.Runtime.Env exercise the shell's runServer
-      # and runWorker, so Ecluse.Runtime.ServerSpec and Ecluse.Runtime.EnvSpec live
-      # in ecluse-unit, which links the app library. The runtime-unit partition
-      # cannot link them. ecluse-unit covers both.
+      # re-export only: the curated public surface over an .Internal or sibling
+      # module (docs/style.md 4.6). Such a module declares no expression, so HPC
+      # has no tick box for it and the report names it under no suite. The
+      # implementation and its coverage sit in the modules it re-exports.
+      ./runtime/src/Ecluse/Runtime/Credential/CodeArtifact.hs
+      ./runtime/src/Ecluse/Runtime/Cve/Sync.hs
+      ./runtime/src/Ecluse/Runtime/Log.hs
+      ./runtime/src/Ecluse/Runtime/Maintenance/CodeArtifact.hs
+      ./runtime/src/Ecluse/Runtime/Maintenance/CodeArtifact/Decide.hs
+      ./runtime/src/Ecluse/Runtime/Maintenance/CodeArtifact/Read.hs
+      ./runtime/src/Ecluse/Runtime/Queue/Sqs.hs
       ./runtime/src/Ecluse/Runtime/Server.hs
+      ./runtime/src/Ecluse/Runtime/Telemetry.hs
+      ./runtime/src/Ecluse/Runtime/Telemetry/Correlation.hs
+      ./runtime/src/Ecluse/Runtime/Telemetry/ExportFailure.hs
+      ./runtime/src/Ecluse/Runtime/Telemetry/Instruments.hs
+      ./runtime/src/Ecluse/Runtime/Telemetry/Resolve.hs
+      ./runtime/src/Ecluse/Runtime/Telemetry/Scrape.hs
+      ./runtime/src/Ecluse/Runtime/Telemetry/Tracing.hs
+      # Ecluse.Runtime.Server.Internal and Ecluse.Runtime.Env carry the shell's
+      # runServer and runWorker, so Ecluse.Runtime.ServerSpec and
+      # Ecluse.Runtime.EnvSpec live in ecluse-unit, which links the app library.
+      # The runtime-unit partition cannot link them. ecluse-unit covers both.
+      ./runtime/src/Ecluse/Runtime/Server/Internal.hs
       ./runtime/src/Ecluse/Runtime/Env.hs
       # The composed application (shell fixtures) exercises the middleware pieces
       # and health probes in that same ecluse-unit Ecluse.Runtime.ServerSpec. The
