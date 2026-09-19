@@ -38,7 +38,7 @@ import Ecluse.Runtime.Server (
     mkServerConfig,
     newDrainSignal,
  )
-import Ecluse.Test.Log (captureStderr, captureStdout)
+import Ecluse.Test.Log (captureStderrWith, captureStdout)
 
 runEnv :: [(String, String)]
 runEnv =
@@ -404,23 +404,16 @@ checkConfigOutput envVars =
 -- | The checker's status and the lines it reported on standard error.
 checkConfigRefusal :: [(String, String)] -> IO (Either ExitCode (), [Text])
 checkConfigRefusal envVars = withEnvVars envVars $ do
-    outcome <- newIORef (Nothing :: Maybe (Either ExitCode ()))
-    report <- captureStderr (try (withArgs ["check-config"] run) >>= writeIORef outcome . Just)
-    readIORef outcome >>= \case
-        Nothing -> fail "the checker left no outcome behind"
-        Just result -> pure (result, reportLines report)
+    (outcome, report) <- captureStderrWith (try (withArgs ["check-config"] run))
+    pure (outcome, reportLines report)
 
 -- | The status a boot took and the lines it reported on standard error.
 bootRefusal :: [String] -> [(String, String)] -> IO (Either ExitCode (Maybe ()), [Text])
 bootRefusal args envVars = withEnvVars envVars $ do
-    outcome <- newIORef (Nothing :: Maybe (Either ExitCode (Maybe ())))
-    report <- captureStderr $ do
-        -- Guard against a hung boot, without requiring refusal within a boot-speed deadline.
-        result <- try (timeout 5_000_000 (withArgs args run))
-        writeIORef outcome (Just result)
-    readIORef outcome >>= \case
-        Nothing -> fail "the boot left no outcome behind"
-        Just result -> pure (result, reportLines report)
+    -- The timeout guards against a hung boot, without requiring refusal within a boot-speed
+    -- deadline.
+    (outcome, report) <- captureStderrWith (try (timeout 5_000_000 (withArgs args run)))
+    pure (outcome, reportLines report)
 
 -- | Write a configuration document to a temporary path and hand the path to the case.
 withDocument :: Text -> (FilePath -> IO a) -> IO a
