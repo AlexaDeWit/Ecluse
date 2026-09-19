@@ -41,7 +41,6 @@ spec = do
             scenarios
             telemetryScenarios
             publishScenarios
-            pendingScenarios
 
 scenarios :: SpecWith GlobalDataPlane
 scenarios = do
@@ -283,9 +282,3 @@ publishScenarios = do
                     void $ npmPublishIn proj >>= shouldFail
                     reached <- verdaccioMirroredWithinWindow e2e name ver
                     reached `shouldBe` False
-
-pendingScenarios :: SpecWith GlobalDataPlane
-pendingScenarios =
-    describe "graceful shutdown" $
-        it "drains in-flight work on SIGTERM" $ \_ ->
-            pendingWith "activates with the #160 graceful-drain work"
