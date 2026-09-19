@@ -10,7 +10,7 @@ import Network.HTTP.Types.Header (RequestHeaders)
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 import Ecluse.Core.Credential (
-    ClientCredential (ClientCredential, credSecret, credUsername),
+    ClientCredential (ClientCredential, credSecret),
     bareCredential,
     mkSecret,
  )
@@ -32,9 +32,6 @@ recoverySpec = describe "PyPI recovers the Basic pair a Python client presents" 
     it "recovers a token sent under twine's fixed username" $
         recover [("Authorization", "Basic X190b2tlbl9fOnB5cGktQWdFSQ==")]
             `shouldBe` Just (ClientCredential (Just "__token__") (mkSecret "pypi-AgEI"))
-
-    it "admits any username, because the index rather than Écluse decides who a name is" $
-        credUsername <$> recover [("Authorization", "Basic YWxpY2U6aHVudGVyMg==")] `shouldBe` Just (Just "alice")
 
     it "reads an empty username as no username at all" $
         recover [("Authorization", "Basic OnNlY3JldA==")] `shouldBe` Just (bareCredential (mkSecret "secret"))

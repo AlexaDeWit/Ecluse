@@ -91,22 +91,17 @@ verdictSpec = describe "the delete verdict" $ do
         recResults rec' `shouldReturn` [SweepExamined, SweepDeleted]
         held store `shouldReturn` []
 
-    it "keeps a version deny-by-default left undecided" $ do
-        -- No rule was decisive, which the serve path refuses on. Here it keeps: nothing named
-        -- this version, so nothing licenses destroying it.
-        (rec', store) <- sweepOne [] ["1.0.0"] ["1.0.0"]
-        recResults rec' `shouldReturn` [SweepExamined, SweepKept]
-        held store `shouldReturn` [npmVersion "1.0.0"]
-
-    it "keeps a version a rule admitted" $ do
-        (rec', store) <- sweepOne [admitRule] ["1.0.0"] ["1.0.0"]
-        recResults rec' `shouldReturn` [SweepExamined, SweepKept]
-        held store `shouldReturn` [npmVersion "1.0.0"]
-
-    it "keeps a version no rule could vet" $ do
-        (rec', store) <- sweepOne [cannotVetRule] ["1.0.0"] ["1.0.0"]
-        recResults rec' `shouldReturn` [SweepExamined, SweepKept]
-        held store `shouldReturn` [npmVersion "1.0.0"]
+    -- The serve path refuses an undecided version. Here each of these keeps it instead.
+    for_
+        [ ("keeps a version deny-by-default left undecided", [])
+        , ("keeps a version a rule admitted", [admitRule])
+        , ("keeps a version no rule could vet", [cannotVetRule])
+        ]
+        $ \(caseName, rules) ->
+            it caseName $ do
+                (rec', store) <- sweepOne rules ["1.0.0"] ["1.0.0"]
+                recResults rec' `shouldReturn` [SweepExamined, SweepKept]
+                held store `shouldReturn` [npmVersion "1.0.0"]
 
     it "deletes a version the manifest omits but a deny names by identity, so the next request 404s" $ do
         -- The store lists it and its own metadata does not. The listing establishes identity anyway.

@@ -45,11 +45,6 @@ matchingSpec = describe "which route claims a request" $ do
     it "routes a project's index read" $
         claimed methodGet jsonAccept ["simple", "requests"] `shouldBe` Just (RouteName "simpleIndex")
 
-    it "routes the same path with a trailing slash, which the router strips" $
-        -- The mount dispatcher drops a trailing empty segment before the table sees the path,
-        -- so /simple/requestsName/ and /simple/requestsName are one template.
-        claimed methodGet jsonAccept ["simple", "requests"] `shouldBe` Just (RouteName "simpleIndex")
-
     it "routes a HEAD of the index as the bodiless variation of its GET" $
         claimed methodHead jsonAccept ["simple", "requests"] `shouldBe` Just (RouteName "simpleIndex")
 
@@ -100,9 +95,6 @@ matchingSpec = describe "which route claims a request" $ do
 
 negotiationSpec :: Spec
 negotiationSpec = describe "the index route serves the PEP 691 JSON form alone" $ do
-    it "claims a request that admits the JSON form" $
-        claimed methodGet jsonAccept ["simple", "requests"] `shouldBe` Just (RouteName "simpleIndex")
-
     it "claims a request that sends no Accept header at all" $
         claimed methodGet [] ["simple", "requests"] `shouldBe` Just (RouteName "simpleIndex")
 
