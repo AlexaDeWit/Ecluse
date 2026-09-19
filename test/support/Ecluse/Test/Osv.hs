@@ -280,4 +280,4 @@ runOsvTestMWith logEnv action = runResourceT (runReaderT (unOsvTestM action) log
 the ingest reported rather than on what it returned.
 -}
 runOsvJsonLog :: OsvTestM a -> IO Text
-runOsvJsonLog action = snd <$> captureJsonLog (\logEnv -> runOsvTestMWith logEnv action)
+runOsvJsonLog action = snd <$> captureJsonLog (`runOsvTestMWith` action)
