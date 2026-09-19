@@ -3,8 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 {- | Ecosystem-agnostic request mechanics: the outbound finaliser, the credential presentation,
-the conditional-GET validators, and URL parsing into a typed 'UrlFormationError'. An adapter
-supplies only its own protocol facts.
+and URL parsing into a typed 'UrlFormationError'. An adapter supplies only its own protocol facts.
 
 'parseRequestEither' seals what it parses, so an adapter cannot obtain an unsealed 'Request'
 from this module at all.
@@ -21,11 +20,6 @@ module Ecluse.Core.Registry.Request (
     attachCredential,
     authorizationUnder,
 
-    -- * Conditional-GET validators
-    Validators (..),
-    noValidators,
-    addValidators,
-
     -- * Request building
     artifactRequestByUrl,
     joinPath,
@@ -38,8 +32,6 @@ import Network.HTTP.Types.Header (
     HeaderName,
     RequestHeaders,
     hAuthorization,
-    hIfModifiedSince,
-    hIfNoneMatch,
     hUserAgent,
  )
 
@@ -118,34 +110,6 @@ authorizationUnder scheme headers = do
     let (presented, rest) = T.break (== ' ') (decodeUtf8 raw)
     guard (T.toLower presented == T.toLower scheme)
     pure (T.dropWhile (== ' ') rest)
-
-{- | The conditional-GET validators to relay on a metadata fetch. Replaying them lets the
-upstream answer @304 Not Modified@ with no body on a cache revalidation.
--}
-data Validators = Validators
-    { validatorIfNoneMatch :: Maybe ByteString
-    -- ^ An entity tag to send as @If-None-Match@ (an upstream @ETag@).
-    , validatorIfModifiedSince :: Maybe ByteString
-    {- ^ An RFC-1123 date to send as @If-Modified-Since@ (an upstream
-    @Last-Modified@).
-    -}
-    }
-    deriving stock (Eq, Show)
-
--- | No conditional-GET validators: an unconditional fetch.
-noValidators :: Validators
-noValidators = Validators{validatorIfNoneMatch = Nothing, validatorIfModifiedSince = Nothing}
-
--- Add the present conditional-GET validators as request headers.
-addValidators :: Validators -> Request -> Request
-addValidators validators request =
-    request{requestHeaders = newHeaders <> requestHeaders request}
-  where
-    newHeaders =
-        catMaybes
-            [ (,) hIfNoneMatch <$> validatorIfNoneMatch validators
-            , (,) hIfModifiedSince <$> validatorIfModifiedSince validators
-            ]
 
 {- | Build the artifact @GET@ at the URL a projection preserved from upstream. Non-decompressing,
 so the bytes the served integrity digest is paired with are never gunzipped.

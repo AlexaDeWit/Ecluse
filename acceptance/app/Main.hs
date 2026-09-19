@@ -23,7 +23,6 @@ import Ecluse.Core.Registry (RegistryResponse (..), isSuccessStatus)
 import Ecluse.Core.Registry.Exchange (boundedFetch)
 import Ecluse.Core.Registry.Npm.Request qualified as Npm
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPI
-import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot), digestOf)
@@ -97,8 +96,8 @@ fetchDocument manager eco pkg = case liveRequest eco pkg of
 
 liveRequest :: Ecosystem -> PackageName -> Either Text Request
 liveRequest eco pkg = case eco of
-    Npm -> first show (Npm.metadataRequest "https://registry.npmjs.org" Nothing Npm.Full noValidators pkg)
-    PyPI -> first show (PyPI.simpleIndexRequest "https://pypi.org" Nothing noValidators pkg)
+    Npm -> first show (Npm.metadataRequest "https://registry.npmjs.org" Nothing Npm.Full pkg)
+    PyPI -> first show (PyPI.simpleIndexRequest "https://pypi.org" Nothing pkg)
     RubyGems -> Left "no registered performance adapter for rubygems"
 
 -- Allocate each copy in IO before timing. Evaluating one pure copy thunk would share it across passes.

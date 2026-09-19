@@ -6,7 +6,7 @@ module Ecluse.Core.Registry.RequestSpec (spec) where
 
 import Data.List (lookup)
 import Network.HTTP.Client qualified as Client
-import Network.HTTP.Types.Header (RequestHeaders, hIfModifiedSince, hIfNoneMatch, hUserAgent)
+import Network.HTTP.Types.Header (RequestHeaders, hUserAgent)
 import Test.Hspec (
     Spec,
     describe,
@@ -21,15 +21,12 @@ import Ecluse.Core.Credential (ClientCredential (ClientCredential, credSecret, c
 import Ecluse.Core.Registry (UrlFormationError (EmptyBaseUrl, UnparseableUrl))
 import Ecluse.Core.Registry.Request (
     CredentialMapping,
-    Validators (..),
-    addValidators,
     artifactRequestByUrl,
     attachCredential,
     credentialMapping,
     credentialRecover,
     finaliseRequest,
     joinPath,
-    noValidators,
     parseRequestEither,
     sealRequest,
  )
@@ -41,7 +38,6 @@ spec = do
     finaliseRequestSpec
     credentialMappingSpec
     artifactByUrlSpec
-    validatorsSpec
     joinPathSpec
     parseSpec
 
@@ -149,21 +145,6 @@ artifactByUrlSpec = describe "artifactRequestByUrl (opaque, non-decompressing, b
     it "refuses an unparseable URL as a UrlFormationError" $ do
         artifactRequestByUrl apiKeyMapping Nothing "not a url with spaces"
             `shouldSatisfy` urlErrorWas (UnparseableUrl "not a url with spaces")
-
-validatorsSpec :: Spec
-validatorsSpec = describe "conditional-GET validators" $ do
-    it "adds both If-None-Match and If-Modified-Since when present" $ do
-        req <- parseRequestOrFail "https://reg.test/x"
-        let validators = Validators (Just "\"etag-123\"") (Just "Wed, 21 Oct 2015 07:28:00 GMT")
-        let hs = Client.requestHeaders (addValidators validators req)
-        lookup hIfNoneMatch hs `shouldBe` Just "\"etag-123\""
-        lookup hIfModifiedSince hs `shouldBe` Just "Wed, 21 Oct 2015 07:28:00 GMT"
-
-    it "adds neither header for noValidators" $ do
-        req <- parseRequestOrFail "https://reg.test/x"
-        let hs = Client.requestHeaders (addValidators noValidators req)
-        lookup hIfNoneMatch hs `shouldBe` Nothing
-        lookup hIfModifiedSince hs `shouldBe` Nothing
 
 joinPathSpec :: Spec
 joinPathSpec = describe "joinPath guards the empty base and joins one path" $ do

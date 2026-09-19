@@ -45,7 +45,6 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated), jsonPutRequest, metadataRequest, packageUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (..), PublishPlan (ppLatest, ppMetadata, ppVersion))
-import Ecluse.Core.Registry.Request (noValidators)
 import Ecluse.Core.Server.Path (unFilename)
 import Ecluse.Core.Version (renderVersion)
 
@@ -53,7 +52,7 @@ import Ecluse.Core.Version (renderVersion)
 npmPublishCodec :: PublishCodec
 npmPublishCodec =
     PublishCodec
-        { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated noValidators
+        { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated
         , pcParseVersionList = Project.parseVersionList
         , pcPublishRequest = npmPublishRequestFor
         , pcPublishOutcome = classifyPublish
