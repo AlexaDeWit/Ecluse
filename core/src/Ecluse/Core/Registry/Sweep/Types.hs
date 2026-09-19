@@ -341,7 +341,7 @@ outcomeComplete outcome =
     isNothing (outcomeHalt outcome) && evidenceComplete (outcomeEvidence outcome)
 
 {- | Whether a halt stops the Dredger for the life of the process. Only the cap does, because a
-breaker that re-closes itself is not a breaker; every other halt is re-read next cycle.
+breaker that re-closes itself is not a breaker. Every other halt is re-read next cycle.
 -}
 latches :: CycleHalt -> Bool
 latches = \case
