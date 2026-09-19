@@ -10,6 +10,7 @@ import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Server.Pipeline.TestSupport
+import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Server.Mount (withPrivateBaseUrl)
 import Ecluse.Test.Wai
@@ -583,7 +584,7 @@ losslessSpec = describe "lossless served surface (raw Value edited in place)" $ 
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
-            topLevel "_id" resp `shouldBe` Just (String "thing")
+            fieldAt "_id" (decodedBody resp) `shouldBe` Just (String "thing")
             servedVersionKey "1.0.0" "_unmodeled" resp `shouldBe` Just (String "kept")
 
     it "rewrites dist.tarball under the mount base so artifacts route back through the gate" $ do

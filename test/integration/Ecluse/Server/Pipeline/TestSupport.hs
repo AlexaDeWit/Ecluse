@@ -84,7 +84,6 @@ module Ecluse.Server.Pipeline.TestSupport (
     headTarball,
 
     -- * Reading a served document
-    topLevel,
     servedVersionKey,
     servedTarball,
     servedIntegrity,
@@ -663,12 +662,6 @@ drainJobs env = go []
             Right [] -> pure (reverse acc)
             Right messages -> go (reverse (map msgJob messages) <> acc)
             Left fault -> fail ("drainJobs: the in-memory queue faulted: " <> show fault)
-
--- The value at a top-level key in the served body (for relayed unmodeled keys).
-topLevel :: Text -> SResponse -> Maybe Value
-topLevel key resp = case decodedBody resp of
-    Object o -> KeyMap.lookup (Key.fromText key) o
-    _ -> Nothing
 
 -- The value at a top-level @field@ within a served version object.
 servedVersionKey :: Text -> Text -> SResponse -> Maybe Value

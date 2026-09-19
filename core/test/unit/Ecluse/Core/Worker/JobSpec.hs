@@ -55,6 +55,7 @@ import Ecluse.Core.Worker (
     processJob,
  )
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
+import Ecluse.Test.Json (textAtPath)
 import Ecluse.Test.Package (npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
@@ -114,10 +115,10 @@ spec = do
             case decoded of
                 Left err -> expectationFailure ("publish document is not valid JSON: " <> err)
                 Right value -> do
-                    stringAt ["name"] value `shouldBe` Just "thing"
-                    stringAt ["dist-tags", "latest"] value `shouldBe` Just "1.0.0"
-                    stringAt ["versions", "1.0.0", "dist", "integrity"] value `shouldBe` Just trueSri
-                    stringAt ["_attachments", "thing-1.0.0.tgz", "data"] value
+                    textAtPath ["name"] value `shouldBe` Just "thing"
+                    textAtPath ["dist-tags", "latest"] value `shouldBe` Just "1.0.0"
+                    textAtPath ["versions", "1.0.0", "dist", "integrity"] value `shouldBe` Just trueSri
+                    textAtPath ["_attachments", "thing-1.0.0.tgz", "data"] value
                         `shouldBe` Just (decodeUtf8 (convertToBase Base64 tarballBytes :: ByteString))
     describe "processJob -- the integrity gate" $ do
         -- The worker recomputes whichever digest current metadata carries, so an artifact the

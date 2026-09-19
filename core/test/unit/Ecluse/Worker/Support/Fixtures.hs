@@ -63,15 +63,12 @@ module Ecluse.Worker.Support.Fixtures (
     testSupervision,
 
     -- * Reading an outcome back
-    stringAt,
     isDropped,
     isSourceUnavailable,
     isRetried,
     isDeadLettered,
 ) where
 
-import Data.Aeson (Key, Value (Object, String))
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
@@ -357,13 +354,6 @@ testSupervision =
         , spClassify = const Transient
         , spBackoff = BackoffSchedule{bsBaseMicros = 1_000_000, bsCapMicros = 1_000_000}
         }
-
--- Follow a path of object keys into a decoded JSON 'Value' and return the string at the
--- leaf. Any step that is absent or the wrong shape yields 'Nothing'.
-stringAt :: [Key] -> Value -> Maybe Text
-stringAt [] (String t) = Just t
-stringAt (k : ks) (Object o) = KeyMap.lookup k o >>= stringAt ks
-stringAt _ _ = Nothing
 
 isDropped :: JobOutcome -> Bool
 isDropped = \case

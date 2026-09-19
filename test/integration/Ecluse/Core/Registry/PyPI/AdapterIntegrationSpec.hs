@@ -35,7 +35,7 @@ import Ecluse.Core.Server.Upstream (MirrorServePlan (NoMirrorWrite))
 import Ecluse.Runtime.Server (application, mkServerConfig)
 import Ecluse.Server.Pipeline.TestSupport (getPath, getPathWith, newTestEnvWithQueue, postPath, requestAt)
 import Ecluse.Service (mountBindingFor)
-import Ecluse.Test.Json (asObject, fieldAt, objectAt, textAt)
+import Ecluse.Test.Json (asObject, fieldAt, textAtPath)
 import Ecluse.Test.Package (hexSha256Of)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (atDefaultPrecedence, inertRuleDeps)
@@ -108,14 +108,14 @@ conditionalFloorSpec = describe "listing validators across configured integrity 
                 initial <- request [] (proxyApp proxy)
                 statusOf initial `shouldBe` 200
                 servedVersions initial `shouldBe` ["2.34.2"]
-                mapMaybe (textAt "marker" . asObject) (servedFiles initial) `shouldBe` ["weak", "strong", "strong", "last"]
+                mapMaybe (textAtPath ["marker"]) (servedFiles initial) `shouldBe` ["weak", "strong", "strong", "last"]
                 oldTag <- validator initial
                 unchanged <- request [("If-None-Match", oldTag)] (proxyApp proxy)
                 statusOf unchanged `shouldBe` 304
                 changed <- request [("If-None-Match", oldTag)] strictApp
                 statusOf changed `shouldBe` 200
                 servedVersions changed `shouldBe` servedVersions initial
-                mapMaybe (textAt "marker" . asObject) (servedFiles changed) `shouldBe` ["strong", "strong", "last"]
+                mapMaybe (textAtPath ["marker"]) (servedFiles changed) `shouldBe` ["strong", "strong", "last"]
                 simpleBody changed `shouldNotBe` simpleBody initial
                 newTag <- validator changed
                 newTag `shouldNotBe` oldTag
@@ -388,13 +388,13 @@ servedVersions resp = case fieldAt "versions" (decodedBody resp) of
 
 -- | The locations the served index names, in the order it named them.
 servedUrls :: SResponse -> [Text]
-servedUrls = mapMaybe (textAt "url" . asObject) . servedFiles
+servedUrls = mapMaybe (textAtPath ["url"]) . servedFiles
 
 -- | The digests the served index carries, one per file.
 servedDigests :: SResponse -> [Text]
 servedDigests = mapMaybe digestOf . servedFiles
   where
-    digestOf = textAt "sha256" . objectAt "hashes" . asObject
+    digestOf = textAtPath ["hashes", "sha256"]
 
 -- | Every key the served file entries carry.
 servedKeys :: SResponse -> [Text]

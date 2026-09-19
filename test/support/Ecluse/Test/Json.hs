@@ -26,6 +26,7 @@ module Ecluse.Test.Json (
     mapAt,
     keysAt,
     textAt,
+    textAtPath,
     encodeStrict,
 ) where
 
@@ -125,3 +126,11 @@ textAt :: Key -> Object -> Maybe Text
 textAt key fields = case KeyMap.lookup key fields of
     Just (String value) -> Just value
     _ -> Nothing
+
+{- | The string at the end of a key path into a document. Any step that is absent or the wrong
+shape yields 'Nothing', so a caller reads a nested leaf without matching each level.
+-}
+textAtPath :: [Key] -> Value -> Maybe Text
+textAtPath [] (String value) = Just value
+textAtPath (key : rest) (Object fields) = KeyMap.lookup key fields >>= textAtPath rest
+textAtPath _ _ = Nothing
