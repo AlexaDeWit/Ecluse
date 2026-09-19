@@ -826,8 +826,10 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Pipeline.InternalSpec
     Ecluse.Core.Server.Pipeline.OriginSpec
     Ecluse.Core.Server.Pipeline.PackumentSpec
+    Ecluse.Core.Server.Pipeline.Tarball.PrivateSpec
+    Ecluse.Core.Server.Pipeline.Tarball.PublicSpec
+    Ecluse.Core.Server.Pipeline.Tarball.RefusalSpec
     Ecluse.Core.Server.Pipeline.Tarball.RelaySpec
-    Ecluse.Core.Server.Pipeline.TarballSpec
     Ecluse.Core.Server.PipelineSpec
     Ecluse.Core.Server.ReadinessSpec
     Ecluse.Core.Server.ResponseSpec
