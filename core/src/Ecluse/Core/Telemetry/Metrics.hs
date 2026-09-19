@@ -69,11 +69,8 @@ import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
-{- | The catalogue of metric instruments Écluse emits, each mapped to its wire name
-through 'metricName'.
-
-Queue backlog and DLQ depth are deliberately absent. Those are cloud-native metrics
-(CloudWatch, Cloud Monitoring), not signals Écluse re-emits.
+{- | The catalogue of metric instruments Écluse emits. Queue backlog and DLQ depth are absent
+on purpose: those are cloud-native metrics, not signals Écluse re-emits.
 -}
 data MetricName
     = -- | @http.server.request.duration@: server request latency (histogram).
@@ -190,9 +187,8 @@ metricName = \case
     AdvisoryCompileDropped -> "ecluse.advisory.compile.dropped"
     AdvisoryCompileRuns -> "ecluse.advisory.compile.runs"
 
-{- | The closed set of metric label keys. Every label Écluse attaches is one of these
-bounded-domain keys. The high-cardinality identifiers (@package@, @version@, @scope@, a
-denial @message@) are deliberately absent, so they can never become a metric label.
+{- | The closed set of metric label keys. The high-cardinality identifiers (@package@,
+@version@, @scope@, a denial @message@) have no key, so they can never become a label.
 -}
 data LabelKey
     = KeyDecision
@@ -235,9 +231,8 @@ data Decision = Admit | Deny | Unavailable
 
 instance Universe Decision where universe = universeGeneric
 
-{- | The bucketed class of a denial reason: a bounded summary of
-"Ecluse.Core.Server.Response.RejectReason". It is not the rule name or the message,
-which are high-cardinality and stay on the log line.
+{- | The bucketed class of a denial reason. Not the rule name or the message, which are
+high-cardinality and stay on the log line.
 -}
 data ReasonClass = ReasonPolicy | ReasonMissingIntegrity | ReasonUnavailable | ReasonLimit
     deriving stock (Eq, Generic, Show)
@@ -256,8 +251,8 @@ data StatusClass = Status2xx | Status3xx | Status4xx | Status5xx | StatusOther
 
 instance Universe StatusClass where universe = universeGeneric
 
-{- | The store a mirror-write credential's refresh\/ttl signal concerns: one value per store tag
-the configuration admits, so a dashboard and a mount's declaration spell the same word.
+{- | The store a mirror-write credential's refresh\/ttl signal concerns: one value per store
+tag the configuration admits, so a dashboard and a mount's declaration spell the same word.
 -}
 data Provider = ProviderRegistry | ProviderCodeArtifact | ProviderVerdaccio
     deriving stock (Eq, Generic, Show)
@@ -276,19 +271,16 @@ data Tier = Structural | Effectful
 
 instance Universe Tier where universe = universeGeneric
 
-{- | Why the request perimeter had to answer for an escaped fault
-(@ecluse.serve.perimeter.faults@). The unbounded detail rides the perimeter's log line,
-never a label.
+{- | Why the request perimeter had to answer for an escaped fault. The unbounded detail rides
+the perimeter's log line, never a label.
 -}
 data RequestFaultCause = RenderFault | UnclassifiedFault
     deriving stock (Eq, Generic, Show)
 
 instance Universe RequestFaultCause where universe = universeGeneric
 
-{- | What a public artifact relay passed through when it did not carry the admitted
-artifact (@ecluse.serve.relay.anomalies@). It is a 2xx whose headers do not look like an
-artifact, or a non-success relayed verbatim. The unbounded detail rides the paired
-WARNING log line, never a label.
+{- | What a public artifact relay passed through when it did not carry the admitted artifact:
+a 2xx that does not look like one, or a non-success relayed verbatim.
 -}
 data RelayAnomaly = RelayOddShape | RelayNonSuccess
     deriving stock (Eq, Generic, Show)
@@ -301,18 +293,17 @@ data CacheResult = Hit | Miss
 
 instance Universe CacheResult where universe = universeGeneric
 
-{- | A processed mirror job's result. The worker counts the idempotent "already present"
-outcome (a registry @409@) as 'Published', not as a distinct value.
+{- | A processed mirror job's result. The idempotent "already present" outcome (a registry
+@409@) counts as 'Published', not as a distinct value.
 -}
 data MirrorResult
     = -- | The artifact reached the mirror target (an already-present version included).
       Published
     | -- | The job did not publish, and its message stays in the queue's own hands.
       Failed
-    | {- | The worker retired the message itself, after it spent the queue's redelivery
-      budget ('Ecluse.Core.Queue.deliveryBudgetSpent'). Distinct from 'Failed' because
-      this is the terminus a deployment with no dead-letter queue has. An operator
-      alerts on it, since nothing else captured a discarded job.
+    | {- | The worker retired the message itself, once it spent the queue's redelivery budget.
+      It is the terminus a deployment with no dead-letter queue has, so an operator alerts on
+      it: nothing else captured the job.
       -}
       Discarded
     deriving stock (Eq, Generic, Show)
@@ -351,9 +342,8 @@ data CredentialResult = Refreshed | RefreshFailed
 
 instance Universe CredentialResult where universe = universeGeneric
 
-{- | What one advisory sync attempt concluded. The value labels the
-@ecluse.advisory.sync.*@ signals and the advisory sync span, mirroring the outcomes of
-@Ecluse.Runtime.Cve.Sync@.
+{- | What one advisory sync attempt concluded. It labels the @ecluse.advisory.sync.*@ signals
+and the sync span alike.
 -}
 data AdvisorySyncResult
     = -- | The sync verified a new artifact and swapped it into the read path.
@@ -370,8 +360,8 @@ data AdvisorySyncResult
 
 instance Universe AdvisorySyncResult where universe = universeGeneric
 
-{- | The wire value of an advisory sync result. The metric label and the sync span's
-result attribute must read identically, so the two signals join on it.
+{- | The wire value of an advisory sync result. The metric label and the span attribute must
+read identically, so the two signals join on it.
 -}
 advisorySyncResultName :: AdvisorySyncResult -> Text
 advisorySyncResultName = \case
@@ -381,8 +371,8 @@ advisorySyncResultName = \case
     AdvisoryFetchFailed -> "fetch_failed"
     AdvisoryRefused -> "refused"
 
-{- | Why a compile pass dropped one advisory entry (@ecluse.advisory.compile.dropped@). The
-entry's own name and bytes stay on the drop log line, never a label.
+{- | Why a compile pass dropped one advisory entry. The entry's own name and bytes stay on the
+drop log line, never a label.
 -}
 data AdvisoryDropCause
     = -- | The entry breached the per-advisory byte cap.
@@ -393,8 +383,8 @@ data AdvisoryDropCause
 
 instance Universe AdvisoryDropCause where universe = universeGeneric
 
-{- | What one compile pass concluded (@ecluse.advisory.compile.runs@). A pass that never
-concluded, because a fetch or a filesystem fault escaped it, records neither value.
+{- | What one compile pass concluded. A pass that never concluded, because a fetch or a
+filesystem fault escaped it, records neither value.
 -}
 data AdvisoryCompileResult
     = -- | The pass finalised an artifact.
@@ -411,8 +401,8 @@ data BreakerSource = EffectfulRule | CredentialMint
 
 instance Universe BreakerSource where universe = universeGeneric
 
-{- | The circuit-breaker state, recorded as the value of the @ecluse.rule.breaker.state@
-gauge (labelled by 'BreakerSource'). It is a bounded measurement, not a label.
+{- | The circuit-breaker state, recorded as the @ecluse.rule.breaker.state@ gauge's value
+(labelled by 'BreakerSource'). It is a bounded measurement, not a label.
 -}
 data BreakerState = Closed | HalfOpen | Open
     deriving stock (Eq, Generic, Show)
@@ -428,10 +418,9 @@ breakerStateCode = \case
     HalfOpen -> 1
     Open -> 2
 
-{- | A single metric label: a bounded key paired with its bounded value. There is no
-constructor for a package, version, scope, or message, so nothing can turn a
-high-cardinality identifier into a label. 'LRule' carries a rule's configured name, the
-one operator-bounded label: a deployment defines a small, fixed rule set.
+{- | A single metric label: a bounded key with its bounded value. No constructor takes a
+package, version, scope, or message. 'LRule' is the one operator-bounded label, since a
+deployment defines a small, fixed rule set.
 -}
 data Label
     = LDecision Decision

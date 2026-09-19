@@ -6,12 +6,11 @@
 {- | The domain-span tracing ports, and the bracket Pilot opens its own spans through.
 
 The serve path, the mirror worker, and the advisory sync task reach their hand-added spans
-through a port: bracket operations as a record (the Handle pattern), parametric in the
-bracketed action's result and naming no OpenTelemetry tracer. The application supplies the
-OTel-backed implementations (see @Ecluse.Runtime.Telemetry.Tracing@), a test a pass-through
-double. Pilot's compile, stream, and export passes run outside a request and hold the
-'TracerProvider' themselves, so they bracket through 'withOptionalSpan' instead. Both
-consumers create their tracer under 'ecluseScope'.
+through a port: bracket operations as a record, parametric in the bracketed action's result
+and naming no OpenTelemetry tracer, so the application supplies the OTel-backed
+implementations and a test a pass-through double. Pilot's passes run outside a request and
+hold the 'TracerProvider' themselves, so they bracket through 'withOptionalSpan' instead.
+Both consumers create their tracer under 'ecluseScope'.
 -}
 module Ecluse.Core.Telemetry.Span (
     -- * The serve-path tracing port
@@ -68,29 +67,29 @@ data TracingPort = TracingPort
         (a -> Maybe Text) ->
         (Maybe RemoteSpanContext -> IO a) ->
         IO a
-    {- ^ Bracket the serve-time hand-off to the asynchronous mirror, carrying the artifact's
-    authoritative URL. The body stamps the supplied span context ('Nothing' when tracing is
-    off) onto the job, linking the worker's span across the async hop. A 'Just' from the
-    projection marks the span errored.
+    {- ^ Bracket the serve-time hand-off to the asynchronous mirror. The body stamps the
+    supplied span context onto the job, linking the worker's span across the async hop.
     -}
     , spanPackumentGate ::
         forall a.
         PackageName ->
         IO a ->
         IO a
+    {- ^ Bracket the gating phase of a packument request, which runs the rules and filter on
+    the public upstream document.
+    -}
     , spanMetadataFetch ::
         forall a.
         PackageName ->
         IO a ->
         IO a
+    -- ^ Bracket one upstream metadata fetch, refusals included.
     , spanMetadataDecode ::
         forall a.
         PackageName ->
         IO a ->
         IO a
-    {- ^ Bracket the gating phase of a packument request, which runs the rules and
-    filter on the public upstream document.
-    -}
+    -- ^ Bracket the projection of a fetched document, which only a success reaches.
     }
 
 {- | The mirror worker's domain-span tracing port: the worker analogue of 'TracingPort'. The
@@ -105,14 +104,13 @@ newtype WorkerTracingPort = WorkerTracingPort
         (a -> JobSpanOutcome) ->
         IO a ->
         IO a
-    {- ^ Bracket the worker's per-job fetch, verify, and publish. The supplied trace context
-    links the span back to the enqueueing request, and is 'Nothing' when the job carried none.
-    The projected 'JobSpanOutcome' marks the span errored when the job did not publish.
+    {- ^ Bracket the worker's per-job fetch, verify, and publish. The supplied context links
+    the span back to the enqueueing request, and is 'Nothing' when the job carried none.
     -}
     }
 
-{- | The outcome projection a caller supplies for the mirror-job span. It is a small record rather
-than the worker's own outcome type, so the tracing port does not depend on the worker loop.
+{- | The outcome projection a caller supplies for the mirror-job span. It is its own record so
+the tracing port does not depend on the worker loop.
 -}
 data JobSpanOutcome = JobSpanOutcome
     { jobSpanLabel :: Text
@@ -122,9 +120,8 @@ data JobSpanOutcome = JobSpanOutcome
     }
     deriving stock (Eq, Show)
 
-{- | The advisory sync task's domain-span tracing port: one span per sync attempt. The span
-carries the same 'AdvisorySyncResult' that labels the attempt metrics, so a trace and a series
-join on one vocabulary. The implementation is inert when tracing is off.
+{- | One span per advisory sync attempt. It carries the same 'AdvisorySyncResult' that labels
+the attempt metrics, so a trace and a series join on one vocabulary.
 -}
 newtype AdvisorySyncTracingPort = AdvisorySyncTracingPort
     { astpSyncAttemptSpan ::
@@ -136,8 +133,8 @@ newtype AdvisorySyncTracingPort = AdvisorySyncTracingPort
     -- ^ Bracket one advisory sync attempt for an ecosystem, recording the projected result.
     }
 
-{- | The instrumentation scope the hand-added spans and the WAI meter are created under, so they
-are attributed to Écluse rather than to a third-party instrumentation library.
+{- | The instrumentation scope the hand-added spans and the WAI meter are created under, so the
+signals are attributed to Écluse rather than to a third-party instrumentation library.
 -}
 ecluseScope :: (IsString s) => s
 ecluseScope = "ecluse"
