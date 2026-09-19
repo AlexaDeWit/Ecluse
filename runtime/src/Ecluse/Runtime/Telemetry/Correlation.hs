@@ -2,31 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The log↔trace correlation glue: read the active OpenTelemetry span off the
-ambient context and stamp its ids onto the @dd@ log object ("Ecluse.Runtime.Log"). A
-reader then joins a JSONL line to the trace it was emitted within.
-
-"Ecluse.Runtime.Log" owns the @dd@ object's /shape/ and stays free of any OpenTelemetry
-dependency. This module is the IO half that "Ecluse.Runtime.Log" deferred. It reaches into
-the OpenTelemetry thread-local context for the active span. It renders the trace and span
-ids into a 'DdSpan' and fills that onto a 'DdContext'. The id format is the declared SDK's
-own @hs-opentelemetry-propagator-datadog@ conversion: the unsigned decimal of the low 64
-bits, big-endian, which is what @dd.trace_id@ and @dd.span_id@ join on.
-
-== The identity and the span
-
-"Ecluse.Runtime.Telemetry.Resolve" resolves the @service@\/@env@\/@version@ identity
-once, and this module carries it as a span-less 'DdContext', the __identity__.
-'ddPayloadNow' fills the __active span__ onto a copy of it at log time. With no span
-in scope, outside a request or with telemetry off, the trace and span ids are simply
-absent. The identity still stamps the line. A span whose context is not valid (a
-dropped\/non-recording span carrying zero ids) likewise contributes no ids. A line
-therefore never carries a meaningless all-zero trace id.
-
-The identity is installed as the initial @katip@ context at the per-request and worker
-entry points, so every log line carries the @dd@ object. The ids are read at that
-point, since the WAI server span is active by then, and re-read where a tighter span
-opens.
+{- | The log-to-trace correlation glue: read the active OpenTelemetry span off the ambient
+context and stamp its ids onto the @dd@ log object ("Ecluse.Runtime.Log"), so a reader joins a
+JSONL line to the trace it was emitted within. This is the IO half "Ecluse.Runtime.Log" defers,
+which is why that module needs no OpenTelemetry dependency. The ids take
+@hs-opentelemetry-propagator-datadog@'s form: the unsigned decimal of the low 64 bits,
+big-endian. No span in scope, or one whose context is not valid, contributes no ids, so a line
+never carries a meaningless all-zero trace id. The identity still stamps it.
 -}
 module Ecluse.Runtime.Telemetry.Correlation (
     -- * Identity

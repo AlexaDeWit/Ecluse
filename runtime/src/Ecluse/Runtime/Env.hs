@@ -2,22 +2,13 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition root: the single record from which every effectful component is reached,
-and the one place backend choice is resolved. Each handle it holds is an opaque record of
-functions whose closures already capture their backend's private state, so nothing downstream
-inspects which backend it got. It also carries the @http-client@ 'Manager' the data plane
-shares, so pooling and TLS setup happen once. Consumers read it through a projection:
-'serveRuntimeOf' per request, 'workerRuntimeOf' for the mirror worker.
-
-== Invariants
-
-* __No backend SDK appears here.__ 'Env' imports the handle /records/ only, never a cloud
-  SDK, and their effectful fields return 'IO'. That is what keeps an adapter from importing
-  back into this module (see @docs\/architecture\/technology-stack.md@ → "Key Decisions").
-
-* __It is the sole composition root.__ The single-process proxy and the split deployment
-  (@ecluse proxy --no-worker@ beside an @ecluse mirror@ fleet) both wire up through here and
-  nowhere else (see @docs\/architecture\/cloud-backends.md@ → "Process model").
+{- | The composition root: the single record every effectful component is reached through, and
+the one place backend choice is resolved. Each handle it holds is an opaque record of functions
+whose closures already capture their backend's private state, so no cloud SDK appears here and
+nothing downstream inspects which backend it got. That is what keeps an adapter from importing
+back into this module. It also carries the @http-client@ 'Manager' the data plane shares. The
+single-process proxy and the split deployment both wire up here and nowhere else. Consumers
+read it through a projection: 'serveRuntimeOf' per request, 'workerRuntimeOf' for the worker.
 -}
 module Ecluse.Runtime.Env (
     -- * Composition root

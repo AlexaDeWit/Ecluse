@@ -4,22 +4,11 @@
 
 {- | The OpenTelemetry substrate: the tracer and meter providers the rest of the proxy hangs
 spans and metrics on, behind the @ECLUSE_OBSERVABILITY__TELEMETRY@ master switch. Observability
-is opt-in and vendor-neutral, so with that switch unset nothing is wired, nothing is emitted,
-and the SDK is never initialised. The maintainer's own backend must never become a consumer's
-obligation. This module stands up, or declines to stand up, the providers and brackets their
-lifecycle. The request-lifecycle spans and the metric instruments layer on top, and nothing
-here instruments the hot path. @docs\/architecture\/observability.md@ describes the
-configuration model and the signal catalogue.
-
-== The handle
-
-'telemetryDisabled' holds no providers. An enabled handle carries the SDK's providers, built
-from the standard @OTEL_*@ variables the SDK reads directly. 'withTelemetry' is the lifecycle
-bracket the composition root ("Ecluse.Runtime.Env") runs the proxy within, tearing the providers
-down along every exit path and flushing what they hold. It also runs the Prometheus scrape
-listener ("Ecluse.Runtime.Telemetry.Scrape") for that same span, and wraps the OTLP exporters,
-because @hs-opentelemetry 1.0.0.0@ drops a failed export silently. The wrappers only observe,
-routing the failure through the shared @katip@ throttle ("Ecluse.Runtime.Telemetry.Resolve").
+is opt-in, so with that switch unset nothing is wired and the SDK is never initialised.
+'withTelemetry' is the lifecycle bracket the composition root runs the proxy within: it builds
+the providers from the standard @OTEL_*@ variables, runs the Prometheus scrape listener, and
+tears both down along every exit path. It also wraps the OTLP exporters, because
+@hs-opentelemetry 1.0.0.0@ drops a failed export silently.
 -}
 module Ecluse.Runtime.Telemetry (
     -- * Master switch

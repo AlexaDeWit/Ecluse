@@ -2,15 +2,11 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The S3 edge of the @amazonka@ adapters: an S3-configured env over an optional
-endpoint override, built through 'Ecluse.Runtime.Aws.Env.newAwsEnv'.
-
-Ecosystem-agnostic and free of the composition shell. The caller (Pilot's export loop or
-the proxy's advisory sync) passes the resolved override down. The env is the private state
-a cloud capability's smart constructor captures, the boundary
-@docs\/architecture\/cloud-backends.md@ describes. It is built here and sealed by the
-capability that owns it: 'Ecluse.Runtime.Cve.Sync.newS3CveSource' for the sync consumer,
-'Ecluse.Runtime.Pilot.Export.exportToS3' for the producer.
+{- | The S3 edge of the @amazonka@ adapters: an S3-configured env over an optional endpoint
+override, built through 'Ecluse.Runtime.Aws.Env.newAwsEnv'. The caller (Pilot's export loop or
+the proxy's advisory sync) passes the resolved override down, so this module holds no
+dependency on the composition shell. The env is private state the capability that owns it
+seals (@docs\/architecture\/cloud-backends.md@).
 -}
 module Ecluse.Runtime.Aws.S3 (
     buildS3Env,

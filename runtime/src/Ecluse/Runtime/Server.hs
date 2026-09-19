@@ -1,61 +1,15 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 --
 -- SPDX-License-Identifier: MIT
--- TupleSections: pairing a matched mount with its router's verdict on the remainder
--- in 'matchMount' ((mount,) . router). See STYLE.md §2.
 {-# LANGUAGE TupleSections #-}
 
-{- | The HTTP front door: the raw @wai@ 'Application', its dispatch, the
-meta-routes, the middleware stack, and 'runServer'.
-
-The proxy is a passthrough over a small, irregular URL surface, so the front door
-is a raw 'Application' rather than a web framework. Matching on @pathInfo@ keeps the
-encoded-slash handling and the streaming control the proxy depends on (see
-@docs\/architecture\/web-layer.md@). Routing is two layers:
-
-* __Mount dispatch__: match a request's leading path segments to a configured
-  'MountBinding' and strip the prefix. That mount's
-  'Ecluse.Core.Server.Context.MountRouter' then takes the remainder, an
-  ecosystem-native path. A binding carries a
-  mount's __complete__ ecosystem wiring: its router and serve dependencies. The web
-  layer is closed over the agnostic 'Ecluse.Core.Server.Context.RouteAction'
-  vocabulary and holds no ecosystem's path grammar or body shape of its own. Every
-  registry is __path-mounted__ (e.g. @\/npm@). There is no root mount, so adding an
-  ecosystem never changes an existing consumer's URLs. A mount prefix is accepted
-  with or without a trailing slash (see @docs\/architecture\/web-layer.md@ →
-  "Multi-ecosystem mounts").
-
-Responses split into __two tiers__:
-
-* __Above the mounts, neutral and server-owned.__ The top level answers the
-  orchestration health probes (@\/livez@, @\/readyz@). A path matching __no__
-  configured mount is a generic @404 Not Found@ in @text\/plain@: there is no
-  ecosystem to shape it.
-
-* __Within a matched mount.__ The mount's router
-  ('Ecluse.Core.Server.Context.MountRouter', supplied by its ecosystem adapter) says what
-  the request names, as an 'Ecluse.Core.Server.Context.RouteAction'. That action is a
-  route-scoped response contract. It pairs existentially with either a pure response
-  value or a data-plane handler that can produce only that value type.
-
-This module holds __no route knowledge of its own__. It does not name a route, a path
-grammar, or a status. It asks the matched mount's router for an action, then either
-responds with it or runs it under the request perimeter. Adding an ecosystem adds a
-router and changes nothing here.
-
-Cross-cutting concerns are middleware composed around the 'Application' (see
-@docs\/architecture\/web-layer.md@ → "Middleware"): correct client-IP recovery behind
-a load balancer, and a request timeout. The request-body cap is not cross-cutting. It
-is a route concern, enforced at the read site by the only body-consuming route
-(publish). The middleware pieces and the health probes live in
-"Ecluse.Runtime.Server.Middleware", the graceful-shutdown drain vocabulary in
-"Ecluse.Runtime.Server.Drain", and the local-dev quit key in
-"Ecluse.Runtime.Server.Halt". This module composes them and re-exports their surface.
-Dispatch builds a per-request 'Ecluse.Core.Server.Context.RequestCtx': the request
-runtime ('serveRuntimeOf') paired with the matched 'MountBinding'. The effectful
-routes run in the 'Ecluse.Core.Server.Context.Handler' reader over it. A handler
-therefore reads its mount's wiring and the request runtime from context, not from
-threaded arguments.
+{- | The HTTP front door: the raw @wai@ 'Application', its dispatch, the middleware stack, and
+'runWarp'. It is a raw 'Application' rather than a framework because matching on @pathInfo@
+keeps the encoded-slash handling and the streaming control the proxy depends on
+(@docs\/architecture\/web-layer.md@). Dispatch matches a request's leading segments to a
+configured 'MountBinding', strips the prefix, and asks that mount's router what the remainder
+names, so this module holds no path grammar and no status of its own. A path under no mount is
+the neutral @404@, and @\/livez@ and @\/readyz@ are answered above the mounts.
 -}
 module Ecluse.Runtime.Server (
     -- * The WAI application
