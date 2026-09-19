@@ -20,12 +20,14 @@ module Ecluse.Test.Server.Route (
     genPathSegmentsFrom,
     genPathSegmentFrom,
     genSegmentName,
+    claimedBy,
     claimsEveryRendering,
 ) where
 
 import Hedgehog (Gen, PropertyT, annotateShow, failure, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
+import Network.HTTP.Types (Method, RequestHeaders)
 import Network.HTTP.Types.Method (methodGet)
 
 import Ecluse.Core.Server.Route (Route (routeName), RouteName, matchRoute, renderRoute)
@@ -68,6 +70,11 @@ hostileFragments =
 segmentChars :: String
 segmentChars = ['a', 'b', 'c', 'n', 'p', 'm', '@', '-', '/', '.', '%', ' ', '1', '2', '3', '4']
 
+-- | The name of the first route in a table to claim a request, 'Nothing' when none does.
+claimedBy :: [Route v] -> Method -> RequestHeaders -> [Text] -> Maybe RouteName
+claimedBy table method headers segments =
+    routeName . fst <$> matchRoute table method headers segments
+
 {- | Assert that the named route's own rendering of one set of captures is a URL that same
 route claims out of its table.
 
@@ -83,7 +90,7 @@ claimsEveryRendering table name captures =
             Nothing -> refuse "the route rendered no path for its own captures"
             Just segments -> do
                 annotateShow segments
-                fmap (unName . routeName . fst) (matchRoute table methodGet [] segments) === Just (unName name)
+                fmap unName (claimedBy table methodGet [] segments) === Just (unName name)
   where
     refuse reason = do
         annotateShow (unName name, reason :: Text)
