@@ -6,10 +6,10 @@ module Ecluse.Composition.ExecutableSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import System.Environment (setEnv)
+import System.Environment (setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (bracket_, throwIO)
 
 import Ecluse.Composition (
     BootWiring (bwBindings, bwPublishTargets),
@@ -88,8 +88,7 @@ spec = describe "planExecutable" $ do
         null (mwCveSync mirror) `shouldBe` True
 
     it "qualifies advisory consumers in both the mirror and Dredger plans" $
-        withSystemTempDirectory "epss-role-plan" $ \dir -> do
-            for_ [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test"), ("AWS_REGION", "us-east-1")] $ uncurry setEnv
+        withSystemTempDirectory "epss-role-plan" $ \dir -> withAmbientAws $
             for_ [(BootMirrorPipeline ServeAndMirror, staticEnvVars), (BootStorePruner, codeArtifactEnvVars)] $ \(role, mountEnv) -> do
                 let envVars =
                         overrideEnv "ECLUSE_ADVISORIES__DATA_DIR" dir $
@@ -336,6 +335,15 @@ storePlan role = reportWith codeArtifactEnvVars role (\_ _ _ -> Nothing) refusin
 probedPlan :: MirrorRole -> UpstreamSafety -> IO ([Advisory], Either [BootError] ExecutablePlan)
 probedPlan role answer =
     reportWith staticEnvVars (BootMirrorPipeline role) mountBindingFor inertQueue (probing answer inertStore)
+
+{- | Run the case under an AWS identity the sync's own credential discovery finds. The entries
+are cleared afterwards, since the whole suite shares one process environment.
+-}
+withAmbientAws :: IO a -> IO a
+withAmbientAws =
+    bracket_ (traverse_ (uncurry setEnv) ambientAws) (traverse_ (unsetEnv . fst) ambientAws)
+  where
+    ambientAws = [("AWS_ACCESS_KEY_ID", "test"), ("AWS_SECRET_ACCESS_KEY", "test"), ("AWS_REGION", "us-east-1")]
 
 -- | The arm a settled plan came back through, failing the case on a refusal.
 armOf :: Either [BootError] ExecutablePlan -> IO Text
