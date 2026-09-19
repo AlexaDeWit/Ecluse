@@ -3,9 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The @ecluse@ command line: the subcommand grammar and the flags each one settles. A bare
-invocation is @proxy@, so an operator who names no role gets the single-process pipeline. Every
-flag here narrows what one invocation does, so an absent flag always gives the shipped behaviour.
-"Ecluse.run" dispatches the 'AppCommand' this yields.
+invocation is @proxy@, so an operator who names no role gets the single-process pipeline.
+'Ecluse.run' dispatches the 'AppCommand' this yields.
 -}
 module Ecluse.CLI (
     AppCommand (..),
@@ -53,6 +52,8 @@ proxyRoleParser =
         ServeOnly
         (long "no-worker" <> help "Serve without the embedded mirror worker; needs a durable ECLUSE_QUEUE__URL and an 'ecluse mirror' fleet to drain it")
 
+{- Both flags narrow what one invocation does, so absent they give the shipped behaviour: cycle
+for the life of the process, and delete what a named decisive deny condemns. -}
 dredgerOptionsParser :: Parser DredgerOptions
 dredgerOptionsParser =
     DredgerOptions

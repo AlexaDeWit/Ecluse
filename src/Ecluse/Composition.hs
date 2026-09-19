@@ -226,6 +226,7 @@ mountPublishDeps ctx plan vetted =
 packumentDepsFor :: WiringContext -> RegistryAdapter -> Mount -> MountConfig -> IO PackumentDeps
 packumentDepsFor ctx adapter mount mcfg = do
     -- 'prepare' allocates an effectful rule's resilience policy and breaker once per mount.
+    -- The deps below bridge that same 'RuleDeps' non-pinning advisory-ETag reader.
     let ruleDeps = wcRuleDeps ctx (mountEcosystem mount)
     prepared <- prepare ruleDeps (mountPolicy mount)
     let regs = mountRegistries mount
@@ -242,7 +243,8 @@ packumentDepsFor ctx adapter mount mcfg = do
               pdFirstParty = maybe (const False) firstPartyName (mntFirstParty mcfg)
             , pdMountBaseUrl = mountBaseUrl (srvPublicUrl (cfgServer app)) (mountEcosystem mount)
             , pdRules = prepared
-            , -- One list for every mount: a network's internal ranges are a deployment-wide fact.
+            , -- Operator ranges extending the fixed internal-range block on the @dist.tarball@ host
+              -- gate. One list for every mount: internal ranges are a deployment-wide fact.
               pdAdditionalBlockedRanges = egrAdditionalBlockedRanges (cfgEgress app)
             , pdLimits = wcLimits ctx
             , pdInboundToken = srvAuthToken (cfgServer app)

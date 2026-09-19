@@ -7,7 +7,7 @@
 Écluse sits between clients and a package registry and applies a configurable resilience policy
 before any dependency reaches a build. It hosts no packages: the operator's own backend stores them,
 and Écluse governs only what may be fetched from, and mirrored to, those backends. The rules engine
-is __deny by default__ and mirroring is demand-driven, so it never runs on a request's critical path.
+is __deny by default__ and mirroring is demand-driven, so a mirror write never runs on a request's critical path.
 'run', the entry point the @ecluse@ executable invokes, lives here rather than in @app\/Main.hs@ so
 the composition root is one importable unit. This module also holds the typed process perimeter.
 -}
