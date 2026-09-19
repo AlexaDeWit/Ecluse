@@ -25,7 +25,7 @@ carry, in one-line summaries, never a wall of prose.
 |---|---|
 | **Documentation comment** / **Haddock comment** | A comment Haddock reads: `-- \|`, `-- ^`, or `{- \| … -}`. A plain `--` comment is invisible to Haddock. |
 | **Pre-comment** (`-- \|`) / **post-comment** (`-- ^`) | A comment placed *before* vs *after* the thing it documents. |
-| **Module header** | The `{- \| … -}` comment immediately before the `module` keyword. |
+| **Module header** | The Haddock comment immediately before the `module` keyword: `{- \| … -}`, or `-- \|` when it is one line. |
 | **Section heading** | A `-- *`, `-- **`, … marker *in the export list*. It groups exports and builds the page's table of contents. |
 | **Example** / **doctest** | A `>>>` line plus its expected output. `task doctest` *runs* it (§9). |
 
@@ -101,15 +101,18 @@ The marker goes on the first line only. -}
 ```
 
 Default to `-- |` before a declaration. Use `-- ^` inline for arguments, constructor arguments, and
-record fields. Use `{- | … -}` for module headers and long blocks.
+record fields. Use `{- | … -}` for any doc that wraps past one line, module headers included.
+fourmolu owns the choice: it reflows a wrapped `-- |` into a block and rewrites a one-line block
+back to `-- |`, so never hand-convert either form.
 
 ---
 
 ## 5. Module headers
 
-Every module opens with a `{- | … -}` header. State what the module is for and how it fits the
-system: the model and the load-bearing decisions, never a list of type names. Cross-reference
-sibling modules and the architecture documents.
+Every module opens with a header. A header that fits on one line is a `-- |` comment, and a longer
+one is a `{- | … -}` block (§4). State what the module is for and how it fits the system: the model
+and the load-bearing decisions, never a list of type names. Cross-reference sibling modules and the
+architecture documents.
 
 ```haskell
 {- | The policy rules engine.
@@ -274,7 +277,7 @@ lands, it is project narration. Cut it.
 
 ## 12. Checklist (before you open a PR)
 
-- [ ] Every new module has a prose `{- | … -}` header.
+- [ ] Every new module has a prose header (`-- |` for one line, `{- | … -}` for more).
 - [ ] Every exported type and function has a Haddock comment of one or two lines that
       states only what the implementation cannot, with sum constructors and
       record fields documented where they carry meaning.
