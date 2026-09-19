@@ -32,6 +32,7 @@ module Ecluse.Core.Osv.Epss (
 import Conduit
 import Data.Conduit.Combinators qualified as C
 import Data.Conduit.Zlib (ungzip)
+import Data.Foldable1 qualified as Foldable1
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -129,9 +130,7 @@ addScore (cve, score) (EpssScores scores) = EpssScores (Map.insertWith max (T.to
 scores none of them.
 -}
 epssForIds :: EpssScores -> [Text] -> Maybe Double
-epssForIds (EpssScores scores) ids = case mapMaybe lookupScore ids of
-    [] -> Nothing
-    (s : ss) -> Just (foldl' max s ss)
+epssForIds (EpssScores scores) ids = viaNonEmpty Foldable1.maximum (mapMaybe lookupScore ids)
   where
     lookupScore i = Map.lookup (T.toUpper i) scores
 

@@ -24,6 +24,7 @@ module Ecluse.Core.Osv.Advisory (
 import Prelude hiding (universe)
 
 import Data.Aeson (FromJSON (..), withObject, (.:), (.:?))
+import Data.Foldable1 qualified as Foldable1
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Universe.Class (Universe (universe))
@@ -178,9 +179,7 @@ data ExtractedOsv = ExtractedOsv
 advisorySeverity :: OsvAdvisory -> Maybe Double
 advisorySeverity adv = vectorScore <|> labelScore
   where
-    vectorScore = case mapMaybe (parseVectorScore . sevScore) (fromMaybe [] (osvSeverity adv)) of
-        [] -> Nothing
-        (s : ss) -> Just (foldl' max s ss)
+    vectorScore = viaNonEmpty Foldable1.maximum (mapMaybe (parseVectorScore . sevScore) (fromMaybe [] (osvSeverity adv)))
     labelScore = ghsaSeverityCeiling =<< (dbsSeverity =<< osvDatabaseSpecific adv)
 
 parseVectorScore :: Text -> Maybe Double
