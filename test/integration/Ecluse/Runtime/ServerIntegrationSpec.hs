@@ -15,16 +15,6 @@ import Network.HTTP.Client (
     responseStatus,
  )
 import Network.HTTP.Types (hConnection, status200, statusCode)
-import Network.Socket (
-    Family (AF_INET),
-    SockAddr (SockAddrInet),
-    SocketType (Stream),
-    close,
-    connect,
-    defaultProtocol,
-    socket,
-    tupleToHostAddress,
- )
 import Network.Wai (Application, responseLBS)
 import Network.Wai.Handler.Warp (
     Port,
@@ -36,10 +26,9 @@ import Network.Wai.Handler.Warp (
  )
 import Test.Hspec
 import UnliftIO.Async (Async, async, poll, wait)
-import UnliftIO.Exception (bracket, try)
+import UnliftIO.Exception (try)
 import UnliftIO.Timeout (timeout)
 
-import Ecluse.Test.Poll (retryingIO)
 import Ecluse.Test.Wai (freePort)
 
 {- | The graceful-shutdown drain, driven against a real Warp listener on loopback. Closing
@@ -123,19 +112,10 @@ withListener app drainTimeoutSeconds k = do
                 . setInstallShutdownHandler (putMVar closeSocketVar)
                 $ defaultSettings
     serverThread <- async (runSettings settings app)
-    -- The install handler runs as Warp starts, before the listen socket is up. Await the
-    -- captured close action, then the first accepted connection.
+    -- Warp listens before it installs the shutdown handler, so the captured close action
+    -- implies an accepting socket.
     closeSocket <- takeMVar closeSocketVar
-    awaitAccepting port
     k port closeSocket serverThread
-
-{- Wait for the listener to accept, rather than for a fixed beat that a loaded runner can
-outlast. A bare connect reaches no handler: warp runs the application on a request line. -}
-awaitAccepting :: Port -> IO ()
-awaitAccepting port =
-    retryingIO 100 20_000 $
-        bracket (socket AF_INET Stream defaultProtocol) close $ \sock ->
-            connect sock (SockAddrInet (fromIntegral port) (tupleToHostAddress (127, 0, 0, 1)))
 
 {- Issue a GET to the loopback listener. The request carries @Connection: close@, as a
 response from a draining instance does, so no keep-alive socket holds the drain open.
