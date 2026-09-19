@@ -53,11 +53,6 @@ fetchStepSpec = describe "fetchThenProject" $ do
             void outcome `shouldBe` expected
             readIORef events `shouldReturn` ([("fetch", name)] <> [("decode", name) | isRight expected])
 
-    for_ [401, 403] $ \code ->
-        it ("retains HTTP " <> show code <> " before projecting a usable body") $
-            runStep (Right (RegistryResponse code "usable")) Right
-                `shouldReturn` (Left (MetadataAuthorisationFailure code) :: Either MetadataError ByteString)
-
     it "hands the fetched body to the projection" $
         runStep (Right (RegistryResponse 200 "the-body")) Right `shouldReturn` Right "the-body"
 

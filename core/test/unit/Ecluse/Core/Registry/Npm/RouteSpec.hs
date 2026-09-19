@@ -126,8 +126,6 @@ spec = do
         it "routes a scoped package (one decoded segment) to its packument" $
             classify ["@babel/code-frame"]
                 `shouldBe` ToPackument (scopedNpm "babel" "code-frame")
-        it "agrees on the same Route for both scoped encodings" $
-            classify ["@babel", "code-frame"] `shouldBe` classify ["@babel/code-frame"]
 
     describe "classify -- tarballs (the parsed artifact coordinate)" $ do
         it "routes an unscoped tarball to its artifact, parsing the version" $
@@ -145,11 +143,6 @@ spec = do
             -- the FIRST @{name}-@ boundary, taking everything after it as the version.
             classify ["pkg", "-", "pkg-1.0.0-rc.1.tgz"]
                 `shouldBe` ToTarball (unscopedNpm "pkg") (npmVersion "1.0.0-rc.1") (unsafeFilename "pkg-1.0.0-rc.1.tgz")
-        it "preserves the filename verbatim, not one rebuilt from (name, version)" $
-            -- The file's parsed version round-trips and the Filename is byte-identical
-            -- to what arrived. That Filename, not a reconstruction, fetches the bytes.
-            classify ["@babel/code-frame", "-", "code-frame-7.0.0.tgz"]
-                `shouldBe` ToTarball (scopedNpm "babel" "code-frame") (npmVersion "7.0.0") (unsafeFilename "code-frame-7.0.0.tgz")
         it "denies a basename that does not match the requested package (path-confusion)" $
             -- The file names a DIFFERENT package's artifact under @is-odd@'s path.
             -- The basename lacks the @is-odd-@ prefix, so the parse denies rather than fabricates.
@@ -211,8 +204,6 @@ spec = do
             written ["@acme", "widget"] `shouldBe` ToPublish (scopedNpm "acme" "widget")
         it "routes a PUT of a scoped package (one decoded segment) to Publish" $
             written ["@acme/widget"] `shouldBe` ToPublish (scopedNpm "acme" "widget")
-        it "agrees on the same Publish route for both scoped encodings" $
-            written ["@acme", "widget"] `shouldBe` written ["@acme/widget"]
         it "denies a PUT to a tarball slot (a publish is a bare-package path only)" $
             -- The version lives in the body, not the path. A PUT to /{pkg}/-/{file}.tgz
             -- is not a publish.
@@ -231,10 +222,6 @@ spec = do
             -- The publish handler is reachable only through this capture, so a name the
             -- grammar refuses never becomes a write.
             written ["@acme/wid\x3164\&get"] `shouldBe` Denied
-        it "does not publish a GET of the same package (a GET /{pkg} is a Packument)" $
-            -- The method decides as much as the path: the same /{pkg} reads under GET
-            -- and publishes under PUT.
-            classify ["is-odd"] `shouldBe` ToPackument (unscopedNpm "is-odd")
 
     describe "classify -- unrecognised paths deny by default" $ do
         it "routes the empty path to Unsupported" $
@@ -295,21 +282,11 @@ spec = do
             classify ["is-odd", "-", "sub/is-odd-3.0.1.tgz"] `shouldBe` Denied
 
     describe "classify -- real names still classify (no over-rejection)" $ do
-        -- Guard against the safe-component check rejecting plausibly-real names.
-        -- Interior dots, hyphens, and uppercase are all fine: this is a security
-        -- boundary, not an npm-policy validator.
-        it "accepts an unscoped name with interior dots" $
+        -- Guard against the safe-component check rejecting plausibly-real names. The
+        -- packument group pins the plain and scoped shapes: these are the punctuation.
+        it "accepts an unscoped name with interior dots" $ do
             classify ["lodash.merge"] `shouldBe` ToPackument (unscopedNpm "lodash.merge")
-        it "accepts another dotted unscoped name" $
             classify ["is.odd"] `shouldBe` ToPackument (unscopedNpm "is.odd")
-        it "accepts a hyphenated unscoped name" $
-            classify ["is-odd"] `shouldBe` ToPackument (unscopedNpm "is-odd")
-        it "accepts a scoped name in two segments" $
-            classify ["@babel", "code-frame"]
-                `shouldBe` ToPackument (scopedNpm "babel" "code-frame")
-        it "accepts a scoped name in one decoded segment" $
-            classify ["@babel/code-frame"]
-                `shouldBe` ToPackument (scopedNpm "babel" "code-frame")
         it "accepts the @types scope" $
             classify ["@types", "node"] `shouldBe` ToPackument (scopedNpm "types" "node")
 

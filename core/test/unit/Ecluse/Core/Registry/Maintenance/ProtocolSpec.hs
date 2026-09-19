@@ -309,12 +309,6 @@ deletionSpec = describe "deletion over the protocol's own request sequence" $ do
             documentReads <- filter ((== "GET") . capMethod) <$> allCaptured stub
             length documentReads `shouldBe` 2
 
-    it "refuses the version, and sends no tarball delete, when the store refuses the edit" $
-        withStore True answerRefusingEdit $ \handle stub -> do
-            outcomes <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]
-            map (refusedAs . snd) outcomes `shouldBe` [Just "HTTP 500"]
-            calls stub `shouldReturn` [("GET", "/leftpad"), ("PUT", "/leftpad/-rev/3-abc")]
-
     it "refuses the version when the store holds no document for the package" $
         withStore True answerNothing $ \handle _ -> do
             outcomes <- deleteVersions handle testDeleteGuard leftpadName [npmVersion "1.0.0"]

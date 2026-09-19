@@ -103,7 +103,7 @@ publishSpec = describe "the npm mirror write (codec over the shared transport)" 
         withStub status500 "boom" $ \stub -> do
             publish <- stubPublish stub
             outcome <- mpPublishArtifact publish isOdd planV1 sizedArtifact dummyTarballBytes
-            outcome `shouldSatisfy` isLeft
+            leftMessage outcome `shouldSatisfy` maybe False (T.isInfixOf "500")
 
     it "reports a transport failure as a PublishFetch value, never thrown" $ do
         publish <- publishAt "http://127.0.0.1:1"
