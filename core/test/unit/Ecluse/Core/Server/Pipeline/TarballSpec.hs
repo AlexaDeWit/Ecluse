@@ -28,13 +28,12 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Core.Server.Pipeline.Internal (denialLabels, serveDecisionClass)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
-import Ecluse.Core.Server.Pipeline.Tarball (
+import Ecluse.Core.Server.Pipeline.Tarball.Private (privateMetadataMiss)
+import Ecluse.Core.Server.Pipeline.Tarball.Public (
     PublicArtifactGate (Admitted, Refused),
-    artifactOutcomeStatus,
-    firstPartyMissRefusal,
-    privateMetadataMiss,
     publicArtifactGate,
  )
+import Ecluse.Core.Server.Pipeline.Tarball.Refusal (artifactOutcomeStatus, firstPartyMissRefusal)
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, ServerError, Unavailable'),
  )

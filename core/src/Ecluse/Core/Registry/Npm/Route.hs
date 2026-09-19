@@ -81,7 +81,8 @@ import Ecluse.Core.Server.Contract (
 import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Server.Pipeline.Packument (PackumentReplies (..), packumentAction)
 import Ecluse.Core.Server.Pipeline.Publish (PublishReplies (..), servePublish)
-import Ecluse.Core.Server.Pipeline.Tarball (TarballReplies (..), tarballAction)
+import Ecluse.Core.Server.Pipeline.Tarball (tarballAction)
+import Ecluse.Core.Server.Pipeline.Tarball.Types (TarballReplies (..))
 import Ecluse.Core.Server.Response (renderRefusal)
 import Ecluse.Core.Server.Route (
     Capture (Capture),
