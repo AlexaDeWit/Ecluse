@@ -2,10 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The proxy's data-plane entry point: the handlers for packument merges (@GET \/{pkg}@),
-artifact relays (@GET \/{pkg}\/-\/{file}.tgz@), and first-party publishes (@PUT \/{pkg}@). An
-ecosystem's route table names them one module at a time, so nothing but its own spec imports
-this hub. It stays as the named entry point the route tables and documents cross-reference.
+{- | The proxy's data-plane entry point: the handlers for packument merges (@GET \/{pkg}@), artifact
+relays (@GET \/{pkg}\/-\/{file}.tgz@), and first-party publishes (@PUT \/{pkg}@). An ecosystem's
+route table names them one module at a time, so nothing but its own spec imports this hub.
 
 The handlers name no ecosystem. A registry's metadata client, packument assembly, and
 artifact-request formation reach them as injected capabilities on

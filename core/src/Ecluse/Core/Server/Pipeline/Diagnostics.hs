@@ -5,9 +5,9 @@
 {- | Operator diagnostics for metadata failures, dropped entries, and integrity divergence.
 Access-refusal logs contain no upstream body, headers, or credential.
 
-Two @module@ filter keys are emitted here. The bad-upstream warnings keep
-'pipelineInternalModule', and everything else carries 'pipelineModule'. Both are held stable
-as values rather than source module paths, so an operator's saved filter keeps matching.
+The bad-upstream warnings carry 'pipelineInternalModule' as their @module@ filter key and the other
+payload-bearing lines carry 'pipelineModule', both held stable as values rather than source module
+paths, so an operator's saved filter keeps matching.
 -}
 module Ecluse.Core.Server.Pipeline.Diagnostics (
     -- * Metadata-read failures

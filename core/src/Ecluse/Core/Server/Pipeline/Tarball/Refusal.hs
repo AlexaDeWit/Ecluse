@@ -4,8 +4,8 @@
 
 {- | The refusals the artifact path can answer with, and their rendering onto the route's replies.
 
-Both legs render through here, so one artifact outcome has one status and one message wherever it
-was decided.
+The leg dispatch and the public leg render through here, so one artifact outcome has one status and
+one message wherever it was decided.
 -}
 module Ecluse.Core.Server.Pipeline.Tarball.Refusal (
     -- * Rendering a refusal
@@ -48,8 +48,9 @@ artifactOutcomeStatus decision
     | decision `elem` [versionAbsent, firstPartyAbsent] = NotFound
     | otherwise = artifactStatus decision
 
-{- Render a non-admit artifact outcome as the serve error model. A transient status carries no
-suggested delay, because the single-artifact path has none to offer. -}
+{- | Render a non-admit artifact outcome as the serve error model. A transient status carries no
+suggested delay, because the single-artifact path has none to offer.
+-}
 artifactError :: TarballReplies response -> PackumentDeps -> ServeDecision -> response
 artifactError replies deps decision =
     tarballError replies (artifactHttpStatus status) retryHeaders (mkRefusal (pdHelp deps) message)
@@ -70,10 +71,12 @@ artifactError replies deps decision =
         Admit -> "the artifact is available"
         Reject rej -> rejectionMessage rej
 
+-- | The @500@ for an artifact URL that configuration and the package name could not form.
 internalArtifactError :: TarballReplies response -> response
 internalArtifactError replies =
     tarballError replies status500 [] (mkRefusal Nothing "could not form the upstream artifact URL")
 
+-- | The @403@ for an artifact host the tarball-host policy does not permit.
 crossHostRefused :: TarballReplies response -> response
 crossHostRefused replies =
     tarballError replies status403 [] (mkRefusal Nothing "the upstream artifact host is not permitted by the tarball-host policy")

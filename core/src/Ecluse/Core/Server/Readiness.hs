@@ -8,7 +8,8 @@ One configured ecosystem awaiting its advisory database does not take the whole 
 rotation, so a router keeps sending the healthy mounts their traffic. Only a mount whose rules
 deny on the database waits for one. Readiness routes traffic and gates no request: a mount with
 no advisory database refuses what needs one through its own rule policy. The constructors are
-exported for matching, and 'mountReadiness' is the only builder.
+exported for matching, and 'mountReadiness' is the sanctioned builder for a mount map, so a verdict
+a producer makes agrees with its own map.
 -}
 module Ecluse.Core.Server.Readiness (
     -- * One mount's advisory state

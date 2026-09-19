@@ -120,8 +120,8 @@ packageUrl :: Text -> PackageName -> Either UrlFormationError Text
 packageUrl baseUrl name =
     joinPath baseUrl (encodePackagePath name)
 
-{- | @filename@ is the exact on-the-wire name, percent-encoded as one component, so a once-decoded
-escape in it cannot reach the upstream raw.
+{- | The artifact URL @{baseUrl}\/{encoded-name}\/-\/{encoded-filename}@, with @filename@
+percent-encoded as one component so a once-decoded escape cannot reach the upstream raw.
 -}
 artifactFileUrl :: Text -> PackageName -> Text -> Either UrlFormationError Text
 artifactFileUrl baseUrl name filename =

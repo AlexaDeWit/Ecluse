@@ -7,8 +7,8 @@
 Private access refusals stop the fallback, and other private misses keep the first-party
 restriction. @GET@ and @HEAD@ share policy. The private leg lives in
 "Ecluse.Core.Server.Pipeline.Tarball.Private", the gated public leg in
-"Ecluse.Core.Server.Pipeline.Tarball.Public", and both render refusals through
-"Ecluse.Core.Server.Pipeline.Tarball.Refusal".
+"Ecluse.Core.Server.Pipeline.Tarball.Public", and this module and the public leg render refusals
+through "Ecluse.Core.Server.Pipeline.Tarball.Refusal".
 -}
 module Ecluse.Core.Server.Pipeline.Tarball (
     tarballAction,

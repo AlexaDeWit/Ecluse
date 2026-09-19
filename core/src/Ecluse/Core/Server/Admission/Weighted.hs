@@ -6,11 +6,10 @@
 ("Ecluse.Core.Server.Admission") and byte-weighted publish admission
 ("Ecluse.Core.Server.Admission.Bytes").
 
-A handle caps the aggregate weight held at once and keeps a bounded room of waiters.
-Capacity is taken directly only when the room is empty, so a newcomer never jumps a
-non-empty room, though wake order within the room is not FIFO (an STM retry races every
-waiter). The wait budget equals the shed path's @Retry-After: 1@ hint, so nothing is
-refused faster than the interval the client was told to wait.
+A handle caps the aggregate weight held at once and keeps a bounded room of waiters. Capacity
+is taken directly only when the room is empty, so a newcomer never jumps a non-empty room,
+though wake order within the room is not FIFO. The wait budget equals the shed path's
+@Retry-After: 1@ hint, so nothing is refused faster than the client was told to wait.
 -}
 module Ecluse.Core.Server.Admission.Weighted (
     WeightedAdmission,
@@ -149,8 +148,8 @@ queuedWait obs wa weight restore action = do
         then admittedRun obs wa weight (onQueued obs) restore action
         else shedRecording obs
 
--- The gauge increment runs under the enclosing mask, before 'restore'. Inside 'restore' a
--- cancellation could fire the finaliser's decrement without it, drifting the gauge negative.
+-- The gauge increment runs under the enclosing mask, before 'restore', and 'afterArm' with it, so a
+-- cancellation or a throwing observer cannot fire the finaliser's decrement without the increment.
 {-# INLINE admittedRun #-}
 admittedRun ::
     (MonadUnliftIO m) =>
@@ -167,8 +166,8 @@ admittedRun obs wa weight afterArm restore action =
                 `UE.finally` releaseWeight obs wa weight
             )
 
--- Publish the gauge decrement before returning capacity. The other order would let a woken
--- waiter increment while the departing holder is still observable, breaching the bound.
+-- Publish the gauge decrement before returning capacity, or a woken waiter increments while the departing
+-- holder is still observable. The STM release is the finaliser, so a throwing observer cannot leak capacity.
 {-# INLINE releaseWeight #-}
 releaseWeight :: (MonadUnliftIO m) => AdmissionObservers -> WeightedAdmission -> Int -> m ()
 releaseWeight obs wa weight =

@@ -40,6 +40,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead (vrVersion),
  )
 import Ecluse.Core.Security (
+    HostPort,
     Origin (TrustedOrigin),
     artifactAuthorityHonoured,
     hostPortAddress,
@@ -124,7 +125,7 @@ privateArtifactRequest ctx token = case pdPrivateBaseUrl deps of
     Just privateBase
         | not (tarballHostHonoured TrustedOrigin deps privateHostPort privateHostPort) -> pure (PrivateMissing MissAbsent)
         | null (artifactHosts (pdArtifact deps)) -> pure (byConventionalPath privateBase)
-        | otherwise -> byIndexedLocation ctx token privateBase
+        | otherwise -> byIndexedLocation ctx token privateBase privateHostPort
   where
     deps = arDeps ctx
 
@@ -138,8 +139,8 @@ privateArtifactRequest ctx token = case pdPrivateBaseUrl deps of
 
 {- The location is gated from the same definition the download gate reads, and the credential
 rides only when the target is the private upstream itself. -}
-byIndexedLocation :: ArtifactRequest response -> Maybe ClientCredential -> RegistryUrl -> Handler PrivateArtifact
-byIndexedLocation ctx token privateBase = do
+byIndexedLocation :: ArtifactRequest response -> Maybe ClientCredential -> RegistryUrl -> Maybe HostPort -> Handler PrivateArtifact
+byIndexedLocation ctx token privateBase privateHostPort = do
     resolved <- tryAny (withPrivateMetadataClient (arRuntime ctx) deps privateBase token (\client -> fetchVersionMetadata client (arPackage ctx) (arVersion ctx)))
     pure $ case resolved of
         Left _ -> PrivateMissing MissUnresolved
@@ -151,7 +152,6 @@ byIndexedLocation ctx token privateBase = do
     requestForDetails details = do
         artifact <- find ((== unFilename (arFile ctx)) . artFilename) (pkgArtifacts details)
         let target = hostPortAddress (artUrl artifact)
-            privateHostPort = thgPrivateHostPort (pdTarballHostGate deps)
         guard (artifactAuthorityHonoured (thgEcosystemHosts (pdTarballHostGate deps)) privateHostPort target)
         let carried = if target == privateHostPort then token else Nothing
         rightToMaybe (artifactByUrl (pdArtifact deps) carried (artUrl artifact))
