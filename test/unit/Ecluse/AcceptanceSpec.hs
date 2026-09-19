@@ -43,7 +43,6 @@ import Ecluse.Acceptance (
     watchFraction,
  )
 
--- | Pin budget isolation and the process exit decision without live registry dependencies.
 spec :: Spec
 spec = do
     describe "Criteria JSON" $ do

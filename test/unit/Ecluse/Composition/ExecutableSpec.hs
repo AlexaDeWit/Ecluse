@@ -41,7 +41,7 @@ import Ecluse.Composition.Executable (
  )
 import Ecluse.Composition.Maintenance (ClearedBackend (cbUrl), StoreBuilds (StoreBuilds, sbDeleting, sbObserving, sbProbing))
 import Ecluse.Composition.Plan (BootPlan (bpRole))
-import Ecluse.Composition.Support (codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, staticEnvVars, withObservablePrivate)
+import Ecluse.Composition.Support (NoCredentials (NoCredentials), codeArtifactEnvVars, expectConfig, expectPlanFor, noCeiling, overrideEnv, privateUpstreamUrl, staticEnvVars, withObservablePrivate)
 import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePreview, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
@@ -417,12 +417,6 @@ inertCredentials _ _ = pure (Right noCredentialProviders)
 -- | A credential build that refuses, as a mint against an identity that cannot answer does.
 refusingCredentials :: BuildCredentials
 refusingCredentials _ _ = pure (Left [CodeArtifactMintFailed ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET" :| []) "no identity answered"])
-
--- | The typed stand-in for amazonka's credential-discovery failure.
-data NoCredentials = NoCredentials
-    deriving stock (Show)
-
-instance Exception NoCredentials
 
 {- | An advisory store over a data directory under a path that is not a directory, so preparing
 the sync throws where every host behaves alike, before it reaches a credential chain.

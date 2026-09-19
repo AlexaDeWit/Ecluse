@@ -33,6 +33,7 @@ import Ecluse.Composition.Maintenance (
     vetStoreBackends,
  )
 import Ecluse.Composition.Support (
+    NoCredentials (NoCredentials),
     clearedUrl,
     codeArtifactDomain,
     codeArtifactEnvVars,
@@ -92,10 +93,7 @@ import Ecluse.Core.Registry.Maintenance.Budget (
     requestKinds,
     undeclaredBudget,
  )
-import Ecluse.Core.Registry.Maintenance.NameSpace (
-    NameAlphabet,
-    noNameAlphabet,
- )
+import Ecluse.Core.Registry.Maintenance.NameSpace (noNameAlphabet)
 import Ecluse.Core.Registry.Maintenance.Upstream (
     ExternalConnection (ExternalConnection),
     RepositoryName (RepositoryName),
@@ -173,7 +171,7 @@ passSpec = describe "vetStoreBackends" $ do
         -- Unreachable through a real boot, which refuses that mount as MissingAdapter first. The
         -- store still clears, walked as one bucket, rather than the pass inventing an alphabet.
         mounts <- mountsFor codeArtifactEnvVars
-        fmap (map clearedAlphabet . Map.elems) (snd (runVet MirrorPruner (vetStoreBackends noAdapter mounts)))
+        fmap (map cbAlphabet . Map.elems) (snd (runVet MirrorPruner (vetStoreBackends noAdapter mounts)))
             `shouldBe` Right [noNameAlphabet]
 
     it "clears that store a read that reports the absent adapter rather than one that invents one" $ do
@@ -336,7 +334,7 @@ planSpec = describe "planStoreMaintenance" $ do
         Map.keys backends `shouldBe` [Npm, PyPI]
         outcome <-
             planStoreMaintenance
-                (\_ _ _ -> throwIO NoStoreClient)
+                (\_ _ _ -> throwIO NoCredentials)
                 passthroughTracingPort
                 unpacedBudget
                 noCredentialProviders
@@ -346,8 +344,8 @@ planSpec = describe "planStoreMaintenance" $ do
             Right _ -> expectationFailure "expected both store builds to refuse"
             Left errs ->
                 map withoutBacktrace errs
-                    `shouldBe` [ StoreMaintenanceUnavailable Npm (ClientBuildFailed "NoStoreClient")
-                               , StoreMaintenanceUnavailable PyPI (ClientBuildFailed "NoStoreClient")
+                    `shouldBe` [ StoreMaintenanceUnavailable Npm (ClientBuildFailed "NoCredentials")
+                               , StoreMaintenanceUnavailable PyPI (ClientBuildFailed "NoCredentials")
                                ]
   where
     -- 'displayException' appends GHC's backtrace, so the assertion reads the reason's own line.
@@ -376,11 +374,11 @@ probeSpec = describe "the private upstream's answer" $ do
             `shouldBe` ([PrivateUpstreamUndecided PyPI NetworkFailure], Left [PrivateUpstreamUnsafe Npm evidence])
 
     it "refuses the mount for a throw no backend read into an answer, rather than passing it off as an open question" $ do
-        (advisories, outcome) <- readUpstreamSafety [(Npm, throwIO NoStoreClient)]
+        (advisories, outcome) <- readUpstreamSafety [(Npm, throwIO NoCredentials)]
         advisories `shouldBe` []
         case outcome of
             Right _ -> expectationFailure "expected an unread probe exception to refuse the mount"
-            Left [PrivateUpstreamProbeFailed Npm detail] -> detail `shouldSatisfy` T.isPrefixOf "NoStoreClient"
+            Left [PrivateUpstreamProbeFailed Npm detail] -> detail `shouldSatisfy` T.isPrefixOf "NoCredentials"
             Left errs -> expectationFailure ("expected the probe's own refusal, got: " <> show errs)
 
     it "answers undecided for a private upstream whose backend does not report its aggregation" $
@@ -411,12 +409,6 @@ privateEndpointFor envVars = do
     maybe (fail "the fixture declares no private upstream") pure $
         mntPrivateUpstream =<< Map.lookup Npm (cfgMounts (configApp config))
 
--- | The typed stand-in for amazonka's credential-discovery failure.
-data NoStoreClient = NoStoreClient
-    deriving stock (Show)
-
-instance Exception NoStoreClient
-
 -- The pass as the boot runs it, over this build's own adapter registry.
 vetted :: RegistryRole -> MountMap -> ([Advisory], Either [BootError] (Map Ecosystem ClearedBackend))
 vetted role mounts = runVet role (vetStoreBackends adapterFor mounts)
@@ -424,10 +416,6 @@ vetted role mounts = runVet role (vetStoreBackends adapterFor mounts)
 -- | An ecosystem this build ships no adapter for at all.
 noAdapter :: ResolveMaintenanceAdapter
 noAdapter _ = Nothing
-
--- | The bucket alphabet a cleared vendor store carries, and 'noNameAlphabet' for any other arm.
-clearedAlphabet :: ClearedBackend -> NameAlphabet
-clearedAlphabet = cbAlphabet
 
 -- | This build's adapters with their maintenance slice emptied: an ecosystem that fills neither verb.
 withoutMaintenance :: ResolveMaintenanceAdapter

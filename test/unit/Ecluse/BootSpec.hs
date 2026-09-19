@@ -64,7 +64,6 @@ awsRunEnv =
     ]
         <> runEnv
 
--- | Verify role boot, process outcomes, and cleanup through the application entry points.
 spec :: Spec
 spec = do
     describe "shared listener settings" $ do

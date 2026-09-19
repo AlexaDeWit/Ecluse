@@ -6,6 +6,7 @@
 environment layers, their targeted mutations, and the expect-helpers that load them.
 -}
 module Ecluse.Composition.Support (
+    NoCredentials (NoCredentials),
     fixedNow,
     testLimits,
     fdLimit,
@@ -67,6 +68,14 @@ import Ecluse.Core.Security (Limits (..))
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
 import Ecluse.Test.Credential (noCredentialReporters)
+
+{- | The typed stand-in for amazonka's credential-discovery failure, which a boot folds into a
+refusal naming this constructor. A case that drives a build to throw throws this.
+-}
+data NoCredentials = NoCredentials
+    deriving stock (Show)
+
+instance Exception NoCredentials
 
 -- | A fixed clock for the injected 'pdNow', never advanced (no timing here).
 fixedNow :: UTCTime
