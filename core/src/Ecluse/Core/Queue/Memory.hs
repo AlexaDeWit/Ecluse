@@ -2,13 +2,12 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The STM-backed in-memory 'MirrorQueue': the bounded, best-effort production
-backend mirroring rolls over to when no @ECLUSE_QUEUE__URL@ is set.
+{- | The STM-backed in-memory 'MirrorQueue': the bounded, best-effort production backend
+mirroring rolls over to when no @ECLUSE_QUEUE__URL@ is set.
 
-It honours the handle's contract (see "Ecluse.Core.Queue" for the @enqueue@ \/
-don't-@ack@-to-retry \/ no-@nack@ conventions) and uses the contract module's backend
-building blocks. See 'newBoundedInMemoryQueue' for why it is correctness-safe (the
-next demand re-enqueues a dropped job) and why it deliberately does not redeliver.
+It honours the handle's contract ("Ecluse.Core.Queue") with two departures. 'enqueue' drops the
+newest job past the depth cap, and a 'receive' is final, so nothing redelivers and no delivery
+carries a lease. Both are safe because the next demand re-enqueues the job.
 -}
 module Ecluse.Core.Queue.Memory (
     -- * Bounded in-memory production backend
@@ -47,10 +46,8 @@ data MemoryQueueConfig = MemoryQueueConfig
     }
     deriving stock (Eq, Show)
 
-{- | A 'MemoryQueueConfig' for a given depth cap, with the idle-poll window at its production
-default of @20s@. That sits under the worker's heartbeat-staleness budget
-('Ecluse.Core.Worker.workerHeartbeatStaleAfter'), so an idle 'receive' returns before
-@\/livez@ flags the loop stalled.
+{- | A 'MemoryQueueConfig' at the production @20s@ idle-poll window, which sits under
+'Ecluse.Core.Worker.workerHeartbeatStaleAfter' so an idle poll cannot stall @\/livez@.
 -}
 defaultMemoryQueueConfig :: Int -> MemoryQueueConfig
 defaultMemoryQueueConfig maxDepth =
@@ -59,10 +56,7 @@ defaultMemoryQueueConfig maxDepth =
         , memQueuePollWaitMicros = 20_000_000
         }
 
-{- The most jobs one 'receive' delivers from the bounded in-memory backend. Held at the SQS
-batch cap, so the worker sees one bounded batch shape whatever the backend, and per-poll work
-and memory stay bounded.
--}
+-- Held at the SQS batch cap, so the worker sees one bounded batch shape whatever the backend.
 memoryQueueBatchSize :: Int
 memoryQueueBatchSize = 10
 
@@ -72,29 +66,13 @@ It reports the first drop, then every multiple of this, so a sustained flood can
 memoryQueueDropReportInterval :: Int
 memoryQueueDropReportInterval = 1000
 
-{- | Build the bounded, best-effort in-memory 'MirrorQueue': the backend mirroring runs on when
-no @ECLUSE_QUEUE__URL@ is set. Loss is safe, because mirroring is a demand-driven optimisation
-over the always-available public upstream and the next pull re-enqueues a lost job. Two
-departures from the cloud backends' contract follow.
-
-* Bounded, drop-newest past 'memQueueMaxDepth', since a cold-cache @npm ci@ enqueues thousands
-of jobs at once. 'enqueue' never throws, because it runs on the serve hot path, and it
-reports drops through the injected callback at 'memoryQueueDropReportInterval'.
-* No redelivery. A 'receive' removes a job for good, so 'ack', 'extendVisibility' and
-'deadLetter' are no-ops, a delivery carries no lease to renew, and the terminus reports absent.
-
-'receive' waits up to 'memQueuePollWaitMicros' for a job, drains up to 'memoryQueueBatchSize'
-without blocking, then returns. The bound is load-bearing: an idle 'receive' that blocked
-forever would let the worker's heartbeat go stale and @\/livez@ flag the loop stalled. The wait
-uses @timeout@ over @atomically@ rather than @registerDelay@, so it works on the non-threaded
-RTS, and an interrupted poll consumes nothing.
+{- | Build the bounded, best-effort in-memory 'MirrorQueue'. A cold-cache @npm ci@ enqueues
+thousands of jobs at once, so 'enqueue' sheds past 'memQueueMaxDepth' rather than throwing.
 -}
 newBoundedInMemoryQueue ::
     -- | The depth cap and the idle-poll window.
     MemoryQueueConfig ->
-    {- | Invoked on each report-worthy cap-overflow drop with the running total
-    drops, so the composition root can log it.
-    -}
+    -- | Invoked on each report-worthy cap-overflow drop with the running total, for the log.
     (Int -> IO ()) ->
     IO MirrorQueue
 newBoundedInMemoryQueue cfg onDrop = do
@@ -107,21 +85,19 @@ newBoundedInMemoryQueue cfg onDrop = do
         MirrorQueue
             { enqueue = \job -> do
                 dropped <- atomically (writeOrDrop queue dropCount job)
-                whenJust dropped (\n -> when (shouldReportDrop n) (onDrop n))
+                whenJust dropped (\n -> when (reportWorthy n memoryQueueDropReportInterval) (onDrop n))
                 -- A cap overflow is the documented drop-newest shed (reported through
                 -- the callback), not a backend fault: the enqueue itself worked.
                 pure (Right ())
-            , -- A bounded long-poll: wait up to the poll window for a batch, else return
-              -- [] so the worker's heartbeat keeps advancing on an idle queue. The
-              -- timeout aborts the blocked STM transaction, so no job is consumed.
+            , -- @timeout@ over @atomically@, not @registerDelay@, so the poll bound holds on the
+              -- non-threaded RTS too. A fired timeout aborts the transaction, consuming nothing.
               receive = Right . fromMaybe [] <$> timeout (memQueuePollWaitMicros cfg) (atomically (receiveBatch queue nextReceipt))
             , -- A delivered job is already gone from the queue, so there is nothing to
               -- retire and a failed job redelivers via the next demand, not here.
               ack = const (pure (Right ()))
             , extendVisibility = \_ _ -> pure (Right ())
-            , -- The in-memory backend's only terminus is the drop a delivered job
-              -- already is. A terminal fault discards the delivery, and its observability is the
-              -- worker's error log and metric. A durable dead-letter needs a durable backend.
+            , -- A delivered job is already dropped, so a terminal fault has nowhere further to
+              -- go. Its observability is the worker's error log and metric.
               deadLetter = const (pure (Right ()))
             , -- Nothing here captures a poison message, and nothing redelivers one, so
               -- the backend holds the budget inert at the shipped default.
@@ -129,14 +105,8 @@ newBoundedInMemoryQueue cfg onDrop = do
             , deadLetterTerminus = Right TerminusAbsent
             }
 
--- Report the first drop, then every interval-th, so the first shed is always
--- visible while a sustained flood is rate-limited.
-shouldReportDrop :: Int -> Bool
-shouldReportDrop n = reportWorthy n memoryQueueDropReportInterval
-
-{- Take a bounded batch in one transaction: block until a job is available, then drain up to
-'memoryQueueBatchSize' more without blocking. The caller bounds the initial block with a
-timeout, and a fired timeout aborts this transaction, which then consumes nothing. -}
+-- One transaction, so a timeout fired by the caller during the initial block aborts the whole
+-- batch and consumes nothing.
 receiveBatch :: TBQueue MirrorJob -> TVar Word64 -> STM [QueueMessage]
 receiveBatch queue nextReceipt = do
     headJob <- readTBQueue queue
