@@ -12,7 +12,7 @@ import Network.HTTP.Client (
     HttpExceptionContent (ConnectionTimeout),
     defaultRequest,
  )
-import Network.HTTP.Types (Header, Status, status403, status404, status429, status503)
+import Network.HTTP.Types (status403, status404, status429, status503)
 import Network.HTTP.Types.Header (hRetryAfter)
 import Test.Hspec
 
@@ -22,7 +22,7 @@ import Amazonka.CodeArtifact.Lens qualified as CAL
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Fault (RetryAfter (RetryAfter), TransportCause (TransportTimeout), tfCause)
-import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, renderPackageName)
+import Ecluse.Core.Package (renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     ConsentVerdict (ConsentGranted, ConsentWithheld),
     DeleteCeiling (AtMost),
@@ -47,7 +47,15 @@ import Ecluse.Core.Registry.Maintenance.Upstream (
     UnsafeReason (InsufficientPermissions),
     UpstreamSafety (Undecidable, Unsafe),
  )
-import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Core.Version (renderVersion)
+import Ecluse.Maintenance.CodeArtifact.Support (
+    connectedTo,
+    describing,
+    npmStore,
+    routedTo,
+    serviceError,
+    withNpmStore,
+ )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     CodeArtifactStore (..),
     arnOfDescription,
@@ -83,6 +91,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     upstreamLinksOf,
  )
 import Ecluse.Test.Maintenance (withBucket)
+import Ecluse.Test.Package (babelCore, lodashName, npmVersion)
 
 spec :: Spec
 spec = do
@@ -112,21 +121,21 @@ formatSpec = describe "codeArtifactFormat" $ do
 codecSpec :: Spec
 codecSpec = describe "the npm codec" $ do
     it "splits a scoped name into CodeArtifact's namespace and package" $
-        packageCoordinates scopedName `shouldBe` (Just "babel", "core")
+        packageCoordinates babelCore `shouldBe` (Just "babel", "core")
 
     it "gives an unscoped name no namespace" $
-        packageCoordinates plainName `shouldBe` (Nothing, "lodash")
+        packageCoordinates lodashName `shouldBe` (Nothing, "lodash")
 
     it "rebuilds the name a listing returned" $ do
         renderPackageName (packageNameFrom Npm (Just "babel") "core") `shouldBe` "@babel/core"
         renderPackageName (packageNameFrom Npm Nothing "lodash") `shouldBe` "lodash"
 
     it "reads a blank namespace as no namespace, never as an empty scope" $
-        packageNameFrom Npm (Just "") "lodash" `shouldBe` plainName
+        packageNameFrom Npm (Just "") "lodash" `shouldBe` lodashName
 
     it "drops a listing entry CodeArtifact returned with no package name" $ do
         let named = CA.newPackageSummary & CAL.packageSummary_package ?~ "lodash"
-        packagesOfPage Npm [named, CA.newPackageSummary] `shouldBe` [plainName]
+        packagesOfPage Npm [named, CA.newPackageSummary] `shouldBe` [lodashName]
 
     it "reads a blank listing package name as absent, dropping the entry" $
         packagesOfPage Npm [CA.newPackageSummary & CAL.packageSummary_package ?~ ""] `shouldBe` []
@@ -138,7 +147,7 @@ codecSpec = describe "the npm codec" $ do
                     ?~ "core"
                         & CAL.packageSummary_namespace
                     ?~ "babel"
-        packagesOfPage Npm [scoped] `shouldBe` [scopedName]
+        packagesOfPage Npm [scoped] `shouldBe` [babelCore]
 
 presenceSpec :: Spec
 presenceSpec = describe "presenceOf" $ do
@@ -162,11 +171,7 @@ presenceSpec = describe "presenceOf" $ do
         presenceOf (CA.PackageVersionStatus' "SOME_LATER_STATUS") `shouldBe` VersionWithdrawn
 
 requestSpec :: Spec
-requestSpec = describe "the requests the leaf builds" $ maybe noNpmFormat requestCases npmStore
-
--- The store's coordinates carry a parsed format, so a spec over them starts from one.
-noNpmFormat :: Spec
-noNpmFormat = it "has a CodeArtifact format for npm" $ expectationFailure "npm resolved to no CodeArtifact format"
+requestSpec = describe "the requests the leaf builds" $ withNpmStore requestCases
 
 requestCases :: CodeArtifactStore -> Spec
 requestCases store = do
@@ -193,7 +198,7 @@ requestCases store = do
             listPackagesRequest store everything Nothing ^. CAL.listPackages_packagePrefix `shouldBe` Nothing
 
     it "addresses a version listing by the package's namespace and base name" $ do
-        let request = listVersionsRequest store scopedName (Just "page-2")
+        let request = listVersionsRequest store babelCore (Just "page-2")
         request ^. CAL.listPackageVersions_package `shouldBe` "core"
         request ^. CAL.listPackageVersions_namespace `shouldBe` Just "babel"
         request ^. CAL.listPackageVersions_format `shouldBe` CA.PackageFormat_Npm
@@ -201,10 +206,10 @@ requestCases store = do
         request ^. CAL.listPackageVersions_nextToken `shouldBe` Just "page-2"
 
     it "sends an unscoped package with no namespace" $
-        listVersionsRequest store plainName Nothing ^. CAL.listPackageVersions_namespace `shouldBe` Nothing
+        listVersionsRequest store lodashName Nothing ^. CAL.listPackageVersions_namespace `shouldBe` Nothing
 
     it "sends the versions to delete in their published spelling" $ do
-        let request = deleteRequest store scopedName [version "7.0.0", version "7.1.0"]
+        let request = deleteRequest store babelCore [npmVersion "7.0.0", npmVersion "7.1.0"]
         request ^. CAL.deletePackageVersions_versions `shouldBe` ["7.0.0", "7.1.0"]
         request ^. CAL.deletePackageVersions_package `shouldBe` "core"
         request ^. CAL.deletePackageVersions_namespace `shouldBe` Just "babel"
@@ -256,7 +261,7 @@ deleteFoldSpec = describe "foldDeleteResponse" $ do
         VersionRefused refusal -> Just (refusalCode refusal, refusalDetail refusal)
         _ -> Nothing
 
-    submitted = [version "1.0.0", version "1.1.0", version "1.2.0"]
+    submitted = [npmVersion "1.0.0", npmVersion "1.1.0", npmVersion "1.2.0"]
 
 faultSpec :: Spec
 faultSpec = describe "classifyStoreFault" $ do
@@ -297,22 +302,11 @@ faultSpec = describe "classifyStoreFault" $ do
 
 verdictSpec :: Spec
 verdictSpec = describe "the verdicts a sweep reads before it deletes" $ do
-    it "refuses a repository with an external connection, which refills itself" $ do
-        let connected =
-                CA.newRepositoryDescription
-                    & CAL.repositoryDescription_externalConnections
-                    ?~ [ CA.newRepositoryExternalConnectionInfo
-                            & CAL.repositoryExternalConnectionInfo_externalConnectionName
-                            ?~ "public:npmjs"
-                       ]
-        classifyRepository connected `shouldSatisfy` preservedFor "public:npmjs"
+    it "refuses a repository with an external connection, which refills itself" $
+        classifyRepository (connectedTo "public:npmjs") `shouldSatisfy` preservedFor "public:npmjs"
 
-    it "refuses a repository fed by an upstream" $ do
-        let routed =
-                CA.newRepositoryDescription
-                    & CAL.repositoryDescription_upstreams
-                    ?~ [CA.newUpstreamRepositoryInfo & CAL.upstreamRepositoryInfo_repositoryName ?~ "shared"]
-        classifyRepository routed `shouldSatisfy` preservedFor "shared"
+    it "refuses a repository fed by an upstream" $
+        classifyRepository (routedTo ["shared"]) `shouldSatisfy` preservedFor "shared"
 
     it "accepts a repository that holds only what was published to it" $
         classifyRepository CA.newRepositoryDescription `shouldBe` StoreDestroyable
@@ -327,8 +321,7 @@ verdictSpec = describe "the verdicts a sweep reads before it deletes" $ do
         consentOfTags [] `shouldSatisfy` describesAttachment
 
     it "reads the described repository, and faults when the store described none" $ do
-        let described = CA.newDescribeRepositoryResponse 200 & CAL.describeRepositoryResponse_repository ?~ CA.newRepositoryDescription
-        repositoryOfResponse described `shouldSatisfy` isRight
+        repositoryOfResponse (describing CA.newRepositoryDescription) `shouldSatisfy` isRight
         repositoryOfResponse (CA.newDescribeRepositoryResponse 200) `shouldSatisfy` isLeft
 
     it "reads the ARN a tag call needs, and faults when the description carries none" $ do
@@ -359,10 +352,8 @@ upstreamSpec :: Spec
 upstreamSpec = describe "the private upstream's aggregation" $ do
     it "reads the external connections and the upstream repositories a description carries" $ do
         let described =
-                CA.newRepositoryDescription
-                    & CAL.repositoryDescription_externalConnections
-                    ?~ [CA.newRepositoryExternalConnectionInfo & CAL.repositoryExternalConnectionInfo_externalConnectionName ?~ "public:npmjs"]
-                        & CAL.repositoryDescription_upstreams
+                connectedTo "public:npmjs"
+                    & CAL.repositoryDescription_upstreams
                     ?~ [CA.newUpstreamRepositoryInfo & CAL.upstreamRepositoryInfo_repositoryName ?~ "shared"]
         rlConnections (upstreamLinksOf described) `shouldBe` [ExternalConnection "public:npmjs"]
         rlUpstreams (upstreamLinksOf described) `shouldBe` [RepositoryName "shared"]
@@ -401,28 +392,6 @@ upstreamSpec = describe "the private upstream's aggregation" $ do
         describeUpstreamRefusal (serviceError status404 "ResourceNotFoundException" []) `shouldBe` Undecidable NetworkFailure
         describeUpstreamRefusal (AWS.TransportError (HttpExceptionRequest defaultRequest ConnectionTimeout))
             `shouldBe` Undecidable NetworkFailure
-
--- The CodeArtifact npm repository the request cases address.
-npmStore :: Maybe CodeArtifactStore
-npmStore = coordinates <$> codeArtifactFormat Npm
-  where
-    coordinates format =
-        CodeArtifactStore
-            { casDomain = "acme"
-            , casDomainOwner = "111122223333"
-            , casRegion = "eu-west-1"
-            , casRepository = "mirror"
-            , casFormat = format
-            }
-
-scopedName :: PackageName
-scopedName = mkPackageName Npm (Just (mkScope "babel")) "core"
-
-plainName :: PackageName
-plainName = mkPackageName Npm Nothing "lodash"
-
-version :: Text -> Version
-version = mkVersion Npm
 
 -- A delete response reporting the named successes and failures, the way CodeArtifact does.
 deleteResponse :: [Text] -> [(Text, Text, Text)] -> CA.DeletePackageVersionsResponse
@@ -480,7 +449,3 @@ cursorSpec = describe "the walk cursor's tag" $ do
 
 repositoryArn :: Text
 repositoryArn = "arn:aws:codeartifact:eu-west-1:111122223333:repository/acme/mirror"
-
-serviceError :: Status -> Text -> [Header] -> AWS.Error
-serviceError status code headers =
-    AWS.ServiceError (AWS.ServiceError' "CodeArtifact" status headers (AWS.newErrorCode code) Nothing Nothing)

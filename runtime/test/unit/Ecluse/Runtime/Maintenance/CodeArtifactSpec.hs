@@ -8,7 +8,7 @@ module Ecluse.Runtime.Maintenance.CodeArtifactSpec (spec) where
 import Data.List (lookup)
 import Data.Text qualified as T
 import Lens.Micro ((.~), (?~), (^.))
-import Network.HTTP.Types (Status, status403, status503)
+import Network.HTTP.Types (status403, status503)
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
 
@@ -19,7 +19,7 @@ import Amazonka.CodeArtifact.Lens qualified as CAL
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Fault (TransportCause (TransportProtocol), tfDetail, transportFault)
-import Ecluse.Core.Package (PackageName, mkPackageName, renderPackageName)
+import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
@@ -59,9 +59,15 @@ import Ecluse.Core.Registry.Sweep.Package (sweepPackageGroup)
 import Ecluse.Core.Registry.Sweep.Types (SweepMount (smStore), SweepPacing (swpDeletionCap), SweepState (stIssued), newSweepState)
 import Ecluse.Core.Telemetry.Metrics (SweepResult (SweepDeleted, SweepExamined, SweepKept))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Maintenance.CodeArtifact.Support (
+    connectedTo,
+    describing,
+    routedTo,
+    serviceError,
+    withNpmStore,
+ )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal (
     CodeArtifactStore (..),
-    codeArtifactFormat,
     consentTagKey,
     consentTagValue,
     cursorTagKey,
@@ -79,7 +85,7 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Internal (
  )
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read (ReadPlane (..))
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
-import Ecluse.Test.Package (sampleManifest)
+import Ecluse.Test.Package (lodashName, sampleManifest)
 import Ecluse.Test.Rules (denyRule)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recResults), recordingPorts, testMount, testPacing)
 
@@ -87,10 +93,7 @@ import Ecluse.Test.Sweep (RecordedSweep (recPorts, recResults), recordingPorts, 
 answers built from @amazonka@'s own types. Each decision is covered in "Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec".
 -}
 spec :: Spec
-spec = maybe noNpmFormat handleCases npmStore
-
-noNpmFormat :: Spec
-noNpmFormat = it "has a CodeArtifact format for npm" $ expectationFailure "npm resolved to no CodeArtifact format"
+spec = withNpmStore handleCases
 
 handleCases :: CodeArtifactStore -> Spec
 handleCases store = do
@@ -125,7 +128,7 @@ factCases store = describe "the CodeArtifact handle's standing facts" $ do
         factNameAlphabet facts `shouldBe` testAlphabet
 
     it "reads a manifest through the read it was handed, never through the control plane" $ do
-        outcome <- readStoreManifest (handleOver store inertPlane) aPackage
+        outcome <- readStoreManifest (handleOver store inertPlane) lodashName
         fmap detailOf (leftToMaybe outcome) `shouldBe` Just "the spec wired no manifest read"
 
     it "enumerates over a read plane alone, which carries no call that changes the repository" $ do
@@ -166,20 +169,20 @@ enumerationCases store = describe "the handle's paged enumerations" $ do
         tokens <- newIORef []
         answer <- answersFrom [versionsPage (Just "v2") ["1.0.0"], versionsPage Nothing ["1.1.0"]]
         let plane = reading inertReader{rpListVersions = \request -> record tokens (request ^. CAL.listPackageVersions_nextToken) >> answer}
-        outcome <- enumerateVersions (handleOver store plane) aPackage
+        outcome <- enumerateVersions (handleOver store plane) lodashName
         outcome `shouldBe` Right [served "1.0.0", served "1.1.0"]
         readIORef tokens `shouldReturn` [Nothing, Just "v2"]
 
     it "reads a version page carrying no versions field as an empty page" $ do
         let plane = reading inertReader{rpListVersions = \_ -> pure (Right (CA.newListPackageVersionsResponse 200))}
-        enumerateVersions (handleOver store plane) aPackage `shouldReturn` Right []
+        enumerateVersions (handleOver store plane) lodashName `shouldReturn` Right []
 
     it "stops preview pagination at the version bound without requesting a later page" $ do
         tokens <- newIORef []
         answer <- answersFrom [versionsPage (Just "v2") ["1.0.0"], versionsPage (Just "v3") ["1.1.0"], versionsPage Nothing ["1.2.0"]]
         let versionReader = inertReader{rpListVersions = \request -> record tokens (request ^. CAL.listPackageVersions_nextToken) >> answer}
             observation = boundedObservationFor 1 (mkNameAlphabet "abc") (\_ -> fail "inventory does not read metadata") store versionReader
-        result <- obEnumerateVersions observation aPackage
+        result <- obEnumerateVersions observation lodashName
         result `shouldSatisfy` isLeft
         readIORef tokens `shouldReturn` [Nothing, Just "v2"]
 
@@ -200,7 +203,7 @@ deleteCases store = describe "the handle's chunked delete" $ do
                                 issued <- length <$> readIORef requests
                                 pure (if issued == faultAt then Left storeUnreachable else Right (allRemoved submitted))
                             }
-                    handle = (handleOver store plane){readStoreManifest = \_ -> pure (Right (sampleManifest aPackage versions))}
+                    handle = (handleOver store plane){readStoreManifest = \_ -> pure (Right (sampleManifest lodashName versions))}
                 outcomes <-
                     if throughSweep
                         then do
@@ -222,7 +225,7 @@ deleteCases store = describe "the handle's chunked delete" $ do
                                     (recPorts rec')
                                     counters
                                     swept
-                                    aPackage
+                                    lodashName
                                     [(smStore swept, [StoredVersion v VersionServed Nothing | v <- versions])]
                             {- The fault abandons the last chunk before its recheck, so the cap charges
                             every version the backend was handed and none it never reached. -}
@@ -233,7 +236,7 @@ deleteCases store = describe "the handle's chunked delete" $ do
                             recResults rec'
                                 `shouldReturn` (replicate count SweepExamined <> replicate successful SweepDeleted <> replicate (count - successful) SweepKept)
                             readIORef recorded
-                        else deleteVersions handle testDeleteGuard aPackage versions
+                        else deleteVersions handle testDeleteGuard lodashName versions
                 readIORef requests `shouldReturn` map (map renderVersion) (take faultAt (chunksOfCeiling (AtMost 100) versions))
                 outcomes `shouldBe` zip versions (replicate successful VersionRemoved <> replicate (min 100 (count - successful)) (VersionUncertain storeUnreachable) <> replicate (max 0 (count - successful - 100)) (VersionUnreached storeUnreachable))
 
@@ -247,7 +250,7 @@ deleteCases store = describe "the handle's chunked delete" $ do
                         record requests submitted
                         pure (Right (if length submitted == 100 then CA.newDeletePackageVersionsResponse 200 else allRemoved submitted))
                     }
-            handle = (handleOver store plane){readStoreManifest = \_ -> pure (Right (sampleManifest aPackage versions))}
+            handle = (handleOver store plane){readStoreManifest = \_ -> pure (Right (sampleManifest lodashName versions))}
         rec' <- recordingPorts Nothing
         counters <- newSweepState
         let swept = testMount handle [denyRule] []
@@ -256,7 +259,7 @@ deleteCases store = describe "the handle's chunked delete" $ do
             (recPorts rec')
             counters
             swept
-            aPackage
+            lodashName
             [(smStore swept, [StoredVersion v VersionServed Nothing | v <- versions])]
             `shouldReturn` Just (HaltDeletionCap 101 101 Nothing)
         map length <$> readIORef requests `shouldReturn` [100, 1]
@@ -271,19 +274,19 @@ deleteCases store = describe "the handle's chunked delete" $ do
                         record sizes (length submitted)
                         pure (Right (allRemoved submitted))
                     }
-        outcomes <- deleteVersions (handleOver store plane) testDeleteGuard aPackage (versionRun 101)
+        outcomes <- deleteVersions (handleOver store plane) testDeleteGuard lodashName (versionRun 101)
         readIORef sizes `shouldReturn` [100, 1]
         map snd outcomes `shouldBe` replicate 101 VersionRemoved
 
     it "refuses a version the store answered for neither way, never reports it removed" $ do
         let plane = inertPlane{cpDeleteVersions = \_ -> pure (Right (CA.newDeletePackageVersionsResponse 200))}
-        outcomes <- deleteVersions (handleOver store plane) testDeleteGuard aPackage (versionRun 2)
+        outcomes <- deleteVersions (handleOver store plane) testDeleteGuard lodashName (versionRun 2)
         map (refusalCodeOf . snd) outcomes `shouldBe` replicate 2 (Just "UNREPORTED")
 
     it "stops at the first faulted chunk and marks every submitted version unreached" $ do
         calls <- newIORef (0 :: Int)
         let plane = inertPlane{cpDeleteVersions = \_ -> modifyIORef' calls (+ 1) >> pure (Left storeUnreachable)}
-        outcomes <- deleteVersions (handleOver store plane) testDeleteGuard aPackage (versionRun 101)
+        outcomes <- deleteVersions (handleOver store plane) testDeleteGuard lodashName (versionRun 101)
         readIORef calls `shouldReturn` 1
         map snd outcomes `shouldBe` replicate 100 (VersionUncertain storeUnreachable) <> [VersionUnreached storeUnreachable]
 
@@ -359,11 +362,11 @@ upstreamCases store = describe "the handle's private upstream probe" $ do
         probeOver store (fanOf (upstreamCallCeiling + 5)) `shouldReturn` Undecidable ChainBoundExceeded
 
     it "reads a refused identity as unsafe, because it cannot clear the repository" $
-        probeRefusing store (serviceError status403 "AccessDeniedException")
+        probeRefusing store (serviceError status403 "AccessDeniedException" [])
             `shouldReturn` Unsafe (InsufficientPermissions describeRepositoryGrant)
 
     it "leaves a faulted call undecided" $
-        probeRefusing store (serviceError status503 "ServiceUnavailable") `shouldReturn` Undecidable NetworkFailure
+        probeRefusing store (serviceError status503 "ServiceUnavailable" []) `shouldReturn` Undecidable NetworkFailure
 
     it "reads an identity that could not ask at all as unsafe, which fails closed" $
         -- A service refusal comes back as a value, so a throw is the identity: none was discovered,
@@ -392,25 +395,11 @@ probeRefusing :: CodeArtifactStore -> AWS.Error -> IO UpstreamSafety
 probeRefusing store err =
     probeUpstreamSafety inertReader{rpDescribeUpstream = \_ -> pure (Left (describeUpstreamRefusal err))} store
 
-serviceError :: Status -> Text -> AWS.Error
-serviceError status code =
-    AWS.ServiceError (AWS.ServiceError' "CodeArtifact" status [] (AWS.newErrorCode code) Nothing Nothing)
-
 -- | The typed stand-in for a client whose identity could not be discovered or renewed.
 data NoIdentity = NoIdentity
     deriving stock (Show)
 
 instance Exception NoIdentity
-
-connectedTo :: Text -> CA.RepositoryDescription
-connectedTo connection =
-    CA.newRepositoryDescription
-        & (CAL.repositoryDescription_externalConnections ?~ [CA.newRepositoryExternalConnectionInfo & (CAL.repositoryExternalConnectionInfo_externalConnectionName ?~ connection)])
-
-routedTo :: [Text] -> CA.RepositoryDescription
-routedTo upstreams =
-    CA.newRepositoryDescription
-        & (CAL.repositoryDescription_upstreams ?~ [CA.newUpstreamRepositoryInfo & (CAL.upstreamRepositoryInfo_repositoryName ?~ name) | name <- upstreams])
 
 -- A chain of the given length from the store's own repository, each forwarding to the next.
 chainOf :: Int -> [(Text, CA.RepositoryDescription)]
@@ -612,10 +601,6 @@ taggedWith tags = CA.newListTagsForResourceResponse 200 & (CAL.listTagsForResour
 markerTag :: CA.Tag
 markerTag = CA.newTag consentTagKey consentTagValue
 
-describing :: CA.RepositoryDescription -> CA.DescribeRepositoryResponse
-describing description =
-    CA.newDescribeRepositoryResponse 200 & (CAL.describeRepositoryResponse_repository ?~ description)
-
 describedWithArn :: CA.DescribeRepositoryResponse
 describedWithArn =
     describing (CA.newRepositoryDescription & CAL.repositoryDescription_arn ?~ "arn:aws:codeartifact:::repository/acme/mirror")
@@ -624,9 +609,7 @@ describedWithoutArn :: CA.DescribeRepositoryResponse
 describedWithoutArn = describing CA.newRepositoryDescription
 
 routedDescription :: CA.RepositoryDescription
-routedDescription =
-    CA.newRepositoryDescription
-        & (CAL.repositoryDescription_upstreams ?~ [CA.newUpstreamRepositoryInfo & CAL.upstreamRepositoryInfo_repositoryName ?~ "shared"])
+routedDescription = routedTo ["shared"]
 
 -- What a fault says, so an assertion reads the refusal rather than only that one happened.
 detailOf :: StoreFault -> Text
@@ -657,9 +640,6 @@ faultSaying :: Text -> StoreFault
 faultSaying detail =
     StoreFault{faultTransport = transportFault TransportProtocol detail, faultRetry = RetryFutile}
 
-aPackage :: PackageName
-aPackage = mkPackageName Npm Nothing "lodash"
-
 versionRun :: Int -> [Version]
 versionRun n = [mkVersion Npm ("1.0." <> show i) | i <- [1 .. n]]
 
@@ -688,15 +668,3 @@ handleFor :: CodeArtifactStore -> IO StoreMaintenance
 handleFor store =
     AWS.newEnv (pure . fromKeys (AWS.AccessKey "AKIDtestkey") (AWS.SecretKey "testsecretkey"))
         >>= fmap (handleOver store) . controlPlaneFor
-
-npmStore :: Maybe CodeArtifactStore
-npmStore = coordinates <$> codeArtifactFormat Npm
-  where
-    coordinates format =
-        CodeArtifactStore
-            { casDomain = "acme"
-            , casDomainOwner = "111122223333"
-            , casRegion = "eu-west-1"
-            , casRepository = "mirror"
-            , casFormat = format
-            }

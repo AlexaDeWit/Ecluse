@@ -1048,6 +1048,7 @@ test-suite ecluse-runtime-unit
   main-is:            Spec.hs
   hs-source-dirs:     runtime/test/unit
   other-modules:
+    Ecluse.Maintenance.CodeArtifact.Support
     Ecluse.Runtime.Credential.CodeArtifactSpec
     Ecluse.Runtime.Cve.SyncSpec
     Ecluse.Runtime.LogSpec

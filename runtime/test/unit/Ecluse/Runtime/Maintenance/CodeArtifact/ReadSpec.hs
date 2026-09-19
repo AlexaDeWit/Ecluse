@@ -11,16 +11,13 @@ import Amazonka.CodeArtifact qualified as CA
 import Amazonka.CodeArtifact.Lens qualified as CAL
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
 import Ecluse.Core.Registry.Maintenance (
     StoredVersion (..),
     VersionPresence (VersionServed, VersionWithdrawn),
  )
-import Ecluse.Core.Version (Version, mkVersion, renderVersion)
-import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
-    CodeArtifactStore (..),
-    codeArtifactFormat,
- )
+import Ecluse.Core.Version (renderVersion)
+import Ecluse.Maintenance.CodeArtifact.Support (withNpmStore)
+import Ecluse.Runtime.Maintenance.CodeArtifact.Decide (CodeArtifactStore (..))
 import Ecluse.Runtime.Maintenance.CodeArtifact.Read.Internal (
     RepositoryIdentity (..),
     VersionObservation (..),
@@ -30,16 +27,13 @@ import Ecluse.Runtime.Maintenance.CodeArtifact.Read.Internal (
     storedOfObservation,
     versionsOfPage,
  )
+import Ecluse.Test.Package (babelCore, npmVersion)
 
 {- | The read-only CodeArtifact layer: what one observation of a listing preserves. The coordinates
 and verdicts it builds on are covered in "Ecluse.Runtime.Maintenance.CodeArtifact.DecideSpec".
 -}
 spec :: Spec
-spec = maybe noNpmFormat readCases npmStore
-
--- The store's coordinates carry a parsed format, so a spec over them starts from one.
-noNpmFormat :: Spec
-noNpmFormat = it "has a CodeArtifact format for npm" $ expectationFailure "npm resolved to no CodeArtifact format"
+spec = withNpmStore readCases
 
 readCases :: CodeArtifactStore -> Spec
 readCases store = do
@@ -71,7 +65,7 @@ pageSpec store = describe "observationsOfPage" $ do
     it "keeps the raw version as published, and the package the listing was read for" $ do
         let page = observed store [published "1.0.0-rc.1+build"]
         map (renderVersion . obsVersion) page `shouldBe` ["1.0.0-rc.1+build"]
-        map obsPackage page `shouldBe` [scopedName]
+        map obsPackage page `shouldBe` [babelCore]
 
     it "reports no revision where the store reported none" $
         map obsRevision (observed store [published "1.0.0"]) `shouldBe` [Nothing]
@@ -128,13 +122,13 @@ projectionSpec store = describe "versionsOfPage" $ do
 
     it "reads a served version as one the store still holds" $
         stored store [published "1.0.0"]
-            `shouldBe` [StoredVersion{storedVersion = version "1.0.0", storedPresence = VersionServed, storedRevision = Nothing}]
+            `shouldBe` [StoredVersion{storedVersion = npmVersion "1.0.0", storedPresence = VersionServed, storedRevision = Nothing}]
 
 observed :: CodeArtifactStore -> [CA.PackageVersionSummary] -> [VersionObservation]
-observed store = observationsOfPage (identityOfStore store) scopedName
+observed store = observationsOfPage (identityOfStore store) babelCore
 
 stored :: CodeArtifactStore -> [CA.PackageVersionSummary] -> [StoredVersion]
-stored store = versionsOfPage (identityOfStore store) scopedName
+stored store = versionsOfPage (identityOfStore store) babelCore
 
 -- Every status CodeArtifact names, plus one it has not named yet.
 statusRun :: [(Text, CA.PackageVersionStatus)]
@@ -182,21 +176,3 @@ ingested =
         CA.newDomainEntryPoint
             & (CAL.domainEntryPoint_repositoryName ?~ "shared")
             & (CAL.domainEntryPoint_externalConnectionName ?~ "public:npmjs")
-
-scopedName :: PackageName
-scopedName = mkPackageName Npm (Just (mkScope "babel")) "core"
-
-version :: Text -> Version
-version = mkVersion Npm
-
-npmStore :: Maybe CodeArtifactStore
-npmStore = coordinates <$> codeArtifactFormat Npm
-  where
-    coordinates format =
-        CodeArtifactStore
-            { casDomain = "acme"
-            , casDomainOwner = "111122223333"
-            , casRegion = "eu-west-1"
-            , casRepository = "mirror"
-            , casFormat = format
-            }
