@@ -783,7 +783,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.PublishSpec
     Ecluse.Core.Registry.Npm.RequestSpec
     Ecluse.Core.Registry.Npm.RouteSpec
-    Ecluse.Core.Registry.Npm.RouteTableSpec
     Ecluse.Core.Registry.Npm.ServeSpec
     Ecluse.Core.Registry.Npm.WireSpec
     Ecluse.Core.Registry.NpmSpec
