@@ -34,6 +34,7 @@ import UnliftIO (concurrently)
 import UnliftIO.Exception (catchAny, throwIO)
 
 import Ecluse.Core.Credential (ClientCredential)
+import Ecluse.Core.Cve (DbEtag)
 import Ecluse.Core.Package (
     PackageDetails,
     PackageInfo (infoVersions),
@@ -82,6 +83,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
     packumentServeDecision,
     recordDenials,
     recordEffectfulFailures,
+    statusServeDecision,
  )
 import Ecluse.Core.Server.Pipeline.Origin (
     Contribution (..),
@@ -159,6 +161,21 @@ data PackumentServe
       -- @Content-Length@ and the own @ETag@) with no body.
       PackumentHead
 
+-- Everything a terminal arm of one packument serve answers through. It is assembled once
+-- per request so each arm takes it whole instead of seven positional parameters.
+data PackumentServing response = PackumentServing
+    { psvMode :: PackumentServe
+    , psvReplies :: PackumentReplies response
+    , psvDeps :: PackumentDeps
+    , psvName :: PackageName
+    , psvRequest :: Request
+    , psvRespond :: response -> IO ResponseReceived
+    , psvRuntime :: ServeRuntime
+    }
+
+servingMetrics :: PackumentServing response -> MetricsPort
+servingMetrics = srMetrics . psvRuntime
+
 packumentWith ::
     PackumentServe ->
     PackumentReplies response ->
@@ -167,77 +184,47 @@ packumentWith ::
     (response -> IO ResponseReceived) ->
     Handler ResponseReceived
 packumentWith mode replies name request respond = do
-    mount <- asks ctxMount
-    serveWithDeps mode replies (bindingPackumentDeps mount) (forwardedCredential mount request) name request respond
+    ctx <- ask
+    let mount = ctxMount ctx
+        serving =
+            PackumentServing
+                { psvMode = mode
+                , psvReplies = replies
+                , psvDeps = bindingPackumentDeps mount
+                , psvName = name
+                , psvRequest = request
+                , psvRespond = respond
+                , psvRuntime = ctxRuntime ctx
+                }
+    serveWithinGuards serving (forwardedCredential mount request)
 
--- Serve a packument once the mount's dependencies are known. The edge token is compared
--- before any upstream is touched, so an unauthenticated client cannot drive egress.
-serveWithDeps ::
-    PackumentServe ->
-    PackumentReplies response ->
-    PackumentDeps ->
-    Maybe ClientCredential ->
-    PackageName ->
-    Request ->
-    (response -> IO ResponseReceived) ->
-    Handler ResponseReceived
-serveWithDeps mode replies deps clientToken name request respond
-    | not (edgeTokenMatches (pdInboundToken deps) clientToken) =
+-- The edge token is compared before any upstream is touched, so an unauthenticated client
+-- cannot drive egress. Admission is held only for the gated work.
+serveWithinGuards :: PackumentServing response -> Maybe ClientCredential -> Handler ResponseReceived
+serveWithinGuards serving clientToken
+    | not (edgeTokenMatches (pdInboundToken (psvDeps serving)) clientToken) =
         liftIO (respond (packumentUnauthorised replies [] (mkRefusal Nothing unauthorisedMessage)))
-    | otherwise = do
-        rt <- asks ctxRuntime
+    | otherwise =
         withAdmissionOrShed
-            (srMetrics rt)
-            (srAdmission rt)
+            (servingMetrics serving)
+            (srAdmission (psvRuntime serving))
             (liftIO (respond (packumentUnavailable replies [shedRetryAfter] (mkRefusal Nothing shedMessage))))
-            (serveAdmittedPackument mode replies deps clientToken name request respond rt)
+            (serveAdmittedPackument serving clientToken)
             pure
+  where
+    replies = psvReplies serving
+    respond = psvRespond serving
 
-serveAdmittedPackument ::
-    PackumentServe ->
-    PackumentReplies response ->
-    PackumentDeps ->
-    Maybe ClientCredential ->
-    PackageName ->
-    Request ->
-    (response -> IO ResponseReceived) ->
-    ServeRuntime ->
-    Handler ResponseReceived
-serveAdmittedPackument mode replies deps clientToken name request respond rt = do
-    logFM InfoS (ls ("serving packument request for " <> renderPackageName name))
-    let metrics = srMetrics rt
+serveAdmittedPackument :: PackumentServing response -> Maybe ClientCredential -> Handler ResponseReceived
+serveAdmittedPackument serving clientToken = do
+    logFM InfoS (ls ("serving packument request for " <> renderPackageName (psvName serving)))
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pdAdvisoryEtag deps))
-    (privResult, pubResult) <- resolveOrigins deps rt clientToken name
+    (privResult, pubResult) <- resolveOrigins deps (psvRuntime serving) clientToken (psvName serving)
     case privResult of
-        OriginAuthorisationFailure _ -> do
-            liftIO (mpServeDecision metrics Metric.Deny)
-            liftIO (respond (packumentForbidden replies [] (privateAuthorisationRefusal (pdHelp deps))))
-        _ -> do
-            let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
-                trustedVersions = maybe Map.empty (infoVersions . srcInfo) private
-            public <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx trustedVersions (originManifest pubResult))
-            let sources = catMaybes [private, paContribution public]
-                noServeableVersions = do
-                    let decisions = collectDecisions privResult pubResult (privateExclusions <> paExclusions public)
-                    liftIO (mpServeDecision metrics (packumentServeDecision decisions))
-                    liftIO (recordDenials metrics decisions)
-                    logDenials name (ctxAdvisoryEtag evalCtx) (paVerdicts public)
-                    liftIO (respond (noSurvivors replies deps decisions))
-                serveResolved served = do
-                    liftIO (mpServeDecision metrics Metric.Admit)
-                    answerPackumentConditional mode replies deps name request respond rt sources served
-                firstPartyMissed miss = do
-                    let decision = firstPartyMissDecision name miss
-                    liftIO (mpServeDecision metrics (packumentServeDecision [decision]))
-                    liftIO (recordDenials metrics [decision])
-                    liftIO (respond (firstPartyMissReply replies (pdHelp deps) name miss))
-            case originMiss privResult of
-                Just miss | pdFirstParty deps name -> firstPartyMissed miss
-                _ -> case packumentPlan sources (paDeniedEvidence public) of
-                    Nothing -> noServeableVersions
-                    Just plan -> do
-                        warnDivergences metrics name plan
-                        serveResolved plan
+        OriginAuthorisationFailure _ -> privateAccessRefused serving
+        _ -> serveMergedPackument serving evalCtx privResult pubResult
+  where
+    deps = psvDeps serving
 
 {- Resolve the origins this request may read: a first-party name reads the private origin alone
 and never the public leg. Every other name reads both concurrently. -}
@@ -251,59 +238,35 @@ resolveOrigins deps rt clientToken name
             (fetchPrivateOrigin deps rt clientToken name)
             (fetchPublicOrigin deps rt name)
 
--- Why a first-party name did not resolve, in the words the client reads.
-firstPartyMissMessage :: PackageName -> OriginMiss -> Text
-firstPartyMissMessage name = \case
-    MissAbsent ->
-        "'"
-            <> rendered
-            <> "' did not resolve from the private upstream, and its namespace is first-party to this deployment, so it is never fetched from the public registry"
-    MissUnresolved ->
-        "the private upstream did not answer for '"
-            <> rendered
-            <> "', and its namespace is first-party to this deployment, so no public document may stand in for it"
-  where
-    rendered = renderPackageName name
+-- An explicit private refusal stops the request: no public document may stand in for it.
+privateAccessRefused :: PackumentServing response -> Handler ResponseReceived
+privateAccessRefused serving = do
+    liftIO (mpServeDecision (servingMetrics serving) Metric.Deny)
+    liftIO . psvRespond serving $
+        packumentForbidden (psvReplies serving) [] (privateAuthorisationRefusal (pdHelp (psvDeps serving)))
 
--- | Classify a first-party absence as a policy refusal and an unread origin as an outage.
-firstPartyMissDecision :: PackageName -> OriginMiss -> ServeDecision
-firstPartyMissDecision name miss = Reject (Rejection reason (firstPartyMissMessage name miss))
-  where
-    reason = case miss of
-        MissAbsent -> ByPolicy firstPartyRule
-        MissUnresolved -> Unavailable (WillResolve Nothing)
-
--- | Render a settled absence as @404@ and an unread origin as @503@ without @Retry-After@.
-firstPartyMissReply :: PackumentReplies response -> Maybe HelpMessage -> PackageName -> OriginMiss -> response
-firstPartyMissReply replies help name miss = case miss of
-    MissAbsent -> packumentNotFound replies [] body
-    MissUnresolved -> packumentUnavailable replies [] body
-  where
-    body = mkRefusal help (firstPartyMissMessage name miss)
-
-{- Answer the conditional packument request before any assembly. A 304 costs the fetches
-and the plan, never the document rebuild, the encode, or an output hash. -}
-answerPackumentConditional ::
-    PackumentServe ->
-    PackumentReplies response ->
-    PackumentDeps ->
-    PackageName ->
-    Request ->
-    (response -> IO ResponseReceived) ->
-    ServeRuntime ->
-    [Contribution] ->
-    MergePlan ->
+serveMergedPackument ::
+    PackumentServing response ->
+    EvalContext ->
+    OriginResult ->
+    OriginResult ->
     Handler ResponseReceived
-answerPackumentConditional mode replies deps name request respond rt sources plan = do
-    let etag = packumentETag (pdMountBaseUrl deps) name (map fingerprintPiece sources)
-    case evaluateETag (requestHeaders request) etag of
-        NotModified matched -> do
-            logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
-            liftIO (respond (packumentNotModified replies [etagHeader matched]))
-        Modified fresh -> do
-            logFM DebugS (ls ("serving packument for " <> renderPackageName name))
-            bytes <- liftIO (servedBytes rt deps sources plan fresh)
-            liftIO (respond (packumentResponse replies mode fresh bytes))
+serveMergedPackument serving evalCtx privResult pubResult = do
+    let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
+        trustedVersions = maybe Map.empty (infoVersions . srcInfo) private
+    public <- liftIO (gatePublic (srTracing rt) (servingMetrics serving) deps name evalCtx trustedVersions (originManifest pubResult))
+    let sources = catMaybes [private, paContribution public]
+    case originMiss privResult of
+        Just miss | pdFirstParty deps name -> firstPartyMissed serving miss
+        _ -> case packumentPlan sources trustedVersions (paDeniedEvidence public) of
+            Just plan -> serveResolved serving sources plan
+            Nothing ->
+                noServeableVersions serving (ctxAdvisoryEtag evalCtx) (paVerdicts public) $
+                    collectDecisions privResult pubResult (privateExclusions <> paExclusions public)
+  where
+    deps = psvDeps serving
+    name = psvName serving
+    rt = psvRuntime serving
 
 admitTrusted :: MinTrustedIntegrity -> Maybe Manifest -> (Maybe Contribution, [ServeDecision])
 admitTrusted minTrusted = \case
@@ -355,12 +318,38 @@ projectDecisions info =
   where
     versionVerdict (ver, details) d = VersionVerdict ver (serveDecisionOf details d)
 
-packumentPlan :: [Contribution] -> Map Text PackageDetails -> Maybe MergePlan
-packumentPlan sources deniedEvidence = do
+{- The trusted version map is the caller's own, the one the public gate was given, so the merge
+and the gate can never disagree about which versions are trusted. -}
+packumentPlan :: [Contribution] -> Map Text PackageDetails -> Map Text PackageDetails -> Maybe MergePlan
+packumentPlan sources trustedVersions deniedEvidence = do
     plan <- mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources]
     guard (not (Map.null (mpSurvivors plan)))
-    let trustedVersions = maybe Map.empty (infoVersions . srcInfo) (find ((== TrustedSource) . srcProvenance) sources)
     pure plan{mpDivergences = mpDivergences plan <> integrityDivergences trustedVersions deniedEvidence}
+
+serveResolved :: PackumentServing response -> [Contribution] -> MergePlan -> Handler ResponseReceived
+serveResolved serving sources plan = do
+    warnDivergences (servingMetrics serving) (psvName serving) plan
+    liftIO (mpServeDecision (servingMetrics serving) Metric.Admit)
+    answerPackumentConditional serving sources plan
+
+{- Answer the conditional packument request before any assembly. A 304 costs the fetches
+and the plan, never the document rebuild, the encode, or an output hash. -}
+answerPackumentConditional :: PackumentServing response -> [Contribution] -> MergePlan -> Handler ResponseReceived
+answerPackumentConditional serving sources plan = do
+    let etag = packumentETag (pdMountBaseUrl deps) name (map fingerprintPiece sources)
+    case evaluateETag (requestHeaders (psvRequest serving)) etag of
+        NotModified matched -> do
+            logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
+            liftIO (respond (packumentNotModified replies [etagHeader matched]))
+        Modified fresh -> do
+            logFM DebugS (ls ("serving packument for " <> renderPackageName name))
+            bytes <- liftIO (servedBytes (psvRuntime serving) deps sources plan fresh)
+            liftIO (respond (packumentResponse replies (psvMode serving) fresh bytes))
+  where
+    deps = psvDeps serving
+    name = psvName serving
+    replies = psvReplies serving
+    respond = psvRespond serving
 
 -- | A validator derived from framed inputs so unchanged requests skip assembly. Bump the salt when assembly behaviour changes.
 packumentETag :: Text -> PackageName -> [(Provenance, ContentDigest, [(Text, [EntryKey])])] -> ETag
@@ -377,32 +366,32 @@ packumentETag mountBaseUrl name sources =
             <> "\0"
             <> byteString (encodeUtf8 (renderPackageName name))
             <> "\0"
-            <> foldMap sourcePieces sources
+            <> foldMap etagSourcePiece sources
 
-    sourcePieces :: (Provenance, ContentDigest, [(Text, [EntryKey])]) -> Builder
-    sourcePieces (provenance, digest, survivors) =
-        provenanceTag provenance
-            <> byteString (digestBytes digest)
-            <> foldMap versionPieces survivors
-            <> "\1"
+etagSourcePiece :: (Provenance, ContentDigest, [(Text, [EntryKey])]) -> Builder
+etagSourcePiece (provenance, digest, survivors) =
+    etagProvenanceTag provenance
+        <> byteString (digestBytes digest)
+        <> foldMap etagVersionPiece survivors
+        <> "\1"
 
-    versionPieces :: (Text, [EntryKey]) -> Builder
-    versionPieces (version, entries) =
-        frame (encodeUtf8 version) <> foldMap entryPiece entries <> "\2"
+etagVersionPiece :: (Text, [EntryKey]) -> Builder
+etagVersionPiece (version, entries) =
+    etagFrame (encodeUtf8 version) <> foldMap etagEntryPiece entries <> "\2"
 
-    entryPiece :: EntryKey -> Builder
-    entryPiece = \case
-        ArrayEntry index -> "a" <> frame (show index)
-        ObjectEntry key -> "o" <> frame (encodeUtf8 key)
-        SingletonEntry -> "s"
+etagEntryPiece :: EntryKey -> Builder
+etagEntryPiece = \case
+    ArrayEntry index -> "a" <> etagFrame (show index)
+    ObjectEntry key -> "o" <> etagFrame (encodeUtf8 key)
+    SingletonEntry -> "s"
 
-    frame :: ByteString -> Builder
-    frame bytes = intDec (BS.length bytes) <> ":" <> byteString bytes
+etagFrame :: ByteString -> Builder
+etagFrame bytes = intDec (BS.length bytes) <> ":" <> byteString bytes
 
-    provenanceTag :: Provenance -> Builder
-    provenanceTag = \case
-        TrustedSource -> "t\0"
-        GatedSource -> "g\0"
+etagProvenanceTag :: Provenance -> Builder
+etagProvenanceTag = \case
+    TrustedSource -> "t\0"
+    GatedSource -> "g\0"
 
 -- Distinct private views produce distinct cache keys, preventing reuse across clients.
 -- A render escape breaks the totality contract and is wrapped only on a cache miss.
@@ -427,38 +416,6 @@ baseDocument :: [Contribution] -> Maybe CachedDoc
 baseDocument sources =
     srcValue <$> (find ((== TrustedSource) . srcProvenance) sources <|> listToMaybe sources)
 
-collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
-collectDecisions privResult pubResult publicExclusions =
-    privateDecision privResult <> publicMismatch pubResult <> publicExclusions
-  where
-    privateDecision :: OriginResult -> [ServeDecision]
-    privateDecision = \case
-        OriginAuthorisationFailure _ -> []
-        OriginResolved _ -> []
-        -- A merged name keeps a private 404 and a private outage on one refusal, so a name
-        -- neither leg could serve still invites a retry.
-        OriginNotFound -> [neededUpstreamUnavailable]
-        OriginUnresolved -> [neededUpstreamUnavailable]
-        OriginNameMismatch -> [upstreamInvalidDecision]
-        -- An unconfigured private leg (a serve-only pure gate) is not an outage:
-        -- nothing was needed, so nothing is unavailable.
-        OriginAbsent -> []
-
-    publicMismatch :: OriginResult -> [ServeDecision]
-    publicMismatch = \case
-        OriginAuthorisationFailure _ -> []
-        OriginNameMismatch -> [upstreamInvalidDecision]
-        OriginResolved _ -> []
-        OriginNotFound -> []
-        OriginUnresolved -> []
-        OriginAbsent -> []
-
-    neededUpstreamUnavailable :: ServeDecision
-    neededUpstreamUnavailable = Reject (Rejection (Unavailable (WillResolve Nothing)) "a needed upstream was unavailable")
-
-    upstreamInvalidDecision :: ServeDecision
-    upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
-
 packumentResponse :: PackumentReplies response -> PackumentServe -> ETag -> ByteString -> response
 packumentResponse replies mode etag bytes = case mode of
     PackumentFull ->
@@ -469,19 +426,32 @@ packumentResponse replies mode etag bytes = case mode of
             [etagHeader etag, (hContentLength, show (BS.length bytes))]
             (LBS.fromStrict bytes)
 
-noSurvivors :: PackumentReplies response -> PackumentDeps -> [ServeDecision] -> response
-noSurvivors replies deps decisions = case status of
+-- The status folds the decision list once and both the metric and the response read that value.
+noServeableVersions ::
+    PackumentServing response ->
+    Maybe DbEtag ->
+    [VersionVerdict] ->
+    [ServeDecision] ->
+    Handler ResponseReceived
+noServeableVersions serving etag verdicts decisions = do
+    liftIO (mpServeDecision metrics (statusServeDecision status))
+    liftIO (recordDenials metrics decisions)
+    logDenials (psvName serving) etag verdicts
+    liftIO (psvRespond serving (noSurvivors (psvReplies serving) (psvDeps serving) status decisions))
+  where
+    metrics = servingMetrics serving
+    status = packumentStatus decisions
+
+noSurvivors :: PackumentReplies response -> PackumentDeps -> PackumentStatus -> [ServeDecision] -> response
+noSurvivors replies deps status decisions = case status of
     PackumentOk -> packumentInternal replies [] body
     PackumentForbidden -> packumentForbidden replies [] body
     PackumentUnavailable retry -> packumentUnavailable replies (retryAfterHeaders retry) body
     PackumentBadGateway -> packumentBadGateway replies [] body
     PackumentServerError -> packumentInternal replies [] body
   where
-    status :: PackumentStatus
-    status = packumentStatus decisions
-
-    -- The collected denial reasons. An empty set (no versions at all) renders a
-    -- deny-by-default message rather than an empty body.
+    -- An empty reason set (no versions at all) renders a deny-by-default message rather
+    -- than an empty body.
     message :: Text
     message = case mapMaybe rejectionText decisions of
         [] -> "no versions are available for this package"
@@ -489,7 +459,80 @@ noSurvivors replies deps decisions = case status of
 
     body = mkRefusal (pdHelp deps) message
 
-    rejectionText :: ServeDecision -> Maybe Text
-    rejectionText = \case
-        Admit -> Nothing
-        Reject rej -> Just (rejectionMessage rej)
+rejectionText :: ServeDecision -> Maybe Text
+rejectionText = \case
+    Admit -> Nothing
+    Reject rej -> Just (rejectionMessage rej)
+
+collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
+collectDecisions privResult pubResult publicExclusions =
+    privateDecision privResult <> publicMismatch pubResult <> publicExclusions
+
+privateDecision :: OriginResult -> [ServeDecision]
+privateDecision = \case
+    OriginAuthorisationFailure _ -> []
+    OriginResolved _ -> []
+    -- A merged name keeps a private 404 and a private outage on one refusal, so a name
+    -- neither leg could serve still invites a retry.
+    OriginNotFound -> [neededUpstreamUnavailable]
+    OriginUnresolved -> [neededUpstreamUnavailable]
+    OriginNameMismatch -> [upstreamInvalidDecision]
+    -- An unconfigured private leg (a serve-only pure gate) is not an outage:
+    -- nothing was needed, so nothing is unavailable.
+    OriginAbsent -> []
+
+publicMismatch :: OriginResult -> [ServeDecision]
+publicMismatch = \case
+    OriginAuthorisationFailure _ -> []
+    OriginNameMismatch -> [upstreamInvalidDecision]
+    OriginResolved _ -> []
+    OriginNotFound -> []
+    OriginUnresolved -> []
+    OriginAbsent -> []
+
+neededUpstreamUnavailable :: ServeDecision
+neededUpstreamUnavailable = Reject (Rejection (Unavailable (WillResolve Nothing)) "a needed upstream was unavailable")
+
+upstreamInvalidDecision :: ServeDecision
+upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
+
+firstPartyMissed :: PackumentServing response -> OriginMiss -> Handler ResponseReceived
+firstPartyMissed serving miss = do
+    liftIO (mpServeDecision metrics (packumentServeDecision [decision]))
+    liftIO (recordDenials metrics [decision])
+    liftIO . psvRespond serving $
+        firstPartyMissReply (psvReplies serving) (pdHelp (psvDeps serving)) name miss
+  where
+    metrics = servingMetrics serving
+    name = psvName serving
+    decision = firstPartyMissDecision name miss
+
+-- Why a first-party name did not resolve, in the words the client reads.
+firstPartyMissMessage :: PackageName -> OriginMiss -> Text
+firstPartyMissMessage name = \case
+    MissAbsent ->
+        "'"
+            <> rendered
+            <> "' did not resolve from the private upstream, and its namespace is first-party to this deployment, so it is never fetched from the public registry"
+    MissUnresolved ->
+        "the private upstream did not answer for '"
+            <> rendered
+            <> "', and its namespace is first-party to this deployment, so no public document may stand in for it"
+  where
+    rendered = renderPackageName name
+
+-- | Classify a first-party absence as a policy refusal and an unread origin as an outage.
+firstPartyMissDecision :: PackageName -> OriginMiss -> ServeDecision
+firstPartyMissDecision name miss = Reject (Rejection reason (firstPartyMissMessage name miss))
+  where
+    reason = case miss of
+        MissAbsent -> ByPolicy firstPartyRule
+        MissUnresolved -> Unavailable (WillResolve Nothing)
+
+-- | Render a settled absence as @404@ and an unread origin as @503@ without @Retry-After@.
+firstPartyMissReply :: PackumentReplies response -> Maybe HelpMessage -> PackageName -> OriginMiss -> response
+firstPartyMissReply replies help name miss = case miss of
+    MissAbsent -> packumentNotFound replies [] body
+    MissUnresolved -> packumentUnavailable replies [] body
+  where
+    body = mkRefusal help (firstPartyMissMessage name miss)
