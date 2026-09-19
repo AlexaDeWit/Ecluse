@@ -12,10 +12,10 @@ module Ecluse.Core.Worker.Integrity (
     verifyIntegrity,
 ) where
 
-import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.Text qualified as T
 
 import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SRI), computeDigest, sriBody, sriPrefix)
+import Ecluse.Core.Package.Hash (base64DigestText, hexDigestText)
 import Ecluse.Core.Package.Integrity (assertedAlg, authoritativeDigest)
 
 -- | Whether fetched bytes may enter the mirror, with a refusal detail for the operator.
@@ -50,17 +50,11 @@ matchesDigest lazyBytes h hashes = do
     let digest = digestOf lazyBytes
     pure $ case hashAlg h of
         SRI ->
-            let encoded = base64 digest
+            let encoded = base64DigestText digest
              in any (\candidate -> hashAlg candidate == SRI && assertedAlg candidate == Just alg && sriBody (hashValue candidate) == encoded) hashes
-        _ -> hexLower digest == T.toLower (hashValue h)
+        _ -> hexDigestText digest == T.toLower (hashValue h)
 
 describeDigest :: Hash -> Text
 describeDigest h = case hashAlg h of
     SRI -> "SRI " <> sriPrefix (hashValue h)
     alg -> show alg
-
-hexLower :: ByteString -> Text
-hexLower d = T.toLower (decodeUtf8 (convertToBase Base16 d :: ByteString))
-
-base64 :: ByteString -> Text
-base64 d = decodeUtf8 (convertToBase Base64 d :: ByteString)

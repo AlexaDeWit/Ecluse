@@ -23,6 +23,10 @@ module Ecluse.Core.Package.Hash (
     -- * Digest computation
     computeDigest,
     isComputable,
+
+    -- * Wire encodings of digest bytes
+    hexDigestText,
+    base64DigestText,
 ) where
 
 import Crypto.Hash (Blake2b_512, Digest, MD5, SHA1, SHA256, SHA384, SHA512, digestFromByteString, hashlazy)
@@ -88,12 +92,19 @@ mkSriHashes wire = case nonEmpty (T.words wire) of
     Nothing -> Left "malformed sri digest"
     Just comps -> traverse (mkHash SRI) comps
 
+-- | The lowercase hex a non-SRI digest is compared and reported in.
+hexDigestText :: ByteString -> Text
+hexDigestText d = decodeUtf8 (convertToBase Base16 d :: ByteString)
+
+-- | The base64 body an SRI component carries after its algorithm prefix.
+base64DigestText :: ByteString -> Text
+base64DigestText d = decodeUtf8 (convertToBase Base64 d :: ByteString)
+
 {- | Lowercase hex for comparison, or 'Nothing' if a record update introduced an invalid digest.
 The original 'hashValue' remains unchanged.
 -}
 canonicalHashValue :: Hash -> Maybe Text
-canonicalHashValue h =
-    decodeUtf8 . (convertToBase Base16 :: ByteString -> ByteString) <$> decodeHash (hashAlg h) (hashValue h)
+canonicalHashValue h = hexDigestText <$> decodeHash (hashAlg h) (hashValue h)
 
 decodeHash :: HashAlg -> Text -> Maybe ByteString
 decodeHash SRI value = do
