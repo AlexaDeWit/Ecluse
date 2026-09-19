@@ -969,7 +969,6 @@ test-suite ecluse-unit
     Ecluse.PilotSpec
     Ecluse.RtsSpec
     Ecluse.Runtime.EnvSpec
-    Ecluse.Runtime.ServerMountSpec
     Ecluse.Runtime.ServerSpec
     Ecluse.ServiceSpec
     Ecluse.Site.MarkdownSpec
