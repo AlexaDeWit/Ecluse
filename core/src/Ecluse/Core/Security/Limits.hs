@@ -74,8 +74,7 @@ data LimitError
     deriving stock (Eq, Show)
 
 {- | Read a streamed body chunk by chunk, refusing it whole once the accumulated size would
-exceed 'maxBodyBytes'. @readChunk@ follows the @http-client@ @BodyReader@ contract, where an
-empty 'ByteString' ends the input, and the size check runs before a chunk is retained.
+exceed 'maxBodyBytes'. @readChunk@ ends the input with an empty 'ByteString' (@BodyReader@).
 -}
 boundedRead :: (Monad m) => Limits -> m ByteString -> m (Either LimitError ByteString)
 boundedRead limits readChunk = go 0 mempty
@@ -129,8 +128,7 @@ checkNestingDepth limits value =
         else Left (TooDeeplyNested (maxNestingDepth limits))
 
 {- | True iff @value@ nests no deeper than @budget@ levels: a scalar and an empty container are
-depth @1@, and each enclosing 'Object' or 'Array' adds one. The selective decoders bound each
-sub-tree at the same budget, so they reproduce 'checkNestingDepth' without materialising whole.
+depth @1@, and each enclosing 'Object' or 'Array' adds one.
 -}
 withinNestingBudget :: Int -> Value -> Bool
 withinNestingBudget budget v =

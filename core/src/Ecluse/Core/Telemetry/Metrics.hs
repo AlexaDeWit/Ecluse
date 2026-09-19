@@ -302,8 +302,7 @@ data MirrorResult
     | -- | The job did not publish, and its message stays in the queue's own hands.
       Failed
     | {- | The worker retired the message itself, once it spent the queue's redelivery budget.
-      It is the terminus a deployment with no dead-letter queue has, so an operator alerts on
-      it: nothing else captured the job.
+      The terminus when no dead-letter queue exists, so an operator alerts on it.
       -}
       Discarded
     deriving stock (Eq, Generic, Show)
@@ -418,9 +417,8 @@ breakerStateCode = \case
     HalfOpen -> 1
     Open -> 2
 
-{- | A single metric label: a bounded key with its bounded value. No constructor takes a
-package, version, scope, or message. 'LRule' is the one operator-bounded label, since a
-deployment defines a small, fixed rule set.
+{- | A single metric label. No constructor takes a package, version, scope, or message. 'LRule'
+is the one operator-bounded label, since a deployment defines a small, fixed rule set.
 -}
 data Label
     = LDecision Decision

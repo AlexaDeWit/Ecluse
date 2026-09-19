@@ -27,8 +27,8 @@ import Data.Text qualified as T
 import Ecluse.Core.Security (authorityLabel, hostAddress)
 import Ecluse.Core.Security.Egress.Internal (RegistryUrl, mkConfiguredRegistryUrl, mkRegistryUrl, registryUrlText)
 
-{- | Resolve a packument's @dist.tarball@ against the https-only posture: plaintext upgrades to
-https only on the packument's own host, and a refusal names the authority, never the URL.
+{- | Resolve a packument's @dist.tarball@ under the https-only posture: plaintext upgrades
+to https only on its own host. A refusal names the authority, since the URL can carry a credential.
 -}
 resolveTarballUrl :: Text -> Text -> Either Text RegistryUrl
 resolveTarballUrl upstreamHost url

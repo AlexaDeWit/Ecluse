@@ -43,9 +43,8 @@ mkRegistryUrl raw
   where
     trimmed = T.strip raw
 
-{- | Build a 'RegistryUrl' for an __operator-configured__ endpoint: 'mkRegistryUrl' behind
-'Ecluse.Core.Security.Authority.refuseCredentialMaterial', which runs first because
-'mkRegistryUrl' quotes what it rejects. An upstream @dist.tarball@ keeps to 'mkRegistryUrl'.
+{- | Build a 'RegistryUrl' for an __operator-configured__ endpoint. @refuseCredentialMaterial@
+runs before 'mkRegistryUrl', which quotes what it rejects.
 
 >>> mkConfiguredRegistryUrl "https://registry.npmjs.org"
 Right (RegistryUrl "https://registry.npmjs.org")

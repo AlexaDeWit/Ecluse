@@ -21,8 +21,8 @@ import Data.Aeson (
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (Parser, parseMaybe)
 
-{- | Decode an optional field __leniently__: absent, @null@, and present-but-undecodable all
-yield 'Nothing'. For __advisory__ fields only. A load-bearing field keeps @(.:?)@\/@(.:)@.
+{- | Decode an optional field __leniently__: absent, @null@, and undecodable yield 'Nothing', so
+one poisoned value cannot deny the document. For __advisory__ fields only, never a load-bearing one.
 -}
 lenientOptional :: (FromJSON a) => Object -> Key -> Parser (Maybe a)
 lenientOptional o k = do
