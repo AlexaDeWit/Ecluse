@@ -5,9 +5,8 @@
 {- | The advisory lookup's internals: the hardened SQLite open and the raw queries
 "Ecluse.Core.Cve" curates into the public handle.
 
-Importing this module opts out of the public surface's stability promises. It exists
-so a test can pin the hardening properties directly against the connection the handle
-actually uses. That connection refuses writes, and it distrusts schema-borne SQL.
+Importing this module opts out of the public surface's stability promises. It exists so a test
+can pin the hardening properties against the connection the handle actually uses.
 -}
 module Ecluse.Core.Cve.Internal (
     AdvisoryRange (..),

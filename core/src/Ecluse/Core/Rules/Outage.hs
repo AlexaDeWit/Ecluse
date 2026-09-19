@@ -5,8 +5,8 @@
 {- | Bounded reporting of an advisory source the rules cannot consult. Each advisory-reading
 evaluation reports what it saw, and the state machine turns that stream into three reports: the
 outage began, it continues (at most once per period), and it recovered. The outage also records
-which admissions the gate has logged evidence for, once per identity, so a request never produces
-a line of its own beyond the first for its identity, whatever the traffic.
+which admissions the gate has logged evidence for, once per identity, so traffic volume cannot
+multiply the lines.
 -}
 module Ecluse.Core.Rules.Outage (
     -- * What one evaluation saw
@@ -195,9 +195,8 @@ tvarOutageStore shared =
             pure report
         }
 
-{- | A reporter folding into one source's store. A healthy source costs an evaluation one read, and
-an outage that changes nothing (the same rule, still failing, inside the period) costs one read and
-one clock reading, so only a transition or a due reminder commits.
+{- | A reporter folding into one source's store. Only a transition or a due reminder commits, so
+a healthy source costs one read and an unchanged outage one read and one clock reading.
 -}
 sourceReporter :: NominalDiffTime -> IO UTCTime -> OutageStore -> (OutageReport -> IO ()) -> SourceReporter
 sourceReporter period clock store emit = SourceReporter{reportSource = report, noteAdmission = note}
