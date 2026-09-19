@@ -158,18 +158,18 @@ fallbackPlan inputs =
     (cacheEntries, cacheEntriesLine) = fallbackOr "cache entry bound" (csMaxEntries (piCache inputs)) (clamp (cacheEntriesFloor, cacheEntriesCap) (cacheBytes `div` cacheEntryExpectedBytes))
     (queueDepth, queueDepthLine) = fallbackOr "memory-queue depth" (opDepth pins) queueDepthFallback
     (artifactBytes, artifactLine) = fallbackOr "mirror artifact byte cap" (opArtifact pins) mirrorArtifactBytesCap
-    publishTenant = listToMaybe [PublishTenant{ptAggregateBytes = publishAggregateFallbackRequests * requestBytes} | piPublishConfigured inputs]
-    mirrorArtifactTenant = listToMaybe [MirrorArtifactTenant{matMaxBytes = artifactBytes} | anyMountMirrors demand]
+    publishTenant = PublishTenant{ptAggregateBytes = publishAggregateFallbackRequests * requestBytes} <$ guard (piPublishConfigured inputs)
+    mirrorArtifactTenant = MirrorArtifactTenant{matMaxBytes = artifactBytes} <$ guard (anyMountMirrors demand)
 
 fallbackOr :: Text -> Maybe Int -> Int -> (Int, Text)
 fallbackOr name explicit fallback =
     resolveSized ("memory plan: " <> name) explicit fallback "built-in default; no heap-ceiling datapoint"
 
 publishTenantOf :: TenantDemands -> ShedOutcomes -> Maybe PublishTenant
-publishTenantOf d o = listToMaybe [PublishTenant{ptAggregateBytes = soPublishFinal o} | tdPublishConfigured d]
+publishTenantOf d o = PublishTenant{ptAggregateBytes = soPublishFinal o} <$ guard (tdPublishConfigured d)
 
 mirrorArtifactTenantOf :: TenantDemands -> ShedOutcomes -> Maybe MirrorArtifactTenant
-mirrorArtifactTenantOf d o = listToMaybe [MirrorArtifactTenant{matMaxBytes = soArtifactCapFinal o} | tdMirrors d]
+mirrorArtifactTenantOf d o = MirrorArtifactTenant{matMaxBytes = soArtifactCapFinal o} <$ guard (tdMirrors d)
 
 {- | The metadata cache's tunables: the configured TTL with the plan's cache aggregate
 split across the three stores. A zero aggregate stores nothing, so the proxy serves uncached.
