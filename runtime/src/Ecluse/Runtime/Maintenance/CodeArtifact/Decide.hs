@@ -7,7 +7,6 @@ and response types. @amazonka@ is trusted for serialisation, signing, and decodi
 service model, so what stays ours is which call to build and how to read what comes back. The
 read-only calls and the evidence they preserve live in
 "Ecluse.Runtime.Maintenance.CodeArtifact.Read".
-"Ecluse.Runtime.Maintenance.CodeArtifact.Decide.Internal" implements it.
 -}
 module Ecluse.Runtime.Maintenance.CodeArtifact.Decide (
     -- * Coordinates

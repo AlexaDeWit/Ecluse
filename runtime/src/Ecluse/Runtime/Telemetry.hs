@@ -8,7 +8,7 @@ is opt-in, so with that switch unset nothing is wired and the SDK is never initi
 'withTelemetry' is the lifecycle bracket the composition root runs the proxy within: it builds
 the providers from the standard @OTEL_*@ variables, runs the Prometheus scrape listener, and
 tears both down along every exit path. It also wraps the OTLP exporters, because
-@hs-opentelemetry 1.0.0.0@ drops a failed export silently. "Ecluse.Runtime.Telemetry.Internal" implements it.
+@hs-opentelemetry 1.0.0.0@ drops a failed export silently.
 -}
 module Ecluse.Runtime.Telemetry (
     -- * Master switch

@@ -8,7 +8,6 @@ per-flush flood. The span exporter, the metric exporter, and the SDK's own diagn
 coalesce through the same sink. None of it reaches the request path: the SDK's batch exporter runs
 asynchronously, so a failed export never touches a served request. The exporter wrappers in
 "Ecluse.Runtime.Telemetry" feed the sink through 'observeExportResult'.
-"Ecluse.Runtime.Telemetry.ExportFailure.Internal" implements it.
 -}
 module Ecluse.Runtime.Telemetry.ExportFailure (
     ExportFailureSink,

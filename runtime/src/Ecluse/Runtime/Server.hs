@@ -8,7 +8,7 @@ keeps the encoded-slash handling and the streaming control the proxy depends on
 (@docs\/architecture\/web-layer.md@). Dispatch matches a request's leading segments to a
 configured 'MountBinding', strips the prefix, and asks that mount's router what the remainder
 names, so this module holds no path grammar and no status of its own. A path under no mount is
-the neutral @404@, and @\/livez@ and @\/readyz@ are answered above the mounts. "Ecluse.Runtime.Server.Internal" implements it.
+the neutral @404@, and @\/livez@ and @\/readyz@ are answered above the mounts.
 -}
 module Ecluse.Runtime.Server (
     -- * The WAI application

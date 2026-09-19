@@ -8,7 +8,7 @@ object per line to stdout, the shape a log collector's stdout autodiscovery cons
 and 'ConsoleLog' the human-readable bracketed form for local development. Colour is forced off
 either way, so a captured JSON line stays valid JSON. A bearer token reaches no field here: it
 is the redacted @Secret@ of "Ecluse.Core.Credential", and a URL is reduced to its authority
-before it names anything in a line. "Ecluse.Runtime.Log.Internal" implements it.
+before it names anything in a line.
 -}
 module Ecluse.Runtime.Log (
     -- * Log format

@@ -8,7 +8,6 @@ built once from a discovered identity and captured in the handle's closures, so 
 state never reaches the proxy's @Env@ and a spec can drive the sequencing without one. The
 read-only calls are their own record ("Ecluse.Runtime.Maintenance.CodeArtifact.Read"), and the
 decisions live in "Ecluse.Runtime.Maintenance.CodeArtifact.Decide".
-"Ecluse.Runtime.Maintenance.CodeArtifact.Internal" implements it.
 -}
 module Ecluse.Runtime.Maintenance.CodeArtifact (
     newCodeArtifactMaintenance,

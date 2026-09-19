@@ -7,7 +7,6 @@ the evidence one observed version carries. A 'ReadPlane' holds no deletion, no c
 no publication, so holding one confers no authority over the repository, and an observation is
 evidence a later decision reads rather than a permission it acts on. The requests and verdicts
 the whole leaf shares live in "Ecluse.Runtime.Maintenance.CodeArtifact.Decide".
-"Ecluse.Runtime.Maintenance.CodeArtifact.Read.Internal" implements it.
 -}
 module Ecluse.Runtime.Maintenance.CodeArtifact.Read (
     -- * The calls that only observe

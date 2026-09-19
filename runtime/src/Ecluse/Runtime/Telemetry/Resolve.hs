@@ -8,7 +8,7 @@ never read, and the OTLP endpoint is an operator-declared destination used as gi
 the environment can turn into off-cluster egress. @OTEL_RESOURCE_ATTRIBUTES@ is read with the W3C
 baggage grammar the SDK itself uses, so a percent-encoded value decodes the same way for the @dd@
 log object and for the span resource. @docs\/architecture\/observability.md@ describes the
-configuration model. "Ecluse.Runtime.Telemetry.Resolve.Internal" implements it.
+configuration model.
 -}
 module Ecluse.Runtime.Telemetry.Resolve (
     -- * The resolved telemetry identity
