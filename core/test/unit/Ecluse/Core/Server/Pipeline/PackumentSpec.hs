@@ -8,7 +8,7 @@ module Ecluse.Core.Server.Pipeline.PackumentSpec (spec) where
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource))
 import Ecluse.Core.Registry.Metadata (ContentDigest, digestOf)
@@ -27,6 +27,7 @@ import Ecluse.Core.Server.Response (
     Transience (WillResolve),
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Test.Package (thingName)
 import Ecluse.Test.Server.Response (reasonOf)
 
 spec :: Spec
@@ -41,7 +42,7 @@ packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
                 [ (TrustedSource, privateDigest base, [("1\0é", [ArrayEntry 0, ArrayEntry 10, ArrayEntry (-1), ObjectEntry "é\0x", SingletonEntry])])
                 , (GatedSource, publicDigest base, [])
                 ]
-        renderETag (packumentETag mountBase thing sources)
+        renderETag (packumentETag mountBase thingName sources)
             `shouldBe` "\"93f747ebd65d300c3cd90719d0394ddd77c87140342be84e3df6560d8f7fed26\""
 
     it "changes when an origin body changes (same survivors)" $
@@ -57,7 +58,7 @@ packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
         tagWith base{publicSurvivors = ["1.0.0", "2.0.0", "3.0.0"]} `shouldNotBe` tagWith base
 
     it "changes when the mount base URL changes (rewritten tarball URLs differ)" $
-        packumentETag "https://other.example/npm" thing (piecesOf base)
+        packumentETag "https://other.example/npm" thingName (piecesOf base)
             `shouldNotBe` tagWith base
 
     it "changes across packages" $
@@ -68,7 +69,7 @@ packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
         tagWith base{privateProvenance = GatedSource} `shouldNotBe` tagWith base
 
     it "distinguishes source order (merge precedence is positional)" $
-        packumentETag mountBase thing (reverse (piecesOf base)) `shouldNotBe` tagWith base
+        packumentETag mountBase thingName (reverse (piecesOf base)) `shouldNotBe` tagWith base
 
     it "does not collide survivor lists on concatenation framing" $ do
         -- ["1.0", "0.2.0"] vs ["1.0.0", "2.0"] concatenate to the same characters.
@@ -83,10 +84,10 @@ packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
             `shouldNotBe` tagWith base{privateSurvivors = ["9.0.0"], publicSurvivors = ["1.0.0", "2.0.0"]}
 
     it "changes when a whole source appears or disappears" $
-        packumentETag mountBase thing [publicPiece base] `shouldNotBe` tagWith base
+        packumentETag mountBase thingName [publicPiece base] `shouldNotBe` tagWith base
 
     for_ [TrustedSource, GatedSource] $ \provenance -> do
-        let tag entries = packumentETag mountBase thing [(provenance, publicDigest base, [("1.0.0", entries)])]
+        let tag entries = packumentETag mountBase thingName [(provenance, publicDigest base, [("1.0.0", entries)])]
         it ("tracks exact admitted coordinates for " <> show provenance) $
             tag [ArrayEntry 0, ArrayEntry 1] `shouldNotBe` tag [ArrayEntry 1]
         it ("distinguishes entry constructors for " <> show provenance) $ do
@@ -127,10 +128,10 @@ namedReplies =
         }
 
 replyFor :: OriginMiss -> Text
-replyFor = firstPartyMissReply namedReplies Nothing thing
+replyFor = firstPartyMissReply namedReplies Nothing thingName
 
 decisionFor :: OriginMiss -> ServeDecision
-decisionFor = firstPartyMissDecision thing
+decisionFor = firstPartyMissDecision thingName
 
 -- The fixture: a private (trusted) and a public (gated) source with distinct
 -- bodies and survivor sets, varied one field at a time by each case.
@@ -159,10 +160,7 @@ publicPiece :: Fixture -> (Provenance, ContentDigest, [(Text, [EntryKey])])
 publicPiece f = (GatedSource, publicDigest f, map (,[SingletonEntry]) (publicSurvivors f))
 
 tagWith :: Fixture -> ETag
-tagWith f = packumentETag mountBase thing (piecesOf f)
+tagWith f = packumentETag mountBase thingName (piecesOf f)
 
 mountBase :: Text
 mountBase = "https://proxy.example/npm"
-
-thing :: PackageName
-thing = mkPackageName Npm Nothing "thing"
