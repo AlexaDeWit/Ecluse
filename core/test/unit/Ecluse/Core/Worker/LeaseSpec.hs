@@ -13,7 +13,7 @@ import Control.Concurrent.STM (check, retry)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import GHC.Conc (ThreadStatus (ThreadDied, ThreadFinished), threadStatus)
-import Katip (KatipContextT, SimpleLogPayload, runKatipContextT)
+import Katip (KatipContextT)
 import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Async (withAsync)
@@ -38,7 +38,7 @@ import Ecluse.Core.Worker.Lease (
     whileLeased,
     withLeasedBatch,
  )
-import Ecluse.Test.Log (newTestLogEnv)
+import Ecluse.Test.Log (runQuietKatip)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Queue (sampleJob)
 import Ecluse.Test.Support (TestContractEscape (TestContractEscape))
@@ -502,9 +502,8 @@ runLeases world answer = runLeasesWith world (worldOps world answer)
 
 -- | 'runLeases' over caller-built ops, for a case that perturbs the clock or the waiting itself.
 runLeasesWith :: LeaseWorld -> LeaseOps -> [QueueMessage] -> ([LeasedReceipt] -> KatipContextT IO a) -> IO a
-runLeasesWith world ops batch body = do
-    logEnv <- newTestLogEnv
-    withWorldClock world (runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (withLeasedBatch ops batch body))
+runLeasesWith world ops batch body =
+    withWorldClock world (runQuietKatip (withLeasedBatch ops batch body))
 
 -- A lease the batch does not hold is a broken premise, so it fails loudly.
 leaseAt :: (MonadIO m) => Int -> [LeasedReceipt] -> m LeasedReceipt

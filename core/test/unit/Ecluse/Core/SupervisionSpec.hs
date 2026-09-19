@@ -6,8 +6,6 @@ module Ecluse.Core.SupervisionSpec (spec) where
 
 import Control.Retry (simulatePolicy)
 import Data.Text qualified as T
-import Katip (SimpleLogPayload, closeScribes)
-import Katip.Monadic (runKatipContextT)
 import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Async (asyncWithUnmask, cancel, waitCatch)
@@ -23,7 +21,7 @@ import Ecluse.Core.Supervision (
     superviseLoop,
     transientPolicy,
  )
-import Ecluse.Test.Log (captureStdout, jsonLogEnv, runQuietKatip)
+import Ecluse.Test.Log (runJsonLog, runQuietKatip)
 
 -- | A typed fault for the loop under test to throw, never stringly.
 newtype StepFault = StepFault Text
@@ -128,24 +126,20 @@ spec = do
         -- scribe demonstrably renders "sev":"Error" when a line earns it.
         it "warns on a transient fault, so a self-healing retry never pages an operator" $ do
             let step = throwIO (StepFault "still down")
-            logged <- captureStdout $ do
-                logEnv <- jsonLogEnv
-                void . timeout 200_000 $
-                    runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (superviseLoop (fastPolicy (const Transient)) step)
-                void (closeScribes logEnv)
+            logged <-
+                runJsonLog . void . timeout 200_000 $
+                    superviseLoop (fastPolicy (const Transient)) step
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` T.isInfixOf "iteration faulted"
             logged `shouldSatisfy` (not . T.isInfixOf "\"sev\":\"Error\"")
 
         it "errors on a permanent fault, the one that takes the process down" $ do
             let step = throwIO (StepFault "wiring fault")
-            logged <- captureStdout $ do
-                logEnv <- jsonLogEnv
-                outcome <- try (runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (superviseLoop (fastPolicy (const Permanent)) step))
+            logged <- runJsonLog $ do
+                outcome <- try (superviseLoop (fastPolicy (const Permanent)) step)
                 case outcome of
-                    Left fault -> fromException fault `shouldBe` Just (StepFault "wiring fault")
+                    Left fault -> liftIO (fromException fault `shouldBe` Just (StepFault "wiring fault"))
                     Right v -> absurd v
-                void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Error\""
             logged `shouldSatisfy` T.isInfixOf "permanent fault, failing up"
 

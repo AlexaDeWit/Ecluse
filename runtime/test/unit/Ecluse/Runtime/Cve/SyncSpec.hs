@@ -16,7 +16,7 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
-import Katip (KatipContextT, closeScribes, runKatipContextT)
+import Katip (KatipContextT)
 import System.Directory (copyFile, doesFileExist)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -58,7 +58,7 @@ import Ecluse.Runtime.Cve.Sync.Internal (
  )
 import Ecluse.Runtime.Test.Cve (fetchServing, fetchServingAt, headOnlyFetch)
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Log (captureStdout, jsonLogEnv, runQuietKatip)
+import Ecluse.Test.Log (runJsonLog, runQuietKatip)
 import Ecluse.Test.Maintenance (FakeStore (..), FakeStoreConfig (..), defaultFakeStoreConfig, newFakeStore)
 import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb, mkMinimalValidDbWithMeta, osvZipOf)
 import Ecluse.Test.Osv.Withdrawal (withdrawalBytes, withdrawalZip)
@@ -102,10 +102,9 @@ publishedAt = UTCTime (fromGregorian 2026 9 1) 0
 
 -- Run a sync task against a capturing scribe until 'settle' returns, and hand back its whole log.
 captureSyncLog :: SyncEnv -> SyncSchedule -> SyncHooks -> IO () -> IO Text
-captureSyncLog env schedule hooks settle = captureStdout $ do
-    logEnv <- jsonLogEnv
-    withAsync (runKatipContextT logEnv () mempty (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort env schedule hooks)) (const settle)
-    void (closeScribes logEnv)
+captureSyncLog env schedule hooks settle =
+    runJsonLog $
+        withAsync (runCveSync noopAdvisorySyncMetricsPort passthroughAdvisorySyncTracingPort env schedule hooks) (const (liftIO settle))
 
 -- Run one boot attempt against a capturing scribe and hand back everything it logged.
 captureSwapLog :: SyncEnv -> IO Text
@@ -319,11 +318,9 @@ spec = do
                             ]
                         env = envWith (fetchServing (Just "e1") (\path -> mkMinimalValidDbWithMeta path "pkg-a" meta))
                     (swaps, notify) <- newSwapCounter
-                    logged <- captureStdout $ do
-                        logEnv <- jsonLogEnv
-                        withAsync (runKatipContextT logEnv () mempty (runUnobserved env oneAttempt notify)) $ \_ ->
-                            awaitCount "legacy artifact swap" swaps 1
-                        void (closeScribes logEnv)
+                    logged <- runJsonLog $
+                        withAsync (runUnobserved env oneAttempt notify) $ \_ ->
+                            liftIO (awaitCount "legacy artifact swap" swaps 1)
                     logged `shouldSatisfy` T.isInfixOf "advisory database swapped in"
                     logged `shouldSatisfy` T.isInfixOf summary
                     logged `shouldSatisfy` (not . T.isInfixOf "SECRET")

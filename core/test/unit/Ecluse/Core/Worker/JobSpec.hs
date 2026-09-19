@@ -45,7 +45,7 @@ import Ecluse.Core.Registry.Publish (
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker (
     JobOutcome (DeadLettered, Dropped, Retried, Succeeded),
     RetryLeg (AfterPublish, BeforePublish),
@@ -53,7 +53,7 @@ import Ecluse.Core.Worker (
     processJob,
  )
 import Ecluse.Core.Worker.Job (mirrorLatest, outcomeOfAdmission, outcomeOfFetchFault)
-import Ecluse.Test.Package (unsafeFilename, unsafeHash)
+import Ecluse.Test.Package (npmVersion, unsafeFilename, unsafeHash)
 import Ecluse.Test.Port (noopWorkerMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Rules (admitRule, cannotVetRule, denyRule)
@@ -571,34 +571,34 @@ spec = do
         -- upstream tag as chosen, and the store's post-write inventory as survivors.
         it "keeps a present upstream latest, whatever this job publishes" $
             -- 2.0.0 mirrored first, then an older 1.0.0 job: completion order must not retag.
-            mirrorLatest (Just (npmVer "2.0.0")) [npmVer "2.0.0"] (npmVer "1.0.0")
-                `shouldBe` npmVer "2.0.0"
+            mirrorLatest (Just (npmVersion "2.0.0")) [npmVersion "2.0.0"] (npmVersion "1.0.0")
+                `shouldBe` npmVersion "2.0.0"
 
         it "converges on the same tag when the two jobs complete in the reverse order" $ do
             -- 1.0.0 lands first with its target absent, so it is the only version to name.
-            mirrorLatest (Just (npmVer "2.0.0")) [] (npmVer "1.0.0") `shouldBe` npmVer "1.0.0"
-            mirrorLatest (Just (npmVer "2.0.0")) [npmVer "1.0.0"] (npmVer "2.0.0") `shouldBe` npmVer "2.0.0"
+            mirrorLatest (Just (npmVersion "2.0.0")) [] (npmVersion "1.0.0") `shouldBe` npmVersion "1.0.0"
+            mirrorLatest (Just (npmVersion "2.0.0")) [npmVersion "1.0.0"] (npmVersion "2.0.0") `shouldBe` npmVersion "2.0.0"
 
         it "falls back to the highest stable version when the upstream target is not mirrored" $
-            mirrorLatest (Just (npmVer "9.9.9")) [npmVer "2.0.0"] (npmVer "1.0.0")
-                `shouldBe` npmVer "2.0.0"
+            mirrorLatest (Just (npmVersion "9.9.9")) [npmVersion "2.0.0"] (npmVersion "1.0.0")
+                `shouldBe` npmVersion "2.0.0"
 
         it "falls back the same way when no upstream latest is known" $
-            mirrorLatest Nothing [npmVer "2.0.0"] (npmVer "1.0.0") `shouldBe` npmVer "2.0.0"
+            mirrorLatest Nothing [npmVersion "2.0.0"] (npmVersion "1.0.0") `shouldBe` npmVersion "2.0.0"
 
         it "prefers a stable version over a higher prerelease" $
-            mirrorLatest Nothing [npmVer "2.0.0"] (npmVer "3.0.0-beta.1") `shouldBe` npmVer "2.0.0"
+            mirrorLatest Nothing [npmVersion "2.0.0"] (npmVersion "3.0.0-beta.1") `shouldBe` npmVersion "2.0.0"
 
         it "names a prerelease only when no stable version is present" $
-            mirrorLatest Nothing [npmVer "3.0.0-beta.1"] (npmVer "3.0.0-beta.2")
-                `shouldBe` npmVer "3.0.0-beta.2"
+            mirrorLatest Nothing [npmVersion "3.0.0-beta.1"] (npmVersion "3.0.0-beta.2")
+                `shouldBe` npmVersion "3.0.0-beta.2"
 
         it "keeps an explicit upstream prerelease latest that is present" $
-            mirrorLatest (Just (npmVer "3.0.0-beta.1")) [npmVer "2.0.0"] (npmVer "3.0.0-beta.1")
-                `shouldBe` npmVer "3.0.0-beta.1"
+            mirrorLatest (Just (npmVersion "3.0.0-beta.1")) [npmVersion "2.0.0"] (npmVersion "3.0.0-beta.1")
+                `shouldBe` npmVersion "3.0.0-beta.1"
 
         it "names the published version when the store held nothing" $
-            mirrorLatest Nothing [] (npmVer "1.0.0") `shouldBe` npmVer "1.0.0"
+            mirrorLatest Nothing [] (npmVersion "1.0.0") `shouldBe` npmVersion "1.0.0"
 
     describe "processJob: the release tag the write declares" $ do
         it "declares the upstream's latest, not the version this job publishes" $
@@ -650,9 +650,6 @@ spec = do
             -- transient degrade.
             outcome <- try (fetchVersionDetails throwingVersionClient pkg ver) :: IO (Either SomeException VersionEvaluation)
             outcome `shouldSatisfy` isLeft
-
-npmVer :: Text -> Version
-npmVer = mkVersion Npm
 
 -- The version object current metadata carries, marked so a case can tell it from any other.
 admissionObject :: CachedDoc
