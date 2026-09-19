@@ -48,17 +48,16 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash scripts/ci-classify-change.sh
 
-  build-test:
-    name: Build & tests (core-unit + app-unit + integration)
+  build:
+    name: Build & compile checks (all targets, residency, doctest)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    # One build, then every Haskell tier against those same artifacts. Two runners would
-    # race to populate one first-writer-wins cabal cache, incomplete for the widest plan.
+    # Builds the widest plan, so it is the sole writer of the shared Nix and cabal
+    # caches that every other Haskell job restores.
     runs-on: ubuntu-latest
     timeout-minutes: 75
     permissions:
       contents: read
-      id-token: write # OIDC for tokenless Codecov upload (no stored token)
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal # deterministic, cacheable store location
     steps:
@@ -73,76 +72,25 @@ jobs:
         with:
           cabal-cache: "true"
 
-      # Cached here, not in the shared action: no other job builds dist-coverage. The key
-      # has the shape of dist-newstyle's: the version family bounds a restore, and the
-      # commit makes each main run's save a fresh entry.
-      - name: Restore dist-coverage
-        id: restore-dist-coverage
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: dist-coverage
-          key: dist-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
-          restore-keys: |
-            dist-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-
-
       # An exact cabal-store hit already covers cabal.project's pinned index-state, so
       # `cabal update` would only re-fetch TUF metadata over its dead-mirror fallback.
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # One throttled pull from the runners' shared Docker Hub IP pool cascades the tier to
-      # red. The refs mirror the pins in test/support/Ecluse/Test/Container/Image.hs.
-      - name: Pre-pull pinned integration images (Docker Hub throttle resilience)
-        run: >-
-          bash scripts/docker-prepull.sh
-          ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594
-          otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373
-
       # cache-nix-action trims the store with `nix store gc` before saving, and a dev
       # shell holds no GC root, so without this profile the saved entry loses `.#ci`.
       - name: Root the .#ci shell for the Nix-store cache save
         run: nix develop .#ci --profile "$RUNNER_TEMP/ecluse-ci-profile" --command true
 
-      - name: Cabal checks (build, coverage, doctest, cabal-check)
-        run: nix develop .#ci --command task cabal-checks
+      # go-task runs several targets in the order given, in one dev shell.
+      - name: Build every target, then residency, doctest, and cabal check
+        run: nix develop .#ci --command task build test-residency doctest cabal-check
 
-      - name: Upload core unit coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          use_oidc: true # tokenless upload via GitHub OIDC, no CODECOV_TOKEN secret
-          files: coverage/ecluse-core-unit.json
-          flags: unit
-          fail_ci_if_error: true # a lost upload must not silently skip the gate
-
-      - name: Upload app unit coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          use_oidc: true # tokenless upload via GitHub OIDC, no CODECOV_TOKEN secret
-          files: coverage/ecluse-unit.json
-          flags: unit
-          fail_ci_if_error: true # a lost upload must not silently skip the gate
-
-      - name: Upload runtime unit coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          use_oidc: true # tokenless upload via GitHub OIDC, no CODECOV_TOKEN secret
-          files: coverage/ecluse-runtime-unit.json
-          flags: unit
-          fail_ci_if_error: true # a lost upload must not silently skip the gate
-
-      - name: Upload integration coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          use_oidc: true # tokenless upload via GitHub OIDC, no CODECOV_TOKEN secret
-          files: coverage/ecluse-integration.json
-          flags: integration
-          fail_ci_if_error: true # a lost upload must not silently skip the gate
-
-      # Sole writer of the three cabal-side caches, and only from main. !cancelled()
-      # keeps the warm store when a later tier fails: the deps built fine either way.
-      # The two build-product keys end in the commit, so each main run writes a new
-      # entry, except on a re-run whose entry the restore above already found.
+      # Sole writer of the two cabal-side caches, and only from main. !cancelled()
+      # keeps the warm store when a later target fails: the deps built fine either way.
+      # The dist key ends in the commit, so each main run writes a new entry, except on
+      # a re-run whose entry the restore already found.
       - name: Save cabal store (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -157,12 +105,93 @@ jobs:
           path: dist-newstyle
           key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
 
+  coverage:
+    name: Coverage (${{ matrix.suite }})
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      id-token: write # OIDC for tokenless Codecov upload (no stored token)
+    # One runner per instrumented suite. Each leg runs the suite Codecov expects under
+    # its flag, so the four uploads Codecov waits for still land on every commit.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: ecluse-core-unit
+            coverage-task: coverage-unit
+            flag: unit
+          - suite: ecluse-unit
+            coverage-task: coverage-unit
+            flag: unit
+          - suite: ecluse-runtime-unit
+            coverage-task: coverage-unit
+            flag: unit
+          # Drives ministack through testcontainers, so this leg alone needs Docker.
+          - suite: ecluse-integration
+            coverage-task: coverage-integration
+            flag: integration
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+          save-nix-store: "false" # build is the single writer of the shared store
+
+      # One key per suite, so each leg is the sole writer of the builddir it produces.
+      # The version family bounds a restore, and the commit makes each main save fresh.
+      - name: Restore dist-coverage
+        id: restore-dist-coverage
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist-coverage
+          key: dist-coverage-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
+          restore-keys: |
+            dist-coverage-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-
+
+      - name: Update package index
+        if: steps.toolchain.outputs.cabal-cache-hit != 'true'
+        run: nix develop .#ci --command task update
+
+      # One throttled pull from the runners' shared Docker Hub IP pool cascades the tier
+      # to red. The refs mirror the pins in test/support/Ecluse/Test/Container/Image.hs.
+      - name: Pre-pull pinned integration images (Docker Hub throttle resilience)
+        if: ${{ matrix.suite == 'ecluse-integration' }}
+        run: >-
+          bash scripts/docker-prepull.sh
+          ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594
+          otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373
+
+      - name: Instrumented build and run
+        env:
+          COVERAGE_TASK: ${{ matrix.coverage-task }}
+          SUITE: ${{ matrix.suite }}
+        run: nix develop .#ci --command task "$COVERAGE_TASK" SUITE="$SUITE"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          use_oidc: true # tokenless upload via GitHub OIDC, no CODECOV_TOKEN secret
+          files: coverage/${{ matrix.suite }}.json
+          flags: ${{ matrix.flag }}
+          fail_ci_if_error: true # a lost upload must not silently skip the gate
+
       - name: Save dist-coverage (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.restore-dist-coverage.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: dist-coverage
-          key: dist-coverage-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
+          key: dist-coverage-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
 
   smoke:
     name: Smoke tests (live registries, non-gating)
@@ -186,7 +215,7 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          save-nix-store: "false" # build-test is the single writer of the shared store
+          save-nix-store: "false" # build is the single writer of the shared store
 
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
@@ -258,7 +287,7 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          save-nix-store: "false" # build-test is the single writer of the shared store
+          save-nix-store: "false" # build is the single writer of the shared store
 
       - name: Static checks
         env:
@@ -283,7 +312,7 @@ jobs:
     # rebuilds the Haskell closure's doc outputs from source, which ran past 100 minutes.
     timeout-minutes: 160
     # `checks.docs`, not `cabal haddock`: the cabal path wants a documentation variant of
-    # the deps that build-test's store lacks, so it rebuilds the whole closure every run.
+    # the deps that the build job's store lacks, so it rebuilds the whole closure every run.
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -328,7 +357,7 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          save-nix-store: "false" # build-test is the single writer of the shared store
+          save-nix-store: "false" # build is the single writer of the shared store
 
       # dist-analysis is deliberately NOT cached. cabal cannot delete a removed module's
       # artifacts, so a restored builddir feeds weeder orphaned .hie for modules that are gone.
@@ -375,7 +404,7 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          save-nix-store: "false" # build-test is the single writer of the shared store
+          save-nix-store: "false" # build is the single writer of the shared store
 
       # dist-analysis is not cached here either, for the reason on the weeder job.
       - name: Update package index
@@ -404,7 +433,7 @@ jobs:
     name: CI gate
     # The single Required check. Wire a new one in by adding it to `needs` here AND to
     # scripts/ci-gate-verdict.sh. The smoke job is absent on purpose: it is non-gating.
-    needs: [changes, build-test, static-checks, docs, e2e, weeder, stan]
+    needs: [changes, build, coverage, static-checks, docs, e2e, weeder, stan]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -421,7 +450,8 @@ jobs:
           DOCS_ONLY: ${{ needs.changes.outputs.docs-only }}
           CHANGES: ${{ needs.changes.result }}
           STATIC_CHECKS: ${{ needs.static-checks.result }}
-          BUILD_TEST: ${{ needs.build-test.result }}
+          BUILD: ${{ needs.build.result }}
+          COVERAGE: ${{ needs.coverage.result }}
           DOCS: ${{ needs.docs.result }}
           E2E: ${{ needs.e2e.result }}
           WEEDER: ${{ needs.weeder.result }}

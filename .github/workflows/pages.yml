@@ -53,7 +53,7 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url || steps.deploy_retry.outputs.page_url }}
     env:
       # Pin the cabal store to a deterministic, cacheable location (as in ci.yml).
-      # Unlike the gate jobs, Pages does NOT restore build-test's pristine cabal
+      # Unlike the gate jobs, Pages does NOT restore the CI build job's pristine cabal
       # store into this directory. It fills the directory with the
       # documentation-variant closure instead (see the doc-variant cache steps below).
       CABAL_DIR: ${{ github.workspace }}/.cabal
@@ -69,12 +69,12 @@ jobs:
 
       # Same SHA-pinned setup as the gate jobs: install Nix, restore the shared Nix
       # store. The save-nix-store: false input keeps Pages RESTORE-ONLY for the Nix
-      # store. The build-test job is the single writer, Pages runs on main
-      # concurrently, and it must not race build-test for the nix-<os>-<flakehash>
+      # store. The CI build job is the single writer, Pages runs on main
+      # concurrently, and it must not race it for the nix-<os>-<flakehash>
       # entry.
       #
       # The cabal-cache input is OFF. The composite's cabal and dist caches hold the
-      # REGULAR build variant, written by build-test's `cabal build all`.
+      # REGULAR build variant, written by the CI build job's `cabal build all`.
       # `cabal haddock` cannot reuse it: it needs a documentation-variant of the whole
       # closure. Pages restores and saves its own doc-variant store and builddir
       # instead, in the two steps below. See AGENTS.md.
@@ -89,7 +89,7 @@ jobs:
       # doc-variant of every dependency, with a different ConfiguredId than the regular
       # build variant. That closure is ~84% of this job's wall time. The project's own
       # Haddock accounts for only ~55 s of that. It lives in CABAL_DIR (= the store),
-      # under a docs-specific key so it never collides with build-test's pristine
+      # under a docs-specific key so it never collides with that job's pristine
       # cabal-store-* entry. The key covers the same dependency plan, so it stays a hit
       # until a real dependency bump. The restore-keys prefix gives partial warmth
       # across an epoch change: cabal reuses unchanged store entries and rebuilds only
