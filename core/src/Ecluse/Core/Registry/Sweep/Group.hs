@@ -46,6 +46,7 @@ collectGroupBucket alphabet prefix mirror cache =
     source = do
         fault <- locatedPages False mirror
         maybe (locatedPages True cache) (pure . Just) fault
+    -- The slot keys its own entry, so a name a location lists on several pages joins once.
     locatedPages slot store =
         fmap (store,)
             <$> fuseUpstream
