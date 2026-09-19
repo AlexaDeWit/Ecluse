@@ -803,6 +803,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.WireSupportSpec
     Ecluse.Core.Rules.EffectfulSpec
     Ecluse.Core.Rules.FreshnessSpec
+    Ecluse.Core.Rules.Outage.InternalSpec
     Ecluse.Core.Rules.OutageSpec
     Ecluse.Core.Rules.TypesSpec
     Ecluse.Core.RulesSpec
@@ -851,6 +852,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Worker.LoopSpec
     Ecluse.Core.Worker.RealiseSpec
     Ecluse.Queue.Support
+    Ecluse.Rules.Outage.Support
     Ecluse.Rules.Support
     Ecluse.Security.Support
     Ecluse.Test.Container.ImageSpec
