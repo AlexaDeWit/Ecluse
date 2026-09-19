@@ -22,7 +22,7 @@ check() {
   fi
 }
 
-all_pass="CHANGES=success STATIC_CHECKS=success BUILD=success COVERAGE=success DOCS=success E2E=success WEEDER=success STAN=success"
+all_pass="CHANGES=success STATIC_CHECKS=success BUILD=success COVERAGE=success CODECOV_NOTIFY=success DOCS=success E2E=success WEEDER=success STAN=success"
 
 # shellcheck disable=SC2086 # the shared result set is a deliberate word-split list
 check "a code PR with every job green passes" 0 \
@@ -38,11 +38,20 @@ check "a code PR with a job skipped outside the filter fails" 1 \
 
 # shellcheck disable=SC2086
 check "a code PR with a failed coverage leg fails" 1 \
-  $all_pass COVERAGE=failure DOCS_ONLY=false
+  $all_pass COVERAGE=failure CODECOV_NOTIFY=skipped DOCS_ONLY=false
 
-check "a documentation-only PR passes with the six Haskell jobs skipped" 0 \
+# shellcheck disable=SC2086
+check "an unsent Codecov status fails behind green coverage" 1 \
+  $all_pass CODECOV_NOTIFY=failure DOCS_ONLY=false
+
+# shellcheck disable=SC2086
+check "a skipped Codecov notify fails behind green coverage" 1 \
+  $all_pass CODECOV_NOTIFY=skipped DOCS_ONLY=false
+
+check "a documentation-only PR passes with the six Haskell jobs and notify skipped" 0 \
   CHANGES=success STATIC_CHECKS=success \
-  BUILD=skipped COVERAGE=skipped DOCS=skipped E2E=skipped WEEDER=skipped STAN=skipped \
+  BUILD=skipped COVERAGE=skipped CODECOV_NOTIFY=skipped \
+  DOCS=skipped E2E=skipped WEEDER=skipped STAN=skipped \
   DOCS_ONLY=true
 
 # shellcheck disable=SC2086

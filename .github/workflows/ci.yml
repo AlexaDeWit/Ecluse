@@ -193,6 +193,33 @@ jobs:
           path: dist-coverage
           key: dist-coverage-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
 
+  codecov-notify:
+    name: Codecov statuses
+    needs: [changes, coverage]
+    # Without `always()`, a failed or skipped coverage leg skips this job, so Codecov
+    # posts nothing rather than a number computed from a partial report.
+    if: ${{ needs.changes.outputs.docs-only != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # OIDC for the tokenless Codecov call, no stored token
+    steps:
+      # The CLI derives the commit from git on a push to main, so the tree must be here.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `codecov.notify.manual_trigger` holds every Codecov status until this call, so
+      # the statuses post once, against the complete four-upload report.
+      - name: Send the Codecov notifications
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          use_oidc: true # tokenless via GitHub OIDC, no CODECOV_TOKEN secret
+          run_command: send-notifications
+          fail_ci_if_error: true # an unsent status must not read as a green gate
+
   smoke:
     name: Smoke tests (live registries, non-gating)
     needs: changes
@@ -433,7 +460,7 @@ jobs:
     name: CI gate
     # The single Required check. Wire a new one in by adding it to `needs` here AND to
     # scripts/ci-gate-verdict.sh. The smoke job is absent on purpose: it is non-gating.
-    needs: [changes, build, coverage, static-checks, docs, e2e, weeder, stan]
+    needs: [changes, build, coverage, codecov-notify, static-checks, docs, e2e, weeder, stan]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -452,6 +479,7 @@ jobs:
           STATIC_CHECKS: ${{ needs.static-checks.result }}
           BUILD: ${{ needs.build.result }}
           COVERAGE: ${{ needs.coverage.result }}
+          CODECOV_NOTIFY: ${{ needs.codecov-notify.result }}
           DOCS: ${{ needs.docs.result }}
           E2E: ${{ needs.e2e.result }}
           WEEDER: ${{ needs.weeder.result }}

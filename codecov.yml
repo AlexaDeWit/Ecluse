@@ -8,16 +8,16 @@
 
 # The gating coverage job uploads four coverage reports per commit, one per matrix leg:
 # `ecluse-core-unit` (flag: unit), `ecluse-runtime-unit` (flag: unit), `ecluse-unit`
-# (flag: unit), and `ecluse-integration` (flag: integration). Wait for all FOUR before
-# computing statuses. With the default of 1, Codecov computes the project total off
-# whichever upload lands first. It fires a transient "coverage decreased" status, then
-# re-computes when the others arrive. The matrix always has exactly these four legs, so
-# a fixed wait is deterministic here. Were the count ever variable,
-# `notify.manual_trigger` plus an explicit send-notifications step would be the
-# alternative.
+# (flag: unit), and `ecluse-integration` (flag: integration). The legs run on their own
+# runners and finish minutes apart.
+#
+# `manual_trigger` holds every status and comment until the `codecov-notify` job calls
+# the CLI's send-notifications, which it does only once all four legs are green. A
+# count-based wait (`after_n_builds`) fired on a partial report here and posted a
+# "coverage decreased" status that it corrected a minute later.
 codecov:
   notify:
-    after_n_builds: 4
+    manual_trigger: true
 
 coverage:
   status:
@@ -36,23 +36,17 @@ coverage:
         # land.
         target: 85%
 
-# Flags let one combined gate span multiple suites. `carryforward` keeps a suite's
-# last-known coverage on runs that do not re-upload it, a skipped job for example.
+# Flags let one combined gate span multiple suites. The three unit suites upload under
+# the same `unit` flag, so Codecov merges their reports into one flag total. The `unit`
+# paths cover src/ (composition shell), runtime/src/ (effectful edge), and core/src/
+# (core), so the merged flag view excludes no layer.
 #
-# Three uploads land per commit: ecluse-core-unit (flag: unit), ecluse-unit (flag:
-# unit), and ecluse-integration (flag: integration). Both unit suites upload under
-# the same `unit` flag, so Codecov merges their reports into one flag total. The
-# `unit` paths cover src/ (composition shell), runtime/src/ (effectful edge), and
-# core/src/ (core), so the merged flag view excludes no layer.
-#
-# `carryforward` here is a SAFETY NET, not an active path. Every flag re-uploads on
-# EVERY commit: every leg of the `coverage` matrix job uploads unconditionally, with
-# no `if:` guard and `fail_ci_if_error: true`. So each flag
-# always lands a fresh report, and `carryforward` never substitutes. A PR that
-# *adds* a module cannot show that module uncovered from a stale carried-forward
-# report. `carryforward` takes effect only when an upload is genuinely missing, a
-# removed or skipped job for example. Then keeping the last-known number beats
-# dropping the flag to 0% and firing a false regression.
+# `carryforward` here is a SAFETY NET, not an active path. Every leg uploads with no
+# `if:` guard and `fail_ci_if_error: true`, and a status posts only once all four legs
+# are green, so a posted number is always built from four fresh reports. A PR that adds
+# a module cannot show it uncovered from a stale carried-forward report. Carryforward
+# takes effect only on a commit whose statuses never post, where keeping the last-known
+# number beats dropping the flag to 0%.
 flags:
   unit:
     paths:
