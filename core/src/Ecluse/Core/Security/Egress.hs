@@ -7,10 +7,9 @@
 Every outbound registry URL is a 'RegistryUrl', so a plain-HTTP target cannot be represented
 and a non-https configured upstream fails closed at boot. TLS certificate validation, not a
 resolved-IP pin, is the endpoint-authentication boundary: an attacker who steers a name to an
-internal address cannot make it present a CA-trusted certificate for the requested host. The
-host allowlist ('Ecluse.Core.Security.isAllowedUpstreamHost'), the literal internal-range
-block, and the @redirectCount = 0@ every request carries are complementary controls owned
-elsewhere.
+internal address cannot make it present a CA-trusted certificate for that host. The host
+allowlist ('Ecluse.Core.Security.isAllowedUpstreamHost'), the literal internal-range block,
+and the @redirectCount = 0@ every request carries are complementary controls owned elsewhere.
 -}
 module Ecluse.Core.Security.Egress (
     -- * The https-only egress URL
@@ -28,10 +27,8 @@ import Data.Text qualified as T
 import Ecluse.Core.Security (authorityLabel, hostAddress)
 import Ecluse.Core.Security.Egress.Internal (RegistryUrl, mkConfiguredRegistryUrl, mkRegistryUrl, registryUrlText)
 
-{- | Resolve a packument's @dist.tarball@ against the https-only posture, given the bare host
-the packument came from: plaintext upgrades to https only on that same host, any other
-plaintext target is refused, and a refusal names the authority, never the URL, because an
-upstream-supplied @dist.tarball@ can carry a credential. It authorises nothing on its own.
+{- | Resolve a packument's @dist.tarball@ against the https-only posture: plaintext upgrades to
+https only on the packument's own host, and a refusal names the authority, never the URL.
 -}
 resolveTarballUrl :: Text -> Text -> Either Text RegistryUrl
 resolveTarballUrl upstreamHost url

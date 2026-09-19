@@ -30,9 +30,7 @@ data IpAddr
       IpV6 [Word16]
 
 {- | Parse a host as an IP literal, or 'Nothing' for a DNS name the host allowlist still
-constrains: a short @inet_aton@ form (@2130706433@, @127.1@), a malformed octet, an
-overflowing IPv6 group, or a zone id. A leading-zero octet is octal (see 'octetInetAton'), so
-@0012.0.0.1@ is @10.0.0.1@ and the block catches it.
+constrains: a short @inet_aton@ form (@2130706433@, @127.1@), a bad octet, or a zone id.
 -}
 parseIpLiteral :: Text -> Maybe IpAddr
 parseIpLiteral host = case T.uncons host of

@@ -4,13 +4,12 @@
 
 {- | Outbound-request guards for the data plane: where the proxy is allowed to fetch.
 
-The two untrusted sources of an outbound target are the client's request path and an
-upstream's @dist.tarball@. A target must pass both halves of the SSRF gate:
-'isAllowedUpstreamHost' restricts a fetch to the configured upstream @host:port@ pairs, and
-'isBlockedTarget' rejects internal address literals. They compare different projections on
-purpose. Authorisation compares the full authority, because the fetch dials the port too,
-while the internal-range block classifies the bare host, because an address is internal at
-any port.
+An outbound target comes from the client's request path or an upstream's @dist.tarball@, and
+must pass both halves of the SSRF gate: 'isAllowedUpstreamHost' restricts a fetch to the
+configured upstream @host:port@ pairs, and 'isBlockedTarget' rejects internal address
+literals. They compare different projections on purpose. Authorisation compares the full
+authority, because the fetch dials the port too, while the block classifies the bare host,
+because an address is internal at any port.
 -}
 module Ecluse.Core.Security.Host (
     -- * Outbound host:port allowlist
