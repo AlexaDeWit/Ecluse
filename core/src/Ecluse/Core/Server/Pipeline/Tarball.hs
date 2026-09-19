@@ -129,7 +129,7 @@ import Ecluse.Core.Server.Pipeline.Tarball.Relay (
     withValidators,
  )
 import Ecluse.Core.Server.Response (
-    ArtifactStatus (NotFound, Unavailable'),
+    ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     Refusal,
     RejectReason (ByPolicy),
     Rejection (Rejection, rejectionMessage),
@@ -579,7 +579,10 @@ artifactError replies deps decision =
     retryHeaders :: ResponseHeaders
     retryHeaders = case status of
         Unavailable' retry -> retryAfterHeaders retry
-        _ -> []
+        Ok -> []
+        Forbidden -> []
+        ServerError -> []
+        NotFound -> []
 
     message :: Text
     message = case decision of
