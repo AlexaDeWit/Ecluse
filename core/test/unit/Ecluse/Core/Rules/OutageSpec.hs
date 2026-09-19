@@ -13,6 +13,7 @@ import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Test.Hspec
 
 import Ecluse.Core.Rules.Outage
+import Ecluse.Core.Rules.Outage.Internal
 import Ecluse.Core.Rules.Types (Reason)
 
 t0 :: UTCTime

@@ -178,6 +178,7 @@ library ecluse-core
     Ecluse.Core.Rules.Effectful
     Ecluse.Core.Rules.Freshness
     Ecluse.Core.Rules.Outage
+    Ecluse.Core.Rules.Outage.Internal
     Ecluse.Core.Rules.Types
     Ecluse.Core.Security
     Ecluse.Core.Security.Authority
