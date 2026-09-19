@@ -17,13 +17,12 @@ module Ecluse.Core.Registry.PyPI.Adapter (
 ) where
 
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
-import Ecluse.Core.Registry.Adapter.Types (
+import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (..),
     AdapterMaintenance (..),
     AdapterMetadata (..),
-    AdapterServe (..),
-    RegistryAdapter (..),
  )
+import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Maintenance (mkNameAlphabet)
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.PyPI.Credential (pypiCredential)

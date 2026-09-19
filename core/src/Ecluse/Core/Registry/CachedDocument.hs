@@ -38,10 +38,12 @@ foldCachedDoc f = \case
     CachedNpm v -> f v
     CachedPyPISimple v -> f v
 
--- | npm's boundary pair. A document another ecosystem injected projects as 'Nothing'.
+{- | npm's boundary pair. Every arm is spelled out, so a third ecosystem fails to compile here
+rather than silently projecting as 'Nothing'.
+-}
 npmCached :: (Value -> CachedDoc, CachedDoc -> Maybe Value)
-npmCached = (CachedNpm, \case CachedNpm v -> Just v; _ -> Nothing)
+npmCached = (CachedNpm, \case CachedNpm v -> Just v; CachedPyPISimple _ -> Nothing)
 
--- | PyPI's boundary pair. A document another ecosystem injected projects as 'Nothing'.
+-- | PyPI's boundary pair, spelled out arm by arm for the same reason as 'npmCached'.
 pypiSimpleCached :: (Value -> CachedDoc, CachedDoc -> Maybe Value)
-pypiSimpleCached = (CachedPyPISimple, \case CachedPyPISimple v -> Just v; _ -> Nothing)
+pypiSimpleCached = (CachedPyPISimple, \case CachedPyPISimple v -> Just v; CachedNpm _ -> Nothing)

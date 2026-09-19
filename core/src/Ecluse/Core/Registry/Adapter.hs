@@ -2,13 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The ecosystem adapter registry: resolve an 'Ecosystem' to its registered capability
-record. It answers which ecosystems this binary supports, independent of what an operator
-configures, which keeps an unsupported ecosystem and an unconfigured one distinct: the first
-resolves to 'Nothing' here, and the second is simply never activated. A __configured__
-ecosystem that resolves to 'Nothing' is the composition root's loud missing-adapter boot
-error, never a half-wired mount. Only that root consumes an adapter: it resolves one per
-activation and carries the capability records onto each pipeline's dependency record whole.
+{- | The ecosystem adapter registry: which ecosystems this build supports, independent of what an
+operator configures. An unsupported ecosystem resolves to 'Nothing' here and a configured one is
+never activated, so the composition root can tell a missing adapter from an unconfigured mount.
 -}
 module Ecluse.Core.Registry.Adapter (
     -- * The capability record
@@ -25,12 +21,19 @@ module Ecluse.Core.Registry.Adapter (
 ) where
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
-import Ecluse.Core.Registry.Adapter.Types
+import Ecluse.Core.Registry.Adapter.Capability (
+    AdapterArtifact (..),
+    AdapterMaintenance (..),
+    AdapterMetadata (..),
+    AdapterPublish (..),
+    ProjectName,
+ )
+import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 
-{- | Resolve an ecosystem to its registered 'RegistryAdapter', or 'Nothing' when this build
-carries none. Every arm is explicit, so an added 'Ecosystem' surfaces here as a compiler error.
+{- | Resolve an ecosystem to its registered 'RegistryAdapter'. Every arm is explicit, so an added
+'Ecosystem' surfaces here as a compiler error rather than a silent 'Nothing'.
 -}
 adapterFor :: Ecosystem -> Maybe RegistryAdapter
 adapterFor = \case

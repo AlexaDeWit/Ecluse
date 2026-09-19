@@ -66,9 +66,7 @@ data AdapterMetadata = AdapterMetadata
         (PackageName -> IO ()) ->
         OriginFor posture ->
         MetadataReads posture
-    {- ^ Bind one origin's metadata reads to their observers, carrying its posture. The caller
-    settles the caching policy with the builders in "Ecluse.Core.Server.Metadata".
-    -}
+    -- ^ Bind one origin's metadata reads to their observers, carrying its posture.
     , metadataAssemble :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
     -- ^ Select exact admitted entries from the supplied snapshots before rendering their wire shape.
     , metadataSerialise :: CachedDoc -> LByteString
@@ -87,16 +85,14 @@ The serve deps and the worker bundle share it ('Ecluse.Core.Server.Context.pdArt
 -}
 data AdapterArtifact = AdapterArtifact
     { artifactByFile :: OriginClient -> PackageName -> Text -> Either UrlFormationError Request
-    {- ^ Build an artifact request by conventional filename path under the origin's base URL:
-    how the proxy addresses a trusted origin.
-    -}
+    -- ^ Address a trusted origin by the conventional filename path under its base URL.
     , artifactByUrl :: Maybe ClientCredential -> Text -> Either UrlFormationError Request
-    {- ^ Build an artifact request at its authoritative upstream URL. It names no origin: the
-    URL is complete on its own, and the mirror worker's fetch has none to give.
+    {- ^ Build the request at the authoritative upstream URL, which names no origin because the
+    mirror worker's fetch has none to give.
     -}
     , artifactHosts :: [Text]
-    {- ^ The ecosystem's canonical artifact hosts, which the same-host tarball gate admits without the
-    operator naming them (PyPI's is @https://files.pythonhosted.org@). Empty for npm, whose artifacts ride the registry host.
+    {- ^ The hosts the same-host tarball gate admits without the operator naming them. Empty for
+    npm, whose artifacts ride the registry host.
     -}
     }
 
@@ -105,16 +101,14 @@ publish transport per mounted ecosystem ('Ecluse.Core.Registry.Publish.newMirror
 -}
 data AdapterPublish = AdapterPublish
     { publishRelay :: OriginClient -> PackageName -> ByteString -> IO (Either FetchFault PublishRelayResponse)
-    {- ^ Relay a client's publish document to the publication target, named as the origin to
-    write through, and return the target's own response.
-    -}
+    -- ^ Relay a client's publish document to the target named as the origin, and return its answer.
     , publishDeclaredNames :: LByteString -> [Text]
-    {- ^ Every package name a publish body declares as its own identity, @[]@ when none is readable.
-    The anti-shadowing guard refuses a declared name that disagrees with the URL-path name.
+    {- ^ Every name a publish body claims, @[]@ when none is readable. The anti-shadowing guard
+    refuses one that disagrees with the URL-path name.
     -}
     , publishCodec :: PublishCodec
-    {- ^ The mirror write's protocol codec: document assembly, request formation, the probe, and the
-    status semantics. The manager, credential mint, and fault classification are the transport's.
+    {- ^ Document assembly, request formation, the probe, and the status semantics. The manager,
+    credential mint, and fault classification are the transport's.
     -}
     }
 
@@ -127,8 +121,8 @@ data AdapterMaintenance = AdapterMaintenance
     , maintenanceVersionDelete :: Maybe VersionDelete
     -- ^ How the protocol deletes one version, where it can.
     , maintenanceAlphabet :: NameAlphabet
-    {- ^ The characters a name may begin with under this ecosystem's own grammar, which is what
-    partitions a store's name space into the buckets a full walk covers one at a time.
+    {- ^ The characters a name may begin with, which partition the store's name space into the
+    buckets a full walk covers one at a time.
     -}
     }
 
@@ -139,8 +133,8 @@ data StoreListing = StoreListing
     { listingRequest :: OriginClient -> Either UrlFormationError Request
     -- ^ Form the listing read against the store.
     , listingParse :: ByteString -> Either ParseError [PackageName]
-    {- ^ Project a listing body onto the names it holds. An entry this ecosystem cannot parse
-    as a name is dropped, because Écluse could serve it no better than it can sweep it.
+    {- ^ Project a listing body onto the names it holds. An unparseable entry is dropped, because
+    Écluse could serve it no better than it can sweep it.
     -}
     }
 
@@ -156,7 +150,7 @@ data VersionDelete = VersionDelete
         Version ->
         RegistryResponse ->
         Either StoreRefusal (NonEmpty Request)
-    {- ^ Form the ordered requests that remove one version, or say why the fetched document
-    admits none. Every request must be sent, in this order, for the version to be gone.
+    {- ^ Form the ordered requests that remove one version, or say why the document admits none.
+    Every one must be sent, in this order, for the version to be gone.
     -}
     }

@@ -39,7 +39,8 @@ module Ecluse.Test.Server.Mount (
 
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 
-import Ecluse.Core.Registry.Adapter.Types (AdapterArtifact (artifactHosts), RegistryAdapter (adapterArtifact, adapterMetadata))
+import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactHosts))
+import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact, adapterMetadata))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Rules (PreparedRule)

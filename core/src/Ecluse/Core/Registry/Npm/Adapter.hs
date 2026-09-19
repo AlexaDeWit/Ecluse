@@ -13,13 +13,12 @@ module Ecluse.Core.Registry.Npm.Adapter (
 ) where
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Registry.Adapter.Types (
+import Ecluse.Core.Registry.Adapter.Capability (
     AdapterArtifact (..),
     AdapterMetadata (..),
     AdapterPublish (..),
-    AdapterServe (..),
-    RegistryAdapter (..),
  )
+import Ecluse.Core.Registry.Adapter.Types (AdapterServe (..), RegistryAdapter (..))
 import Ecluse.Core.Registry.Npm (relayPublishDocument)
 import Ecluse.Core.Registry.Npm.Credential (npmCredential)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedDocument, serialiseMergedDocument)
