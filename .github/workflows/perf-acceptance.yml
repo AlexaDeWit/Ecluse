@@ -42,9 +42,6 @@ jobs:
         with:
           # Restore the warm cabal store (this job compiles the harness).
           cabal-cache: "true"
-          # Restore the shared Nix store but never write it. The CI build job on
-          # main is the single writer. Restore-only.
-          save-nix-store: "false"
 
       # Skipped on an exact cabal-store cache hit: the restored index already covers
       # cabal.project's pinned index-state. `cabal update` otherwise hits Hackage's

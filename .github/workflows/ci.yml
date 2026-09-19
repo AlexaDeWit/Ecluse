@@ -52,8 +52,8 @@ jobs:
     name: Build & compile checks (all targets, residency, doctest)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    # Builds the widest plan, so it is the sole writer of the shared Nix and cabal
-    # caches that every other Haskell job restores.
+    # Builds the widest cabal plan, so it is the sole writer of the cabal store and of
+    # dist-newstyle, which every other Haskell job restores.
     runs-on: ubuntu-latest
     timeout-minutes: 75
     permissions:
@@ -77,11 +77,6 @@ jobs:
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
-
-      # cache-nix-action trims the store with `nix store gc` before saving, and a dev
-      # shell holds no GC root, so without this profile the saved entry loses `.#ci`.
-      - name: Root the .#ci shell for the Nix-store cache save
-        run: nix develop .#ci --profile "$RUNNER_TEMP/ecluse-ci-profile" --command true
 
       # go-task runs several targets in the order given, in one dev shell.
       - name: Build every target, then residency, doctest, and cabal check
@@ -146,7 +141,7 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          save-nix-store: "false" # build is the single writer of the shared store
+          dist-cache: "false" # this job builds instrumented, into dist-coverage
 
       # One key per suite, so each leg is the sole writer of the builddir it produces.
       # The version family bounds a restore, and the commit makes each main save fresh.
@@ -242,7 +237,6 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          save-nix-store: "false" # build is the single writer of the shared store
 
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
@@ -269,15 +263,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # `.#dockerImage` links the Nix-built Haskell closure the docs job roots, and the
+      # suite runs in `.#ci`. The one Nix-store cache carries both.
       - name: Set up toolchain
         id: toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          # `.#dockerImage` links the same Nix-built Haskell closure `checks.docs` does.
-          # On the shared "nix" store this job rebuilt all ~188 of them from source.
-          nix-cache-prefix: nix-docs
-          save-nix-store: "false" # the docs job is the single writer of nix-docs
 
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
@@ -313,8 +305,6 @@ jobs:
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
-        with:
-          save-nix-store: "false" # build is the single writer of the shared store
 
       - name: Static checks
         env:
@@ -335,7 +325,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-latest
-    # Sized for a cold run: any flake.lock change misses the nix-docs cache and
+    # Sized for a cold run: any flake.lock change misses the Nix-store cache and
     # rebuilds the Haskell closure's doc outputs from source, which ran past 100 minutes.
     timeout-minutes: 160
     # `checks.docs`, not `cabal haddock`: the cabal path wants a documentation variant of
@@ -349,13 +339,17 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          # Sole writer of the Nix-built Haskell closure the e2e job also restores. The
-          # cap covers the whole store this job accumulates, ~10.5 GB observed.
-          nix-cache-prefix: nix-docs
-          nix-gc-max-store-size: 13G
+          # Realises the widest Nix closure of any job, so it is the one writer of the
+          # one Nix-store cache. The two roots below are what the saved entry carries.
+          save-nix-store: "true"
 
-      # --out-link, not --no-link: the cache save's `nix store gc` drops every unrooted
-      # path, and this job is the sole writer of the closure the e2e job restores.
+      # A dev shell holds no GC root, so without this profile the save's `nix store gc`
+      # drops `.#ci` and every reader of this entry re-substitutes it.
+      - name: Root the .#ci shell for the Nix-store cache save
+        run: nix develop .#ci --profile "$RUNNER_TEMP/ecluse-ci-profile" --command true
+
+      # --out-link, not --no-link: the same gc drops every unrooted path, and the
+      # Haskell closure this realises is what the e2e job's image build links against.
       - name: Flake checks (Haddock, locks)
         run: >-
           bash scripts/ci-build-diagnostics.sh nix build --out-link "$RUNNER_TEMP/flake-check" --print-build-logs
@@ -384,7 +378,7 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          save-nix-store: "false" # build is the single writer of the shared store
+          dist-cache: "false" # this job builds with -fwrite-ide-info, into dist-analysis
 
       # dist-analysis is deliberately NOT cached. cabal cannot delete a removed module's
       # artifacts, so a restored builddir feeds weeder orphaned .hie for modules that are gone.
@@ -431,7 +425,7 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
-          save-nix-store: "false" # build is the single writer of the shared store
+          dist-cache: "false" # this job builds with -fwrite-ide-info, into dist-analysis
 
       # dist-analysis is not cached here either, for the reason on the weeder job.
       - name: Update package index
