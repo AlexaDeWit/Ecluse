@@ -43,7 +43,7 @@ __only__ at the point of use with 'unSecret'.
 newtype Secret = Secret Text
 
 {- | Constant-time equality over the UTF-8 encoding. The @ECLUSE_SERVER__AUTH_TOKEN@ edge gate
-compares a client's token through it, and a short-circuiting compare would leak the prefix length.
+compares through it, a short-circuit would leak the prefix length. The token length still leaks.
 -}
 instance Eq Secret where
     Secret a == Secret b = BA.constEq (encodeUtf8 a :: ByteString) (encodeUtf8 b :: ByteString)

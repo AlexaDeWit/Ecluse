@@ -330,8 +330,8 @@ every @interval@-th.
 reportWorthy :: Int -> Int -> Bool
 reportWorthy n interval = n == 1 || n `mod` interval == 0
 
-{- | Wrap a bounded drop-newest hand-off buffer in front of a queue, so the serve path's 'enqueue'
-becomes an STM write that never fails. The returned drain loop never returns, so race it.
+{- | Wrap a bounded drop-newest hand-off in front of a queue, so the serve path pays an STM write
+and not the backend producer call, an HTTP round trip on SQS. The drain loop never returns, race it.
 -}
 newEnqueueBuffer ::
     -- | Buffer depth: undelivered jobs the hand-off retains before it drops the newest.

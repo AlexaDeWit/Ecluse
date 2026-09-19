@@ -272,7 +272,7 @@ data Artifact = Artifact
     , artHashes :: [Hash]
     -- ^ Integrity digests. The client verifies the download against these.
     , artSize :: Maybe Int
-    {- ^ The registry-declared size, if reported. Not the tarball byte count: npm populates
+    {- ^ The registry-declared size, if reported. Not always the tarball byte count: npm populates
     it from @dist.unpackedSize@, the size of the unpacked tree.
     -}
     , artInterpreter :: Maybe Text
