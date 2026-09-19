@@ -299,7 +299,6 @@ data Answer = Answer Status [Header] AnswerBody
 
 data AnswerBody
     = MediaAnswer ByteString LByteString
-    | MediaStreamAnswer ByteString StreamingBody
     | RawAnswer LByteString
     | RawStreamAnswer StreamingBody
     | NoAnswerBody
@@ -310,7 +309,6 @@ withoutAnswerBody (Answer status headers body) =
   where
     contentTypeOf = \case
         MediaAnswer media _ -> [(hContentType, media)]
-        MediaStreamAnswer media _ -> [(hContentType, media)]
         RawAnswer _ -> []
         RawStreamAnswer _ -> []
         NoAnswerBody -> []
@@ -318,7 +316,6 @@ withoutAnswerBody (Answer status headers body) =
 answerToResponse :: Answer -> Response
 answerToResponse (Answer status headers body) = case body of
     MediaAnswer media bytes -> responseLBS status ((hContentType, media) : headers) bytes
-    MediaStreamAnswer media stream -> responseStream status ((hContentType, media) : headers) stream
     RawAnswer bytes -> responseLBS status headers bytes
     RawStreamAnswer stream -> responseStream status headers stream
     NoAnswerBody -> responseLBS status headers ""

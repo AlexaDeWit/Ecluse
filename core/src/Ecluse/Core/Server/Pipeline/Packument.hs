@@ -342,8 +342,6 @@ projectDecisions info =
   where
     versionVerdict (ver, details) d = VersionVerdict ver (serveDecisionOf details d)
 
-newtype ServedBody = ServedBody {servedDoc :: CachedDoc}
-
 packumentPlan :: [Contribution] -> Map Text PackageDetails -> Maybe MergePlan
 packumentPlan sources deniedEvidence = do
     plan <- mergePackuments [(srcProvenance s, Snapshot (srcDigest s) (srcInfo s)) | s <- sources]
@@ -400,14 +398,14 @@ servedBytes rt deps sources plan etag =
     resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag etag) $
         markRenderEscape $
             pure $!
-                LBS.toStrict (metadataSerialise (pdMetadata deps) (servedDoc (renderServedBody deps sources plan)))
+                LBS.toStrict (metadataSerialise (pdMetadata deps) (renderServedBody deps sources plan))
   where
     markRenderEscape :: IO ByteString -> IO ByteString
     markRenderEscape render = render `catchAny` (throwIO . RenderEscape)
 
-renderServedBody :: PackumentDeps -> [Contribution] -> MergePlan -> ServedBody
+renderServedBody :: PackumentDeps -> [Contribution] -> MergePlan -> CachedDoc
 renderServedBody deps sources plan =
-    ServedBody (metadataAssemble (pdMetadata deps) (pdMountBaseUrl deps) bySource plan (baseDocument sources))
+    metadataAssemble (pdMetadata deps) (pdMountBaseUrl deps) bySource plan (baseDocument sources)
   where
     bySource :: Map SourceId (Snapshot CachedDoc)
     bySource = Map.fromList (zip [0 ..] [Snapshot (srcDigest source) (srcValue source) | source <- sources])
