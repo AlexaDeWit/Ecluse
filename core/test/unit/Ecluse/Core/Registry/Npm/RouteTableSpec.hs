@@ -18,10 +18,11 @@ compare directly:
   and the __denials__. A path-confusion artifact name claims no route and falls through to
   the @404@.
 
-* __What a route's captures parse to__ ('takePackage', 'tarballCoordinate'). This is where
-  the scoped-name decoding, the component-safety gate, and the artifact coordinate live.
-  The table references them by name, so these examples assert them directly rather than
-  through the router.
+* __What a route's captures parse to__ ('takePackage', and the artifact coordinate the
+  tarball route's capture reads). The reference parses both for itself, so the generated
+  requests hold the scoped-name decoding, the component-safety gate, and the coordinate
+  against it. The worked examples of each parse live in
+  "Ecluse.Core.Registry.Npm.RouteSpec".
 
 The reference encodes the grammar exactly, including the two rules asserted directly
 below:
@@ -44,11 +45,9 @@ import Test.Hspec.QuickCheck (modifyMaxSuccess)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
-import Ecluse.Core.Registry.Npm.Route.Internal (NpmCap (NpmFilename, NpmPackage), npmRoutes, takePackage, tarballCoordinate)
+import Ecluse.Core.Registry.Npm.Route.Internal (NpmCap (NpmFilename, NpmPackage), npmRoutes, takePackage)
 import Ecluse.Core.Server.Path (isSafeComponent)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
-import Ecluse.Core.Version (mkVersion)
-import Ecluse.Test.Package (unsafeFilename)
 import Ecluse.Test.Registry.Npm (genPathSegments)
 import Ecluse.Test.Server.Route (claimsEveryRendering)
 
@@ -107,35 +106,8 @@ spec = do
                     claimed === referenceRouteId method segments
 
     describe "the routes it claims" $ do
-        -- Worked examples: also documentation of the grammar the table encodes.
-        it "GET /-/ping is the liveness probe" $
-            matchedId methodGet ["-", "ping"] `shouldBe` Just (RouteName "ping")
-        it "GET /-/v1/search is the (unsupported) search route" $
-            matchedId methodGet ["-", "v1", "search"] `shouldBe` Just (RouteName "search")
-        it "GET /-/package/{pkg}/dist-tags is the (unsupported) dist-tag list route" $
-            matchedId methodGet ["-", "package", "lodash", "dist-tags"]
-                `shouldBe` Just (RouteName "distTagList")
-        it "PUT /-/package/{pkg}/dist-tags/{tag} is the (unsupported) dist-tag set route" $
-            matchedId methodPut ["-", "package", "lodash", "dist-tags", "latest"]
-                `shouldBe` Just (RouteName "distTagSet")
-        it "DELETE /-/package/{pkg}/dist-tags/{tag} is the (unsupported) dist-tag removal route" $
-            matchedId methodDelete ["-", "package", "lodash", "dist-tags", "latest"]
-                `shouldBe` Just (RouteName "distTagRemove")
-        it "GET /{package} is a packument read" $
-            matchedId methodGet ["lodash"] `shouldBe` Just (RouteName "packument")
-        it "GET /{package}/-/{file}.tgz is an artifact read" $
-            matchedId methodGet ["lodash", "-", "lodash-1.0.0.tgz"] `shouldBe` Just (RouteName "tarball")
-        it "PUT /{package} is a publish" $
-            matchedId methodPut ["lodash"] `shouldBe` Just (RouteName "publish")
         it "a HEAD reads like a GET" $
             matchedId methodHead ["lodash"] `shouldBe` Just (RouteName "packument")
-        it "an unknown meta-route denies" $
-            matchedId methodGet ["-", "bogus"] `shouldBe` Nothing
-
-        -- Path confusion is a denial: the router fabricates no coordinate from a mismatched
-        -- artifact basename.
-        it "an artifact whose basename is for another package is not claimed (path confusion)" $
-            matchedId methodGet ["lodash", "-", "evil-1.0.0.tgz"] `shouldBe` Nothing
 
         -- "-" is the reserved meta-route prefix, and npm cannot hold a package named "-".
         it "a lone \"-\" is never a package, on any method" $ do
@@ -149,28 +121,6 @@ spec = do
             matchedId methodPost ["lodash"] `shouldBe` Nothing
             matchedId methodDelete ["lodash", "-", "lodash-1.0.0.tgz"] `shouldBe` Nothing
             matchedId methodPost ["-", "package", "lodash", "dist-tags", "latest"] `shouldBe` Nothing
-
-    describe "what its captures parse to" $ do
-        it "normalises both scoped-name wire encodings to the same package" $
-            takePackage ["@scope", "pkg"] `shouldBe` takePackage ["@scope/pkg"]
-        it "parses an unscoped package unit" $
-            takePackage ["lodash"] `shouldBe` Just (mkPackageName Npm Nothing "lodash", [])
-        it "parses a scoped package unit, leaving the tail" $
-            takePackage ["@babel/core", "-", "core-7.0.0.tgz"]
-                `shouldBe` Just (mkPackageName Npm (Just (mkScope "babel")) "core", ["-", "core-7.0.0.tgz"])
-        it "refuses a traversal component" $
-            takePackage [".."] `shouldBe` Nothing
-
-        it "reads the version out of an artifact name, preserving the file verbatim" $
-            tarballCoordinate (mkPackageName Npm Nothing "lodash") "lodash-1.0.0.tgz"
-                `shouldBe` Just (mkVersion Npm "1.0.0", unsafeFilename "lodash-1.0.0.tgz")
-        it "drops the scope from a scoped package's artifact name, as npm does" $
-            tarballCoordinate (mkPackageName Npm (Just (mkScope "babel")) "code-frame") "code-frame-7.0.0.tgz"
-                `shouldBe` Just (mkVersion Npm "7.0.0", unsafeFilename "code-frame-7.0.0.tgz")
-        it "refuses an artifact name for a different package (path confusion)" $
-            tarballCoordinate (mkPackageName Npm Nothing "lodash") "evil-1.0.0.tgz" `shouldBe` Nothing
-        it "refuses a bare .tgz with no version" $
-            tarballCoordinate (mkPackageName Npm Nothing "lodash") "lodash-.tgz" `shouldBe` Nothing
 
 -- Generators -----------------------------------------------------------------
 
