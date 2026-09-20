@@ -986,6 +986,7 @@ test-suite ecluse-unit
     Ecluse.Composition.ExecutableSpec
     Ecluse.Composition.MaintenanceSpec
     Ecluse.Composition.MemoryPlan.OverrideSpec
+    Ecluse.Composition.MemoryPlan.ShedSpec
     Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec
     Ecluse.Composition.MirrorRoleSpec

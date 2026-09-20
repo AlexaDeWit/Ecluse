@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Memory plan defaults, explicit pins, and tenant shedding.
 module Ecluse.Composition.MemoryPlanSpec (spec) where
 
 import Data.Text qualified as T
@@ -26,6 +27,7 @@ import Ecluse.Config (CacheSettings (..), LimitsSettings (..), QueueSettings (..
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup, FromRts))
 
+-- | Verify the resolved plan and its operator-facing report.
 spec :: Spec
 spec = describe "resolveMemoryPlan" $ do
     it "falls back to the shipped bounds with no heap-ceiling datapoint" $ do
@@ -151,6 +153,7 @@ spec = describe "resolveMemoryPlan" $ do
             mpOverrideViolations plan `shouldBe` []
             mpAdmissionCapacity plan `shouldBe` 40
             mpCacheAggregateBytes plan `shouldBe` 0
+            mpCacheMaxEntries plan `shouldBe` 256
             mpDegradations plan `shouldSatisfy` any (T.isInfixOf "irreducible minimum")
 
         it "sheds the capability count when the nursery is the pressure" $ do
@@ -216,7 +219,7 @@ spec = describe "resolveMemoryPlan" $ do
                        , "memory plan: request byte cap 104857600" <> ceilingClause
                        , "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
                        , "memory plan: cache byte bound 257698038" <> ceilingClause
-                       , "memory plan: cache entry bound 983" <> ceilingClause
+                       , "memory plan: cache entry bound 15728" <> ceilingClause
                        , "memory plan: publish aggregate 128849019" <> ceilingClause
                        , "memory plan: memory-queue depth 41943" <> ceilingClause
                        , "memory plan: mirror artifact byte cap 8589934" <> ceilingClause
