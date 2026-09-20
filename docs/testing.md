@@ -77,9 +77,10 @@ Metadata probes use a fresh child process for each corpus package and retained s
 They authenticate every capture against the byte count and SHA-256 in `bench/corpus/pins.json`.
 The complete corpus must include a capture above the previous 3,687,514-byte maximum.
 The four shapes are the original strict bytes, a decoded `Value`, the production typed
-projection alone, and the shared `CacheEntry` containing the typed projection, raw document,
-and source digest. The combined measurement preserves sharing, so adding the two separate
-measurements does not give its size.
+projection alone, and the shared `CacheEntry` containing the typed projection, serving document,
+and source digest. npm serving documents retain only supported fields. The raw shape remains
+the complete decoded source for comparison. The combined measurement preserves sharing, so adding
+the two separate measurements does not give its size.
 
 Each child first prepares and releases one copy to initialise runtime state before its baseline.
 It records a major-GC baseline, roots a newly prepared shape with a stable pointer,
@@ -108,26 +109,37 @@ peak or a bound on transient buffers. The probes use production projection funct
 default structural limits. They do not execute the HTTP bounded read or prove that shipping
 response limits admit each capture.
 
-The retained-byte gate uses the following corpus envelopes. The baseline used all nine npm
-and three PyPI captures with the pinned GHC 9.10.3 runtime, one capability, and a warmed process.
+The retained-byte gate uses the following corpus envelopes. The calibration at
+`009c33d81964f868783ed1cc0a6e3ec75df3b130` used all nine npm and three PyPI captures with
+GHC 9.10.3, Cabal `-O1`, one capability, and a warmed process.
 These are regression limits for authenticated fixtures, not a universal metadata expansion model.
 
-| Retained shape | Observed maximum bytes per wire byte | Package | Gate | Margin over maximum |
-|---|---:|---|---:|---:|
-| Wire bytes | 1.000880175 | lodash | 1.25 | 24.9% |
-| Raw `Value` | 6.479016838 | express | 7 | 8.0% |
-| Typed projection | 1.911619444 | requests (PyPI) | 2.25 | 17.7% |
-| Shared cache entry | 6.723927108 | express | 7.5 | 11.5% |
+| Ecosystem | Retained shape | Maximum heap bytes per source byte | Package | Gate | Margin |
+|---|---|---:|---|---:|---:|
+| npm | Wire bytes | 1.001106275 | lodash | 1.25 | 24.9% |
+| npm | Raw `Value` | 6.479086061 | express | 7 | 8.0% |
+| npm | Typed projection | 0.584934090 | react | 0.75 | 28.2% |
+| npm | Shared cache entry | 4.428914846 | typescript | 5 | 12.9% |
+| PyPI | Wire bytes | 1.079997401 | requests | 1.25 | 15.7% |
+| PyPI | Raw `Value` | 4.120672117 | boto3 | 7 | 69.9% |
+| PyPI | Typed projection | 1.832921757 | requests | 2.25 | 22.8% |
+| PyPI | Shared cache entry | 5.169352742 | requests | 7.5 | 45.1% |
 
-The 48 baseline rows left -8,976 to 10,936 bytes above their warmed baselines after release.
-The 16 KiB release tolerance leaves 5,448 bytes above the observed maximum.
+Only the npm typed and shared gates changed with the compact representation.
+Each denominator is the original authenticated source size, including omitted fields.
+For example, the TypeScript shared shape retains 69,507,208 heap bytes from 15,693,959 source bytes.
+Its re-encoded serving document is 10,363,033 bytes. That encoded size and the source probe's
+`compact_byte_estimate` are different from measured retained heap, and neither is this gate's denominator.
+
+The 48 calibration rows left -8,976 to 11,752 bytes above their warmed baselines after release.
+The 16 KiB release tolerance leaves 4,632 bytes above the observed maximum.
 The second release condition requires at least 90% of each held growth to disappear.
 Signed integer differences preserve samples that fall below baseline without unsigned wraparound.
 
 The production expansion factor stays at 7.5, which covers these retained samples.
 The corpus does not prove a universal bound or justify reducing that factor.
 Every measured shared entry exceeds the 256 KiB typical-entry assumption.
-The smallest warmed entry is 636,232 bytes for PyPI requests.
+The smallest warmed entry is 515,568 bytes for npm lodash.
 These twelve captures do not define a workload distribution, so their mean cannot justify
 a replacement for `cacheEntryExpectedBytes` or its planning assumptions.
 

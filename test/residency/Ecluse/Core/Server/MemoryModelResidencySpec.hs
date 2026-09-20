@@ -43,21 +43,23 @@ spec = describe "metadata retained heap" $ do
                 unless (status == ExitSuccess) (expectationFailure (show status <> ": " <> errors))
                 result <- either fail pure (eitherDecodeStrict (encodeUtf8 (toText output)))
                 report package digest shape result
-                checkMeasurement shape size result
+                checkMeasurement (pkgEcosystem (cpPackage package)) shape size result
 
-checkMeasurement :: Shape -> Int -> Measurement -> Expectation
-checkMeasurement shape size result = do
+checkMeasurement :: Ecosystem -> Shape -> Int -> Measurement -> Expectation
+checkMeasurement ecosystem shape size result = do
     let retained = toInteger (heldLive result) - toInteger (baselineLive result)
         residual = max 0 (toInteger (releasedLive result) - toInteger (baselineLive result))
     wireBytes result `shouldBe` size
     retained `shouldSatisfy` (> 0)
     residual `shouldSatisfy` (<= 16 * 1024)
     (10 * residual) `shouldSatisfy` (<= retained)
-    (4 * retained) `shouldSatisfy` (<= envelopeQuarters shape * toInteger size)
+    (4 * retained) `shouldSatisfy` (<= envelopeQuarters ecosystem shape * toInteger size)
     when (shape == Typed || shape == Shared) (versions result `shouldSatisfy` (> 0))
 
-envelopeQuarters :: Shape -> Integer
-envelopeQuarters = \case
+envelopeQuarters :: Ecosystem -> Shape -> Integer
+envelopeQuarters Npm Typed = 3
+envelopeQuarters Npm Shared = 20
+envelopeQuarters _ shape = case shape of
     Wire -> 5
     Raw -> 28
     Typed -> 9
