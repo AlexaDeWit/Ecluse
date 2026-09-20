@@ -34,7 +34,7 @@ import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
-import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits, ecosystemArtifactAuthorities)
+import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits, ecosystemArtifactAuthorities)
 import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), StoreBudget (..), weighCacheEntry)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.MemoryModel (contractResidentBytes, expandWireBytes)
@@ -62,7 +62,7 @@ patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
                 requestTrace <- either benchFail pure (makeTrace patternKind patternKnobs (map cpName packages))
                 wireBytes <- either benchFail pure (workingBytes (Map.map (fromIntegral . LBS.length) captures) requestTrace)
                 let largest = foldl' max 0 (map (fromIntegral . LBS.length) (Map.elems captures))
-                measuredBodies <- newIORef (maxBodyBytes defaultLimits, wireBytes, largest, 0)
+                measuredBodies <- newIORef (maxMetadataBytes defaultLimits, wireBytes, largest, 0)
                 let defaultFull = sbMaxBytes (cacheFullBudget defaultCacheConfig)
                     scanDefault = min defaultFull (max 1 (expandWireBytes wireBytes `div` 2))
                 fullCapacity <- readKnob "BENCH_PATTERN_FULL_BYTES" (if patternKind == Scan then scanDefault else defaultFull)
@@ -83,7 +83,7 @@ patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
                             servedBodies = Map.map (rebaseAuthority authority (localhost publicPort)) captures
                             servedSizes = Map.map (fromIntegral . LBS.length) servedBodies
                             servedLargest = foldl' max 0 (Map.elems servedSizes)
-                            bodyCap = if defaultCap then maxBodyBytes defaultLimits else max (maxBodyBytes defaultLimits) servedLargest
+                            bodyCap = if defaultCap then maxMetadataBytes defaultLimits else max (maxMetadataBytes defaultLimits) servedLargest
                         servedWorking <- either benchFail pure (workingBytes servedSizes requestTrace)
                         fullWeights <-
                             traverse
@@ -94,7 +94,7 @@ patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
                                 )
                                 [package | package <- packages, cpName package `elem` rtNames requestTrace]
                         writeIORef measuredBodies (bodyCap, servedWorking, servedLargest, sum fullWeights)
-                        pure base{pdLimits = (pdLimits base){maxBodyBytes = bodyCap}, pdNow = pure evaluationTime}
+                        pure base{pdLimits = (pdLimits base){maxMetadataBytes = bodyCap}, pdNow = pure evaluationTime}
                 deadlineMicros <- readKnob "BENCH_PATTERN_DEADLINE_US" (120_000_000 :: Int)
                 when (deadlineMicros <= 0) (benchFail "BENCH_PATTERN_DEADLINE_US must be positive")
                 selected <- lookupEnv "BENCH_PATTERN_SELECTED_VERSION"
@@ -185,7 +185,7 @@ evidence meter upstreamCount config rawBytes measuredBodies knobs requestTrace s
                 then "Full retention intentionally disabled by requested budget zero. The existing store clamps this to one byte, below every captured full candidate. Single-flight remains active. These retention refusals do not indicate unusually large documents."
                 else "Full retention enabled under the stated budget."
             , "Raw captured working bytes: " <> show rawBytes <> " B. Served stub working bytes: " <> show wireBytes <> " B. Selected-version mode: " <> maybe "none" toText selected <> "."
-            , "Body cap: " <> show bodyCap <> " B. Default cap: " <> show (maxBodyBytes defaultLimits) <> " B. Largest served stub body: " <> show largest <> " B. Default would refuse largest: " <> show (largest > maxBodyBytes defaultLimits) <> "."
+            , "Body cap: " <> show bodyCap <> " B. Default cap: " <> show (maxMetadataBytes defaultLimits) <> " B. Largest served stub body: " <> show largest <> " B. Default would refuse largest: " <> show (largest > maxMetadataBytes defaultLimits) <> "."
             , "Wire working set / full-store wire-equivalent budget: " <> show wireBytes <> " / " <> show (contractResidentBytes (sbMaxBytes (cacheFullBudget config))) <> " B. The resident estimate excludes retained artifact keys."
             , "Public upstream requests (metadata / artifact): " <> show metadataRequests <> " / " <> show artifactRequests <> ". Selected-version warm-full shortcuts: " <> (if metricsAvailable then show fullHits else "unavailable") <> ". These shortcuts are separate from version-store resolutions."
             , if metricsAvailable then renderStoreEvidence stores else "Cache evidence unavailable: this build lacks the collapse and refusal telemetry catalogue. Full-store candidate accounted bytes / capacity: " <> show fullWorkingBytes <> " / " <> show (max 1 (sbMaxBytes (cacheFullBudget config))) <> "."
@@ -226,7 +226,7 @@ accountedFullBytes ecosystem upstreamBase package bytes = do
                 else second (fst pypiSimpleCached) <$> projectPyPIIndex defaultLimits (cpPackage package) raw
     let hosts = if ecosystem == Npm then npmArtifactHosts else pypiArtifactHosts
         located = enforceArtifactLocations (ecosystemArtifactAuthorities hosts) upstreamBase info
-    pure (weighCacheEntry (CacheEntry located document (digestOf raw)))
+    pure (weighCacheEntry (CacheEntry located document (fromIntegral (LBS.length bytes)) (digestOf raw)))
 
 selectArtifacts :: Ecosystem -> Maybe String -> Map Text Text -> [CorpusPackage] -> Map Text LByteString -> Either Text (Map Text SelectedArtifact)
 selectArtifacts ecosystem selected pins packages captures =
