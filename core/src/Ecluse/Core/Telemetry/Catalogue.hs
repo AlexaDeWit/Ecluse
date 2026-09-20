@@ -79,7 +79,7 @@ data MetricName
       MirrorJobsProcessed
     | -- | @ecluse.mirror.publish.duration@: mirror publish latency (histogram).
       MirrorPublishDuration
-    | -- | @ecluse.dredger.versions@: mirror-store versions one sweep cycle disposed of, by result (counter).
+    | -- | @ecluse.dredger.versions@: versions one sweep cycle disposed of, by target and result (counter).
       DredgerVersions
     | -- | @ecluse.credential.refresh@: credential refreshes by result and provider (counter).
       CredentialRefresh
