@@ -201,6 +201,38 @@ Read a red result according to its measurement:
 Budget values and calibration belong in [acceptance/criteria.json](../acceptance/criteria.json).
 Corpus pins and capture policy belong in [bench/corpus/pins.json](../bench/corpus/pins.json).
 
+### Benchmark captures
+
+The catalogue records complete npm packuments and PyPI PEP 691 Simple JSON snapshots.
+Each capture keeps the upstream response body unchanged, including prereleases, operational fields,
+and PyPI serial metadata. The catalogue records its source, capture time, actual media type, byte
+size, and SHA-256 digest. Requests use identity content encoding, so these bytes match decompressed
+JSON input rather than compressed transport traffic.
+
+Run `task gen-bench-corpus` only for a deliberate recapture. Version pins identify workloads and do
+not limit the captured releases. Run `BENCH_CORPUS_VERIFY=1 task gen-bench-corpus` to check committed
+sizes, hashes, provenance fields, and basic document shape without network access.
+The harness separately validates each capture through the production adapter before measurement.
+
+| Group | Capture use |
+|---|---|
+| `wire+project (per package)` | Complete bodies feed decoding and production full-document projection on every iteration. |
+| `single-version metadata (per package)` | Complete bodies feed production full-document and selective projections. |
+| Realistic serve, merge, rules, and version groups | Inputs derive from complete captures, with preparation outside the measured operation. |
+| Load metadata and cache scenarios | Fixture upstreams retain all captured metadata and rewrite artifact authorities for the local harness. These are derived bodies, not byte-identity measurements. |
+| Scaled groups | Synthetic bodies measure growth separately and do not establish wire-to-resident ratios. |
+
+The projection groups measure decoding from held bytes, including the production structural guards.
+They exclude fetch-wrapper hashing, the streamed body-size guard, network, and cache lookup.
+The full-manifest digest lives in `fetchManifestWith`, outside these measured projection calls.
+Work-per-request reports do not provide an automatic comparison against main or a fixed control group.
+Replacing trimmed captures breaks historical comparability, so comparisons must use the same capture hashes.
+
+The wire-to-resident factor still requires measurements of raw and typed retention on these bodies
+under [#1421](https://github.com/AlexaDeWit/Ecluse/issues/1421).
+Capture byte sizes alone do not establish an expansion ratio, and this corpus change does not
+recalibrate `expandWireBytes` or acceptance budgets.
+
 ## Onboarding an ecosystem
 
 An ecosystem counts as onboarded when it supplies each item below for its supported operations.
