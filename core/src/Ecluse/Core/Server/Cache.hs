@@ -57,14 +57,8 @@ import Ecluse.Core.Server.Cache.Store (
  )
 import Ecluse.Core.Server.Cache.VersionWeight (weighEntryKey, weighVersion)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Telemetry.Record (
-    MetricsPort,
-    mpAssembledCacheResidentBytes,
-    mpCacheEntries,
-    mpCacheRequest,
-    mpCacheResidentBytes,
-    mpVersionCacheResidentBytes,
- )
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- | Limits for one store's entry count and accounted bytes.
@@ -134,7 +128,6 @@ keyText (Source source) name =
         <> "\x1f"
         <> TS.toText (pkgCanonical name)
 
--- | Project a 'Source' and a 'PackageName' to their full-packument cache key.
 cacheKey :: Source -> PackageName -> CacheKey
 cacheKey source name = CacheKey (keyText source name)
 
@@ -170,10 +163,8 @@ resolveMetadata metrics cache source name =
     resolveSingleFlight
         (pure ())
         (mpCacheRequest metrics)
-        ( \occ -> do
-            mpCacheEntries metrics (occEntries occ)
-            mpCacheResidentBytes metrics (occBytes occ)
-        )
+        (recordFullOccupancy metrics)
+        (mpCacheRefused metrics Metric.FullStore)
         (mcFull cache)
         (cacheKey source name)
 
@@ -182,8 +173,9 @@ resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Versi
 resolveVersion metrics cache source name version =
     resolveSingleFlight
         (pure ())
-        (const pass)
+        (mpVersionCacheRequest metrics)
         (mpVersionCacheResidentBytes metrics . occBytes)
+        (mpCacheRefused metrics Metric.VersionStore)
         (mcVersion cache)
         (versionKey source name version)
 
@@ -193,16 +185,24 @@ resolveAssembled metrics cache key render =
     either absurd id
         <$> resolveSingleFlight
             (pure ())
-            (const pass)
+            (mpAssembledCacheRequest metrics)
             (mpAssembledCacheResidentBytes metrics . occBytes)
+            (mpCacheRefused metrics Metric.AssembledStore)
             (mcAssembled cache)
             key
             (Right <$> render)
 
--- | Read full metadata without fetching or refreshing recency.
-cachedMetadata :: MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
-cachedMetadata cache source name = lookupStore (mcFull cache) (cacheKey source name)
+-- | Probe full metadata without fetching or refreshing recency. Report expiry but no request outcome.
+cachedMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
+cachedMetadata metrics cache source name = lookupStore (recordFullOccupancy metrics) (mcFull cache) (cacheKey source name)
 
--- | Read and refresh recency. A read whose 'vrVersion' is 'Nothing' is a cached absence.
-cachedVersion :: MetadataCache -> Source -> PackageName -> Version -> IO (Maybe VersionRead)
-cachedVersion cache source name version = lookupStoreTouching (mcVersion cache) (versionKey source name version)
+{- | Probe a version and refresh recency. Report expiry but no request outcome.
+A read whose 'vrVersion' is 'Nothing' is a cached absence.
+-}
+cachedVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Maybe VersionRead)
+cachedVersion metrics cache source name version = lookupStoreTouching (mpVersionCacheResidentBytes metrics . occBytes) (mcVersion cache) (versionKey source name version)
+
+recordFullOccupancy :: MetricsPort -> CacheOccupancy -> IO ()
+recordFullOccupancy metrics occ = do
+    mpCacheEntries metrics (occEntries occ)
+    mpCacheResidentBytes metrics (occBytes occ)

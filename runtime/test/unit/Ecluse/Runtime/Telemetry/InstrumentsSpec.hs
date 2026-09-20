@@ -17,11 +17,12 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisoryNonePublished, AdvisoryRefused, AdvisorySwapped, AdvisoryUnchanged),
     BreakerSource (CredentialMint, EffectfulRule),
     BreakerState (Closed, HalfOpen, Open),
-    CacheResult (Hit, Miss),
+    CacheResult (Collapsed, Hit, Miss),
+    CacheStore (AssembledStore, FullStore, VersionStore),
     Cause (Connection, Decode, Timeout),
     CredentialResult (RefreshFailed, Refreshed),
     Decision (Admit, Deny, Unavailable),
-    Label (LEcosystem, LProvider),
+    Label (LCacheResult, LCacheStore, LEcosystem, LProvider),
     MirrorResult (Failed, Published),
     Provider (ProviderCodeArtifact, ProviderRegistry, ProviderVerdaccio),
     ReasonClass (ReasonMissingIntegrity, ReasonPolicy),
@@ -30,10 +31,11 @@ import Ecluse.Core.Telemetry.Metrics (
     Upstream (Private, Public),
     metricAttributes,
  )
-import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (acmpCompileAccepted, acmpCompileDropped, acmpCompileRun), timedSeconds)
+import Ecluse.Core.Telemetry.Record (AdvisoryCompileMetricsPort (acmpCompileAccepted, acmpCompileDropped, acmpCompileRun), MetricsPort (..), timedSeconds)
 import Ecluse.Runtime.Telemetry (telemetryDisabled)
 import Ecluse.Runtime.Telemetry.Instruments.Internal (
     advisoryCompileMetricsPortOf,
+    metricsPortOf,
     newMetrics,
     recordAdvisoryCompileAccepted,
     recordAdvisoryCompileDropped,
@@ -60,7 +62,7 @@ import Ecluse.Runtime.Telemetry.Instruments.Internal (
     reportAdvisoryDatabaseAge,
     reportAdvisorySourceAge,
  )
-import Ecluse.Runtime.Test.Telemetry (gaugePoints, withTestTelemetry)
+import Ecluse.Runtime.Test.Telemetry (gaugePoints, sumPoints, withTestTelemetry)
 import Ecluse.Test.Support (newTestClock)
 
 {- | Tests that the instrument handle is inert when telemetry is off: every @record*@ helper
@@ -68,6 +70,20 @@ is total and silent against the no-op meter, so the hot path can instrument unco
 -}
 spec :: Spec
 spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ do
+    it "exports distinct store outcomes, refusals and warm-full selected reads" $
+        withTestTelemetry $ \telemetry meterEnv -> do
+            port <- metricsPortOf <$> newMetrics telemetry
+            for_ [mpCacheRequest port, mpVersionCacheRequest port, mpAssembledCacheRequest port] $ \recordRequest ->
+                traverse_ recordRequest [Hit, Miss, Collapsed]
+            traverse_ (mpCacheRefused port) [FullStore, VersionStore, AssembledStore]
+            mpVersionCacheFullHit port
+            for_ ["ecluse.metadata_cache.requests", "ecluse.metadata_cache.version.requests", "ecluse.metadata_cache.assembled.requests"] $ \name -> do
+                points <- sumPoints name meterEnv
+                points `shouldMatchList` [(metricAttributes [LCacheResult result], 1) | result <- [Hit, Miss, Collapsed]]
+            refused <- sumPoints "ecluse.metadata_cache.refused" meterEnv
+            refused `shouldMatchList` [(metricAttributes [LCacheStore store], 1) | store <- [FullStore, VersionStore, AssembledStore]]
+            sumPoints "ecluse.metadata_cache.version.full_hits" meterEnv `shouldReturn` [(metricAttributes [], 1)]
+
     it "collects a decreasing lifetime, floors fractional seconds and retains zero after expiry" $
         withTestTelemetry $ \telemetry meterEnv -> do
             let start = UTCTime (fromGregorian 2026 9 12) 0
@@ -100,7 +116,7 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         recordUpstreamFetch m Public Status2xx 0.04
         recordUpstreamFetch m Private Status5xx 0.5
         recordUpstreamFetchError m Public Connection
-        traverse_ (recordCacheRequest m) [Hit, Miss]
+        traverse_ (recordCacheRequest m) [Hit, Miss, Collapsed]
         recordCacheEntries m 0
         recordCacheEntries m 1024
         recordMirrorEnqueued m

@@ -461,7 +461,7 @@ sharedCacheSpec = describe "the shared metadata cache across the two origins" $
 
 -- Whether the shared cache holds a full-document entry under an origin's own key.
 cachedUnder :: ServeRuntime -> RegistryUrl -> IO Bool
-cachedUnder rt baseUrl = isJust <$> cachedMetadata (srMetadataCache rt) (Source (registryUrlText baseUrl)) leftpadName
+cachedUnder rt baseUrl = isJust <$> cachedMetadata noopMetricsPort (srMetadataCache rt) (Source (registryUrlText baseUrl)) leftpadName
 
 withConflictOrigins :: Application -> Application -> (ServeRuntime -> PackumentDeps -> IO Int -> IORef Int -> IO ()) -> IO ()
 withConflictOrigins public private action = do

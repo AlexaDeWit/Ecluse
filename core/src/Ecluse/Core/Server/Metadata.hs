@@ -133,24 +133,21 @@ manifestLeader wiring name = do
     recordedFetch (cwMetrics wiring) (cwUpstream wiring) $
         traverse (entryOfManifest wiring name) =<< loggingFailure wiring name (cwFetch wiring name)
 
--- Report the entries the projection dropped, then hold the fetched document as a cache entry.
 entryOfManifest :: ClientWiring -> PackageName -> Manifest -> IO CacheEntry
 entryOfManifest wiring name manifest = do
     let invalid = infoInvalidEntries (manifestInfo manifest)
     unless (null invalid) (cwLogInvalid wiring name invalid)
     pure (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestDigest manifest))
 
-{- The single-version hybrid: the small version cache, then the warm full cache read-only, then
-a cold selective fetch. Uncached, it is the raw selective fetch. -}
 resolveVersionHybrid :: ClientWiring -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 resolveVersionHybrid wiring name version = case cwCaching wiring of
     Uncached -> versionLeader wiring name version
     Cached cache source ->
-        cachedVersion cache source name version >>= \case
-            Just versionRead -> pure (Right versionRead)
+        cachedVersion (cwMetrics wiring) cache source name version >>= \case
+            Just versionRead -> Right versionRead <$ mpVersionCacheRequest (cwMetrics wiring) Metric.Hit
             Nothing ->
-                cachedMetadata cache source name >>= \case
-                    Just entry -> pure (Right (readOfEntry (cwSelectRaw wiring) version entry))
+                cachedMetadata (cwMetrics wiring) cache source name >>= \case
+                    Just entry -> Right (readOfEntry (cwSelectRaw wiring) version entry) <$ mpVersionCacheFullHit (cwMetrics wiring)
                     Nothing -> resolveVersion (cwMetrics wiring) cache source name version (versionLeader wiring name version)
 
 versionLeader :: ClientWiring -> PackageName -> Version -> IO (Either MetadataError VersionRead)
@@ -159,7 +156,6 @@ versionLeader wiring name version = do
     recordedFetch (cwMetrics wiring) (cwUpstream wiring) $
         loggingFailure wiring name (cwFetchVersion wiring name version)
 
--- Report a leader fetch's failure on the way out, so both leaders log it identically.
 loggingFailure :: ClientWiring -> PackageName -> IO (Either MetadataError a) -> IO (Either MetadataError a)
 loggingFailure wiring name action = do
     result <- action
@@ -170,9 +166,7 @@ loggingFailure wiring name action = do
 selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
 selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
 
-{- | Project a held entry onto one version's read, so a warm full-cache hit answers as a selective
-read would: the pair's two sides both come from the one entry.
--}
+-- The typed view and raw version object must come from the same retained document.
 readOfEntry :: (Version -> CachedDoc -> Maybe CachedDoc) -> Version -> CacheEntry -> VersionRead
 readOfEntry selectRaw version entry =
     VersionRead
@@ -190,8 +184,7 @@ entryToManifest entry =
         , manifestDigest = entryDigest entry
         }
 
-{- Record one upstream metadata fetch around a leader action: its latency on success, or the
-bounded error cause otherwise. The leader runs only on a miss, so this never meters a cache hit. -}
+-- Only leaders record upstream work, so followers and retention hits do not inflate it.
 recordedFetch :: MetricsPort -> Metric.Upstream -> IO (Either MetadataError a) -> IO (Either MetadataError a)
 recordedFetch metrics upstream action = do
     (result, seconds) <- timedSeconds action
@@ -200,8 +193,6 @@ recordedFetch metrics upstream action = do
         Left err -> mpUpstreamFetchError metrics upstream (metadataErrorCause err)
     pure result
 
-{- Classify a leader-fetch failure into the bounded @ecluse.upstream.fetch.errors@ cause. It reads
-the typed 'MetadataError', never error text, so the label set stays bounded by construction. -}
 metadataErrorCause :: MetadataError -> Metric.Cause
 metadataErrorCause = \case
     MetadataAbsent -> Metric.UpstreamStatus

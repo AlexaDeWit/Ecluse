@@ -24,6 +24,7 @@ module Ecluse.Core.Telemetry.Metrics (
     Cause (..),
     Tier (..),
     CacheResult (..),
+    CacheStore (..),
     MirrorResult (..),
     SweepResult (..),
     SweepTarget (..),
@@ -83,6 +84,7 @@ data LabelKey
     | KeyCause
     | KeyBreakerSource
     | KeyTier
+    | KeyStore
     deriving stock (Eq, Generic, Ord, Show)
 
 instance Universe LabelKey where universe = universeGeneric
@@ -103,6 +105,7 @@ labelKeyName = \case
     KeyCause -> "cause"
     KeyBreakerSource -> "source"
     KeyTier -> "tier"
+    KeyStore -> "store"
 
 -- | The serve decision (@ecluse.serve.decision@).
 data Decision = Admit | Deny | Unavailable
@@ -167,10 +170,16 @@ data RelayAnomaly = RelayOddShape | RelayNonSuccess
 instance Universe RelayAnomaly where universe = universeGeneric
 
 -- | A metadata-cache lookup result.
-data CacheResult = Hit | Miss
+data CacheResult = Hit | Miss | Collapsed
     deriving stock (Eq, Generic, Show)
 
 instance Universe CacheResult where universe = universeGeneric
+
+-- | The independently budgeted metadata stores.
+data CacheStore = FullStore | VersionStore | AssembledStore
+    deriving stock (Eq, Generic, Show)
+
+instance Universe CacheStore where universe = universeGeneric
 
 {- | A processed mirror job's result. The idempotent "already present" outcome (a registry
 @409@) counts as 'Published', not as a distinct value.
@@ -308,6 +317,7 @@ data Label
     | LUpstream Upstream
     | LStatusClass StatusClass
     | LCacheResult CacheResult
+    | LCacheStore CacheStore
     | LMirrorResult MirrorResult
     | LSweepResult SweepResult
     | LSweepTarget SweepTarget
@@ -334,6 +344,7 @@ labelKey = \case
     LUpstream{} -> KeyUpstream
     LStatusClass{} -> KeyStatusClass
     LCacheResult{} -> KeyResult
+    LCacheStore{} -> KeyStore
     LMirrorResult{} -> KeyResult
     LSweepResult{} -> KeyResult
     LSweepTarget{} -> KeyTarget
@@ -378,6 +389,11 @@ labelValue = \case
     LCacheResult c -> case c of
         Hit -> "hit"
         Miss -> "miss"
+        Collapsed -> "collapsed"
+    LCacheStore store -> case store of
+        FullStore -> "full"
+        VersionStore -> "version"
+        AssembledStore -> "assembled"
     LMirrorResult m -> case m of
         Published -> "published"
         Failed -> "failed"

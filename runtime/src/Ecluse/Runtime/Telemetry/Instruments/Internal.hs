@@ -98,7 +98,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Cause,
     CredentialResult,
     Decision,
-    Label (LAdvisoryCompileResult, LAdvisoryDropCause, LAdvisorySyncResult, LBreakerSource, LCacheResult, LCause, LCredentialResult, LDecision, LEcosystem, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LSweepResult, LSweepTarget, LTier, LUpstream),
+    Label (LAdvisoryCompileResult, LAdvisoryDropCause, LAdvisorySyncResult, LBreakerSource, LCacheResult, LCacheStore, LCause, LCredentialResult, LDecision, LEcosystem, LMirrorResult, LPerimeterCause, LProvider, LReasonClass, LRelayAnomaly, LRule, LStatusClass, LSweepResult, LSweepTarget, LTier, LUpstream),
     MirrorResult,
     Provider,
     ReasonClass,
@@ -131,6 +131,10 @@ data Metrics = Metrics
     , mUpstreamFetchDuration :: Histogram
     , mUpstreamFetchErrors :: Counter Int64
     , mMetadataCacheRequests :: Counter Int64
+    , mSingleVersionCacheRequests :: Counter Int64
+    , mAssembledCacheRequests :: Counter Int64
+    , mMetadataCacheRefused :: Counter Int64
+    , mSingleVersionCacheFullHits :: Counter Int64
     , mMetadataCacheEntries :: Gauge Int64
     , mMetadataCacheResidentBytes :: Gauge Int64
     , mSingleVersionCacheResidentBytes :: Gauge Int64
@@ -172,7 +176,11 @@ newMetrics telemetry = do
         <*> gauge meter RuleBreakerState "circuit-breaker state by source (0 closed, 1 half-open, 2 open)"
         <*> histogram meter UpstreamFetchDuration "upstream metadata-fetch latency by upstream and status class"
         <*> counter meter UpstreamFetchErrors "{error}" "upstream metadata-fetch errors by upstream and cause"
-        <*> counter meter MetadataCacheRequests "{request}" "metadata-cache lookups by hit/miss"
+        <*> counter meter MetadataCacheRequests "{request}" "full-store requests by hit/miss/collapsed"
+        <*> counter meter SingleVersionCacheRequests "{request}" "selected-version requests by hit/miss/collapsed"
+        <*> counter meter AssembledCacheRequests "{request}" "assembled-response requests by hit/miss/collapsed"
+        <*> counter meter MetadataCacheRefused "{entry}" "oversized values refused by store"
+        <*> counter meter SingleVersionCacheFullHits "{request}" "selective reads served by full-store retention"
         <*> gauge meter MetadataCacheEntries "metadata-cache occupancy"
         <*> gauge meter MetadataCacheResidentBytes "full-packument metadata-cache resident bytes"
         <*> gauge meter SingleVersionCacheResidentBytes "single-version metadata-cache resident bytes"
@@ -233,6 +241,10 @@ metricsPortOf m =
         , mpUpstreamFetch = recordUpstreamFetch m
         , mpUpstreamFetchError = recordUpstreamFetchError m
         , mpCacheRequest = recordCacheRequest m
+        , mpVersionCacheRequest = \result -> addOne (mSingleVersionCacheRequests m) [LCacheResult result]
+        , mpAssembledCacheRequest = \result -> addOne (mAssembledCacheRequests m) [LCacheResult result]
+        , mpCacheRefused = \store -> addOne (mMetadataCacheRefused m) [LCacheStore store]
+        , mpVersionCacheFullHit = addOne (mSingleVersionCacheFullHits m) []
         , mpCacheEntries = recordCacheEntries m
         , mpCacheResidentBytes = recordCacheResidentBytes m
         , mpVersionCacheResidentBytes = recordVersionCacheResidentBytes m
@@ -343,7 +355,7 @@ recordUpstreamFetchError :: (MonadIO m) => Metrics -> Upstream -> Cause -> m ()
 recordUpstreamFetchError m upstream cause =
     addOne (mUpstreamFetchErrors m) [LUpstream upstream, LCause cause]
 
--- | Record one metadata-cache lookup (@ecluse.metadata_cache.requests@) as a hit or miss.
+-- | Record one metadata-cache lookup (@ecluse.metadata_cache.requests@) as hit, miss, or collapsed.
 recordCacheRequest :: (MonadIO m) => Metrics -> CacheResult -> m ()
 recordCacheRequest m result =
     addOne (mMetadataCacheRequests m) [LCacheResult result]
