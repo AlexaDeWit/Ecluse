@@ -37,7 +37,6 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataUndecodable),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
     VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
-    digestOf,
  )
 import Ecluse.Core.Registry.Origin (OriginFor, Public, anonymousOrigin, perCallerOrigin)
 import Ecluse.Core.Security (defaultLimits)
@@ -53,7 +52,7 @@ import Ecluse.Core.Version (Version)
 import Ecluse.Test.Package (npmVersion, unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, externalOperations)
-import Ecluse.Test.Snapshot (readDetails)
+import Ecluse.Test.Snapshot (digestOf, readDetails)
 
 -- | Selected reads use the chosen provider without hydrating a full document.
 spec :: Spec

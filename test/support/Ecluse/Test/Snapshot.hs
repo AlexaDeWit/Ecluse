@@ -6,6 +6,7 @@
 version pair a read carries when a case decides on the typed view alone.
 -}
 module Ecluse.Test.Snapshot (
+    digestOf,
     jsonSnapshot,
     projectJsonSnapshot,
     syntheticSnapshot,
@@ -15,13 +16,18 @@ module Ecluse.Test.Snapshot (
     readDetails,
 ) where
 
+import Crypto.Hash (hashInit, hashUpdate)
 import Data.Aeson (Value, encode)
 
 import Ecluse.Core.Package (PackageDetails)
 import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc, vdDetails, vdRaw), VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion))
-import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
+import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..), digestFromContext)
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Support (expectRight)
+
+-- | Hash caller-owned fixture bytes through the same digest type as incremental source reads.
+digestOf :: ByteString -> ContentDigest
+digestOf = digestFromContext . hashUpdate hashInit
 
 -- | Treat a fixture's compact encoding as its upstream bytes.
 jsonSnapshot :: Value -> Snapshot Value

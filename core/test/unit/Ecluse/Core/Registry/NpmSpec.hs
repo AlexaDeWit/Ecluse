@@ -43,12 +43,12 @@ import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Snapshot (digestOf)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode))
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry (isBoundExceededFetch, isTransportFetch)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, isOdd, publicRegistryBaseUrl)
 
+import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Stub (
     stubConfig,
     withStub,

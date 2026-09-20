@@ -12,7 +12,6 @@ module Ecluse.Core.Registry.Metadata (
     -- * The full-manifest result
     Manifest (..),
     ContentDigest,
-    digestOf,
     digestBytes,
 
     -- * One version's read
@@ -34,7 +33,7 @@ import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (..))
-import Ecluse.Core.Snapshot (ContentDigest, digestBytes, digestOf)
+import Ecluse.Core.Snapshot (ContentDigest, digestBytes)
 import Ecluse.Core.Version (Version)
 
 -- | A package snapshot with ecosystem-owned serving data and the original source digest.

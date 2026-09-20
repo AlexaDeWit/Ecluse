@@ -22,9 +22,9 @@ import Ecluse.Core.Package.Merge (
     Provenance (GatedSource, TrustedSource),
     mergePackuments,
  )
-import Ecluse.Core.Snapshot (Snapshot (Snapshot), digestOf)
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
-import Ecluse.Test.Snapshot (syntheticSnapshot)
+import Ecluse.Test.Snapshot (digestOf, syntheticSnapshot)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf)
 
 -- | The merge benches: realistic over the corpus, scaled over synthetic versions.

@@ -22,7 +22,7 @@ import UnliftIO.Exception (throwIO)
 import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts), PackageInfo (..), PackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
-import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead, digestOf)
+import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (
     CacheConfig (..),
@@ -43,7 +43,7 @@ import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIVersion)
 import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion, externalOperations, newLocalRetention, weighCacheEntry)
-import Ecluse.Test.Snapshot (readDetails, untaggedRead)
+import Ecluse.Test.Snapshot (digestOf, readDetails, untaggedRead)
 
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
 resolveMetadata c source name fetch =

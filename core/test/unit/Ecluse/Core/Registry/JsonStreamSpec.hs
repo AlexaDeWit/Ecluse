@@ -14,8 +14,8 @@ import UnliftIO.Exception (finally)
 
 import Ecluse.Core.Registry.JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
-import Ecluse.Core.Snapshot (digestOf)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
+import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
 -- | Verify retained-depth boundaries, source identity and response cancellation.

@@ -7,7 +7,8 @@ module Ecluse.Core.SnapshotSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
+import Ecluse.Core.Snapshot (Snapshot (..))
+import Ecluse.Test.Snapshot (digestOf)
 
 -- | Pin byte-level identity independently of decoded JSON equality.
 spec :: Spec

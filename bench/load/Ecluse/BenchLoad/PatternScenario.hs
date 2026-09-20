@@ -29,7 +29,6 @@ import Ecluse.BenchLoad.Replay (Replay (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations)
 import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
-import Ecluse.Core.Registry.Metadata (digestOf)
 
 import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
@@ -42,6 +41,7 @@ import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Server.Cache (defaultCacheConfig, weighCacheEntry)
+import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
 
 -- | Every family receives a fresh proxy. No preflight request consumes or warms its trace.

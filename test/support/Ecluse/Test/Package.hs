@@ -93,10 +93,11 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Registry.CachedDocument (npmCached)
-import Ecluse.Core.Registry.Metadata (Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw), digestOf)
+import Ecluse.Core.Registry.Metadata (Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw))
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Server.Path (Filename, mkFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Test.Snapshot (digestOf)
 
 {- | Build a 'Hash' from a known-valid digest, for fixtures. A malformed digest errors,
 so a fixture typo fails loudly instead of silently yielding nothing.
