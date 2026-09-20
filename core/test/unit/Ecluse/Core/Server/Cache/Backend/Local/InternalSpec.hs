@@ -4,7 +4,6 @@
 -- | Aggregate capacity and STM rollback across local-store maintenance.
 module Ecluse.Core.Server.Cache.Backend.Local.InternalSpec (spec) where
 
-import Control.Concurrent.STM (throwSTM)
 import System.Clock (fromNanoSecs)
 import Test.Hspec
 

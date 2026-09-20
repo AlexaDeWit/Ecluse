@@ -3,7 +3,6 @@
 
 -- | Local TTL retention with shared bounds and per-store recency eviction.
 module Ecluse.Core.Server.Cache.Backend.Local (
-    newLocalRetention,
     newPooledRetention,
     LocalPool,
     newLocalPool,
@@ -39,12 +38,6 @@ data LocalStore k v = LocalStore
     , lsExpiry :: TVar (Map TimeSpec (HashSet k))
     , lsRecord :: TVar (CacheOccupancy -> IO ())
     }
-
--- | Build a standalone bounded store. Zero bounds disable insertion without weighing values.
-newLocalRetention :: (Hashable k) => NominalDiffTime -> Int -> Int -> (v -> Int) -> IO (RetentionOperations k v)
-newLocalRetention ttl maxEntries maxBytes weigh = do
-    pool <- newLocalPool maxEntries maxBytes
-    newPooledRetention pool ttl (StoreBudget 0 0) weigh
 
 -- | Share aggregate capacity, evicting only this store's entries above its floor.
 newPooledRetention :: (Hashable k) => LocalPool -> NominalDiffTime -> StoreBudget -> (v -> Int) -> IO (RetentionOperations k v)

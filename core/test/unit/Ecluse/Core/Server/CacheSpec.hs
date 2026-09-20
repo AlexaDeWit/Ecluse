@@ -35,7 +35,6 @@ import Ecluse.Core.Server.Cache (
  )
 import Ecluse.Core.Server.Cache qualified as Cache
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (..))
-import Ecluse.Core.Server.Cache.Backend.Local (newLocalRetention)
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -43,7 +42,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Package (npmVersion, pypiVersion, sampleArtifact, sampleDetails, thingName, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
-import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion, externalOperations, weighCacheEntry)
+import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion, externalOperations, newLocalRetention, weighCacheEntry)
 import Ecluse.Test.Snapshot (readDetails, untaggedRead)
 
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
