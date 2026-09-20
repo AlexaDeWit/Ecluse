@@ -327,8 +327,7 @@ It does not model a pre-restart heap or claim that a short default run measures 
 | `BENCH_PATTERN_SEED` | 42 |
 | `BENCH_PATTERN_DEADLINE_US` | 120000000, covering client start delays and response reads |
 | `BENCH_PATTERN_FULL_BYTES` | Must be zero. The local backend never retains full metadata, regardless of capacity |
-| `BENCH_PATTERN_VERSION_BYTES` | The fixture version-store budget, must be positive |
-| `BENCH_PATTERN_ASSEMBLED_BYTES` | The fixture assembled-store budget, must be positive |
+| `BENCH_PATTERN_CACHE_BYTES` | The shared local byte budget, must be positive |
 | `BENCH_PATTERN_NOW` | Latest authenticated capture time plus two days. Override with an ISO8601 UTC time |
 | `BENCH_PATTERN_SELECTED_VERSION` | Unset for listing-only. `pinned` follows each npm listing with its captured public tarball coordinate |
 
@@ -376,8 +375,10 @@ Full metadata is always ineligible for local retention. Its effective capacity i
 this path performs no retention weighing, encoding, insertion, or capacity-refusal accounting.
 `BENCH_PATTERN_FULL_BYTES` accepts only zero and does not select a different retention mode.
 
-Use `BENCH_PATTERN_VERSION_BYTES` and `BENCH_PATTERN_ASSEMBLED_BYTES` to vary eligible stores.
-Report the pod memory target and both store budgets for every comparison. Full candidate charges
+Use `BENCH_PATTERN_CACHE_BYTES` to vary the shared eligible-store budget. The previous
+`BENCH_PATTERN_VERSION_BYTES` and `BENCH_PATTERN_ASSEMBLED_BYTES` knobs now fail with a migration message.
+Report the pod memory target and the aggregate byte and entry bounds for every comparison.
+Version and assembled rows report the same shared ceiling, not independently funded capacities. Full candidate charges
 are historical diagnostics prepared before measurement, not retained local bytes or admission work.
 TTL zero changes both eligible stores. Keep 200-body replay separate from the legacy 304 scenario,
 because 304 avoids assembled-store resolution.

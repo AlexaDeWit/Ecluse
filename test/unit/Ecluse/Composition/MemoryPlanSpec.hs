@@ -23,7 +23,7 @@ import Ecluse.Composition.MemoryPlan (
     resolveMemoryPlan,
  )
 import Ecluse.Config (CacheSettings (..), LimitsSettings (..), QueueSettings (..))
-import Ecluse.Core.Server.Cache (CacheConfig (cacheAssembledBudget, cacheFullBudget, cacheTtl, cacheVersionBudget), StoreBudget (sbMaxBytes, sbMaxEntries))
+import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup, FromRts))
 
 spec :: Spec
@@ -229,18 +229,15 @@ spec = describe "resolveMemoryPlan" $ do
                     assert (any (T.isInfixOf "cache aggregate shed") (mpDegradations plan))
 
     describe "planCacheConfig" $ do
-        it "marries the TTL to the plan's aggregate, split summing exactly to it" $ do
+        it "uses one aggregate byte and entry bound with no reserved store shares" $ do
             let (plan, lines') = resolve bareCache{csTtl = 45} bareLimits bareQueue Nothing (planWith (Just (2 * gib))) NoQueueTenant False
                 cacheCfg = planCacheConfig bareCache{csTtl = 45} plan
             cacheTtl cacheCfg `shouldBe` 45
-            sbMaxBytes (cacheFullBudget cacheCfg)
-                + sbMaxBytes (cacheVersionBudget cacheCfg)
-                + sbMaxBytes (cacheAssembledBudget cacheCfg)
-                `shouldBe` mpCacheAggregateBytes plan
-            sbMaxEntries (cacheFullBudget cacheCfg) `shouldBe` 0
-            sbMaxBytes (cacheFullBudget cacheCfg) `shouldBe` 0
+            cacheMaxBytes cacheCfg `shouldBe` mpCacheAggregateBytes plan
+            cacheMaxEntries cacheCfg `shouldBe` mpCacheMaxEntries plan
+            map ($ cacheCfg) [cacheFullBudget, cacheVersionBudget, cacheAssembledBudget]
+                `shouldBe` replicate 3 (StoreBudget 0 0)
             lines' `shouldContain` ["metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"]
-            sbMaxEntries (cacheVersionBudget cacheCfg) `shouldBe` 4 * mpCacheMaxEntries plan
   where
     resolve = resolveMemoryPlan
 

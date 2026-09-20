@@ -31,14 +31,16 @@ import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (Version)
 
--- | A 60-second TTL and 256 MiB split between locally eligible stores.
+-- | A 60-second TTL and 256 MiB shared by locally eligible stores.
 defaultCacheConfig :: CacheConfig
 defaultCacheConfig =
     CacheConfig
         { cacheTtl = 60
-        , cacheFullBudget = StoreBudget{sbMaxEntries = 0, sbMaxBytes = 0}
-        , cacheVersionBudget = StoreBudget{sbMaxEntries = 4096, sbMaxBytes = (256 * 1024 * 1024) * 3 `div` 8}
-        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 1024, sbMaxBytes = 256 * 1024 * 1024 - (256 * 1024 * 1024) * 3 `div` 8}
+        , cacheMaxEntries = 1024
+        , cacheMaxBytes = 256 * 1024 * 1024
+        , cacheFullBudget = StoreBudget 0 0
+        , cacheVersionBudget = StoreBudget 0 0
+        , cacheAssembledBudget = StoreBudget 0 0
         }
 
 -- | Adapt test operations to the same bounded backend contract used by production storage.

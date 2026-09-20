@@ -35,9 +35,8 @@ import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits, ecosystemArtifactAuthorities)
-import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), StoreBudget (..))
+import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
-import Ecluse.Core.Server.MemoryModel (contractResidentBytes)
 import Ecluse.Core.Telemetry.Catalogue (MetricName, metricName)
 import Ecluse.Runtime.Test.Telemetry (gaugePoints, sumPoints, withTestTelemetry)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName)
@@ -65,16 +64,12 @@ patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
                 measuredBodies <- newIORef (maxMetadataBytes defaultLimits, wireBytes, largest, 0)
                 fullCapacity <- readKnob "BENCH_PATTERN_FULL_BYTES" (0 :: Int)
                 when (fullCapacity /= 0) (benchFail "BENCH_PATTERN_FULL_BYTES must be zero: the local backend never retains full metadata")
-                versionCapacity <- readKnob "BENCH_PATTERN_VERSION_BYTES" (sbMaxBytes (cacheVersionBudget defaultCacheConfig))
-                assembledCapacity <- readKnob "BENCH_PATTERN_ASSEMBLED_BYTES" (sbMaxBytes (cacheAssembledBudget defaultCacheConfig))
-                when
-                    (fullCapacity < 0 || versionCapacity <= 0 || assembledCapacity <= 0)
-                    (benchFail "pattern full budget must be non-negative and version/assembled budgets must be positive")
-                let cacheConfig =
-                        defaultCacheConfig
-                            { cacheVersionBudget = (cacheVersionBudget defaultCacheConfig){sbMaxBytes = versionCapacity}
-                            , cacheAssembledBudget = (cacheAssembledBudget defaultCacheConfig){sbMaxBytes = assembledCapacity}
-                            }
+                for_ ["BENCH_PATTERN_VERSION_BYTES", "BENCH_PATTERN_ASSEMBLED_BYTES"] $ \name -> do
+                    configured <- lookupEnv name
+                    when (isJust configured) (benchFail (toText name <> " was replaced by BENCH_PATTERN_CACHE_BYTES for the shared pool"))
+                capacity <- readKnob "BENCH_PATTERN_CACHE_BYTES" (cacheMaxBytes defaultCacheConfig)
+                when (capacity <= 0) (benchFail "pattern cache budget must be positive")
+                let cacheConfig = defaultCacheConfig{cacheMaxBytes = capacity}
                     deps privatePort publicPort = do
                         base <- depsFor privatePort publicPort
                         let authority = if ecosystem == Npm then "https://registry.npmjs.org" else "https://files.pythonhosted.org"
@@ -170,31 +165,31 @@ evidence meter upstreamCount config rawBytes measuredBodies knobs requestTrace s
     stores <-
         traverse
             (collect fullWorkingBytes)
-            [("full", "", cacheFullBudget config), ("version", ".version", cacheVersionBudget config), ("assembled", ".assembled", cacheAssembledBudget config)]
+            [("full", "", 0), ("version", ".version", cacheMaxBytes config), ("assembled", ".assembled", cacheMaxBytes config)]
     (metadataRequests, artifactRequests) <- readIORef upstreamCount
     pure $
         T.unlines
             [ "Replay parameters: `" <> show knobs <> "`. Actual clients: " <> show (length (rtClients requestTrace)) <> ". Distinct measured names: " <> show (length (rtNames requestTrace)) <> "."
             , "Pattern evaluation time: " <> toText (iso8601Show evaluationTime) <> ". Listing-only and artifact-follow-up cells share this clock. Default: latest authenticated capture time plus two days. BENCH_PATTERN_NOW overrides it."
             , "Corpus space and tail are bounded by the committed captures. Zipf is a finite sampled trace, not registry-wide traffic."
-            , "Configured store budgets (full / version / assembled): " <> show (sbMaxBytes (cacheFullBudget config)) <> " / " <> show (sbMaxBytes (cacheVersionBudget config)) <> " / " <> show (sbMaxBytes (cacheAssembledBudget config)) <> " accounted bytes."
+            , "Shared local budget: " <> show (cacheMaxBytes config) <> " accounted bytes and " <> show (cacheMaxEntries config) <> " entries. Version and assembled rows share this ceiling, not separate capacities. Their floors are zero."
             , "Local full retention is ineligible. Effective full capacity is zero. Full requests still coalesce, without retention weighing, encoding, insertion, or capacity refusals."
             , "Raw captured working bytes: " <> show rawBytes <> " B. Served stub working bytes: " <> show wireBytes <> " B. Selected-version mode: " <> maybe "none" toText selected <> "."
             , "Body cap: " <> show bodyCap <> " B. Default cap: " <> show (maxMetadataBytes defaultLimits) <> " B. Largest served stub body: " <> show largest <> " B. Default would refuse largest: " <> show (largest > maxMetadataBytes defaultLimits) <> "."
-            , "Wire working set / full-store wire-equivalent budget: " <> show wireBytes <> " / " <> show (contractResidentBytes (sbMaxBytes (cacheFullBudget config))) <> " B. The resident estimate excludes retained artifact keys."
+            , "Wire working set / full-store wire-equivalent budget: " <> show wireBytes <> " / 0 B. Full retention is ineligible."
             , "Public upstream requests (metadata / artifact): " <> show metadataRequests <> " / " <> show artifactRequests <> ". Selected lookups use only the selected provider capability."
-            , if metricsAvailable then renderStoreEvidence stores else "Cache evidence unavailable: this build lacks the collapse and refusal telemetry catalogue. Full-store candidate accounted bytes / capacity: " <> show fullWorkingBytes <> " / " <> show (sbMaxBytes (cacheFullBudget config)) <> "."
+            , if metricsAvailable then renderStoreEvidence stores else "Cache evidence unavailable: this build lacks the collapse and refusal telemetry catalogue. Full-store candidate accounted bytes / capacity: " <> show fullWorkingBytes <> " / 0."
             , "Selected npm replay follows listings with captured public tarball coordinates after private misses. Artifact bytes are synthetic relay payloads. This measures the HTTP metadata gate, not a complete npm install or client integrity validation."
             , "RTS allocation and heap figures include the in-process replay client and stub upstreams. They are not proxy-only costs or directly comparable with the external oha generator."
             , "Occupancy is the final reported gauge, not peak heap. Full working bytes use production projection and historical weighCacheEntry over each distinct rewritten body before measurement. Version and assembled working sets are unavailable. Their representations differ from listing wire bytes."
-            , "Full candidate charges above are diagnostic preparation only. The local request path never weighs full candidates. Compare equal successful work and all eligible store budgets."
+            , "Full candidate charges above are diagnostic preparation only. The local request path never weighs full candidates. Compare equal successful work and the shared eligible-store budget."
             ]
   where
     metricsAvailable =
         all
             (`elem` map metricName (Universe.universe :: [MetricName]))
             ["ecluse.metadata_cache.version.requests", "ecluse.metadata_cache.assembled.requests", "ecluse.metadata_cache.refused"]
-    collect fullWorkingBytes (storeName, suffix, budget) = do
+    collect fullWorkingBytes (storeName, suffix, capacity) = do
         outcomes <- sumPoints ("ecluse.metadata_cache" <> suffix <> ".requests") meter
         occupied <- gaugePoints ("ecluse.metadata_cache" <> suffix <> ".resident_bytes") meter
         refused <- sumPoints "ecluse.metadata_cache.refused" meter
@@ -202,7 +197,7 @@ evidence meter upstreamCount config rawBytes measuredBodies knobs requestTrace s
         pure
             StoreEvidence
                 { seStore = storeName
-                , seCapacity = sbMaxBytes budget
+                , seCapacity = capacity
                 , seAccountedWorkingSet = if storeName == "full" then Just fullWorkingBytes else Nothing
                 , seResidentBytes = fromIntegral (sum (map snd occupied))
                 , seHits = count "result" "hit" outcomes

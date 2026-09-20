@@ -159,8 +159,16 @@ The local selected-version store charges each retained release field, including 
 allocation of each text slice. Repeated artifacts, hashes, licences, and trust evidence each carry
 a node allowance. A fixed allowance covers the entry and scalar fields, and a per-byte version
 allowance covers parsed ordering keys. Shared allocations count repeatedly. This is conservative
-accounting, not exact heap residency. A release above its store's budget is served without retention
+accounting, not exact heap residency. A release above the aggregate budget is served without retention
 or eviction, and occupancy reports the charged weights. Cached absences keep their smaller charge.
+
+Selected-version and assembled stores share one byte bound and one entry bound. Neither store
+reserves a static share. Under pressure, the inserting store evicts its least-recently used entries
+until the aggregate fits or its eviction floor stops it. The shipped floors are zero.
+One store cannot evict another store's live entries. Reads and retaining inserts reclaim expired
+entries across both stores, so TTL bounds this unfairness to one TTL window during active use.
+Per-store recency and expiry indexes change with the entries and aggregate accounting in one
+transaction. Recency updates add work to cache hits but avoid sorting a whole store during eviction.
 
 The cache holds the metadata, not the verdict. The rules engine re-evaluates the rules on every
 request, so time-sensitive rules (`AllowIfOlderThan`) stay correct.

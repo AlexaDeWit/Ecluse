@@ -95,12 +95,14 @@ configBytes :: NominalDiffTime -> Int -> Int -> CacheConfig
 configBytes ttl size bytes =
     CacheConfig
         { cacheTtl = ttl
+        , cacheMaxEntries = size
+        , cacheMaxBytes = bytes
         , cacheFullBudget = budget
         , cacheVersionBudget = budget
         , cacheAssembledBudget = budget
         }
   where
-    budget = StoreBudget{sbMaxEntries = size, sbMaxBytes = bytes}
+    budget = StoreBudget 0 0
 
 entryWeight :: Int
 entryWeight = weighCacheEntry (entry (unscopedNpm "weight-probe") "raw")
@@ -367,15 +369,27 @@ spec = do
             cachedVersion port c publicSource name v1_0_0 `shouldReturn` Nothing
             traverse readIORef [full, version, entries] `shouldReturn` [0, 0, 0]
 
-    describe "the named sub-budgets" $ do
+    describe "the pooled local budget" $ do
+        it "shares the entry bound across selected and assembled capabilities" $ do
+            c <- newMetadataCache (config 60 1)
+            calls <- newIORef (0 :: Int)
+            let name = unscopedNpm "shared-bound"
+                render = modifyIORef' calls (+ 1) $> "body"
+            _ <- Cache.resolveVersion noopMetricsPort c publicSource name v1_0_0 (pure (Right (untaggedRead Nothing)))
+            replicateM_ 2 (resolveAssembled c "digest" render `shouldReturn` "body")
+            readIORef calls `shouldReturn` 2
+            cachedVersion noopMetricsPort c publicSource name v1_0_0 `shouldReturn` Just (untaggedRead Nothing)
+
         it "a version-store flood preserves assembled entries without retaining full metadata" $ do
             c <-
                 newMetadataCache
                     CacheConfig
                         { cacheTtl = 60
-                        , cacheFullBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 100 * entryWeight}
-                        , cacheVersionBudget = StoreBudget{sbMaxEntries = 2, sbMaxBytes = 1024 * 1024}
-                        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
+                        , cacheMaxEntries = 3
+                        , cacheMaxBytes = 1024 * 1024
+                        , cacheFullBudget = StoreBudget{sbMinEntries = 100, sbMinBytes = 100 * entryWeight}
+                        , cacheVersionBudget = StoreBudget 0 0
+                        , cacheAssembledBudget = StoreBudget 0 0
                         }
             let name = unscopedNpm "hot-head"
             _ <- resolveMetadata c publicSource name (pure (entry name "raw"))
@@ -406,9 +420,11 @@ spec = do
                 newMetadataCache
                     CacheConfig
                         { cacheTtl = 60
-                        , cacheFullBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = fullBytes}
-                        , cacheVersionBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = versionBytes}
-                        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = assembledBytes}
+                        , cacheMaxEntries = 100
+                        , cacheMaxBytes = versionBytes + assembledBytes
+                        , cacheFullBudget = StoreBudget{sbMinEntries = 100, sbMinBytes = fullBytes}
+                        , cacheVersionBudget = StoreBudget 0 0
+                        , cacheAssembledBudget = StoreBudget 0 0
                         }
             for_ ([1 .. 10] :: [Int]) $ \i -> do
                 let name = unscopedNpm ("filler-" <> show i)
@@ -426,9 +442,11 @@ spec = do
                 newMetadataCache
                     CacheConfig
                         { cacheTtl = 60
-                        , cacheFullBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
-                        , cacheVersionBudget = StoreBudget{sbMaxEntries = 2, sbMaxBytes = 1024 * 1024}
-                        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
+                        , cacheMaxEntries = 2
+                        , cacheMaxBytes = 1024 * 1024
+                        , cacheFullBudget = StoreBudget{sbMinEntries = 100, sbMinBytes = 1024 * 1024}
+                        , cacheVersionBudget = StoreBudget 0 0
+                        , cacheAssembledBudget = StoreBudget 0 0
                         }
             let name = unscopedNpm "recency"
                 v n = npmVersion (show (n :: Int) <> ".0.0")
