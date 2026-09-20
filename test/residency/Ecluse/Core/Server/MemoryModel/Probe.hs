@@ -126,7 +126,7 @@ prepare shape package = do
                 Npm -> pure (fst npmCached raw)
                 PyPI -> pure (fst pypiSimpleCached raw)
                 RubyGems -> fail "no RubyGems metadata residency corpus"
-            let entry = CacheEntry info document (digestOf bytes)
+            let entry = CacheEntry info document (BS.length bytes) (digestOf bytes)
             _ <- forceShown entry
             compact <- evaluate (LBS.length (encode raw))
             weight <- evaluate (weighCacheEntry entry)
