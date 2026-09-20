@@ -141,7 +141,7 @@ divided by its compact encoding equal 6.707226350. The unchanged 7.5 factor leav
 above that measured maximum across both ecosystems. It is not an active-work bound.
 The local provider retains selected releases and assembled bytes, so full shared shapes do not
 size its entry-count control. An assembled-output mean cannot size a shared count of both forms.
-The existing planning divisor remains until a criterion accounts for mixed sizes and cardinality.
+These residency measurements do not determine the shared entry-count allowance.
 
 These rows came from [CI run 35534647795](https://github.com/AlexaDeWit/Ecluse/actions/runs/35534647795/job/106141404819).
 Its merge checkout `98a03cd9289041b5a2106f333f27ac32596c2aea` has the same source tree as the
