@@ -87,7 +87,10 @@ spec = describe "resolveBootPlan" $ do
                        , "runtime: public connection pool 128 (computed from file-descriptor limit 1024)"
                        , "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
                        , "runtime: serve admission 20 (computed from 2 capabilities)"
-                       , "memory plan: response byte cap 12582912" <> fallbackClause
+                       , "memory plan: material estimate budget 178257920" <> fallbackClause
+                       , "memory plan: metadata ingest ceiling 134217728 (built-in default, independent of heap and CPU)"
+                       , "metadata admission: static workload estimates reduce concurrency pressure. They do not bound worst-case heap use"
+                       , "metadata admission estimates: cold selected 9437184, retained selected 262144, full origin 38797312, listing output 11534336 bytes"
                        , "memory plan: request byte cap 26214400" <> fallbackClause
                        , "memory plan: cache byte bound 268435456" <> fallbackClause
                        , "memory plan: cache entry bound 1024" <> fallbackClause

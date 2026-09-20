@@ -9,7 +9,6 @@ does not bound active input, parser, policy, merge, or output memory.
 module Ecluse.Core.Server.MemoryModel (
     expandWireBytes,
     contractResidentBytes,
-    packumentOriginFanout,
     mirrorJobEstimatedBytes,
 ) where
 
@@ -30,10 +29,6 @@ residentRatioNumerator = 15
 
 residentRatioDenominator :: Int
 residentRatioDenominator = 2
-
--- | The maximum number of permitted origins contributing to one listing.
-packumentOriginFanout :: Int
-packumentOriginFanout = 2
 
 -- | The resident-byte allowance per in-memory mirror queue slot.
 mirrorJobEstimatedBytes :: Int

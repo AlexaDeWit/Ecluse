@@ -71,13 +71,13 @@ spec = do
 defaultLimitsSpec :: Spec
 defaultLimitsSpec =
     describe "defaultLimits" $
-        it "ships a 12 MiB body, 100k version and artifact ceilings, and 64 nesting levels" $
+        it "ships a 128 MiB body, one million version and artifact ceilings, and 64 nesting levels" $
             ( maxMetadataBytes defaultLimits
             , maxVersionCount defaultLimits
             , maxArtifactCount defaultLimits
             , maxNestingDepth defaultLimits
             )
-                `shouldBe` (12 * 1024 * 1024, 100_000, 100_000, 64)
+                `shouldBe` (128 * 1024 * 1024, 1_000_000, 1_000_000, 64)
 
 boundedReadSpec :: Spec
 boundedReadSpec = describe "boundedRead" $ do
@@ -112,7 +112,7 @@ boundedReadSpec = describe "boundedRead" $ do
         runBounded limits ["ab", "", "cd"] `shouldBe` Right (2, "ab")
 
     it "passes a small body under the generous default budget" $
-        -- Exercises 'defaultLimits' (the 12 MiB cap) directly.
+        -- Exercises 'defaultLimits' (the 128 MiB cap) directly.
         runBounded defaultLimits ["small", "body"] `shouldBe` Right (9, "smallbody")
 
     for_ [MetadataBodyLimit 1, PublishRequestBodyLimit 1, MirrorArtifactBodyLimit 1] $ \bound ->
@@ -255,7 +255,7 @@ realPackumentSpec = describe "default Limits admit a real large trusted packumen
             Left err -> expectationFailure ("real packument refused by the version bound: " <> show err)
             Right admitted -> do
                 renderPackageName (infoName admitted) `shouldBe` "express"
-                -- A genuinely large version set, well under the 100k ceiling: proof the
+                -- A genuinely large version set, well under the one million ceiling: proof the
                 -- count bound clears a real package, not a toy one.
                 Map.size (infoVersions admitted) `shouldSatisfy` (> 200)
                 Map.size (infoVersions admitted) `shouldSatisfy` (<= maxVersionCount defaultLimits)

@@ -35,23 +35,23 @@ data Limits = Limits
     , maxMirrorArtifactBytes :: Int
     -- ^ Artifact bytes buffered for mirror verification and publication.
     , maxVersionCount :: Int
-    -- ^ Most versions a parsed document may carry. Bounds per-version rule evaluation.
+    -- ^ npm source versions, PyPI full releases, or PyPI selected source file positions.
     , maxArtifactCount :: Int
-    -- ^ Total artifacts across versions, bounding projection and residency beyond the version count.
+    -- ^ Valid projected artifacts. Selected PyPI uses its source-file scan count instead.
     , maxNestingDepth :: Int
-    -- ^ Deepest JSON nesting a decoded document may reach. Bounds stack\/CPU on nested input.
+    -- ^ Retained JSON nesting depth. Skipped metadata fields do not use this bound.
     }
     deriving stock (Eq, Show)
 
--- | Default byte ceilings are 12 MiB until composition supplies each role's resolved cap.
+-- | Generous bounded metadata input, with publish and mirror caps resolved separately by composition.
 defaultLimits :: Limits
 defaultLimits =
     Limits
-        { maxMetadataBytes = 12 * 1024 * 1024
+        { maxMetadataBytes = 128 * 1024 * 1024
         , maxPublishRequestBytes = 12 * 1024 * 1024
         , maxMirrorArtifactBytes = 12 * 1024 * 1024
-        , maxVersionCount = 100_000
-        , maxArtifactCount = 100_000
+        , maxVersionCount = 1_000_000
+        , maxArtifactCount = 1_000_000
         , maxNestingDepth = 64
         }
 

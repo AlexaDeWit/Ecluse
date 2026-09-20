@@ -35,6 +35,7 @@ import Ecluse.Core.Server.Cache (
 import Ecluse.Core.Server.Cache qualified as Cache
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (..))
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
+import Ecluse.Core.Server.Cache.Store (MaterialReuse (KnownLocalReuse), executePrepared, preparedReuse)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
@@ -189,6 +190,23 @@ spec = do
             cachedVersion noopMetricsPort c publicSource pypiName absentVersion `shouldReturn` Just (untaggedRead Nothing)
             readIORef calls `shouldReturn` 2
             readResidency `shouldReturn` Just 1024
+
+    describe "prepared selected absence" $
+        it "pins the retained absence through facade eviction and reports one hit on execution" $ do
+            calls <- newIORef (0 :: Int)
+            seen <- newIORef []
+            let absent = untaggedRead Nothing
+                metrics = noopMetricsPort{mpVersionCacheRequest = \result -> modifyIORef' seen (result :)}
+                cacheConfig = (configBytes 60 1 16384){cacheVersionBudget = StoreBudget 1 16384}
+            cache <- newMetadataCache cacheConfig
+            _ <- Cache.resolveVersion noopMetricsPort cache publicSource thingName v1_0_0 (pure (Right absent))
+            prepared <- Cache.prepareVersion metrics cache publicSource thingName v1_0_0 (modifyIORef' calls (+ 1) $> Left MetadataUndecodable)
+            preparedReuse prepared `shouldBe` KnownLocalReuse
+            _ <- Cache.resolveVersion noopMetricsPort cache publicSource thingName (npmVersion "2.0.0") (pure (Right absent))
+            readIORef seen `shouldReturn` []
+            executePrepared prepared `shouldReturn` Right absent
+            readIORef seen `shouldReturn` [Metric.Hit]
+            readIORef calls `shouldReturn` 0
 
     describe "local full retention" $ do
         for_ [0, 1, maxBound] $ \capacity ->
