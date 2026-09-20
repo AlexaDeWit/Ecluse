@@ -161,7 +161,6 @@ newMetadataCache cfg =
 resolveMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Either MetadataError CacheEntry) -> IO (Either MetadataError CacheEntry)
 resolveMetadata metrics cache source name =
     resolveSingleFlight
-        (pure ())
         (mpCacheRequest metrics)
         (recordFullOccupancy metrics)
         (mpCacheRefused metrics Metric.FullStore)
@@ -172,7 +171,6 @@ resolveMetadata metrics cache source name =
 resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (Either MetadataError VersionRead)
 resolveVersion metrics cache source name version =
     resolveSingleFlight
-        (pure ())
         (mpVersionCacheRequest metrics)
         (mpVersionCacheResidentBytes metrics . occBytes)
         (mpCacheRefused metrics Metric.VersionStore)
@@ -184,7 +182,6 @@ resolveAssembled :: MetricsPort -> MetadataCache -> Text -> IO ByteString -> IO 
 resolveAssembled metrics cache key render =
     either absurd id
         <$> resolveSingleFlight
-            (pure ())
             (mpAssembledCacheRequest metrics)
             (mpAssembledCacheResidentBytes metrics . occBytes)
             (mpCacheRefused metrics Metric.AssembledStore)
