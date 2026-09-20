@@ -111,6 +111,22 @@ spec = do
             getWeight active 2 `shouldReturn` Just 10
             readIORef observed `shouldReturn` CacheOccupancy 0 0
 
+        it "reclaims an idle store's expiry when another store reads a fresh hit" $ do
+            clock <- newIORef (fromNanoSecs 0)
+            pool <- newLocalPoolWithClock (readIORef clock) 2 20
+            idle <- weightedStore pool (StoreBudget 0 0)
+            active <- weightedStore pool (StoreBudget 0 0)
+            observed <- newIORef (CacheOccupancy 0 0)
+            roInsert idle (writeIORef observed) pass 1 10
+            writeIORef clock (fromNanoSecs 30000000000)
+            putWeight active 2 10
+            getWeight active 2 `shouldReturn` Just 10
+            readIORef observed `shouldReturn` CacheOccupancy 1 10
+            writeIORef clock (fromNanoSecs 60000000001)
+            getWeight active 2 `shouldReturn` Just 10
+            readIORef observed `shouldReturn` CacheOccupancy 0 0
+            getWeight idle 1 `shouldReturn` Nothing
+
         it "keeps a replacement alive when its old deadline expires" $ do
             clock <- newIORef (fromNanoSecs 0)
             pool <- newLocalPoolWithClock (readIORef clock) 1 20

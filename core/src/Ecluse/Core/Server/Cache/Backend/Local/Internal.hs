@@ -8,6 +8,7 @@ module Ecluse.Core.Server.Cache.Backend.Local.Internal (
     newLocalPoolWithClock,
     registerStore,
     runPool,
+    readPool,
     poolFits,
     adjustPool,
     poolEnabled,
@@ -31,7 +32,8 @@ data LocalPool = LocalPool
     }
 
 data StoreMaintenance = StoreMaintenance
-    { smExpire :: TimeSpec -> STM ()
+    { smDeadline :: STM (Maybe TimeSpec)
+    , smExpire :: TimeSpec -> STM ()
     , smObserve :: STM (CacheOccupancy, CacheOccupancy -> IO ())
     }
 
@@ -49,9 +51,9 @@ newLocalPoolWithClock now entries bytes =
         <*> pure now
 
 -- | Register maintenance without erasing a store's key or value type.
-registerStore :: LocalPool -> (TimeSpec -> STM ()) -> STM (CacheOccupancy, CacheOccupancy -> IO ()) -> IO ()
-registerStore pool expire observe =
-    atomically (modifyTVar' (lpStores pool) (StoreMaintenance expire observe :))
+registerStore :: LocalPool -> STM (Maybe TimeSpec) -> (TimeSpec -> STM ()) -> STM (CacheOccupancy, CacheOccupancy -> IO ()) -> IO ()
+registerStore pool deadline expire observe =
+    atomically (modifyTVar' (lpStores pool) (StoreMaintenance deadline expire observe :))
 
 -- | Expiry, entry changes and accounting commit together. Gauge reports keep commit order.
 runPool :: LocalPool -> (TimeSpec -> STM a) -> IO a
@@ -69,6 +71,18 @@ runPool pool action = withMVar (lpLock pool) $ \() -> mask_ $ do
     pure result
   where
     report (before, _) (after, record) = when (before /= after) (record after)
+
+-- | Reads bypass telemetry when no expiry is due. Actions must not change occupancy.
+readPool :: LocalPool -> (TimeSpec -> STM a) -> IO a
+readPool pool action = do
+    now <- lpNow pool
+    fresh <- atomically $ do
+        stores <- readTVar (lpStores pool)
+        deadlines <- traverse smDeadline stores
+        if any (maybe False (< now)) deadlines
+            then pure Nothing
+            else Just <$> action now
+    maybe (runPool pool action) pure fresh
 
 -- | Test aggregate capacity for one additional entry without overflowing byte arithmetic.
 poolFits :: LocalPool -> Int -> STM Bool

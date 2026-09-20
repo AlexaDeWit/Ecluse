@@ -10,7 +10,7 @@ module Ecluse.Core.Server.Cache.StoreSpec (spec) where
 import Control.Exception (getMaskingState, throw)
 import Data.Time (NominalDiffTime)
 import Test.Hspec
-import UnliftIO (async, cancel, concurrently, concurrently_, mapConcurrently, timeout, wait, withAsync)
+import UnliftIO (async, cancel, concurrently, mapConcurrently, timeout, wait, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, try)
 
@@ -69,7 +69,10 @@ resolveOkRecording seen sf key fetch =
 resolveOkAccumulating :: IORef [CacheOccupancy] -> SingleFlight StoreFault Text Text -> Text -> IO Text -> IO Text
 resolveOkAccumulating seen sf key fetch =
     either (throwIO . UnexpectedFault) pure
-        =<< resolveSingleFlight (const pass) (\occ -> atomicModifyIORef' seen (\os -> (occ : os, ()))) pass sf key (Right <$> fetch)
+        =<< resolveSingleFlight (const pass) (recordOccupancyHistory seen) pass sf key (Right <$> fetch)
+
+recordOccupancyHistory :: IORef [CacheOccupancy] -> CacheOccupancy -> IO ()
+recordOccupancyHistory seen occ = atomicModifyIORef' seen (\os -> (occ : os, ()))
 
 lookupStore :: SingleFlight StoreFault Text Text -> Text -> IO (Maybe Text)
 lookupStore = Store.lookupStore (const pass) pass PreserveRecency
@@ -395,12 +398,14 @@ spec = do
             resolveOk sf "final" (pure "raw") `shouldReturn` "raw"
 
     describe "incremental occupancy" $ do
-        it "reports the decrease before an eviction replacement is inserted" $ do
+        it "reports only committed occupancy after an eviction replacement" $ do
             seen <- newIORef []
             sf <- newStore 60 1 flatWeight
             _ <- resolveOkAccumulating seen sf "first" (pure "raw")
             _ <- resolveOkAccumulating seen sf "second" (pure "raw")
-            map occupancyPair <$> readIORef seen `shouldReturn` [(1, flatWeight), (0, 0), (1, flatWeight)]
+            map occupancyPair <$> readIORef seen `shouldReturn` [(1, flatWeight)]
+            lookupStore sf "first" `shouldReturn` Nothing
+            lookupStore sf "second" `shouldReturn` Just "raw"
 
         for_ [("read-only", \record -> Store.lookupStore record pass PreserveRecency), ("touching", \record -> Store.lookupStore record pass RefreshRecency)] $ \(viewName, readEntry) ->
             it ("reports expiry immediately through the " <> viewName <> " view") $ do
@@ -543,17 +548,22 @@ spec = do
             _ <- resolveOkRecording seen sf "second" (pure "raw")
             recordedOccupancy seen `shouldReturn` Just (2, 2 * flatWeight)
 
-        it "counts concurrent expiry reads and retaining inserts once" $ do
+        it "keeps committed occupancy bounded through concurrent expiry reads and inserts" $ do
             seen <- newIORef []
             sf <- newStore 0 3 (3 * flatWeight)
-            _ <- resolveOk sf "expired" (pure "raw")
+            let readEntry = Store.lookupStore (recordOccupancyHistory seen) pass RefreshRecency sf
+            _ <- resolveOkAccumulating seen sf "expired" (pure "raw")
             threadDelay 1000
-            concurrently_
-                (replicateM_ 20 (lookupStoreTouching sf "expired"))
-                (mapConcurrently (\(key :: Int) -> resolveOkAccumulating seen sf (show key) (pure "raw")) [1 .. 8])
-            readings <- readIORef seen
-            length (filter ((== 1) . occEntries) readings) `shouldBe` 8
-            map occupancyPair readings `shouldSatisfy` all (`elem` [(0, 0), (1, flatWeight)])
+            (_, results) <-
+                concurrently
+                    (replicateM_ 20 (readEntry "expired"))
+                    (mapConcurrently (\(key :: Int) -> resolveOkAccumulating seen sf (show key) (pure "raw")) [1 .. 8])
+            results `shouldBe` replicate 8 "raw"
+            threadDelay 1000
+            traverse readEntry ("expired" : map show [1 .. 8 :: Int]) `shouldReturn` replicate 9 Nothing
+            readings <- map occupancyPair <$> readIORef seen
+            listToMaybe readings `shouldBe` Just (0, 0)
+            readings `shouldSatisfy` all (`elem` [(0, 0), (1, flatWeight)])
 
         it "counts zero-weight entries against the entry limit" $ do
             seen <- newIORef Nothing

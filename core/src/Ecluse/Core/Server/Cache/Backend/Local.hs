@@ -49,7 +49,7 @@ newPooledRetention pool ttl floorBudget weigh = do
     expiry <- newTVarIO Map.empty
     record <- newTVarIO (const pass)
     let storeState = LocalStore store pool floorBudget weigh clock recency (toTimeSpec ttl) occupancy expiry record
-    registerStore pool (purgeExpired storeState) ((,) <$> readTVar occupancy <*> readTVar record)
+    registerStore pool (fmap fst . Map.lookupMin <$> readTVar expiry) (purgeExpired storeState) ((,) <$> readTVar occupancy <*> readTVar record)
     pure RetentionOperations{roLookup = lookupStore storeState, roInsert = insertBounded storeState}
 
 insertBounded :: (Hashable k) => LocalStore k v -> (CacheOccupancy -> IO ()) -> IO () -> k -> v -> IO ()
@@ -135,7 +135,7 @@ nextStamp storeState = do
     pure stamp
 
 lookupStore :: (Hashable k) => LocalStore k v -> (CacheOccupancy -> IO ()) -> Recency -> k -> IO (Maybe v)
-lookupStore storeState record recency key = runPool (lsPool storeState) $ \now -> do
+lookupStore storeState record recency key = readPool (lsPool storeState) $ \now -> do
     writeTVar (lsRecord storeState) record
     held <- Cache.lookupSTM False key (lsStore storeState) now
     for_ held $ \weighted -> case recency of
