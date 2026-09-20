@@ -149,7 +149,7 @@ shedQueueStep d overshoot =
             | otherwise -> depthDesired
 
 {- | The cache entry bound: an explicit count, or the surviving aggregate divided by the
-planning allowance per assembled-response slot.
+planning allowance per shared local metadata entry slot.
 -}
 cacheEntryBound :: TenantDemands -> ShedOutcomes -> Int
 cacheEntryBound d o =
