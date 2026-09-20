@@ -71,13 +71,12 @@ probe :: Shape -> CorpusPackage -> IO Measurement
 probe shape package = do
     enabled <- getRTSStatsEnabled
     unless enabled (fail "metadata residency requires RTS -T")
+    bracket (prepare shape package) (freeStablePtr . fst) (observe . fst)
     before <- sample
     (bytes, compact, weight, count, held, prepared) <-
         bracket (prepare shape package) (freeStablePtr . fst) $ \(root, (bytes, compact, weight, count)) -> do
             retained <- sample
-            -- Dereferencing after GC makes the root's continued reachability observable.
-            observed <- deRefStablePtr root >>= evaluate . heldSize
-            when (observed <= 0) (fail "retained metadata root is empty")
+            observe root
             pure (bytes, compact, weight, count, retained, allocated_bytes retained)
     released <- sample
     pure
@@ -95,6 +94,12 @@ probe shape package = do
 
 sample :: IO RTSStats
 sample = performMajorGC >> getRTSStats
+
+-- Dereferencing after GC makes the root's continued reachability observable.
+observe :: StablePtr Held -> IO ()
+observe root = do
+    observed <- deRefStablePtr root >>= evaluate . heldSize
+    when (observed <= 0) (fail "retained metadata root is empty")
 
 live :: RTSStats -> Word64
 live = gcdetails_live_bytes . gc

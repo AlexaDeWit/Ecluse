@@ -38,10 +38,25 @@ spec = describe "metadata retained heap" $ do
                 unless (status == ExitSuccess) (expectationFailure (show status <> ": " <> errors))
                 result <- either fail pure (eitherDecodeStrict (encodeUtf8 (toText output)))
                 report package digest shape result
-                wireBytes result `shouldBe` size
-                heldLive result `shouldSatisfy` (> baselineLive result)
-                releasedLive result `shouldSatisfy` (< heldLive result)
-                when (shape == Typed || shape == Shared) (versions result `shouldSatisfy` (> 0))
+                checkMeasurement shape size result
+
+checkMeasurement :: Shape -> Int -> Measurement -> Expectation
+checkMeasurement shape size result = do
+    let retained = toInteger (heldLive result) - toInteger (baselineLive result)
+        residual = max 0 (toInteger (releasedLive result) - toInteger (baselineLive result))
+    wireBytes result `shouldBe` size
+    retained `shouldSatisfy` (> 0)
+    residual `shouldSatisfy` (<= 16 * 1024)
+    (10 * residual) `shouldSatisfy` (<= retained)
+    (4 * retained) `shouldSatisfy` (<= envelopeQuarters shape * toInteger size)
+    when (shape == Typed || shape == Shared) (versions result `shouldSatisfy` (> 0))
+
+envelopeQuarters :: Shape -> Integer
+envelopeQuarters = \case
+    Wire -> 5
+    Raw -> 28
+    Typed -> 9
+    Shared -> 30
 
 -- | Dispatch a fresh process without entering Hspec or loading any other capture.
 childMain :: String -> FilePath -> IO ()
