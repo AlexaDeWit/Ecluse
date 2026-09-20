@@ -395,14 +395,38 @@ The harness separately validates each capture through the production adapter bef
 |---|---|
 | `wire+project (per package)` | Complete bodies feed decoding and production full-document projection on every iteration. |
 | `single-version metadata (per package)` | Complete bodies feed production full-document and selective projections. |
+| `cold production reads (per package)` | Unchanged complete bodies pass through the production npm and PyPI full-document and selected-version HTTP readers on every iteration. |
 | Realistic serve, merge, rules, and version groups | Inputs derive from complete captures, with preparation outside the measured operation. |
 | Load metadata and cache scenarios | Fixture upstreams retain all captured metadata and rewrite artifact authorities for the local harness. These are derived bodies, not byte-identity measurements. |
 | Scaled groups | Synthetic bodies measure growth separately and do not establish wire-to-resident ratios. |
 
-The projection groups measure decoding from held bytes, including the production structural guards.
-They exclude fetch-wrapper hashing, the streamed body-size guard, network, and cache lookup.
-The full-manifest digest lives in `fetchManifestWith`, outside these measured projection calls.
+The projection groups measure decoding from held bytes, including the structural guards.
+They do not measure the production HTTP wrappers.
+
+The cold-read group calls `fetchFullManifest` and `fetchVersionMetadata` through uncached production
+clients. Each iteration includes request formation, loopback HTTP, bounded response consumption,
+source hashing, extraction, projection, and artifact-location checks. The manager redirects every
+request to the local replay server and disables proxies. No timed request reaches a live registry.
+Source bytes and artifact URLs stay unchanged. Metadata is always cold, although the HTTP manager
+can reuse connections. The group measures neither cache hits nor cache admission.
+
+Each row reports time and RTS allocation per capture in `bench-results.csv`.
+Rows name the body ceiling and distinguish successful reads from body-limit refusals.
+Every capture runs with `defaultLimits`. A capture above that body ceiling also runs with an explicit
+cap equal to its byte size. Other structural limits stay unchanged. Preflight fails on unexpected
+errors, missing selected versions, incorrect byte counts, or a full-document digest mismatch.
+Selected reads target the same greatest retained text key as the selective projection group.
+
+Every measured result is compared with its preflight reference through typed fields and compact
+payloads. This forces the returned data without encoding it or forcing the lazy cache charge.
+The comparison cost and local HTTP server work contribute to the result. Capture loading, preflight,
+manager creation, and server startup sit outside the measured iteration. Held inputs and reference
+results remain resident. RTS allocation does not measure total process memory or native parser storage.
+The group excludes TLS, external network latency, compression, response assembly, and telemetry export.
+
 Work-per-request reports do not provide an automatic comparison against main or a fixed control group.
+[#1305](https://github.com/AlexaDeWit/Ecluse/issues/1305) owns that comparison. Match successful work,
+capture hashes, limits, and forcing when comparing these rows against another revision.
 Replacing trimmed captures breaks historical comparability, so comparisons must use the same capture hashes.
 
 The wire-to-resident factor still requires measurements of raw and typed retention on these bodies
