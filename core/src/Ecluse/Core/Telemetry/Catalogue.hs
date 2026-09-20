@@ -57,7 +57,7 @@ data MetricName
       SingleVersionCacheRequests
     | -- | @ecluse.metadata_cache.assembled.requests@: assembled-response request outcomes (counter).
       AssembledCacheRequests
-    | -- | @ecluse.metadata_cache.refused@: oversized values refused by store (counter).
+    | -- | @ecluse.metadata_cache.refused@: capacity refusals and backend failures (counter).
       MetadataCacheRefused
     | -- | @ecluse.metadata_cache.entries@: metadata-cache occupancy (gauge).
       MetadataCacheEntries

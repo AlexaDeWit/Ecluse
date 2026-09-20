@@ -141,7 +141,8 @@ identities must survive that boundary. No request can bypass the private authori
 Recency is a storage-policy hint, not a remote LRU requirement. Occupancy reporting is optional
 and describes the adapter's charged bytes and entry counts, not its server's exact heap use.
 The local provider reports its bounded stores' charges. Each external operation has a deadline
-capped at one second. Synchronous faults and deadline expiry cause an origin fetch or skipped write.
+capped at one second. A failed read fetches metadata from its origin or renders an assembled response
+from this request's authorised inputs. A failed write skips retention.
 Cancellation propagates. Writes run inline with no pending write queue. There is no external client,
 codec, or service configuration in the shipped provider.
 

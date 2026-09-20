@@ -33,11 +33,11 @@ data RecordingStore value = RecordingStore
 recordingStore :: IO (RecordingStore value)
 recordingStore = do
     values <- newIORef Map.empty
-    reads <- newIORef 0
+    readCount <- newIORef 0
     writes <- newIORef 0
-    let readValue _ key = modifyIORef' reads (+ 1) >> Map.lookup key <$> readIORef values
+    let readValue _ key = modifyIORef' readCount (+ 1) >> Map.lookup key <$> readIORef values
         writeValue key value = modifyIORef' writes (+ 1) >> modifyIORef' values (Map.insert key value)
-    pure (RecordingStore (externalOperations readValue writeValue) values reads writes)
+    pure (RecordingStore (externalOperations readValue writeValue) values readCount writes)
 
 sampleEntry :: CacheEntry
 sampleEntry = CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestDigest manifest)

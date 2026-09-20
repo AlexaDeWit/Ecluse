@@ -107,8 +107,8 @@ spec = do
                 release <- newEmptyMVar
                 fetches <- newIORef (0 :: Int)
                 let readValue _ _ = do
-                        first <- atomicModifyIORef' firstRead (False,)
-                        if first
+                        isFirst <- atomicModifyIORef' firstRead (False,)
+                        if isFirst
                             then putMVar started () >> takeMVar release $> Nothing
                             else readIORef held
                     operations = externalOperations readValue (\_ value -> writeIORef held (Just value))

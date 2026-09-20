@@ -16,6 +16,7 @@ import System.Clock (Clock (Monotonic), TimeSpec, fromNanoSecs, getTime)
 import UnliftIO.MVar (withMVar)
 
 import Ecluse.Core.Server.Cache.Backend (CacheOccupancy (..), Recency (..), RetentionOperations (..))
+import Ecluse.Core.Server.Cache.Backend.Local.Internal (publishAccessStamp)
 
 data Weighted v = Weighted
     { wValue :: v
@@ -154,7 +155,7 @@ nextStamp :: LocalStore k v -> IO Word64
 nextStamp sf = atomicModifyIORef' (sfClock sf) (\n -> let n' = n + 1 in (n', n'))
 
 touch :: LocalStore k v -> Weighted v -> IO ()
-touch sf weighted = nextStamp sf >>= writeIORef (wStamp weighted)
+touch sf weighted = nextStamp sf >>= publishAccessStamp (wStamp weighted)
 
 -- | Read without fetching or refreshing recency, reporting any expired entry's removal.
 lookupStore :: (Hashable k) => (CacheOccupancy -> IO ()) -> LocalStore k v -> k -> IO (Maybe v)

@@ -373,7 +373,8 @@ a selected-version read can therefore fetch upstream twice. No external cache se
 Boot and `check-config` output report these local capabilities. `cache.maxBytes` applies only to
 eligible local retention. Increasing it cannot enable full retention.
 One selected provider owns every metadata retention capability. Unsupported capabilities stay
-uncached. Backend failure causes an origin fetch, never a retained local fallback.
+uncached. A failed backend read fetches metadata from its origin or rerenders an assembled response
+from authorised inputs. A failed write skips retention. Neither failure uses a retained local fallback.
 Recency hints and occupancy reporting do not require a remote provider to use local LRU or report
 exact server memory. Provider occupancy, when available, reports its charged bytes and entry count.
 

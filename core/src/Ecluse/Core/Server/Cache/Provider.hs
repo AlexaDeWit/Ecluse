@@ -21,20 +21,32 @@ import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 
 -- | Missing capabilities remain uncached. They never fall back to another storage provider.
 data CacheProvider = CacheProvider
-    { providerFull :: Maybe (RetentionBackend Text CacheEntry)
+    { cpFull :: Maybe (RetentionBackend Text CacheEntry)
     -- ^ Full metadata is absent for local storage, regardless of the supplied operations.
-    , providerVersion :: Maybe (RetentionBackend Text VersionRead)
+    , cpVersion :: Maybe (RetentionBackend Text VersionRead)
     -- ^ Selected reads may use an adapter-owned projection without loading a full value locally.
-    , providerAssembled :: Maybe (RetentionBackend Text ByteString)
+    , cpAssembled :: Maybe (RetentionBackend Text ByteString)
     }
+
+-- | Full retention from the selected provider, absent for local storage.
+providerFull :: CacheProvider -> Maybe (RetentionBackend Text CacheEntry)
+providerFull = cpFull
+
+-- | Selected retention from the same provider, without a full-document read.
+providerVersion :: CacheProvider -> Maybe (RetentionBackend Text VersionRead)
+providerVersion = cpVersion
+
+-- | Assembled retention from the same provider, with no local fallback.
+providerAssembled :: CacheProvider -> Maybe (RetentionBackend Text ByteString)
+providerAssembled = cpAssembled
 
 -- | Classify every operation together. Local storage cannot opt into full retention.
 cacheProvider :: BackendStorage -> Maybe (RetentionOperations Text CacheEntry) -> Maybe (RetentionOperations Text VersionRead) -> Maybe (RetentionOperations Text ByteString) -> CacheProvider
 cacheProvider storage full version assembled =
     CacheProvider
-        { providerFull = (retentionBackend storage <$> full) <* guard (supportsFullRetention storage)
-        , providerVersion = retentionBackend storage <$> version
-        , providerAssembled = retentionBackend storage <$> assembled
+        { cpFull = (retentionBackend storage <$> full) <* guard (supportsFullRetention storage)
+        , cpVersion = retentionBackend storage <$> version
+        , cpAssembled = retentionBackend storage <$> assembled
         }
 
 -- | Retain only selected versions and assembled responses in bounded local stores.
