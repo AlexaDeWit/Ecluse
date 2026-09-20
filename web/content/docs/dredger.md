@@ -1,20 +1,20 @@
 +++
 title = "Running the Dredger"
-description = "The role that deletes denied versions from your mirror target and its private cache: what one cycle does, what bounds it, and the permissions it needs."
+description = "Deleting denied versions from your mirror target and its private cache: what one cycle does, what bounds it, and the permissions it needs."
 weight = 6
 +++
 
 `ecluse dredger` is the only role that deletes. It walks each mount's mirror target and the
 `privateUpstream` cache paired with it, and removes versions the mount's own rules deny. Run it when
-those stores must not keep serving a version a new advisory condemns, and read this page before you
+those stores must not keep serving a version a new advisory condemns. Read this page before you
 point it at a store, because deletion is permanent.
 
 `privateUpstream` is a cache. Your builds read through it, the mirror worker writes to
 `mirrorTarget`, and your publishers write to `publicationTarget`. Dredger cleans the first two and
-never the third. Because the cache only holds copies of what those stores already carry, Dredger
-needs no proof that a cached version came from the mirror: an unknown or absent origin does not
-shield a copy. Pointing publishes at a store you also declare as `privateUpstream` breaks that
-premise, so treat it as a deployment fault rather than a supported topology.
+never the third. The cache only holds copies of what those stores already carry. So Dredger needs
+no proof that a cached version came from the mirror. An unknown or absent origin does not shield a
+copy. Pointing publishes at a store you also declare as `privateUpstream` breaks that premise, so
+treat it as a deployment fault rather than a supported topology.
 
 Dredger reads actual inventories from each mount's mirror target and private cache independently.
 It removes eligible mirror versions before their eligible cache copies, under separate consent.
@@ -28,10 +28,17 @@ exist only in the publication target, so Dredger never runs against a store that
 publications. Distinct repository paths on one host remain valid. Proxy and mirror still
 accept this same-mount pair.
 
-Both cleanup targets have to be sweepable. Dredger refuses a mount whose `mirrorTarget` or whose
-`privateUpstream` names a store this build has no maintenance backend for, and it refuses a mirrored
-mount whose private cache it cannot observe at all. A `registry` target fails that test on either
-side, because it offers no control plane. The refusal names the mount key and the reason.
+Both cleanup targets have to be sweepable. Dredger refuses a `mirrorTarget` whose tag names a store
+this build has no maintenance backend for. It refuses a declared `privateUpstream` in four cases:
+
+- a `registry` tag, which carries no inventory control plane
+- a `codeArtifact` cache whose backend does not resolve
+- a `verdaccio` cache with `permitDeletion` unset
+- a `verdaccio` cache with no `token`
+
+The last two bind the deleting role alone, and preview boots without either key. A mirrored mount
+that declares no `privateUpstream` refuses as well, because Dredger sweeps each mirror target beside
+the cache paired with it. Every refusal names the mount key and the reason.
 
 The Dredger takes no ingress. It exposes only `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`.
 
@@ -159,8 +166,8 @@ allocate between them.
 **Not every physical attempt is counted.** The sweep counts the calls it makes. A retry the AWS SDK
 makes inside one call is not counted, and a version enumeration counts as one request however many
 pages the store takes to answer it. A maintenance client replays no request on a reused connection
-below that accounting, so every physical attempt is one the budget counted, and a connection that
-fails reaches the store-fault policy: a metadata read that fails keeps its package until a later
+below that accounting. So every physical attempt is one the budget counted. A connection that fails
+reaches the store-fault policy, and a metadata read that fails keeps its package until a later
 cycle.
 
 ## What is deleted, and what never is
@@ -205,6 +212,9 @@ through the store backend's own handle.
 | `codeArtifact` | a repository resource tag, key `ecluse-dredger-consent`, value `true` | remove the tag, and the next cycle halts with no restart |
 | `verdaccio` | `permitDeletion: true` under each target's tag | unset the key and restart, because the boot reads it |
 | `registry` | no consent form and no control plane, so the Dredger refuses the store at boot and names the tag | |
+
+A `verdaccio` private cache also needs `privateUpstream.verdaccio.token` before the deleting role
+boots, and the refusal names that key.
 
 The Dredger never writes a consent marker. Placing one and removing it are yours alone, and the
 full walk's resumption marker is a separate tag key so a marker write cannot reach your consent.
@@ -410,9 +420,9 @@ leaves the consent tag outside the Dredger's reach entirely.
 
 On a store reached through the ecosystem protocol alone, least privilege is an account of the
 store's own: a user whose package rights cover that one store and nothing else. Give the mirror
-target and the private cache separate accounts, and declare each one's token under its own key
-(`mirrorTarget.verdaccio.token` and `privateUpstream.verdaccio.token`), so neither target's
-credential reaches the other.
+target and the private cache separate accounts. Declare each one's token under its own key,
+`mirrorTarget.verdaccio.token` and `privateUpstream.verdaccio.token`, so neither target's credential
+reaches the other.
 
 ## Known limits
 

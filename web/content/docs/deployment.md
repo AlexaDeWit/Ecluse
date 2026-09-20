@@ -36,9 +36,8 @@ Dredger refuses some endpoint pairs that the proxy and the mirror worker accept,
 deletions could reach first-party packages that exist only in the publication target. It refuses a
 mount whose `mirrorTarget` equals any mount's `privateUpstream` or its own `publicationTarget`, and a
 mount whose `privateUpstream` equals its own `publicationTarget`. The proxy and the mirror worker
-start on those pairs, and warn on the two mirror-target pairs. Dredger also refuses either cleanup
-target, the mirror target or the private cache, whose tag names a store this build has no
-maintenance backend for, and a mirrored mount whose private cache it cannot observe at all. The
+start on those pairs, and warn on the two mirror-target pairs. Dredger also refuses a cleanup target
+it cannot sweep, on either side. [Running the Dredger](@/docs/dredger.md) lists those cases. The
 [endpoint collision table](@/docs/configuration.md#endpoint-collisions) lists every pair and its
 outcome per role.
 
