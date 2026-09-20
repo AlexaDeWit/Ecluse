@@ -139,6 +139,13 @@ transferring or decoding a full document locally. The adapter owns its TTL, code
 identity checks, and representation. Source, ecosystem, package, version, digest, and artifact
 identities must survive that boundary. No request can bypass the private authorisation or rules.
 
+A selected public read first prepares its provider operation while holding CPU admission.
+A local retained value, including a cached absence, stays captured for this request, so its lower
+materialisation allowance cannot lead to a fetch after eviction. Preparation performs no origin
+fetch or external lookup. The request acquires materialisation admission before executing deferred
+work and evaluating current rules. An external lookup uses the cold allowance even when its remote
+provider later reports a hit.
+
 Recency is a storage-policy hint, not a remote LRU requirement. Occupancy reporting is optional
 and describes the adapter's charged bytes and entry counts, not its server's exact heap use.
 The local provider reports its bounded stores' charges. Each external operation has a deadline
@@ -188,12 +195,22 @@ No request shares or skips the private fetch and its authorisation.
 
 ## Serve admission and upstream pools
 
-The packument path and a tarball miss's public-metadata gate share one process-wide admission bound.
-A request that waits out its budget for a slot is shed with `503` and `Retry-After`. Shedding
-instantly would be self-amplifying, because the refusal work competes for the cores the admitted work
-needs. Health probes, cheap local routes, and trusted private tarball hits bypass admission. The hit
-already streams in constant memory, and holding a metadata slot for a slow download would let clients
-starve packument traffic.
+Listings and public artifact metadata decisions acquire a process-wide CPU gate and then a separate
+materialisation gate. The CPU capacity follows the core count or an explicit operator pin.
+Materialisation charges static workload estimates against an independent capacity. The
+[memory plan](configuration.md#runtime-sizing-cores-and-heap-ceiling) explains why neither these
+estimates nor their scheduling minimum guarantee that a request fits the heap.
+
+A listing reserves output work plus one full-read allowance per permitted configured origin before
+fetching them concurrently. First-party names omit the public origin, and mounts without a private
+upstream omit that origin. An assembled hit or a conditional `304` does not reduce the initial charge.
+Both gates remain held through metadata evaluation and the listing response. Public artifact
+requests release both after the metadata decision, before streaming the admitted artifact.
+
+Each gate has a bounded waiting room and wait budget. A full waiting room or expired wait sheds
+with `503` and `Retry-After`. Health probes, cheap local routes and trusted private artifact hits
+bypass these metadata gates. The mirror worker runs outside these serve gates. A slow artifact
+client therefore holds no serve metadata slot while its download drains.
 
 The public and private connection pools take independent settings. The private pool takes the larger
 share, because a trusted tarball hit streams outside admission, which makes its demand the
