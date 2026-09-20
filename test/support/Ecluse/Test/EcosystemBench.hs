@@ -11,6 +11,7 @@ module Ecluse.Test.EcosystemBench (
 ) where
 
 import Data.Aeson (Value, eitherDecodeStrict)
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Types (Method, methodGet, methodPut)
@@ -64,7 +65,7 @@ npmBench =
         , ebCorpus = []
         , ebSynthetic = syntheticPackumentBytes
         , ebSyntheticName = benchPackageName
-        , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionList . RegistryResponse 200
+        , ebDecode = \_ -> first show . fmap (map renderVersion) . parseVersionList . (\body -> RegistryResponse 200 (BS.length body) body)
         , ebProject = \name -> fmap (second (fst npmCached)) . projectNpmManifest defaultLimits name
         , ebSelective = \name version -> fmap readDetails . projectNpmVersion defaultLimits name version
         , ebReadDocument = readDocument (fst npmCached)

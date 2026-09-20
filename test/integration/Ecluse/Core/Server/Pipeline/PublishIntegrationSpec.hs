@@ -36,7 +36,7 @@ import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterProjectName))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter, npmPublish)
 import Ecluse.Core.Registry.Npm.Publish qualified as NpmPublish
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security (defaultLimits, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission, newByteAdmissionTuned)
 import Ecluse.Core.Server.Context (PublishDeps (..))
@@ -62,9 +62,8 @@ publishDepsAt targetPort staticToken bodyBudget =
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticToken = staticToken
         , pubInboundToken = Nothing
-        , pubLimits = defaultLimits
+        , pubLimits = defaultLimits{maxPublishRequestBytes = 26214400}
         , pubBodyBudget = bodyBudget
-        , pubMaxRequestBytes = 26214400
         , pubHelp = Nothing
         , pubProjectName = adapterProjectName npmAdapter
         , pubAdapter = npmPublish
@@ -83,7 +82,7 @@ proxyWith mkPublishDeps =
 -- The body cap fires before relay, so the target port is an unconnectable placeholder.
 cappedProxyWith :: Int -> IO Application
 cappedProxyWith cap =
-    proxyWith (Just (\bodyBudget -> (publishDepsAt 1 Nothing bodyBudget){pubMaxRequestBytes = cap}))
+    proxyWith (Just (\bodyBudget -> (publishDepsAt 1 Nothing bodyBudget){pubLimits = defaultLimits{maxPublishRequestBytes = cap}}))
 
 putPublish :: ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
 putPublish = putPublishAs ChunkedBody

@@ -14,7 +14,7 @@ import Ecluse.Composition.Worker (mirrorTransportFor, workerPoliciesFor)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry.Publish (MirrorTransport (ptLimits))
-import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
+import Ecluse.Core.Security (Limits (maxMetadataBytes, maxMirrorArtifactBytes), defaultLimits)
 import Ecluse.Core.Server.Context (MountBinding (bindingPackumentDeps), PackumentDeps (pdFirstParty, pdLimits, pdMinIntegrity))
 import Ecluse.Core.Worker (WorkerPolicy (wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpNow))
 import Ecluse.Runtime.Env (Env)
@@ -71,7 +71,7 @@ spec = describe "workerPoliciesFor (config plus adapters in, WorkerPolicies out)
         (env, bindings, targets) <- composedFixtures
         case Map.lookup Npm (workerPoliciesFor env bindings targets testArtifactCap) of
             Nothing -> expectationFailure "expected an npm bundle"
-            Just policy -> maxBodyBytes (wpArtifactLimits policy) `shouldBe` testArtifactCap
+            Just policy -> maxMirrorArtifactBytes (wpArtifactLimits policy) `shouldBe` testArtifactCap
 
     it "reads the mirror presence probe under the mount's plan-resolved response bound, not the metadata-path default (issue #851)" $ do
         -- The probe honours the same plan-resolved response bound as every other metadata read on
@@ -105,7 +105,7 @@ testArtifactCap = 40 * 1024 * 1024
 -- A distinctive plan-resolved response bound, below the shipped default, so the
 -- probe-bound pin fails were the wiring to revert to the metadata-path default.
 probeLimits :: Limits
-probeLimits = defaultLimits{maxBodyBytes = 3 * 1024 * 1024}
+probeLimits = defaultLimits{maxMetadataBytes = 3 * 1024 * 1024}
 
 -- The composed inputs the production boot path derives, over no-network doubles.
 composedFixtures :: IO (Env, [MountBinding], [PublishTarget])

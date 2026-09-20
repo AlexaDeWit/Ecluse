@@ -23,7 +23,7 @@ import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable), PublishRelayResponse (PublishRelayResponse))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterPublish (publishDeclaredNames, publishRelay))
 import Ecluse.Core.Registry.Origin (OriginClient, originClient)
-import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead)
+import Ecluse.Core.Security (BodyLimit (PublishRequestBodyLimit), Limits (maxPublishRequestBytes), boundedRead)
 import Ecluse.Core.Server.Admission.Bytes (withByteAdmission)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -80,12 +80,12 @@ publishWithDeps replies deps clientToken name request respond
         liftIO (respond (fromMaybe (bodyBudgetShed replies deps) outcome))
   where
     overDeclaredCap = case requestBodyLength request of
-        KnownLength n -> n > fromIntegral (pubMaxRequestBytes deps)
+        KnownLength n -> n > fromIntegral (maxPublishRequestBytes (pubLimits deps))
         ChunkedBody -> False
 
     bodyWeight = case requestBodyLength request of
         KnownLength n -> fromIntegral n
-        ChunkedBody -> pubMaxRequestBytes deps
+        ChunkedBody -> maxPublishRequestBytes (pubLimits deps)
 
 {- Read the bounded body, check the name it declares, then relay, in that order. This runs
 inside the byte-admission bracket, so the reserved weight always covers the bytes buffered. -}
@@ -97,15 +97,11 @@ readAndRelay ::
     Request ->
     IO response
 readAndRelay replies deps target name request =
-    boundedRead requestBodyLimits (getRequestBodyChunk request) >>= \case
+    boundedRead (PublishRequestBodyLimit (maxPublishRequestBytes (pubLimits deps))) (getRequestBodyChunk request) >>= \case
         Left _ -> pure (publishTooLarge replies deps)
-        Right body -> case bodyNameDisagreement (publishDeclaredNames (pubAdapter deps)) (pubProjectName deps) name (LBS.fromStrict body) of
+        Right (_, body) -> case bodyNameDisagreement (publishDeclaredNames (pubAdapter deps)) (pubProjectName deps) name (LBS.fromStrict body) of
             Just declared -> pure (bodyNameMismatch replies deps name declared)
             Nothing -> renderRelay replies deps <$> publishRelay (pubAdapter deps) target name body
-  where
-    -- The per-request body cap as a 'boundedRead' bound. 'boundedRead' consults only
-    -- 'maxBodyBytes', so the response budget's other 'Limits' fields do not matter here.
-    requestBodyLimits = (pubLimits deps){maxBodyBytes = pubMaxRequestBytes deps}
 
 publicationTarget :: PublishDeps -> ServeRuntime -> Maybe ClientCredential -> OriginClient
 publicationTarget deps rt clientToken =

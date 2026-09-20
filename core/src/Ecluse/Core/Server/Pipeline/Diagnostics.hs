@@ -55,8 +55,10 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
  )
 import Ecluse.Core.Security (
+    BodyLimit (..),
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyArtifacts, TooManyVersions),
     authorityLabel,
+    bodyLimitBytes,
  )
 import Ecluse.Core.Server.Pipeline.Internal (pipelineInternalModule)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
@@ -104,7 +106,13 @@ logBreach name err =
     observed :: Text
     cap :: Text
     (boundName, observed, cap) = case err of
-        BodyTooLarge c -> ("body-size", "over " <> show c <> " bytes", show c <> " bytes")
+        BodyTooLarge bound ->
+            let c = bodyLimitBytes bound
+                role = case bound of
+                    MetadataBodyLimit _ -> "metadata-body-size"
+                    PublishRequestBodyLimit _ -> "publish-request-body-size"
+                    MirrorArtifactBodyLimit _ -> "mirror-artifact-body-size"
+             in (role, "over " <> show c <> " bytes", show c <> " bytes")
         TooManyVersions seen c -> ("version-count", show seen, show c)
         TooManyArtifacts seen c -> ("artifact-count", show seen, show c)
         TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")

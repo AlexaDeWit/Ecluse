@@ -11,6 +11,8 @@ module Ecluse.Core.Security.Limits (
     -- * Response bounds
     Limits (..),
     defaultLimits,
+    BodyLimit (..),
+    bodyLimitBytes,
     LimitError (..),
     boundedRead,
     checkVersionCount,
@@ -30,41 +32,56 @@ import Data.Vector qualified as V
 
 import Ecluse.Core.Package (PackageInfo, infoVersions, pkgArtifacts)
 
-{- | Resource budget for a single upstream response. 'maxVersionCount' and 'maxArtifactCount'
-are post-projection backstops behind the pre-decode 'maxBodyBytes' cap.
--}
+-- | Byte ceilings by operation, followed by structural metadata backstops.
 data Limits = Limits
-    { maxBodyBytes :: Int
-    {- ^ Largest response body 'boundedRead' accumulates, in bytes. The metadata path only:
-    the proxy streams artifacts rather than buffering them.
-    -}
+    { maxMetadataBytes :: Int
+    -- ^ Decompressed registry metadata and control-response bytes.
+    , maxPublishRequestBytes :: Int
+    -- ^ Client publish request bytes buffered before relay.
+    , maxMirrorArtifactBytes :: Int
+    -- ^ Artifact bytes buffered for mirror verification and publication.
     , maxVersionCount :: Int
     -- ^ Most versions a parsed document may carry. Bounds per-version rule evaluation.
     , maxArtifactCount :: Int
-    {- ^ Most artifacts a parsed document may carry across all its versions. One version can
-    hold many, so this bounds the projection and residency cost 'maxVersionCount' does not reach.
-    -}
+    -- ^ Total artifacts across versions, bounding projection and residency beyond the version count.
     , maxNestingDepth :: Int
     -- ^ Deepest JSON nesting a decoded document may reach. Bounds stack\/CPU on nested input.
     }
     deriving stock (Eq, Show)
 
-{- | Defaults: a 12 MiB metadata body, 100k versions, 100k artifacts, 64 nesting levels.
-Generous for real documents, tight enough to fail closed on pathological input.
--}
+-- | Default byte ceilings are 12 MiB until composition supplies each role's resolved cap.
 defaultLimits :: Limits
 defaultLimits =
     Limits
-        { maxBodyBytes = 12 * 1024 * 1024
+        { maxMetadataBytes = 12 * 1024 * 1024
+        , maxPublishRequestBytes = 12 * 1024 * 1024
+        , maxMirrorArtifactBytes = 12 * 1024 * 1024
         , maxVersionCount = 100_000
         , maxArtifactCount = 100_000
         , maxNestingDepth = 64
         }
 
+-- | The selected body role and its byte ceiling, shared by reads and failures.
+data BodyLimit
+    = -- | Metadata and registry control responses.
+      MetadataBodyLimit Int
+    | -- | Inbound first-party publish requests.
+      PublishRequestBodyLimit Int
+    | -- | Artifacts buffered by the mirror worker.
+      MirrorArtifactBodyLimit Int
+    deriving stock (Eq, Show)
+
+-- | The selected ceiling in bytes, before decoding or projection.
+bodyLimitBytes :: BodyLimit -> Int
+bodyLimitBytes = \case
+    MetadataBodyLimit cap -> cap
+    PublishRequestBodyLimit cap -> cap
+    MirrorArtifactBodyLimit cap -> cap
+
 -- | Which 'Limits' ceiling a response exceeded.
 data LimitError
-    = -- | The body exceeded 'maxBodyBytes'. Carries the configured ceiling.
-      BodyTooLarge Int
+    = -- | The selected body role exceeded its configured byte ceiling.
+      BodyTooLarge BodyLimit
     | -- | More than 'maxVersionCount' versions. Carries the count seen and the ceiling.
       TooManyVersions Int Int
     | -- | More than 'maxArtifactCount' artifacts across the versions, then the ceiling.
@@ -73,22 +90,19 @@ data LimitError
       TooDeeplyNested Int
     deriving stock (Eq, Show)
 
-{- | Read a streamed body chunk by chunk, refusing it whole once the accumulated size would
-exceed 'maxBodyBytes'. @readChunk@ ends the input with an empty 'ByteString' (@BodyReader@).
--}
-boundedRead :: (Monad m) => Limits -> m ByteString -> m (Either LimitError ByteString)
-boundedRead limits readChunk = go 0 mempty
+-- | Return the consumed byte count and body. An empty chunk ends the read, and an overstep refuses it whole.
+boundedRead :: (Monad m) => BodyLimit -> m ByteString -> m (Either LimitError (Int, ByteString))
+boundedRead bound readChunk = go 0 mempty
   where
-    cap = maxBodyBytes limits
-    -- A forward-built 'Builder': chunks appended in arrival order, finalised once at EOF.
+    cap = bodyLimitBytes bound
     go !seen acc = do
         chunk <- readChunk
         if BS.null chunk
-            then pure (Right (BSL.toStrict (toLazyByteString acc)))
+            then pure (Right (seen, BSL.toStrict (toLazyByteString acc)))
             else
                 let seen' = seen + BS.length chunk
                  in if seen' > cap
-                        then pure (Left (BodyTooLarge cap))
+                        then pure (Left (BodyTooLarge bound))
                         else go seen' (acc <> byteString chunk)
 
 {- | Reject a parsed packument carrying more than 'maxVersionCount' versions. It runs between

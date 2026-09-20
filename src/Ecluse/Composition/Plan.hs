@@ -69,7 +69,7 @@ import Ecluse.Config (
     resolvedKeyProvenance,
  )
 import Ecluse.Config.Ambient (AmbientAws, ambientAwsFromEnv, ambientS3Endpoint)
-import Ecluse.Core.Security (Limits (Limits, maxArtifactCount, maxBodyBytes, maxNestingDepth, maxVersionCount))
+import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheConfig)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Rts (EffectiveRuntimePlan)
@@ -209,8 +209,8 @@ bootPlanFrom role inputs (validated, mirror, s3Endpoint) =
         , bpMirrorRuntime = mdRuntime mirror
         , bpMemoryPlan = memoryPlan
         , bpLimits =
-            Limits
-                { maxBodyBytes = mpMaxResponseBytes memoryPlan
+            defaultLimits
+                { maxMetadataBytes = mpMaxResponseBytes memoryPlan
                 , maxVersionCount = limMaxVersionCount (cfgLimits app)
                 , maxArtifactCount = limMaxArtifactCount (cfgLimits app)
                 , maxNestingDepth = limMaxNestingDepth (cfgLimits app)

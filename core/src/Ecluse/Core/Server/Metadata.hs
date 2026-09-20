@@ -27,16 +27,16 @@ import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoDistT
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
-    Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
+    Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (..),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
-    VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
+    VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, originClientOf)
 
 import Ecluse.Core.Server.Cache (
-    CacheEntry (CacheEntry, entryDigest, entryInfo, entryRaw),
+    CacheEntry (CacheEntry, entryBodyBytes, entryDigest, entryInfo, entryRaw),
     MetadataCache,
     Source,
     cachedMetadata,
@@ -138,7 +138,7 @@ entryOfManifest :: ClientWiring -> PackageName -> Manifest -> IO CacheEntry
 entryOfManifest wiring name manifest = do
     let invalid = infoInvalidEntries (manifestInfo manifest)
     unless (null invalid) (cwLogInvalid wiring name invalid)
-    pure (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestDigest manifest))
+    pure (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestDigest manifest))
 
 {- The single-version hybrid: the small version cache, then the warm full cache read-only, then
 a cold selective fetch. Uncached, it is the raw selective fetch. -}
@@ -177,6 +177,7 @@ readOfEntry :: (Version -> CachedDoc -> Maybe CachedDoc) -> Version -> CacheEntr
 readOfEntry selectRaw version entry =
     VersionRead
         { vrVersion = pairOf <$> selectVersion version (entryInfo entry)
+        , vrBodyBytes = entryBodyBytes entry
         , vrUpstreamLatest = Map.lookup "latest" (infoDistTags (entryInfo entry))
         }
   where
@@ -187,6 +188,7 @@ entryToManifest entry =
     Manifest
         { manifestInfo = entryInfo entry
         , manifestRaw = entryRaw entry
+        , manifestBodyBytes = entryBodyBytes entry
         , manifestDigest = entryDigest entry
         }
 

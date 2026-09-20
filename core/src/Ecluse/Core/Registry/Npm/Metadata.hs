@@ -24,6 +24,7 @@ import Data.Aeson (Value (Object, String), parseJSON)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseMaybe)
+import Data.ByteString qualified as BS
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -40,7 +41,7 @@ import Ecluse.Core.Registry.Metadata (
     ManifestProjection (ManifestProjection, prjDecode, prjInject, prjLocations),
     MetadataError (MetadataBoundExceeded),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
-    VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
+    VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
     fetchManifestWith,
     fetchThenProject,
  )
@@ -103,8 +104,9 @@ projectNpmManifest limits name = projectMetadata (parsePackageInfoFromValue name
 
 fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchNpmVersion tracing origin name version =
-    fetchThenProject tracing (fetchNpmPackument origin) name $
-        fmap (locationChecked (originBaseUrl origin)) . projectNpmVersion (ocLimits origin) name version
+    fetchThenProject tracing (fetchNpmPackument origin) name $ \bodyBytes body ->
+        (\readResult -> (locationChecked (originBaseUrl origin) readResult){vrBodyBytes = bodyBytes})
+            <$> projectNpmVersion (ocLimits origin) name version body
 
 -- A version whose artifact sits off the serving authority drops, as it does on the whole document.
 locationChecked :: Text -> VersionRead -> VersionRead
@@ -137,6 +139,7 @@ projectNpmVersion limits name version body = do
                 -- Use the same rendered version key as the full-document projection.
                 details <- projectVersionEntry name (mkVersion Npm (renderVersion version)) publishedAt raw
                 pure VersionDoc{vdDetails = details, vdRaw = Just (fst npmCached raw)}
+            , vrBodyBytes = BS.length body
             , vrUpstreamLatest = latestTarget (svDistTagLatest selected)
             }
 

@@ -322,7 +322,7 @@ succeedingPublishClient counter =
         { mpPublishArtifact = \_ _ _ _ -> do
             atomicModifyIORef' counter (\n -> (n + 1, ()))
             pure (Right ())
-        , mpProbeMetadata = const (pure (Right (RegistryResponse 404 "")))
+        , mpProbeMetadata = const (pure (Right (RegistryResponse 404 0 "")))
         , mpParseVersionList = const (Left (ParseError "bench mirror: nothing mirrored yet"))
         }
 

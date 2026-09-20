@@ -90,7 +90,7 @@ import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Security (HostPort, Limits (maxBodyBytes), defaultLimits)
+import Ecluse.Core.Security (HostPort, Limits (maxMirrorArtifactBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
@@ -324,7 +324,7 @@ withArtifactRequest builder = Map.map (\p -> p{wpArtifact = (wpArtifact p){artif
 
 -- | Set every bundle's artifact fetch cap, so a test drives an over-cap fetch.
 withArtifactCap :: Int -> WorkerPolicies -> WorkerPolicies
-withArtifactCap cap = Map.map (\p -> p{wpArtifactLimits = defaultLimits{maxBodyBytes = cap}})
+withArtifactCap cap = Map.map (\p -> p{wpArtifactLimits = defaultLimits{maxMirrorArtifactBytes = cap}})
 
 {- | An address with nothing listening. A fetch against it is refused at connect, the
 genuine transient fault. Port 1 is in the privileged range and never bound.

@@ -10,7 +10,7 @@ module Ecluse.Core.SecurityBench (benchmarks) where
 import Data.ByteString qualified as BS
 import Ecluse.Bench.Corpus (entryInfo, entryName, syntheticPackageInfo)
 import Ecluse.Core.Package (PackageInfo)
-import Ecluse.Core.Security (LimitError, boundedRead, checkVersionCount, defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, boundedRead, checkVersionCount, defaultLimits, maxMetadataBytes)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnf, whnfIO)
 
@@ -37,8 +37,8 @@ benchmarks ecosystem =
 boundedReadDepth :: [ByteString] -> IO Int
 boundedReadDepth chunks = do
     cursor <- newIORef chunks
-    result <- boundedRead defaultLimits (popChunk cursor)
-    pure $! either limitErrorCode BS.length result
+    result <- boundedRead (MetadataBodyLimit (maxMetadataBytes defaultLimits)) (popChunk cursor)
+    pure $! either limitErrorCode (BS.length . snd) result
   where
     popChunk cursor = atomicModifyIORef' cursor $ \case
         [] -> ([], BS.empty)

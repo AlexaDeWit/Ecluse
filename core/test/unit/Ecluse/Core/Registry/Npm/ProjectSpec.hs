@@ -4,6 +4,8 @@
 
 module Ecluse.Core.Registry.Npm.ProjectSpec (spec) where
 
+import Data.ByteString qualified as BS
+
 import Data.Aeson (Value (Number, Object, String), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -360,10 +362,10 @@ versionListSpec :: Spec
 versionListSpec = describe "parseVersionList" $ do
     it "lists the packument's versions, preserving the raw strings (is-odd)" $ do
         body <- readFixture "is-odd.full.json"
-        fmap (map renderVersion) (parseVersionList (RegistryResponse 200 body)) `shouldBe` Right ["3.0.1"]
+        fmap (map renderVersion) (parseVersionList (RegistryResponse 200 (BS.length body) body)) `shouldBe` Right ["3.0.1"]
 
     it "lists every key for a multi-version inline packument, in key order" $ do
-        vs <- expectRight (parseVersionList (RegistryResponse 200 multiVersionPackument))
+        vs <- expectRight (parseVersionList (RegistryResponse 200 (BS.length multiVersionPackument) multiVersionPackument))
         map renderVersion vs `shouldBe` ["1.0.0", "1.2.0", "2.0.0"]
 
 -- | One version broken in a required or security-decisive field is dropped from the decision surface, never denying the whole package.
@@ -386,7 +388,7 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
         Map.keys (infoVersions info) `shouldBe` []
 
     it "lists only the versions that decode (parseVersionList)" $
-        fmap (map renderVersion) (parseVersionList (RegistryResponse 200 mixedHealthAndBrokenPackument))
+        fmap (map renderVersion) (parseVersionList (RegistryResponse 200 (BS.length mixedHealthAndBrokenPackument) mixedHealthAndBrokenPackument))
             `shouldBe` Right ["1.0.0"]
 
     it "resolves a surviving version's details while a broken sibling is absent" $ do
@@ -491,14 +493,14 @@ projectionIsTotal :: (RegistryResponse -> String) -> PropertyT IO ()
 projectionIsTotal render = do
     v <- forAll genBody
     annotateShow v
-    _ <- H.eval (length (render (RegistryResponse 200 (encodeToBody v))))
+    _ <- H.eval (length (render (RegistryResponse 200 (BS.length (encodeToBody v)) (encodeToBody v))))
     H.success
 
 -- | Malformed bytes must yield a parse failure rather than a crash.
 projectionBytesIsTotal :: (RegistryResponse -> String) -> PropertyT IO ()
 projectionBytesIsTotal render = do
     bytes <- forAll (Gen.bytes (Range.linear 0 64))
-    _ <- H.eval (length (render (RegistryResponse 200 bytes)))
+    _ <- H.eval (length (render (RegistryResponse 200 (BS.length bytes) bytes)))
     H.success
 
 -- | Exercise decoded inputs directly, without a serialisation round trip.

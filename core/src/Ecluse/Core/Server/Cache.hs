@@ -98,6 +98,8 @@ data CacheEntry = CacheEntry
     -- ^ The typed packument view the rules and merge reason over.
     , entryRaw :: CachedDoc
     -- ^ The raw upstream document the served body is built from.
+    , entryBodyBytes :: Int
+    -- ^ Decompressed source bytes, retained independently of the cache weight.
     , entryDigest :: ContentDigest
     }
     deriving stock (Eq, Show)

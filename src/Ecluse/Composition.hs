@@ -84,7 +84,7 @@ import Ecluse.Core.Registry.Npm.Publish (npmPublishAllowed)
 import Ecluse.Core.Registry.PyPI.FirstParty (pypiFirstPartyName)
 import Ecluse.Core.Rules (RuleDeps, prepare, rdCurrentAdvisoryEtag, rdSourceReporter)
 import Ecluse.Core.Rules.Outage (SourceReporter (noteAdmission))
-import Ecluse.Core.Security (Limits)
+import Ecluse.Core.Security (Limits, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
@@ -299,9 +299,8 @@ publishDepsFor adapter app limits publishBudget helpMessage publication = do
             , pubAllowed = firstPartyName (vpubFirstParty publication)
             , pubStaticToken = vpubStaticToken publication
             , pubInboundToken = srvAuthToken (cfgServer app)
-            , pubLimits = limits
+            , pubLimits = limits{maxPublishRequestBytes = pbMaxRequestBytes budget}
             , pubBodyBudget = pbBodyBudget budget
-            , pubMaxRequestBytes = pbMaxRequestBytes budget
             , pubHelp = helpMessage
             , pubProjectName = adapterProjectName adapter
             , pubAdapter = publish

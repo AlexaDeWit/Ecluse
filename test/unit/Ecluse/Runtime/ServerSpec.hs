@@ -49,7 +49,7 @@ import Ecluse.Core.Rules.Types (
     PrecededRule,
     Rule (AllowByIdentity, AllowIfOlderThan, DenyIfCve),
  )
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security (defaultLimits, maxPublishRequestBytes)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission, newByteAdmission)
 import Ecluse.Core.Server.Context (MountRouter, PublishDeps (..), ResponseAction (AnswerLocally), RouteAction (RouteAction))
@@ -140,9 +140,8 @@ basePublishDeps bodyBudget =
         , pubAllowed = NpmPublish.npmPublishAllowed [mkScope "acme"]
         , pubStaticToken = Nothing
         , pubInboundToken = Nothing
-        , pubLimits = defaultLimits
+        , pubLimits = defaultLimits{maxPublishRequestBytes = 26214400}
         , pubBodyBudget = bodyBudget
-        , pubMaxRequestBytes = 26214400
         , pubHelp = Nothing
         , pubProjectName = adapterProjectName npmAdapter
         , pubAdapter = npmPublish

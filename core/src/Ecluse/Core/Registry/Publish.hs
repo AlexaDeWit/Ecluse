@@ -39,7 +39,7 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Exchange (boundedExchange, boundedFetch, formThen)
 import Ecluse.Core.Registry.Request (sealRequest)
-import Ecluse.Core.Security (Limits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, maxMetadataBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (Version)
 
@@ -120,7 +120,7 @@ probeMetadata transport targetUrl codec name = do
     token <- ptMintToken transport
     formThen
         FetchUrlUnformable
-        (boundedFetch (ptManager transport) (ptLimits transport))
+        (boundedFetch (ptManager transport) (MetadataBodyLimit (maxMetadataBytes (ptLimits transport))))
         (sealRequest <$> pcProbeRequest codec targetUrl token name)
 
 publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
@@ -135,7 +135,7 @@ publishArtifact transport targetUrl codec name plan artifact bytes = do
 -- target's body, which the write has no use for, and the exchange bounds it either way.
 writeArtifact :: MirrorTransport -> PublishCodec -> Request -> IO (Either PublishFault ())
 writeArtifact transport codec request =
-    boundedExchange const (ptManager transport) (ptLimits transport) request
+    boundedExchange (\status _ _ -> status) (ptManager transport) (MetadataBodyLimit (maxMetadataBytes (ptLimits transport))) request
         <&> \case
             Left fault -> Left (PublishFetch fault)
             Right status -> pcPublishOutcome codec status

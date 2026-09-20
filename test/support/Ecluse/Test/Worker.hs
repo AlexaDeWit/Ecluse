@@ -29,7 +29,7 @@ import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterArtifact))
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
 import Ecluse.Core.Registry.Publish (MirrorPublish)
-import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
+import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), defaultLimits)
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (WorkerPolicy, wpArtifact, wpArtifactHostHonoured, wpArtifactLimits, wpFirstParty, wpMinIntegrity, wpNow, wpPublish, wpResolveVersion, wpRules))
 import Ecluse.Test.Package (defaultMinIntegrity, sampleArtifact, sampleDetails)
 import Ecluse.Test.Registry.Npm (sourceVersionDoc)
@@ -58,7 +58,7 @@ npmPolicyWith clock artifactMaxBytes publish resolve rules =
           -- bundle, so the fetch path forms requests as production does.
           wpArtifact = adapterArtifact npmAdapter
         , wpPublish = publish
-        , wpArtifactLimits = defaultLimits{maxBodyBytes = artifactMaxBytes}
+        , wpArtifactLimits = defaultLimits{maxMirrorArtifactBytes = artifactMaxBytes}
         , wpNow = clock
         }
 

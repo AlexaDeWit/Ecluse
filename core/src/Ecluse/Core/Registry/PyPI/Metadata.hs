@@ -37,7 +37,7 @@ import Ecluse.Core.Registry.Metadata (
     ManifestProjection (ManifestProjection, prjDecode, prjInject, prjLocations),
     MetadataError (MetadataBoundExceeded, MetadataUndecodable),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
-    VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
+    VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
     fetchManifestWith,
     fetchThenProject,
  )
@@ -58,9 +58,11 @@ import Ecluse.Core.Registry.PyPI.Wire (checkApiVersion)
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (
     AllowedHostPorts,
+    BodyLimit (MetadataBodyLimit),
     Limits,
     checkVersionCountOf,
     ecosystemArtifactAuthorities,
+    maxMetadataBytes,
     maxNestingDepth,
  )
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
@@ -85,7 +87,7 @@ fetchSimpleIndex :: OriginClient -> PackageName -> IO (Either FetchFault Registr
 fetchSimpleIndex origin name =
     formThen
         FetchUrlUnformable
-        (boundedFetch (ocManager origin) (ocLimits origin))
+        (boundedFetch (ocManager origin) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
         (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name)
 
 -- | Fetch a bounded Simple index with the digest that scopes its cached document.
@@ -108,14 +110,15 @@ projectPyPIIndex limits name = projectMetadata (projectSimpleIndexFromValue name
 A Simple index declares no release tag, so 'vrUpstreamLatest' is always 'Nothing' here. -}
 fetchPyPIVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 fetchPyPIVersion tracing origin name version =
-    fetchThenProject tracing (fetchSimpleIndex origin) name $
-        fmap untagged . projectPyPIVersion (ocLimits origin) name version
+    fetchThenProject tracing (fetchSimpleIndex origin) name $ \bodyBytes body ->
+        untagged bodyBytes <$> projectPyPIVersion (ocLimits origin) name version body
   where
-    untagged details =
+    untagged bodyBytes details =
         VersionRead
             { vrVersion = do
                 located <- details >>= enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin)
                 pure VersionDoc{vdDetails = located, vdRaw = Nothing}
+            , vrBodyBytes = bodyBytes
             , vrUpstreamLatest = Nothing
             }
 

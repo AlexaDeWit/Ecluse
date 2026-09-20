@@ -15,7 +15,7 @@ import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import Ecluse.Core.BuildIdentity (userAgent)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Registry (
-    FetchFault (FetchUrlUnformable),
+    FetchFault (FetchBoundExceeded, FetchUrlUnformable),
     PublishFault (PublishFetch),
     UrlFormationError (UnparseableUrl),
  )
@@ -27,10 +27,10 @@ import Ecluse.Core.Registry.Publish (
     PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
     newMirrorPublish,
  )
-import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Package (v1_0_0)
-import Ecluse.Test.Registry (isBoundExceededFetch, isBoundExceededPublish, isTransportFetch, isUrlUnformableFetch, isUrlUnformablePublish)
+import Ecluse.Test.Registry (isBoundExceededPublish, isTransportFetch, isUrlUnformableFetch, isUrlUnformablePublish)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc)
 import Ecluse.Test.Stub (
     Captured (capPath),
@@ -91,11 +91,11 @@ spec = do
                         MirrorTransport
                             { ptManager = manager
                             , ptMintToken = pure Nothing
-                            , ptLimits = defaultLimits{maxBodyBytes = 16}
+                            , ptLimits = defaultLimits{maxMetadataBytes = 16}
                             }
                     publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
                 outcome <- mpProbeMetadata publish isOdd
-                outcome `shouldSatisfy` isBoundExceededFetch
+                outcome `shouldBe` Left (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 16)))
 
         it "refuses an over-cap publish answer fail-closed as a PublishFetch bound breach" $
             -- The write reads the target's answer through the same bounded exchange as the
@@ -106,7 +106,7 @@ spec = do
                         MirrorTransport
                             { ptManager = manager
                             , ptMintToken = pure Nothing
-                            , ptLimits = defaultLimits{maxBodyBytes = 16}
+                            , ptLimits = defaultLimits{maxMetadataBytes = 16}
                             }
                     publish = newMirrorPublish transport (loopbackRegistryUrl (stubBaseUrl stub)) npmPublishCodec
                 outcome <- mpPublishArtifact publish isOdd planV1 dummyArtifact "bytes"

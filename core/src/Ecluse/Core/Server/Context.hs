@@ -196,11 +196,9 @@ data PublishDeps = PublishDeps
     the same gate the read paths apply. 'Nothing' leaves the edge open.
     -}
     , pubLimits :: Limits
-    -- ^ The response-bound budget enforced on the publication target's response.
+    -- ^ Separate client request and registry response bounds for publication.
     , pubBodyBudget :: ByteAdmission
     -- ^ Shared body-byte budget reserved before reading. Exhaustion sheds a @503@.
-    , pubMaxRequestBytes :: Int
-    -- ^ Per-request body cap in bytes, also the aggregate reservation for a chunked body.
     , pubHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to a publish denial, if configured.
     , pubProjectName :: ProjectName

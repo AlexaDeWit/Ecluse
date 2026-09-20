@@ -7,6 +7,8 @@ Successful responses retain each ecosystem's identity and decode checks.
 -}
 module Ecluse.Core.Registry.MetadataSpec (spec) where
 
+import Data.ByteString.Lazy qualified as BL
+
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (mkStatus)
 import Network.Wai (responseLBS)
@@ -22,17 +24,18 @@ import Ecluse.Core.Registry (
     RegistryResponse (RegistryResponse),
  )
 import Ecluse.Core.Registry.Metadata (
+    Manifest (manifestBodyBytes),
     MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
-    VersionRead,
+    VersionRead (vrBodyBytes),
     fetchThenProject,
     fetchVersionDetails,
  )
 import Ecluse.Core.Registry.Npm.Metadata (newNpmMetadataReads)
 import Ecluse.Core.Registry.Origin (perCallerOrigin)
 import Ecluse.Core.Registry.PyPI.Metadata (newPyPIMetadataReads)
-import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Metadata (privateMetadataClient)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
@@ -57,29 +60,37 @@ fetchStepSpec = describe "fetchThenProject" $ do
             let name = unscopedNpm "left-pad"
                 record phase who action = modifyIORef' events (<> [(phase, who)]) >> action
                 tracing = passthroughTracingPort{spanMetadataFetch = record "fetch", spanMetadataDecode = record "decode"}
-            outcome <- fetchThenProject tracing (const (pure (Right (RegistryResponse code "body")))) name Right
+            outcome <- fetchThenProject tracing (const (pure (Right (RegistryResponse code 4 "body")))) name (const Right)
             void outcome `shouldBe` expected
             readIORef events `shouldReturn` ([("fetch", name)] <> [("decode", name) | isRight expected])
 
     it "hands the fetched body to the projection" $
-        runStep (Right (RegistryResponse 200 "the-body")) Right `shouldReturn` Right "the-body"
+        runStep (Right (RegistryResponse 200 8 "the-body")) Right `shouldReturn` Right "the-body"
+
+    it "passes the measured decompressed byte count to projection" $
+        fetchThenProject
+            passthroughTracingPort
+            (const (pure (Right (RegistryResponse 200 8 "the-body"))))
+            (unscopedNpm "left-pad")
+            (curry Right)
+            `shouldReturn` Right (8, "the-body")
 
     it "folds an exchange fault into MetadataFetch, discarding the projection" $
         runStep (Left bodyTooLarge) (const (Right "projected"))
             `shouldReturn` (Left (MetadataFetch bodyTooLarge) :: Either MetadataError ByteString)
 
     it "returns a projection refusal as the mount phrased it" $
-        runStep (Right (RegistryResponse 200 "junk")) (const (Left MetadataUndecodable))
+        runStep (Right (RegistryResponse 200 4 "junk")) (const (Left MetadataUndecodable))
             `shouldReturn` (Left MetadataUndecodable :: Either MetadataError ByteString)
 
     it "retains a successful response's identity refusal" $
-        runStep (Right (RegistryResponse 200 "other-package")) (const (Left (MetadataNameMismatch "other-package")))
+        runStep (Right (RegistryResponse 200 13 "other-package")) (const (Left (MetadataNameMismatch "other-package")))
             `shouldReturn` (Left (MetadataNameMismatch "other-package") :: Either MetadataError ByteString)
 
     it "asks the fetch action for the requested package, once" $ do
         asked <- newIORef ([] :: [PackageName])
-        let fetch name = modifyIORef' asked (name :) $> Right (RegistryResponse 200 "b")
-        _ <- fetchThenProject passthroughTracingPort fetch (unscopedNpm "left-pad") Right
+        let fetch name = modifyIORef' asked (name :) $> Right (RegistryResponse 200 1 "b")
+        _ <- fetchThenProject passthroughTracingPort fetch (unscopedNpm "left-pad") (const Right)
         readIORef asked `shouldReturn` [unscopedNpm "left-pad"]
 
 rawReadersSpec :: Spec
@@ -99,6 +110,9 @@ rawReadersSpec = describe "raw metadata readers" $
                     void full `shouldBe` expected
                     single <- fetchVersionMetadata client name (mkVersion ecosystem "1.0.0")
                     void single `shouldBe` expected
+                    when (isRight expected) $ do
+                        fmap manifestBodyBytes full `shouldBe` Right (fromIntegral (BL.length (bodyFor ecosystem)))
+                        fmap vrBodyBytes single `shouldBe` Right (fromIntegral (BL.length (bodyFor ecosystem)))
   where
     bodyFor PyPI = "{\"meta\":{\"api-version\":\"1.0\"},\"name\":\"thing\",\"files\":[]}"
     bodyFor _ = "{\"name\":\"thing\",\"versions\":{}}"
@@ -172,11 +186,11 @@ statusOutcomes =
         <> [(code, Left (MetadataHttpFailure code)) | code <- [301, 304, 400, 408, 410, 429, 500, 503, 599]]
 
 bodyTooLarge :: FetchFault
-bodyTooLarge = FetchBoundExceeded (BodyTooLarge 12)
+bodyTooLarge = FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 12))
 
 runStep ::
     Either FetchFault RegistryResponse ->
     (ByteString -> Either MetadataError a) ->
     IO (Either MetadataError a)
-runStep outcome =
-    fetchThenProject passthroughTracingPort (const (pure outcome)) (unscopedNpm "left-pad")
+runStep outcome project =
+    fetchThenProject passthroughTracingPort (const (pure outcome)) (unscopedNpm "left-pad") (const project)

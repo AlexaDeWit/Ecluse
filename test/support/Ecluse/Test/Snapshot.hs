@@ -18,7 +18,7 @@ module Ecluse.Test.Snapshot (
 import Data.Aeson (Value, encode)
 
 import Ecluse.Core.Package (PackageDetails)
-import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc, vdDetails, vdRaw), VersionRead (VersionRead, vrUpstreamLatest, vrVersion))
+import Ecluse.Core.Registry.Metadata (VersionDoc (VersionDoc, vdDetails, vdRaw), VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion))
 import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Support (expectRight)
@@ -43,7 +43,7 @@ versionDocOf details = VersionDoc{vdDetails = details, vdRaw = Nothing}
 
 -- | A version read carrying the given release and the document's own latest.
 versionReadOf :: Maybe PackageDetails -> Maybe Version -> VersionRead
-versionReadOf details upstreamLatest = VersionRead{vrVersion = versionDocOf <$> details, vrUpstreamLatest = upstreamLatest}
+versionReadOf details upstreamLatest = VersionRead{vrVersion = versionDocOf <$> details, vrBodyBytes = 0, vrUpstreamLatest = upstreamLatest}
 
 -- | A version read with no upstream latest, for a case that decides nothing from the tag.
 untaggedRead :: Maybe PackageDetails -> VersionRead

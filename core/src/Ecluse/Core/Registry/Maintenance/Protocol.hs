@@ -13,6 +13,8 @@ module Ecluse.Core.Registry.Maintenance.Protocol (
     newProtocolMaintenance,
 ) where
 
+import Data.ByteString qualified as BS
+
 import Data.Conduit (ConduitT, yield)
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request)
@@ -71,6 +73,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Publish (PublishCodec (pcParseVersionList, pcProbeRequest))
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), maxMetadataBytes)
 import Ecluse.Core.Version (Version)
 
 {- | One protocol-only store as a reader reaches it: where it is, how its protocol enumerates it,
@@ -198,7 +201,7 @@ listVersions store name =
             | isSuccessStatus status -> first (parseFault "version list") (served status body)
             | otherwise -> Left (readFault "version list" status)
   where
-    served status body = map stored <$> pcParseVersionList (prCodec store) (RegistryResponse status body)
+    served status body = map stored <$> pcParseVersionList (prCodec store) (RegistryResponse status (BS.length body) body)
     stored version = StoredVersion{storedVersion = version, storedPresence = VersionServed, storedRevision = Nothing}
 
 deleteStoredVersions :: ProtocolStore -> DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]
@@ -224,7 +227,7 @@ deleteChunk store name = \case
 
 applyDelete :: ProtocolStore -> PackageName -> Version -> Int -> ByteString -> IO (Either StoreFault [(Version, VersionOutcome)])
 applyDelete store name version status body =
-    case deleteRequests (psDelete store) (prOrigin (psRead store)) name version (RegistryResponse status body) of
+    case deleteRequests (psDelete store) (prOrigin (psRead store)) name version (RegistryResponse status (BS.length body) body) of
         Left refusal -> pure (refused version refusal)
         Right requests ->
             sendSequence (psRead store){prOrigin = psDeleteOrigin store} (toList requests) <&> fmap outcomeOf
@@ -257,7 +260,7 @@ refused version refusal = Right [(version, VersionRefused refusal)]
 send :: ProtocolRead -> Request -> IO (Either StoreFault (Int, ByteString))
 send store request =
     first storeFaultOfFetch
-        <$> boundedExchange (,) (ocManager origin) (ocLimits origin) request
+        <$> boundedExchange (\status _ body -> (status, body)) (ocManager origin) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))) request
   where
     origin = prOrigin store
 
