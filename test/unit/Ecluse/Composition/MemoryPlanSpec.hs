@@ -63,9 +63,9 @@ spec = describe "resolveMemoryPlan" $ do
         map mpMaterialAggregateBytes plans `shouldSatisfy` all (> 0)
 
     it "preserves every positive explicit CPU and ingest pin on small and large plans" $ do
-        for_ [Nothing, Just (64 * mib), Just (4 * gib)] $ \ceiling ->
+        for_ [Nothing, Just (64 * mib), Just (4 * gib)] $ \heapCeiling ->
             for_ [1, 13000000, maxBound] $ \pin -> do
-                let (plan, _) = resolve bareCache bareLimits{limMaxResponseBytes = Just pin} bareQueue (Just pin) (planWith ceiling) NoQueueTenant False
+                let (plan, _) = resolve bareCache bareLimits{limMaxResponseBytes = Just pin} bareQueue (Just pin) (planWith heapCeiling) NoQueueTenant False
                 mpMaxResponseBytes plan `shouldBe` pin
                 mpAdmissionCapacity plan `shouldBe` pin
                 mpOverrideViolations plan `shouldBe` []
