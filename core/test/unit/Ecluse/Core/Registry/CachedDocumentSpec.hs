@@ -5,11 +5,13 @@
 -- | Opaque document injection and projection.
 module Ecluse.Core.Registry.CachedDocumentSpec (spec) where
 
-import Data.Aeson (Value (Bool, Null, Number, String), object, (.=))
+import Data.Aeson (Value (Bool, Null, Number, String), encode, object, (.=))
+import Data.ByteString.Lazy qualified as BSL
 import Test.Hspec
 
-import Ecluse.Core.Registry.CachedDocument (foldCachedDoc, npmCached)
+import Ecluse.Core.Registry.CachedDocument (foldCachedDoc, npmCached, weighCachedDoc)
 
+-- | Boundary pairs preserve their compact values and memoise an encoding-free accounting estimate.
 spec :: Spec
 spec = describe "CachedDocument (npm's opaque-carrier boundary)" $ do
     it "inject then project round-trips every sample to Just" $
@@ -17,6 +19,10 @@ spec = describe "CachedDocument (npm's opaque-carrier boundary)" $ do
 
     it "foldCachedDoc preserves the same value for diagnostic accounting" $
         map (foldCachedDoc id . inject) samples `shouldBe` samples
+
+    it "charges representative compact values without understating their encoded bytes" $
+        forM_ samples $
+            \sample -> weighCachedDoc (inject sample) `shouldSatisfy` (>= BSL.length (encode sample))
   where
     (inject, project) = npmCached
 

@@ -12,6 +12,7 @@ module Ecluse.Core.Registry.Npm.Maintenance (
     -- * The listing
     listingRequestFor,
     parsePackageListing,
+    packageListingParser,
 
     -- * The unpublish
     packumentRequestFor,
@@ -21,6 +22,9 @@ module Ecluse.Core.Registry.Npm.Maintenance (
 import Data.Aeson (Object, Value (Object, String), decodeStrict, encode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
+import Data.JsonStream.Parser qualified as J
+import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request (method, requestHeaders))
 import Network.HTTP.Types.Header (hAccept)
 
@@ -37,6 +41,7 @@ import Ecluse.Core.Registry.Adapter.Capability (
     StoreListing (..),
     VersionDelete (..),
  )
+import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue), parseJsonChunks)
 import Ecluse.Core.Registry.Maintenance (StoreRefusal, storeRefusal)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Npm.Project (npmNameLeadChars, projectName)
@@ -51,6 +56,7 @@ import Ecluse.Core.Registry.Npm.Request (
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Request (joinPath, parseRequestEither)
 import Ecluse.Core.Registry.ServedDocument (adjustField, stringField)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
 import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (nonBlank, urlFilenameComponent)
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, renderVersion)
@@ -63,7 +69,7 @@ npmMaintenance =
             Just
                 StoreListing
                     { listingRequest = listingRequestFor
-                    , listingParse = parsePackageListing
+                    , listingParser = packageListingParser
                     }
         , maintenanceVersionDelete =
             Just
@@ -84,16 +90,21 @@ listingRequestFor origin = do
 
 -- | Ignore the @_updated@ bookkeeping key and keys that are not npm package names.
 parsePackageListing :: ByteString -> Either ParseError [PackageName]
-parsePackageListing body = case decodeStrict body :: Maybe Object of
-    Nothing -> Left (ParseError "the store's package listing is not a JSON object")
-    Just listing ->
-        Right
-            [ name
-            | key <- KeyMap.keys listing
-            , let raw = Key.toText key
-            , raw /= "_updated"
-            , Right name <- [projectName raw]
-            ]
+parsePackageListing body = do
+    streamed <- first (ParseError . show) (parseJsonChunks (MetadataBodyLimit (BS.length body)) packageListingParser (\_ names -> Right names) [] [body])
+    streamValue streamed
+
+-- | Read only package-name keys. Values are skipped without constructing package objects.
+packageListingParser :: J.Parser [PackageName]
+packageListingParser = J.mapWithFailure finish (J.foldI collect Nothing events)
+  where
+    events = J.objectFound Nothing Nothing (Just . fst <$> J.objectItems (pure ()))
+    collect found Nothing = Just (fromMaybe mempty found)
+    collect found (Just raw) = Just $ case projectName raw of
+        Right name | raw /= "_updated" -> Map.insert raw name (fromMaybe mempty found)
+        _ -> fromMaybe mempty found
+    finish Nothing = Left "the store's package listing is not a JSON object"
+    finish (Just names) = Right (Map.elems names)
 
 -- | Read the full packument, because the install view omits @_rev@ and @time@.
 packumentRequestFor :: OriginClient -> PackageName -> Either UrlFormationError Request

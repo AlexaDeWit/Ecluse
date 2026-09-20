@@ -157,7 +157,7 @@ unsealedCodec :: PublishCodec
 unsealedCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
-        , pcParseVersionList = const (Right [])
+        , pcVersionListParser = const (pure [])
         , pcPublishRequest = \targetUrl _token _name _plan _artifact _bytes ->
             first (PublishFetch . FetchUrlUnformable) (unsealed (targetUrl <> "/write"))
         , pcPublishOutcome = const (Right ())

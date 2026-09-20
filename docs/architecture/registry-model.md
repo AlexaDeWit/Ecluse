@@ -446,3 +446,27 @@ imports the other, and a store that needs an ecosystem fact reads it off the `Ec
 the CodeArtifact format token does. A backend matrix therefore costs one adapter per ecosystem plus
 one backend per store, never a cell per pair. npm and PyPI ship in this build, PyPI for reads only. Their stores
 are CodeArtifact, any host that speaks the protocol, and Verdaccio for development.
+
+### Incremental npm extraction
+
+npm reads run `json-stream` inside the HTTP response lifetime. The reader feeds chunks of at most
+32 KiB, counts decompressed bytes and updates SHA-256 from the same source bytes. A successful
+result consumes the complete response, including data after extraction finishes. Transport failure,
+body limits and cancellation still close the response through `withResponse`.
+
+Each retained release produces its typed policy record as it arrives. Separate timestamp and tag
+maps join those records at the end, so source member order does not affect release association.
+Selected reads skip sibling release objects. Presence probes and store enumeration retain only
+version identifiers and the field shapes needed to exclude unusable releases.
+
+The [operator field contract](https://ecluse-proxy.com/docs/protocol-support/#npm-metadata-fields)
+owns the retained set. Extraction skips unknown fields before constructing values. The parser does
+not establish whole-document JSON validity. Retained structures have a depth budget, and skipped
+structures use the library's constant-state skip path. Body and version ceilings bound other work.
+
+The pinned library's native lexer allocates batches proportional to the input chunk size
+(`20 + chunkBytes / 5` result records). Its key accumulator stops at about 64 KiB and its number
+accumulator at about 200,000 digits. Retained strings become owned `Text`. Parser continuations
+advance before the next chunk, so successful reads do not retain a complete source buffer.
+These bounds do not make required output constant in size. Process peak, native allocation and
+retained-live measurements remain distinct from the cached accounting estimate.

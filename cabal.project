@@ -99,3 +99,9 @@ package ecluse
   -- path that builds the shipped artifact, ignores cabal.project. So the release `ecluse`
   -- keeps the flag's default (off) and carries no plaintext-egress constructor.
   flags: +dev-http-egress
+
+-- Incremental metadata extraction, pinned with the Nix overlay.
+source-repository-package
+  type: git
+  location: https://github.com/ondrap/json-stream.git
+  tag: 537a43a775e64f50dc63c373193323de98619799

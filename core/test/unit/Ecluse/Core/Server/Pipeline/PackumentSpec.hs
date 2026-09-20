@@ -37,13 +37,17 @@ spec = do
 
 packumentETagSpec :: Spec
 packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
-    it "preserves the v2 byte framing for every entry constructor" $ do
+    it "pins the v3 byte framing for every entry constructor" $ do
         let sources =
                 [ (TrustedSource, privateDigest base, [("1\0é", [ArrayEntry 0, ArrayEntry 10, ArrayEntry (-1), ObjectEntry "é\0x", SingletonEntry])])
                 , (GatedSource, publicDigest base, [])
                 ]
-        renderETag (packumentETag mountBase thingName sources)
-            `shouldBe` "\"93f747ebd65d300c3cd90719d0394ddd77c87140342be84e3df6560d8f7fed26\""
+        renderETag (packumentETag mountBase [] thingName sources)
+            `shouldBe` "\"1d03b46e65ffdf7c24ba7e32430a6427cb103f825ad2c52a10c83de241ef92c4\""
+
+    it "changes when the origin URL changes the source metadata pointer" $
+        packumentETag mountBase ["https://source-one.example"] thingName (piecesOf base)
+            `shouldNotBe` packumentETag mountBase ["https://source-two.example"] thingName (piecesOf base)
 
     it "changes when an origin body changes (same survivors)" $
         tagWith base{publicDigest = digestOf "public-bytes-v2"} `shouldNotBe` tagWith base
@@ -58,18 +62,18 @@ packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
         tagWith base{publicSurvivors = ["1.0.0", "2.0.0", "3.0.0"]} `shouldNotBe` tagWith base
 
     it "changes when the mount base URL changes (rewritten tarball URLs differ)" $
-        packumentETag "https://other.example/npm" thingName (piecesOf base)
+        packumentETag "https://other.example/npm" [] thingName (piecesOf base)
             `shouldNotBe` tagWith base
 
     it "changes across packages" $
-        packumentETag mountBase (mkPackageName Npm Nothing "other-thing") (piecesOf base)
+        packumentETag mountBase [] (mkPackageName Npm Nothing "other-thing") (piecesOf base)
             `shouldNotBe` tagWith base
 
     it "distinguishes provenance: the same digest as trusted vs gated" $
         tagWith base{privateProvenance = GatedSource} `shouldNotBe` tagWith base
 
     it "distinguishes source order (merge precedence is positional)" $
-        packumentETag mountBase thingName (reverse (piecesOf base)) `shouldNotBe` tagWith base
+        packumentETag mountBase [] thingName (reverse (piecesOf base)) `shouldNotBe` tagWith base
 
     it "does not collide survivor lists on concatenation framing" $ do
         -- ["1.0", "0.2.0"] vs ["1.0.0", "2.0"] concatenate to the same characters.
@@ -84,10 +88,10 @@ packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
             `shouldNotBe` tagWith base{privateSurvivors = ["9.0.0"], publicSurvivors = ["1.0.0", "2.0.0"]}
 
     it "changes when a whole source appears or disappears" $
-        packumentETag mountBase thingName [publicPiece base] `shouldNotBe` tagWith base
+        packumentETag mountBase [] thingName [publicPiece base] `shouldNotBe` tagWith base
 
     for_ [TrustedSource, GatedSource] $ \provenance -> do
-        let tag entries = packumentETag mountBase thingName [(provenance, publicDigest base, [("1.0.0", entries)])]
+        let tag entries = packumentETag mountBase [] thingName [(provenance, publicDigest base, [("1.0.0", entries)])]
         it ("tracks exact admitted coordinates for " <> show provenance) $
             tag [ArrayEntry 0, ArrayEntry 1] `shouldNotBe` tag [ArrayEntry 1]
         it ("distinguishes entry constructors for " <> show provenance) $ do
@@ -160,7 +164,7 @@ publicPiece :: Fixture -> (Provenance, ContentDigest, [(Text, [EntryKey])])
 publicPiece f = (GatedSource, publicDigest f, map (,[SingletonEntry]) (publicSurvivors f))
 
 tagWith :: Fixture -> ETag
-tagWith f = packumentETag mountBase thingName (piecesOf f)
+tagWith f = packumentETag mountBase [] thingName (piecesOf f)
 
 mountBase :: Text
 mountBase = "https://proxy.example/npm"

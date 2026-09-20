@@ -20,19 +20,19 @@ import Ecluse.Core.Package (
     PackageName,
     renderPackageName,
  )
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
+import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
     VersionRead (vrUpstreamLatest, vrVersion),
  )
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
+import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion, selectNpmVersionDoc)
 import Ecluse.Core.Security (
     LimitError (TooDeeplyNested, TooManyVersions),
     Limits (maxNestingDepth, maxVersionCount),
     defaultLimits,
  )
-import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Json (isObject)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Snapshot (readDetails)
@@ -51,8 +51,6 @@ projectNpmManifestSpec = describe "projectNpmManifest" $ do
             Right (info, raw) -> do
                 renderPackageName (infoName info) `shouldBe` "is-odd"
                 Map.keys (infoVersions info) `shouldBe` ["3.0.1"]
-                -- The raw document is the decoded bytes, kept so the served surface
-                -- stays coherent with the typed view it came from.
                 raw `shouldSatisfy` isObject
             other -> expectationFailure ("expected a projection, got: " <> show other)
 
@@ -107,7 +105,7 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
             body = richPackumentBytes "is-odd" versions
         forM_ versions $ \v -> do
             selected <- expectRight (projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm v) body)
-            fmap vdRaw (vrVersion selected) `shouldBe` Just (Just (fst npmCached (richVersionObject "is-odd" v)))
+            fmap vdRaw (vrVersion selected) `shouldBe` Just (Just (fst npmCached (compactRichVersion "is-odd" v)))
 
     it "matches a selected version object to the same source's full projection" $ do
         let versions = ["1.0.0", "2.1.3", "10.0.0-beta.1"]
@@ -133,9 +131,10 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
         selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") "{not json"
             `shouldBe` Left MetadataUndecodable
 
-    it "reports trailing non-whitespace after the document as undecodable (the end-of-input check)" $
-        selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0"] <> " trailing")
-            `shouldBe` Left MetadataUndecodable
+    it "extracts usable data without requiring trailing-data validity" $ do
+        let body = richPackumentBytes "is-odd" ["1.0.0"]
+        selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (body <> " trailing")
+            `shouldBe` selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") body
 
     it "reports an absent top-level name as undecodable" $
         selectedDetails defaultLimits (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (BL.toStrict (encode (object ["versions" .= object []])))
@@ -153,11 +152,9 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
         selectedDetails (defaultLimits{maxNestingDepth = 2}) (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0"])
             `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 2))
 
-    it "reports the name mismatch, not the count breach, for a document that breaches both" $
-        -- The self-reported name is the validation authority, so it is decided first.
-        -- Reordering the two checks would surface the bound breach here instead.
+    it "stops at the version ceiling before completing name validation" $
         selectedDetails (defaultLimits{maxVersionCount = 1}) (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-even" ["1.0.0", "2.0.0"])
-            `shouldBe` Left (MetadataNameMismatch "is-even")
+            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
 
     it "reads the document's own dist-tags.latest, matching the full projection" $ do
         let versions = ["1.0.0", "2.1.3"]
@@ -190,15 +187,10 @@ optionalContainerParity = describe "optional containers match the full projectio
             it label $ parity defaultLimits (bodyFor key values)
         forM_ [("null then object", [Null, populated]), ("object then null", [populated, Null]), ("null then invalid", [Null, Bool True]), ("invalid then null", [Bool True, Null])] $ \(label, values) ->
             it ("keeps the first duplicate: " <> label) $ parity defaultLimits (bodyFor key values)
-        it "rejects a malformed duplicate after null" $ do
-            let body = "{\"name\":\"is-odd\"," <> BL.toStrict (encode key) <> ":null," <> BL.toStrict (encode key) <> ":{broken} }"
-            parity defaultLimits body
-            selectedDetails defaultLimits name version body `shouldBe` Left MetadataUndecodable
-        it "bounds a duplicate after null" $ do
+        it "skips deeply nested duplicate data after the first container" $ do
             let limits = defaultLimits{maxNestingDepth = 5}
                 deep = foldr (\_ value -> object ["nested" .= value]) Null [1 :: Int .. 6]
-                body = bodyFor key [Null, deep]
-            selectedDetails limits name version body `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 5))
+            parity limits (bodyFor key [Null, deep])
   where
     name :: PackageName
     name = unscopedNpm "is-odd"
@@ -343,8 +335,7 @@ rawObject :: [(Text, Value)] -> ByteString
 rawObject members =
     "{" <> BS.intercalate "," [BL.toStrict (encode k) <> ":" <> BL.toStrict (encode v) | (k, v) <- members] <> "}"
 
-selectNpmVersionDoc :: Version -> CachedDoc -> Maybe CachedDoc
-selectNpmVersionDoc version doc = do
-    Object packument <- snd npmCached doc
-    Object versions <- KeyMap.lookup "versions" packument
-    fst npmCached <$> KeyMap.lookup (Key.fromText (renderVersion version)) versions
+compactRichVersion :: Text -> Text -> Value
+compactRichVersion name version = case richVersionObject name version of
+    Object fields -> Object (KeyMap.insert "author" (String ("See https://registry.npmjs.org/" <> name)) (KeyMap.delete "maintainers" fields))
+    other -> other

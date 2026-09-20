@@ -10,9 +10,10 @@ module Ecluse.Core.Snapshot (
     ContentDigest,
     digestOf,
     digestBytes,
+    digestFromContext,
 ) where
 
-import Crypto.Hash (Digest, SHA256, hash)
+import Crypto.Hash (Context, Digest, SHA256, hash, hashFinalize)
 import Data.ByteArray qualified as BA
 
 {- | A view paired with the digest computed before projection. Producers must use the same fetch.
@@ -35,3 +36,7 @@ digestOf body = ContentDigest (BA.convert (hash body :: Digest SHA256))
 -- | The digest's raw 32 bytes, for feeding into a wider fingerprint.
 digestBytes :: ContentDigest -> ByteString
 digestBytes (ContentDigest bytes) = bytes
+
+-- | Finish the SHA-256 state accumulated from the exact consumed source chunks.
+digestFromContext :: Context SHA256 -> ContentDigest
+digestFromContext = ContentDigest . BA.convert . hashFinalize

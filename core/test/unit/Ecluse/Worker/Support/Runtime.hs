@@ -61,9 +61,8 @@ import Ecluse.Core.Registry (
     MirrorArtifact,
     ParseError (ParseError),
     PublishFault,
-    RegistryResponse (RegistryResponse),
  )
-import Ecluse.Core.Registry.Publish (MirrorPublish (..), PublishPlan)
+import Ecluse.Core.Registry.Publish (MirrorPublish (..), PublishPlan, VersionListResponse (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version)
@@ -101,8 +100,7 @@ worker reads as a known-empty store without consulting the version list.
 recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 recordingPublish logRef outcome =
     MirrorPublish
-        { mpProbeMetadata = const (pure (Right (RegistryResponse 404 0 "")))
-        , mpParseVersionList = const (Left (ParseError "absent: nothing mirrored yet"))
+        { mpProbeMetadata = const (pure (Right (VersionListResponse 404 (Right []))))
         , mpPublishArtifact = \_ plan artifact document -> do
             atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l, plPlans = plan : plPlans l}, ()))
             pure outcome
@@ -112,8 +110,7 @@ recordingPublish logRef outcome =
 mirrorListingPublish :: IORef PublishLog -> Either PublishFault () -> [Version] -> MirrorPublish
 mirrorListingPublish logRef outcome versions =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 0 "")))
-        , mpParseVersionList = const (Right versions)
+        { mpProbeMetadata = const (pure (Right (VersionListResponse 200 (Right versions))))
         }
 
 -- | 'recordingPublish' whose inventory probe reports a mirror outage as the typed 'FetchTransport' value, for the unreadable-inventory cases.
@@ -127,14 +124,14 @@ probeUnreachablePublish logRef outcome =
 probeUnreadablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeUnreadablePublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 15 "not a packument")))
+        { mpProbeMetadata = const (pure (Right (VersionListResponse 200 (Left (ParseError "not a packument")))))
         }
 
 -- | 'recordingPublish' whose inventory probe answers a status that is neither success nor an absence.
 probeRefusingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeRefusingPublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Right (RegistryResponse 503 0 "")))
+        { mpProbeMetadata = const (pure (Right (VersionListResponse 503 (Right []))))
         }
 
 -- | 'recordingPublish' whose inventory probe overruns the response bound, the probe leg's terminal fault.

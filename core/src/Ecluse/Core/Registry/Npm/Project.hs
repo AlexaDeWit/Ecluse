@@ -9,7 +9,9 @@ module Ecluse.Core.Registry.Npm.Project (
     -- * Projection
     parsePackageInfoFromValue,
     parseVersionList,
+    versionListParser,
     projectVersionEntry,
+    projectVersionEntryResult,
 
     -- * Name validation
     projectName,
@@ -17,9 +19,11 @@ module Ecluse.Core.Registry.Npm.Project (
     npmNameLeadChars,
 ) where
 
-import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, withObject, (.!=), (.:?))
-import Data.Aeson.Types (Parser, parseEither, parseMaybe)
+import Data.Aeson (FromJSON (parseJSON), Object, Value, withObject, (.!=), (.:?))
+import Data.Aeson.Types (Parser, parseEither)
+import Data.ByteString qualified as BS
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.JsonStream.Parser qualified as J
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -48,6 +52,8 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry (ParseError (..), RegistryResponse (responseBody))
+import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue), parseJsonChunks)
+import Ecluse.Core.Registry.Npm.Streaming (NpmField (VersionField), NpmRead (VersionListRead), npmFields)
 import Ecluse.Core.Registry.Npm.Wire (
     Dist (..),
     License (LicenseObject, LicenseSpdx),
@@ -61,6 +67,7 @@ import Ecluse.Core.Registry.WireSupport (
     partitionLenient,
     withinNameLimit,
  )
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, defaultLimits, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
@@ -155,19 +162,34 @@ The selective read in "Ecluse.Core.Registry.Npm.Metadata" reuses it, so both pat
 -}
 projectVersionEntry :: PackageName -> Version -> Maybe UTCTime -> Value -> Maybe PackageDetails
 projectVersionEntry name version publishedAt value =
-    projectDetails name version publishedAt <$> parseMaybe parseJSON value
+    rightToMaybe (projectVersionEntryResult name version publishedAt value)
+
+-- | Project a compact release while retaining the decoder reason for the invalid-entry report.
+projectVersionEntryResult :: PackageName -> Version -> Maybe UTCTime -> Value -> Either String PackageDetails
+projectVersionEntryResult name version publishedAt value =
+    projectDetails name version publishedAt <$> parseEither parseJSON value
 
 {- | The available versions of a fetched metadata response, in the packument's @versions@ key
 order. Fails with a 'ParseError' only when the body does not decode.
 -}
 parseVersionList :: RegistryResponse -> Either ParseError [Version]
 parseVersionList resp = do
-    pkmt <- decodePackument resp
-    pure (map (mkVersion Npm) (Map.keys (wpVersions pkmt)))
+    let body = responseBody resp
+        limits = defaultLimits{maxMetadataBytes = BS.length body}
+    streamed <- first (ParseError . show) (parseJsonChunks (MetadataBodyLimit (BS.length body)) (versionListParser limits) (\_ versions -> Right versions) [] [body])
+    streamValue streamed
 
-decodePackument :: RegistryResponse -> Either ParseError WirePackument
-decodePackument =
-    first (ParseError . toText) . eitherDecodeStrict . responseBody
+-- | Recognise usable versions with only VersionEntry's discriminating fields and return sorted identifiers.
+versionListParser :: Limits -> J.Parser [Version]
+versionListParser limits = J.mapWithFailure finish (J.foldI collect Nothing events)
+  where
+    events = J.objectFound Nothing Nothing (Just <$> npmFields (maxNestingDepth limits) VersionListRead)
+    collect found Nothing = Just (fromMaybe mempty found)
+    collect found (Just (VersionField key raw)) = Just (Map.insertWith (\_ old -> old) key (usable raw) (fromMaybe mempty found))
+    collect found _ = found
+    usable raw = isJust (raw >>= rightToMaybe . (parseEither parseJSON :: Value -> Either String VersionEntry))
+    finish Nothing = Left "the version list is not a JSON object"
+    finish (Just versions) = Right [mkVersion Npm key | (key, True) <- Map.toAscList versions]
 
 decodePackumentValue :: Value -> Either ParseError WirePackument
 decodePackumentValue =

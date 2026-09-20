@@ -7,35 +7,57 @@ The pipeline carries source snapshot scope separately and delegates wire access 
 -}
 module Ecluse.Core.Registry.CachedDocument (
     CachedDoc,
+    weighCachedDoc,
     foldCachedDoc,
     npmCached,
     pypiSimpleCached,
 ) where
 
-import Data.Aeson (Value)
+import Data.Aeson (Value (..))
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Text.Internal qualified as Text
 
 {- | A raw document the cache holds and the pipeline threads. The derived 'Show' and 'Eq' are a
 debug and test affordance, not a projection.
 -}
 data CachedDoc
-    = CachedNpm Value
-    | CachedPyPISimple Value
+    = CachedNpm Value ~Int64
+    | CachedPyPISimple Value ~Int64
     deriving stock (Eq, Show)
+
+-- | Cached estimate of compact bytes. This is an accounting input, not measured resident memory.
+weighCachedDoc :: CachedDoc -> Int64
+weighCachedDoc = \case
+    CachedNpm _ charge -> charge
+    CachedPyPISimple _ charge -> charge
 
 {- | Read a held document blind to its ecosystem, for accounting only. Projection goes through
 the ecosystem's own pair below, so no adapter reads another's document through this.
 -}
 foldCachedDoc :: (Value -> a) -> CachedDoc -> a
 foldCachedDoc f = \case
-    CachedNpm v -> f v
-    CachedPyPISimple v -> f v
+    CachedNpm v _ -> f v
+    CachedPyPISimple v _ -> f v
 
 {- | npm's boundary pair. Every arm is spelled out, so a third ecosystem fails to compile here
 rather than silently projecting as 'Nothing'.
 -}
 npmCached :: (Value -> CachedDoc, CachedDoc -> Maybe Value)
-npmCached = (CachedNpm, \case CachedNpm v -> Just v; CachedPyPISimple _ -> Nothing)
+npmCached = (\v -> CachedNpm v (wireBytes v), \case CachedNpm v _ -> Just v; CachedPyPISimple _ _ -> Nothing)
 
 -- | PyPI's boundary pair, spelled out arm by arm for the same reason as 'npmCached'.
 pypiSimpleCached :: (Value -> CachedDoc, CachedDoc -> Maybe Value)
-pypiSimpleCached = (CachedPyPISimple, \case CachedPyPISimple v -> Just v; CachedNpm _ -> Nothing)
+pypiSimpleCached = (\v -> CachedPyPISimple v (wireBytes v), \case CachedPyPISimple v _ -> Just v; CachedNpm _ _ -> Nothing)
+
+wireBytes :: Value -> Int64
+wireBytes = \case
+    Object fields -> 2 + sum [4 + textBytes (Key.toText key) + wireBytes value | (key, value) <- KeyMap.toList fields]
+    Array items -> 2 + sum [1 + wireBytes value | value <- toList items]
+    String value -> 2 + textBytes value
+    Number _ -> 24
+    Bool _ -> 5
+    Null -> 4
+
+textBytes :: Text -> Int64
+textBytes (Text.Text _ _ len) = fromIntegral len

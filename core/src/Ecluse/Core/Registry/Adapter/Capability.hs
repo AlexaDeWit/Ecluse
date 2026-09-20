@@ -25,6 +25,7 @@ module Ecluse.Core.Registry.Adapter.Capability (
     VersionDelete (..),
 ) where
 
+import Data.JsonStream.Parser qualified as J
 import Network.HTTP.Client (Request)
 
 import Ecluse.Core.Credential (ClientCredential)
@@ -133,10 +134,8 @@ registry may well refuse: a listing that does not answer @200@ is the caller's f
 data StoreListing = StoreListing
     { listingRequest :: OriginClient -> Either UrlFormationError Request
     -- ^ Form the listing read against the store.
-    , listingParse :: ByteString -> Either ParseError [PackageName]
-    {- ^ Project a listing body onto the names it holds. An unparseable entry is dropped, because
-    Écluse could serve it no better than it can sweep it.
-    -}
+    , listingParser :: J.Parser [PackageName]
+    -- ^ Stream names while skipping unrelated per-package metadata.
     }
 
 {- | Deleting one version, as the request sequence the protocol spells it with. It names its own

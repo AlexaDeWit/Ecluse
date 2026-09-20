@@ -44,7 +44,6 @@ import Ecluse.Core.Registry (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     ParseError (ParseError),
     PublishFault (PublishFetch, PublishRejected, PublishSourceUnavailable),
-    RegistryResponse (responseStatusCode),
     isSuccessStatus,
     renderUrlFormationError,
  )
@@ -56,8 +55,9 @@ import Ecluse.Core.Registry.Metadata (
     versionTransience,
  )
 import Ecluse.Core.Registry.Publish (
-    MirrorPublish (mpParseVersionList, mpProbeMetadata, mpPublishArtifact),
+    MirrorPublish (mpProbeMetadata, mpPublishArtifact),
     PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
+    VersionListResponse (..),
  )
 import Ecluse.Core.Rules.Types (Decision (Blocked, Undecidable), Transience (WillResolve, WontResolve), mkEvalContext)
 import Ecluse.Core.Security (authorityLabel, hostPortAddress)
@@ -177,10 +177,10 @@ probeInventory policy job = do
     pure $ case probed of
         Left fault -> Left (outcomeOfFetchFault BeforePublish (probeFaultReason job) fault)
         Right response
-            | responseStatusCode response == 404 -> Right []
-            | not (isSuccessStatus (responseStatusCode response)) ->
-                Left (Retried BeforePublish (probeStatusReason job (responseStatusCode response)))
-            | otherwise -> case mpParseVersionList (wpPublish policy) response of
+            | versionListStatus response == 404 -> Right []
+            | not (isSuccessStatus (versionListStatus response)) ->
+                Left (Retried BeforePublish (probeStatusReason job (versionListStatus response)))
+            | otherwise -> case versionListResult response of
                 Left (ParseError detail) -> Left (Retried BeforePublish (probeParseReason job detail))
                 Right versions -> Right versions
 

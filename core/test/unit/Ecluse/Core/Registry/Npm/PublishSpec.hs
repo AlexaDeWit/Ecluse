@@ -192,9 +192,10 @@ fieldRewriteSpec = describe "the field-rewrite contract on the published version
         KeyMap.lookup "signatures" dist `shouldBe` Nothing
         KeyMap.lookup "attestations" dist `shouldBe` Nothing
 
-    it "strips every underscore-prefixed registry bookkeeping field" $ do
+    it "keeps the shrinkwrap installation marker while stripping registry bookkeeping" $ do
         manifest <- publishedManifest
-        filter (T.isPrefixOf "_" . Key.toText) (KeyMap.keys manifest) `shouldBe` []
+        filter (T.isPrefixOf "_" . Key.toText) (KeyMap.keys manifest) `shouldBe` ["_hasShrinkwrap"]
+        KeyMap.lookup "_hasShrinkwrap" manifest `shouldBe` Just (Bool False)
 
     it "never lets an unverified source digest survive the absence of a verified one" $ do
         document <- decodeJsonOrFail =<< expectRight (npmPublishDocument isOdd (planWith (fst npmCached sourceVersion)) "is-odd-1.0.0.tgz" Nothing Nothing dummyTarballBytes) :: IO Object
