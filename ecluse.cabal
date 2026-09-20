@@ -192,7 +192,9 @@ library ecluse-core
     Ecluse.Core.Server.Cache.Backend
     Ecluse.Core.Server.Cache.Backend.Internal
     Ecluse.Core.Server.Cache.Backend.Local
+    Ecluse.Core.Server.Cache.Provider
     Ecluse.Core.Server.Cache.Store
+    Ecluse.Core.Server.Cache.Types
     Ecluse.Core.Server.Cache.VersionWeight
     Ecluse.Core.Server.Accept
     Ecluse.Core.Server.Admission
@@ -821,6 +823,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.AdmissionSpec
     Ecluse.Core.Server.Cache.BackendSpec
     Ecluse.Core.Server.Cache.Backend.LocalSpec
+    Ecluse.Core.Server.Cache.ProviderSpec
     Ecluse.Core.Server.Cache.StoreSpec
     Ecluse.Core.Server.Cache.VersionWeightSpec
     Ecluse.Core.Server.CacheSpec

@@ -4,6 +4,7 @@
 -- | Optional retention with bounded external operations and backend-owned codecs.
 module Ecluse.Core.Server.Cache.Backend (
     RetentionBackend,
+    RetentionOperations (..),
     BackendStorage (..),
     Recency (..),
     CacheOccupancy (..),
@@ -21,14 +22,13 @@ Adapters own TTL, bounded decoding, identity validation, and storage representat
 -}
 retentionBackend ::
     BackendStorage ->
-    ((CacheOccupancy -> IO ()) -> Recency -> k -> IO (Maybe v)) ->
-    ((CacheOccupancy -> IO ()) -> IO () -> k -> v -> IO ()) ->
+    RetentionOperations k v ->
     RetentionBackend k v
-retentionBackend storage readValue writeValue =
+retentionBackend storage operations =
     RetentionBackend
         { rbStorage = storage
-        , rbLookup = \record failed recency key -> runBackend storage failed Nothing (readValue record recency key)
-        , rbInsert = \record refused failed key value -> runBackend storage failed () (writeValue record refused key value)
+        , rbLookup = \record failed recency key -> runBackend storage failed Nothing (roLookup operations record recency key)
+        , rbInsert = \record refused failed key value -> runBackend storage failed () (roInsert operations record refused key value)
         }
 
 runBackend :: BackendStorage -> IO () -> a -> IO a -> IO a
@@ -41,7 +41,7 @@ runBackend storage failed fallback action = case storage of
             _ -> failed $> fallback
 
 -- | Only external storage is eligible to retain full metadata.
-supportsFullRetention :: RetentionBackend k v -> Bool
-supportsFullRetention backend = case rbStorage backend of
+supportsFullRetention :: BackendStorage -> Bool
+supportsFullRetention = \case
     LocalStorage -> False
     ExternalStorage _ -> True

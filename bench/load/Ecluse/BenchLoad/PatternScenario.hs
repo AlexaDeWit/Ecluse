@@ -171,7 +171,6 @@ evidence meter upstreamCount config rawBytes measuredBodies knobs requestTrace s
         traverse
             (collect fullWorkingBytes)
             [("full", "", cacheFullBudget config), ("version", ".version", cacheVersionBudget config), ("assembled", ".assembled", cacheAssembledBudget config)]
-    fullHits <- sum . map snd <$> sumPoints "ecluse.metadata_cache.version.full_hits" meter
     (metadataRequests, artifactRequests) <- readIORef upstreamCount
     pure $
         T.unlines
@@ -183,7 +182,7 @@ evidence meter upstreamCount config rawBytes measuredBodies knobs requestTrace s
             , "Raw captured working bytes: " <> show rawBytes <> " B. Served stub working bytes: " <> show wireBytes <> " B. Selected-version mode: " <> maybe "none" toText selected <> "."
             , "Body cap: " <> show bodyCap <> " B. Default cap: " <> show (maxMetadataBytes defaultLimits) <> " B. Largest served stub body: " <> show largest <> " B. Default would refuse largest: " <> show (largest > maxMetadataBytes defaultLimits) <> "."
             , "Wire working set / full-store wire-equivalent budget: " <> show wireBytes <> " / " <> show (contractResidentBytes (sbMaxBytes (cacheFullBudget config))) <> " B. The resident estimate excludes retained artifact keys."
-            , "Public upstream requests (metadata / artifact): " <> show metadataRequests <> " / " <> show artifactRequests <> ". Selected-version warm-full shortcuts: " <> (if metricsAvailable then show fullHits else "unavailable") <> ". These shortcuts are separate from version-store resolutions."
+            , "Public upstream requests (metadata / artifact): " <> show metadataRequests <> " / " <> show artifactRequests <> ". Selected lookups use only the selected provider capability."
             , if metricsAvailable then renderStoreEvidence stores else "Cache evidence unavailable: this build lacks the collapse and refusal telemetry catalogue. Full-store candidate accounted bytes / capacity: " <> show fullWorkingBytes <> " / " <> show (sbMaxBytes (cacheFullBudget config)) <> "."
             , "Selected npm replay follows listings with captured public tarball coordinates after private misses. Artifact bytes are synthetic relay payloads. This measures the HTTP metadata gate, not a complete npm install or client integrity validation."
             , "RTS allocation and heap figures include the in-process replay client and stub upstreams. They are not proxy-only costs or directly comparable with the external oha generator."

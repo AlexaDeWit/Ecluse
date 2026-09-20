@@ -125,21 +125,36 @@ then completion removes the flight registration. This path does not weigh, encod
 full entries. A subsequent full read fetches again, so an earlier listing does not make a later
 selected-version read an upstream-free operation.
 
-Retention uses a backend handle separate from single-flight and request admission.
-The composition root supplies the local backend without an external dependency.
-The optional full-retention interface excludes the shipped local backend even when explicitly
-supplied. An external adapter owns its TTL, representation, codec, bounded decoding, and identity
-validation. It must preserve the source, ecosystem, package, source digest, and artifact identities.
-Each external operation has a deadline capped at one second. A synchronous fault or deadline
-expiry becomes a miss or skipped write. Cancellation propagates. Writes run inline and no pending
-write queue retains documents. There is no external backend implementation or configuration.
+One selected provider owns all three retention capabilities: full metadata, selected versions,
+and assembled responses. Its constructor assigns one storage class to every capability.
+The composition root chooses the shipped local provider without an external dependency.
+Local full retention is absent even if an adapter supplies full operations. Unsupported capabilities
+stay uncached, and a failed provider never falls back to a retained local copy.
+Single-flight and request admission remain local coordination, separate from persistent storage.
+
+Selected reads call the provider's selected capability directly. They never fetch a retained full
+entry through the generic cache. An external adapter can read a selected remote projection without
+transferring or decoding a full document locally. The adapter owns its TTL, codec, bounded decoding,
+identity checks, and representation. Source, ecosystem, package, version, digest, and artifact
+identities must survive that boundary. No request can bypass the private authorisation or rules.
+
+Recency is a storage-policy hint, not a remote LRU requirement. Occupancy reporting is optional
+and describes the adapter's charged bytes and entry counts, not its server's exact heap use.
+The local provider reports its bounded stores' charges. Each external operation has a deadline
+capped at one second. Synchronous faults and deadline expiry cause an origin fetch or skipped write.
+Cancellation propagates. Writes run inline with no pending write queue. There is no external client,
+codec, or service configuration in the shipped provider.
+
+Credential refresh state, advisory snapshots, HTTP connection pools, and mirror queues retain
+their separate control-state contracts. Operator-owned private registries are registry roles,
+not an implicit second metadata retention provider.
 
 Repeated full fetches can increase upstream work. Dependency-graph captures establish large full
 working sets, but no successful paired runtime comparison establishes the size of this trade-off.
 Performance reports must compare equal successful work and distinguish retained bytes from transient
 materialisation, allocation, and upstream transfer.
 
-The selected-version store charges each retained release field, including the full backing
+The local selected-version store charges each retained release field, including the full backing
 allocation of each text slice. Repeated artifacts, hashes, licences, and trust evidence each carry
 a node allowance. A fixed allowance covers the entry and scalar fields, and a per-byte version
 allowance covers parsed ordering keys. Shared allocations count repeatedly. This is conservative

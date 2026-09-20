@@ -7,9 +7,9 @@ module Ecluse.Core.Server.Cache.Backend.LocalSpec (spec) where
 import Control.Exception (throw)
 import Test.Hspec
 
-import Ecluse.Core.Server.Cache.Backend (supportsFullRetention)
-import Ecluse.Core.Server.Cache.Backend.Local (newLocalBackend)
-import Ecluse.Core.Server.Cache.Store (SingleFlight, lookupStoreWithFailure, newSingleFlightWithBackend, resolveSingleFlight)
+import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), Recency (PreserveRecency), supportsFullRetention)
+import Ecluse.Core.Server.Cache.Store (SingleFlight, lookupStore, newSingleFlightWithBackend, resolveSingleFlight)
+import Ecluse.Test.Server.Cache (newLocalBackend)
 
 data Weighed = Weighed
     deriving stock (Show)
@@ -21,7 +21,7 @@ spec = describe "newLocalBackend" $
     for_ [(0, 100), (100, 0)] $ \(entries, bytes) ->
         it ("serves without weighing at bounds " <> show (entries, bytes)) $ do
             backend <- newLocalBackend 60 entries bytes (\_ -> throw Weighed)
-            supportsFullRetention backend `shouldBe` False
+            supportsFullRetention LocalStorage `shouldBe` False
             store <- newSingleFlightWithBackend (Just backend) :: IO (SingleFlight () Text Text)
             resolveSingleFlight (const pass) (const pass) pass store "key" (pure (Right "value")) `shouldReturn` Right "value"
-            lookupStoreWithFailure (const pass) pass store "key" `shouldReturn` Nothing
+            lookupStore (const pass) pass PreserveRecency store "key" `shouldReturn` Nothing

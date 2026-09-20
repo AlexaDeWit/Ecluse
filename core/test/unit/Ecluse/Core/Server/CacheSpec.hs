@@ -31,18 +31,19 @@ import Ecluse.Core.Server.Cache (
     MetadataCache,
     Source (..),
     StoreBudget (..),
-    cachedMetadata,
     newMetadataCache,
  )
 import Ecluse.Core.Server.Cache qualified as Cache
-import Ecluse.Core.Server.Cache.Backend.Local (newLocalBackend)
+import Ecluse.Core.Server.Cache.Backend (BackendStorage (..))
+import Ecluse.Core.Server.Cache.Backend.Local (newLocalRetention)
+import Ecluse.Core.Server.Cache.Provider (cacheProvider)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Package (npmVersion, pypiVersion, sampleArtifact, sampleDetails, thingName, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
-import Ecluse.Test.Server.Cache (externalBackend, weighCacheEntry)
+import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion, externalOperations, weighCacheEntry)
 import Ecluse.Test.Snapshot (readDetails, untaggedRead)
 
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
@@ -175,7 +176,7 @@ spec = do
                 (port, readResidency) <- recordingVersionResidencyPort
                 c <- newMetadataCache (configBytes 60 100 accounted)
                 Cache.resolveVersion port c publicSource pypiName (pypiVersion "1") (pure (Right release)) `shouldReturn` Right release
-                Cache.cachedVersion noopMetricsPort c publicSource pypiName (pypiVersion "1") `shouldReturn` Just release
+                cachedVersion noopMetricsPort c publicSource pypiName (pypiVersion "1") `shouldReturn` Just release
                 readResidency `shouldReturn` Just accounted
 
         it "serves an oversized selected release without evicting the cached absence" $ do
@@ -187,8 +188,8 @@ spec = do
             c <- newMetadataCache (configBytes 60 100 16384)
             _ <- Cache.resolveVersion port c publicSource pypiName absentVersion (pure (Right (untaggedRead Nothing)))
             replicateM_ 2 $ Cache.resolveVersion port c publicSource pypiName (pypiVersion "1") fetch `shouldReturn` Right release
-            Cache.cachedVersion noopMetricsPort c publicSource pypiName (pypiVersion "1") `shouldReturn` Nothing
-            Cache.cachedVersion noopMetricsPort c publicSource pypiName absentVersion `shouldReturn` Just (untaggedRead Nothing)
+            cachedVersion noopMetricsPort c publicSource pypiName (pypiVersion "1") `shouldReturn` Nothing
+            cachedVersion noopMetricsPort c publicSource pypiName absentVersion `shouldReturn` Just (untaggedRead Nothing)
             readIORef calls `shouldReturn` 2
             readResidency `shouldReturn` Just 1024
 
@@ -202,8 +203,8 @@ spec = do
                 cachedMetadata noopMetricsPort c publicSource thingName `shouldReturn` Nothing
 
         it "excludes an explicitly supplied local backend without evaluating its weigher" $ do
-            backend <- newLocalBackend 60 maxBound maxBound (\_ -> throw (UnexpectedFault MetadataUndecodable))
-            c <- Cache.newMetadataCacheWithBackend (configBytes 60 maxBound maxBound) (Just backend)
+            operations <- newLocalRetention 60 maxBound maxBound (\_ -> throw (UnexpectedFault MetadataUndecodable))
+            c <- Cache.newMetadataCacheWithProvider (cacheProvider LocalStorage (Just operations) Nothing Nothing)
             resolveMetadata c publicSource thingName (pure (entry thingName "raw")) `shouldReturn` entry thingName "raw"
             cachedMetadata noopMetricsPort c publicSource thingName `shouldReturn` Nothing
 
@@ -242,9 +243,9 @@ spec = do
     describe "optional external full retention" $ do
         it "partitions retained values by source, ecosystem, and package" $ do
             values <- newIORef Map.empty
-            let backend = externalBackend 100000 (\_ key -> Map.lookup key <$> readIORef values) (\key value -> modifyIORef' values (Map.insert key value))
+            let operations = externalOperations (\_ key -> Map.lookup key <$> readIORef values) (\key value -> modifyIORef' values (Map.insert key value))
                 identities = [(publicSource, thingName), (privateSource, thingName), (publicSource, unscopedPyPI "thing"), (publicSource, unscopedNpm "other")]
-            c <- Cache.newMetadataCacheWithBackend (config 60 8) (Just backend)
+            c <- Cache.newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just operations) Nothing Nothing)
             for_ (zip identities [1 ..]) $ \((source, name), marker :: Int) -> do
                 let expected = entry name (show marker)
                 resolveMetadata c source name (pure expected) `shouldReturn` expected
@@ -254,10 +255,10 @@ spec = do
 
         it "preserves origin success and reports a failed backend read and write" $ do
             failures <- newIORef []
-            let backend = externalBackend 100000 (\_ _ -> throwIO (UnexpectedFault MetadataUndecodable)) (\_ _ -> throwIO (UnexpectedFault MetadataUndecodable))
+            let operations = externalOperations (\_ _ -> throwIO (UnexpectedFault MetadataUndecodable)) (\_ _ -> throwIO (UnexpectedFault MetadataUndecodable))
                 port = noopMetricsPort{mpCacheRefused = \store -> modifyIORef' failures (store :)}
                 expected = entry thingName "fresh"
-            c <- Cache.newMetadataCacheWithBackend (config 60 8) (Just backend)
+            c <- Cache.newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just operations) Nothing Nothing)
             Cache.resolveMetadata port c publicSource thingName (pure (Right expected)) `shouldReturn` Right expected
             readIORef failures `shouldReturn` [Metric.FullStore, Metric.FullStore]
 
@@ -362,8 +363,8 @@ spec = do
             readIORef full `shouldReturn` 0
             readIORef version >>= (`shouldSatisfy` (> 0))
             threadDelay 1000
-            Cache.cachedMetadata port c publicSource name `shouldReturn` Nothing
-            Cache.cachedVersion port c publicSource name v1_0_0 `shouldReturn` Nothing
+            cachedMetadata port c publicSource name `shouldReturn` Nothing
+            cachedVersion port c publicSource name v1_0_0 `shouldReturn` Nothing
             traverse readIORef [full, version, entries] `shouldReturn` [0, 0, 0]
 
     describe "the named sub-budgets" $ do
@@ -382,7 +383,7 @@ spec = do
             for_ ([1 .. 5] :: [Int]) $ \i ->
                 Cache.resolveVersion noopMetricsPort c publicSource name (npmVersion (show i <> ".0.0")) (pure (Right (untaggedRead Nothing)))
 
-            Cache.cachedVersion noopMetricsPort c publicSource name (npmVersion "1.0.0") `shouldReturn` Nothing
+            cachedVersion noopMetricsPort c publicSource name (npmVersion "1.0.0") `shouldReturn` Nothing
 
             found <- cachedMetadata noopMetricsPort c publicSource name
             found `shouldBe` Nothing
@@ -434,9 +435,9 @@ spec = do
             _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 1) (pure (Right (untaggedRead Nothing)))
             _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 2) (pure (Right (untaggedRead Nothing)))
 
-            _ <- Cache.cachedVersion noopMetricsPort c publicSource name (v 1)
+            _ <- cachedVersion noopMetricsPort c publicSource name (v 1)
 
             _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 3) (pure (Right (untaggedRead Nothing)))
 
-            Cache.cachedVersion noopMetricsPort c publicSource name (v 1) `shouldReturn` Just (untaggedRead Nothing)
-            Cache.cachedVersion noopMetricsPort c publicSource name (v 2) `shouldReturn` Nothing
+            cachedVersion noopMetricsPort c publicSource name (v 1) `shouldReturn` Just (untaggedRead Nothing)
+            cachedVersion noopMetricsPort c publicSource name (v 2) `shouldReturn` Nothing

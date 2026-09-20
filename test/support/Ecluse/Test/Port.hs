@@ -55,7 +55,6 @@ noopMetricsPort =
         , mpVersionCacheRequest = const pass
         , mpAssembledCacheRequest = const pass
         , mpCacheRefused = const pass
-        , mpVersionCacheFullHit = pass
         , mpCacheEntries = const pass
         , mpCacheResidentBytes = const pass
         , mpVersionCacheResidentBytes = const pass

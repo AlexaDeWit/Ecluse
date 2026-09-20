@@ -37,7 +37,6 @@ catalogueSpec = describe "metric-name catalogue" $ do
                             , "ecluse.metadata_cache.version.requests"
                             , "ecluse.metadata_cache.assembled.requests"
                             , "ecluse.metadata_cache.refused"
-                            , "ecluse.metadata_cache.version.full_hits"
                             , "ecluse.metadata_cache.entries"
                             , "ecluse.metadata_cache.resident_bytes"
                             , "ecluse.metadata_cache.version.resident_bytes"

@@ -4,6 +4,7 @@
 -- | Retention handles and their storage capability classification.
 module Ecluse.Core.Server.Cache.Backend.Internal (
     RetentionBackend (..),
+    RetentionOperations (..),
     BackendStorage (..),
     Recency (..),
     CacheOccupancy (..),
@@ -16,6 +17,14 @@ data RetentionBackend k v = RetentionBackend
     -- ^ Report occupancy changes and backend failure, then return a retained value.
     , rbInsert :: (CacheOccupancy -> IO ()) -> IO () -> IO () -> k -> v -> IO ()
     -- ^ Report occupancy, capacity refusal, and backend failure respectively.
+    }
+
+{- | Typed storage operations. Recency is advisory and occupancy reporting is optional.
+Adapters may report charged bytes and entry counts. These do not measure process or remote heap size.
+-}
+data RetentionOperations k v = RetentionOperations
+    { roLookup :: (CacheOccupancy -> IO ()) -> Recency -> k -> IO (Maybe v)
+    , roInsert :: (CacheOccupancy -> IO ()) -> IO () -> k -> v -> IO ()
     }
 
 -- | Local storage cannot retain full metadata, regardless of its capacity.

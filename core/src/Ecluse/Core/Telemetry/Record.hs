@@ -81,15 +81,13 @@ data MetricsPort = MetricsPort
     , mpUpstreamFetchError :: Upstream -> Cause -> IO ()
     -- ^ Record one upstream metadata-fetch error (@ecluse.upstream.fetch.errors@).
     , mpCacheRequest :: CacheResult -> IO ()
-    -- ^ Full-store requests (@ecluse.metadata_cache.requests@), excluding selective-read shortcuts.
+    -- ^ Full-store requests (@ecluse.metadata_cache.requests@).
     , mpVersionCacheRequest :: CacheResult -> IO ()
     -- ^ Selected-version requests (@ecluse.metadata_cache.version.requests@).
     , mpAssembledCacheRequest :: CacheResult -> IO ()
     -- ^ Assembled-response requests (@ecluse.metadata_cache.assembled.requests@).
     , mpCacheRefused :: CacheStore -> IO ()
     -- ^ Capacity refusals and external backend failures (@ecluse.metadata_cache.refused@).
-    , mpVersionCacheFullHit :: IO ()
-    -- ^ Selective reads served by full-store retention (@ecluse.metadata_cache.version.full_hits@).
     , mpCacheEntries :: Int -> IO ()
     -- ^ Record the metadata cache's current occupancy (@ecluse.metadata_cache.entries@).
     , mpCacheResidentBytes :: Int -> IO ()

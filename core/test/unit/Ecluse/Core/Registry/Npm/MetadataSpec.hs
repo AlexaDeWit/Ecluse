@@ -5,8 +5,9 @@
 -- | Differential checks for full and selective npm metadata reads.
 module Ecluse.Core.Registry.Npm.MetadataSpec (spec) where
 
-import Data.Aeson (Value (Bool, Null, String), encode, object, toJSON, (.=))
+import Data.Aeson (Value (Bool, Null, Object, String), encode, object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
@@ -19,19 +20,19 @@ import Ecluse.Core.Package (
     PackageName,
     renderPackageName,
  )
-import Ecluse.Core.Registry.CachedDocument (npmCached)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
     VersionRead (vrUpstreamLatest, vrVersion),
  )
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion, selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Core.Security (
     LimitError (TooDeeplyNested, TooManyVersions),
     Limits (maxNestingDepth, maxVersionCount),
     defaultLimits,
  )
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Json (isObject)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Snapshot (readDetails)
@@ -108,7 +109,7 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
             selected <- expectRight (projectNpmVersion defaultLimits (unscopedNpm "is-odd") (mkVersion Npm v) body)
             fmap vdRaw (vrVersion selected) `shouldBe` Just (Just (fst npmCached (richVersionObject "is-odd" v)))
 
-    it "selects the same version object out of the full projection's raw document (the warm-path pair)" $ do
+    it "matches a selected version object to the same source's full projection" $ do
         let versions = ["1.0.0", "2.1.3", "10.0.0-beta.1"]
             body = richPackumentBytes "is-odd" versions
         (_info, raw) <- expectRight (projectNpmManifest defaultLimits (unscopedNpm "is-odd") body)
@@ -341,3 +342,9 @@ fullVersionOutcome limits name v body =
 rawObject :: [(Text, Value)] -> ByteString
 rawObject members =
     "{" <> BS.intercalate "," [BL.toStrict (encode k) <> ":" <> BL.toStrict (encode v) | (k, v) <- members] <> "}"
+
+selectNpmVersionDoc :: Version -> CachedDoc -> Maybe CachedDoc
+selectNpmVersionDoc version doc = do
+    Object packument <- snd npmCached doc
+    Object versions <- KeyMap.lookup "versions" packument
+    fst npmCached <$> KeyMap.lookup (Key.fromText (renderVersion version)) versions

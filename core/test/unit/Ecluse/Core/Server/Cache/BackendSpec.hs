@@ -9,7 +9,7 @@ import Test.Hspec
 import UnliftIO (cancel, timeout, wait, withAsync)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Server.Cache.Backend (supportsFullRetention)
+import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage), supportsFullRetention)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
 
 import Ecluse.Test.Server.Cache (externalBackend)
@@ -26,7 +26,7 @@ spec = do
             failed <- newIORef (0 :: Int)
             fetched <- newIORef (0 :: Int)
             let backend = externalBackend 100000 (\_ _ -> throwIO BackendFault) (\_ _ -> throwIO BackendFault)
-            supportsFullRetention backend `shouldBe` True
+            supportsFullRetention (ExternalStorage 100000) `shouldBe` True
             store <- newSingleFlightWithBackend (Just backend)
             run failed store (modifyIORef' fetched (+ 1) $> Right "fresh") `shouldReturn` Right "fresh"
             readIORef fetched `shouldReturn` 1

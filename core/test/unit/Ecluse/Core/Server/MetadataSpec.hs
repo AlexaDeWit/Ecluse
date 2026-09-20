@@ -39,22 +39,23 @@ import Ecluse.Core.Registry.Metadata (
     VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
     digestOf,
  )
-import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
 import Ecluse.Core.Registry.Origin (OriginFor, Public, anonymousOrigin, perCallerOrigin)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache, newMetadataCacheWithBackend)
+import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), newMetadataCache, newMetadataCacheWithProvider)
+import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage))
+import Ecluse.Core.Server.Cache.Provider (cacheProvider)
 import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, selectVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetchError, mpVersionCacheFullHit, mpVersionCacheRequest))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetchError, mpVersionCacheRequest))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Package (npmVersion, unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Server.Cache (defaultCacheConfig, externalBackend)
+import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig, externalOperations)
 import Ecluse.Test.Snapshot (readDetails)
 
--- | Tests for the serve-path read handle, whose single-version op is hybrid.
+-- | Selected reads use the chosen provider without hydrating a full document.
 spec :: Spec
 spec = do
     -- Every case here drives the read functions directly, so neither origin is ever dialled:
@@ -63,34 +64,10 @@ spec = do
     let anonymous = anonymousOrigin defaultLimits manager stubUrl
         perCaller = perCallerOrigin defaultLimits manager stubUrl Nothing
 
-    describe "publicMetadataClient -- single-version hybrid topology" $ do
-        it "counts the warm-full shortcut separately from ordinary full-store requests" $ do
+    describe "publicMetadataClient -- selected retention" $ do
+        it "keeps full listing and selected retention independent" $ do
             full <- newIORef []
             version <- newIORef []
-            shortcuts <- newIORef (0 :: Int)
-            calls <- newIORef (0 :: Int)
-            cache <- externalCache
-            let info = manifest name ["1.0.0"]
-                port =
-                    noopMetricsPort
-                        { mpCacheRequest = \r -> modifyIORef' full (r :)
-                        , mpVersionCacheRequest = \r -> modifyIORef' version (r :)
-                        , mpVersionCacheFullHit = modifyIORef' shortcuts (+ 1)
-                        }
-                observedReads = newMetadataReads port noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) selectNpmVersionDoc anonymous
-                client = publicMetadataClient cache source observedReads
-            _ <- fetchFullManifest client name
-            _ <- fetchVersionMetadata client name (npmVersion "1.0.0")
-            _ <- fetchVersionMetadata client name (npmVersion "9.0.0")
-            readIORef full `shouldReturn` [Metric.Miss]
-            readIORef version `shouldReturn` []
-            readIORef shortcuts `shouldReturn` 2
-            readIORef calls `shouldReturn` 1
-
-        it "counts one version-store outcome per cold or retained selected read" $ do
-            full <- newIORef []
-            version <- newIORef []
-            shortcuts <- newIORef (0 :: Int)
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
@@ -98,49 +75,67 @@ spec = do
                     noopMetricsPort
                         { mpCacheRequest = \r -> modifyIORef' full (r :)
                         , mpVersionCacheRequest = \r -> modifyIORef' version (r :)
-                        , mpVersionCacheFullHit = modifyIORef' shortcuts (+ 1)
                         }
-                observedReads = newMetadataReads port noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) selectNpmVersionDoc anonymous
+                observedReads = newMetadataReads port noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) anonymous
+                client = publicMetadataClient cache source observedReads
+            _ <- fetchFullManifest client name
+            _ <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            _ <- fetchVersionMetadata client name (npmVersion "9.0.0")
+            readIORef full `shouldReturn` [Metric.Miss]
+            readIORef version `shouldReturn` [Metric.Miss, Metric.Miss]
+            readIORef calls `shouldReturn` 3
+
+        it "counts one version-store outcome per cold or retained selected read" $ do
+            full <- newIORef []
+            version <- newIORef []
+            calls <- newIORef (0 :: Int)
+            cache <- newMetadataCache defaultCacheConfig
+            let info = manifest name ["1.0.0"]
+                port =
+                    noopMetricsPort
+                        { mpCacheRequest = \r -> modifyIORef' full (r :)
+                        , mpVersionCacheRequest = \r -> modifyIORef' version (r :)
+                        }
+                observedReads = newMetadataReads port noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) anonymous
                 client = publicMetadataClient cache source observedReads
             replicateM_ 2 (fetchVersionMetadata client name (npmVersion "1.0.0"))
             readIORef full `shouldReturn` []
             readIORef version `shouldReturn` [Metric.Hit, Metric.Miss]
-            readIORef shortcuts `shouldReturn` 0
             readIORef calls `shouldReturn` 1
 
-        it "reuses the warm full-packument cache: a GET then its version select is one upstream call" $ do
+        it "fetches a selected representation after a full listing" $ do
             calls <- newIORef (0 :: Int)
-            cache <- externalCache
+            cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0", "2.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 1
             found <- fetchVersionMetadata client name (npmVersion "1.0.0")
             fmap (fmap pkgVersion . readDetails) found `shouldBe` Right (Just (npmVersion "1.0.0"))
-            readIORef calls `shouldReturn` 1
+            readIORef calls `shouldReturn` 2
 
-        it "pairs a warm full-cache select with that entry's own raw object, with no upstream call" $ do
+        it "pairs a selected read with its own upstream object" $ do
             calls <- newIORef (0 :: Int)
-            cache <- externalCache
+            cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0", "2.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
             found <- fetchVersionMetadata client name (npmVersion "1.0.0")
-            fmap (fmap vdRaw . vrVersion) found `shouldBe` Right (Just (Just (markedObject "1.0.0")))
-            readIORef calls `shouldReturn` 1
+            fmap (fmap vdRaw . vrVersion) found `shouldBe` Right (Just (Just (markedObject "cold")))
+            readIORef calls `shouldReturn` 2
 
-        it "keys a warm pair by version: a sibling select pairs its own raw object, never a neighbour's" $ do
+        it "keys selected pairs by version" $ do
             calls <- newIORef (0 :: Int)
-            cache <- externalCache
+            cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0", "2.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
             older <- fetchVersionMetadata client name (npmVersion "1.0.0")
             newer <- fetchVersionMetadata client name (npmVersion "2.0.0")
-            fmap (fmap vdRaw . vrVersion) older `shouldBe` Right (Just (Just (markedObject "1.0.0")))
-            fmap (fmap vdRaw . vrVersion) newer `shouldBe` Right (Just (Just (markedObject "2.0.0")))
+            fmap (fmap vdRaw . vrVersion) older `shouldBe` Right (Just (Just (markedObject "cold")))
+            fmap (fmap vdRaw . vrVersion) newer `shouldBe` Right (Just (Just (markedObject "cold")))
             fmap (fmap (pkgVersion . vdDetails) . vrVersion) newer `shouldBe` Right (Just (npmVersion "2.0.0"))
-            readIORef calls `shouldReturn` 1
+            readIORef calls `shouldReturn` 3
 
         it "cold: leads a selective single-version fetch, caches it, and a repeat hits the version cache" $ do
             calls <- newIORef (0 :: Int)
@@ -204,9 +199,9 @@ spec = do
             warm <- fetchVersionMetadata client name (npmVersion "2.0.0")
             fmap vrUpstreamLatest warm `shouldBe` Right (Just (npmVersion "2.0.0"))
 
-        it "preserves source byte counts across full-cache hits and warm version selection" $ do
+        it "preserves each source byte count across repeated full and selected reads" $ do
             calls <- newIORef (0 :: Int)
-            cache <- externalCache
+            cache <- newMetadataCache defaultCacheConfig
             let info = manifest name ["1.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             firstRead <- fetchFullManifest client name
@@ -214,8 +209,8 @@ spec = do
             warm <- fetchVersionMetadata client name (npmVersion "1.0.0")
             fmap manifestBodyBytes firstRead `shouldBe` Right 9
             fmap manifestBodyBytes fullHit `shouldBe` Right 9
-            fmap vrBodyBytes warm `shouldBe` Right 9
-            readIORef calls `shouldReturn` 1
+            fmap vrBodyBytes warm `shouldBe` Right 17
+            readIORef calls `shouldReturn` 3
 
         it "caches a determined absence: an absent version is a Nothing re-served without a re-fetch" $ do
             calls <- newIORef (0 :: Int)
@@ -228,6 +223,21 @@ spec = do
             absentHit <- fetchVersionMetadata client name (npmVersion "2.0.0")
             fmap (fmap pkgVersion . readDetails) absentHit `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
+
+    describe "selected provider reads" $
+        it "uses the selected capability without reading or rehydrating full metadata" $ do
+            fullReads <- newIORef (0 :: Int)
+            versionReads <- newIORef (0 :: Int)
+            originReads <- newIORef (0 :: Int)
+            let selected = VersionRead{vrVersion = Just (VersionDoc (details name "1.0.0") (Just (markedObject "selected-provider"))), vrBodyBytes = 31, vrUpstreamLatest = Just (npmVersion "1.0.0")}
+                full = externalOperations (\_ _ -> modifyIORef' fullReads (+ 1) $> Nothing) (\_ _ -> pass)
+                version = externalOperations (\_ _ -> modifyIORef' versionReads (+ 1) $> Just selected) (\_ _ -> pass)
+            cache <- newMetadataCacheWithProvider (cacheProvider (ExternalStorage 100000) (Just full) (Just version) Nothing)
+            let client = publicClient anonymous cache (unreachableFull originReads) (failingVersion originReads)
+            fetchVersionMetadata client name (npmVersion "1.0.0") `shouldReturn` Right selected
+            readIORef versionReads `shouldReturn` 1
+            readIORef fullReads `shouldReturn` 0
+            readIORef originReads `shouldReturn` 0
 
     describe "the default local policy" $
         it "fetches selected metadata after a full read, then retains only the selected result" $ do
@@ -246,7 +256,7 @@ spec = do
             calls <- newIORef (0 :: Int)
             let info = manifest name ["1.0.0"]
                 client =
-                    privateMetadataClient (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) selectNpmVersionDoc perCaller)
+                    privateMetadataClient (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) perCaller)
             _ <- fetchFullManifest client name
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 2
@@ -258,7 +268,7 @@ spec = do
                 failures <- newIORef []
                 let port = noopMetricsPort{mpUpstreamFetchError = \upstream cause -> modifyIORef' causes ((upstream, cause) :)}
                     recordFailure who err = modifyIORef' failures ((who, err) :)
-                    client = privateMetadataClient (newMetadataReads port recordFailure noInvalidLog noFetchLog (\_ _ -> pure (Left refusal)) (\_ _ _ -> pure (Left refusal)) selectNpmVersionDoc perCaller)
+                    client = privateMetadataClient (newMetadataReads port recordFailure noInvalidLog noFetchLog (\_ _ -> pure (Left refusal)) (\_ _ _ -> pure (Left refusal)) perCaller)
                 replicateM_ 2 $ do
                     full <- fetchFullManifest client name
                     void full `shouldBe` Left refusal
@@ -299,7 +309,7 @@ spec = do
             cache <- newMetadataCache defaultCacheConfig
             let port = noopMetricsPort{mpUpstreamFetchError = \upstream cause -> atomicModifyIORef' causes (\cs -> ((upstream, cause) : cs, ()))}
                 client =
-                    publicMetadataClient cache source (newMetadataReads port noLog noInvalidLog noFetchLog (const (unreachableFull calls)) (const (failingVersion calls)) selectNpmVersionDoc anonymous)
+                    publicMetadataClient cache source (newMetadataReads port noLog noInvalidLog noFetchLog (const (unreachableFull calls)) (const (failingVersion calls)) anonymous)
             _ <- fetchFullManifest client name
             readIORef causes `shouldReturn` [(Metric.Public, Metric.Connection)]
 
@@ -318,7 +328,7 @@ spec = do
                     pure (Left (MetadataFetch (FetchTransport (transportFault TransportUnreachable "refused"))))
                 countingLog _name _err = atomicModifyIORef' failureLogs (\n -> (n + 1, ()))
                 client =
-                    publicMetadataClient cache source (newMetadataReads noopMetricsPort countingLog noInvalidLog noFetchLog (const blockingOutage) (const (failingVersion fetches)) selectNpmVersionDoc anonymous)
+                    publicMetadataClient cache source (newMetadataReads noopMetricsPort countingLog noInvalidLog noFetchLog (const blockingOutage) (const (failingVersion fetches)) anonymous)
             (results, ()) <-
                 concurrently
                     (mapConcurrently (const (fetchFullManifest client name)) [1 .. 8 :: Int])
@@ -330,12 +340,6 @@ spec = do
             map isUnreachable results `shouldBe` replicate 8 True
             readIORef fetches `shouldReturn` 1
             readIORef failureLogs `shouldReturn` 1
-
-externalCache :: IO MetadataCache
-externalCache = do
-    values <- newIORef Map.empty
-    let backend = externalBackend 100000 (\_ key -> Map.lookup key <$> readIORef values) (\key value -> modifyIORef' values (Map.insert key value))
-    newMetadataCacheWithBackend defaultCacheConfig (Just backend)
 
 httpFailures :: [(MetadataError, Metric.Cause)]
 httpFailures =
@@ -375,7 +379,7 @@ publicClientAt ::
     (PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
     MetadataClient
 publicClientAt at origin cache full version =
-    publicMetadataClient cache at (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (const full) (const version) selectNpmVersionDoc origin)
+    publicMetadataClient cache at (newMetadataReads noopMetricsPort noLog noInvalidLog noFetchLog (const full) (const version) origin)
 
 -- The raw object the fixtures mark each version with, so a case can tell which body it came from.
 markedObject :: Text -> CachedDoc

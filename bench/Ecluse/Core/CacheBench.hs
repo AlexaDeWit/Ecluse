@@ -6,7 +6,8 @@ Cold fills create a store per sample. Churn and hits use prefilled stores.
 -}
 module Ecluse.Core.CacheBench (benchmarks) where
 
-import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
+import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
+import Ecluse.Test.Server.Cache (newSingleFlight)
 import Test.Tasty (localOption, mkTimeout)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO, whnfIO)
 

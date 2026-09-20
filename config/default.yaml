@@ -85,6 +85,7 @@ limits:
   # maxArtifactBytes: 536870912
 
 cache:
+  # One provider owns all metadata retention. The shipped provider is local memory.
   # Seconds the local selected-version and assembled stores keep entries. Non-negative, and a fractional value
   # is refused rather than truncated.
   ttl: 60

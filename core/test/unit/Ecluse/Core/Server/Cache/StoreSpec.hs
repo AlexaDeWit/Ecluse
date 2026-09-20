@@ -14,10 +14,12 @@ import UnliftIO (async, cancel, concurrently, concurrently_, mapConcurrently, ti
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, try)
 
+import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), Recency (..), retentionBackend)
+import Ecluse.Test.Server.Cache (externalOperations, newSingleFlight)
+
 import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
     SingleFlight,
-    newSingleFlight,
     newSingleFlightWithBackend,
     resolveSingleFlight,
  )
@@ -70,16 +72,55 @@ resolveOkAccumulating seen sf key fetch =
         =<< resolveSingleFlight (const pass) (\occ -> atomicModifyIORef' seen (\os -> (occ : os, ()))) pass sf key (Right <$> fetch)
 
 lookupStore :: SingleFlight StoreFault Text Text -> Text -> IO (Maybe Text)
-lookupStore = Store.lookupStoreWithFailure (const pass) pass
+lookupStore = Store.lookupStore (const pass) pass PreserveRecency
 
 lookupStoreTouching :: SingleFlight StoreFault Text Text -> Text -> IO (Maybe Text)
-lookupStoreTouching = Store.lookupStoreTouching (const pass)
+lookupStoreTouching = Store.lookupStore (const pass) pass RefreshRecency
 
 countingFetch :: IORef Int -> Text -> IO Text
 countingFetch calls value = atomicModifyIORef' calls (\n -> (n + 1, ())) $> value
 
 spec :: Spec
 spec = do
+    describe "local retained hits" $ do
+        it "returns a second hit while the first hit's request callback is blocked" $ do
+            result <- timeout 1000000 $ do
+                sf <- roomyStore
+                _ <- resolveOk sf "hot" (pure "held")
+                started <- newEmptyMVar
+                release <- newEmptyMVar
+                seen <- newIORef []
+                let blocked request = putMVar started request >> takeMVar release
+                withAsync (resolveSingleFlight blocked (const pass) pass sf "hot" (pure (Right "wrong"))) $ \firstWorker -> do
+                    takeMVar started `shouldReturn` Metric.Hit
+                    resolveWithRequests seen pass sf "hot" (pure (Right "wrong")) `shouldReturn` Right "held"
+                    readIORef seen `shouldReturn` [Metric.Hit]
+                    putMVar release ()
+                    wait firstWorker `shouldReturn` Right "held"
+            result `shouldBe` Just ()
+
+        it "rechecks retention after claiming a miss that raced with another completed fetch" $ do
+            result <- timeout 1000000 $ do
+                held <- newIORef Nothing
+                firstRead <- newIORef True
+                started <- newEmptyMVar
+                release <- newEmptyMVar
+                fetches <- newIORef (0 :: Int)
+                let readValue _ _ = do
+                        first <- atomicModifyIORef' firstRead (False,)
+                        if first
+                            then putMVar started () >> takeMVar release $> Nothing
+                            else readIORef held
+                    operations = externalOperations readValue (\_ value -> writeIORef held (Just value))
+                sf <- newSingleFlightWithBackend (Just (retentionBackend LocalStorage operations))
+                withAsync (resolveOk sf "key" (countingFetch fetches "wrong")) $ \firstWorker -> do
+                    takeMVar started
+                    resolveOk sf "key" (countingFetch fetches "winner") `shouldReturn` "winner"
+                    putMVar release ()
+                    wait firstWorker `shouldReturn` "winner"
+                readIORef fetches `shouldReturn` 1
+            result `shouldBe` Just ()
+
     describe "single-flight without retention" $ do
         for_ [Right "fresh", Left StoreFault] $ \outcome ->
             it ("shares an active result and drops completed history: " <> show outcome) $ do
@@ -361,7 +402,7 @@ spec = do
             _ <- resolveOkAccumulating seen sf "second" (pure "raw")
             map occupancyPair <$> readIORef seen `shouldReturn` [(1, flatWeight), (0, 0), (1, flatWeight)]
 
-        for_ [("read-only", (`Store.lookupStoreWithFailure` pass)), ("touching", Store.lookupStoreTouching)] $ \(viewName, readEntry) ->
+        for_ [("read-only", \record -> Store.lookupStore record pass PreserveRecency), ("touching", \record -> Store.lookupStore record pass RefreshRecency)] $ \(viewName, readEntry) ->
             it ("reports expiry immediately through the " <> viewName <> " view") $ do
                 seen <- newIORef Nothing
                 sf <- newStore 0 1 flatWeight

@@ -361,8 +361,8 @@ The finite report retains scheduled, completed, successful, refused, other HTTP 
 failure, and unfinished totals and rates. Its success fraction divides by all scheduled requests.
 Successful throughput and latency exclude error responses. HTTP refusals count 429 and 503, while
 other non-success statuses have a separate count. Allocation averages include all completed responses
-and are unavailable when no response completes. Public upstream requests and the
-selected-version warm-full shortcut count remain separate from store outcomes.
+and are unavailable when no response completes. Public upstream requests remain separate from store outcomes. Selected reads use their provider
+capability directly, so there is no full-entry shortcut count.
 
 The `pattern-cold-install-default-body-cap` cell keeps the default body limit. Other finite cells use
 a stated benchmark-only cap derived from the largest actual stub body after URL rewriting.

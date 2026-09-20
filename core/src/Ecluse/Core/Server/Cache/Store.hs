@@ -4,21 +4,17 @@
 -- | Local request coalescing with optional, separately owned retention.
 module Ecluse.Core.Server.Cache.Store (
     SingleFlight,
-    newSingleFlight,
     newSingleFlightWithBackend,
     resolveSingleFlight,
-    lookupStoreWithFailure,
-    lookupStoreTouching,
+    lookupStore,
     CacheOccupancy (..),
 ) where
 
 import Data.Map.Strict qualified as Map
-import Data.Time (NominalDiffTime)
 import UnliftIO.Exception (SomeAsyncException, mask, throwIO)
 
 import Ecluse.Core.InFlight (guardInFlight)
 import Ecluse.Core.Server.Cache.Backend.Internal
-import Ecluse.Core.Server.Cache.Backend.Local (newLocalBackend)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
 -- | Active requests own flight results. Completion removes the only registry reference.
@@ -31,11 +27,6 @@ data FlightOutcome e v
     = FlightValue v
     | FlightFault e
     | FlightOrphaned SomeException
-
--- | Build a local bounded store. A weight of 'maxBound' means uncacheable.
-newSingleFlight :: (Hashable k) => NominalDiffTime -> Int -> Int -> (v -> Int) -> IO (SingleFlight e k v)
-newSingleFlight ttl maxEntries maxBytes weigh =
-    newLocalBackend ttl maxEntries maxBytes weigh >>= newSingleFlightWithBackend . Just
 
 -- | Coalesce requests without retaining completed values when the backend is absent.
 newSingleFlightWithBackend :: Maybe (RetentionBackend k v) -> IO (SingleFlight e k v)
@@ -55,6 +46,15 @@ resolveSingleFlight ::
     IO (Either e v)
 resolveSingleFlight recordRequest recordOccupancy recordRefused sf key fetch = mask $ \restore ->
     let resolveAt reportRequest = do
+            held <- case sfBackend sf of
+                Just backend
+                    | rbStorage backend == LocalStorage ->
+                        restore (lookupStore recordOccupancy recordRefused RefreshRecency sf key)
+                _ -> pure Nothing
+            case held of
+                Just value -> reportRequest Metric.Hit $> Right value
+                Nothing -> resolveMiss reportRequest
+        resolveMiss reportRequest = do
             decision <- atomically (claimFlight sf key)
             case decision of
                 Follow marker -> do
@@ -68,7 +68,7 @@ resolveSingleFlight recordRequest recordOccupancy recordRefused sf key fetch = m
                             Nothing -> throwIO err
                 Lead marker ->
                     guardInFlight id (orphan marker) (atomically deregister) $ do
-                        held <- restore (readBackend recordOccupancy recordRefused RefreshRecency sf key)
+                        held <- restore (lookupStore recordOccupancy recordRefused RefreshRecency sf key)
                         fetched <- case held of
                             Just value -> reportRequest Metric.Hit $> Right value
                             Nothing -> do
@@ -84,16 +84,9 @@ resolveSingleFlight recordRequest recordOccupancy recordRefused sf key fetch = m
   where
     deregister = modifyTVar' (sfInFlight sf) (Map.delete key)
 
--- | Probe retention and report external failure without starting an upstream fetch.
-lookupStoreWithFailure :: (CacheOccupancy -> IO ()) -> IO () -> SingleFlight e k v -> k -> IO (Maybe v)
-lookupStoreWithFailure record failed = readBackend record failed PreserveRecency
-
--- | Read without fetching and refresh recency on a hit, reporting expiry removals.
-lookupStoreTouching :: (CacheOccupancy -> IO ()) -> SingleFlight e k v -> k -> IO (Maybe v)
-lookupStoreTouching record = readBackend record pass RefreshRecency
-
-readBackend :: (CacheOccupancy -> IO ()) -> IO () -> Recency -> SingleFlight e k v -> k -> IO (Maybe v)
-readBackend record failed recency sf key = case sfBackend sf of
+-- | Probe the selected storage. Recency is a hint, and unsupported retention reports zero occupancy.
+lookupStore :: (CacheOccupancy -> IO ()) -> IO () -> Recency -> SingleFlight e k v -> k -> IO (Maybe v)
+lookupStore record failed recency sf key = case sfBackend sf of
     Nothing -> record (CacheOccupancy 0 0) $> Nothing
     Just backend -> rbLookup backend record failed recency key
 

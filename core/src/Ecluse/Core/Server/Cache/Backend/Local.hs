@@ -4,7 +4,7 @@
 
 -- | Local retention with TTL expiry and bounded accounted bytes.
 module Ecluse.Core.Server.Cache.Backend.Local (
-    newLocalBackend,
+    newLocalRetention,
 ) where
 
 import Data.Cache (Cache)
@@ -15,7 +15,7 @@ import Data.Time (NominalDiffTime)
 import System.Clock (Clock (Monotonic), TimeSpec, fromNanoSecs, getTime)
 import UnliftIO.MVar (withMVar)
 
-import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), CacheOccupancy (..), Recency (..), RetentionBackend, retentionBackend)
+import Ecluse.Core.Server.Cache.Backend (CacheOccupancy (..), Recency (..), RetentionOperations (..))
 
 data Weighted v = Weighted
     { wValue :: v
@@ -45,8 +45,8 @@ data LocalStore k v = LocalStore
     }
 
 -- | Build a bounded store. Zero bounds disable insertion without weighing values.
-newLocalBackend :: (Hashable k) => NominalDiffTime -> Int -> Int -> (v -> Int) -> IO (RetentionBackend k v)
-newLocalBackend ttl maxEntries maxBytes weigh = do
+newLocalRetention :: (Hashable k) => NominalDiffTime -> Int -> Int -> (v -> Int) -> IO (RetentionOperations k v)
+newLocalRetention ttl maxEntries maxBytes weigh = do
     -- Expiry belongs to this wrapper so deletion and accounting share one transaction.
     store <- Cache.newCache Nothing
     clock <- newIORef 0
@@ -70,7 +70,7 @@ newLocalBackend ttl maxEntries maxBytes weigh = do
             PreserveRecency -> lookupStore record storeState key
             RefreshRecency -> lookupStoreTouching record storeState key
         writeValue record refused = insertBounded record refused storeState
-    pure (retentionBackend LocalStorage readValue writeValue)
+    pure RetentionOperations{roLookup = readValue, roInsert = writeValue}
 
 insertBounded :: (Hashable k) => (CacheOccupancy -> IO ()) -> IO () -> LocalStore k v -> k -> v -> IO ()
 insertBounded recordOccupancy recordRefused sf key value

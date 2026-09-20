@@ -8,7 +8,7 @@ The caching policy is not exported, and an origin carries its credential posture
 'publicMetadataClient' takes reads over a 'Public' origin, which only
 'Ecluse.Core.Registry.Origin.anonymousOrigin' builds and which presents no credential, so reads
 that carry a caller's credential cannot reach the shared cache. 'privateMetadataClient' takes no
-cache at all. Anonymous public reads share full-document and version caches.
+cache at all. Anonymous public reads use the selected provider's typed retention capabilities.
 -}
 module Ecluse.Core.Server.Metadata (
     -- * Constructing a per-request read handle
@@ -23,15 +23,13 @@ module Ecluse.Core.Server.Metadata (
 
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoDistTags, infoInvalidEntries, infoVersions), PackageName)
+import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoVersions), PackageName)
 import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded, FetchTransport, FetchUrlUnformable))
-import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (
     Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (..),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataBoundExceeded, MetadataFetch, MetadataHttpFailure, MetadataNameMismatch, MetadataUndecodable),
-    VersionDoc (VersionDoc, vdDetails, vdRaw),
-    VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
+    VersionRead,
  )
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, Private, Public, originClientOf)
 
@@ -39,8 +37,6 @@ import Ecluse.Core.Server.Cache (
     CacheEntry (CacheEntry, entryBodyBytes, entryDigest, entryInfo, entryRaw),
     MetadataCache,
     Source,
-    cachedMetadata,
-    cachedVersion,
     resolveMetadata,
     resolveVersion,
  )
@@ -63,9 +59,7 @@ newtype MetadataReads (posture :: Type) = MetadataReads (Metric.Upstream -> Mani
 -- turn per-caller reads into the ones the public builder accepts.
 type role MetadataReads nominal
 
-{- | Bind one origin's raw reads to the metrics port and the failure, invalid-entry, and fetch logs.
-The selector pairs a warm full-cache hit with one version's raw object, as a selective read does.
--}
+-- | Bind one origin's raw reads to the metrics port and the failure, invalid-entry, and fetch logs.
 newMetadataReads ::
     MetricsPort ->
     (PackageName -> MetadataError -> IO ()) ->
@@ -73,10 +67,9 @@ newMetadataReads ::
     (PackageName -> IO ()) ->
     (OriginClient -> PackageName -> IO (Either MetadataError Manifest)) ->
     (OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)) ->
-    (Version -> CachedDoc -> Maybe CachedDoc) ->
     OriginFor posture ->
     MetadataReads posture
-newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion selectRaw origin =
+newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion origin =
     MetadataReads $ \upstream caching ->
         newMetadataClient
             ClientWiring
@@ -85,7 +78,6 @@ newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion
                 , cwCaching = caching
                 , cwFetch = rawFetch client
                 , cwFetchVersion = rawFetchVersion client
-                , cwSelectRaw = selectRaw
                 , cwLogFailure = logFailure
                 , cwLogInvalid = logInvalid
                 , cwLogFetch = logFetch
@@ -109,7 +101,6 @@ data ClientWiring = ClientWiring
     , cwCaching :: ManifestCaching
     , cwFetch :: PackageName -> IO (Either MetadataError Manifest)
     , cwFetchVersion :: PackageName -> Version -> IO (Either MetadataError VersionRead)
-    , cwSelectRaw :: Version -> CachedDoc -> Maybe CachedDoc
     , cwLogFailure :: PackageName -> MetadataError -> IO ()
     , cwLogInvalid :: PackageName -> [InvalidEntry] -> IO ()
     , cwLogFetch :: PackageName -> IO ()
@@ -119,7 +110,7 @@ newMetadataClient :: ClientWiring -> MetadataClient
 newMetadataClient wiring =
     MetadataClient
         { fetchFullManifest = fmap (fmap entryToManifest) . resolveEntry wiring
-        , fetchVersionMetadata = resolveVersionHybrid wiring
+        , fetchVersionMetadata = resolveSelectedVersion wiring
         }
 
 resolveEntry :: ClientWiring -> PackageName -> IO (Either MetadataError CacheEntry)
@@ -139,16 +130,10 @@ entryOfManifest wiring name manifest = do
     unless (null invalid) (cwLogInvalid wiring name invalid)
     pure (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestBodyBytes manifest) (manifestDigest manifest))
 
-resolveVersionHybrid :: ClientWiring -> PackageName -> Version -> IO (Either MetadataError VersionRead)
-resolveVersionHybrid wiring name version = case cwCaching wiring of
+resolveSelectedVersion :: ClientWiring -> PackageName -> Version -> IO (Either MetadataError VersionRead)
+resolveSelectedVersion wiring name version = case cwCaching wiring of
     Uncached -> versionLeader wiring name version
-    Cached cache source ->
-        cachedVersion (cwMetrics wiring) cache source name version >>= \case
-            Just versionRead -> Right versionRead <$ mpVersionCacheRequest (cwMetrics wiring) Metric.Hit
-            Nothing ->
-                cachedMetadata (cwMetrics wiring) cache source name >>= \case
-                    Just entry -> Right (readOfEntry (cwSelectRaw wiring) version entry) <$ mpVersionCacheFullHit (cwMetrics wiring)
-                    Nothing -> resolveVersion (cwMetrics wiring) cache source name version (versionLeader wiring name version)
+    Cached cache source -> resolveVersion (cwMetrics wiring) cache source name version (versionLeader wiring name version)
 
 versionLeader :: ClientWiring -> PackageName -> Version -> IO (Either MetadataError VersionRead)
 versionLeader wiring name version = do
@@ -165,17 +150,6 @@ loggingFailure wiring name action = do
 -- | Find a version by its ecosystem-rendered key in a package snapshot.
 selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
 selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
-
--- The typed view and raw version object must come from the same retained document.
-readOfEntry :: (Version -> CachedDoc -> Maybe CachedDoc) -> Version -> CacheEntry -> VersionRead
-readOfEntry selectRaw version entry =
-    VersionRead
-        { vrVersion = pairOf <$> selectVersion version (entryInfo entry)
-        , vrBodyBytes = entryBodyBytes entry
-        , vrUpstreamLatest = Map.lookup "latest" (infoDistTags (entryInfo entry))
-        }
-  where
-    pairOf details = VersionDoc{vdDetails = details, vdRaw = selectRaw version (entryRaw entry)}
 
 entryToManifest :: CacheEntry -> Manifest
 entryToManifest entry =
