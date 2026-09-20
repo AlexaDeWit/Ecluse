@@ -110,7 +110,7 @@ default structural limits. They do not execute the HTTP bounded read or prove th
 response limits admit each capture.
 
 The retained-byte gate uses the following corpus envelopes. The calibration at
-`009c33d81964f868783ed1cc0a6e3ec75df3b130` used all nine npm and three PyPI captures with
+`868818d671fa30ea93957feb4a6b20a878d14d13` used all nine npm and three PyPI captures with
 GHC 9.10.3, Cabal `-O1`, one capability, and a warmed process.
 These are regression limits for authenticated fixtures, not a universal metadata expansion model.
 
@@ -122,10 +122,10 @@ These are regression limits for authenticated fixtures, not a universal metadata
 | npm | Shared cache entry | 4.428914846 | typescript | 5 | 12.9% |
 | PyPI | Wire bytes | 1.079997401 | requests | 1.25 | 15.7% |
 | PyPI | Raw `Value` | 4.120672117 | boto3 | 7 | 69.9% |
-| PyPI | Typed projection | 1.832921757 | requests | 2.25 | 22.8% |
-| PyPI | Shared cache entry | 5.169352742 | requests | 7.5 | 45.1% |
+| PyPI | Typed projection | 1.821159345 | requests | 2.25 | 23.5% |
+| PyPI | Shared cache entry | 4.367559137 | requests | 5 | 14.5% |
 
-Only the npm typed and shared gates changed with the compact representation.
+The npm typed gate and both shared gates changed with their compact representations.
 Each denominator is the original authenticated source size, including omitted fields.
 For example, the TypeScript shared shape retains 69,507,208 heap bytes from 15,693,959 source bytes.
 Its re-encoded serving document is 10,363,033 bytes. That encoded size and the source probe's
@@ -136,16 +136,25 @@ The 16 KiB release tolerance leaves 4,632 bytes above the observed maximum.
 The second release condition requires at least 90% of each held growth to disappear.
 Signed integer differences preserve samples that fall below baseline without unsigned wraparound.
 
-The production expansion factor stays at 7.5, which covers these retained samples.
-The corpus does not prove a universal bound or justify reducing that factor.
-Every measured shared entry exceeds the 256 KiB typical-entry assumption.
-The smallest warmed entry is 515,568 bytes for npm lodash.
-These twelve captures do not define a workload distribution, so their mean cannot justify
-a replacement for `cacheEntryExpectedBytes` or its planning assumptions.
+The compact denominator gives a different accounting ratio. TypeScript's shared retained bytes
+divided by its compact encoding equal 6.707226350. The unchanged 7.5 factor leaves 11.8% margin
+above that measured maximum across both ecosystems. It is not an active-work bound.
+The local provider retains selected releases and assembled bytes, so full shared shapes do not
+size its entry-count control. An assembled-output mean cannot size a shared count of both forms.
+The existing planning divisor remains until a criterion accounts for mixed sizes and cardinality.
+
+These rows came from [CI run 35534647795](https://github.com/AlexaDeWit/Ecluse/actions/runs/35534647795/job/106141404819).
+Its merge checkout `98a03cd9289041b5a2106f333f27ac32596c2aea` has the same source tree as the
+feature head above. The later digest-helper move changes no read or projection behaviour.
+Separate Vite and Next source probes give held-byte/compact-estimate ratios of 6.4900 and 6.4389.
+Their exact encoded sizes are unmeasured. Those probes force accounting without warmed preparation
+or derived rendering, so they do not establish the same fully forced retained envelope.
 
 ### Streaming source probes
 
-The same residency executable accepts `--metadata-source-probe MODE NAME VERSION LIMIT PATH`.
+The same residency executable accepts `--metadata-source-probe ECOSYSTEM MODE NAME VERSION LIMIT PATH`.
+`ECOSYSTEM` is `npm` or `pypi`. The older invocation without it remains an npm probe.
+PyPI pins use the same PEP 440 canonicalisation as production artifact routes.
 `LIMIT` is the decompressed body ceiling in bytes. `PATH` remains the complete source capture.
 Modes are `BufferedLegacy`, `BufferedCompact`, `StreamedFull`, `StreamedSelected` and
 `StreamedVersions`. The first uses the prior complete Aeson representation. The second feeds held
@@ -170,6 +179,56 @@ measurements does not demonstrate admission under the shipping default.
 Compare equal successful workloads. Full-reference results do not establish a speedup over the
 prior selected-version or inventory algorithms. The warmed retained-shape gate remains a separate
 measurement from this first-read source probe.
+
+### Material admission calibration
+
+`--metadata-material-probe ECOSYSTEM MODE NAME VERSION LIMIT PATH` measures `ColdSelected`,
+`RetainedSelected`, `FullOrigin`, `ListingOneOrigin` and `ListingTwoOrigins` in isolated processes.
+It reuses the source reader, rule filter, merge and adapter assembly/serialisation operations.
+The policy admits releases older than one day at a fixed `2026-09-22T00:00:00Z` clock.
+Two-origin reads prepare independent objects sequentially and keep both rooted through output.
+They do not measure simultaneous native parser buffers. There is no HTTP, TLS, advisory database,
+authentication exchange, real install, worker or maintenance request in these probes.
+
+Samples report process RSS and high-water alongside RTS allocation, GC live bytes and committed
+memory. Cold read costs subtract the initial process RSS from the operation's high-water.
+Known-hit costs start after the selected value is rooted and a major collection completes.
+They use current RSS growth and allocation, because preparation already contaminated high-water.
+Process-counter sampling and rule preparation remain in that interval.
+The source roots survive a final collection before release, but process-sampled deltas do not
+calibrate tiny selected objects. Use `--metadata-selected-retention-probe ECOSYSTEM NAME VERSION LIMIT PATH`
+for the separate warmed, GC-only selected measurement.
+
+The material calibration used three processes per mode and each of the twelve authentic captures.
+Each name has equal weight. Take each name's median, then the mean across names, add 25%, and round
+up to a whole MiB. Retained-hit weights round to 64 KiB. This declared corpus mix does not establish
+production request frequencies. The resulting mean inputs were:
+
+| Cost input | Mean bytes before margin |
+|---|---:|
+| Cold selected RSS growth | 6,819,840 |
+| Retained hit, larger of RSS growth and allocated interval | 167,936 |
+| Full-origin RSS growth | 30,256,469.333 |
+| Listing work after source preparation | 8,647,740.5 |
+
+Listing cost takes the larger of RSS growth and twice the strict output size, then the larger
+one-origin/two-origin median for each name. Two buffers account for lazy encoding chunks and their
+strict destination. The no-heap-datapoint fallback admits two calibrated listings with two origins
+each. These weights control heuristic concurrency. TypeScript's two-origin median process RSS was
+256,868,352 bytes, so the calibrated request weight cannot be read as its heap limit.
+
+The production source was `868818d671fa30ea93957feb4a6b20a878d14d13`, with the probe extension.
+GHC 9.10.3, Cabal `-O1`, RTS `-T -N1`, and 32 KiB file chunks produced 180 cold/hit/full/listing cells.
+No physical memory ceiling was imposed. The separate 36-row PyPI source comparison also completed.
+The first comparison had six empty selected results because the probe used noncanonical trailing-zero
+pins. Correcting the probe to use production canonical keys admitted the same releases.
+The original 36 process-sampled selected-retention diagnostics had noise larger than some roots.
+Those diagnostics supplied no admission weights or retained-factor inference.
+
+Vite and Next were separate acceptance stress cases. All twelve full/selected reads completed at a
+48 MiB ingest ceiling. Their original bodies were 38,945,461 and 31,270,567 bytes respectively.
+The largest body has 29.24% byte headroom. Next's median full-read process RSS was 376,426,496 bytes.
+This is input capability evidence, not successful-install or deployment-size evidence.
 
 ## Smoke tests: `ecluse-smoke` (allowed to fail, non-gating)
 

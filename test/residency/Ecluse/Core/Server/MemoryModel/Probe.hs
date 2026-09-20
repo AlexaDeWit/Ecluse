@@ -10,8 +10,13 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     Measurement (..),
     packages,
     probe,
+    probeSelected,
     SourceMode (..),
     probeSource,
+    Held (..),
+    readSource,
+    sourceSize,
+    sourceSummary,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeStrict, encode)
@@ -84,6 +89,7 @@ data Measurement = Measurement
 instance ToJSON Measurement
 instance FromJSON Measurement
 
+-- | A rooted representation shared by isolated retention and materialisation probes.
 data Held = HeldWire ByteString | HeldRaw Value | HeldTyped PackageInfo | HeldShared CacheEntry | HeldSelected VersionRead | HeldVersions [Version] | HeldLegacy PackageInfo Value
 
 -- | Use the same complete package catalogue as the performance harnesses.
@@ -92,13 +98,28 @@ packages = corpusPackages <> pypiCorpusPackages
 
 -- | Root only the selected representation across collections, then verify its release separately.
 probe :: Shape -> CorpusPackage -> IO Measurement
-probe shape package = do
+probe shape package = measureRetained (prepare shape package)
+
+-- | Measure one selected release with warmed GC-only samples, excluding process-counter sampling.
+probeSelected :: Limits -> PackageName -> Version -> FilePath -> IO Measurement
+probeSelected limits name version path = measureRetained $ do
+    (root, (bytes, _, count, _)) <- prepareSource StreamedSelected limits name version path >>= either (fail . toString) pure
+    held <- deRefStablePtr root
+    weight <- evaluate (sourceSize held)
+    compact <- case held of
+        HeldSelected selected ->
+            evaluate (maybe 0 (maybe 0 (LBS.length . encode . diagnosticDocumentValue) . vdRaw) (vrVersion selected))
+        _ -> fail "selected retention probe retained a different representation"
+    pure (root, (bytes, compact, weight, count))
+
+measureRetained :: IO (StablePtr Held, (Int, Int64, Int, Int)) -> IO Measurement
+measureRetained prepareShape = do
     enabled <- getRTSStatsEnabled
     unless enabled (fail "metadata residency requires RTS -T")
-    bracket (prepare shape package) (freeStablePtr . fst) (observe . fst)
+    bracket prepareShape (freeStablePtr . fst) (observe . fst)
     before <- sample
     (bytes, compact, weight, count, held, prepared) <-
-        bracket (prepare shape package) (freeStablePtr . fst) $ \(root, (bytes, compact, weight, count)) -> do
+        bracket prepareShape (freeStablePtr . fst) $ \(root, (bytes, compact, weight, count)) -> do
             retained <- sample
             observe root
             pure (bytes, compact, weight, count, retained, allocated_bytes retained)
@@ -234,6 +255,7 @@ prepareSource mode limits name version path =
                 root <- newStablePtr held
                 pure (Right (root, (bytes', compactBytes', count', digest')))
 
+-- | Read one explicit ecosystem representation through the production streaming projection.
 readSource :: SourceMode -> Limits -> PackageName -> Version -> IO ByteString -> IO (Either Text (Held, Int, ContentDigest))
 readSource mode limits name version next = case pkgEcosystem name of
     Npm -> readNpmSource mode limits name version next
@@ -299,6 +321,7 @@ readLegacySource limits name next = boundedRead (MetadataBodyLimit (maxMetadataB
         PyPI -> projectSimpleIndexFromValue name
         _ -> parsePackageInfoFromValue name
 
+-- | Force retained fields through their accounting traversal without rendering them.
 sourceSize :: Held -> Int
 sourceSize = \case
     HeldShared entry -> fromIntegral (weighCachedDoc (entryRaw entry)) + infoSize (entryInfo entry)
@@ -311,6 +334,7 @@ sourceSize = \case
   where
     infoSize = Map.foldl' (\total details -> total + weighVersion (untaggedRead (Just details))) 0 . infoVersions
 
+-- | Return the compact structural charge and retained version count.
 sourceSummary :: Held -> (Int64, Int)
 sourceSummary = \case
     HeldShared entry -> (weighCachedDoc (entryRaw entry), Map.size (infoVersions (entryInfo entry)))
