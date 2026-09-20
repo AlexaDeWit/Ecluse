@@ -1233,6 +1233,7 @@ test-suite ecluse-residency
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
   other-modules:
+    Ecluse.Core.Server.MemoryModel.MaterialProbe
     Ecluse.Core.Server.MemoryModel.Probe
     Ecluse.Core.Server.MemoryModelResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec
