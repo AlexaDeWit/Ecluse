@@ -189,7 +189,7 @@ newMetrics telemetry = do
         <*> counter meter MirrorEnqueueFailures "{failure}" "mirror enqueue failures"
         <*> counter meter MirrorJobsProcessed "{job}" "mirror jobs processed by result"
         <*> histogram meter MirrorPublishDuration "mirror publish latency"
-        <*> counter meter DredgerVersions "{version}" "mirror-store versions a sweep cycle disposed of, by result"
+        <*> counter meter DredgerVersions "{version}" "versions a sweep cycle disposed of, by target and result"
         <*> counter meter CredentialRefresh "{refresh}" "credential refreshes by result and provider"
         <*> observableGauge meter CredentialTokenTtlSeconds "remaining outbound-token lifetime by provider"
         <*> counter meter AdvisorySyncAttempts "{attempt}" "advisory sync attempts by ecosystem and result"
@@ -404,7 +404,7 @@ recordMirrorJobProcessed :: (MonadIO m) => Metrics -> MirrorResult -> m ()
 recordMirrorJobProcessed m result =
     addOne (mMirrorJobsProcessed m) [LMirrorResult result]
 
--- | Record one disposition of one swept mirror-store version (@ecluse.dredger.versions@).
+-- | Record one disposition of one swept version (@ecluse.dredger.versions@).
 recordSweptVersion :: (MonadIO m) => Metrics -> SweepTarget -> SweepResult -> m ()
 recordSweptVersion m target result = addOne (mDredgerVersions m) [LSweepTarget target, LSweepResult result]
 

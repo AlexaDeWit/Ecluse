@@ -27,7 +27,7 @@ in [Deploying Écluse](https://ecluse-proxy.com/docs/deployment/#the-image-and-i
 | `ecluse proxy` | Serves clients, gates public versions, relays first-party publishes, and enqueues mirror jobs. It runs the mirror worker too unless started with `--no-worker`. | [Web layer](architecture/web-layer.md), [Registry model](architecture/registry-model.md), [Rules engine](architecture/rules-engine.md) |
 | `ecluse mirror` | Consumes mirror jobs, re-checks each version against policy, and publishes it to the mirror store. | [Mirror queue](architecture/cloud-backends.md#mirror-queue) |
 | `ecluse pilot` | Builds each ecosystem's advisory database from the OSV exports and the EPSS feed, and publishes it to the advisory store. | [Local polling, decoupled ingestion](architecture/rules-engine.md#local-polling-decoupled-ingestion) |
-| `ecluse dredger` | Re-checks the mirror store against current policy and deletes what it now denies. | [Walking a store](architecture/cloud-backends.md#walking-a-store) |
+| `ecluse dredger` | Re-checks each mount's mirror target and private cache against current policy and deletes what it denies. | [Walking a store](architecture/cloud-backends.md#walking-a-store) |
 | `ecluse check-config` | Validates the configuration for every role and prints the resolved posture. | [Configuration](architecture/configuration.md) |
 
 A request's path through the proxy is in

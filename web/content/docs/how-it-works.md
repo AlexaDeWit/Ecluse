@@ -32,8 +32,8 @@ other tags take a static token you supply. Écluse hosts no packages itself.
 - `ecluse mirror` runs the mirror worker alone, when you want to scale it apart from the proxy.
 - `ecluse pilot` builds the advisory database from the OSV exports and the EPSS feed. The fast
   lane, the advisory denies, and Dredger all read it.
-- `ecluse dredger` deletes mirrored versions your rules now deny. It is the only role that
-  deletes, and [Running the Dredger](@/docs/dredger.md) covers it.
+- `ecluse dredger` deletes versions your rules deny from each mount's mirror target and private
+  cache. It is the only role that deletes, and [Running the Dredger](@/docs/dredger.md) covers it.
 
 [Deploying Écluse](@/docs/deployment.md) covers all four.
 

@@ -211,10 +211,11 @@ observability:
   # false, which the load then refuses as the wrong type.
   telemetry: "off"
 
-# The mirror sweep, read only by `ecluse dredger`. Every other role carries these keys
-# unread. Each cycle intersects the store's package listing with the names the advisory
-# database covers and the names an identity-deny rule pins, reads each of those packages'
-# metadata back from the store, and deletes a version only on a named decisive deny.
+# The sweep over each mount's mirrorTarget and the privateUpstream cache paired with it,
+# read only by `ecluse dredger`. Every other role carries these keys unread. Each cycle
+# intersects both stores' package listings with the names the advisory database covers
+# and the names an identity-deny rule pins. It then reads each of those packages' metadata
+# back from the store holding it. It deletes a version only on a named decisive deny.
 # Deletion is permanent, so the pacing and the cap below bound what one cycle can do.
 dredger:
   # Candidate packages one chunk examines before the sweep pauses.
@@ -304,8 +305,9 @@ mounts:
     # equal repository identities, including equivalent URL spellings.
     # Proxy reads forward the caller's credential. Dredger uses this target's own authority.
     # CodeArtifact mints a maintenance token and checks the repository's consent tag.
-    # Verdaccio accepts an optional token and permitDeletion (default false) for maintenance.
-    # Deletion requires both. Preview permits anonymous reads and needs no deletion consent.
+    # Verdaccio takes a token and permitDeletion (default false) for maintenance. The
+    # deleting role refuses to boot without both, naming the key it wants. Preview permits
+    # anonymous reads and needs no deletion consent.
     # permitDeletion also declares the Verdaccio store standalone.
     # At boot, both proxy roles and both Dredger modes ask the backend whether this
     # repository connects to a public registry. An unsafe answer refuses the role, an

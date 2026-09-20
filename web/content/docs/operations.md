@@ -5,8 +5,8 @@ weight = 5
 +++
 
 Deployment ends with a running instance, and this page is about living with one. Come here when
-you wire probes into an orchestrator, point a collector at the logs, size a pod, or have to pull
-a bad version back out of the mirror.
+you wire probes into an orchestrator, point a collector at the logs, or size a pod. It also covers
+pulling a bad version back out of the mirror target and its private cache.
 
 `ecluse check-config` validates the configuration without starting a role.
 For mirror stores with a control plane, it reports that boot builds the maintenance client
@@ -480,7 +480,8 @@ also finds anything an old writer added after an earlier scan reported the name 
 
 If an old Dredger deletes the only bytes during a rollout, later policy agreement cannot restore
 them. A removed version returns only when a usable source still holds its bytes and something
-admits it again. The [threat model](@/docs/threat-model.md) records that accepted residual.
+admits it again. The [threat model](@/docs/threat-model.md) records that accepted residual as
+risk 109, over deletions from the mirror target and from the private cache alike.
 
 ## Mirror receipts and their visibility
 

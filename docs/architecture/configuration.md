@@ -266,7 +266,7 @@ reach are the ones a live environment settles. These are the steps that raise th
 - building the mirror-queue backend
 - preparing each mount ecosystem's advisory sync
 - resolving a mount's mirror-write provider
-- building the client the Dredger sweeps each mirror store with
+- building the clients the Dredger sweeps each mirror target and its private cache with
 
 The same validation runs without a boot. `ecluse check-config` runs the full resolution chain:
 config load, runtime plan, sizing and memory-budget resolvers, mirror-queue selection, and the
