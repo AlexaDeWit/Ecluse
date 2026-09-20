@@ -6,7 +6,7 @@ weight = 5
 
 Deployment ends with a running instance, and this page is about living with one. Come here when
 you wire probes into an orchestrator, point a collector at the logs, size a pod, or have to pull
-a bad version back out of the mirror.
+a bad version back out of the mirror target and the private cache that retained it.
 
 `ecluse check-config` validates the configuration without starting a role.
 For mirror stores with a control plane, it reports that boot builds the maintenance client

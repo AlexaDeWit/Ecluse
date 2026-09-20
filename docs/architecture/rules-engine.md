@@ -362,12 +362,13 @@ one the rule evaluated against, since a shadow-swap can land mid-request.
 
 The serve path gates a version once, before it enters the mirror, and serves it from the trusted
 store without gating it again at request time. A stored version does not stay exempt, because
-[Dredger](https://ecluse-proxy.com/docs/dredger/) re-checks the mirror store against the current
-rules and prunes what they now deny. A CVE disclosed after mirroring, or a policy change, therefore
-removes the version on a later Dredger cycle. Pruning the copies a private read cache retains is
-still planned (#1227). Until it lands, the
+[Dredger](https://ecluse-proxy.com/docs/dredger/) re-checks each mount's mirror target and the
+private read cache paired with it against the current rules, and prunes what they deny. A CVE
+disclosed after mirroring, or a policy change, therefore removes the version on a later Dredger
+cycle. It removes an eligible mirror version before its eligible cache copy, and a restart or a
+later cycle rediscovers a cache copy left behind. The
 [revocation procedure](https://ecluse-proxy.com/docs/operations/#revoking-a-mirrored-version-internal-yank)
-covers those copies.
+is the operator's side of it.
 
 ## Denial responses
 
