@@ -7,8 +7,7 @@ The same filename parser supplies coordinates for upstream projection and inboun
 -}
 module Ecluse.Core.Registry.PyPI.Project (
     -- * Projection
-    projectSimpleIndexFromValue,
-    projectSimpleFiles,
+    projectSimpleIndex,
 
     -- * File coordinates
     FileCoordinate (..),
@@ -23,8 +22,7 @@ module Ecluse.Core.Registry.PyPI.Project (
     pypiNameLeadChars,
 ) where
 
-import Data.Aeson (Value, toJSON)
-import Data.Aeson.Types (parseEither, parseJSON)
+import Data.Aeson (toJSON)
 import Data.Char (isAlphaNum, isAscii)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
@@ -56,11 +54,8 @@ import Ecluse.Core.Registry.PyPI.Wire (
     IndexFile (..),
     SimpleIndex (..),
     YankState (FileOffered, FileWithdrawn),
-    decodeIndexFiles,
  )
 import Ecluse.Core.Registry.WireSupport (
-    Projection,
-    checkNameAgreement,
     nameComponentWith,
     withinNameLimit,
  )
@@ -75,22 +70,9 @@ data FileCoordinate = FileCoordinate
     }
     deriving stock (Eq, Show)
 
--- | Project a decoded Simple index, refusing unusable structure and reporting name mismatches.
-projectSimpleIndexFromValue :: PackageName -> Value -> Either ParseError (Projection PackageInfo)
-projectSimpleIndexFromValue requestedName value = do
-    index <- first (ParseError . toText) (parseEither parseJSON value)
-    reportedName <- projectName (siName index)
-    pure (checkNameAgreement requestedName reportedName (projectIndex reportedName index))
-
--- | Project selected files under a validated project name, retaining their original array positions.
-projectSimpleFiles :: PackageName -> [(Int, Value)] -> PackageInfo
-projectSimpleFiles name entries =
-    projectIndex name SimpleIndex{siName = renderPackageName name, siFiles = files, siInvalidEntries = drops}
-  where
-    (files, drops) = decodeIndexFiles entries
-
-projectIndex :: PackageName -> SimpleIndex -> PackageInfo
-projectIndex name index =
+-- | Group decoded files without changing their source coordinates or release policy inputs.
+projectSimpleIndex :: PackageName -> SimpleIndex -> PackageInfo
+projectSimpleIndex name index =
     PackageInfo
         { infoName = name
         , infoVersions = versions

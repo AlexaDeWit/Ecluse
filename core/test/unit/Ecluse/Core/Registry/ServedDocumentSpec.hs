@@ -25,8 +25,8 @@ import Ecluse.Core.Package.Filter (enforceArtifactLocations)
 import Ecluse.Core.Package.Merge (MergePlan (..), Provenance (GatedSource), SourceId, mergePackuments)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 
+import Ecluse.Core.Registry.PyPI.Document (simpleValue)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleIndex)
-import Ecluse.Core.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl, safeDocumentName)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (ecosystemArtifactAuthorities)
@@ -35,6 +35,8 @@ import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Registry.Npm qualified as Npm
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue)
+import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Snapshot (jsonSnapshot, syntheticSnapshot)
 import Ecluse.Test.Support (expectRight)
 
@@ -79,7 +81,7 @@ droppedArtifactSpec = describe "served artifact filename refusals" $
                 case mergePackuments [(GatedSource, kept <$ jsonSnapshot source)] of
                     Nothing -> expectationFailure "expected a merge plan for the listing"
                     Just plan -> do
-                        let served = assembleSimpleIndex "https://ecluse.test/pypi" (Map.singleton 0 (jsonSnapshot source)) plan source
+                        let served = simpleValue (assembleSimpleIndex "https://ecluse.test/pypi" (Map.singleton 0 (documentFromValue <$> jsonSnapshot source)) plan (documentFromValue source))
                             sibling = withFileKeys [("url", String ("https://ecluse.test/pypi/simple/requests/" <> siblingName))] (simpleFile siblingName)
                         fieldAt "files" served `shouldBe` Just (Array (fromList [sibling | keepSibling]))
                         fieldAt "versions" served `shouldBe` Just (Array (fromList [String "1" | keepSibling]))

@@ -4,6 +4,8 @@
 
 module Ecluse.Core.Security.LimitsSpec (spec) where
 
+import Ecluse.Test.Security.Limits (checkNestingDepth, checkVersionCount)
+
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), eitherDecodeStrict)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
@@ -31,8 +33,6 @@ import Ecluse.Core.Security (
     Limits (..),
     boundedRead,
     checkArtifactCount,
-    checkNestingDepth,
-    checkVersionCount,
     checkVersionCountOf,
     defaultLimits,
  )

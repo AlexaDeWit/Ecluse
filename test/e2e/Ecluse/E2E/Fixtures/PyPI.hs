@@ -15,8 +15,9 @@ module Ecluse.E2E.Fixtures.PyPI (
     buildPyPIFixtures,
 ) where
 
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value (Bool, Object, String), object, (.=))
 import Data.Aeson qualified as Aeson
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import System.Directory (createDirectoryIfMissing)
@@ -45,9 +46,7 @@ pypiWheelFile = escapedProject <> "-" <> pypiVersion <> "-py3-none-any.whl"
 pypiDistInfo :: Text
 pypiDistInfo = escapedProject <> "-" <> pypiVersion <> ".dist-info"
 
-{- | Write the Simple-index tree the nginx stub serves under @root@: the wheel, then the
-PEP 691 document naming it with the digest its own bytes hash to.
--}
+-- | Write one wheel and an index with higher-build candidates that pip must exclude.
 buildPyPIFixtures :: FilePath -> IO ()
 buildPyPIFixtures root = do
     let projectDir = root </> "simple" </> toString pypiProject
@@ -115,7 +114,7 @@ simpleIndex digest =
         [ "name" .= pypiProject
         , "meta" .= object ["api-version" .= ("1.1" :: Text)]
         , "versions" .= [pypiVersion]
-        , "files" .= [wheelEntry digest]
+        , "files" .= [wheelEntry digest, excludedWheel "2" "requires-python" (String ">=99") digest, excludedWheel "3" "yanked" (Bool True) digest]
         ]
 
 wheelEntry :: Text -> Value
@@ -125,6 +124,15 @@ wheelEntry digest =
         , "url" .= (pypiUpstreamUrl <> "simple/" <> pypiProject <> "/" <> pypiWheelFile)
         , "hashes" .= object ["sha256" .= digest]
         , "requires-python" .= (">=3.8" :: Text)
-        , -- Backdated past the harness quarantine, as the npm fixtures are.
-          "upload-time" .= ("2020-01-01T00:00:00Z" :: Text)
+        , "upload-time" .= ("2020-01-01T00:00:00Z" :: Text)
+        , "core-metadata" .= True
         ]
+
+-- These files are absent, so an installer that loses compatibility or yank fields cannot succeed.
+excludedWheel :: Text -> Aeson.Key -> Value -> Text -> Value
+excludedWheel build key value digest = case wheelEntry digest of
+    Object fields -> Object (KeyMap.insert key value (KeyMap.insert "filename" (String filename) (KeyMap.insert "url" (String url) fields)))
+    other -> other
+  where
+    filename = escapedProject <> "-" <> pypiVersion <> "-" <> build <> "-py3-none-any.whl"
+    url = pypiUpstreamUrl <> "simple/" <> pypiProject <> "/" <> filename

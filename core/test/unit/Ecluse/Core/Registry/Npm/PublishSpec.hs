@@ -42,6 +42,7 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker.Integrity (IntegrityResult (IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (hexSha1Of, sriSha256Of, sriSha512Of, unsafeHash, v1_0_0, validSha1)
 import Ecluse.Test.Registry.Npm (dummyArtifact, isOdd, isOddVersionDoc)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
 import Ecluse.Test.Stub (
@@ -205,7 +206,7 @@ fieldRewriteSpec = describe "the field-rewrite contract on the published version
         KeyMap.lookup "tarball" dist `shouldBe` Just (String "is-odd-1.0.0.tgz")
 
     it "refuses, as a value, a version object another ecosystem injected" $
-        documentOf (fst pypiSimpleCached sourceVersion) `shouldSatisfy` isSourceRefusal
+        documentOf (fst pypiSimpleCached (documentFromValue sourceVersion)) `shouldSatisfy` isSourceRefusal
 
     it "refuses, as a value, a carried version object that is not a JSON object" $
         documentOf (fst npmCached (String "not an object")) `shouldSatisfy` isSourceRefusal

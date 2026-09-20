@@ -36,12 +36,12 @@ import Ecluse.Core.Registry.PyPI.Project (
     fileVersionKey,
     isCanonicalName,
     projectName,
-    projectSimpleIndexFromValue,
  )
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Package (azureStorageBlob, requestsName, unscopedPyPI, validSha256)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist, simpleFile, simpleIndex, withFileKeys)
+import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
