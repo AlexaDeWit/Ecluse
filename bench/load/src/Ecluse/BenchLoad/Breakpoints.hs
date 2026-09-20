@@ -4,7 +4,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
 {- | Weighted full-store model over observed request intervals.
-Completion times approximate insertion. This model does not measure decoding or heap residency.
+Completion times bound insertion. Artifact hits are opportunities, before version-cache masking.
 -}
 module Ecluse.BenchLoad.Breakpoints (
     Access (..),
@@ -44,7 +44,7 @@ data ModelBudget = ModelBudget
     deriving stock (Eq, Show, Generic)
     deriving anyclass (FromJSON, ToJSON)
 
--- | Useful hits carry their insertion age and admitted bytes since insertion.
+-- | Full-store opportunities carry age and admitted bytes. A version hit can mask an artifact hit.
 data Reuse = Reuse
     { reuseKey :: Text
     , reuseAccess :: Access
@@ -89,13 +89,13 @@ data Event = Begin TraceRead | Complete TraceRead
 
 -- | Reject malformed observations before sweeping the same intervals under another budget.
 modelTrace :: ModelBudget -> [TraceRead] -> Either Text ModelReport
-modelTrace budget reads
+modelTrace budget observations
     | mbBytes budget < 0 || mbEntries budget <= 0 || mbTtlMicros budget < 0 = Left "invalid model budget"
-    | any invalid reads = Left "invalid request interval or weight"
+    | any invalid observations = Left "invalid request interval or weight"
     | otherwise = Right ((modelReport final){mrReuse = reverse (mrReuse (modelReport final))})
   where
     invalid r = trStart r < 0 || trEnd r <= trStart r || trWeight r <= 0
-    events = sortOn eventOrder (concatMap (\r -> [Begin r, Complete r]) reads)
+    events = sortOn eventOrder (concatMap (\r -> [Begin r, Complete r]) observations)
     eventOrder (Begin r) = (trStart r, 1 :: Int)
     eventOrder (Complete r) = (trEnd r, 0)
     initial = Model Map.empty Map.empty 0 (ModelReport 0 0 0 0 0 0 0 0 0 0 [])

@@ -17,8 +17,8 @@ spec = describe "observed interval full-store model" $ do
         let result = modelTrace budget [listing "a" 0, listing "a" 1, listing "a" 3]
         fmap (\r -> (mrMisses r, mrCollapsed r, mrHits r)) result `shouldBe` Right (1, 1, 1)
     it "measures listing-to-artifact age and admitted bytes without touching recency" $ do
-        let reads = [listing "a" 0, listing "b" 3, (listing "a" 6){trAccess = Artifact}, listing "c" 9, listing "a" 12]
-            result = modelTrace budget{mbBytes = 120} reads
+        let observations = [listing "a" 0, listing "b" 3, (listing "a" 6){trAccess = Artifact}, listing "c" 9, listing "a" 12]
+            result = modelTrace budget{mbBytes = 120} observations
         fmap mrReuse result `shouldBe` Right [Reuse "a" Artifact 4 60]
         fmap mrCapacityEvictions result `shouldBe` Right 2
     it "separates TTL expiry, oversized refusal, and capacity eviction" $ do
@@ -26,9 +26,12 @@ spec = describe "observed interval full-store model" $ do
         fmap mrOversized (modelTrace budget{mbBytes = 59} [listing "a" 0]) `shouldBe` Right 1
         fmap mrCapacityEvictions (modelTrace budget [listing "a" 0, listing "b" 3]) `shouldBe` Right 1
     it "does not populate a full entry from an artifact or failed listing" $ do
-        let reads = [(listing "a" 0){trAccess = Artifact}, (listing "a" 3){trSuccess = False}, listing "a" 6]
-        fmap mrHits (modelTrace budget reads) `shouldBe` Right 0
-        fmap mrAdmittedBytes (modelTrace budget reads) `shouldBe` Right 60
+        let observations = [(listing "a" 0){trAccess = Artifact}, (listing "a" 3){trSuccess = False}, listing "a" 6]
+        fmap mrHits (modelTrace budget observations) `shouldBe` Right 0
+        fmap mrAdmittedBytes (modelTrace budget observations) `shouldBe` Right 60
+    it "keeps a later artifact as an upper-bound opportunity after an earlier artifact miss" $ do
+        let observations = [(listing "a" 0){trAccess = Artifact}, listing "a" 3, (listing "a" 6){trAccess = Artifact}]
+        fmap mrReuse (modelTrace budget observations) `shouldBe` Right [Reuse "a" Artifact 1 0]
     it "enforces the entry-count bound independently of bytes" $
         fmap (\r -> (mrBytePressureEvictions r, mrCountPressureEvictions r)) (modelTrace budget{mbBytes = 1000, mbEntries = 1} [listing "a" 0, listing "b" 3]) `shouldBe` Right (0, 1)
     it "rejects reversed intervals instead of silently reordering completion" $

@@ -31,8 +31,12 @@ Preparation downloads the installer as a separate tool, before the measured inst
 Each client starts with a new project copy, store, and metadata cache.
 The client resolves, downloads, checks integrity, and extracts artifacts.
 Lifecycle scripts and pnpmfile hooks stay disabled. The experiment does not execute the application or its tests.
-Workspace configuration still applies. The proxy clock is fixed in `policy-clock`.
-The installer uses the host clock, so graph equality needs checking across capture dates.
+The preserved Saerskriven configuration sets `minimumReleaseAge: 10080`.
+Every experimental client overrides that rule to zero, recorded in its outcome.
+This controlled input differs from the workspace's normal security posture.
+It prevents the installer's host clock from changing the frozen graph as releases age.
+After capture, the proxy clock becomes the latest capture time plus two days.
+That clock remains fixed in `policy-clock` for all policy variants.
 
 Capture mode alone fetches anonymous public npm responses.
 It stores complete decompressed bodies with URL, time, SHA-256, size, status, and response headers.
@@ -44,7 +48,9 @@ validator generation, and artifact streaming.
 Its configured private origin returns 404 per request.
 
 The origin process runs separately from the proxy and installer.
-HTTP observations include request headers, path, timing, response headers, status, and capture weight.
+HTTP observations include redacted headers, path, timing, status, and capture weight.
+Clients receive an empty environment apart from the pinned tool path and empty npm configuration.
+The capture registry refuses authentication and cookie headers.
 Each client saves its outcome, generated lockfile, and installed inventory.
 Compare versions, source identities, and integrities before comparing performance.
 A failed install is evidence, never an equivalent successful workload.
@@ -70,13 +76,17 @@ The other stores keep their existing defaults.
 Weights come from the actual captured bodies after registry-authority rewriting.
 They use the production `weighCacheEntry` accounting, which is not exact heap size.
 The model keeps the entry limit above the observed cardinality.
-It reports useful reuse age, intervening admitted bytes, expiry, eviction, refusal, and collapse.
+It reports full-store reuse opportunities, age, intervening admitted bytes, expiry, eviction, refusal, and collapse.
 Artifact probes neither populate nor refresh the model's full store.
+Artifact opportunities are an upper bound: retained version entries can mask full-store reads after churn.
+Reconcile them with the measured `ecluse.metadata_cache.version.full_hits` counter.
 
 The model uses request completion as an insertion bound.
 It does not claim to observe the actual cache insertion event.
 Policy changes alter client timing, so model curves do not replace real policy comparisons.
 It does not model selected-version or assembled retention, socket buffers, or allocation.
+Failed installer cells emit no capacity model. Successful traces require all successful request weights.
+The completeness report counts excluded unsuccessful requests.
 
 ## Required evidence before a recommendation
 

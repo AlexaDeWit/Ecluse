@@ -27,7 +27,7 @@ import UnliftIO.MVar (withMVar)
 import Ecluse.BenchLoad.Breakpoints
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (withExternalProxy)
-import Ecluse.BenchLoad.GraphRegistry (capturePath, graphRegistry, packageKey)
+import Ecluse.BenchLoad.GraphRegistry (capturePath, graphRegistry, packageKey, traceHeaders)
 import Ecluse.BenchLoad.Harness (loadKnobsFromEnv)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Rules (prepare)
@@ -80,7 +80,7 @@ runGraph = \case
                 after <- getRTSStats
                 performMajorGC
                 final <- getRTSStats
-                readFileText "/proc/self/status" >>= writeFileText (output </> "proc-status.txt")
+                readFileBS "/proc/self/status" >>= writeFileBS (output </> "proc-status.txt")
                 counters <- forM metricNames $ \metric -> do
                     points <- sumPoints metric meter
                     pure (metric, [(show attrs :: Text, value) | (attrs, value) <- points])
@@ -100,16 +100,16 @@ runGraph = \case
                             , "metrics" .= counters
                             ]
     ["model", input, output, ttl] -> do
-        reads <- either (benchFail . toText) pure . eitherDecode =<< readFileLBS input
+        observations <- either (benchFail . toText) pure . eitherDecode =<< readFileLBS input
         ttlMicros <- number ttl
-        let weights = Map.fromList [(trKey r, trWeight r) | r <- reads]
+        let weights = Map.fromList [(trKey r, trWeight r) | r <- observations]
             working = sum (Map.elems weights)
             ratios = [0.25, 0.5, 0.9, 1, 1.1, 2, 4, 8] :: [Double]
         cells <- forM ratios $ \ratio -> do
             let budget = ModelBudget (ceiling (fromIntegral working / ratio)) (max 1 (Map.size weights + 1)) (fromIntegral ttlMicros)
-            result <- either benchFail pure (modelTrace budget reads)
+            result <- either benchFail pure (modelTrace budget observations)
             pure (object ["workingToCapacityRatio" .= ratio, "budget" .= budget, "result" .= result])
-        LBS.writeFile output (encode (object ["kind" .= ("interval model, not measured cache events" :: Text), "workingBytes" .= working, "weights" .= weights, "cells" .= cells]))
+        LBS.writeFile output (encode (object ["kind" .= ("interval model, not measured cache events" :: Text), "artifactHits" .= ("upper-bound opportunities before version-store masking, compare measured full_hits" :: Text), "workingBytes" .= working, "weights" .= weights, "cells" .= cells]))
     _ -> benchFail "usage: bench-load graph origin|proxy|model (see docs/cache-breakpoints.md)"
 
 number :: String -> IO Int
@@ -132,6 +132,7 @@ observeHttp root destination = do
         start <- getMonotonicTimeNSec
         let parts = pathInfo request
             key = T.intercalate "/" (case parts of "npm" : rest -> rest; _ -> parts)
+            record :: Maybe Int -> [(Text, Text)] -> IO ()
             record status headers = do
                 end <- getMonotonicTimeNSec
                 let weightFile = capturePath root (packageKey key) <> ".weight"
@@ -143,7 +144,7 @@ observeHttp root destination = do
                             , "package" .= packageKey key
                             , "method" .= (decodeUtf8 (requestMethod request) :: Text)
                             , "path" .= (decodeUtf8 (rawPathInfo request) :: Text)
-                            , "requestHeaders" .= (show (requestHeaders request) :: Text)
+                            , "requestHeaders" .= traceHeaders (requestHeaders request)
                             , "responseHeaders" .= headers
                             , "startMicros" .= ((start - epoch) `div` 1000)
                             , "endMicros" .= ((end - epoch) `div` 1000)
@@ -155,10 +156,10 @@ observeHttp root destination = do
             request
             ( \response -> do
                 result <- respond response
-                record (Just (statusCode (responseStatus response))) (show (responseHeaders response) :: Text)
+                record (Just (statusCode (responseStatus response))) (traceHeaders (responseHeaders response))
                 pure result
             )
-            `onException` record Nothing "transport exception"
+            `onException` record Nothing [("failure", "transport exception")]
 
 metricNames :: [Text]
 metricNames =

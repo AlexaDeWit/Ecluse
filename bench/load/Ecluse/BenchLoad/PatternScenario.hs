@@ -19,6 +19,7 @@ import OpenTelemetry.Attributes (fromAttribute, lookupAttribute)
 import OpenTelemetry.MeterProvider (SdkMeterEnv)
 import UnliftIO (evaluate)
 
+import Ecluse.BenchLoad.CacheWeight (accountedFullBytes)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, loadCorpusBodies, withProxyConfigured)
 import Ecluse.BenchLoad.Harness (Driver (DriveReplay), LoadKnobs (..), Scenario (..))
@@ -27,15 +28,8 @@ import Ecluse.BenchLoad.PatternReport (StoreEvidence (..), renderStoreEvidence)
 import Ecluse.BenchLoad.Patterns
 import Ecluse.BenchLoad.Replay (Replay (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
-import Ecluse.Core.Package.Filter (enforceArtifactLocations)
-import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
-import Ecluse.Core.Registry.Metadata (digestOf)
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
-import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex)
-import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
-import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits, ecosystemArtifactAuthorities)
-import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), StoreBudget (..), weighCacheEntry)
+import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
+import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.MemoryModel (contractResidentBytes, expandWireBytes)
 import Ecluse.Core.Telemetry.Catalogue (MetricName, metricName)
@@ -90,7 +84,7 @@ patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
                                 ( \package ->
                                     case Map.lookup (cpName package) servedBodies of
                                         Nothing -> benchFail "missing served capture"
-                                        Just bytes -> either benchFail evaluate (accountedFullBytes ecosystem (localhost publicPort) package bytes)
+                                        Just bytes -> either benchFail evaluate (accountedFullBytes ecosystem (localhost publicPort) (cpPackage package) bytes)
                                 )
                                 [package | package <- packages, cpName package `elem` rtNames requestTrace]
                         writeIORef measuredBodies (bodyCap, servedWorking, servedLargest, sum fullWeights)
@@ -215,18 +209,6 @@ evidence meter upstreamCount config rawBytes measuredBodies knobs requestTrace s
                 , seCollapsed = count "result" "collapsed" outcomes
                 , seRefused = count "store" storeName refused
                 }
-
-accountedFullBytes :: Ecosystem -> Text -> CorpusPackage -> LByteString -> Either Text Int
-accountedFullBytes ecosystem upstreamBase package bytes = do
-    let raw = LBS.toStrict bytes
-    (info, document) <-
-        first show $
-            if ecosystem == Npm
-                then second (fst npmCached) <$> projectNpmManifest defaultLimits (cpPackage package) raw
-                else second (fst pypiSimpleCached) <$> projectPyPIIndex defaultLimits (cpPackage package) raw
-    let hosts = if ecosystem == Npm then npmArtifactHosts else pypiArtifactHosts
-        located = enforceArtifactLocations (ecosystemArtifactAuthorities hosts) upstreamBase info
-    pure (weighCacheEntry (CacheEntry located document (fromIntegral (LBS.length bytes)) (digestOf raw)))
 
 selectArtifacts :: Ecosystem -> Maybe String -> Map Text Text -> [CorpusPackage] -> Map Text LByteString -> Either Text (Map Text SelectedArtifact)
 selectArtifacts ecosystem selected pins packages captures =

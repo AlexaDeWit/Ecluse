@@ -362,6 +362,7 @@ tasks:
       - bash scripts/coverage-tix.test.sh
       - bash scripts/docs-open.test.sh
       - bash scripts/gen-bench-corpus.test.sh
+      - bash scripts/cache-breakpoint-trace.test.sh
       - bash scripts/release-assets.test.sh
       - bash scripts/release-version.test.sh
       - bash scripts/source-inventory.test.sh

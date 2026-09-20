@@ -10,13 +10,15 @@ origin_port=${GRAPH_ORIGIN_PORT:-18101}
 revision=89054e5e4857ca2e94e663d4344257b49cb68dd2
 pnpm_version=11.25.0
 mkdir -p "$experiment"
-touch "$experiment/user.npmrc" "$experiment/global.npmrc"
+: > "$experiment/user.npmrc"
+: > "$experiment/global.npmrc"
 export NPM_CONFIG_USERCONFIG="$experiment/user.npmrc"
 export NPM_CONFIG_GLOBALCONFIG="$experiment/global.npmrc"
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 binary() { cabal list-bin bench-load; }
-pnpm_client() { "$experiment/tools/node_modules/.bin/pnpm" "$@"; }
+isolated_tool() { env -i PATH="$PATH" NPM_CONFIG_USERCONFIG="$NPM_CONFIG_USERCONFIG" NPM_CONFIG_GLOBALCONFIG="$NPM_CONFIG_GLOBALCONFIG" "$@"; }
+pnpm_client() { isolated_tool "$experiment/tools/node_modules/.bin/pnpm" "$@"; }
 
 prepare() {
     [[ ! -e $experiment/inputs ]] || fail 'inputs already exist, choose a new GRAPH_EXPERIMENT'
@@ -25,7 +27,7 @@ prepare() {
     tar -xzf "$experiment/source.tar.gz" --strip-components=1 -C "$experiment/inputs/saerskriven"
     find "$experiment/inputs/saerskriven" -type f \( -name pnpm-lock.yaml -o -name package-lock.json -o -name npm-shrinkwrap.json -o -name yarn.lock \) -delete
     printf '{"name":"next-cache-input","private":true,"version":"1.0.0","packageManager":"pnpm@%s","dependencies":{"next":"16.2.1","react":"19.2.4","react-dom":"19.2.4"}}\n' "$pnpm_version" > "$experiment/inputs/next/package.json"
-    npm install --prefix "$experiment/tools" --ignore-scripts --no-audit --no-fund "pnpm@$pnpm_version"
+    isolated_tool npm install --prefix "$experiment/tools" --registry=https://registry.npmjs.org --ignore-scripts --no-audit --no-fund "pnpm@$pnpm_version"
     {
         printf 'source_revision=%s\n' "$revision"
         printf 'source_archive_sha256='; sha256sum "$experiment/source.tar.gz"
@@ -37,34 +39,44 @@ prepare() {
     } > "$experiment/provenance.txt"
     find "$experiment/inputs" -type f \( -name package.json -o -name pnpm-workspace.yaml -o -name .npmrc -o -name pnpmfile.cjs \) -print0 |
         sort -z | xargs -0 sha256sum > "$experiment/input-hashes.txt"
-    date -u -d '+2 days' +%Y-%m-%dT%H:%M:%SZ > "$experiment/policy-clock"
 }
 
 client() {
     local project=$1 output=$2 registry=$3
+    [[ $project == saerskriven || $project == next ]] || fail "unknown project: $project"
     mkdir -p "$output/project" "$output/cache" "$output/store"
     cp -a "$experiment/inputs/$project/." "$output/project/"
-    local start result
+    local start result install_status inventory_status=0 graph_status=0
     start=$(date +%s%N)
     result=0
     (
         cd "$output/project"
         pnpm_client install --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile --registry "$registry" \
             --store-dir "$output/store" --cache-dir "$output/cache" \
-            --config.pm-on-fail=error \
+            --config.pm-on-fail=error --config.minimum-release-age=0 \
             --network-concurrency "${GRAPH_CLIENT_CONCURRENCY:-16}" --reporter ndjson
     ) > "$output/install.jsonl" 2> "$output/install.stderr" || result=$?
-    jq -n --arg project "$project" --argjson start "$start" --argjson end "$(date +%s%N)" \
-        --argjson status "$result" --arg registry "$registry" \
-        '{project:$project,startNs:$start,endNs:$end,status:$status,registry:$registry,scripts:false,initialLockfile:false,initialClientCache:"empty"}' > "$output/outcome.json"
+    install_status=$result
     if [[ -f $output/project/pnpm-lock.yaml ]]; then
         cp "$output/project/pnpm-lock.yaml" "$output/resolved-lock.yaml"
         sed -E 's@http://(localhost|127\.0\.0\.1):[0-9]+(/npm)?/@https://registry.npmjs.org/@g' "$output/resolved-lock.yaml" > "$output/canonical-lock.yaml"
-        (cd "$output/project" && pnpm_client list --recursive --depth Infinity --json) > "$output/installed.json" 2> "$output/inventory.stderr" || return 1
-        if [[ $output != "$experiment/capture/"* ]] && [[ -f $experiment/capture/$project/canonical-lock.yaml ]]; then
-            diff -u "$experiment/capture/$project/canonical-lock.yaml" "$output/canonical-lock.yaml" > "$output/graph.diff" || result=1
+        (cd "$output/project" && pnpm_client list --recursive --depth Infinity --json) > "$output/installed.json" 2> "$output/inventory.stderr" || inventory_status=$?
+        jq -e 'type == "array" and length > 0' "$output/installed.json" > /dev/null || inventory_status=1
+        if [[ $output != "$experiment/capture/"* ]]; then
+            if [[ -f $experiment/capture/$project/canonical-lock.yaml ]]; then
+                diff -u "$experiment/capture/$project/canonical-lock.yaml" "$output/canonical-lock.yaml" > "$output/graph.diff" || graph_status=1
+            else
+                graph_status=1
+            fi
         fi
+    else
+        inventory_status=1
+        graph_status=1
     fi
+    if [[ $inventory_status != 0 || $graph_status != 0 ]]; then result=1; fi
+    jq -n --arg project "$project" --argjson start "$start" --argjson end "$(date +%s%N)" \
+        --argjson status "$result" --argjson install "$install_status" --argjson inventory "$inventory_status" --argjson graph "$graph_status" --arg registry "$registry" \
+        '{project:$project,startNs:$start,endNs:$end,status:$status,installStatus:$install,inventoryStatus:$inventory,graphStatus:$graph,registry:$registry,scripts:false,pnpmfile:false,minimumReleaseAgeOverride:0,initialLockfile:false,initialClientCache:"empty"}' > "$output/outcome.json"
     return "$result"
 }
 
@@ -89,7 +101,7 @@ start_origin() {
 }
 
 capture() {
-    [[ -f $experiment/policy-clock ]] || fail 'run prepare first'
+    [[ -f $experiment/provenance.txt ]] || fail 'run prepare first'
     [[ ! -e $experiment/capture ]] || fail 'capture already exists, choose a new GRAPH_EXPERIMENT'
     start_origin capture
     local failures=0
@@ -97,10 +109,15 @@ capture() {
         client "$project" "$experiment/capture/$project" "http://127.0.0.1:$origin_port/" || failures=$((failures + 1))
     done
     [[ $failures == 0 ]] || fail "$failures capture installers failed. Outcomes are preserved."
+    local latest
+    latest=$(jq -rs 'map(.capDate) | max' "$experiment/corpus"/*.json)
+    date -u -d "$latest +2 days" +%Y-%m-%dT%H:%M:%SZ > "$experiment/policy-clock"
+    jq -s '[.[] | select(.capKey | contains("/-/") | not)] | {count:length,totalBytes:(map(.capBytes)|add),largestBytes:(map(.capBytes)|max),distribution:(map(.capBytes)|sort)}' "$experiment/corpus"/*.json > "$experiment/metadata-sizes.json"
 }
 
 cell() {
     local name=${1:?cell name} bytes=${2:?full byte budget} projects=${3:-saerskriven}
+    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail 'invalid cell name'
     local output=$experiment/runs/$name
     [[ ! -e $output ]] || fail "cell already exists: $name"
     mkdir -p "$output"
@@ -132,9 +149,9 @@ cell() {
     touch "$output/stop"
     wait "$proxy_pid"
     proxy_pid=
-    jq -s '[.[] | select(.accountedBytes != null and .accountedBytes > 0 and (.key | startswith("private-miss/") | not)) | {trKey:.package,trStart:.startMicros,trEnd:.endMicros,trWeight:.accountedBytes,trAccess:(if (.key | contains("/-/")) then "Artifact" else "Listing" end),trSuccess:(.status != null and .status >= 200 and .status < 300)}]' "$output/http.jsonl" > "$output/model-input.json"
+    [[ $failures == 0 ]] || fail "$failures cell installers failed. Outcomes are preserved. No capacity model was emitted."
+    bash scripts/cache-breakpoint-trace.sh "$output/http.jsonl" "$output"
     "$(binary)" graph model "$output/model-input.json" "$output/model.json" "$(( ${GRAPH_TTL_SECONDS:-3600} * 1000000 ))"
-    [[ $failures == 0 ]] || fail "$failures cell installers failed. Outcomes are preserved."
 }
 
 case ${1:-} in

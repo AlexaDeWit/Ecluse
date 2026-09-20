@@ -1434,6 +1434,7 @@ library ecluse-bench-load
     Ecluse.BenchLoad.Patterns
     Ecluse.BenchLoad.PatternReport
     Ecluse.BenchLoad.Breakpoints
+    Ecluse.BenchLoad.CacheWeight
   build-depends:
     ecluse:ecluse-core
     , text ^>=2.1
