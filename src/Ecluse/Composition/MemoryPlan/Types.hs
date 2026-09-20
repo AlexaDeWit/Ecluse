@@ -57,7 +57,7 @@ data MemoryPlan = MemoryPlan
     { mpRuntimeReserveBytes :: Int
     -- ^ Tenant 1, taken off the top. Zero with no ceiling datapoint.
     , mpCacheAggregateBytes :: Int
-    -- ^ Tenant 3: the one cache aggregate, split at 'Ecluse.Composition.MemoryPlan.planCacheConfig'.
+    -- ^ Tenant 3: one shared byte bound for all eligible local cache stores.
     , mpCacheMaxEntries :: Int
     , mpMaterialAggregateBytes :: Int
     -- ^ Tenant 4: the materialisation envelope bytes admission may hold at once.

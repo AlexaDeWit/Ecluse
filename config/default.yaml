@@ -92,9 +92,10 @@ cache:
   # Écluse computes both bounds at boot from the resolved heap ceiling, as a clamped
   # fraction of it, and the boot log names each decision. Set either one only to
   # override it.
+  # One entry bound covers both eligible stores together.
   # maxEntries: 1024
   # The local backend never retains full metadata. Active fetches still coalesce.
-  # One aggregate budget covers selected versions (37.5%) and assembled responses (62.5%).
+  # Selected versions and assembled responses share one byte budget, with no reserved shares.
   # A pod too small for the plan sheds the
   # mirror-artifact cap first and this aggregate second.
   # maxBytes: 268435456

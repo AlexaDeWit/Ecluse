@@ -36,7 +36,7 @@ import Ecluse.Composition.Sizing (connectionPoolSettings, openFileSoftLimit, res
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Server.Admission (newServeAdmission)
-import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..), newMetadataCache)
+import Ecluse.Core.Server.Cache (CacheConfig (..), newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps)
 import Ecluse.Core.Worker (newWorkerHeartbeat)
 import Ecluse.Runtime.Env (newEnvWithAdmission)
@@ -84,19 +84,16 @@ withProxyConfigured ecosystem depsFor knobs cacheConfig telemetry privateApp pub
 longCacheTtl :: NominalDiffTime
 longCacheTtl = 3600
 
--- | The local assembled-response entry bound.
+-- | The aggregate local entry bound.
 defaultCacheEntries :: Int
-defaultCacheEntries = sbMaxEntries (cacheAssembledBudget defaultCacheConfig)
+defaultCacheEntries = cacheMaxEntries defaultCacheConfig
 
 benchCacheConfig :: NominalDiffTime -> Int -> CacheConfig
 benchCacheConfig ttl maxEntries =
     defaultCacheConfig
         { cacheTtl = ttl
-        , cacheVersionBudget = capEntries (cacheVersionBudget defaultCacheConfig)
-        , cacheAssembledBudget = capEntries (cacheAssembledBudget defaultCacheConfig)
+        , cacheMaxEntries = maxEntries
         }
-  where
-    capEntries budget = budget{sbMaxEntries = maxEntries}
 
 -- | A payload-sized body shared by artifact relays and integrity verification.
 artifactBytes :: Int -> LByteString

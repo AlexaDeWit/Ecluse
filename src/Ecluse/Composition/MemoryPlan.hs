@@ -2,14 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The composition root's memory plan: one solver that partitions the effective heap ceiling
-("Ecluse.Rts") between named tenants whose sum stays within it. In allocation order they are the
-runtime reserve, the fixed enqueue buffer, the cache aggregate, the material aggregate, the publish
-aggregate, the memory-queue depth, and the mirror-artifact envelope, one 'MemoryPlan' field each.
-The non-byte runtime sizings live in "Ecluse.Composition.Sizing". A configured value wins its own
-bound, every bound has a shipped fallback for a pod with no ceiling datapoint, and every decision
-returns a boot-log line. The shed ladder ("Ecluse.Composition.MemoryPlan.Shed") keeps a pod too small
-for its tenants booting, and an explicit override ("Ecluse.Composition.MemoryPlan.Override") refuses.
+{- | Divide the heap ceiling among named tenants and report the resolved bounds.
+"Ecluse.Composition.MemoryPlan.Shed" reduces demands to fit the ceiling.
+"Ecluse.Composition.MemoryPlan.Override" checks explicit overrides.
 -}
 module Ecluse.Composition.MemoryPlan (
     -- * The plan and its tenants
@@ -171,22 +166,13 @@ publishTenantOf d o = PublishTenant{ptAggregateBytes = soPublishFinal o} <$ guar
 mirrorArtifactTenantOf :: TenantDemands -> ShedOutcomes -> Maybe MirrorArtifactTenant
 mirrorArtifactTenantOf d o = MirrorArtifactTenant{matMaxBytes = soArtifactCapFinal o} <$ guard (tdMirrors d)
 
-{- | The metadata cache's tunables: the configured TTL with the plan's cache aggregate
-split across the two locally eligible stores. A zero aggregate stores nothing, so the proxy serves uncached.
--}
+-- | Apply one aggregate bound to eligible stores. Zero floors reserve no static shares.
 planCacheConfig :: CacheSettings -> MemoryPlan -> CacheConfig
 planCacheConfig cacheSettings plan =
     CacheConfig
         { cacheTtl = csTtl cacheSettings
-        , cacheFullBudget = StoreBudget{sbMaxEntries = 0, sbMaxBytes = 0}
-        , cacheVersionBudget = StoreBudget{sbMaxEntries = cacheVersionEntriesFactor * entries, sbMaxBytes = versionBytes}
-        , cacheAssembledBudget = StoreBudget{sbMaxEntries = entries, sbMaxBytes = aggregate - versionBytes}
+        , cacheMaxEntries = mpCacheMaxEntries plan
+        , cacheMaxBytes = mpCacheAggregateBytes plan
+        , cacheVersionBudget = StoreBudget 0 0
+        , cacheAssembledBudget = StoreBudget 0 0
         }
-  where
-    aggregate = mpCacheAggregateBytes plan
-    entries = mpCacheMaxEntries plan
-    versionBytes = aggregate * 3 `div` 8
-
--- Selected releases keep four entry slots per assembled response slot.
-cacheVersionEntriesFactor :: Int
-cacheVersionEntriesFactor = 4

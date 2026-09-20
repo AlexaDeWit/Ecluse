@@ -9,6 +9,7 @@ module Ecluse.Test.Server.Cache (
     externalBackend,
     externalOperations,
     newLocalBackend,
+    newLocalRetention,
     newSingleFlight,
     cachedMetadata,
     cachedVersion,
@@ -24,21 +25,22 @@ import Ecluse.Core.Registry.CachedDocument (foldCachedDoc)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead)
 import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), MetadataCache, Source, StoreBudget (..), resolveMetadata, resolveVersion)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage, LocalStorage), Recency, RetentionBackend, RetentionOperations (..), retentionBackend)
-import Ecluse.Core.Server.Cache.Backend.Local (newLocalRetention)
+import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool, newPooledRetention)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend)
 import Ecluse.Core.Server.Cache.VersionWeight (weighEntryKey)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (Version)
 
--- | A 60-second TTL and 256 MiB split between locally eligible stores.
+-- | A 60-second TTL and 256 MiB shared by locally eligible stores.
 defaultCacheConfig :: CacheConfig
 defaultCacheConfig =
     CacheConfig
         { cacheTtl = 60
-        , cacheFullBudget = StoreBudget{sbMaxEntries = 0, sbMaxBytes = 0}
-        , cacheVersionBudget = StoreBudget{sbMaxEntries = 4096, sbMaxBytes = (256 * 1024 * 1024) * 3 `div` 8}
-        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 1024, sbMaxBytes = 256 * 1024 * 1024 - (256 * 1024 * 1024) * 3 `div` 8}
+        , cacheMaxEntries = 1024
+        , cacheMaxBytes = 256 * 1024 * 1024
+        , cacheVersionBudget = StoreBudget 0 0
+        , cacheAssembledBudget = StoreBudget 0 0
         }
 
 -- | Adapt test operations to the same bounded backend contract used by production storage.
@@ -57,6 +59,12 @@ weighCacheEntry entry =
 -- | External doubles may ignore local recency hints and occupancy callbacks.
 externalOperations :: (Recency -> k -> IO (Maybe v)) -> (k -> v -> IO ()) -> RetentionOperations k v
 externalOperations readValue writeValue = RetentionOperations (const readValue) (\_ _ -> writeValue)
+
+-- | Build a standalone bounded store. Zero bounds disable insertion without weighing values.
+newLocalRetention :: (Hashable k) => NominalDiffTime -> Int -> Int -> (v -> Int) -> IO (RetentionOperations k v)
+newLocalRetention ttl maxEntries maxBytes weigh = do
+    pool <- newLocalPool maxEntries maxBytes
+    newPooledRetention pool ttl (StoreBudget 0 0) weigh
 
 -- | Build the shipped local operations through the same backend constructor as the provider.
 newLocalBackend :: (Hashable k) => NominalDiffTime -> Int -> Int -> (v -> Int) -> IO (RetentionBackend k v)

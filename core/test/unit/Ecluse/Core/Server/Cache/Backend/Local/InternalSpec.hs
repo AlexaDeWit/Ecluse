@@ -1,28 +1,35 @@
 -- SPDX-FileCopyrightText: 2026 Alexandra de Wit
 -- SPDX-License-Identifier: MIT
 
--- | Recency publication remains monotonic when callers publish in reverse allocation order.
+-- | Aggregate capacity and STM rollback across local-store maintenance.
 module Ecluse.Core.Server.Cache.Backend.Local.InternalSpec (spec) where
 
+import System.Clock (fromNanoSecs)
 import Test.Hspec
-import UnliftIO (timeout, wait, withAsync)
 
-import Ecluse.Core.Server.Cache.Backend.Local.Internal (publishAccessStamp)
+import Ecluse.Core.Server.Cache.Backend.Local.Internal
+
+data Aborted = Aborted
+    deriving stock (Show, Eq)
+
+instance Exception Aborted
 
 spec :: Spec
-spec = describe "publishAccessStamp" $
-    it "keeps the newer access when an older caller publishes after it" $ do
-        outcome <- timeout 1000000 $ do
-            clock <- newIORef (0 :: Word64)
-            published <- newIORef (0 :: Word64)
-            allocated <- newEmptyMVar
-            release <- newEmptyMVar
-            let allocate = atomicModifyIORef' clock (\held -> (held + 1, held + 1))
-            withAsync (do stamp <- allocate; putMVar allocated (); takeMVar release; publishAccessStamp published stamp) $ \older -> do
-                takeMVar allocated
-                newer <- allocate
-                publishAccessStamp published newer
-                putMVar release ()
-                wait older
-                readIORef published `shouldReturn` newer
-        outcome `shouldBe` Just ()
+spec = describe "LocalPool" $ do
+    it "tests one aggregate entry limit and byte limit" $ do
+        pool <- newLocalPool 2 10
+        atomically (poolFits pool 10) `shouldReturn` True
+        atomically (adjustPool pool 1 7)
+        atomically (poolFits pool 4) `shouldReturn` False
+        atomically (poolFits pool 3) `shouldReturn` True
+        atomically (adjustPool pool 1 0)
+        atomically (poolFits pool 0) `shouldReturn` False
+
+    it "rolls back occupancy if a store transaction aborts" $ do
+        pool <- newLocalPoolWithClock (pure (fromNanoSecs 0)) 1 10
+        runPool pool (\_ -> adjustPool pool 1 10 >> throwSTM Aborted) `shouldThrow` (== Aborted)
+        atomically (poolFits pool 10) `shouldReturn` True
+
+    it "refuses negative and sentinel weights without overflow" $ do
+        pool <- newLocalPool maxBound maxBound
+        map (poolAcceptsWeight pool) [-1, 0, maxBound - 1, maxBound] `shouldBe` [False, True, True, False]

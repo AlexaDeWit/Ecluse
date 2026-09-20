@@ -355,7 +355,8 @@ The request counters use `result=hit|miss|collapsed`:
 A `hit` uses a retained value. A `miss` leads a fetch or render. A `collapsed` request joins
 an existing leader and shares its result, including a failure. A follower that retries after
 leader cancellation keeps its original classification, so one request never counts twice.
-Capacity refusals count fetched values, not followers, and do not evict other entries.
+Capacity refusals count fetched values, not followers. A value above the aggregate byte bound causes no eviction.
+Under shared pressure, a refused insertion can evict its own store down to its floor.
 Backend failures count failed storage operations, including reads and writes.
 
 Selected reads use only the selected retention capability. Their denominator is the sum of
@@ -368,18 +369,21 @@ and `ecluse.metadata_cache.assembled.resident_bytes` gauges report accounted byt
 eviction, and expiry removal. `ecluse.metadata_cache.entries` reports the full store's entry count.
 The shipped local backend never retains full metadata. Full-store entries and resident bytes stay
 zero, and local full reads report misses or collapsed active work without capacity refusals.
-Selected-version and assembled stores retain their own TTL and bounds. A full listing followed by
+Selected-version and assembled stores share one byte bound and one entry bound, with no reserved shares. A full listing followed by
 a selected-version read can therefore fetch upstream twice. No external cache service is required.
 Boot and `check-config` output report these local capabilities. `cache.maxBytes` applies only to
 eligible local retention. Increasing it cannot enable full retention.
+Each store evicts its own least-recently used entries under shared pressure. It cannot evict another
+store's live entries. The shipped eviction floors are zero. If the other store holds the capacity,
+the request serves without retention until expiry releases room.
 One selected provider owns every metadata retention capability. Unsupported capabilities stay
 uncached. A failed backend read fetches metadata from its origin or rerenders an assembled response
 from authorised inputs. A failed write skips retention. Neither failure uses a retained local fallback.
 Recency hints and occupancy reporting do not require a remote provider to use local LRU or report
 exact server memory. Provider occupancy, when available, reports its charged bytes and entry count.
 
-Local expiry removal happens on access or a retaining insert, not on a background timer. An idle store
-can therefore still report the charge for entries whose TTL elapsed until the next removal.
+Local expiry removal checks both stores on access or a retaining insert, without a background timer.
+If both stores are idle, their gauges can retain expired charges until the next operation.
 
 ### Credential expiry
 

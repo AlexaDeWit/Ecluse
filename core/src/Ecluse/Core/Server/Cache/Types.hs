@@ -9,24 +9,26 @@ import Ecluse.Core.Package (PackageInfo)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (ContentDigest)
 
--- | Limits for one store's entry count and accounted bytes.
+-- | Retention floors, used only to stop a store evicting its own live entries.
 data StoreBudget = StoreBudget
-    { sbMaxEntries :: Int
-    -- ^ The maximum number of distinct entries held. An insert past this evicts.
-    , sbMaxBytes :: Int
-    -- ^ The resident-byte budget the held entries are kept under.
+    { sbMinEntries :: Int
+    -- ^ Eviction stops before the retained entry count falls below this floor.
+    , sbMinBytes :: Int
+    -- ^ Eviction stops before accounted bytes fall below this floor.
     }
     deriving stock (Eq, Show)
 
 -- | Retention bounds and the TTL for the local selected-version and assembled stores.
 data CacheConfig = CacheConfig
     { cacheTtl :: NominalDiffTime
-    , cacheFullBudget :: StoreBudget
-    -- ^ Compatibility field, inactive for local retention. No local full store is allocated.
+    , cacheMaxEntries :: Int
+    -- ^ One entry bound shared by all eligible local stores.
+    , cacheMaxBytes :: Int
+    -- ^ One accounted-byte bound shared by all eligible local stores.
     , cacheVersionBudget :: StoreBudget
-    -- ^ The single-version store's bounds (retained-field accounting).
+    -- ^ The selected-version eviction floor. It reserves no capacity.
     , cacheAssembledBudget :: StoreBudget
-    -- ^ The assembled-representation store's bounds (exact strict-bytes weights).
+    -- ^ The assembled-response eviction floor. It reserves no capacity.
     }
     deriving stock (Eq, Show)
 

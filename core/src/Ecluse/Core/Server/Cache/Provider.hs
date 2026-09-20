@@ -15,7 +15,7 @@ import Data.ByteString qualified as BS
 
 import Ecluse.Core.Registry.Metadata (VersionRead)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), RetentionBackend, RetentionOperations, retentionBackend, supportsFullRetention)
-import Ecluse.Core.Server.Cache.Backend.Local (newLocalRetention)
+import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool, newPooledRetention)
 import Ecluse.Core.Server.Cache.Types
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 
@@ -52,12 +52,10 @@ cacheProvider storage full version assembled =
 -- | Retain only selected versions and assembled responses in bounded local stores.
 localCacheProvider :: CacheConfig -> IO CacheProvider
 localCacheProvider config = do
-    version <- newStore (cacheVersionBudget config) weighVersion
-    assembled <- newStore (cacheAssembledBudget config) weighAssembled
+    pool <- newLocalPool (cacheMaxEntries config) (cacheMaxBytes config)
+    version <- newPooledRetention pool (cacheTtl config) (cacheVersionBudget config) weighVersion
+    assembled <- newPooledRetention pool (cacheTtl config) (cacheAssembledBudget config) weighAssembled
     pure (cacheProvider LocalStorage Nothing (Just version) (Just assembled))
-  where
-    newStore :: (Hashable k) => StoreBudget -> (value -> Int) -> IO (RetentionOperations k value)
-    newStore budget = newLocalRetention (cacheTtl config) (sbMaxEntries budget) (sbMaxBytes budget)
 
 weighAssembled :: ByteString -> Int
 weighAssembled bytes = BS.length bytes + 256

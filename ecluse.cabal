@@ -886,6 +886,7 @@ test-suite ecluse-core-unit
     , amazonka          ^>=2.0
     , autodocodec       ^>=0.5
     , bytestring        ^>=0.12
+    , clock             ^>=0.8
     , containers        ^>=0.7
     , crypton           >=1.0 && <1.2
     , hedgehog          ^>=1.5

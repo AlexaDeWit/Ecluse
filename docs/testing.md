@@ -306,7 +306,7 @@ No family represents all deployments. The small captured identity space limits e
 | Heterogeneous fleet | Shared fraction and disjoint private names per client |
 | Zipf | Exponent, captured space, seed, and finite draw count |
 | Restart | Empty process cache and interval between client arrivals |
-| Scan | Repeated full scans with selected-version and assembled capacity as independent controls |
+| Scan | Repeated full scans with one shared selected-version and assembled byte bound |
 
 `bench-load npm/pattern-cold-install` selects one cell. Substitute `pypi` for its Simple-index trace.
 Each cell stops when its finite sequence completes or its whole-replay deadline expires.
@@ -327,8 +327,7 @@ It does not model a pre-restart heap or claim that a short default run measures 
 | `BENCH_PATTERN_SEED` | 42 |
 | `BENCH_PATTERN_DEADLINE_US` | 120000000, covering client start delays and response reads |
 | `BENCH_PATTERN_FULL_BYTES` | Must be zero. The local backend never retains full metadata, regardless of capacity |
-| `BENCH_PATTERN_VERSION_BYTES` | The fixture version-store budget, must be positive |
-| `BENCH_PATTERN_ASSEMBLED_BYTES` | The fixture assembled-store budget, must be positive |
+| `BENCH_PATTERN_CACHE_BYTES` | The shared local byte budget, must be positive |
 | `BENCH_PATTERN_NOW` | Latest authenticated capture time plus two days. Override with an ISO8601 UTC time |
 | `BENCH_PATTERN_SELECTED_VERSION` | Unset for listing-only. `pinned` follows each npm listing with its captured public tarball coordinate |
 
@@ -347,8 +346,8 @@ preparation and warm-up. GC-observed live heap does not establish the maximum tr
 Timed allocation and GC deltas keep their original measurement window.
 
 Unsupported distinct-name and overlap requests fail instead of creating synthetic package aliases.
-Each report states the parameters, distinct wire bytes, accounted capacity, occupancy, retention
-refusals, retention fraction, and collapsed fraction per store. The wire-to-resident comparison
+Each report states the parameters, distinct wire bytes, and shared accounted capacity.
+Occupancy, retention refusals, retention fraction, and collapsed fraction remain per-store observations. The wire-to-resident comparison
 uses matching accounted bytes for the full store, computed through production projection and
 the historical `weighCacheEntry` helper before measurement. Version and assembled working-set bytes remain unavailable.
 The separate full-store wire-equivalent estimate excludes retained artifact keys.
@@ -376,8 +375,10 @@ Full metadata is always ineligible for local retention. Its effective capacity i
 this path performs no retention weighing, encoding, insertion, or capacity-refusal accounting.
 `BENCH_PATTERN_FULL_BYTES` accepts only zero and does not select a different retention mode.
 
-Use `BENCH_PATTERN_VERSION_BYTES` and `BENCH_PATTERN_ASSEMBLED_BYTES` to vary eligible stores.
-Report the pod memory target and both store budgets for every comparison. Full candidate charges
+Use `BENCH_PATTERN_CACHE_BYTES` to vary the shared eligible-store budget. The previous
+`BENCH_PATTERN_VERSION_BYTES` and `BENCH_PATTERN_ASSEMBLED_BYTES` knobs now fail with a migration message.
+Report the pod memory target and the aggregate byte and entry bounds for every comparison.
+Version and assembled rows report the same shared ceiling, not independently funded capacities. Full candidate charges
 are historical diagnostics prepared before measurement, not retained local bytes or admission work.
 TTL zero changes both eligible stores. Keep 200-body replay separate from the legacy 304 scenario,
 because 304 avoids assembled-store resolution.

@@ -35,7 +35,6 @@ import Ecluse.Core.Server.Cache (
  )
 import Ecluse.Core.Server.Cache qualified as Cache
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (..))
-import Ecluse.Core.Server.Cache.Backend.Local (newLocalRetention)
 import Ecluse.Core.Server.Cache.Provider (cacheProvider)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -43,7 +42,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Package (npmVersion, pypiVersion, sampleArtifact, sampleDetails, thingName, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
-import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion, externalOperations, weighCacheEntry)
+import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion, externalOperations, newLocalRetention, weighCacheEntry)
 import Ecluse.Test.Snapshot (readDetails, untaggedRead)
 
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
@@ -95,15 +94,13 @@ configBytes :: NominalDiffTime -> Int -> Int -> CacheConfig
 configBytes ttl size bytes =
     CacheConfig
         { cacheTtl = ttl
-        , cacheFullBudget = budget
+        , cacheMaxEntries = size
+        , cacheMaxBytes = bytes
         , cacheVersionBudget = budget
         , cacheAssembledBudget = budget
         }
   where
-    budget = StoreBudget{sbMaxEntries = size, sbMaxBytes = bytes}
-
-entryWeight :: Int
-entryWeight = weighCacheEntry (entry (unscopedNpm "weight-probe") "raw")
+    budget = StoreBudget 0 0
 
 recordingResidencyPort :: IO (MetricsPort, IO (Maybe Int))
 recordingResidencyPort = do
@@ -367,15 +364,26 @@ spec = do
             cachedVersion port c publicSource name v1_0_0 `shouldReturn` Nothing
             traverse readIORef [full, version, entries] `shouldReturn` [0, 0, 0]
 
-    describe "the named sub-budgets" $ do
+    describe "the pooled local budget" $ do
+        it "shares the entry bound across selected and assembled capabilities" $ do
+            c <- newMetadataCache (config 60 1)
+            calls <- newIORef (0 :: Int)
+            let name = unscopedNpm "shared-bound"
+                render = modifyIORef' calls (+ 1) $> "body"
+            _ <- Cache.resolveVersion noopMetricsPort c publicSource name v1_0_0 (pure (Right (untaggedRead Nothing)))
+            replicateM_ 2 (resolveAssembled c "digest" render `shouldReturn` "body")
+            readIORef calls `shouldReturn` 2
+            cachedVersion noopMetricsPort c publicSource name v1_0_0 `shouldReturn` Just (untaggedRead Nothing)
+
         it "a version-store flood preserves assembled entries without retaining full metadata" $ do
             c <-
                 newMetadataCache
                     CacheConfig
                         { cacheTtl = 60
-                        , cacheFullBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 100 * entryWeight}
-                        , cacheVersionBudget = StoreBudget{sbMaxEntries = 2, sbMaxBytes = 1024 * 1024}
-                        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
+                        , cacheMaxEntries = 3
+                        , cacheMaxBytes = 1024 * 1024
+                        , cacheVersionBudget = StoreBudget 0 0
+                        , cacheAssembledBudget = StoreBudget 0 0
                         }
             let name = unscopedNpm "hot-head"
             _ <- resolveMetadata c publicSource name (pure (entry name "raw"))
@@ -389,7 +397,7 @@ spec = do
             found `shouldBe` Nothing
             resolveAssembled c "stable" (pure "wrong") `shouldReturn` "assembled"
 
-        it "bounds eligible local residency without borrowing inactive full capacity" $ do
+        it "bounds eligible residency while full occupancy remains zero" $ do
             fullSeen <- newIORef 0
             versionSeen <- newIORef 0
             assembledSeen <- newIORef 0
@@ -399,16 +407,15 @@ spec = do
                         , mpVersionCacheResidentBytes = writeIORef versionSeen
                         , mpAssembledCacheResidentBytes = writeIORef assembledSeen
                         }
-                fullBytes = 4 * entryWeight
-                versionBytes = 64 * 1024
-                assembledBytes = 8 * 1024
+                aggregateBytes = 72 * 1024
             c <-
                 newMetadataCache
                     CacheConfig
                         { cacheTtl = 60
-                        , cacheFullBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = fullBytes}
-                        , cacheVersionBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = versionBytes}
-                        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = assembledBytes}
+                        , cacheMaxEntries = 100
+                        , cacheMaxBytes = aggregateBytes
+                        , cacheVersionBudget = StoreBudget 0 0
+                        , cacheAssembledBudget = StoreBudget 0 0
                         }
             for_ ([1 .. 10] :: [Int]) $ \i -> do
                 let name = unscopedNpm ("filler-" <> show i)
@@ -418,7 +425,7 @@ spec = do
                 pass
             readIORef fullSeen `shouldReturn` 0
             total <- sum <$> traverse readIORef [versionSeen, assembledSeen]
-            total `shouldSatisfy` (<= versionBytes + assembledBytes)
+            total `shouldSatisfy` (<= aggregateBytes)
 
     describe "cachedVersion -- read recency" $
         it "a cachedVersion read bumps the version entry's recency, so a re-read entry survives eviction (LRU, not FIFO)" $ do
@@ -426,9 +433,10 @@ spec = do
                 newMetadataCache
                     CacheConfig
                         { cacheTtl = 60
-                        , cacheFullBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
-                        , cacheVersionBudget = StoreBudget{sbMaxEntries = 2, sbMaxBytes = 1024 * 1024}
-                        , cacheAssembledBudget = StoreBudget{sbMaxEntries = 100, sbMaxBytes = 1024 * 1024}
+                        , cacheMaxEntries = 2
+                        , cacheMaxBytes = 1024 * 1024
+                        , cacheVersionBudget = StoreBudget 0 0
+                        , cacheAssembledBudget = StoreBudget 0 0
                         }
             let name = unscopedNpm "recency"
                 v n = npmVersion (show (n :: Int) <> ".0.0")
