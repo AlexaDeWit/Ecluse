@@ -23,7 +23,7 @@ import Ecluse.Core.Package (
     PackageName,
     renderPackageName,
  )
-import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue)
+
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (
     BodyLimit (..),
@@ -38,6 +38,7 @@ import Ecluse.Core.Security (
  )
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (sampleDetails, unscopedNpm)
+import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 
 -- | A minimal per-version snapshot. Only the name and version are meaningful here.
 details :: PackageName -> Version -> PackageDetails
@@ -226,12 +227,7 @@ nestingDepthSpec = describe "checkNestingDepth" $ do
                     )
          in checkNestingDepth defaultLimits doc `shouldBe` Right doc
 
-{- | The default 'Limits' (12 MiB body, 100k versions, depth 64) must never refuse a legitimate
-trusted package. This case drives the serve-path sequence (bounded read, decode, depth check,
-projection, version count) over a real untrimmed @express@ packument: about 805 KB, 288 versions,
-JSON depth 7. The live smoke tier ("Ecluse.Core.Registry.NpmSmokeSpec") covers larger packuments against
-current data.
--}
+-- The complete express fixture exercises the defaults through bounded reading and projection.
 realPackumentSpec :: Spec
 realPackumentSpec = describe "default Limits admit a real large trusted packument (no false positive)" $ do
     it "express: bounded read, decode, depth, projection, and version count all clear the defaults" $ do

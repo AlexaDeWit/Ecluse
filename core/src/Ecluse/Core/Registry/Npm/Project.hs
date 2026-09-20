@@ -7,9 +7,8 @@ Version-map keys identify artifacts independently of their filenames.
 -}
 module Ecluse.Core.Registry.Npm.Project (
     -- * Projection
-    parsePackageInfoFromValue,
-    parseVersionList,
-    projectVersionEntry,
+    versionListParser,
+    projectVersionEntryResult,
 
     -- * Name validation
     projectName,
@@ -17,11 +16,11 @@ module Ecluse.Core.Registry.Npm.Project (
     npmNameLeadChars,
 ) where
 
-import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, withObject, (.!=), (.:?))
-import Data.Aeson.Types (Parser, parseEither, parseMaybe)
+import Data.Aeson (FromJSON (parseJSON), Value, withObject, (.:?))
+import Data.Aeson.Types (parseEither)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.JsonStream.Parser qualified as J
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 
@@ -33,10 +32,7 @@ import Ecluse.Core.Package (
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     Hash,
     HashAlg (SHA1),
-    InvalidEntry (invalidKey),
-    InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
     PackageDetails (..),
-    PackageInfo (..),
     PackageName,
     Person (..),
     Scope,
@@ -47,72 +43,22 @@ import Ecluse.Core.Package (
     mkSriHashes,
  )
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
-import Ecluse.Core.Registry (ParseError (..), RegistryResponse (responseBody))
+import Ecluse.Core.Registry (ParseError (..))
+import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (VersionsContainer), NpmField (BeginContainer, InvalidContainer, VersionField), NpmRead (VersionListRead), npmFields)
 import Ecluse.Core.Registry.Npm.Wire (
     Dist (..),
     License (LicenseObject, LicenseSpdx),
     VersionManifest (..),
  )
 import Ecluse.Core.Registry.Npm.Wire qualified as Wire
+import Ecluse.Core.Registry.VersionList (VersionListItem (..))
 import Ecluse.Core.Registry.WireSupport (
-    Projection,
-    checkNameAgreement,
     nameComponentWith,
-    partitionLenient,
     withinNameLimit,
  )
+import Ecluse.Core.Security (Limits, maxNestingDepth)
 import Ecluse.Core.Text (urlFilename)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
-
-{- The packument as this projection reads it: the wire fields plus the per-version @_npmUser@
-that "Ecluse.Core.Registry.Npm.Wire" leaves off the manifest, so the publisher survives. -}
-data WirePackument = WirePackument
-    { wpName :: Text
-    , wpDistTags :: Map Text Text
-    , wpVersions :: Map Text VersionEntry
-    , wpTime :: Map Text UTCTime
-    , wpInvalidEntries :: [InvalidEntry]
-    -- ^ The malformed @versions@\/@dist-tags@\/@time@ entries dropped during decode.
-    }
-
-instance FromJSON WirePackument where
-    parseJSON = withObject "npm packument" $ \o -> do
-        name <- o .:? "name" .!= ""
-        (distTags, distTagDrops) <- lenientDistTags o
-        (versions, versionDrops) <- lenientVersionMap o
-        (time, timeDrops) <- lenientTimeMap (Map.keysSet versions) o
-        pure
-            WirePackument
-                { wpName = name
-                , wpDistTags = distTags
-                , wpVersions = versions
-                , wpTime = time
-                , -- Each source list is already in ascending-key order, so this fixed
-                  -- concatenation keeps the dropped-entry list stable.
-                  wpInvalidEntries = versionDrops <> distTagDrops <> timeDrops
-                }
-
-{- Decode @versions@ element-wise. A manifest that lacks a required or security-decisive field
-is recorded as an 'InvalidVersionManifest': it cannot be evaluated, so it must never be served. -}
-lenientVersionMap :: Object -> Parser (Map Text VersionEntry, [InvalidEntry])
-lenientVersionMap o = do
-    raw <- o .:? "versions" .!= mempty -- Map Text Value: each version object kept raw
-    pure (partitionLenient InvalidVersionManifest (parseEither parseJSON) raw)
-
-{- Decode @dist-tags@ element-wise, so one non-string value loses only that tag. 'mkVersion' is
-total, so the merge reconciles tag targeting later. -}
-lenientDistTags :: Object -> Parser (Map Text Text, [InvalidEntry])
-lenientDistTags o = do
-    raw <- o .:? "dist-tags" .!= mempty
-    pure (partitionLenient InvalidDistTag (parseEither parseJSON) raw)
-
-{- Decode @time@ element-wise. Only a key naming a present version records an
-'InvalidPublishTime': @created@ and @modified@ are package-level bookkeeping. -}
-lenientTimeMap :: Set Text -> Object -> Parser (Map Text UTCTime, [InvalidEntry])
-lenientTimeMap versionKeys o = do
-    raw <- o .:? "time" .!= mempty
-    let (kept, dropped) = partitionLenient InvalidPublishTime (parseEither parseJSON) raw
-    pure (kept, filter ((`Set.member` versionKeys) . invalidKey) dropped)
 
 -- A decoded version object: the wire 'VersionManifest' plus its @_npmUser@ publisher.
 data VersionEntry = VersionEntry
@@ -124,64 +70,20 @@ instance FromJSON VersionEntry where
     parseJSON v =
         withObject "npm version object" (\o -> VersionEntry <$> parseJSON v <*> o .:? "_npmUser") v
 
-{- | Project an already-decoded packument @Value@ into a 'Projection' for the requested package,
-reusing that parse instead of the bytes. A @Value@ that is not a packument gives a 'ParseError'.
--}
-parsePackageInfoFromValue :: PackageName -> Value -> Either ParseError (Projection PackageInfo)
-parsePackageInfoFromValue requestedName value =
-    decodePackumentValue value >>= projectValidated requestedName
+-- | Project a compact release while retaining the decoder reason for the invalid-entry report.
+projectVersionEntryResult :: PackageName -> Version -> Maybe UTCTime -> Value -> Either String PackageDetails
+projectVersionEntryResult name version publishedAt value =
+    projectDetails name version publishedAt <$> parseEither parseJSON value
 
-{- Validate a decoded packument's self-reported name against the request. An absent or empty
-upstream name fails as a 'ParseError'. -}
-projectValidated :: PackageName -> WirePackument -> Either ParseError (Projection PackageInfo)
-projectValidated requestedName pkmt = do
-    info <- projectPackageInfo pkmt
-    pure (checkNameAgreement requestedName (infoName info) info)
-
--- Takes the upstream's self-reported name. 'projectValidated' owns checking it against the request.
-projectPackageInfo :: WirePackument -> Either ParseError PackageInfo
-projectPackageInfo pkmt = do
-    name <- projectName (wpName pkmt)
-    pure
-        PackageInfo
-            { infoName = name
-            , infoVersions = projectVersions name pkmt
-            , infoDistTags = projectDistTags pkmt
-            , infoInvalidEntries = wpInvalidEntries pkmt
-            }
-
-{- | Project one @versions@ entry into 'PackageDetails', or 'Nothing' on a missing required field.
-The selective read in "Ecluse.Core.Registry.Npm.Metadata" reuses it, so both paths project alike.
--}
-projectVersionEntry :: PackageName -> Version -> Maybe UTCTime -> Value -> Maybe PackageDetails
-projectVersionEntry name version publishedAt value =
-    projectDetails name version publishedAt <$> parseMaybe parseJSON value
-
-{- | The available versions of a fetched metadata response, in the packument's @versions@ key
-order. Fails with a 'ParseError' only when the body does not decode.
--}
-parseVersionList :: RegistryResponse -> Either ParseError [Version]
-parseVersionList resp = do
-    pkmt <- decodePackument resp
-    pure (map (mkVersion Npm) (Map.keys (wpVersions pkmt)))
-
-decodePackument :: RegistryResponse -> Either ParseError WirePackument
-decodePackument =
-    first (ParseError . toText) . eitherDecodeStrict . responseBody
-
-decodePackumentValue :: Value -> Either ParseError WirePackument
-decodePackumentValue =
-    first (ParseError . toText) . parseEither parseJSON
-
-projectVersions :: PackageName -> WirePackument -> Map Text PackageDetails
-projectVersions name pkmt =
-    Map.mapWithKey projectAt (wpVersions pkmt)
+-- | Recognise usable versions with only VersionEntry's discriminating fields and return sorted identifiers.
+versionListParser :: Limits -> J.Parser VersionListItem
+versionListParser limits = J.objectFound VersionListObject VersionListObject (J.catMaybeI (candidate <$> npmFields (maxNestingDepth limits) VersionListRead))
   where
-    projectAt rawVersion =
-        projectDetails
-            name
-            (mkVersion Npm rawVersion)
-            (Map.lookup rawVersion (wpTime pkmt))
+    candidate (BeginContainer VersionsContainer) = Just VersionListContainer
+    candidate (InvalidContainer VersionsContainer) = Just VersionListInvalidContainer
+    candidate (VersionField key raw) = Just (VersionListEntry (if usable raw then Just (mkVersion Npm key) else Nothing))
+    candidate _ = Nothing
+    usable raw = isJust (raw >>= rightToMaybe . (parseEither parseJSON :: Value -> Either String VersionEntry))
 
 projectDetails :: PackageName -> Version -> Maybe UTCTime -> VersionEntry -> PackageDetails
 projectDetails name version publishedAt entry =
@@ -252,9 +154,6 @@ projectArtifact version dist =
 tarballFilename :: Text -> Version -> Text
 tarballFilename url version =
     fromMaybe (renderVersion version <> ".tgz") (urlFilename url)
-
-projectDistTags :: WirePackument -> Map Text Version
-projectDistTags = Map.map (mkVersion Npm) . wpDistTags
 
 {- | Parse an npm package name into the domain 'PackageName': the one splitter every npm entry
 point reads a name through. A bare @\@foo@ is a malformed scoped name, never an unscoped one.

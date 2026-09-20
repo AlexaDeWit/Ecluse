@@ -5,8 +5,7 @@
 -- | Shared pipeline refusal behaviour under upstream faults and malformed responses.
 module Ecluse.Core.Server.Pipeline.SharedIntegrationSpec (spec) where
 
-import Data.Aeson (Value (Object, String))
-import Data.Aeson qualified as Aeson
+import Data.Aeson (Value (Object, String), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
@@ -157,14 +156,32 @@ undecodableBody :: LByteString
 undecodableBody = "!"
 
 deeplyNestedBody :: LByteString
-deeplyNestedBody = encodePackument (nest 32 (String "deep"))
+deeplyNestedBody = encodePackument (packument [("1.0.0", retainedNested)] "1.0.0" [("1.0.0", publishedDaysAgo 30)])
   where
-    nest :: Int -> Value -> Value
-    nest 0 v = v
-    nest n v = nest (n - 1) (Aeson.toJSON [v])
+    retainedNested = case plainVersion "1.0.0" of
+        Object fields -> Object (KeyMap.insert "exports" nestedValue fields)
+        other -> other
+
+nestedValue :: Value
+nestedValue = foldr (\_ value -> object ["default" .= value]) (String "./index.js") [1 :: Int .. 32]
 
 boundsSpec :: Spec
 boundsSpec = describe "response bounds through the request path (security.md invariant 4)" $ do
+    it "skips deeply nested unknown fields without rejecting the package" $ do
+        let body = case admittingPublic "1.0.0" of
+                Object fields -> Object (KeyMap.insert "_unknown" nestedValue fields)
+                other -> other
+        privateUp <- failingUpstream
+        publicUp <- servingUpstream (encodePackument body)
+        queue <- newTestMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
+            response <- getThing Nothing app
+            status response `shouldBe` 200
+            servedVersions response `shouldBe` ["1.0.0"]
+            case decodedBody response of
+                Object fields -> KeyMap.lookup "_unknown" fields `shouldBe` Nothing
+                _ -> expectationFailure "expected a metadata object"
+
     it "refuses an oversized private packument fail-closed, serving only the public set" $ do
         privateUp <- servingUpstream (oversizedPackument "9.9.9")
         publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))

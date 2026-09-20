@@ -10,7 +10,6 @@ upstream URL. An ecosystem's grammar layers its own rules on top and never repla
 -}
 module Ecluse.Core.Registry.WireSupport (
     -- * Per-entry lenient degradation
-    partitionLenient,
     partitionLenientList,
 
     -- * Name agreement
@@ -25,7 +24,6 @@ module Ecluse.Core.Registry.WireSupport (
 ) where
 
 import Data.Aeson (Value)
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Ecluse.Core.Package (
@@ -49,13 +47,6 @@ partitionLenientList kind decode =
     step (key, value) (kept, dropped) = case decode value of
         Right a -> ((key, a) : kept, dropped)
         Left err -> (kept, mkInvalidEntry kind key value (toText err) : dropped)
-
-{- | The keyed-map form of 'partitionLenientList', for a document whose entries already carry
-their keys. The dropped list is in ascending-key order, so it is deterministic.
--}
-partitionLenient :: InvalidEntryKind -> (Value -> Either String a) -> Map Text Value -> (Map Text a, [InvalidEntry])
-partitionLenient kind decode =
-    first Map.fromDistinctAscList . partitionLenientList kind decode . Map.toAscList
 
 {- | What an upstream document projected into, once its self-reported name has been checked.
 A mismatch carries no payload, so a disagreeing origin's contribution is unrepresentable.

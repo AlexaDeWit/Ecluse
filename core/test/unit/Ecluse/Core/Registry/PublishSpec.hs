@@ -27,6 +27,7 @@ import Ecluse.Core.Registry.Publish (
     PublishPlan (PublishPlan, ppLatest, ppMetadata, ppVersion),
     newMirrorPublish,
  )
+import Ecluse.Core.Registry.VersionList (VersionListItem (VersionListObject))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Package (v1_0_0)
@@ -157,7 +158,7 @@ unsealedCodec :: PublishCodec
 unsealedCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl _token _name -> unsealed (targetUrl <> "/probe")
-        , pcParseVersionList = const (Right [])
+        , pcVersionListParser = const (pure VersionListObject)
         , pcPublishRequest = \targetUrl _token _name _plan _artifact _bytes ->
             first (PublishFetch . FetchUrlUnformable) (unsealed (targetUrl <> "/write"))
         , pcPublishOutcome = const (Right ())

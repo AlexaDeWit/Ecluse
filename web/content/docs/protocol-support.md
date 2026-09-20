@@ -34,3 +34,47 @@ so activating one refuses the boot.
 {{ generated(name="openapi") }}
 
 The raw OpenAPI document is published at [/api/openapi.json](/api/openapi.json).
+
+## npm metadata fields
+
+Écluse retains metadata needed for installation, runtime resolution, policy evaluation and mirroring.
+Unknown fields are skipped during extraction. Full `npm view` fidelity is not a supported contract.
+The source tarball is unchanged. Served and mirrored metadata replace author lists with a short
+pointer to the source registry's package document.
+
+The version representation retains these supported fields:
+
+| Use | Fields |
+| --- | --- |
+| Identity and policy | `name`, `version`, `dist`, `deprecated`, `hasInstallScript`, `scripts`, `license`, `_npmUser` |
+| Dependency resolution | `dependencies`, `dependenciesMeta`, `acceptDependencies`, `devDependencies`, `optionalDependencies`, `peerDependencies`, `peerDependenciesMeta`, `bundleDependencies`, `bundledDependencies` |
+| Runtime and type resolution | `main`, `module`, `browser`, `exports`, `imports`, `type`, `types`, `typings`, `typesVersions`, `sideEffects` |
+| Installation and platforms | `engines`, `engineStrict`, `os`, `cpu`, `libc`, `bin`, `man`, `directories`, `gypfile`, `preferGlobal`, `_hasShrinkwrap` |
+| Package configuration | `files`, `config`, `workspaces`, `packageManager`, `devEngines`, `publishConfig` |
+
+The top-level document retains `name`, `versions`, `time` and `dist-tags`.
+Dependency names, script names, engine names, export conditions, import mappings and type mappings
+are protocol data, so their map entries remain available. Fixed schemas do not retain arbitrary keys:
+publisher records retain `name`, `email` and `url`, and legacy licence objects retain `type` and `url`.
+`dependenciesMeta` and `peerDependenciesMeta` retain each entry's `optional` flag and preserve its key.
+Yarn uses [dependency optionality](https://yarnpkg.com/configuration/manifest#dependenciesMeta.optional)
+from registry metadata throughout the dependency tree. Other dependency metadata flags are not retained.
+
+`dist` retains `tarball`, `shasum`, `integrity`, `unpackedSize`, `fileCount`, `signatures` and
+`attestations`. Signatures retain `keyid` and `sig`. Attestations retain `url` and
+`provenance.predicateType`. Mirror publication still replaces artifact coordinates and verified
+hashes, and removes signatures that belong to the source registry.
+
+`directories` retains `lib`, `bin`, `man`, `doc`, `example` and `test`. `devEngines` retains
+`cpu`, `os`, `libc`, `runtime` and `packageManager`, with `name`, `version` and `onFail` in each entry.
+The object form of `workspaces` retains `packages` and `nohoist`.
+`publishConfig` retains `registry`, `tag`, `access`, `provenance`, `ignore-scripts`, `directory`,
+`linkDirectory`, `executableFiles`, `main`, `module`, `types`, `typings`, `exports`, `imports`,
+`bin` and `browser`.
+
+The installation fields follow [npm's package metadata contract](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/).
+Adding support for another field requires an explicit compatibility change.
+
+The [registry metadata specification](https://github.com/npm/registry/blob/main/docs/responses/package-metadata.md#abbreviated-version-object)
+identifies `acceptDependencies` and `_hasShrinkwrap` as installation inputs. Mirroring preserves the
+shrinkwrap marker while removing other source-registry bookkeeping.

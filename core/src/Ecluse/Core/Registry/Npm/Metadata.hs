@@ -15,58 +15,33 @@ module Ecluse.Core.Registry.Npm.Metadata (
     fetchNpmManifest,
 
     -- * Pure projection
-    projectNpmManifest,
-    projectNpmVersion,
+    projectNpmStream,
+    selectNpmRead,
+    selectNpmVersionDoc,
 ) where
 
-import Data.Aeson (Value (String), parseJSON)
-import Data.Aeson.Types (parseMaybe)
-import Data.ByteString qualified as BS
-import Data.Time (UTCTime)
+import Data.Aeson (Value (Object))
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Map.Strict qualified as Map
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (
-    InvalidEntry,
-    PackageInfo,
-    PackageName,
- )
+import Ecluse.Core.Package (InvalidEntry, PackageInfo (..), PackageName, renderPackageName)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
-import Ecluse.Core.Registry (FetchFault, RegistryResponse)
-import Ecluse.Core.Registry.CachedDocument (npmCached)
-import Ecluse.Core.Registry.Metadata (
-    Manifest,
-    ManifestProjection (ManifestProjection, prjDecode, prjInject, prjLocations),
-    MetadataError (MetadataBoundExceeded),
-    VersionDoc (VersionDoc, vdDetails, vdRaw),
-    VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
-    fetchManifestWith,
-    fetchThenProject,
- )
-import Ecluse.Core.Registry.Metadata.Projection (projectMetadata, projectionResult, selectiveError, validateReportedName)
-import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
-import Ecluse.Core.Registry.Npm.Project (
-    parsePackageInfoFromValue,
-    projectName,
-    projectVersionEntry,
- )
-import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), npmArtifactHosts)
-import Ecluse.Core.Registry.Npm.SelectiveDecode (
-    SelectedVersion (svDistTagLatest, svName, svTime, svVersion, svVersionCount),
-    selectVersionFromPackument,
- )
-import Ecluse.Core.Registry.Origin (OriginClient (ocLimits), OriginFor, originBaseUrl)
-import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
-import Ecluse.Core.Security (
-    AllowedHostPorts,
-    Limits,
-    checkVersionCountOf,
-    ecosystemArtifactAuthorities,
-    maxNestingDepth,
- )
+import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), isAuthorisationFailure)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
+import Ecluse.Core.Registry.Exchange (boundedJsonFetchWith, formThen)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..))
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataFetchError)
+import Ecluse.Core.Registry.Metadata.Projection (streamError)
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest, npmArtifactHosts, packageUrl)
+import Ecluse.Core.Registry.Npm.Streaming (NpmRead (..), npmFields)
+import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection)
+import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
+import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), Limits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
-import Ecluse.Core.Telemetry.Span (TracingPort)
-import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
+import Ecluse.Core.Version (Version, renderVersion)
 
 -- | Bind one origin's npm metadata reads to their observers, leaving the caching policy to the caller.
 newNpmMetadataReads ::
@@ -80,73 +55,85 @@ newNpmMetadataReads ::
 newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing)
 
-fetchNpmPackument :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
-fetchNpmPackument origin = fetchMetadataFormBounded origin Full
-
--- | Fetch a bounded full packument with the digest that scopes its cached document.
+-- | Fetch compact installation metadata and the complete source digest inside the response lifetime.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
-fetchNpmManifest tracing origin =
-    fetchManifestWith
-        tracing
-        (fetchNpmPackument origin)
-        ManifestProjection
-            { prjDecode = projectNpmManifest (ocLimits origin)
-            , prjLocations = enforceArtifactLocations npmArtifactAuthorities (originBaseUrl origin)
-            , prjInject = fst npmCached
-            }
+fetchNpmManifest tracing origin name = do
+    result <- fetchNpmStream tracing origin name FullRead
+    pure $ do
+        streamed <- result
+        (info, raw) <- projectNpmStream (ocLimits origin) name (originBaseUrl origin) streamed
+        pure
+            Manifest
+                { manifestInfo = enforceArtifactLocations npmArtifactAuthorities (originBaseUrl origin) info
+                , manifestRaw = fst npmCached raw
+                , manifestBodyBytes = streamBytes streamed
+                , manifestDigest = streamDigest streamed
+                }
 
--- | Project a nesting-checked packument and retain its raw document for assembly.
-projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
-projectNpmManifest limits name = projectMetadata (parsePackageInfoFromValue name) limits
+fetchNpmStream :: TracingPort -> OriginClient -> PackageName -> NpmRead -> IO (Either MetadataError (StreamResult NpmProjection))
+fetchNpmStream tracing origin name mode =
+    spanMetadataFetch tracing name fetch <&> \case
+        Left fault -> Left (metadataFetchError fault)
+        Right (404, _) -> Left MetadataAbsent
+        Right (code, result)
+            | isAuthorisationFailure code -> Left (MetadataAuthorisationFailure code)
+            | Just parsed <- result -> Right parsed
+            | otherwise -> Left (MetadataHttpFailure code)
+  where
+    limits = ocLimits origin
+    fetch =
+        formThen
+            FetchUrlUnformable
+            ( boundedJsonFetchWith
+                (spanMetadataDecode tracing name)
+                (ocManager origin)
+                (MetadataBodyLimit (maxMetadataBytes limits))
+                (npmFields (maxNestingDepth limits) mode)
+                (collectField limits name)
+                emptyProjection
+            )
+            (metadataRequest (originBaseUrl origin) (ocToken origin) Full name)
 
 fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
-fetchNpmVersion tracing origin name version =
-    fetchThenProject tracing (fetchNpmPackument origin) name $ \bodyBytes body ->
-        (\readResult -> (locationChecked (originBaseUrl origin) readResult){vrBodyBytes = bodyBytes})
-            <$> projectNpmVersion (ocLimits origin) name version body
+fetchNpmVersion tracing origin name version = do
+    result <- fetchNpmStream tracing origin name (SelectedRead (renderVersion version))
+    pure $ do
+        streamed <- result
+        projected <- projectNpmStream (ocLimits origin) name (originBaseUrl origin) streamed
+        let selected = selectNpmRead version (streamBytes streamed) projected
+        pure selected{vrVersion = vrVersion selected >>= locationCheckedDoc (originBaseUrl origin)}
 
--- A version whose artifact sits off the serving authority drops, as it does on the whole document.
-locationChecked :: Text -> VersionRead -> VersionRead
-locationChecked upstreamBaseUrl versionRead =
-    versionRead{vrVersion = vrVersion versionRead >>= locationCheckedDoc upstreamBaseUrl}
+-- | Finish a streamed source while preserving its original identity and typed error classification.
+projectNpmStream :: Limits -> PackageName -> Text -> StreamResult NpmProjection -> Either MetadataError (PackageInfo, Value)
+projectNpmStream limits name base streamed =
+    first (streamError limits) (streamValue streamed) >>= finishProjection limits name (authorPointer base name)
+
+-- | Pair one release with its compact source object and the same document's latest tag.
+selectNpmRead :: Version -> Int -> (PackageInfo, Value) -> VersionRead
+selectNpmRead version bodyBytes (info, raw) =
+    VersionRead
+        { vrVersion = do
+            details <- Map.lookup (renderVersion version) (infoVersions info)
+            selected <- selectNpmVersionDoc version (fst npmCached raw)
+            pure VersionDoc{vdDetails = details, vdRaw = Just selected}
+        , vrBodyBytes = bodyBytes
+        , vrUpstreamLatest = Map.lookup "latest" (infoDistTags info)
+        }
+
+authorPointer :: Text -> PackageName -> Text
+authorPointer base name = "See " <> fromRight (base <> "/" <> renderPackageName name) (packageUrl base name)
 
 locationCheckedDoc :: Text -> VersionDoc -> Maybe VersionDoc
 locationCheckedDoc upstreamBaseUrl doc =
     (\details -> doc{vdDetails = details})
         <$> enforceArtifactLocationsOf npmArtifactAuthorities upstreamBaseUrl (vdDetails doc)
 
--- npm artifacts must use the authority that served the packument.
 npmArtifactAuthorities :: AllowedHostPorts
 npmArtifactAuthorities = ecosystemArtifactAuthorities npmArtifactHosts
 
-{- | Project one version without decoding its siblings. Absent or unprojectable versions yield
-'Nothing'. The pair carries the selected object as decoded, never a re-rendering of the typed view.
--}
-projectNpmVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError VersionRead
-projectNpmVersion limits name version body = do
-    decoded <- first (selectiveError limits) (selectVersionFromPackument (maxNestingDepth limits) version body)
-    reported <- validateReportedName projectName (svName decoded)
-    selected <- projectionResult (checkNameAgreement name reported decoded)
-    first MetadataBoundExceeded (checkVersionCountOf limits (svVersionCount selected))
-    let publishedAt = parsePublishTime (svTime selected)
-    pure
-        VersionRead
-            { vrVersion = do
-                raw <- svVersion selected
-                -- Use the same rendered version key as the full-document projection.
-                details <- projectVersionEntry name (mkVersion Npm (renderVersion version)) publishedAt raw
-                pure VersionDoc{vdDetails = details, vdRaw = Just (fst npmCached raw)}
-            , vrBodyBytes = BS.length body
-            , vrUpstreamLatest = latestTarget (svDistTagLatest selected)
-            }
-
--- A non-string @latest@ is no known tag, matching the whole-document projection's per-entry drop.
-latestTarget :: Maybe Value -> Maybe Version
-latestTarget = \case
-    Just (String raw) -> Just (mkVersion Npm raw)
-    _ -> Nothing
-
--- An absent or undecodable stamp means no known publish time, never a document failure.
--- The whole-document path drops a malformed @time@ entry the same way.
-parsePublishTime :: Maybe Value -> Maybe UTCTime
-parsePublishTime = (>>= parseMaybe parseJSON)
+-- | Select the object paired with a warm full projection under the same rendered version key.
+selectNpmVersionDoc :: Version -> CachedDoc -> Maybe CachedDoc
+selectNpmVersionDoc version doc = do
+    Object packument <- snd npmCached doc
+    Object versions <- KeyMap.lookup "versions" packument
+    fst npmCached <$> KeyMap.lookup (Key.fromText (renderVersion version)) versions

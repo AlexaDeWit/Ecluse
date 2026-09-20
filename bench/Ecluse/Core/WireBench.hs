@@ -22,8 +22,8 @@ benchmarks ecosystem =
         "wire+project (per package)"
         [ bgroup
             (entryName entry)
-            [ bench "decode" (whnf (either (const (-1)) length . ebDecode ecosystem (cpPackage package)) raw)
-            , bench "decode+project" (whnf (either (const (-1)) (infoDepth . fst) . ebProject ecosystem (cpPackage package)) raw)
+            [ bench "version identifiers" (whnf (either (const (-1)) length . ebDecode ecosystem (cpPackage package)) raw)
+            , bench "full metadata projection" (whnf (either (const (-1)) (infoDepth . fst) . ebProject ecosystem (cpPackage package)) raw)
             ]
         | entry@(package, raw, _, _) <- ebCorpus ecosystem
         ]

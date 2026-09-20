@@ -128,6 +128,8 @@ library ecluse-core
     Ecluse.Core.Registry.Adapter.Types
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Exchange
+    Ecluse.Core.Registry.JsonStream
+    Ecluse.Core.Registry.VersionList
     Ecluse.Core.Registry.Maintenance
     Ecluse.Core.Registry.Maintenance.Budget
     Ecluse.Core.Registry.Maintenance.Budget.Internal
@@ -143,11 +145,12 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Maintenance
     Ecluse.Core.Registry.Npm.Metadata
     Ecluse.Core.Registry.Npm.Project
+    Ecluse.Core.Registry.Npm.Streaming
+    Ecluse.Core.Registry.Npm.StreamingProjection
     Ecluse.Core.Registry.Npm.Publish
     Ecluse.Core.Registry.Npm.Request
     Ecluse.Core.Registry.Npm.Route
     Ecluse.Core.Registry.Npm.Route.Internal
-    Ecluse.Core.Registry.Npm.SelectiveDecode
     Ecluse.Core.Registry.Npm.Serve
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Origin
@@ -295,6 +298,9 @@ library ecluse-core
     , http-conduit          ^>=2.3
     , http-types            ^>=0.12
     , hs-opentelemetry-api  ^>=1.0
+    , integer-logarithms    ^>=1.0
+    , scientific            ^>=0.3
+    , json-stream           ==0.4.6.1
     , iproute               ^>=1.7
     , katip                 ^>=0.8.8
     , ram                   ^>=0.22
@@ -609,7 +615,7 @@ executable site-gen
     , ecluse:ecluse-site
     , filepath   ^>=1.5
 
--- Internal test-support library shared by every suite below. The common home for
+-- Internal support library shared by tests and performance tools. The common home for
 -- cross-suite helpers, fixtures, and specs. It links against the library under test,
 -- so shared fixtures can build domain values directly.
 library ecluse-test-support
@@ -639,6 +645,11 @@ library ecluse-test-support
     Ecluse.Test.Queue
     Ecluse.Test.Registry
     Ecluse.Test.Registry.Npm
+    Ecluse.Test.Registry.Npm.Metadata
+    Ecluse.Test.Registry.Npm.Maintenance
+    Ecluse.Test.Registry.Npm.Project
+    Ecluse.Test.Registry.JsonStream
+    Ecluse.Test.Registry.WireSupport
     Ecluse.Test.Registry.PyPI
     Ecluse.Test.Registry.PyPI.Wire
     Ecluse.Test.Registry.RubyGems.Wire
@@ -666,6 +677,7 @@ library ecluse-test-support
 
   build-depends:
     , ecluse:ecluse-core
+    , json-stream       ==0.4.6.1
     , aeson             >=2.2 && <2.4
     , bytestring        ^>=0.12
     , case-insensitive  ^>=1.2
@@ -767,6 +779,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.AdapterSpec
     Ecluse.Core.Registry.CachedDocumentSpec
     Ecluse.Core.Registry.ExchangeSpec
+    Ecluse.Core.Registry.JsonStreamSpec
+    Ecluse.Core.Registry.VersionListSpec
     Ecluse.Core.Registry.Maintenance.BudgetSpec
     Ecluse.Core.Registry.Maintenance.NameSpaceSpec
     Ecluse.Core.Registry.Maintenance.ProtocolSpec
@@ -787,6 +801,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.Npm.FilterSpec
     Ecluse.Core.Registry.Npm.MaintenanceSpec
     Ecluse.Core.Registry.Npm.MetadataSpec
+    Ecluse.Core.Registry.Npm.StreamingSpec
+    Ecluse.Core.Registry.Npm.StreamingProjectionSpec
     Ecluse.Core.Registry.Npm.ProjectSpec
     Ecluse.Core.Registry.Npm.PublishSpec
     Ecluse.Core.Registry.Npm.RequestSpec
@@ -882,6 +898,7 @@ test-suite ecluse-core-unit
   build-depends:
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
+    , json-stream       ==0.4.6.1
     , aeson             >=2.2 && <2.4
     , amazonka          ^>=2.0
     , autodocodec       ^>=0.5
@@ -1232,6 +1249,7 @@ test-suite ecluse-residency
     , http-types       ^>=0.12
     , iproute          ^>=1.7
     , katip            ^>=0.8.8
+    , ram              ^>=0.22
     , process          ^>=1.6
     , text             ^>=2.1
     , time             ^>=1.12
@@ -1438,6 +1456,7 @@ library ecluse-bench-load
     Ecluse.BenchLoad.PatternReport
   build-depends:
     ecluse:ecluse-core
+    , ecluse:ecluse-test-support
     , text ^>=2.1
     , containers ^>=0.7
     , bytestring ^>=0.12

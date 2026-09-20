@@ -10,6 +10,8 @@ module Ecluse.Core.Registry.Exchange (
     boundedExchange,
     singleAttemptSettings,
     boundedFetch,
+    boundedJsonFetch,
+    boundedJsonFetchWith,
     boundedRelay,
 
     -- * Request formation
@@ -17,6 +19,7 @@ module Ecluse.Core.Registry.Exchange (
 ) where
 
 import Data.ByteString.Lazy qualified as LBS
+import Data.JsonStream.Parser qualified as J
 import Network.HTTP.Client (
     BodyReader,
     Manager,
@@ -37,7 +40,9 @@ import Ecluse.Core.Registry (
     RegistryResponse (RegistryResponse),
     UrlFormationError,
     isAuthorisationFailure,
+    isSuccessStatus,
  )
+import Ecluse.Core.Registry.JsonStream (StreamResult, readJsonStream)
 import Ecluse.Core.Security (BodyLimit, LimitError, boundedRead)
 
 -- | Destructive clients must return uncertain transport failures for reassessment before retry.
@@ -83,3 +88,23 @@ readBounded :: (Int -> Int -> ByteString -> a) -> BodyLimit -> Response BodyRead
 readBounded project limits response =
     fmap (uncurry (project (statusCode (responseStatus response))))
         <$> boundedRead limits (brRead (responseBody response))
+
+-- | Extract successful metadata within the response lifetime. Refusals do not parse error bodies.
+boundedJsonFetch :: Manager -> BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> Request -> IO (Either FetchFault (Int, Maybe (StreamResult s)))
+boundedJsonFetch = boundedJsonFetchWith id
+
+-- | Bracket successful-body extraction after response headers. Error statuses never enter the observer.
+boundedJsonFetchWith ::
+    (IO (Either LimitError (StreamResult s)) -> IO (Either LimitError (StreamResult s))) ->
+    Manager ->
+    BodyLimit ->
+    J.Parser a ->
+    (s -> a -> Either LimitError s) ->
+    s ->
+    Request ->
+    IO (Either FetchFault (Int, Maybe (StreamResult s)))
+boundedJsonFetchWith observe manager limits parser step initial request = runExchange manager request $ \response -> do
+    let code = statusCode (responseStatus response)
+    if isSuccessStatus code
+        then fmap ((code,) . Just) <$> observe (readJsonStream limits parser step initial (brRead (responseBody response)))
+        else pure (Right (code, Nothing))

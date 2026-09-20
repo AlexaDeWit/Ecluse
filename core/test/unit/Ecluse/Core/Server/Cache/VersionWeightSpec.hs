@@ -7,9 +7,10 @@ Cache integration checks live in the parent cache spec.
 -}
 module Ecluse.Core.Server.Cache.VersionWeightSpec (spec) where
 
-import Data.Aeson (Value, object, toJSON, (.=))
+import Data.Aeson (Value (Number), object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.ByteString qualified as BS
+import Data.Scientific (scientific)
 import Data.Text qualified as T
 import Data.Time (Day (ModifiedJulianDay), UTCTime (..))
 import Test.Hspec
@@ -42,6 +43,10 @@ spec = describe "selected-release accounting" $ do
         weighVersion (withKeys 100) - weighVersion (withKeys 0) `shouldBe` expandWireBytes (wireOf 100) - expandWireBytes (wireOf 0)
         weighVersion (withKeys 1000) `shouldSatisfy` (> weighVersion (withKeys 100))
         weighVersion (withKeys 0) `shouldSatisfy` (> weighVersion (untaggedRead (Just baseline)))
+
+    it "charges large Scientific coefficient storage beyond the fixed release allowance" $ do
+        let huge = Number (scientific (10 ^ (100000 :: Int)) 0)
+        weighVersion (carrying huge) - weighVersion (carrying (Number 1)) `shouldSatisfy` (> 40000)
 
     it "charges the retained upstream release tag on top of the release" $ do
         let tagged = (untaggedRead (Just baseline)){vrUpstreamLatest = Just (mkVersion Npm "1.0.0")}

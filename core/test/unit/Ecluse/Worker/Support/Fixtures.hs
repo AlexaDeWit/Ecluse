@@ -85,7 +85,7 @@ import Ecluse.Core.Package (
     PackageName,
  )
 import Ecluse.Core.Queue (MirrorJob (..))
-import Ecluse.Core.Registry (ParseError (ParseError), UrlFormationError)
+import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionPresent))
 import Ecluse.Core.Registry.Publish (MirrorPublish (..))
@@ -283,7 +283,6 @@ unwiredPublish :: MirrorPublish
 unwiredPublish =
     MirrorPublish
         { mpProbeMetadata = const (throwIO (TestContractEscape "unwiredPublish: probe consulted"))
-        , mpParseVersionList = const (Left (ParseError "unwiredPublish: nothing to parse"))
         , mpPublishArtifact = \_ _ _ _ -> throwIO (TestContractEscape "unwiredPublish: publish consulted")
         }
 

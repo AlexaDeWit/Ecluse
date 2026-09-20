@@ -5,8 +5,9 @@
 -- | HTTP metadata merging, policy filtering, and representation coherence.
 module Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec (spec) where
 
-import Data.Aeson (Value (String))
+import Data.Aeson (Value (String), object, (.=))
 import Data.ByteString.Lazy qualified as LBS
+import Data.Text qualified as T
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
 import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
@@ -27,7 +28,7 @@ spec = do
     edgeAuthSpec
     conditionalSpec
     packumentHeadSpec
-    losslessSpec
+    retainedFieldsSpec
 
 mergeSpec :: Spec
 mergeSpec = describe "multi-upstream merge (not fallback)" $ do
@@ -327,7 +328,8 @@ cacheSpec = describe "metadata fetch and assembled-response coherence" $ do
             status secondResp `shouldBe` 200
             servedVersions secondResp `shouldBe` ["1.0.0"]
             servedIntegrity "1.0.0" secondResp `shouldBe` Just (sriFor "1.0.0")
-            servedVersionKey "1.0.0" "_unmodeled" secondResp `shouldBe` Just (String "kept")
+            servedVersionKey "1.0.0" "dependencies" secondResp `shouldBe` Just (object ["fixture-dependency" .= ("^1.0.0" :: Text)])
+            servedVersionKey "1.0.0" "_unmodeled" secondResp `shouldBe` Nothing
             seenAuth publicUp `shouldReturn` [Nothing, Nothing]
 
 noSurvivorsSpec :: Spec
@@ -587,16 +589,22 @@ packumentHeadSpec = describe "HEAD on a packument route (same gating as GET, no 
             seenAuth privateUp `shouldReturn` []
             seenAuth publicUp `shouldReturn` []
 
-losslessSpec :: Spec
-losslessSpec = describe "lossless served surface (raw Value edited in place)" $ do
-    it "relays unmodeled top-level and per-version keys unchanged" $ do
+retainedFieldsSpec :: Spec
+retainedFieldsSpec = describe "supported served metadata fields" $ do
+    it "retains installation fields and omits unknown metadata" $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
-            fieldAt "_id" (decodedBody resp) `shouldBe` Just (String "thing")
-            servedVersionKey "1.0.0" "_unmodeled" resp `shouldBe` Just (String "kept")
+            fieldAt "_id" (decodedBody resp) `shouldBe` Nothing
+            servedVersionKey "1.0.0" "_unmodeled" resp `shouldBe` Nothing
+            servedVersionKey "1.0.0" "dependencies" resp `shouldBe` Just (object ["fixture-dependency" .= ("^1.0.0" :: Text)])
+            let pointer = servedVersionKey "1.0.0" "author" resp
+            fieldAt "author" (decodedBody resp) `shouldBe` pointer
+            pointer `shouldSatisfy` \case
+                Just (String text) -> "See http://" `T.isPrefixOf` text && "/thing" `T.isSuffixOf` text
+                _ -> False
 
     it "rewrites dist.tarball under the mount base so artifacts route back through the gate" $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))

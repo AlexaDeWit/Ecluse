@@ -31,7 +31,7 @@ import Ecluse.Core.Registry.Npm.Filter (
     npmDocumentName,
     rewriteVersion,
  )
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
+
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
 import Ecluse.Core.Rules.Types (
@@ -45,6 +45,7 @@ import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
 import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Test.Json (asObject, fieldAt, mapAt, objectAt, textAt)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isApproved)
 import Ecluse.Test.Snapshot (jsonSnapshot, projectJsonSnapshot)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
@@ -270,9 +271,7 @@ coherenceSpec = describe "coherence of the filtered packument" $ do
         distTag "latest" filtered `shouldBe` Just "1.0.0"
 
     it "keeps an admitted but unparseable-version key and still resolves a present latest" $ do
-        -- `banana` is not parseable semver, so `compareVersions` against it yields
-        -- Nothing. It is old enough to survive the quarantine, so it drives the
-        -- unorderable-version path while coherence (a present latest) must hold.
+        -- The admitted key cannot be ordered as semver, but latest must still resolve.
         filtered <- filterTo unparseableSurvivorPackument
         Map.member "banana" (versionsOf filtered) `shouldBe` True
         case distTag "latest" filtered of
@@ -337,9 +336,7 @@ propertiesSpec = describe "properties" $ do
                         Nothing -> annotateShow out >> failure
 
     it "the assembled document forces deeply without bottoming (the metadataAssemble never-throws contract)" $
-        -- The serve tail feeds the assembled document straight into the encoder, so a lurking
-        -- bottom in any branch would escape the request perimeter at serve time. Force the whole
-        -- 'Value' here.
+        -- A deferred failure would escape the request perimeter during response encoding.
         hedgehog $ do
             spec' <- forAll genPackumentSpec
             (info, v) <- loadOrFail (renderPackument spec')

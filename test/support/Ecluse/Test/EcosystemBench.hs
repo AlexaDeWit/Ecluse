@@ -22,8 +22,9 @@ import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Adapter.Types (RegistryAdapter (adapterMetadata))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Npm.Adapter (npmAdapter)
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
-import Ecluse.Core.Registry.Npm.Project (parseVersionList)
+
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
+
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIVersion)
@@ -37,6 +38,7 @@ import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpTier), corpusPack
 import Ecluse.Test.Corpus.Npm (benchPackageName, syntheticPackumentBytes)
 import Ecluse.Test.Corpus.PyPI (benchProject, syntheticIndexBytes)
 import Ecluse.Test.EcosystemBench.Types
+import Ecluse.Test.Registry.Npm.Project (parseVersionList)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
 import Ecluse.Test.Snapshot (readDetails)
 

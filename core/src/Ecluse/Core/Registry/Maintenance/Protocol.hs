@@ -23,16 +23,17 @@ import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
 import Ecluse.Core.Fault.Http (isRetryableStatusCode)
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
-    ParseError (parseErrorMessage),
+    ParseError (ParseError, parseErrorMessage),
     RegistryResponse (RegistryResponse),
     UrlFormationError,
     isSuccessStatus,
  )
 import Ecluse.Core.Registry.Adapter.Capability (
-    StoreListing (listingParse, listingRequest),
+    StoreListing (listingParser, listingRequest),
     VersionDelete (deleteDocumentRequest, deleteRequests),
  )
-import Ecluse.Core.Registry.Exchange (boundedExchange, formThen)
+import Ecluse.Core.Registry.Exchange (boundedExchange, boundedJsonFetch, formThen)
+import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Maintenance (
     CompletionNotion (CompletesOnCall),
     ConsentVerdict (ConsentGranted, ConsentWithheld),
@@ -72,7 +73,7 @@ import Ecluse.Core.Registry.Maintenance.NameSpace (
  )
 import Ecluse.Core.Registry.Maintenance.Upstream (noUpstreamMechanism)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
-import Ecluse.Core.Registry.Publish (PublishCodec (pcParseVersionList, pcProbeRequest))
+import Ecluse.Core.Registry.Publish (PublishCodec (pcProbeRequest, pcVersionListParser), VersionListResponse (..), fetchVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), maxMetadataBytes)
 import Ecluse.Core.Version (Version)
 
@@ -174,11 +175,22 @@ listBucket store prefix =
 
 listPackages :: ProtocolRead -> IO (Either StoreFault [PackageName])
 listPackages store =
-    sendFormed store (listingRequest (prListing store) (prOrigin store)) <&> \case
+    formThen unformableFault fetch (listingRequest (prListing store) origin) <&> \case
         Left fault -> Left fault
-        Right (status, body)
-            | status == 200 -> first (parseFault "package listing") (listingParse (prListing store) body)
+        Right (status, result)
+            | status == 200 -> first (parseFault "package listing") (maybe (Left (ParseError "missing package listing")) streamValue result)
             | otherwise -> Left (listingUnavailable status)
+  where
+    origin = prOrigin store
+    fetch request =
+        first storeFaultOfFetch
+            <$> boundedJsonFetch
+                (ocManager origin)
+                (MetadataBodyLimit (maxMetadataBytes (ocLimits origin)))
+                (listingParser (prListing store))
+                (\_ names -> Right names)
+                []
+                request
 
 listingUnavailable :: Int -> StoreFault
 listingUnavailable status =
@@ -194,14 +206,16 @@ listingUnavailable status =
 worker. A store that holds no document for a package holds no versions of it either. -}
 listVersions :: ProtocolRead -> PackageName -> IO (Either StoreFault [StoredVersion])
 listVersions store name =
-    sendFormed store (pcProbeRequest (prCodec store) (originBase store) (originToken store) name) <&> \case
+    formThen unformableFault fetch (pcProbeRequest codec (originBase store) (originToken store) name) <&> \case
         Left fault -> Left fault
-        Right (status, body)
-            | status == 404 -> Right []
-            | isSuccessStatus status -> first (parseFault "version list") (served status body)
-            | otherwise -> Left (readFault "version list" status)
+        Right response
+            | versionListStatus response == 404 -> Right []
+            | isSuccessStatus (versionListStatus response) -> first (parseFault "version list") (map stored <$> versionListResult response)
+            | otherwise -> Left (readFault "version list" (versionListStatus response))
   where
-    served status body = map stored <$> pcParseVersionList (prCodec store) (RegistryResponse status (BS.length body) body)
+    origin = prOrigin store
+    codec = prCodec store
+    fetch request = first storeFaultOfFetch <$> fetchVersionList (ocManager origin) (ocLimits origin) (pcVersionListParser codec (ocLimits origin)) request
     stored version = StoredVersion{storedVersion = version, storedPresence = VersionServed, storedRevision = Nothing}
 
 deleteStoredVersions :: ProtocolStore -> DeleteGuard -> PackageName -> [Version] -> IO [(Version, VersionOutcome)]

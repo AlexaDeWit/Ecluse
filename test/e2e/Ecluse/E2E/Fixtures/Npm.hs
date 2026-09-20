@@ -14,6 +14,7 @@ module Ecluse.E2E.Fixtures.Npm (
     denyPkg,
     mirrorPkg,
     mirrorAuthorFields,
+    mirrorOmittedAuthorFields,
     mirrorRegistryFields,
     mirrorRegistryDistFields,
     latestPkg,
@@ -98,11 +99,11 @@ carries the author fields the mirror write keeps and the registry fields it stri
 mirrorPkg :: PkgSpec
 mirrorPkg =
     (defaultPkgSpec "e2e-mirror")
-        { psVersionFields = mirrorAuthorFields <> mirrorRegistryFields
+        { psVersionFields = mirrorAuthorFields <> mirrorOmittedAuthorFields <> mirrorRegistryFields
         , psDistFields = mirrorRegistryDistFields
         }
 
--- | What the author of 'mirrorPkg' wrote: every field must reach the mirror verbatim.
+-- | Supported authored installation fields that must reach the mirror.
 mirrorAuthorFields :: [Pair]
 mirrorAuthorFields =
     [ "dependencies" .= object [Key.fromText (psName allowPkg) .= psVersion allowPkg]
@@ -111,8 +112,11 @@ mirrorAuthorFields =
     , "license" .= ("MIT" :: Text)
     , "scripts" .= object ["test" .= ("node -e \"\"" :: Text)]
     , "deprecated" .= ("superseded by a later release" :: Text)
-    , "gitHead" .= ("0123456789abcdef0123456789abcdef01234567" :: Text)
     ]
+
+-- | Authored data deliberately omitted from the supported metadata representation.
+mirrorOmittedAuthorFields :: [Pair]
+mirrorOmittedAuthorFields = ["gitHead" .= ("0123456789abcdef0123456789abcdef01234567" :: Text)]
 
 -- | What the public registry wrote about itself on 'mirrorPkg': none of it reaches the mirror.
 mirrorRegistryFields :: [Pair]

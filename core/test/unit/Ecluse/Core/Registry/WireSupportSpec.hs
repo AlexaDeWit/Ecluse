@@ -18,10 +18,10 @@ import Ecluse.Core.Registry.WireSupport (
     Projection (NameMismatch, Projected),
     checkNameAgreement,
     parseNameComponent,
-    partitionLenient,
     partitionLenientList,
  )
 import Ecluse.Test.Package (scopedNpm, unscopedNpm)
+import Ecluse.Test.Registry.WireSupport (partitionLenient)
 
 {- | Direct tests for the cross-ecosystem wire-projection helpers the npm projection builds on.
 "Ecluse.Core.Registry.Npm.ProjectSpec" covers the npm projection end to end.

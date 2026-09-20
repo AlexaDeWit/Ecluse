@@ -15,6 +15,8 @@ module Ecluse.Core.Registry.Publish (
 
     -- * The adapter's protocol codec
     PublishCodec (..),
+    VersionListResponse (..),
+    fetchVersionList,
 
     -- * The shared transport
     MirrorTransport (..),
@@ -24,6 +26,8 @@ module Ecluse.Core.Registry.Publish (
     newMirrorPublish,
 ) where
 
+import Data.JsonStream.Parser qualified as J
+
 import Network.HTTP.Client (Manager, Request)
 
 import Ecluse.Core.Credential (Secret)
@@ -31,14 +35,15 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Registry (
     FetchFault (FetchUrlUnformable),
     MirrorArtifact,
-    ParseError,
+    ParseError (ParseError),
     PublishFault (PublishFetch),
-    RegistryResponse,
     UrlFormationError,
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
-import Ecluse.Core.Registry.Exchange (boundedExchange, boundedFetch, formThen)
+import Ecluse.Core.Registry.Exchange (boundedExchange, boundedJsonFetch, formThen)
+import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Request (sealRequest)
+import Ecluse.Core.Registry.VersionList (VersionListItem, collectVersionList, emptyVersionList, finishVersionList)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, maxMetadataBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (Version)
@@ -52,7 +57,7 @@ data PublishPlan = PublishPlan
     , ppLatest :: Version
     -- ^ Always a version the store holds after this write, the published one when it is alone.
     , ppMetadata :: CachedDoc
-    -- ^ The version object the public registry served at admission, republished by the codec.
+    -- ^ Supported source fields paired with the release admitted for mirroring.
     }
     deriving stock (Eq, Show)
 
@@ -62,8 +67,8 @@ so a codec holds no URL, credential, or connection state.
 data PublishCodec = PublishCodec
     { pcProbeRequest :: Text -> Maybe Secret -> PackageName -> Either UrlFormationError Request
     -- ^ Form the metadata read the presence probe makes against the mirror target.
-    , pcParseVersionList :: RegistryResponse -> Either ParseError [Version]
-    -- ^ Project a probed metadata response onto the versions the mirror holds.
+    , pcVersionListParser :: Limits -> J.Parser VersionListItem
+    -- ^ Select usable version identifiers without retaining source release objects.
     , pcPublishRequest :: Text -> Maybe Secret -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> Either PublishFault Request
     {- ^ Form the complete publish request for one verified artifact. A plan whose version object
     the codec cannot read refuses as a value.
@@ -90,10 +95,8 @@ data MirrorTransport = MirrorTransport
 mint. The worker never sees the codec, the transport, or the adapter.
 -}
 data MirrorPublish = MirrorPublish
-    { mpProbeMetadata :: PackageName -> IO (Either FetchFault RegistryResponse)
+    { mpProbeMetadata :: PackageName -> IO (Either FetchFault VersionListResponse)
     -- ^ Every failure is a 'FetchFault' value, so the probe's fall-through match is total.
-    , mpParseVersionList :: RegistryResponse -> Either ParseError [Version]
-    -- ^ Project a probed response onto the versions the mirror holds.
     , mpPublishArtifact :: PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
     {- ^ Every failure is a 'PublishFault' value, so the worker's retry-vs-drop decision is
     total at the call site.
@@ -105,7 +108,6 @@ newMirrorPublish :: MirrorTransport -> RegistryUrl -> PublishCodec -> MirrorPubl
 newMirrorPublish transport target codec =
     MirrorPublish
         { mpProbeMetadata = probeMetadata transport targetUrl codec
-        , mpParseVersionList = pcParseVersionList codec
         , mpPublishArtifact = publishArtifact transport targetUrl codec
         }
   where
@@ -115,13 +117,30 @@ newMirrorPublish transport target codec =
 
 -- Execute the codec's probe read over the transport: mint, form, seal, dial, and read the
 -- body bounded, with every failure folded into the typed 'FetchFault' channel.
-probeMetadata :: MirrorTransport -> Text -> PublishCodec -> PackageName -> IO (Either FetchFault RegistryResponse)
+probeMetadata :: MirrorTransport -> Text -> PublishCodec -> PackageName -> IO (Either FetchFault VersionListResponse)
 probeMetadata transport targetUrl codec name = do
     token <- ptMintToken transport
     formThen
         FetchUrlUnformable
-        (boundedFetch (ptManager transport) (MetadataBodyLimit (maxMetadataBytes (ptLimits transport))))
+        (fetchVersionList (ptManager transport) (ptLimits transport) (pcVersionListParser codec (ptLimits transport)))
         (sealRequest <$> pcProbeRequest codec targetUrl token name)
+
+-- | Read a codec's identifiers inside the response lifetime, preserving transport and HTTP outcomes.
+fetchVersionList :: Manager -> Limits -> J.Parser VersionListItem -> Request -> IO (Either FetchFault VersionListResponse)
+fetchVersionList manager limits parser request =
+    fmap project <$> boundedJsonFetch manager (MetadataBodyLimit (maxMetadataBytes limits)) parser (collectVersionList limits) emptyVersionList request
+  where
+    project (status, result) = VersionListResponse status $
+        case result of
+            Nothing -> Left (ParseError "no successful version-list body")
+            Just streamed -> streamValue streamed >>= finishVersionList
+
+-- | HTTP status and usable identifiers from a bounded selective read.
+data VersionListResponse = VersionListResponse
+    { versionListStatus :: Int
+    , versionListResult :: Either ParseError [Version]
+    }
+    deriving stock (Eq, Show)
 
 publishArtifact :: MirrorTransport -> Text -> PublishCodec -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
 publishArtifact transport targetUrl codec name plan artifact bytes = do

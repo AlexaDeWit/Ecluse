@@ -8,9 +8,10 @@ module Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (..), selectedNpmArtifact)
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (Artifact (artFilename, artUrl), PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName)
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
+
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 
 -- | The proxy route and public location describe the same captured artifact.
 data SelectedArtifact = SelectedArtifact

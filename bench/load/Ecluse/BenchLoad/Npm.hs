@@ -46,8 +46,7 @@ import Ecluse.Core.Queue (
     enqueue,
  )
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
-import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
-import Ecluse.Core.Registry.Publish (MirrorPublish (..))
+import Ecluse.Core.Registry.Publish (MirrorPublish (..), VersionListResponse (..))
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
@@ -335,8 +334,7 @@ succeedingPublishClient counter =
         { mpPublishArtifact = \_ _ _ _ -> do
             atomicModifyIORef' counter (\n -> (n + 1, ()))
             pure (Right ())
-        , mpProbeMetadata = const (pure (Right (RegistryResponse 404 0 "")))
-        , mpParseVersionList = const (Left (ParseError "bench mirror: nothing mirrored yet"))
+        , mpProbeMetadata = const (pure (Right (VersionListResponse 404 (Right []))))
         }
 
 jobHashes :: LByteString -> NonEmpty Hash

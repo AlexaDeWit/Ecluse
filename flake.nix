@@ -239,11 +239,21 @@
             openapi3 = hlib.doJailbreak hsuper.openapi3;
           };
 
+        jsonStreamOverlay = hself: _hsuper: {
+          json-stream = hlib.dontCheck (hself.callCabal2nix "json-stream" (pkgs.fetchFromGitHub {
+            owner = "ondrap";
+            repo = "json-stream";
+            rev = "537a43a775e64f50dc63c373193323de98619799";
+            hash = "sha256-9ws1kWK/0MU08W7sgxKtEqTdbhj0wJ0yuW/J9pSYVRA=";
+          }) { });
+        };
+
         hpkgs = pkgs.haskell.packages.ghc910.override {
           overrides = pkgs.lib.composeManyExtensions [
             otelOverlay
             amazonkaOverlay
             advisoryOverlay
+            jsonStreamOverlay
           ];
         };
 

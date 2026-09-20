@@ -36,12 +36,12 @@ data CacheConfig = CacheConfig
 newtype Source = Source Text
     deriving stock (Eq, Ord, Show)
 
--- | A typed view paired with the raw document and digest from the same fetch.
+-- | A typed view paired with its source representation and complete fetch digest.
 data CacheEntry = CacheEntry
     { entryInfo :: PackageInfo
     -- ^ The typed packument view the rules and merge reason over.
     , entryRaw :: CachedDoc
-    -- ^ The raw upstream document the served body is built from.
+    -- ^ The source representation from which the adapter builds the served body.
     , entryBodyBytes :: Int
     -- ^ Decompressed source bytes, retained independently of the cache weight.
     , entryDigest :: ContentDigest

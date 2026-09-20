@@ -43,8 +43,6 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Project (
     npmNameLeadChars,
-    parsePackageInfoFromValue,
-    parseVersionList,
     projectName,
     projectScope,
  )
@@ -53,6 +51,7 @@ import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Json (genJsonText, genKey, genValue)
 import Ecluse.Test.Package (unsafeHash, unscopedNpm)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
+import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)
 
 -- | Exercise the production npm projection against wire and decoded inputs.

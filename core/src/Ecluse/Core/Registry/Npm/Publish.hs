@@ -53,7 +53,7 @@ npmPublishCodec :: PublishCodec
 npmPublishCodec =
     PublishCodec
         { pcProbeRequest = \targetUrl token -> metadataRequest targetUrl (bareCredential <$> token) Abbreviated
-        , pcParseVersionList = Project.parseVersionList
+        , pcVersionListParser = Project.versionListParser
         , pcPublishRequest = npmPublishRequestFor
         , pcPublishOutcome = classifyPublish
         }
@@ -131,11 +131,10 @@ npmPublishDocument name plan filename integrity shasum tarball = do
     versionText = renderVersion (ppVersion plan)
     rendered = renderPackageName name
 
-{- The fields the author wrote on the source version object. An underscore-prefixed key is the
-public registry's bookkeeping about itself, so none reaches the mirror. -}
+-- Keep the shrinkwrap installation marker, but drop the source registry's bookkeeping.
 authoredFields :: CachedDoc -> Either PublishFault (KeyMap Value)
 authoredFields doc = case snd npmCached doc of
-    Just (Object o) -> Right (KeyMap.filterWithKey (\k _ -> not (T.isPrefixOf "_" (Key.toText k))) o)
+    Just (Object o) -> Right (KeyMap.filterWithKey (\k _ -> k == "_hasShrinkwrap" || not (T.isPrefixOf "_" (Key.toText k))) o)
     Just _ -> Left (PublishSourceUnavailable "the carried version object is not a JSON object")
     Nothing -> Left (PublishSourceUnavailable "the carried version object is not an npm document")
 

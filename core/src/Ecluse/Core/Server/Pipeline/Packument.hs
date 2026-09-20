@@ -62,6 +62,7 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
@@ -72,6 +73,8 @@ import Ecluse.Core.Server.Context (
     ServeRuntime (..),
     ctxMount,
     ctxRuntime,
+    pdPrivateBaseUrl,
+    pdPublicBaseUrl,
  )
 import Ecluse.Core.Server.Fault (RenderEscape (RenderEscape))
 import Ecluse.Core.Server.Pipeline.Diagnostics (warnDivergences)
@@ -336,7 +339,8 @@ serveResolved serving sources plan = do
 and the plan, never the document rebuild, the encode, or an output hash. -}
 answerPackumentConditional :: PackumentServing response -> [Contribution] -> MergePlan -> Handler ResponseReceived
 answerPackumentConditional serving sources plan = do
-    let etag = packumentETag (pdMountBaseUrl deps) name (map fingerprintPiece sources)
+    let origins = map registryUrlText (maybeToList (pdPrivateBaseUrl deps) <> [pdPublicBaseUrl deps])
+        etag = packumentETag (pdMountBaseUrl deps) origins name (map fingerprintPiece sources)
     case evaluateETag (requestHeaders (psvRequest serving)) etag of
         NotModified matched -> do
             logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
@@ -352,8 +356,8 @@ answerPackumentConditional serving sources plan = do
     respond = psvRespond serving
 
 -- | A validator derived from framed inputs so unchanged requests skip assembly. Bump the salt when assembly behaviour changes.
-packumentETag :: Text -> PackageName -> [(Provenance, ContentDigest, [(Text, [EntryKey])])] -> ETag
-packumentETag mountBaseUrl name sources =
+packumentETag :: Text -> [Text] -> PackageName -> [(Provenance, ContentDigest, [(Text, [EntryKey])])] -> ETag
+packumentETag mountBaseUrl originBaseUrls name sources =
     mkStrongETag (hashFinalize (hashUpdates (hashInit :: Context SHA256) pieces))
   where
     pieces :: [ByteString]
@@ -361,7 +365,9 @@ packumentETag mountBaseUrl name sources =
 
     fingerprint :: Builder
     fingerprint =
-        "ecluse:packument-etag:v2\0"
+        "ecluse:packument-etag:v3\0"
+            <> foldMap (etagFrame . encodeUtf8) originBaseUrls
+            <> "\0"
             <> byteString (encodeUtf8 mountBaseUrl)
             <> "\0"
             <> byteString (encodeUtf8 (renderPackageName name))
