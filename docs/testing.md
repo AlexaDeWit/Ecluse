@@ -73,6 +73,41 @@ flag (`-with-rtsopts=-T`) in its `ghc-options`. It runs outside coverage too. No
 WAI stubs only. Run: `cabal test ecluse-residency` (or `task test-residency`). `task check` includes
 it via `cabal-checks`.
 
+Metadata probes use a fresh child process for each corpus package and retained shape.
+They authenticate every capture against the byte count and SHA-256 in `bench/corpus/pins.json`.
+The complete corpus must include a capture above the previous 3,687,514-byte maximum.
+The four shapes are the original strict bytes, a decoded `Value`, the production typed
+projection alone, and the shared `CacheEntry` containing the typed projection, raw document,
+and source digest. The combined measurement preserves sharing, so adding the two separate
+measurements does not give its size.
+
+Each child records a major-GC baseline, roots its prepared shape with a stable pointer,
+collects again, dereferences the root, frees it, and records another collection.
+The checks require positive retained growth and a decrease after release.
+Preparation fully consumes the derived rendering of retained metadata without retaining the
+rendered string. That forces opaque fields without adding production `NFData` instances.
+The retained samples include any backing arrays reachable through the selected shape.
+
+| Output | Meaning |
+|---|---|
+| `wireBytes` | Capture bytes before parsing, with identity content encoding |
+| `compactBytes` | Re-encoded raw JSON bytes for raw and shared shapes |
+| `cacheWeight` | The production cache charge for the shared entry |
+| `versions` | Projected version count for typed and shared shapes |
+| `baselineLive`, `heldLive`, `releasedLive` | Absolute live bytes after each major collection |
+| `retained_per_wire_byte` | Held minus baseline live bytes, divided by capture bytes |
+| `preparationAllocated` | Cumulative preparation allocation, including forcing and accounting |
+| `preparationMaxLive` | Process high-water sample through preparation, including forcing |
+| `existing_model_bytes` | The unchanged production expansion estimate for comparison |
+
+These counters distinguish the retained heap from allocation and cache accounting.
+The high-water sample includes rendering and cannot establish the production read/decode/project
+peak or a bound on transient buffers. The probes use production projection functions with the
+default structural limits. They do not execute the HTTP bounded read or prove that shipping
+response limits admit each capture. Capture-specific regression envelopes and model calibration
+remain pending measurements against the authenticated corpus. The current factor is printed
+for comparison and is not asserted as a universal bound by this harness.
+
 ## Smoke tests: `ecluse-smoke` (allowed to fail, non-gating)
 
 Make live calls to public registries (npm today) to confirm our JSON decoding and protocol handling
