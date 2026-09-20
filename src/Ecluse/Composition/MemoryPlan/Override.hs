@@ -27,7 +27,7 @@ module Ecluse.Composition.MemoryPlan.Override (
 
 import Data.Text qualified as T
 
-import Ecluse.Composition.MemoryPlan.Bounds (mirrorArtifactEnvelopeMultiplier, queueDepthFloor, responseBytesFloor)
+import Ecluse.Composition.MemoryPlan.Bounds (mirrorArtifactEnvelopeMultiplier, queueDepthFloor)
 import Ecluse.Composition.MemoryPlan.Internal (
     OverridePins (..),
     PlanInputs (piCache, piExplicitAdmission, piLimits, piQueue),
@@ -35,7 +35,7 @@ import Ecluse.Composition.MemoryPlan.Internal (
     TenantDemands (..),
  )
 import Ecluse.Config (CacheSettings (csMaxBytes), LimitsSettings (limMaxArtifactBytes, limMaxRequestBytes, limMaxResponseBytes), QueueSettings (qsMaxMemoryDepth))
-import Ecluse.Core.Server.MemoryModel (expandWireBytes, mirrorJobEstimatedBytes, packumentOriginFanout)
+import Ecluse.Core.Server.MemoryModel (mirrorJobEstimatedBytes)
 
 -- | Every override substituted out: the pin set the override-free minimum resolves from.
 noOverridePins :: OverridePins
@@ -71,12 +71,10 @@ overrideMinShedSum d pins =
     tdReserve d
         + tdFixedBuffers d
         + fromMaybe 0 (opCache pins)
-        + materialFloor
+        + 1
         + (if tdPublishConfigured d then fromMaybe (tdRequestComputed d) (opRequest pins) else 0)
         + (if tdMemoryBacked d then fromMaybe queueDepthFloor (opDepth pins) * mirrorJobEstimatedBytes else 0)
         + (if tdMirrors d then maybe 0 (* mirrorArtifactEnvelopeMultiplier) (opArtifact pins) else 0)
-  where
-    materialFloor = fromMaybe 1 (opAdmission pins) * packumentOriginFanout * expandWireBytes (fromMaybe responseBytesFloor (opResponse pins))
 
 {- | Each explicit override present in the pin set, paired with the pin set that
 substitutes only it out, and with the operator's config-key name.
@@ -85,8 +83,6 @@ overrideSubstitutions :: OverridePins -> [(Text, OverridePins)]
 overrideSubstitutions pins =
     catMaybes
         [ ("cache.maxBytes", pins{opCache = Nothing}) <$ opCache pins
-        , ("runtime.serveMaxInFlight", pins{opAdmission = Nothing}) <$ opAdmission pins
-        , ("limits.maxResponseBytes", pins{opResponse = Nothing}) <$ opResponse pins
         , ("limits.maxRequestBytes", pins{opRequest = Nothing}) <$ opRequest pins
         , ("queue.maxMemoryDepth", pins{opDepth = Nothing}) <$ opDepth pins
         , ("limits.maxArtifactBytes", pins{opArtifact = Nothing}) <$ opArtifact pins

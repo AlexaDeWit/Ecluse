@@ -39,20 +39,24 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Registry.Adapter.Capability (AdapterArtifact (artifactByUrl))
 import Ecluse.Core.Registry.Metadata (
+    MetadataError,
     VersionDoc (vdDetails),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
-    fetchVersionDetails,
+    VersionRead,
+    versionEvaluation,
  )
 import Ecluse.Core.Rules (renderDecision)
 import Ecluse.Core.Rules.Types (EvalContext, SkippedCheck, completeEvidence, mkEvalContext)
 import Ecluse.Core.Security (Origin (UntrustedOrigin), hostPortAddress, thgPublicHostPort)
 import Ecluse.Core.Security.Egress (RegistryUrl)
+import Ecluse.Core.Server.Admission (withServeAdmission)
+import Ecluse.Core.Server.Admission.Material (MaterialWork (SelectedMaterial), withMaterialAdmission)
+import Ecluse.Core.Server.Cache.Store (PreparedStore, executePrepared, preparedReuse)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
     ServeRuntime (..),
     pdMirror,
-    pdPublicBaseUrl,
     pdTarballHostGate,
     tarballHostHonoured,
  )
@@ -65,7 +69,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
     recordDenials,
     serveDecisionClass,
  )
-import Ecluse.Core.Server.Pipeline.Origin (withPublicMetadataClient)
+import Ecluse.Core.Server.Pipeline.Origin (preparePublicMetadata)
 import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Tarball.Refusal (
     artifactError,
@@ -106,14 +110,22 @@ servePublicArtifact ctx = do
     -- The advisory database active for this request, resolved once and used both for the
     -- version's evaluation and for a denial's audit line.
     advisoryEtag <- liftIO (pdAdvisoryEtag (arDeps ctx))
-    withAdmissionOrShed
+    withAdmissionResultOrShed
         metrics
-        (srAdmission (arRuntime ctx))
         (liftIO (arRespond ctx (tarballError (arReplies ctx) shedStatus [shedRetryAfter] (mkRefusal Nothing shedMessage))))
-        (gatePublicVersion ctx advisoryEtag)
+        ( fmap
+            join
+            ( withServeAdmission metrics (srAdmission rt) $ do
+                prepared <- preparePublicMetadata rt (arDeps ctx) (arPackage ctx) (arVersion ctx)
+                withMaterialAdmission (srMaterialAdmission rt) (SelectedMaterial (preparedReuse prepared)) $
+                    gatePublicVersion ctx advisoryEtag prepared
+            )
+        )
         $ \case
             Admitted artifact skipped -> serveAdmitted ctx advisoryEtag artifact skipped
             Refused decision -> refusePublic ctx advisoryEtag decision
+  where
+    rt = arRuntime ctx
 
 -- Stream an admitted artifact, recording the admission and the checks the gate had to skip.
 serveAdmitted :: ArtifactRequest response -> Maybe DbEtag -> Artifact -> [SkippedCheck] -> Handler ResponseReceived
@@ -140,14 +152,11 @@ data PublicArtifactGate
     | -- | The gate refused the version: a policy denial, an upstream outage, or absence.
       Refused ServeDecision
 
-{- Gate the requested version and select its artifact. The single-version read resolves the full
-packument through the shared metadata cache, so a packument @GET@ and this gate are one call. -}
-gatePublicVersion :: ArtifactRequest response -> Maybe DbEtag -> Handler PublicArtifactGate
-gatePublicVersion ctx advisoryEtag = do
+-- Execute the captured read and fresh policy while both admission brackets are held.
+gatePublicVersion :: ArtifactRequest response -> Maybe DbEtag -> PreparedStore MetadataError VersionRead -> Handler PublicArtifactGate
+gatePublicVersion ctx advisoryEtag prepared = do
     evalCtx <- liftIO (mkEvalContext (pdNow deps) (pure advisoryEtag))
-    eval <-
-        withPublicMetadataClient rt deps (pdPublicBaseUrl deps) $ \client ->
-            liftIO (fetchVersionDetails client (arPackage ctx) (arVersion ctx))
+    eval <- liftIO (versionEvaluation <$> executePrepared prepared)
     case eval of
         VersionMetadataUnavailable -> pure (Refused upstreamUnavailable)
         VersionMissing -> pure (Refused versionAbsent)

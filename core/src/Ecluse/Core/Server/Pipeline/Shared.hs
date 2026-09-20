@@ -13,7 +13,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
     privateAuthorisationRefusal,
 
     -- * Admission shed
-    withAdmissionOrShed,
+    withAdmissionResultOrShed,
     shedStatus,
     shedMessage,
     hRetryAfter,
@@ -32,11 +32,9 @@ module Ecluse.Core.Server.Pipeline.Shared (
 
 import Network.HTTP.Types (Header, HeaderName, ResponseHeaders, Status, status503)
 import Network.Wai (Request, requestHeaders)
-import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (ClientCredential (credSecret), Secret)
 import Ecluse.Core.Registry.Request (credentialRecover)
-import Ecluse.Core.Server.Admission (ServeAdmission, withServeAdmission)
 import Ecluse.Core.Server.Admission.Weighted (admissionWaitMicros)
 import Ecluse.Core.Server.Context (MountBinding (bindingCredential))
 import Ecluse.Core.Server.Response (
@@ -75,20 +73,10 @@ shedMessage = "server is busy; retry later"
 retryAfterHeaders :: Maybe RetryAfter -> ResponseHeaders
 retryAfterHeaders = maybe [] (\(RetryAfter secs) -> [(hRetryAfter, show secs)])
 
--- | Hold admission only during gated work. Respond outside the slot and record shedding as unavailable.
-withAdmissionOrShed ::
-    (MonadUnliftIO m) =>
-    MetricsPort ->
-    ServeAdmission ->
-    -- | The shed answer, built by the caller's own reply factory.
-    m received ->
-    -- | The gated work, run while holding one admission slot.
-    m a ->
-    -- | What to answer with the gated work's result.
-    (a -> m received) ->
-    m received
-withAdmissionOrShed metrics admission shed gated answer =
-    withServeAdmission metrics admission gated >>= \case
+-- | Answer an admission result after its brackets release, counting either gate's refusal once.
+withAdmissionResultOrShed :: (MonadIO m) => MetricsPort -> m received -> m (Maybe a) -> (a -> m received) -> m received
+withAdmissionResultOrShed metrics shed gated answer =
+    gated >>= \case
         Just result -> answer result
         Nothing -> do
             liftIO (mpServeDecision metrics Metric.Unavailable)

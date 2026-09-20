@@ -9,6 +9,7 @@ module instead.
 -}
 module Ecluse.Test.Support (
     testServeAdmission,
+    testMaterialAdmission,
     newTestClock,
     expectRight,
     expectRightText,
@@ -23,12 +24,17 @@ import Data.Time (UTCTime)
 import Network.HTTP.Client qualified as Client
 
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission)
+import Ecluse.Core.Server.Admission.Material (MaterialAdmission, MaterialAllowances (..), newMaterialAdmission)
 
 {- | A serve admission for suites that do not test overload. Its capacity sits far above any
 test's in-flight load, so it never sheds.
 -}
 testServeAdmission :: IO ServeAdmission
 testServeAdmission = newServeAdmission 1_000_000
+
+-- | Explicit small test weights with enough capacity for tests unrelated to material pressure.
+testMaterialAdmission :: IO MaterialAdmission
+testMaterialAdmission = newMaterialAdmission 1_000_000 1_000_000 (MaterialAllowances 4 1 4 2)
 
 {- | An IORef-backed clock a test advances by hand, so a case can elapse wall-clock time
 without sleeping. The pair is the read action and the setter.

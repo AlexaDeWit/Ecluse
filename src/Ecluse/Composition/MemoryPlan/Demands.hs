@@ -19,7 +19,6 @@ import Ecluse.Composition.MemoryPlan.Bounds (
     cacheBytesCap,
     cacheBytesFloor,
     cacheSharePercent,
-    envelope,
     fixedBufferBytes,
     materialSharePercent,
     memoryQueueCharged,
@@ -32,19 +31,18 @@ import Ecluse.Composition.MemoryPlan.Bounds (
     queueSharePercent,
     requestBytesCap,
     requestBytesFloor,
-    responseBytesCap,
-    responseBytesFloor,
+    responseBytesFallback,
     runtimeReserveFloorBytes,
     runtimeReserveShareDiv,
  )
 import Ecluse.Composition.MemoryPlan.Internal (
     OverridePins (opArtifact, opCache, opDepth, opRequest),
-    PlanInputs (piCache, piCpuAdmission, piExplicitAdmission, piLimits, piPublishConfigured, piQueueDemand),
+    PlanInputs (piCache, piCpuAdmission, piLimits, piPublishConfigured, piQueueDemand),
     TenantDemands (..),
  )
 import Ecluse.Composition.MemoryPlan.Override (configuredPins)
 import Ecluse.Config (CacheSettings (csMaxEntries), LimitsSettings (limMaxResponseBytes))
-import Ecluse.Core.Server.MemoryModel (contractResidentBytes, mirrorJobEstimatedBytes, packumentOriginFanout)
+import Ecluse.Core.Server.MemoryModel (mirrorJobEstimatedBytes)
 
 -- | Every tenant's desired share over a heap ceiling h, before the shed ladder walks it.
 tenantDemands :: PlanInputs -> Int -> TenantDemands
@@ -56,9 +54,9 @@ tenantDemands inputs h =
         , tdPins = pins
         , tdCacheDesired = fromMaybe (clamp (cacheBytesFloor, cacheBytesCap) (appHeap * cacheSharePercent `div` 100)) (opCache pins)
         , tdCacheEntriesExplicit = csMaxEntries (piCache inputs)
-        , tdMaterialDesired = mdDesired material
-        , tdMaterialMinimum = mdMinimum material
-        , tdAdmissionDesired = mdAdmission material
+        , tdMaterialDesired = max 1 (appHeap * materialSharePercent `div` 100)
+        , tdAdmissionDesired = piCpuAdmission inputs
+        , tdResponseFinal = fromMaybe responseBytesFallback (limMaxResponseBytes (piLimits inputs))
         , tdPublishConfigured = piPublishConfigured inputs
         , tdPublishDesired = max requestFinal (appHeap * publishSharePercent `div` 100)
         , tdRequestFinal = requestFinal
@@ -74,7 +72,6 @@ tenantDemands inputs h =
     pins = configuredPins inputs
     reserve = max runtimeReserveFloorBytes (h `div` runtimeReserveShareDiv)
     appHeap = max 0 (h - reserve)
-    material = materialDemand inputs appHeap
     requestComputed = clamp (requestBytesFloor, requestBytesCap) (appHeap * publishSharePercent `div` 100)
     requestFinal = fromMaybe requestComputed (opRequest pins)
     -- The charged envelope is the cap times the envelope multiplier, so dividing the
@@ -83,33 +80,3 @@ tenantDemands inputs h =
         fromMaybe
             (min mirrorArtifactBytesCap ((appHeap * mirrorArtifactSharePercent `div` 100) `div` mirrorArtifactEnvelopeMultiplier))
             (opArtifact pins)
-
--- The material tenant's desired shape, and the minimum it can shed to.
-data MaterialDemand = MaterialDemand
-    { mdAdmission :: Int
-    , mdDesired :: Int
-    , mdMinimum :: Int
-    }
-
--- Admission is bounded by the CPU capacity and by what the material share holds at the
--- floor response cap. The response cap is what that share affords at the admitted concurrency.
-materialDemand :: PlanInputs -> Int -> MaterialDemand
-materialDemand inputs appHeap =
-    MaterialDemand
-        { mdAdmission = admissionDesired
-        , mdDesired = materialOf admissionDesired responseDesired
-        , mdMinimum = materialOf (fromMaybe 1 explicitAdmission) (fromMaybe responseBytesFloor responseExplicit)
-        }
-  where
-    explicitAdmission = piExplicitAdmission inputs
-    responseExplicit = limMaxResponseBytes (piLimits inputs)
-    shareBytes = appHeap * materialSharePercent `div` 100
-    memBound = max 1 (shareBytes `div` envelope responseBytesFloor)
-    admissionDesired = fromMaybe (max 1 (min (piCpuAdmission inputs) memBound)) explicitAdmission
-    responseDesired =
-        fromMaybe
-            (clamp (responseBytesFloor, responseBytesCap) (contractResidentBytes (shareBytes `div` max 1 (admissionDesired * packumentOriginFanout))))
-            responseExplicit
-
-materialOf :: Int -> Int -> Int
-materialOf a r = a * envelope r

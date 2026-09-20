@@ -32,10 +32,12 @@ import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (LoadKnobs (..))
+import Ecluse.Composition.MemoryPlan.Bounds (materialAllowances, materialBytesFallback)
 import Ecluse.Composition.Sizing (connectionPoolSettings, openFileSoftLimit, resolvePrivateConnections, resolvePublicConnections, resolveServeAdmission)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Server.Admission (newServeAdmission)
+import Ecluse.Core.Server.Admission.Material (newMaterialAdmission)
 import Ecluse.Core.Server.Cache (CacheConfig (..), newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps)
 import Ecluse.Core.Worker (newWorkerHeartbeat)
@@ -66,6 +68,7 @@ withProxyConfigured ecosystem depsFor knobs cacheConfig telemetry privateApp pub
             publicManager <- newManager (connectionPoolSettings publicConnections defaultManagerSettings)
             privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
             admission <- newServeAdmission admissionCapacity
+            materialAdmission <- newMaterialAdmission materialBytesFallback admissionCapacity materialAllowances
             cache <- newMetadataCache cacheConfig
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
@@ -74,7 +77,7 @@ withProxyConfigured ecosystem depsFor knobs cacheConfig telemetry privateApp pub
                 newBoundedInMemoryQueue
                     (defaultMemoryQueueConfig 50_000)
                     (\n -> putTextLn ("bench serve stack: bounded in-memory mirror queue at cap. Running dropped-job total: " <> show n))
-            env <- newEnvWithAdmission admission queue publicManager privateManager cache logEnv telemetry heartbeat
+            env <- newEnvWithAdmission admission materialAdmission queue publicManager privateManager cache logEnv telemetry heartbeat
             deps <- depsFor privatePort publicPort
             let cfg = mkServerConfig (maybeToList (mountBindingFor ecosystem deps Nothing))
             testWithApplication (pure (application cfg env)) $ \proxyPort ->
