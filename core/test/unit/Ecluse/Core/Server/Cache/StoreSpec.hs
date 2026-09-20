@@ -360,14 +360,14 @@ spec = do
                         when (occEntries occ == 1) (putMVar started () >> takeMVar release)
                         writeIORef seen (Just occ)
                     run key = resolveSingleFlight pass (const pass) recordOccupancy pass sf key (pure (Right "raw"))
-                withAsync (run "first") $ \first -> do
+                withAsync (run "first") $ \firstWorker -> do
                     takeMVar started
-                    withAsync (putMVar secondStarted () >> run "second") $ \second -> do
+                    withAsync (putMVar secondStarted () >> run "second") $ \secondWorker -> do
                         takeMVar secondStarted
-                        timeout 30000 (wait second) `shouldReturn` Nothing
+                        timeout 30000 (wait secondWorker) `shouldReturn` Nothing
                         putMVar release ()
-                        wait first `shouldReturn` Right "raw"
-                        wait second `shouldReturn` Right "raw"
+                        wait firstWorker `shouldReturn` Right "raw"
+                        wait secondWorker `shouldReturn` Right "raw"
                 recordedOccupancy seen `shouldReturn` Just (2, 2 * flatWeight)
             result `shouldBe` Just ()
 

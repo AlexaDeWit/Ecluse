@@ -76,7 +76,7 @@ import Ecluse.Test.Maintenance (
     servedVersions,
  )
 import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
-import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
+import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, inertRuleDeps, isUndecidable)

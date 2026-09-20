@@ -77,8 +77,8 @@ spec = do
                         , mpVersionCacheRequest = \r -> modifyIORef' version (r :)
                         , mpVersionCacheFullHit = modifyIORef' shortcuts (+ 1)
                         }
-                reads = newMetadataReads port noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) selectNpmVersionDoc anonymous
-                client = publicMetadataClient cache source reads
+                observedReads = newMetadataReads port noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) selectNpmVersionDoc anonymous
+                client = publicMetadataClient cache source observedReads
             _ <- fetchFullManifest client name
             _ <- fetchVersionMetadata client name (npmVersion "1.0.0")
             _ <- fetchVersionMetadata client name (npmVersion "9.0.0")
@@ -100,8 +100,8 @@ spec = do
                         , mpVersionCacheRequest = \r -> modifyIORef' version (r :)
                         , mpVersionCacheFullHit = modifyIORef' shortcuts (+ 1)
                         }
-                reads = newMetadataReads port noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) selectNpmVersionDoc anonymous
-                client = publicMetadataClient cache source reads
+                observedReads = newMetadataReads port noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) selectNpmVersionDoc anonymous
+                client = publicMetadataClient cache source observedReads
             replicateM_ 2 (fetchVersionMetadata client name (npmVersion "1.0.0"))
             readIORef full `shouldReturn` []
             readIORef version `shouldReturn` [Metric.Hit, Metric.Miss]
