@@ -197,12 +197,13 @@ spec = do
             seen <- newIORef []
             let absent = untaggedRead Nothing
                 metrics = noopMetricsPort{mpVersionCacheRequest = \result -> modifyIORef' seen (result :)}
-                cacheConfig = (configBytes 60 1 16384){cacheVersionBudget = StoreBudget 1 16384}
+                cacheConfig = configBytes 60 1 16384
             cache <- newMetadataCache cacheConfig
             _ <- Cache.resolveVersion noopMetricsPort cache publicSource thingName v1_0_0 (pure (Right absent))
             prepared <- Cache.prepareVersion metrics cache publicSource thingName v1_0_0 (modifyIORef' calls (+ 1) $> Left MetadataUndecodable)
             preparedReuse prepared `shouldBe` KnownLocalReuse
             _ <- Cache.resolveVersion noopMetricsPort cache publicSource thingName (npmVersion "2.0.0") (pure (Right absent))
+            cachedVersion noopMetricsPort cache publicSource thingName v1_0_0 `shouldReturn` Nothing
             readIORef seen `shouldReturn` []
             executePrepared prepared `shouldReturn` Right absent
             readIORef seen `shouldReturn` [Metric.Hit]

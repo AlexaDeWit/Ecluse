@@ -130,7 +130,7 @@ cacheBytesCap = 1073741824
 cacheBytesFallback :: Int
 cacheBytesFallback = 268435456
 
--- | The planning allowance per assembled-response entry slot (256 KiB).
+-- | The planning allowance per shared local metadata entry slot (256 KiB).
 cacheEntryExpectedBytes :: Int
 cacheEntryExpectedBytes = 262144
 
