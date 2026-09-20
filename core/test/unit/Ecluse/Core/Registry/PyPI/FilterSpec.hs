@@ -34,12 +34,12 @@ import Ecluse.Core.Server.Response (
     Rejection (Rejection),
     ServeDecision (Reject),
  )
-import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
+import Ecluse.Core.Snapshot (Snapshot (..))
 import Ecluse.Test.Json (encodeStrict, fieldAt, isObject)
 import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, requestsName, validSha1, validSha256)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndexWith, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex)
-import Ecluse.Test.Snapshot (jsonSnapshot, projectJsonSnapshot)
+import Ecluse.Test.Snapshot (digestOf, jsonSnapshot, projectJsonSnapshot)
 import Ecluse.Test.Support (expectRight)
 
 -- | Pin PyPI source selection, artifact rebasing, and sidecar removal.

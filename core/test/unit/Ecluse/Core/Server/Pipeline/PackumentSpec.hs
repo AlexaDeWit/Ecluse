@@ -11,7 +11,7 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Package.Merge (Provenance (GatedSource, TrustedSource))
-import Ecluse.Core.Registry.Metadata (ContentDigest, digestOf)
+import Ecluse.Core.Registry.Metadata (ContentDigest)
 import Ecluse.Core.Server.Conditional (ETag, renderETag)
 import Ecluse.Core.Server.Pipeline.Internal (denialLabels, packumentServeDecision)
 import Ecluse.Core.Server.Pipeline.Origin (OriginMiss (MissAbsent, MissUnresolved))
@@ -29,6 +29,7 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Test.Package (thingName)
 import Ecluse.Test.Server.Response (reasonOf)
+import Ecluse.Test.Snapshot (digestOf)
 
 spec :: Spec
 spec = do
@@ -37,13 +38,13 @@ spec = do
 
 packumentETagSpec :: Spec
 packumentETagSpec = describe "packumentETag -- the input-derived validator" $ do
-    it "pins the v3 byte framing for every entry constructor" $ do
+    it "pins the v4 byte framing for every entry constructor" $ do
         let sources =
                 [ (TrustedSource, privateDigest base, [("1\0é", [ArrayEntry 0, ArrayEntry 10, ArrayEntry (-1), ObjectEntry "é\0x", SingletonEntry])])
                 , (GatedSource, publicDigest base, [])
                 ]
         renderETag (packumentETag mountBase [] thingName sources)
-            `shouldBe` "\"1d03b46e65ffdf7c24ba7e32430a6427cb103f825ad2c52a10c83de241ef92c4\""
+            `shouldBe` "\"4319a6866882aedd076a71e0f8158f81138c10f4f18ff475446cd63a307a5fe6\""
 
     it "changes when the origin URL changes the source metadata pointer" $
         packumentETag mountBase ["https://source-one.example"] thingName (piecesOf base)

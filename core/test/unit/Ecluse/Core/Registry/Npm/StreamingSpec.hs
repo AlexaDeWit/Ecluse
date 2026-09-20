@@ -28,7 +28,7 @@ import Ecluse.Core.Registry.Npm.StreamingProjection (collectField, emptyProjecti
 import Ecluse.Core.Registry.Publish (PublishPlan (..))
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataBytes), defaultLimits, maxNestingDepth)
-import Ecluse.Core.Snapshot (Snapshot (Snapshot), digestOf)
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath)
 import Ecluse.Test.Json (fieldAt, withKeys)
@@ -36,6 +36,7 @@ import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
+import Ecluse.Test.Snapshot (digestOf)
 import Ecluse.Test.Support (expectRight)
 
 -- | Verify the supported representation and policy projection against independent expectations.

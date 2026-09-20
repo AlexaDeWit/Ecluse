@@ -20,10 +20,11 @@ import Ecluse.Core.Package (PackageInfo, mkScope)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (MetadataError)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), PrecededRule, Rule (AllowIfOlderThan, AllowScope, DenyInstallTimeExecution))
-import Ecluse.Core.Snapshot (Snapshot (Snapshot), digestOf)
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Test.Corpus (CorpusTier (Heavy, Large, Medium), cpName, cpTier)
 import Ecluse.Test.EcosystemBench.Types (EcosystemBench (..), LoadedEntry)
 import Ecluse.Test.Rules (atDefaultPrecedence)
+import Ecluse.Test.Snapshot (digestOf)
 
 -- | The projection validated when the corpus loaded.
 entryInfo :: LoadedEntry -> PackageInfo

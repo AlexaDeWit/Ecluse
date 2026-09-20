@@ -9,9 +9,10 @@ module Ecluse.Core.ServeBench (benchmarks) where
 
 import Ecluse.Bench.Corpus (benchEvalContext, entryName, syntheticInput)
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
-import Ecluse.Core.Snapshot (Snapshot (Snapshot), digestOf)
+import Ecluse.Core.Snapshot (Snapshot (Snapshot))
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Ecluse.Test.Server.Transform (serveDocumentSize)
+import Ecluse.Test.Snapshot (digestOf)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 
 -- | Measure real captures and the growth across synthetic release counts.

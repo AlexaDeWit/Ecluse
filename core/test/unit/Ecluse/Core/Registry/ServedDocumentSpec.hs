@@ -30,14 +30,14 @@ import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleIndex)
 import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl, safeDocumentName)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (ecosystemArtifactAuthorities)
-import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
+import Ecluse.Core.Snapshot (Snapshot (..))
 import Ecluse.Test.Json (fieldAt)
 import Ecluse.Test.Registry.Npm qualified as Npm
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
-import Ecluse.Test.Snapshot (jsonSnapshot, syntheticSnapshot)
+import Ecluse.Test.Snapshot (digestOf, jsonSnapshot, syntheticSnapshot)
 import Ecluse.Test.Support (expectRight)
 
 -- | Pin source selection, name gates, and artifact rebasing after location admission.

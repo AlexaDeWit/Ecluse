@@ -43,7 +43,7 @@ import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, f
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, boundedRead, defaultLimits, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Cache (CacheEntry (..))
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
-import Ecluse.Core.Snapshot (ContentDigest, digestOf)
+import Ecluse.Core.Snapshot (ContentDigest)
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), corpusPackages, pypiCorpusPackages)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
@@ -53,7 +53,7 @@ import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Test.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Test.Server.Cache (diagnosticDocumentValue, weighCacheEntry)
-import Ecluse.Test.Snapshot (untaggedRead)
+import Ecluse.Test.Snapshot (digestOf, untaggedRead)
 
 -- | Each shape gets a fresh process and an independently loaded capture.
 data Shape
