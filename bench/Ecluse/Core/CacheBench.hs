@@ -6,13 +6,17 @@ Cold fills create a store per sample. Churn and hits use prefilled stores.
 -}
 module Ecluse.Core.CacheBench (benchmarks) where
 
-import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlight, resolveSingleFlight)
+import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
+import Ecluse.Test.Server.Cache (newSingleFlight)
 import Test.Tasty (localOption, mkTimeout)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO, whnfIO)
 
 -- | Compare whole-store fill and churn with 100,000 hot hits at three capacities.
 benchmarks :: IO Benchmark
-benchmarks = bgroup "cache maintenance" <$> traverse capacityBench [256, 1024, 4096]
+benchmarks = do
+    retained <- traverse capacityBench [256, 1024, 4096]
+    activeOnly <- newSingleFlightWithBackend Nothing
+    pure (bgroup "cache maintenance" (bench "100000 resolutions without retention" (whnfIO (replicateM_ 100000 (resolveKey activeOnly 0))) : retained))
 
 capacityBench :: Int -> IO Benchmark
 capacityBench capacity = do
@@ -24,7 +28,7 @@ capacityBench capacity = do
             bgroup
                 (show capacity)
                 [ bench "cold fill" (whnfAppIO filledStore capacity)
-                , bench "full-store churn" (whnfIO (churn churnStore nextRange capacity))
+                , bench "eligible-store churn" (whnfIO (churn churnStore nextRange capacity))
                 , bench "100000 hot hits" (whnfIO (replicateM_ 100000 (resolveKey hotStore 0)))
                 ]
 

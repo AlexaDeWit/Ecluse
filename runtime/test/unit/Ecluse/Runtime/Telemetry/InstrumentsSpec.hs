@@ -70,19 +70,17 @@ is total and silent against the no-op meter, so the hot path can instrument unco
 -}
 spec :: Spec
 spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ do
-    it "exports distinct store outcomes, refusals and warm-full selected reads" $
+    it "exports distinct store outcomes and retention refusals" $
         withTestTelemetry $ \telemetry meterEnv -> do
             port <- metricsPortOf <$> newMetrics telemetry
             for_ [mpCacheRequest port, mpVersionCacheRequest port, mpAssembledCacheRequest port] $ \recordRequest ->
                 traverse_ recordRequest [Hit, Miss, Collapsed]
             traverse_ (mpCacheRefused port) [FullStore, VersionStore, AssembledStore]
-            mpVersionCacheFullHit port
             for_ ["ecluse.metadata_cache.requests", "ecluse.metadata_cache.version.requests", "ecluse.metadata_cache.assembled.requests"] $ \name -> do
                 points <- sumPoints name meterEnv
                 points `shouldMatchList` [(metricAttributes [LCacheResult result], 1) | result <- [Hit, Miss, Collapsed]]
             refused <- sumPoints "ecluse.metadata_cache.refused" meterEnv
             refused `shouldMatchList` [(metricAttributes [LCacheStore store], 1) | store <- [FullStore, VersionStore, AssembledStore]]
-            sumPoints "ecluse.metadata_cache.version.full_hits" meterEnv `shouldReturn` [(metricAttributes [], 1)]
 
     it "collects a decreasing lifetime, floors fractional seconds and retains zero after expiry" $
         withTestTelemetry $ \telemetry meterEnv -> do

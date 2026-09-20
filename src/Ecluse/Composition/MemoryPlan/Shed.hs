@@ -173,7 +173,7 @@ shedQueueStep d overshoot =
             | otherwise -> depthDesired
 
 {- | The cache entry bound: an explicit count, or the surviving aggregate divided by the
-expected footprint of one cached packument.
+planning allowance per assembled-response slot.
 -}
 cacheEntryBound :: TenantDemands -> ShedOutcomes -> Int
 cacheEntryBound d o =

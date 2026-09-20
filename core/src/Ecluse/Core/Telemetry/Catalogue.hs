@@ -57,10 +57,8 @@ data MetricName
       SingleVersionCacheRequests
     | -- | @ecluse.metadata_cache.assembled.requests@: assembled-response request outcomes (counter).
       AssembledCacheRequests
-    | -- | @ecluse.metadata_cache.refused@: oversized values refused by store (counter).
+    | -- | @ecluse.metadata_cache.refused@: capacity refusals and backend failures (counter).
       MetadataCacheRefused
-    | -- | @ecluse.metadata_cache.version.full_hits@: selective reads served by full retention (counter).
-      SingleVersionCacheFullHits
     | -- | @ecluse.metadata_cache.entries@: metadata-cache occupancy (gauge).
       MetadataCacheEntries
     | -- | @ecluse.metadata_cache.resident_bytes@: full-packument cache resident bytes (gauge).
@@ -129,7 +127,6 @@ metricName = \case
     SingleVersionCacheRequests -> "ecluse.metadata_cache.version.requests"
     AssembledCacheRequests -> "ecluse.metadata_cache.assembled.requests"
     MetadataCacheRefused -> "ecluse.metadata_cache.refused"
-    SingleVersionCacheFullHits -> "ecluse.metadata_cache.version.full_hits"
     MetadataCacheEntries -> "ecluse.metadata_cache.entries"
     MetadataCacheResidentBytes -> "ecluse.metadata_cache.resident_bytes"
     SingleVersionCacheResidentBytes -> "ecluse.metadata_cache.version.resident_bytes"

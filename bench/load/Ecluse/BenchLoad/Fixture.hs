@@ -84,15 +84,14 @@ withProxyConfigured ecosystem depsFor knobs cacheConfig telemetry privateApp pub
 longCacheTtl :: NominalDiffTime
 longCacheTtl = 3600
 
--- | The production metadata cache's full-store entry bound.
+-- | The local assembled-response entry bound.
 defaultCacheEntries :: Int
-defaultCacheEntries = sbMaxEntries (cacheFullBudget defaultCacheConfig)
+defaultCacheEntries = sbMaxEntries (cacheAssembledBudget defaultCacheConfig)
 
 benchCacheConfig :: NominalDiffTime -> Int -> CacheConfig
 benchCacheConfig ttl maxEntries =
     defaultCacheConfig
         { cacheTtl = ttl
-        , cacheFullBudget = capEntries (cacheFullBudget defaultCacheConfig)
         , cacheVersionBudget = capEntries (cacheVersionBudget defaultCacheConfig)
         , cacheAssembledBudget = capEntries (cacheAssembledBudget defaultCacheConfig)
         }

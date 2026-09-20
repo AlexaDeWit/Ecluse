@@ -15,13 +15,13 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 spec :: Spec
 spec = do
     describe "scenario selection" $ do
-        let fixtures = [(Npm, [("cached-public-hit", "npm result" :: Text)]), (PyPI, [("cached-public-hit", "pypi result")])]
+        let fixtures = [(Npm, [("assembled-response-hit", "npm result" :: Text)]), (PyPI, [("assembled-response-hit", "pypi result")])]
         it "keeps duplicate local scenario names separate" $ do
-            selectScenario "npm/cached-public-hit" fixtures `shouldBe` Just "npm result"
-            selectScenario "pypi/cached-public-hit" fixtures `shouldBe` Just "pypi result"
+            selectScenario "npm/assembled-response-hit" fixtures `shouldBe` Just "npm result"
+            selectScenario "pypi/assembled-response-hit" fixtures `shouldBe` Just "pypi result"
         it "refuses an unqualified name or another ecosystem" $ do
-            selectScenario "cached-public-hit" fixtures `shouldBe` Nothing
-            selectScenario "rubygems/cached-public-hit" fixtures `shouldBe` Nothing
+            selectScenario "assembled-response-hit" fixtures `shouldBe` Nothing
+            selectScenario "rubygems/assembled-response-hit" fixtures `shouldBe` Nothing
     describe "report grouping" $
         it "keeps the load, service, and saturation views inside each ecosystem section" $ do
             let output = fixtureSection Npm ["npm load", "npm service", "npm saturation"] <> fixtureSection PyPI ["pypi load", "pypi service", "pypi saturation"]

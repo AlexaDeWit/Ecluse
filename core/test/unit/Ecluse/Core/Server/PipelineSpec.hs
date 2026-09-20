@@ -45,7 +45,7 @@ import Ecluse.Core.Rules.Types qualified as Rules
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, withServeAdmission)
-import Ecluse.Core.Server.Cache (Source (Source), cachedMetadata, newMetadataCache)
+import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (..),
@@ -80,7 +80,7 @@ import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort, recordingDiver
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, inertRuleDeps, isUndecidable)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Server.Cache (cachedMetadata, defaultCacheConfig)
 import Ecluse.Test.Server.Mount (npmServeDeps, withPrivateBaseUrl)
 import Ecluse.Test.Sweep (RecordedSweep (recPorts, recTargetResults), recordingPorts, testMount, testPacing, withPrivateCache)
 import Network.HTTP.Types.Header (RequestHeaders, hHost)
@@ -272,7 +272,7 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
                     assertPrivatePackument latest keys resp
                 assertConflictLog True logged
                 divergences `shouldReturn` count
-            readIORef publicHits `shouldReturn` 1
+            readIORef publicHits `shouldReturn` 2
 
     it "retains denied conflict evidence beside another admitted public version" $
         withConflictOrigins (conflictPublicApp (\v -> v{vsHasInstallScript = vsVersion v == "1.0.0"})) divergentPrivateApp $ \rt base divergences _ -> do
@@ -445,19 +445,18 @@ distTagSpec = describe "served dist-tags.latest" $ do
 
 sharedCacheSpec :: Spec
 sharedCacheSpec = describe "the shared metadata cache across the two origins" $
-    it "keeps the private origin out of the cache and answers the public origin from it" $ do
+    it "re-fetches both origins without retaining full metadata" $ do
         privateHits <- newIORef 0
         let public = publicAppOver ["1.0.0", "2.0.0"] "2.0.0" id
             private = countingUpstream privateHits (privateAppOver ["1.0.0"] "1.0.0")
         withConflictOrigins public private $ \rt deps _divergences publicHits -> do
             replicateM_ 2 (captureServe npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest))
-            -- The private leg re-reads its upstream per request, so it never answers one caller
-            -- from another's authorised read. The public leg reads once and then serves the cache.
+            -- The private read authorises each request. Full public retention is disabled locally.
             readIORef privateHits `shouldReturn` 2
-            readIORef publicHits `shouldReturn` 1
+            readIORef publicHits `shouldReturn` 2
             privateCached <- traverse (cachedUnder rt) (pdPrivateBaseUrl deps)
             privateCached `shouldBe` Just False
-            cachedUnder rt (pdPublicBaseUrl deps) `shouldReturn` True
+            cachedUnder rt (pdPublicBaseUrl deps) `shouldReturn` False
 
 -- Whether the shared cache holds a full-document entry under an origin's own key.
 cachedUnder :: ServeRuntime -> RegistryUrl -> IO Bool

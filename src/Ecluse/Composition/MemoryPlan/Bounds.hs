@@ -115,7 +115,7 @@ still take the aggregate to zero.
 cacheBytesFloor :: Int
 cacheBytesFloor = 67108864
 
--- | Past a gigabyte of decoded metadata the TTL bounds the cache, not memory.
+-- | The maximum computed aggregate for local metadata retention.
 cacheBytesCap :: Int
 cacheBytesCap = 1073741824
 
@@ -123,7 +123,7 @@ cacheBytesCap = 1073741824
 cacheBytesFallback :: Int
 cacheBytesFallback = 268435456
 
--- | The expected decoded footprint of one cached packument (256 KiB).
+-- | The planning allowance per assembled-response entry slot (256 KiB).
 cacheEntryExpectedBytes :: Int
 cacheEntryExpectedBytes = 262144
 

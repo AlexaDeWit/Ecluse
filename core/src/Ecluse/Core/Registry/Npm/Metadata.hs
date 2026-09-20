@@ -17,12 +17,9 @@ module Ecluse.Core.Registry.Npm.Metadata (
     -- * Pure projection
     projectNpmManifest,
     projectNpmVersion,
-    selectNpmVersionDoc,
 ) where
 
-import Data.Aeson (Value (Object, String), parseJSON)
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson (Value (String), parseJSON)
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteString qualified as BS
 import Data.Time (UTCTime)
@@ -35,7 +32,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
 import Ecluse.Core.Registry (FetchFault, RegistryResponse)
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
+import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
     Manifest,
     ManifestProjection (ManifestProjection, prjDecode, prjInject, prjLocations),
@@ -81,7 +78,7 @@ newNpmMetadataReads ::
     OriginFor posture ->
     MetadataReads posture
 newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
-    newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing) selectNpmVersionDoc
+    newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing)
 
 fetchNpmPackument :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
 fetchNpmPackument origin = fetchMetadataFormBounded origin Full
@@ -142,15 +139,6 @@ projectNpmVersion limits name version body = do
             , vrBodyBytes = BS.length body
             , vrUpstreamLatest = latestTarget (svDistTagLatest selected)
             }
-
-{- | Select one version's object out of a held packument, for a warm full-document read. The
-lookup uses the same rendered key the projection used, so the pair cannot name a sibling.
--}
-selectNpmVersionDoc :: Version -> CachedDoc -> Maybe CachedDoc
-selectNpmVersionDoc version doc = do
-    Object packument <- snd npmCached doc
-    Object versions <- KeyMap.lookup "versions" packument
-    fst npmCached <$> KeyMap.lookup (Key.fromText (renderVersion version)) versions
 
 -- A non-string @latest@ is no known tag, matching the whole-document projection's per-entry drop.
 latestTarget :: Maybe Value -> Maybe Version

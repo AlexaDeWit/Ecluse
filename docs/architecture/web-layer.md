@@ -119,14 +119,43 @@ would force arbitrary full-artifact upstream fetches. So dispatch handles `HEAD`
 
 ## Metadata cache
 
-A short-TTL, size-bounded, in-memory cache holds the parsed packument metadata, keyed by package, so
-concurrent resolutions of a popular package collapse to one upstream call. Each entry is the coherent
-pair of the typed `PackageInfo` and the raw document it was decoded from. The cache holds that raw
-document as an [opaque carrier](registry-model.md#decision-surface-vs-served-surface)
-([`CachedDoc`](../../core/src/Ecluse/Core/Registry/CachedDocument.hs)) and sizes it without reading
-it, so the cache stays ecosystem-agnostic.
+The local backend retains selected versions and assembled responses. It never retains full
+metadata, including a compact full representation. Concurrent full reads share active work,
+then completion removes the flight registration. This path does not weigh, encode, or insert
+full entries. A subsequent full read fetches again, so an earlier listing does not make a later
+selected-version read an upstream-free operation.
 
-The selected-version store charges each retained release field, including the full backing
+One selected provider owns all three retention capabilities: full metadata, selected versions,
+and assembled responses. Its constructor assigns one storage class to every capability.
+The composition root chooses the shipped local provider without an external dependency.
+Local full retention is absent even if an adapter supplies full operations. Unsupported capabilities
+stay uncached, and a failed provider never falls back to a retained local copy.
+Single-flight and request admission remain local coordination, separate from persistent storage.
+
+Selected reads call the provider's selected capability directly. They never fetch a retained full
+entry through the generic cache. An external adapter can read a selected remote projection without
+transferring or decoding a full document locally. The adapter owns its TTL, codec, bounded decoding,
+identity checks, and representation. Source, ecosystem, package, version, digest, and artifact
+identities must survive that boundary. No request can bypass the private authorisation or rules.
+
+Recency is a storage-policy hint, not a remote LRU requirement. Occupancy reporting is optional
+and describes the adapter's charged bytes and entry counts, not its server's exact heap use.
+The local provider reports its bounded stores' charges. Each external operation has a deadline
+capped at one second. A failed read fetches metadata from its origin or renders an assembled response
+from this request's authorised inputs. A failed write skips retention.
+Cancellation propagates. Writes run inline with no pending write queue. There is no external client,
+codec, or service configuration in the shipped provider.
+
+Credential refresh state, advisory snapshots, HTTP connection pools, and mirror queues retain
+their separate control-state contracts. Operator-owned private registries are registry roles,
+not an implicit second metadata retention provider.
+
+Repeated full fetches can increase upstream work. Dependency-graph captures establish large full
+working sets, but no successful paired runtime comparison establishes the size of this trade-off.
+Performance reports must compare equal successful work and distinguish retained bytes from transient
+materialisation, allocation, and upstream transfer.
+
+The local selected-version store charges each retained release field, including the full backing
 allocation of each text slice. Repeated artifacts, hashes, licences, and trust evidence each carry
 a node allowance. A fixed allowance covers the entry and scalar fields, and a per-byte version
 allowance covers parsed ordering keys. Shared allocations count repeatedly. This is conservative
@@ -134,10 +163,10 @@ accounting, not exact heap residency. A release above its store's budget is serv
 or eviction, and occupancy reports the charged weights. Cached absences keep their smaller charge.
 
 The cache holds the metadata, not the verdict. The rules engine re-evaluates the rules on every
-request, so time-sensitive rules (`AllowIfOlderThan`) stay correct. This is in-memory metadata only.
+request, so time-sensitive rules (`AllowIfOlderThan`) stay correct.
 On-disk artifact caching is out of scope, and the mirror stays the durable store.
 
-The cache holds the anonymous public (gated) origin only. It never holds the private origin: the
+Metadata retention and full-read single-flight use the anonymous public (gated) origin only. It never holds the private origin: the
 serve path fetches that origin per request and never hands it to the cache. No caller's private view
 can leak to another inside the TTL, because Écluse forbids a shared private cache. The anonymous public origin crosses no trust boundary, so the cache
 holds it freely.

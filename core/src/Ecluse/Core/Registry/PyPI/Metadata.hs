@@ -80,8 +80,7 @@ newPyPIMetadataReads ::
     OriginFor posture ->
     MetadataReads posture
 newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
-    -- PyPI has no mirror write, so no per-release raw object is retained.
-    newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing) (\_ _ -> Nothing)
+    newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
 
 fetchSimpleIndex :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
 fetchSimpleIndex origin name =

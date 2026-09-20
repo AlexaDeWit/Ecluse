@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Three isolated metadata stores share TTL and single-flight machinery.
+{- | One provider owns metadata retention. Local single-flight shares active requests.
 Public metadata and content-addressed responses follow the sharing policy in the web-layer architecture.
 -}
 module Ecluse.Core.Server.Cache (
@@ -13,112 +13,43 @@ module Ecluse.Core.Server.Cache (
     -- * The cache handle
     MetadataCache,
     newMetadataCache,
+    newMetadataCacheWithProvider,
 
     -- * Cache entries
     Source (..),
     CacheEntry (..),
-    weighCacheEntry,
 
     -- * Resolution
     resolveMetadata,
-    cachedMetadata,
 
     -- * Single-version resolution
     resolveVersion,
-    cachedVersion,
 
     -- * Assembled-representation resolution
     resolveAssembled,
 ) where
 
-import Data.ByteString qualified as BS
 import Data.Text.Short qualified as TS
-import Data.Time (NominalDiffTime)
 
 import Ecluse.Core.Package (
-    PackageDetails (pkgArtifacts),
-    PackageInfo (infoVersions),
     PackageName,
-    artEntryKey,
     pkgCanonical,
     pkgEcosystem,
     pkgNamespace,
     renderScope,
  )
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, weighCachedDoc)
-import Ecluse.Core.Registry.Metadata (ContentDigest, MetadataError, VersionRead)
+import Ecluse.Core.Registry.Metadata (MetadataError, VersionRead)
+import Ecluse.Core.Server.Cache.Provider (CacheProvider, localCacheProvider, providerAssembled, providerFull, providerVersion)
 import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
     SingleFlight,
-    lookupStore,
-    lookupStoreTouching,
-    newSingleFlight,
+    newSingleFlightWithBackend,
     resolveSingleFlight,
  )
-import Ecluse.Core.Server.Cache.VersionWeight (weighEntryKey, weighVersion)
-import Ecluse.Core.Server.MemoryModel (expandWireBytes)
+import Ecluse.Core.Server.Cache.Types
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Core.Version (Version, renderVersion)
-
--- | Limits for one store's entry count and accounted bytes.
-data StoreBudget = StoreBudget
-    { sbMaxEntries :: Int
-    -- ^ The maximum number of distinct entries held. An insert past this evicts.
-    , sbMaxBytes :: Int
-    -- ^ The resident-byte budget the held entries are kept under.
-    }
-    deriving stock (Eq, Show)
-
--- | Three sub-budgets carved from one cache aggregate, with a shared TTL.
-data CacheConfig = CacheConfig
-    { cacheTtl :: NominalDiffTime
-    , cacheFullBudget :: StoreBudget
-    -- ^ The full-packument store's bounds, keyed by @(source, package)@.
-    , cacheVersionBudget :: StoreBudget
-    -- ^ The single-version store's bounds (retained-field accounting).
-    , cacheAssembledBudget :: StoreBudget
-    -- ^ The assembled-representation store's bounds (exact strict-bytes weights).
-    }
-    deriving stock (Eq, Show)
-
--- | An upstream base URL partitions entries without carrying credentials.
-newtype Source = Source Text
-    deriving stock (Eq, Ord, Show)
-
--- | A typed view paired with the raw document and digest from the same fetch.
-data CacheEntry = CacheEntry
-    { entryInfo :: PackageInfo
-    -- ^ The typed packument view the rules and merge reason over.
-    , entryRaw :: CachedDoc
-    -- ^ The raw upstream document the served body is built from.
-    , entryBodyBytes :: Int
-    -- ^ Decompressed source bytes, retained independently of the cache weight.
-    , entryDigest :: ContentDigest
-    }
-    deriving stock (Eq, Show)
-
--- | Charge the shared wire expansion plus artifact coordinates retained by the typed view.
-weighCacheEntry :: CacheEntry -> Int
-weighCacheEntry e =
-    fromInteger (min (toInteger (maxBound :: Int)) (toInteger (weighEncodedBytes (weighCachedDoc (entryRaw e))) + keysWeight))
-  where
-    keysWeight = sum [weighEntryKey (artEntryKey artifact) | details <- toList (infoVersions (entryInfo e)), artifact <- toList (pkgArtifacts details)]
-
--- Scale through the one shared wire-to-resident model ("Ecluse.Core.Server.MemoryModel"), so this
--- weigher and the composition root's memory plan never drift on the expansion factor.
-weighEncodedBytes :: Int64 -> Int
-weighEncodedBytes = expandWireBytes . fromIntegral
-
-weighAssembled :: ByteString -> Int
-weighAssembled bytes = BS.length bytes + assembledEntryOverheadBytes
-
-assembledEntryOverheadBytes :: Int
-assembledEntryOverheadBytes = 256
-
-newtype CacheKey = CacheKey Text
-    deriving stock (Eq, Ord, Show)
-    deriving newtype (Hashable)
 
 keyText :: Source -> PackageName -> Text
 keyText (Source source) name =
@@ -130,34 +61,28 @@ keyText (Source source) name =
         <> "\x1f"
         <> TS.toText (pkgCanonical name)
 
-cacheKey :: Source -> PackageName -> CacheKey
-cacheKey source name = CacheKey (keyText source name)
+versionKey :: Source -> PackageName -> Version -> Text
+versionKey source name version = keyText source name <> "\x1f" <> renderVersion version
 
-newtype VersionKey = VersionKey Text
-    deriving stock (Eq, Ord, Show)
-    deriving newtype (Hashable)
-
-versionKey :: Source -> PackageName -> Version -> VersionKey
-versionKey source name version = VersionKey (keyText source name <> "\x1f" <> renderVersion version)
-
--- | Isolated full-document, selected-version, and assembled-response stores.
+-- | One provider supplies every retention capability beside process-local request coalescing.
 data MetadataCache = MetadataCache
-    { mcFull :: SingleFlight MetadataError CacheKey CacheEntry
-    -- ^ The full-packument store, keyed by @(source, package)@.
-    , mcVersion :: SingleFlight MetadataError VersionKey VersionRead
+    { mcFull :: SingleFlight MetadataError Text CacheEntry
+    -- ^ Full fetches partition by source, ecosystem, and package without local retention.
+    , mcVersion :: SingleFlight MetadataError Text VersionRead
     , mcAssembled :: SingleFlight Void Text ByteString
     }
 
--- | Build each store with its own bounds and the shared TTL.
+-- | Select the shipped local provider without an external service dependency.
 newMetadataCache :: CacheConfig -> IO MetadataCache
-newMetadataCache cfg =
+newMetadataCache cfg = localCacheProvider cfg >>= newMetadataCacheWithProvider
+
+-- | Create only transient flight state. The selected provider owns every retained representation.
+newMetadataCacheWithProvider :: CacheProvider -> IO MetadataCache
+newMetadataCacheWithProvider provider =
     MetadataCache
-        <$> newStore (cacheFullBudget cfg) weighCacheEntry
-        <*> newStore (cacheVersionBudget cfg) weighVersion
-        <*> newStore (cacheAssembledBudget cfg) weighAssembled
-  where
-    newStore :: StoreBudget -> (v -> Int) -> IO (SingleFlight e k v)
-    newStore budget = newSingleFlight (cacheTtl cfg) (sbMaxEntries budget) (sbMaxBytes budget)
+        <$> newSingleFlightWithBackend (providerFull provider)
+        <*> newSingleFlightWithBackend (providerVersion provider)
+        <*> newSingleFlightWithBackend (providerAssembled provider)
 
 -- | Coalesce public metadata fetches. Failures reach all waiters and retain nothing.
 resolveMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Either MetadataError CacheEntry) -> IO (Either MetadataError CacheEntry)
@@ -167,7 +92,7 @@ resolveMetadata metrics cache source name =
         (recordFullOccupancy metrics)
         (mpCacheRefused metrics Metric.FullStore)
         (mcFull cache)
-        (cacheKey source name)
+        (keyText source name)
 
 -- | Cache a selectively decoded release or its absence. Oversized releases remain uncached.
 resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (Either MetadataError VersionRead)
@@ -190,16 +115,6 @@ resolveAssembled metrics cache key render =
             (mcAssembled cache)
             key
             (Right <$> render)
-
--- | Probe full metadata without fetching or refreshing recency. Report expiry but no request outcome.
-cachedMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
-cachedMetadata metrics cache source name = lookupStore (recordFullOccupancy metrics) (mcFull cache) (cacheKey source name)
-
-{- | Probe a version and refresh recency. Report expiry but no request outcome.
-A read whose 'vrVersion' is 'Nothing' is a cached absence.
--}
-cachedVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Maybe VersionRead)
-cachedVersion metrics cache source name version = lookupStoreTouching (mpVersionCacheResidentBytes metrics . occBytes) (mcVersion cache) (versionKey source name version)
 
 recordFullOccupancy :: MetricsPort -> CacheOccupancy -> IO ()
 recordFullOccupancy metrics occ = do

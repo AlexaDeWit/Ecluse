@@ -27,9 +27,10 @@ import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Server.Cache (CacheEntry (CacheEntry), weighCacheEntry)
+import Ecluse.Core.Server.Cache (CacheEntry (CacheEntry))
 import Ecluse.Core.Snapshot (digestOf)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), corpusPackages, pypiCorpusPackages)
+import Ecluse.Test.Server.Cache (weighCacheEntry)
 
 -- | Each shape gets a fresh process and an independently loaded capture.
 data Shape

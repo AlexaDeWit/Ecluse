@@ -7,14 +7,12 @@ The pipeline carries source snapshot scope separately and delegates wire access 
 -}
 module Ecluse.Core.Registry.CachedDocument (
     CachedDoc,
-    weighCachedDoc,
     foldCachedDoc,
     npmCached,
     pypiSimpleCached,
 ) where
 
-import Data.Aeson (Value, encode)
-import Data.ByteString.Lazy qualified as BSL
+import Data.Aeson (Value)
 
 {- | A raw document the cache holds and the pipeline threads. The derived 'Show' and 'Eq' are a
 debug and test affordance, not a projection.
@@ -23,12 +21,6 @@ data CachedDoc
     = CachedNpm Value
     | CachedPyPISimple Value
     deriving stock (Eq, Show)
-
-{- | A held document's resident-size estimate: the byte length of its compact encoding, the
-figure the metadata cache weighs an entry by.
--}
-weighCachedDoc :: CachedDoc -> Int64
-weighCachedDoc = foldCachedDoc (BSL.length . encode)
 
 {- | Read a held document blind to its ecosystem, for accounting only. Projection goes through
 the ecosystem's own pair below, so no adapter reads another's document through this.

@@ -2,24 +2,21 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Opaque document injection and projection.
 module Ecluse.Core.Registry.CachedDocumentSpec (spec) where
 
-import Data.Aeson (Value (Bool, Null, Number, String), encode, object, (.=))
-import Data.ByteString.Lazy qualified as BSL
+import Data.Aeson (Value (Bool, Null, Number, String), object, (.=))
 import Test.Hspec
 
-import Ecluse.Core.Registry.CachedDocument (npmCached, weighCachedDoc)
+import Ecluse.Core.Registry.CachedDocument (foldCachedDoc, npmCached)
 
-{- | Pin the two properties the byte-identity claim rests on. npm's boundary pair round-trips
-('project . inject == Just') and 'weighCachedDoc' returns the compact encoding's byte length.
--}
 spec :: Spec
 spec = describe "CachedDocument (npm's opaque-carrier boundary)" $ do
     it "inject then project round-trips every sample to Just" $
         map (project . inject) samples `shouldBe` map Just samples
 
-    it "weighCachedDoc is the sample's compact-encoded byte length" $
-        map (weighCachedDoc . inject) samples `shouldBe` map (BSL.length . encode) samples
+    it "foldCachedDoc preserves the same value for diagnostic accounting" $
+        map (foldCachedDoc id . inject) samples `shouldBe` samples
   where
     (inject, project) = npmCached
 

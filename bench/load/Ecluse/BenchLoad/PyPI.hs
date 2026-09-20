@@ -47,7 +47,7 @@ pypiFixture =
         { fixtureEcosystem = PyPI
         , fixtureScenarios =
             [ indexScenario "index-cold" "GET the weighted Simple-index corpus with public cache TTL 0. Each request merges a live private overlay and filters files. Concurrent public misses share an in-flight fetch and decode." 0
-            , indexScenario "cached-public-hit" "GET the weighted Simple-index corpus from a warm public metadata cache, with the private index still fetched and merged on each request." longCacheTtl
+            , indexScenario "assembled-response-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
             , revalidateScenario
             , cacheFitsScenario
             , cacheEvictsScenario
@@ -108,7 +108,7 @@ cacheFitsScenario :: Scenario
 cacheFitsScenario =
     Scenario
         { scenarioName = "cache-fits-large"
-        , scenarioDescription = "GET a uniform Simple-index working set with one cache slot per project, so every public entry remains resident after warm-up."
+        , scenarioDescription = "GET a uniform Simple-index working set with one cache slot per project, so assembled responses fit by entry count. Full public metadata is always fetched."
         , scenarioConcurrencyScale = 1
         , scenarioBoot = \knobs k ->
             let packages = workingSet knobs
@@ -119,7 +119,7 @@ cacheEvictsScenario :: Scenario
 cacheEvictsScenario =
     Scenario
         { scenarioName = "cache-evicts-large"
-        , scenarioDescription = "GET the same uniform Simple-index working set with min(configured entries, project count - 1) cache slots, forcing repeated public fetch, decode, and projection."
+        , scenarioDescription = "GET the same uniform Simple-index working set with min(configured entries, project count - 1) cache slots, forcing repeated assembly. Full public metadata is always fetched."
         , scenarioConcurrencyScale = 1
         , scenarioBoot = \knobs k -> do
             let packages = workingSet knobs

@@ -134,7 +134,6 @@ data Metrics = Metrics
     , mSingleVersionCacheRequests :: Counter Int64
     , mAssembledCacheRequests :: Counter Int64
     , mMetadataCacheRefused :: Counter Int64
-    , mSingleVersionCacheFullHits :: Counter Int64
     , mMetadataCacheEntries :: Gauge Int64
     , mMetadataCacheResidentBytes :: Gauge Int64
     , mSingleVersionCacheResidentBytes :: Gauge Int64
@@ -179,8 +178,7 @@ newMetrics telemetry = do
         <*> counter meter MetadataCacheRequests "{request}" "full-store requests by hit/miss/collapsed"
         <*> counter meter SingleVersionCacheRequests "{request}" "selected-version requests by hit/miss/collapsed"
         <*> counter meter AssembledCacheRequests "{request}" "assembled-response requests by hit/miss/collapsed"
-        <*> counter meter MetadataCacheRefused "{entry}" "oversized values refused by store"
-        <*> counter meter SingleVersionCacheFullHits "{request}" "selective reads served by full-store retention"
+        <*> counter meter MetadataCacheRefused "{entry}" "capacity refusals and external backend failures by store"
         <*> gauge meter MetadataCacheEntries "metadata-cache occupancy"
         <*> gauge meter MetadataCacheResidentBytes "full-packument metadata-cache resident bytes"
         <*> gauge meter SingleVersionCacheResidentBytes "single-version metadata-cache resident bytes"
@@ -244,7 +242,6 @@ metricsPortOf m =
         , mpVersionCacheRequest = \result -> addOne (mSingleVersionCacheRequests m) [LCacheResult result]
         , mpAssembledCacheRequest = \result -> addOne (mAssembledCacheRequests m) [LCacheResult result]
         , mpCacheRefused = \store -> addOne (mMetadataCacheRefused m) [LCacheStore store]
-        , mpVersionCacheFullHit = addOne (mSingleVersionCacheFullHits m) []
         , mpCacheEntries = recordCacheEntries m
         , mpCacheResidentBytes = recordCacheResidentBytes m
         , mpVersionCacheResidentBytes = recordVersionCacheResidentBytes m
