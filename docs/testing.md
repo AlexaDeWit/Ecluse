@@ -261,6 +261,9 @@ Corpus pins and capture policy belong in [bench/corpus/pins.json](../bench/corpu
 
 ### Benchmark captures
 
+The separate [dependency-graph cache experiment](cache-breakpoints.md) captures real installer
+traffic without modifying the committed corpus. Its capacity models and runtime results are informational.
+
 The catalogue records complete npm packuments and PyPI PEP 691 Simple JSON snapshots.
 Each capture keeps the upstream response body unchanged, including prereleases, operational fields,
 and PyPI serial metadata. The catalogue records its source, capture time, actual media type, byte

@@ -939,6 +939,9 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.ReplaySpec
     Ecluse.BenchLoad.PatternsSpec
     Ecluse.BenchLoad.PatternReportSpec
+    Ecluse.BenchLoad.BreakpointsSpec
+    Ecluse.BenchLoad.GraphRegistry
+    Ecluse.BenchLoad.GraphRegistrySpec
     Ecluse.BenchReportSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
@@ -1017,6 +1020,7 @@ test-suite ecluse-unit
     , hspec-wai         ^>=0.11
     , http-client       ^>=0.7
     , insert-ordered-containers  ^>=0.2
+    , http-client-tls   >=0.3.6 && <0.5
     , openapi3          ^>=3.2
     , http-media        ^>=0.8
     , http-types        ^>=0.12
@@ -1382,6 +1386,8 @@ executable bench-load
   other-modules:
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Fixture
+    Ecluse.BenchLoad.Graph
+    Ecluse.BenchLoad.GraphRegistry
     Ecluse.BenchLoad.Harness
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.Oha
@@ -1403,6 +1409,8 @@ executable bench-load
     , hs-opentelemetry-sdk ^>=1.0
     , http-client      ^>=0.7
     , http-client-tls  >=0.3.6 && <0.5
+    , directory        ^>=1.3
+    , filepath         ^>=1.5
     , http-types       ^>=0.12
     , iproute          ^>=1.7
     , katip            ^>=0.8.8
@@ -1425,6 +1433,7 @@ library ecluse-bench-load
     Ecluse.BenchLoad.Selection
     Ecluse.BenchLoad.Patterns
     Ecluse.BenchLoad.PatternReport
+    Ecluse.BenchLoad.Breakpoints
   build-depends:
     ecluse:ecluse-core
     , text ^>=2.1

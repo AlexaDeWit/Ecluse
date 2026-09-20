@@ -8,6 +8,7 @@ HTTP preflights reject a wrong response before the measured window starts.
 module Ecluse.BenchLoad.Fixture (
     withProxyOverStubs,
     withProxyConfigured,
+    withExternalProxy,
     longCacheTtl,
     defaultCacheEntries,
     artifactBytes,
@@ -27,7 +28,7 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (Header, Status, status200, status304)
 import Network.HTTP.Types.Header (hETag, hIfNoneMatch)
-import Network.Wai (Application)
+import Network.Wai (Application, Middleware)
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
@@ -56,29 +57,35 @@ withProxyOverStubs ecosystem depsFor knobs ttl maxEntries =
 -- | Boot an empty cache with explicit budgets and telemetry for finite replay.
 withProxyConfigured :: Ecosystem -> (Int -> Int -> IO PackumentDeps) -> LoadKnobs -> CacheConfig -> Telemetry -> Application -> Application -> (Int -> [Text]) -> ([Text] -> IO a) -> IO a
 withProxyConfigured ecosystem depsFor knobs cacheConfig telemetry privateApp publicApp mkMix body = do
+    testWithApplication (pure privateApp) $ \privatePort ->
+        testWithApplication (pure publicApp) $ \publicPort -> do
+            deps <- depsFor privatePort publicPort
+            withExternalProxy ecosystem (const deps) knobs cacheConfig telemetry id (body . mkMix)
+
+-- | Keep the proxy in its own process when the installer and frozen origin run elsewhere.
+withExternalProxy :: Ecosystem -> (Int -> PackumentDeps) -> LoadKnobs -> CacheConfig -> Telemetry -> Middleware -> (Int -> IO a) -> IO a
+withExternalProxy ecosystem depsFor knobs cacheConfig telemetry observe body = do
     capabilities <- getNumCapabilities
     fdLimit <- openFileSoftLimit
     let admissionCapacity = fst (resolveServeAdmission (lkServeMaxInFlight knobs) capabilities)
         privateConnections = fst (resolvePrivateConnections (lkPrivateConnectionsPerHost knobs) fdLimit)
         publicConnections = fst (resolvePublicConnections (lkPublicConnectionsPerHost knobs) fdLimit)
-    testWithApplication (pure privateApp) $ \privatePort ->
-        testWithApplication (pure publicApp) $ \publicPort -> do
-            publicManager <- newManager (connectionPoolSettings publicConnections defaultManagerSettings)
-            privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
-            admission <- newServeAdmission admissionCapacity
-            cache <- newMetadataCache cacheConfig
-            logEnv <- newTestLogEnv
-            heartbeat <- newWorkerHeartbeat
-            -- No worker drains this production-sized queue. At capacity, it sheds new jobs.
-            queue <-
-                newBoundedInMemoryQueue
-                    (defaultMemoryQueueConfig 50_000)
-                    (\n -> putTextLn ("bench serve stack: bounded in-memory mirror queue at cap. Running dropped-job total: " <> show n))
-            env <- newEnvWithAdmission admission queue publicManager privateManager cache logEnv telemetry heartbeat
-            deps <- depsFor privatePort publicPort
-            let cfg = mkServerConfig (maybeToList (mountBindingFor ecosystem deps Nothing))
-            testWithApplication (pure (application cfg env)) $ \proxyPort ->
-                body (mkMix proxyPort)
+    publicManager <- newManager (connectionPoolSettings publicConnections defaultManagerSettings)
+    privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
+    admission <- newServeAdmission admissionCapacity
+    cache <- newMetadataCache cacheConfig
+    logEnv <- newTestLogEnv
+    heartbeat <- newWorkerHeartbeat
+    queue <-
+        newBoundedInMemoryQueue
+            (defaultMemoryQueueConfig 50_000)
+            (\n -> putTextLn ("bench serve stack: bounded mirror queue dropped jobs: " <> show n))
+    env <- newEnvWithAdmission admission queue publicManager privateManager cache logEnv telemetry heartbeat
+    bound <- newEmptyMVar
+    testWithApplication (pure (\request respond -> readMVar bound >>= (\app -> app request respond))) $ \port -> do
+        let cfg = mkServerConfig (maybeToList (mountBindingFor ecosystem (depsFor port) Nothing))
+        putMVar bound (observe (application cfg env))
+        body port
 
 -- | Keep entries alive throughout warm-up and measurement, leaving eviction as the tested axis.
 longCacheTtl :: NominalDiffTime

@@ -155,6 +155,10 @@ tasks:
     desc: Run the throughput and latency load tests
     cmds:
       - '{{.NIX_BENCH}} cabal run -v0 bench-load'
+  cache-breakpoints:
+    desc: Capture or run isolated npm dependency-graph cache experiments
+    cmds:
+      - bash scripts/cache-breakpoints.sh {{.CLI_ARGS}}
   perf-acceptance:
     desc: Run the live performance-acceptance harness
     cmds:

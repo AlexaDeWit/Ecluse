@@ -21,6 +21,7 @@ import System.Environment (getEnvironment, getExecutablePath)
 import System.Process.Typed (proc, readProcessStdout_, setEnv)
 
 import Ecluse.BenchLoad.Error (benchFail)
+import Ecluse.BenchLoad.Graph (runGraph)
 import Ecluse.BenchLoad.Harness (
     LoadKnobs (lkUpstreamLatencyMicros),
     Scenario (scenarioName),
@@ -46,6 +47,7 @@ fixtures = [npmFixture, pypiFixture]
 main :: IO ()
 main =
     getArgs >>= \case
+        "graph" : args -> runGraph args
         [] -> runDriver
         [name] -> runChild (toText name)
         _ -> benchFail "usage: bench-load [<ecosystem>/<scenario-name>]"
