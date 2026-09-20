@@ -340,6 +340,35 @@ The W3C baggage limits cap `OTEL_RESOURCE_ATTRIBUTES` at 8192 bytes in total, 40
 attribute, and 180 attributes. Écluse admits its own identity first, then your attributes in key
 order, and warns once at boot naming every key that did not fit.
 
+### Cache retention and collapsed requests
+
+Use cache outcomes to separate retained data from requests that share an active fetch.
+The request counters use `result=hit|miss|collapsed`:
+
+| Metric | What it counts |
+|---|---|
+| `ecluse.metadata_cache.requests` | Full-document store requests |
+| `ecluse.metadata_cache.version.requests` | Selected-version store requests |
+| `ecluse.metadata_cache.assembled.requests` | Assembled-response store requests |
+| `ecluse.metadata_cache.version.full_hits` | Selected reads answered from a retained full document, including an absent version |
+| `ecluse.metadata_cache.refused` | Fetched values too large to retain, by `store=full|version|assembled` |
+
+A `hit` uses a retained value. A `miss` leads a fetch or render. A `collapsed` request joins
+an existing leader and shares its result, including a failure. A follower that retries after
+leader cancellation keeps its original classification, so one request never counts twice.
+Refusals count fetched values, not followers, and do not evict other entries.
+
+The warm-full shortcut counts only in `version.full_hits`. Failed hybrid probes do not count
+as requests. For selected reads, the denominator is the sum of all `version.requests` results
+plus `version.full_hits`. Retention benefits are version hits plus full hits. Collapsed requests
+measure concurrent work saved separately.
+
+The `ecluse.metadata_cache.resident_bytes`, `ecluse.metadata_cache.version.resident_bytes`,
+and `ecluse.metadata_cache.assembled.resident_bytes` gauges report accounted bytes after insertion,
+eviction, and expiry removal. `ecluse.metadata_cache.entries` reports the full store's entry count.
+Expiry removal happens on access or a retaining insert, not on a background timer. An idle store
+can therefore still report the charge for entries whose TTL elapsed until the next removal.
+
 ### Credential expiry
 
 `ecluse.credential.token.ttl.seconds` reports the shortest remaining lifetime among observed

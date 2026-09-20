@@ -2,15 +2,8 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Test doubles for the core serve-path and worker recording ports
-("Ecluse.Core.Telemetry.Record", "Ecluse.Core.Telemetry.Span").
-
-The core pipeline and the mirror worker record through abstract ports, not a telemetry
-backend. A suite can therefore drive them over inert or recording doubles with no
-OpenTelemetry SDK. This module holds the shared doubles: an inert metrics port, a
-recording metrics port, and a pass-through tracing port. A recording port exposes what
-it captured, so a spec can assert on it. There is one set for the serve path, one for the
-worker, one for the advisory sync task, and one for the advisory compile.
+{- | Inert and recording doubles for the core telemetry ports.
+Tests use these ports without an OpenTelemetry backend.
 -}
 module Ecluse.Test.Port (
     -- * Serve-path ports
@@ -59,6 +52,10 @@ noopMetricsPort =
         , mpUpstreamFetch = \_ _ _ -> pass
         , mpUpstreamFetchError = \_ _ -> pass
         , mpCacheRequest = const pass
+        , mpVersionCacheRequest = const pass
+        , mpAssembledCacheRequest = const pass
+        , mpCacheRefused = const pass
+        , mpVersionCacheFullHit = pass
         , mpCacheEntries = const pass
         , mpCacheResidentBytes = const pass
         , mpVersionCacheResidentBytes = const pass
@@ -78,10 +75,7 @@ recordingMetricsPort = do
     let port = noopMetricsPort{mpServeDecision = \d -> atomically (modifyTVar' seen (<> [d]))}
     pure (port, readTVarIO seen)
 
-{- | A 'MetricsPort' that counts the cross-upstream integrity divergences it receives
-(@ecluse.registry.merge.divergence@), with a reader for the running total. Every other
-field is inert. A spec asserts that the serve path metered a divergence.
--}
+-- | Count merge divergences and discard every other metric.
 recordingDivergenceMetricsPort :: IO (MetricsPort, IO Int)
 recordingDivergenceMetricsPort = do
     seen <- newTVarIO 0
@@ -207,10 +201,7 @@ passthroughAdvisorySyncTracingPort =
         { astpSyncAttemptSpan = \_ _ action -> action
         }
 
-{- | An 'AdvisorySyncTracingPort' that records the ecosystem and projected result of each bracketed
-attempt, with a reader for them in record order. It records __after__ the body returns, as the real
-bracket closes its span, so a spec waiting on the reader also sees the attempt's metrics settled.
--}
+-- | Record each attempt's ecosystem and result after its body returns, when its metrics are settled.
 recordingAdvisorySyncTracingPort :: IO (AdvisorySyncTracingPort, IO [(Ecosystem, AdvisorySyncResult)])
 recordingAdvisorySyncTracingPort = do
     seen <- newTVarIO []

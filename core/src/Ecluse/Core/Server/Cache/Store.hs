@@ -90,81 +90,80 @@ newSingleFlight ttl maxEntries maxBytes weigh = do
             , sfInFlight = inFlight
             }
 
--- | Share a fetch across concurrent misses. Failed and cancelled leaders release their waiters.
+{- | Share concurrent fetches and release waiters on failure or cancellation.
+Occupancy callbacks hold the mutation lock and must not re-enter the store.
+-}
 resolveSingleFlight ::
     (Hashable k, Ord k) =>
-    IO () ->
     (Metric.CacheResult -> IO ()) ->
     (CacheOccupancy -> IO ()) ->
+    IO () ->
     SingleFlight e k v ->
     k ->
     IO (Either e v) ->
     IO (Either e v)
-resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ \restore -> do
-    nowT <- getTime Monotonic
-    -- One atomic decision point under the enclosing 'mask'. A 'Lead' must reach
-    -- 'guardInFlight' with no interruptible point between, or the claimed slot leaks.
-    decision <- atomically (decideSingleFlight sf key nowT)
-    case decision of
-        Hit weighted -> do
-            recordRequest Metric.Hit
-            touch sf weighted
-            pure (Right (wValue weighted))
-        Follow marker -> do
-            recordRequest Metric.Miss
-            outcome <- restore (atomically (readTMVar marker))
-            case outcome of
-                FlightValue fetched -> pure (Right fetched)
-                FlightFault fault -> pure (Left fault)
-                FlightOrphaned err -> case fromException err of
-                    Just (_ :: SomeAsyncException) ->
-                        -- Restore cancellation during retries. Keep the original miss count.
-                        restore (resolveSingleFlight afterClaim (const pass) recordInsert sf key fetch)
-                    -- Preserve synchronous leader faults outside the typed fetch channel.
-                    Nothing -> throwIO err
-        Lead marker -> do
-            -- Mask publication and insertion so cancellation cannot strand followers.
-            (outcome, occupancy) <- guardInFlight id (orphan marker) (atomically deregister) $ do
-                recordRequest Metric.Miss
-                fetched <- restore (afterClaim >> fetch)
-                atomically (putTMVar marker (either FlightFault FlightValue fetched))
-                -- The join collapses "nothing fetched" and "fetched but oversized,
-                -- served uncached" into one no-insert outcome for the telemetry.
-                inserted <- join <$> traverse (insertBounded sf key) (rightToMaybe fetched)
-                pure (fetched, inserted)
-            traverse_ recordInsert occupancy
-            pure outcome
+resolveSingleFlight recordRequest recordOccupancy recordRefused sf key fetch = mask $ \restore ->
+    let resolveAt reportRequest nowT = do
+            decision <- atomically (decideSingleFlight sf key nowT)
+            case decision of
+                Expired -> do
+                    -- Report removal before claiming. A throwing callback must not orphan a leader.
+                    _ <- lookupAfterExpiry recordOccupancy sf key
+                    getTime Monotonic >>= resolveAt reportRequest
+                Hit weighted -> do
+                    reportRequest Metric.Hit
+                    touch sf weighted
+                    pure (Right (wValue weighted))
+                Follow marker -> do
+                    reportRequest Metric.Collapsed
+                    outcome <- restore (atomically (readTMVar marker))
+                    case outcome of
+                        FlightValue fetched -> pure (Right fetched)
+                        FlightFault fault -> pure (Left fault)
+                        FlightOrphaned err -> case fromException err of
+                            Just (_ :: SomeAsyncException) ->
+                                -- A retry keeps the original classification and the outer cancellation mask.
+                                getTime Monotonic >>= resolveAt (const pass)
+                            -- Preserve synchronous leader faults outside the typed fetch channel.
+                            Nothing -> throwIO err
+                Lead marker ->
+                    guardInFlight id (orphan marker) (atomically deregister) $ do
+                        reportRequest Metric.Miss
+                        fetched <- restore fetch
+                        atomically (putTMVar marker (either FlightFault FlightValue fetched))
+                        traverse_ (insertBounded recordOccupancy recordRefused sf key) (rightToMaybe fetched)
+                        pure fetched
+     in getTime Monotonic >>= resolveAt recordRequest
   where
     deregister :: STM ()
     deregister = do
         inFlight <- readTVar (sfInFlight sf)
         writeTVar (sfInFlight sf) (Map.delete key inFlight)
 
-insertBounded :: (Hashable k) => SingleFlight e k v -> k -> v -> IO (Maybe CacheOccupancy)
-insertBounded sf key value
-    | weight == maxBound || weight > sfMaxBytes sf = pure Nothing
+insertBounded :: (Hashable k) => (CacheOccupancy -> IO ()) -> IO () -> SingleFlight e k v -> k -> v -> IO ()
+insertBounded recordOccupancy recordRefused sf key value
+    | weight == maxBound || weight > sfMaxBytes sf = recordRefused
     | otherwise = withMVar (sfInsertLock sf) $ \() -> do
         nowT <- getTime Monotonic
-        atomically $ do
+        observeOccupancy recordOccupancy sf $ atomically $ do
             purgeExpired sf nowT
             deleteStored sf key
-        evictToBudget sf weight
+        evictToBudget recordOccupancy sf weight
         stamp <- nextStamp sf
         stampRef <- newIORef stamp
         insertedAt <- getTime Monotonic
         let expires = insertedAt + sfTTL sf
             weighted = Weighted{wValue = value, wWeight = weight, wStamp = stampRef, wExpires = expires}
-        atomically $ do
+        observeOccupancy recordOccupancy sf $ atomically $ do
             Cache.insertSTM key weighted (sfStore sf) Nothing
             modifyTVar' (sfExpiry sf) (Map.insertWith HashMap.union expires (HashMap.singleton key weight))
             modifyTVar' (sfOccupancy sf) $ \occ ->
                 CacheOccupancy (occEntries occ + 1) (occBytes occ + weight)
-            Just <$> readTVar (sfOccupancy sf)
   where
     weight = sfWeigh sf value
 
-evictToBudget :: (Hashable k) => SingleFlight e k v -> Int -> IO ()
-evictToBudget sf incoming = do
+evictToBudget :: (Hashable k) => (CacheOccupancy -> IO ()) -> SingleFlight e k v -> Int -> IO ()
+evictToBudget recordOccupancy sf incoming = do
     occupancy <- readTVarIO (sfOccupancy sf)
     unless (fits occupancy) $ do
         held <- Cache.toList (sfStore sf)
@@ -179,7 +178,7 @@ evictToBudget sf incoming = do
 
     go [] = pass
     go ((_, k) : rest) = do
-        removed <- atomically $ do
+        removed <- observeOccupancy recordOccupancy sf $ atomically $ do
             occ <- readTVar (sfOccupancy sf)
             if fits occ
                 then pure False
@@ -224,41 +223,57 @@ nextStamp sf = atomicModifyIORef' (sfClock sf) (\n -> let n' = n + 1 in (n', n')
 touch :: SingleFlight e k v -> Weighted v -> IO ()
 touch sf weighted = nextStamp sf >>= writeIORef (wStamp weighted)
 
--- | Read without fetching or refreshing recency.
-lookupStore :: (Hashable k) => SingleFlight e k v -> k -> IO (Maybe v)
-lookupStore sf key = fmap wValue <$> lookupWeighted sf key
+-- | Read without fetching or refreshing recency, reporting any expired entry's removal.
+lookupStore :: (Hashable k) => (CacheOccupancy -> IO ()) -> SingleFlight e k v -> k -> IO (Maybe v)
+lookupStore recordOccupancy sf key = fmap wValue <$> lookupWeighted recordOccupancy sf key
 
--- | Read without fetching and refresh recency on a hit.
-lookupStoreTouching :: (Hashable k) => SingleFlight e k v -> k -> IO (Maybe v)
-lookupStoreTouching sf key =
-    lookupWeighted sf key >>= traverse (\weighted -> wValue weighted <$ touch sf weighted)
+-- | Read without fetching and refresh recency on a hit, reporting expiry removals.
+lookupStoreTouching :: (Hashable k) => (CacheOccupancy -> IO ()) -> SingleFlight e k v -> k -> IO (Maybe v)
+lookupStoreTouching recordOccupancy sf key =
+    lookupWeighted recordOccupancy sf key >>= traverse (\weighted -> wValue weighted <$ touch sf weighted)
 
-lookupWeighted :: (Hashable k) => SingleFlight e k v -> k -> IO (Maybe (Weighted v))
-lookupWeighted sf key = do
+lookupWeighted :: (Hashable k) => (CacheOccupancy -> IO ()) -> SingleFlight e k v -> k -> IO (Maybe (Weighted v))
+lookupWeighted recordOccupancy sf key = do
     nowT <- getTime Monotonic
-    atomically (lookupWeightedSTM True sf key nowT)
+    held <- atomically (Cache.lookupSTM False key (sfStore sf) nowT)
+    case held of
+        Just weighted | wExpires weighted < nowT -> lookupAfterExpiry recordOccupancy sf key
+        _ -> pure held
 
-lookupWeightedSTM :: (Hashable k) => Bool -> SingleFlight e k v -> k -> TimeSpec -> STM (Maybe (Weighted v))
-lookupWeightedSTM eager sf key nowT = do
+lookupAfterExpiry :: (Hashable k) => (CacheOccupancy -> IO ()) -> SingleFlight e k v -> k -> IO (Maybe (Weighted v))
+lookupAfterExpiry recordOccupancy sf key = withMVar (sfInsertLock sf) $ \() -> do
+    nowT <- getTime Monotonic
+    observeOccupancy recordOccupancy sf (atomically (lookupWeightedSTM sf key nowT))
+
+-- All mutations and their absolute gauge updates hold sfInsertLock, so samples cannot reorder.
+observeOccupancy :: (CacheOccupancy -> IO ()) -> SingleFlight e k v -> IO a -> IO a
+observeOccupancy recordOccupancy sf action = do
+    before <- readTVarIO (sfOccupancy sf)
+    result <- action
+    after <- readTVarIO (sfOccupancy sf)
+    when (before /= after) (recordOccupancy after)
+    pure result
+
+lookupWeightedSTM :: (Hashable k) => SingleFlight e k v -> k -> TimeSpec -> STM (Maybe (Weighted v))
+lookupWeightedSTM sf key nowT = do
     held <- Cache.lookupSTM False key (sfStore sf) nowT
     case held of
-        Just weighted | wExpires weighted < nowT -> do
-            when eager (deleteStored sf key)
-            pure Nothing
+        Just weighted | wExpires weighted < nowT -> deleteStored sf key $> Nothing
         _ -> pure held
 
 -- A hit carries the weighted entry, so the caller can bump its recency without a second read.
 data Decision e v
-    = Hit (Weighted v)
+    = Expired
+    | Hit (Weighted v)
     | Follow (TMVar (FlightOutcome e v))
     | Lead (TMVar (FlightOutcome e v))
 
--- The one atomic resolve decision for a key: a fresh hit wins, else follow the key's
--- in-flight fetch, else install a marker and lead. Runs inside 'resolveSingleFlight''s mask.
+-- Expired entries claim nothing. New claims stay masked until guardInFlight owns them.
 decideSingleFlight :: (Hashable k, Ord k) => SingleFlight e k v -> k -> TimeSpec -> STM (Decision e v)
 decideSingleFlight sf key nowT = do
-    hit <- lookupWeightedSTM False sf key nowT
-    case hit of
+    held <- Cache.lookupSTM False key (sfStore sf) nowT
+    case held of
+        Just weighted | wExpires weighted < nowT -> pure Expired
         Just weighted -> pure (Hit weighted)
         Nothing -> do
             inFlight <- readTVar (sfInFlight sf)
@@ -277,13 +292,12 @@ orphan marker err =
         unfilled <- isEmptyTMVar marker
         when unfilled (putTMVar marker (FlightOrphaned err))
 
--- | Entry count and summed accounted bytes after a retaining insert.
+-- | Entry count and summed accounted bytes after a store mutation.
 data CacheOccupancy = CacheOccupancy
     { occEntries :: Int
     , occBytes :: Int
     }
+    deriving stock (Eq, Show)
 
--- Convert a 'NominalDiffTime' (seconds) to the @cache@ library's monotonic
--- 'TimeSpec' via 'fromNanoSecs', clamping a negative TTL to zero.
 toTimeSpec :: NominalDiffTime -> TimeSpec
 toTimeSpec ttl = fromNanoSecs (max 0 (round (realToFrac ttl * 1e9 :: Double) :: Integer))

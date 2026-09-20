@@ -76,7 +76,7 @@ import Ecluse.Test.Maintenance (
     servedVersions,
  )
 import Ecluse.Test.Package (hexSha1Of, leftpadName, npmVersion, sampleDetails, sampleManifest, sriSha256Of, sriSha512Of, unsafeFilename)
-import Ecluse.Test.Port (passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
+import Ecluse.Test.Port (noopMetricsPort, passthroughTracingPort, recordingDivergenceMetricsPort, recordingMetricsPort)
 import Ecluse.Test.Queue (newTestMemoryQueue)
 import Ecluse.Test.Registry.Npm (VersionSpec (..), packumentValue, versionSpec, versionValue)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, blockedBy, inertRuleDeps, isUndecidable)
@@ -461,7 +461,7 @@ sharedCacheSpec = describe "the shared metadata cache across the two origins" $
 
 -- Whether the shared cache holds a full-document entry under an origin's own key.
 cachedUnder :: ServeRuntime -> RegistryUrl -> IO Bool
-cachedUnder rt baseUrl = isJust <$> cachedMetadata (srMetadataCache rt) (Source (registryUrlText baseUrl)) leftpadName
+cachedUnder rt baseUrl = isJust <$> cachedMetadata noopMetricsPort (srMetadataCache rt) (Source (registryUrlText baseUrl)) leftpadName
 
 withConflictOrigins :: Application -> Application -> (ServeRuntime -> PackumentDeps -> IO Int -> IORef Int -> IO ()) -> IO ()
 withConflictOrigins public private action = do

@@ -36,6 +36,7 @@ import Ecluse.Core.Server.Cache (
  )
 import Ecluse.Core.Server.Cache qualified as Cache
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Package (npmVersion, pypiVersion, sampleArtifact, sampleDetails, thingName, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort)
@@ -172,7 +173,7 @@ spec = do
                 (port, readResidency) <- recordingVersionResidencyPort
                 c <- newMetadataCache (configBytes 60 100 accounted)
                 Cache.resolveVersion port c publicSource pypiName (pypiVersion "1") (pure (Right release)) `shouldReturn` Right release
-                Cache.cachedVersion c publicSource pypiName (pypiVersion "1") `shouldReturn` Just release
+                Cache.cachedVersion noopMetricsPort c publicSource pypiName (pypiVersion "1") `shouldReturn` Just release
                 readResidency `shouldReturn` Just accounted
 
         it "serves an oversized selected release without evicting the cached absence" $ do
@@ -184,8 +185,8 @@ spec = do
             c <- newMetadataCache (configBytes 60 100 16384)
             _ <- Cache.resolveVersion port c publicSource pypiName absentVersion (pure (Right (untaggedRead Nothing)))
             replicateM_ 2 $ Cache.resolveVersion port c publicSource pypiName (pypiVersion "1") fetch `shouldReturn` Right release
-            Cache.cachedVersion c publicSource pypiName (pypiVersion "1") `shouldReturn` Nothing
-            Cache.cachedVersion c publicSource pypiName absentVersion `shouldReturn` Just (untaggedRead Nothing)
+            Cache.cachedVersion noopMetricsPort c publicSource pypiName (pypiVersion "1") `shouldReturn` Nothing
+            Cache.cachedVersion noopMetricsPort c publicSource pypiName absentVersion `shouldReturn` Just (untaggedRead Nothing)
             readIORef calls `shouldReturn` 2
             readResidency `shouldReturn` Just 1024
 
@@ -220,12 +221,12 @@ spec = do
         it "exposes a cached entry through cachedMetadata after a resolution" $ do
             c <- freshCache
             _ <- resolveMetadata c publicSource (unscopedNpm "react") (pure (entry (unscopedNpm "react") "raw"))
-            cached <- cachedMetadata c publicSource (unscopedNpm "react")
+            cached <- cachedMetadata noopMetricsPort c publicSource (unscopedNpm "react")
             (infoName . entryInfo <$> cached) `shouldBe` Just (unscopedNpm "react")
 
         it "reports a miss through cachedMetadata before any resolution" $ do
             c <- freshCache
-            cachedMetadata c publicSource (unscopedNpm "never-fetched") `shouldReturn` Nothing
+            cachedMetadata noopMetricsPort c publicSource (unscopedNpm "never-fetched") `shouldReturn` Nothing
 
         it "re-fetches after a failed fetch rather than caching the failure" $ do
             c <- freshCache
@@ -242,8 +243,8 @@ spec = do
             c <- freshCache
             _ <- resolveMetadata c privateSource (unscopedNpm "shared") (pure (entry (unscopedNpm "shared") "private-doc"))
             _ <- resolveMetadata c publicSource (unscopedNpm "shared") (pure (entry (unscopedNpm "shared") "public-doc"))
-            priv <- cachedMetadata c privateSource (unscopedNpm "shared")
-            pub <- cachedMetadata c publicSource (unscopedNpm "shared")
+            priv <- cachedMetadata noopMetricsPort c privateSource (unscopedNpm "shared")
+            pub <- cachedMetadata noopMetricsPort c publicSource (unscopedNpm "shared")
             (entryRaw <$> priv) `shouldBe` Just (cachedRaw "private-doc")
             (entryRaw <$> pub) `shouldBe` Just (cachedRaw "public-doc")
 
@@ -261,7 +262,7 @@ spec = do
             _ <- resolveMetadata c privateSource (unscopedNpm "iso") (countingFetch calls (unscopedNpm "iso") "priv")
 
             _ <- resolveMetadata c publicSource (unscopedNpm "iso") (countingFetch calls (unscopedNpm "iso") "pub")
-            cachedMetadata c publicSource (unscopedNpm "iso") >>= \pub ->
+            cachedMetadata noopMetricsPort c publicSource (unscopedNpm "iso") >>= \pub ->
                 (entryRaw <$> pub) `shouldBe` Just (cachedRaw "pub")
             readIORef calls `shouldReturn` 2
 
@@ -331,6 +332,71 @@ spec = do
             _ <- resolveAssembled c "\"tag-a\"" (countingRender renders (mkBytes bigBytes 'a'))
             readIORef renders `shouldReturn` 3
 
+    describe "per-store telemetry" $ do
+        it "records misses and retained hits independently for all three stores" $ do
+            full <- newIORef []
+            version <- newIORef []
+            assembled <- newIORef []
+            let port =
+                    noopMetricsPort
+                        { mpCacheRequest = \r -> modifyIORef' full (r :)
+                        , mpVersionCacheRequest = \r -> modifyIORef' version (r :)
+                        , mpAssembledCacheRequest = \r -> modifyIORef' assembled (r :)
+                        }
+                name = unscopedNpm "observed"
+            c <- newMetadataCache (config 60 8)
+            replicateM_ 2 $ do
+                _ <- Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
+                _ <- Cache.resolveVersion port c publicSource name v1_0_0 (pure (Right (untaggedRead Nothing)))
+                Cache.resolveAssembled port c "assembled" (pure "raw")
+            for_ [full, version, assembled] $ \seen ->
+                readIORef seen `shouldReturn` [Metric.Hit, Metric.Miss]
+
+        it "attributes oversized non-retention to the store that refused it" $ do
+            refused <- newIORef []
+            let port = noopMetricsPort{mpCacheRefused = \store -> modifyIORef' refused (store :)}
+                name = unscopedNpm "oversized"
+            c <- newMetadataCache (configBytes 60 8 1)
+            replicateM_ 2 $ do
+                Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
+                    `shouldReturn` Right (entry name "raw")
+                Cache.resolveVersion port c publicSource name v1_0_0 (pure (Right (untaggedRead Nothing)))
+                    `shouldReturn` Right (untaggedRead Nothing)
+                Cache.resolveAssembled port c "assembled" (pure "raw") `shouldReturn` "raw"
+            readIORef refused `shouldReturn` concat (replicate 2 [Metric.AssembledStore, Metric.VersionStore, Metric.FullStore])
+
+        it "reports assembled expiry before retaining a replacement" $ do
+            seen <- newIORef []
+            let port = noopMetricsPort{mpAssembledCacheResidentBytes = \bytes -> modifyIORef' seen (bytes :)}
+            c <- newMetadataCache (config 0 8)
+            Cache.resolveAssembled port c "expired" (pure "raw") `shouldReturn` "raw"
+            weight <- sum <$> readIORef seen
+            weight `shouldSatisfy` (> 0)
+            threadDelay 1000
+            Cache.resolveAssembled port c "expired" (pure "new") `shouldReturn` "new"
+            readIORef seen `shouldReturn` [weight, 0, weight]
+
+        it "drops the full and version byte gauges when a probe removes an expired entry" $ do
+            full <- newIORef 0
+            version <- newIORef 0
+            entries <- newIORef 0
+            let port =
+                    noopMetricsPort
+                        { mpCacheResidentBytes = writeIORef full
+                        , mpVersionCacheResidentBytes = writeIORef version
+                        , mpCacheEntries = writeIORef entries
+                        }
+                name = unscopedNpm "expired"
+            c <- newMetadataCache (config 0 8)
+            _ <- Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
+            _ <- Cache.resolveVersion port c publicSource name v1_0_0 (pure (Right (untaggedRead Nothing)))
+            readIORef full >>= (`shouldSatisfy` (> 0))
+            readIORef version >>= (`shouldSatisfy` (> 0))
+            threadDelay 1000
+            Cache.cachedMetadata port c publicSource name `shouldReturn` Nothing
+            Cache.cachedVersion port c publicSource name v1_0_0 `shouldReturn` Nothing
+            traverse readIORef [full, version, entries] `shouldReturn` [0, 0, 0]
+
     describe "the named sub-budgets" $ do
         it "a version-store flood evicts only version entries; the full store stays resident" $ do
             c <-
@@ -346,9 +412,9 @@ spec = do
             for_ ([1 .. 5] :: [Int]) $ \i ->
                 Cache.resolveVersion noopMetricsPort c publicSource name (npmVersion (show i <> ".0.0")) (pure (Right (untaggedRead Nothing)))
 
-            Cache.cachedVersion c publicSource name (npmVersion "1.0.0") `shouldReturn` Nothing
+            Cache.cachedVersion noopMetricsPort c publicSource name (npmVersion "1.0.0") `shouldReturn` Nothing
 
-            found <- cachedMetadata c publicSource name
+            found <- cachedMetadata noopMetricsPort c publicSource name
             found `shouldSatisfy` isJust
 
         it "keeps the summed residency of all three stores within the summed sub-budgets" $ do
@@ -396,9 +462,9 @@ spec = do
             _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 1) (pure (Right (untaggedRead Nothing)))
             _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 2) (pure (Right (untaggedRead Nothing)))
 
-            _ <- Cache.cachedVersion c publicSource name (v 1)
+            _ <- Cache.cachedVersion noopMetricsPort c publicSource name (v 1)
 
             _ <- Cache.resolveVersion noopMetricsPort c publicSource name (v 3) (pure (Right (untaggedRead Nothing)))
 
-            Cache.cachedVersion c publicSource name (v 1) `shouldReturn` Just (untaggedRead Nothing)
-            Cache.cachedVersion c publicSource name (v 2) `shouldReturn` Nothing
+            Cache.cachedVersion noopMetricsPort c publicSource name (v 1) `shouldReturn` Just (untaggedRead Nothing)
+            Cache.cachedVersion noopMetricsPort c publicSource name (v 2) `shouldReturn` Nothing

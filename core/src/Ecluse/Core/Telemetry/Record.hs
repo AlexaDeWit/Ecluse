@@ -34,6 +34,7 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisoryDropCause,
     AdvisorySyncResult,
     CacheResult,
+    CacheStore,
     Cause,
     Decision,
     MirrorResult,
@@ -80,7 +81,15 @@ data MetricsPort = MetricsPort
     , mpUpstreamFetchError :: Upstream -> Cause -> IO ()
     -- ^ Record one upstream metadata-fetch error (@ecluse.upstream.fetch.errors@).
     , mpCacheRequest :: CacheResult -> IO ()
-    -- ^ Record one metadata-cache lookup (@ecluse.metadata_cache.requests@) as a hit or a miss.
+    -- ^ Full-store requests (@ecluse.metadata_cache.requests@), excluding selective-read shortcuts.
+    , mpVersionCacheRequest :: CacheResult -> IO ()
+    -- ^ Selected-version requests (@ecluse.metadata_cache.version.requests@).
+    , mpAssembledCacheRequest :: CacheResult -> IO ()
+    -- ^ Assembled-response requests (@ecluse.metadata_cache.assembled.requests@).
+    , mpCacheRefused :: CacheStore -> IO ()
+    -- ^ Oversized values served without retention (@ecluse.metadata_cache.refused@).
+    , mpVersionCacheFullHit :: IO ()
+    -- ^ Selective reads served by full-store retention (@ecluse.metadata_cache.version.full_hits@).
     , mpCacheEntries :: Int -> IO ()
     -- ^ Record the metadata cache's current occupancy (@ecluse.metadata_cache.entries@).
     , mpCacheResidentBytes :: Int -> IO ()

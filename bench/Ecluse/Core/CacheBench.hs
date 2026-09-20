@@ -41,4 +41,4 @@ churn store nextRange capacity = do
 
 resolveKey :: SingleFlight () Int Int -> Int -> IO ()
 resolveKey store key =
-    void (resolveSingleFlight (pure ()) (const pass) (const pass) store key (pure (Right key)))
+    void (resolveSingleFlight (const pass) (const pass) pass store key (pure (Right key)))

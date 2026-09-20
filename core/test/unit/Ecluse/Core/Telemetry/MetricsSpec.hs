@@ -18,6 +18,7 @@ import Ecluse.Core.Telemetry.Metrics (
     AdvisorySyncResult (AdvisoryFetchFailed, AdvisorySwapped),
     BreakerState (Closed, HalfOpen, Open),
     CacheResult (..),
+    CacheStore (..),
     CredentialResult (..),
     Decision (..),
     Label (..),
@@ -33,10 +34,6 @@ import Ecluse.Core.Telemetry.Metrics (
  )
 import Ecluse.Test.Metrics (allLabelKeys, highCardinalityKeys)
 
-{- | Tests the bounded-label discipline. The crux is the cardinality guard: package, version,
-scope, and message must never become metric labels. The instrument catalogue's own names are
-tested in "Ecluse.Core.Telemetry.CatalogueSpec".
--}
 spec :: Spec
 spec = do
     labelKeySpec
@@ -60,6 +57,7 @@ labelKeySpec = describe "label keys (the cardinality guard)" $ do
                               , "cause"
                               , "source"
                               , "tier"
+                              , "store"
                               ]
 
     it "REJECTS high-cardinality identifiers as labels (the crux)" $
@@ -98,6 +96,12 @@ boundedDomainSpec = describe "bounded label value domains" $ do
 
 renderSpec :: Spec
 renderSpec = describe "renderLabel" $ do
+    it "keeps cache outcomes and refusal stores distinct on the wire" $ do
+        map (renderLabel . LCacheResult) [Hit, Miss, Collapsed]
+            `shouldBe` [("result", "hit"), ("result", "miss"), ("result", "collapsed")]
+        map (renderLabel . LCacheStore) [FullStore, VersionStore, AssembledStore]
+            `shouldBe` [("store", "full"), ("store", "version"), ("store", "assembled")]
+
     it "renders the serve decision to admit/deny/unavailable" $ do
         renderLabel (LDecision Admit) `shouldBe` ("decision", "admit")
         renderLabel (LDecision Deny) `shouldBe` ("decision", "deny")
@@ -145,6 +149,7 @@ allBoundedLabels =
         , LUpstream <$> universe
         , LStatusClass <$> universe
         , LCacheResult <$> universe
+        , LCacheStore <$> universe
         , LMirrorResult <$> universe
         , LSweepTarget <$> universe
         , LCredentialResult <$> universe

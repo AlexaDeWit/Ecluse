@@ -47,7 +47,7 @@ import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache)
 import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, selectVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (mpUpstreamFetchError))
+import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetchError, mpVersionCacheFullHit, mpVersionCacheRequest))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Package (npmVersion, unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
@@ -64,6 +64,50 @@ spec = do
         perCaller = perCallerOrigin defaultLimits manager stubUrl Nothing
 
     describe "publicMetadataClient -- single-version hybrid topology" $ do
+        it "counts the warm-full shortcut separately from ordinary full-store requests" $ do
+            full <- newIORef []
+            version <- newIORef []
+            shortcuts <- newIORef (0 :: Int)
+            calls <- newIORef (0 :: Int)
+            cache <- newMetadataCache defaultCacheConfig
+            let info = manifest name ["1.0.0"]
+                port =
+                    noopMetricsPort
+                        { mpCacheRequest = \r -> modifyIORef' full (r :)
+                        , mpVersionCacheRequest = \r -> modifyIORef' version (r :)
+                        , mpVersionCacheFullHit = modifyIORef' shortcuts (+ 1)
+                        }
+                observedReads = newMetadataReads port noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) selectNpmVersionDoc anonymous
+                client = publicMetadataClient cache source observedReads
+            _ <- fetchFullManifest client name
+            _ <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            _ <- fetchVersionMetadata client name (npmVersion "9.0.0")
+            readIORef full `shouldReturn` [Metric.Miss]
+            readIORef version `shouldReturn` []
+            readIORef shortcuts `shouldReturn` 2
+            readIORef calls `shouldReturn` 1
+
+        it "counts one version-store outcome per cold or retained selected read" $ do
+            full <- newIORef []
+            version <- newIORef []
+            shortcuts <- newIORef (0 :: Int)
+            calls <- newIORef (0 :: Int)
+            cache <- newMetadataCache defaultCacheConfig
+            let info = manifest name ["1.0.0"]
+                port =
+                    noopMetricsPort
+                        { mpCacheRequest = \r -> modifyIORef' full (r :)
+                        , mpVersionCacheRequest = \r -> modifyIORef' version (r :)
+                        , mpVersionCacheFullHit = modifyIORef' shortcuts (+ 1)
+                        }
+                observedReads = newMetadataReads port noLog noInvalidLog noFetchLog (const (countingFull calls info)) (const (countingVersion calls info)) selectNpmVersionDoc anonymous
+                client = publicMetadataClient cache source observedReads
+            replicateM_ 2 (fetchVersionMetadata client name (npmVersion "1.0.0"))
+            readIORef full `shouldReturn` []
+            readIORef version `shouldReturn` [Metric.Hit, Metric.Miss]
+            readIORef shortcuts `shouldReturn` 0
+            readIORef calls `shouldReturn` 1
+
         it "reuses the warm full-packument cache: a GET then its version select is one upstream call" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
@@ -111,7 +155,7 @@ spec = do
             readIORef calls `shouldReturn` 1
             -- The cold single-version path stays isolated on writes: it never populated the
             -- shared full-packument cache (only the version cache).
-            cachedMetadata cache source name `shouldReturn` Nothing
+            cachedMetadata noopMetricsPort cache source name `shouldReturn` Nothing
 
         it "re-serves the cold pair whole from the version cache: the selected raw object, no re-fetch" $ do
             calls <- newIORef (0 :: Int)
@@ -232,7 +276,7 @@ spec = do
                 recovered = countingFull calls info
             first' <- fetchFullManifest (publicClient anonymous cache outage (failingVersion calls)) name
             isUnreachable first' `shouldBe` True
-            cachedMetadata cache source name `shouldReturn` Nothing
+            cachedMetadata noopMetricsPort cache source name `shouldReturn` Nothing
             second' <- fetchFullManifest (publicClient anonymous cache recovered (failingVersion calls)) name
             fmap (infoName . manifestInfo) second' `shouldBe` Right name
             readIORef calls `shouldReturn` 2

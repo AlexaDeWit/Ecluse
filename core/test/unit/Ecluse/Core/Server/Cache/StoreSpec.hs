@@ -7,7 +7,7 @@ Weights exercise admission without allocating the reported byte counts.
 -}
 module Ecluse.Core.Server.Cache.StoreSpec (spec) where
 
-import Control.Exception (throw)
+import Control.Exception (getMaskingState, throw)
 import Data.Time (NominalDiffTime)
 import Test.Hspec
 import UnliftIO (async, cancel, concurrently, concurrently_, mapConcurrently, timeout, wait, withAsync)
@@ -17,11 +17,10 @@ import UnliftIO.Exception (throwIO, try)
 import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
     SingleFlight,
-    lookupStore,
-    lookupStoreTouching,
     newSingleFlight,
     resolveSingleFlight,
  )
+import Ecluse.Core.Server.Cache.Store qualified as Store
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 
 data StoreFault = StoreFault
@@ -47,14 +46,14 @@ roomyStore :: IO (SingleFlight StoreFault Text Text)
 roomyStore = newStore 60 100 (100 * flatWeight)
 
 resolve :: SingleFlight StoreFault Text Text -> Text -> IO (Either StoreFault Text) -> IO (Either StoreFault Text)
-resolve = resolveSingleFlight (pure ()) (const pass) (const pass)
+resolve = resolveSingleFlight (const pass) (const pass) pass
 
 resolveWith :: IO () -> SingleFlight StoreFault Text Text -> Text -> IO (Either StoreFault Text) -> IO (Either StoreFault Text)
-resolveWith afterClaim = resolveSingleFlight afterClaim (const pass) (const pass)
+resolveWith afterClaim sf key fetch = resolveSingleFlight (const pass) (const pass) pass sf key (afterClaim >> fetch)
 
 resolveWithRequests :: IORef [Metric.CacheResult] -> IO () -> SingleFlight StoreFault Text Text -> Text -> IO (Either StoreFault Text) -> IO (Either StoreFault Text)
-resolveWithRequests seen afterClaim =
-    resolveSingleFlight afterClaim (\r -> atomicModifyIORef' seen (\rs -> (r : rs, ()))) (const pass)
+resolveWithRequests seen afterClaim sf key fetch =
+    resolveSingleFlight (\r -> atomicModifyIORef' seen (\rs -> (r : rs, ()))) (const pass) pass sf key (afterClaim >> fetch)
 
 resolveOk :: SingleFlight StoreFault Text Text -> Text -> IO Text -> IO Text
 resolveOk sf key fetch = either (throwIO . UnexpectedFault) pure =<< resolve sf key (Right <$> fetch)
@@ -62,12 +61,18 @@ resolveOk sf key fetch = either (throwIO . UnexpectedFault) pure =<< resolve sf 
 resolveOkRecording :: IORef (Maybe CacheOccupancy) -> SingleFlight StoreFault Text Text -> Text -> IO Text -> IO Text
 resolveOkRecording seen sf key fetch =
     either (throwIO . UnexpectedFault) pure
-        =<< resolveSingleFlight (pure ()) (const pass) (writeIORef seen . Just) sf key (Right <$> fetch)
+        =<< resolveSingleFlight (const pass) (writeIORef seen . Just) pass sf key (Right <$> fetch)
 
 resolveOkAccumulating :: IORef [CacheOccupancy] -> SingleFlight StoreFault Text Text -> Text -> IO Text -> IO Text
 resolveOkAccumulating seen sf key fetch =
     either (throwIO . UnexpectedFault) pure
-        =<< resolveSingleFlight (pure ()) (const pass) (\occ -> atomicModifyIORef' seen (\os -> (occ : os, ()))) sf key (Right <$> fetch)
+        =<< resolveSingleFlight (const pass) (\occ -> atomicModifyIORef' seen (\os -> (occ : os, ()))) pass sf key (Right <$> fetch)
+
+lookupStore :: SingleFlight StoreFault Text Text -> Text -> IO (Maybe Text)
+lookupStore = Store.lookupStore (const pass)
+
+lookupStoreTouching :: SingleFlight StoreFault Text Text -> Text -> IO (Maybe Text)
+lookupStoreTouching = Store.lookupStoreTouching (const pass)
 
 countingFetch :: IORef Int -> Text -> IO Text
 countingFetch calls value = atomicModifyIORef' calls (\n -> (n + 1, ())) $> value
@@ -96,6 +101,33 @@ spec = do
                     )
             results `shouldBe` replicate 8 ("raw" :: Text)
             readIORef calls `shouldReturn` 1
+
+        for_ [(flatWeight, Metric.Hit, 0), (flatWeight - 1, Metric.Miss, 1)] $ \(budget, nextResult, refusalCount) ->
+            it ("counts collapsed work once with byte budget " <> show budget) $ do
+                result <- timeout 5_000_000 $ do
+                    sf <- newStore 60 2 budget
+                    seen <- newIORef []
+                    refused <- newIORef (0 :: Int)
+                    started <- newEmptyMVar
+                    joined <- newEmptyMVar
+                    release <- newEmptyMVar
+                    let recordRequest request = do
+                            atomicModifyIORef' seen (\requests -> (request : requests, ()))
+                            when (request == Metric.Collapsed) (putMVar joined ())
+                        fetch = putMVar started () >> takeMVar release $> Right "raw"
+                        run = resolveSingleFlight recordRequest (const pass) (modifyIORef' refused (+ 1)) sf "shared"
+                    withAsync (run fetch) $ \leader -> do
+                        takeMVar started
+                        withAsync (run fetch) $ \follower -> do
+                            takeMVar joined
+                            putMVar release ()
+                            wait leader `shouldReturn` Right "raw"
+                            wait follower `shouldReturn` Right "raw"
+                    readIORef refused `shouldReturn` refusalCount
+                    run (pure (Right "raw")) `shouldReturn` Right "raw"
+                    readIORef refused `shouldReturn` (2 * refusalCount)
+                    readIORef seen `shouldReturn` [nextResult, Metric.Collapsed, Metric.Miss]
+                result `shouldBe` Just ()
 
         it "has the value in the store the instant the leader's fetch returns" $ do
             sf <- roomyStore
@@ -170,7 +202,7 @@ spec = do
                         -- A callback fault must propagate through the exception channel.
                         throwIO LeaderEscaped
                     resolveReporting callback =
-                        resolveSingleFlight (pure ()) callback (const pass) sf "reporter" fetch
+                        resolveSingleFlight callback (const pass) pass sf "reporter" fetch
                 withAsync (try (resolveReporting leaderRequest)) $ \leader -> do
                     takeMVar leaderReported
                     withAsync (try (resolveReporting (reportRequest followerReported))) $ \follower -> do
@@ -178,12 +210,12 @@ spec = do
                         wait follower `shouldReturn` Left LeaderEscaped
                 lookupStore sf "reporter" `shouldReturn` Nothing
                 readIORef calls `shouldReturn` 0
-                readIORef seen `shouldReturn` [Metric.Miss, Metric.Miss]
+                readIORef seen `shouldReturn` [Metric.Collapsed, Metric.Miss]
                 resolveWithRequests seen (pure ()) sf "reporter" fetch `shouldReturn` Right "raw"
                 resolveWithRequests seen (pure ()) sf "reporter" fetch `shouldReturn` Right "raw"
                 lookupStore sf "reporter" `shouldReturn` Just "raw"
                 readIORef calls `shouldReturn` 1
-                readIORef seen `shouldReturn` [Metric.Hit, Metric.Miss, Metric.Miss, Metric.Miss]
+                readIORef seen `shouldReturn` [Metric.Hit, Metric.Miss, Metric.Collapsed, Metric.Miss]
             result `shouldBe` Just ()
 
     describe "resolveSingleFlight -- single-flight orphan window" $ do
@@ -234,15 +266,19 @@ spec = do
                 Just (recovered, n) -> do
                     recovered `shouldBe` "raw"
                     n `shouldBe` 2 -- the cancelled fetch and the recovering re-lead, no caching of the failure
-        it "counts one miss per logical resolution even when a cancelled leader forces the follower to re-resolve" $ do
+        it "keeps one outcome per request when a cancelled leader forces a follower to retry" $ do
             result <- timeout 5_000_000 $ do
                 sf <- roomyStore
                 seen <- newIORef []
                 calls <- newIORef (0 :: Int)
                 reached <- newEmptyMVar
+                joined <- newEmptyMVar
                 release <- newEmptyMVar
                 armed <- newIORef True -- only the first (cancelled) leader parks
                 let fetch = Right <$> countingFetch calls "raw"
+                    followerRequest request = do
+                        atomicModifyIORef' seen (\requests -> (request : requests, ()))
+                        putMVar joined ()
                     afterClaim = do
                         wasArmed <- atomicModifyIORef' armed (False,)
                         when wasArmed $ do
@@ -250,8 +286,8 @@ spec = do
                             takeMVar release -- block interruptibly so the cancel lands here
                 leader <- async (resolveWithRequests seen afterClaim sf "wedge" fetch)
                 takeMVar reached
-                follower <- async (try (resolveWithRequests seen (pure ()) sf "wedge" fetch) :: IO (Either SomeException (Either StoreFault Text)))
-                threadDelay 30000 -- give the follower time to register on the marker
+                follower <- async (try (resolveSingleFlight followerRequest (const pass) pass sf "wedge" fetch) :: IO (Either SomeException (Either StoreFault Text)))
+                takeMVar joined
                 cancel leader -- cancel in the handoff window: the follower must re-resolve
                 recovered <- wait follower
                 recorded <- readIORef seen
@@ -261,7 +297,7 @@ spec = do
                 Just (Left _, _) -> expectationFailure "follower failed instead of recovering"
                 Just (Right recovered, recorded) -> do
                     recovered `shouldBe` Right "raw" -- the follower recovered by re-leading
-                    recorded `shouldBe` [Metric.Miss, Metric.Miss] -- leader + follower, never a third for the retry
+                    recorded `shouldBe` [Metric.Collapsed, Metric.Miss] -- leader + follower, never a third for the retry
     describe "the entry-count bound" $ do
         it "never exceeds the configured maximum entry count" $ do
             seen <- newIORef Nothing
@@ -277,6 +313,89 @@ spec = do
             resolveOk sf "final" (pure "raw") `shouldReturn` "raw"
 
     describe "incremental occupancy" $ do
+        it "reports the decrease before an eviction replacement is inserted" $ do
+            seen <- newIORef []
+            sf <- newStore 60 1 flatWeight
+            _ <- resolveOkAccumulating seen sf "first" (pure "raw")
+            _ <- resolveOkAccumulating seen sf "second" (pure "raw")
+            map occupancyPair <$> readIORef seen `shouldReturn` [(1, flatWeight), (0, 0), (1, flatWeight)]
+
+        for_ [("read-only", Store.lookupStore), ("touching", Store.lookupStoreTouching)] $ \(viewName, readEntry) ->
+            it ("reports expiry immediately through the " <> viewName <> " view") $ do
+                seen <- newIORef Nothing
+                sf <- newStore 0 1 flatWeight
+                _ <- resolveOkRecording seen sf "expired" (pure "raw")
+                threadDelay 1000
+                readEntry (writeIORef seen . Just) sf "expired" `shouldReturn` Nothing
+                recordedOccupancy seen `shouldReturn` Just (0, 0)
+
+        it "reports expiry even when the replacement fetch fails" $ do
+            seen <- newIORef Nothing
+            sf <- newStore 0 1 flatWeight
+            _ <- resolveOkRecording seen sf "expired" (pure "raw")
+            threadDelay 1000
+            resolveSingleFlight (const pass) (writeIORef seen . Just) pass sf "expired" (pure (Left StoreFault))
+                `shouldReturn` Left StoreFault
+            recordedOccupancy seen `shouldReturn` Just (0, 0)
+
+        it "restores the caller's masking state when expiry leads to a fetch" $ do
+            sf <- newStore 0 1 flatWeight
+            _ <- resolveOk sf "expired" (pure "old")
+            threadDelay 1000
+            callerState <- getMaskingState
+            let fetch = do
+                    getMaskingState `shouldReturn` callerState
+                    pure "new"
+            resolveOk sf "expired" fetch `shouldReturn` "new"
+
+        it "does not claim a leader when the expiry callback throws" $ do
+            result <- timeout 5_000_000 $ do
+                sf <- newStore 0 1 flatWeight
+                _ <- resolveOk sf "expired" (pure "raw")
+                threadDelay 1000
+                -- The telemetry callback exposes faults only through exceptions.
+                outcome <- try (resolveSingleFlight (const pass) (const (throwIO LeaderEscaped)) pass sf "expired" (pure (Right "new")))
+                outcome `shouldBe` Left LeaderEscaped
+                resolveOk sf "expired" (pure "new") `shouldReturn` "new"
+            result `shouldBe` Just ()
+
+        it "serves fresh hits while another key's occupancy callback holds the mutation lock" $ do
+            sf <- roomyStore
+            _ <- resolveOk sf "hot" (pure "raw")
+            started <- newEmptyMVar
+            release <- newEmptyMVar
+            let recordOccupancy _ = putMVar started () >> takeMVar release
+                insertOther = resolveSingleFlight (const pass) recordOccupancy pass sf "other" (pure (Right "other"))
+            withAsync insertOther $ \inserting -> do
+                takeMVar started
+                timeout 1_000_000 (resolveOk sf "hot" (pure "unexpected")) `shouldReturn` Just "raw"
+                timeout 1_000_000 (lookupStore sf "hot") `shouldReturn` Just (Just "raw")
+                timeout 1_000_000 (lookupStoreTouching sf "hot") `shouldReturn` Just (Just "raw")
+                putMVar release ()
+                wait inserting `shouldReturn` Right "other"
+
+        it "keeps concurrent absolute gauge callbacks in mutation order" $ do
+            result <- timeout 5_000_000 $ do
+                sf <- newStore 60 2 (2 * flatWeight)
+                seen <- newIORef Nothing
+                started <- newEmptyMVar
+                secondStarted <- newEmptyMVar
+                release <- newEmptyMVar
+                let recordOccupancy occ = do
+                        when (occEntries occ == 1) (putMVar started () >> takeMVar release)
+                        writeIORef seen (Just occ)
+                    run key = resolveSingleFlight (const pass) recordOccupancy pass sf key (pure (Right "raw"))
+                withAsync (run "first") $ \firstWorker -> do
+                    takeMVar started
+                    withAsync (putMVar secondStarted () >> run "second") $ \secondWorker -> do
+                        takeMVar secondStarted
+                        timeout 30000 (wait secondWorker) `shouldReturn` Nothing
+                        putMVar release ()
+                        wait firstWorker `shouldReturn` Right "raw"
+                        wait secondWorker `shouldReturn` Right "raw"
+                recordedOccupancy seen `shouldReturn` Just (2, 2 * flatWeight)
+            result `shouldBe` Just ()
+
         it "matches retained values through varied-weight eviction and repeated keys" $ do
             seen <- newIORef Nothing
             let weigh value = if value == "large" then 170 else 30
@@ -324,7 +443,7 @@ spec = do
         it "keeps accounting after the occupancy callback throws" $ do
             seen <- newIORef Nothing
             sf <- roomyStore
-            outcome <- try (resolveSingleFlight (pure ()) (const pass) (const (throwIO LeaderEscaped)) sf "first" (pure (Right "raw")))
+            outcome <- try (resolveSingleFlight (const pass) (const (throwIO LeaderEscaped)) pass sf "first" (pure (Right "raw")))
             outcome `shouldBe` Left LeaderEscaped
             lookupStore sf "first" `shouldReturn` Just "raw"
             _ <- resolveOkRecording seen sf "second" (pure "raw")
@@ -351,9 +470,8 @@ spec = do
                 (replicateM_ 20 (lookupStoreTouching sf "expired"))
                 (mapConcurrently (\(key :: Int) -> resolveOkAccumulating seen sf (show key) (pure "raw")) [1 .. 8])
             readings <- readIORef seen
-            length readings `shouldBe` 8
-            map occupancyPair readings
-                `shouldBe` replicate 8 (1, flatWeight)
+            length (filter ((== 1) . occEntries) readings) `shouldBe` 8
+            map occupancyPair readings `shouldSatisfy` all (`elem` [(0, 0), (1, flatWeight)])
 
         it "counts zero-weight entries against the entry limit" $ do
             seen <- newIORef Nothing
@@ -361,6 +479,19 @@ spec = do
             for_ [1 .. 6 :: Int] $ \key ->
                 resolveOkRecording seen sf (show key) (pure "raw")
             recordedOccupancy seen `shouldReturn` Just (2, 0)
+
+    describe "oversized refusal telemetry" $ do
+        for_ [flatWeight + 1, maxBound] $ \weight ->
+            it ("counts one refusal per fetched value with weight " <> show weight) $ do
+                sf <- newSingleFlight 60 2 flatWeight (const weight) :: IO (SingleFlight StoreFault Text Text)
+                refused <- newIORef (0 :: Int)
+                seen <- newIORef []
+                let run = resolveSingleFlight (const pass) (\occ -> modifyIORef' seen (occ :)) (modifyIORef' refused (+ 1)) sf "large" (pure (Right "raw"))
+                run `shouldReturn` Right "raw"
+                run `shouldReturn` Right "raw"
+                lookupStore sf "large" `shouldReturn` Nothing
+                readIORef refused `shouldReturn` 2
+                readIORef seen `shouldReturn` []
 
     describe "the resident-byte budget" $ do
         it "evicts to keep the resident estimate under the byte budget" $ do
