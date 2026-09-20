@@ -22,6 +22,7 @@ module Ecluse.BenchLoad.Harness (
     -- * Running a scenario
     ScenarioReport (..),
     runScenario,
+    warmUp,
 
     -- * Rendering
     renderReports,
@@ -53,6 +54,8 @@ import Ecluse.BenchLoad.Normalise (
     renderSaturation,
  )
 import Ecluse.BenchLoad.Oha (OhaReport (..), runOha, runOhaUrls, runOhaUrlsWith)
+import Ecluse.BenchLoad.Patterns (RequestTrace (rtClients))
+import Ecluse.BenchLoad.Replay (Replay (..), runReplay)
 import Ecluse.Composition.Sizing (resolveServeAdmission)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
@@ -97,10 +100,7 @@ data LoadKnobs = LoadKnobs
     }
     deriving stock (Eq, Show)
 
-{- | The default operating point. The payload is about the median tarball of a
-popular-package mix, and the concurrency loads the tarball paths under a realistic round
-trip while staying inside what a shared runner's generator sustains.
--}
+-- | The default concurrency, duration, upstream latency, and artifact size.
 defaultLoadKnobs :: LoadKnobs
 defaultLoadKnobs =
     LoadKnobs
@@ -115,14 +115,7 @@ defaultLoadKnobs =
         , lkPrivateConnectionsPerHost = Nothing
         }
 
-{- | Read the load knobs from the environment: @BENCH_LOAD_CONCURRENCY@,
-@BENCH_LOAD_DURATION_SECONDS@, @BENCH_LOAD_UPSTREAM_LATENCY_MS@ (milliseconds),
-@BENCH_LOAD_PAYLOAD_BYTES@, @BENCH_LOAD_CACHE_MAX_ENTRIES@, @BENCH_LOAD_WORKING_SET@,
-@BENCH_LOAD_SERVE_MAX_IN_FLIGHT@, @BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST@, and
-@BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST@. A malformed value falls back to the default
-rather than failing, and the three pool knobs stay 'Nothing' so the fixture resolves the
-shipped computed default at use.
--}
+-- | Read @BENCH_LOAD_*@ overrides. Malformed values retain defaults or computed pool sizing.
 loadKnobsFromEnv :: IO LoadKnobs
 loadKnobsFromEnv = do
     concurrency <- readEnvInt "BENCH_LOAD_CONCURRENCY" (lkConcurrency defaultLoadKnobs)
@@ -160,11 +153,7 @@ data UpstreamFixture = UpstreamFixture
     -- ^ The traffic shapes this ecosystem supports.
     }
 
-{- | One load scenario: its identity and the ecosystem-specific setup and teardown that
-boots its stub upstreams, wires the proxy, and yields a 'Driver'. The 'scenarioBoot'
-continuation is higher-rank so the harness can run any measurement while the fixture stays
-up.
--}
+-- | A named scenario whose boot bracket keeps its fixture alive throughout measurement.
 data Scenario = Scenario
     { scenarioName :: Text
     -- ^ A stable, argument-safe identifier (the driver passes it to the child process).
@@ -180,12 +169,11 @@ data Scenario = Scenario
     -- ^ Bracket the ecosystem-specific setup\/teardown and yield the 'Driver'.
     }
 
-{- | What the harness drives once a scenario's fixture is up. An HTTP scenario hands back
-a URL for @oha@, and an in-process scenario hands back an action returning each unit's
-latency in seconds.
--}
+-- | Duration-driven load or a finite replay over a live fixture.
 data Driver
-    = {- | Drive this URL with @oha@ (the proxy is up). The harness owns the concurrency
+    = -- | Consume a finite trace once from the fresh fixture, without priming any cache.
+      DriveReplay Replay
+    | {- | Drive this URL with @oha@ (the proxy is up). The harness owns the concurrency
       and duration.
       -}
       DriveHttp Text
@@ -206,10 +194,7 @@ data Driver
       -}
       DriveInProcess (IO [Double])
 
-{- | The figures one scenario yields. The report crosses the per-scenario process boundary
-as JSON, so it carries JSON instances. Latencies are milliseconds, and @Nothing@ when the
-run recorded no successful request.
--}
+-- | A child-process report. Latencies use milliseconds and are absent when no request succeeds.
 data ScenarioReport = ScenarioReport
     { srName :: Text
     , srDescription :: Text
@@ -249,29 +234,24 @@ data ScenarioReport = ScenarioReport
     -- ^ Wall-clock time spent in GC over the window, in milliseconds.
     , srMeanPauseMs :: Maybe Double
     -- ^ Mean GC pause over the window, in milliseconds. @Nothing@ when no GC ran.
+    , srEvidence :: Text
+    -- ^ Per-pattern parameters, byte budgets, and cache outcomes.
     , srNote :: Text
     -- ^ A short note: the status-code distribution, and any transport errors.
     }
     deriving stock (Generic, Show)
     deriving anyclass (FromJSON, ToJSON)
 
-{- | Boot a scenario's fixture, apply the load, and return the figures. Throws only on a
-literal failure: an unavailable RTS counter (a binary built without @-T@) or a scenario
-that served nothing.
--}
+-- | Measure one live fixture. Missing RTS counters or no responses fail the harness.
 runScenario :: LoadKnobs -> Scenario -> IO ScenarioReport
 runScenario knobs scenario = do
     rtsOn <- getRTSStatsEnabled
     unless rtsOn $
         benchFail "bench-load needs the RTS stats (build with -with-rtsopts=-T); getRTSStatsEnabled is False"
-    -- Apply the scenario's concurrency scale to the shared base here, once. The boot, the
-    -- warm-up, and the measured drive then all see the scenario's own level.
     let scaled = knobs{lkConcurrency = lkConcurrency knobs * max 1 (scenarioConcurrencyScale scenario)}
     scenarioBoot scenario scaled (measure scaled scenario)
 
--- The measured window opens after a warm-up and a major GC, so the allocation and GC
--- figures are deltas over the steady state alone. Peak residency is a process high-water
--- mark, so it also spans the warm-up.
+-- Finite replay starts cold. Only the legacy duration-driven HTTP scenarios receive warm-up.
 measure :: LoadKnobs -> Scenario -> Driver -> IO ScenarioReport
 measure knobs scenario driver = do
     warmUp driver
@@ -279,6 +259,9 @@ measure knobs scenario driver = do
     before <- getRTSStats
     (requests, throughput, successRate, percentilesMs, deadlineAborts, note) <- drive knobs driver
     after <- getRTSStats
+    evidence <- case driver of
+        DriveReplay replay -> replayEvidence replay
+        _ -> pure ""
     when (requests <= 0) $
         benchFail ("scenario " <> scenarioName scenario <> " served no requests -- a harness failure, not a result")
     performMajorGC
@@ -290,7 +273,9 @@ measure knobs scenario driver = do
     pure
         ScenarioReport
             { srName = scenarioName scenario
-            , srConcurrency = lkConcurrency knobs
+            , srConcurrency = case driver of
+                DriveReplay replay -> length (rtClients (replayTrace replay))
+                _ -> lkConcurrency knobs
             , srDescription = scenarioDescription scenario
             , srRequests = requests
             , srThroughput = throughput
@@ -307,13 +292,14 @@ measure knobs scenario driver = do
             , srMajorGcs = major_gcs after - major_gcs before
             , srGcWallMs = gcWallNs / 1_000_000
             , srMeanPauseMs = if gcCount == 0 then Nothing else Just (gcWallNs / 1_000_000 / fromIntegral gcCount)
+            , srEvidence = evidence
             , srNote = note
             }
 
--- The HTTP warm-up also primes the metadata cache for the cache-hit scenario. The
--- in-process path needs none worth a separate run.
+-- | Prime duration-driven HTTP scenarios. Finite replay remains untouched and starts cold.
 warmUp :: Driver -> IO ()
 warmUp = \case
+    DriveReplay _ -> pass
     DriveHttp url -> void (runOha 8 warmupSeconds url)
     DriveHttpUrls urls -> void (runOhaUrls 8 warmupSeconds urls)
     DriveHttpHeaders headers urls -> void (runOhaUrlsWith headers 8 warmupSeconds urls)
@@ -326,6 +312,7 @@ warmUp = \case
 -- four percentiles in milliseconds, the deadline-abort count, and a distribution note.
 drive :: LoadKnobs -> Driver -> IO (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Int, Text)
 drive knobs = \case
+    DriveReplay replay -> fromOha <$> runReplay replay
     DriveHttp url -> fromOha <$> runOha (lkConcurrency knobs) (lkDurationSeconds knobs) url
     DriveHttpUrls urls -> fromOha <$> runOhaUrls (lkConcurrency knobs) (lkDurationSeconds knobs) urls
     DriveHttpHeaders headers urls -> fromOha <$> runOhaUrlsWith headers (lkConcurrency knobs) (lkDurationSeconds knobs) urls
@@ -429,7 +416,7 @@ renderReports knobs capabilities ecosystem reports =
         , ""
         , "### At a glance"
         , ""
-        , "| scenario | connections | req/s | success | p50 | p99 | alloc/req | peak residency |"
+        , "| scenario | connections | req/s | success | p50 | p99 | process alloc/req | peak residency |"
         , "| --- | --: | --: | --: | --: | --: | --: | --: |"
         ]
             <> map glanceRow reports
@@ -505,13 +492,14 @@ renderScenario r =
     , row "throughput" (fmt1 (srThroughput r) <> " req/s")
     , row "requests" (show (srRequests r) <> " (" <> fmt1 (srSuccessRate r * 100) <> "% success)")
     , row "latency p50 / p90 / p99 / p99.9" (msCell (srP50Ms r) <> " / " <> msCell (srP90Ms r) <> " / " <> msCell (srP99Ms r) <> " / " <> msCell (srP999Ms r))
-    , row "allocations / request" (fmtKiB (round (srAllocPerReqBytes r)))
+    , row "process allocations / request" (fmtKiB (round (srAllocPerReqBytes r)))
     , row "peak residency" (fmtMiB (srPeakResidencyBytes r))
     , row "retained heap" (fmtMiB (srRetainedBytes r))
     , row "GCs (total / major)" (show (srGcs r) <> " / " <> show (srMajorGcs r))
     , row "GC wall / mean pause" (fmt1 (srGcWallMs r) <> " ms / " <> maybe "n/a" (\p -> fmt2 p <> " ms") (srMeanPauseMs r))
     , row "distribution" (srNote r)
     , ""
+    , srEvidence r
     , "> " <> srDescription r
     , ""
     ]
@@ -522,20 +510,14 @@ renderScenario r =
     msCell :: Maybe Double -> Text
     msCell = maybe "n/a" (\v -> fmt2 v <> " ms")
 
-{- | Render the service-time attribution section (upstream against Écluse overhead) from
-the concurrency-1 pass's reports, against the given baseline. The pure split and its layout
-live in "Ecluse.BenchLoad.Normalise".
--}
+-- | Attribute concurrency-one service time against the named upstream baseline.
 renderServiceTime :: BaselineSource -> [ScenarioReport] -> Text
 renderServiceTime source reports =
     renderNormalised source (map toRow reports)
   where
     toRow r = NormalisedRow (srName r) (srP50Ms r) (srP99Ms r)
 
-{- | Render the load-saturation section by pairing each loaded report with its
-concurrency-1 counterpart by name. The queuing derivation and its flag live in
-"Ecluse.BenchLoad.Normalise".
--}
+-- | Pair loaded reports with their concurrency-one counterparts to describe saturation.
 renderLoadSaturation :: [ScenarioReport] -> [ScenarioReport] -> Text
 renderLoadSaturation c1Reports loadedReports =
     renderSaturation queuingDominanceThreshold (map (deriveSaturation queuingDominanceThreshold . toInput) loadedReports)

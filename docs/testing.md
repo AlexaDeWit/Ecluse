@@ -291,6 +291,63 @@ under [#1421](https://github.com/AlexaDeWit/Ecluse/issues/1421).
 Capture byte sizes alone do not establish an expansion ratio, and this corpus change does not
 recalibrate `expandWireBytes` or acceptance budgets.
 
+### Request patterns
+
+The finite replay families run once per captured identity sequence, with a new proxy and empty
+stores for each cell. They do not run the HTTP warm-up or the concurrency-one attribution pass.
+The existing warmed repeats remain controls. Finite hot-set repeats include their first cold pass.
+No family represents all deployments. The small captured identity space limits extrapolation.
+
+| Family | Axis |
+| --- | --- |
+| Hot-set control | Set size and repeat count |
+| Cold install | Distinct names, each requested once by one client |
+| CI fleet | Clients sharing one sequence and their start skew |
+| Heterogeneous fleet | Shared fraction and disjoint private names per client |
+| Zipf | Exponent, captured space, seed, and finite draw count |
+| Restart | Empty process cache and interval between client arrivals |
+| Scan | Repeated full scans with a full-store budget below the expanded wire working set |
+
+`bench-load npm/pattern-cold-install` selects one cell. Substitute `pypi` for its Simple-index trace.
+Every cell completes its finite sequence. Duration knobs apply only to the legacy duration drivers.
+Clients send sequential requests after their scheduled start. Slow responses extend the run.
+Restart models post-restart arrivals into an empty cache, with the production 60-second TTL.
+It does not model a pre-restart heap or claim that a short default run measures expiry.
+
+| Environment variable | Default |
+| --- | --- |
+| `BENCH_PATTERN_NAMES` | All captured names, or two per heterogeneous client |
+| `BENCH_PATTERN_CLIENTS` | Four, or two heterogeneous clients |
+| `BENCH_PATTERN_SKEW_US` | 100000 |
+| `BENCH_PATTERN_ROUNDS` | Four for repeat, scan, and Zipf draws |
+| `BENCH_PATTERN_OVERLAP` | 0.5, rounded down to a common-name count |
+| `BENCH_PATTERN_ZIPF_EXPONENT` | 1.1 |
+| `BENCH_PATTERN_ARRIVAL_US` | 100000 between restart clients |
+| `BENCH_PATTERN_SEED` | 42 |
+| `BENCH_PATTERN_FULL_BYTES` | The fixture full-store budget, reduced for scan |
+| `BENCH_PATTERN_SELECTED_VERSION` | Unset for listing-only. `pinned` follows each npm listing with its captured pinned version |
+
+Unsupported distinct-name and overlap requests fail instead of creating synthetic package aliases.
+Each report states the parameters, distinct wire bytes, accounted capacity, occupancy, oversized
+refusals, retention fraction, and collapsed fraction per store. The wire-to-resident comparison
+states its units. The full-store wire-equivalent budget uses the shared expansion model, which
+excludes retained artifact keys. It is an estimate, not measured heap residency.
+Successful throughput and latency exclude error responses. Status counts retain failures, including
+body-limit refusals. Allocation averages include all responses. Public upstream requests and the
+selected-version warm-full shortcut count remain separate from store outcomes.
+
+The `pattern-cold-install-default-body-cap` cell keeps the default body limit. Other finite cells use
+a stated benchmark-only cap derived from the largest actual stub body after URL rewriting.
+Structural limits stay at their defaults. Never read faster refusals as better successful throughput.
+Complete captures and the collapse telemetry are prerequisites for interpreting these results.
+Capture byte counts must match the provenance manifest before replay starts.
+A build without the required telemetry catalogue reports cache evidence as unavailable.
+
+For a retention decision, compare repeated seeds and skew settings at equal total memory. The matrix
+does not disable full retention or reassign its budget. TTL zero is not an isolated full-store
+intervention and does not create a grace window. Keep 200-body replay separate from the legacy 304
+scenario because 304 avoids assembled-store resolution.
+
 ## Onboarding an ecosystem
 
 An ecosystem counts as onboarded when it supplies each item below for its supported operations.

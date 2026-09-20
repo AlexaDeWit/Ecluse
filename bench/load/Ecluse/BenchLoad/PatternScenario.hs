@@ -1,0 +1,169 @@
+-- SPDX-FileCopyrightText: 2026 Alexandra de Wit
+--
+-- SPDX-License-Identifier: MIT
+
+-- | A finite matrix over authenticated captures, with independent cache and upstream evidence.
+module Ecluse.BenchLoad.PatternScenario (patternScenarios) where
+
+import Data.Aeson (Value, eitherDecode, withObject, (.:))
+import Data.Aeson.Types (parseEither)
+import Data.ByteString.Lazy qualified as LBS
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Universe.Class qualified as Universe
+import Network.Wai (Application)
+import OpenTelemetry.Attributes (fromAttribute, lookupAttribute)
+import OpenTelemetry.MeterProvider (SdkMeterEnv)
+
+import Ecluse.BenchLoad.Error (benchFail)
+import Ecluse.BenchLoad.Fixture (loadCorpusBodies, withProxyConfigured)
+import Ecluse.BenchLoad.Harness (Driver (DriveReplay), LoadKnobs (..), Scenario (..))
+import Ecluse.BenchLoad.PatternReport (StoreEvidence (..), renderStoreEvidence)
+import Ecluse.BenchLoad.Patterns
+import Ecluse.BenchLoad.Replay (Replay (..))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
+import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
+import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
+import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.MemoryModel (contractResidentBytes, expandWireBytes)
+import Ecluse.Core.Telemetry.Catalogue (MetricName, metricName)
+import Ecluse.Runtime.Test.Telemetry (gaugePoints, sumPoints, withTestTelemetry)
+import Ecluse.Test.Corpus (CorpusPackage, cpName)
+import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Wai (localhost, rebaseAuthority)
+
+-- | Every family receives a fresh proxy. No preflight request consumes or warms its trace.
+patternScenarios :: Ecosystem -> [CorpusPackage] -> (Int -> Int -> IO PackumentDeps) -> (LoadKnobs -> Application) -> (LoadKnobs -> Map Text LByteString -> IO Application) -> (Int -> Text -> Text) -> [Scenario]
+patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
+    [scenario patternKind False | patternKind <- [minBound .. maxBound]]
+        <> [scenario ColdInstall True]
+  where
+    scenario patternKind defaultCap =
+        Scenario
+            { scenarioName = patternName patternKind <> if defaultCap then "-default-body-cap" else ""
+            , scenarioDescription = "Finite captured-name replay from empty stores. TTL 60 seconds. Hot-set is an upper-bound control. Other families carry no workload preference."
+            , scenarioConcurrencyScale = 1
+            , scenarioBoot = \knobs use -> do
+                captures <- loadCorpusBodies packages
+                verifyCaptures ecosystem captures
+                patternKnobs <- knobsFromEnv patternKind (length packages)
+                trace <- either benchFail pure (makeTrace patternKind patternKnobs (map cpName packages))
+                wireBytes <- either benchFail pure (workingBytes (Map.map (fromIntegral . LBS.length) captures) trace)
+                let largest = foldl' max 0 (map (fromIntegral . LBS.length) (Map.elems captures))
+                measuredBodies <- newIORef (maxBodyBytes defaultLimits, wireBytes, largest)
+                capacity <- readKnob "BENCH_PATTERN_FULL_BYTES" (sbMaxBytes (cacheFullBudget defaultCacheConfig))
+                when (capacity <= 0) (benchFail "BENCH_PATTERN_FULL_BYTES must be positive")
+                let fullCapacity = if patternKind == Scan then min capacity (max 1 (expandWireBytes wireBytes `div` 2)) else capacity
+                    cacheConfig = defaultCacheConfig{cacheFullBudget = (cacheFullBudget defaultCacheConfig){sbMaxBytes = fullCapacity}}
+                    deps privatePort publicPort = do
+                        base <- depsFor privatePort publicPort
+                        let authority = if ecosystem == Npm then "https://registry.npmjs.org" else "https://files.pythonhosted.org"
+                            servedSizes = Map.map (fromIntegral . LBS.length . rebaseAuthority authority (localhost publicPort)) captures
+                            servedLargest = foldl' max 0 (Map.elems servedSizes)
+                            bodyCap = if defaultCap then maxBodyBytes defaultLimits else max (maxBodyBytes defaultLimits) servedLargest
+                        servedWorking <- either benchFail pure (workingBytes servedSizes trace)
+                        writeIORef measuredBodies (bodyCap, servedWorking, servedLargest)
+                        pure base{pdLimits = (pdLimits base){maxBodyBytes = bodyCap}}
+                selected <- lookupEnv "BENCH_PATTERN_SELECTED_VERSION"
+                pins <- loadPins
+                upstreamCount <- newIORef (0 :: Int)
+                public <- publicApp knobs captures
+                let counted request respond = do
+                        atomicModifyIORef' upstreamCount (\n -> (n + 1, ()))
+                        public request respond
+                withTestTelemetry $ \telemetry meter ->
+                    withProxyConfigured ecosystem deps knobs cacheConfig telemetry (privateApp knobs) counted (\port -> [urlFor port ""]) $ \case
+                        [root] ->
+                            use
+                                ( DriveReplay
+                                    Replay
+                                        { replayTrace = trace
+                                        , replayUrls = \name -> let listing = root <> name in listing : [listing <> "/" <> version | ecosystem == Npm, version <- maybeToList (selected >>= \choice -> if choice == "pinned" then Map.lookup name pins else Just (toText choice))]
+                                        , replayEvidence = evidence meter upstreamCount cacheConfig wireBytes measuredBodies patternKnobs trace selected
+                                        }
+                                )
+                        _ -> benchFail "pattern fixture requires exactly one URL root"
+            }
+
+loadPins :: IO (Map Text Text)
+loadPins = do
+    raw <- readFileLBS "bench/corpus/pins.json"
+    value <- either (benchFail . toText) pure (eitherDecode raw :: Either String Value)
+    either (benchFail . toText) pure (parseEither (withObject "pins" (.: "pins")) value)
+
+knobsFromEnv :: Pattern -> Int -> IO PatternKnobs
+knobsFromEnv family available = do
+    let defaults = defaultPatternKnobs
+        heterogeneous = family == Heterogeneous
+    names <- readKnob "BENCH_PATTERN_NAMES" (if heterogeneous then 2 else available)
+    clients <- readKnob "BENCH_PATTERN_CLIENTS" (if heterogeneous then min 2 available else pkClients defaults)
+    skew <- readKnob "BENCH_PATTERN_SKEW_US" (pkSkewMicros defaults)
+    rounds <- readKnob "BENCH_PATTERN_ROUNDS" (pkRounds defaults)
+    overlap <- readKnob "BENCH_PATTERN_OVERLAP" (pkOverlap defaults)
+    exponent <- readKnob "BENCH_PATTERN_ZIPF_EXPONENT" (pkExponent defaults)
+    arrival <- readKnob "BENCH_PATTERN_ARRIVAL_US" (pkArrivalMicros defaults)
+    seed <- readKnob "BENCH_PATTERN_SEED" (pkSeed defaults)
+    pure (PatternKnobs names clients skew rounds overlap exponent arrival seed)
+
+readKnob :: (Read a) => String -> a -> IO a
+readKnob name fallback =
+    lookupEnv name >>= \case
+        Nothing -> pure fallback
+        Just raw -> maybe (benchFail ("invalid " <> toText name)) pure (readMaybe raw)
+
+verifyCaptures :: Ecosystem -> Map Text LByteString -> IO ()
+verifyCaptures ecosystem bodies = do
+    raw <- readFileLBS "bench/corpus/pins.json"
+    manifest <- either (benchFail . toText) pure (eitherDecode raw :: Either String Value)
+    sizes <- either (benchFail . toText) pure (parseEither parser manifest)
+    for_ (Map.toList bodies) $ \(name, body) ->
+        unless (Map.lookup name sizes == Just (LBS.length body)) (benchFail ("complete capture provenance missing or byte count differs: " <> name))
+  where
+    parser = withObject "pins" $ \pins -> do
+        captures <- pins .: "captures"
+        entries <- captures .: fromString (toString (ecosystemName ecosystem))
+        traverse (withObject "capture" (.: "bytes")) entries
+
+evidence :: SdkMeterEnv -> IORef Int -> CacheConfig -> Int -> IORef (Int, Int, Int) -> PatternKnobs -> RequestTrace -> Maybe String -> IO Text
+evidence meter upstreamCount config rawBytes measuredBodies knobs trace selected = do
+    (bodyCap, wireBytes, largest) <- readIORef measuredBodies
+    stores <-
+        traverse
+            (collect wireBytes)
+            [("full", "", cacheFullBudget config), ("version", ".version", cacheVersionBudget config), ("assembled", ".assembled", cacheAssembledBudget config)]
+    fullHits <- sum . map snd <$> sumPoints "ecluse.metadata_cache.version.full_hits" meter
+    upstream <- readIORef upstreamCount
+    pure $
+        T.unlines
+            [ "Replay parameters: `" <> show knobs <> "`. Actual clients: " <> show (length (rtClients trace)) <> ". Distinct measured names: " <> show (length (rtNames trace)) <> "."
+            , "Corpus space and tail are bounded by the committed captures. Zipf is a finite sampled trace, not registry-wide traffic."
+            , "Raw captured working bytes: " <> show rawBytes <> " B. Served stub working bytes: " <> show wireBytes <> " B. Selected-version mode: " <> maybe "none" toText selected <> "."
+            , "Body cap: " <> show bodyCap <> " B. Default cap: " <> show (maxBodyBytes defaultLimits) <> " B. Largest served stub body: " <> show largest <> " B. Default would refuse largest: " <> show (largest > maxBodyBytes defaultLimits) <> "."
+            , "Wire working set / full-store wire-equivalent budget: " <> show wireBytes <> " / " <> show (contractResidentBytes (sbMaxBytes (cacheFullBudget config))) <> " B. The resident estimate excludes retained artifact keys."
+            , "Public upstream requests: " <> show upstream <> ". Selected-version warm-full shortcuts: " <> (if metricsAvailable then show fullHits else "unavailable") <> ". These shortcuts are separate from version-store resolutions."
+            , if metricsAvailable then renderStoreEvidence stores else "Cache evidence unavailable: this build lacks the collapse and refusal telemetry catalogue."
+            , "RTS allocation and heap figures include the in-process replay client and stub upstreams. They are not proxy-only costs or directly comparable with the external oha generator."
+            , "Occupancy is the final reported gauge, not peak heap. Store ratios compare distinct capture wire bytes with accounted resident capacity. Assembled bytes and selected-version working sets differ."
+            , "No isolated full-retention or grace-window intervention runs here. TTL 0 would change every store and still weigh inserts. Compare equal-memory interventions separately."
+            ]
+  where
+    metricsAvailable =
+        all
+            (`elem` map metricName (Universe.universe :: [MetricName]))
+            ["ecluse.metadata_cache.version.requests", "ecluse.metadata_cache.assembled.requests", "ecluse.metadata_cache.refused"]
+    collect wireBytes (storeName, suffix, budget) = do
+        outcomes <- sumPoints ("ecluse.metadata_cache" <> suffix <> ".requests") meter
+        occupied <- gaugePoints ("ecluse.metadata_cache" <> suffix <> ".resident_bytes") meter
+        refused <- sumPoints "ecluse.metadata_cache.refused" meter
+        let count key value points = fromIntegral (sum [n | (attrs, n) <- points, (lookupAttribute attrs key >>= fromAttribute) == Just (value :: Text)])
+        pure
+            StoreEvidence
+                { seStore = storeName
+                , seCapacity = sbMaxBytes budget
+                , seWireWorkingSet = wireBytes
+                , seResidentBytes = fromIntegral (sum (map snd occupied))
+                , seHits = count "result" "hit" outcomes
+                , seMisses = count "result" "miss" outcomes
+                , seCollapsed = count "result" "collapsed" outcomes
+                , seRefused = count "store" storeName refused
+                }

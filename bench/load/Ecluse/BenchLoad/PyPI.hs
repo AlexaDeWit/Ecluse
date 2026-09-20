@@ -25,6 +25,7 @@ import Network.Wai (Application, Request, pathInfo, responseLBS)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, defaultCacheEntries, fetchChecked, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttpHeaders, DriveHttpUrls), LoadKnobs (..), Scenario (..), UpstreamFixture (..))
+import Ecluse.BenchLoad.PatternScenario (patternScenarios)
 import Ecluse.BenchLoad.Selection (evictionEntries)
 import Ecluse.Core.Ecosystem (Ecosystem (PyPI))
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (..), SimpleIndex (..), simpleIndexMediaType)
@@ -53,6 +54,16 @@ pypiFixture =
             , wheelScenario PrivateWheel
             , wheelScenario PublicOnboarding
             ]
+                <> patternScenarios
+                    PyPI
+                    pypiCorpusPackages
+                    pypiDeps
+                    (\knobs -> wheelStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs)))
+                    ( \knobs bodies -> do
+                        rewritten <- newIORef mempty
+                        pure (indexStub rewritten (lkUpstreamLatencyMicros knobs) bodies)
+                    )
+                    indexUrl
         }
 
 -- | State the effective eviction size and the limits of the service-time attribution.

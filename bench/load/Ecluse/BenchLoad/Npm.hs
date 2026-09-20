@@ -27,6 +27,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, defaultCacheEntries, loadCorpusBodies, longCacheTtl, primeETag, selfHosted, withProxyOverStubs)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttpHeaders, DriveHttpUrls, DriveInProcess), LoadKnobs (..), Scenario (..), UpstreamFixture (..))
+import Ecluse.BenchLoad.PatternScenario (patternScenarios)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName, unscopedName)
@@ -91,6 +92,16 @@ npmFixture =
             , tarballCeilingScenario
             , workerScenario
             ]
+                <> patternScenarios
+                    Npm
+                    corpusPackages
+                    npmDeps
+                    (\knobs -> privateOverlayStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs)))
+                    ( \knobs bodies -> do
+                        rewritten <- newIORef mempty
+                        pure (corpusPublicStub rewritten (lkUpstreamLatencyMicros knobs) bodies)
+                    )
+                    packageUrl
         }
 
 mergeScenario :: Scenario

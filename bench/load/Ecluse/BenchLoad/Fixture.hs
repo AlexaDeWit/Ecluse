@@ -7,6 +7,7 @@ HTTP preflights reject a wrong response before the measured window starts.
 -}
 module Ecluse.BenchLoad.Fixture (
     withProxyOverStubs,
+    withProxyConfigured,
     longCacheTtl,
     defaultCacheEntries,
     artifactBytes,
@@ -40,7 +41,7 @@ import Ecluse.Core.Server.Context (PackumentDeps)
 import Ecluse.Core.Worker (newWorkerHeartbeat)
 import Ecluse.Runtime.Env (newEnvWithAdmission)
 import Ecluse.Runtime.Server (application, mkServerConfig)
-import Ecluse.Runtime.Telemetry (telemetryDisabled)
+import Ecluse.Runtime.Telemetry (Telemetry, telemetryDisabled)
 import Ecluse.Service (mountBindingFor)
 import Ecluse.Test.Corpus (CorpusPackage (cpPath), cpName)
 import Ecluse.Test.Log (newTestLogEnv)
@@ -49,7 +50,12 @@ import Ecluse.Test.Wai (rebaseAuthority)
 
 -- | Boot a composed proxy with production pool sizing over the supplied ecosystem stubs.
 withProxyOverStubs :: Ecosystem -> (Int -> Int -> IO PackumentDeps) -> LoadKnobs -> NominalDiffTime -> Int -> Application -> Application -> (Int -> [Text]) -> ([Text] -> IO a) -> IO a
-withProxyOverStubs ecosystem depsFor knobs ttl maxEntries privateApp publicApp mkMix body = do
+withProxyOverStubs ecosystem depsFor knobs ttl maxEntries =
+    withProxyConfigured ecosystem depsFor knobs (benchCacheConfig ttl (max 1 maxEntries)) telemetryDisabled
+
+-- | Boot an empty cache with explicit budgets and telemetry for finite replay.
+withProxyConfigured :: Ecosystem -> (Int -> Int -> IO PackumentDeps) -> LoadKnobs -> CacheConfig -> Telemetry -> Application -> Application -> (Int -> [Text]) -> ([Text] -> IO a) -> IO a
+withProxyConfigured ecosystem depsFor knobs cacheConfig telemetry privateApp publicApp mkMix body = do
     capabilities <- getNumCapabilities
     fdLimit <- openFileSoftLimit
     let admissionCapacity = fst (resolveServeAdmission (lkServeMaxInFlight knobs) capabilities)
@@ -60,7 +66,7 @@ withProxyOverStubs ecosystem depsFor knobs ttl maxEntries privateApp publicApp m
             publicManager <- newManager (connectionPoolSettings publicConnections defaultManagerSettings)
             privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
             admission <- newServeAdmission admissionCapacity
-            cache <- newMetadataCache (benchCacheConfig ttl (max 1 maxEntries))
+            cache <- newMetadataCache cacheConfig
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
             -- No worker drains this production-sized queue. At capacity, it sheds new jobs.
@@ -68,7 +74,7 @@ withProxyOverStubs ecosystem depsFor knobs ttl maxEntries privateApp publicApp m
                 newBoundedInMemoryQueue
                     (defaultMemoryQueueConfig 50_000)
                     (\n -> putTextLn ("bench serve stack: bounded in-memory mirror queue at cap. Running dropped-job total: " <> show n))
-            env <- newEnvWithAdmission admission queue publicManager privateManager cache logEnv telemetryDisabled heartbeat
+            env <- newEnvWithAdmission admission queue publicManager privateManager cache logEnv telemetry heartbeat
             deps <- depsFor privatePort publicPort
             let cfg = mkServerConfig (maybeToList (mountBindingFor ecosystem deps Nothing))
             testWithApplication (pure (application cfg env)) $ \proxyPort ->
