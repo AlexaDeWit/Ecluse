@@ -54,8 +54,9 @@ import Ecluse.BenchLoad.Normalise (
     renderSaturation,
  )
 import Ecluse.BenchLoad.Oha (OhaReport (..), runOha, runOhaUrls, runOhaUrlsWith)
+import Ecluse.BenchLoad.PatternReport (ReplayTotals (..), renderReplayTotals)
 import Ecluse.BenchLoad.Patterns (RequestTrace (rtClients))
-import Ecluse.BenchLoad.Replay (Replay (..), runReplay)
+import Ecluse.BenchLoad.Replay (Replay (..), ReplayReport (..), runReplay)
 import Ecluse.Composition.Sizing (resolveServeAdmission)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
@@ -215,7 +216,7 @@ data ScenarioReport = ScenarioReport
     -}
     , srP50Ms, srP90Ms, srP99Ms, srP999Ms :: Maybe Double
     -- ^ Latency percentiles, in milliseconds.
-    , srAllocPerReqBytes :: Double
+    , srAllocPerReqBytes :: Maybe Double
     {- ^ Bytes allocated per request, the machine-independent signal. The delta spans the
     whole bench process, so it folds in the stub upstreams and is a consistent over-count, not
     a pure proxy per-request cost.
@@ -234,6 +235,8 @@ data ScenarioReport = ScenarioReport
     -- ^ Wall-clock time spent in GC over the window, in milliseconds.
     , srMeanPauseMs :: Maybe Double
     -- ^ Mean GC pause over the window, in milliseconds. @Nothing@ when no GC ran.
+    , srReplayTotals :: Maybe ReplayTotals
+    -- ^ Finite replay accounting, including scheduled work not completed by the deadline.
     , srEvidence :: Text
     -- ^ Per-pattern parameters, byte budgets, and cache outcomes.
     , srNote :: Text
@@ -257,12 +260,12 @@ measure knobs scenario driver = do
     warmUp driver
     performMajorGC
     before <- getRTSStats
-    (requests, throughput, successRate, percentilesMs, deadlineAborts, note) <- drive knobs driver
+    (requests, throughput, successRate, percentilesMs, deadlineAborts, note, replayAccounting) <- drive knobs driver
     after <- getRTSStats
     evidence <- case driver of
         DriveReplay replay -> replayEvidence replay
         _ -> pure ""
-    when (requests <= 0) $
+    when (requests <= 0 && isNothing replayAccounting) $
         benchFail ("scenario " <> scenarioName scenario <> " served no requests -- a harness failure, not a result")
     performMajorGC
     retained <- gcdetails_live_bytes . gc <$> getRTSStats
@@ -285,13 +288,14 @@ measure knobs scenario driver = do
             , srP90Ms = p90
             , srP99Ms = p99
             , srP999Ms = p999
-            , srAllocPerReqBytes = allocated / fromIntegral requests
+            , srAllocPerReqBytes = if requests > 0 then Just (allocated / fromIntegral requests) else Nothing
             , srPeakResidencyBytes = max_live_bytes after
             , srRetainedBytes = retained
             , srGcs = gcCount
             , srMajorGcs = major_gcs after - major_gcs before
             , srGcWallMs = gcWallNs / 1_000_000
             , srMeanPauseMs = if gcCount == 0 then Nothing else Just (gcWallNs / 1_000_000 / fromIntegral gcCount)
+            , srReplayTotals = replayAccounting
             , srEvidence = evidence
             , srNote = note
             }
@@ -310,12 +314,14 @@ warmUp = \case
 
 -- Apply the measured load and return the request count, throughput, success rate, the
 -- four percentiles in milliseconds, the deadline-abort count, and a distribution note.
-drive :: LoadKnobs -> Driver -> IO (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Int, Text)
+drive :: LoadKnobs -> Driver -> IO (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Int, Text, Maybe ReplayTotals)
 drive knobs = \case
-    DriveReplay replay -> fromOha <$> runReplay replay
-    DriveHttp url -> fromOha <$> runOha (lkConcurrency knobs) (lkDurationSeconds knobs) url
-    DriveHttpUrls urls -> fromOha <$> runOhaUrls (lkConcurrency knobs) (lkDurationSeconds knobs) urls
-    DriveHttpHeaders headers urls -> fromOha <$> runOhaUrlsWith headers (lkConcurrency knobs) (lkDurationSeconds knobs) urls
+    DriveReplay replay -> do
+        result <- runReplay replay
+        pure (fromOha (Just (replayTotals result)) (replayHttp result))
+    DriveHttp url -> fromOha Nothing <$> runOha (lkConcurrency knobs) (lkDurationSeconds knobs) url
+    DriveHttpUrls urls -> fromOha Nothing <$> runOhaUrls (lkConcurrency knobs) (lkDurationSeconds knobs) urls
+    DriveHttpHeaders headers urls -> fromOha Nothing <$> runOhaUrlsWith headers (lkConcurrency knobs) (lkDurationSeconds knobs) urls
     DriveInProcess act -> do
         start <- getMonotonicTime
         latencies <- act
@@ -331,17 +337,18 @@ drive knobs = \case
             , (pctl 0.50, pctl 0.90, pctl 0.99, pctl 0.999)
             , 0 -- no deadline-bounded generator here, so the deadline-abort count is explicitly zero
             , "in-process worker loop (no HTTP surface)"
+            , Nothing
             )
   where
     -- Project an oha report into the figures the RTS capture pairs with. The single-URL
     -- and weighted-URL-list HTTP drivers share it.
-    fromOha :: OhaReport -> (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Int, Text)
-    fromOha report =
+    fromOha :: Maybe ReplayTotals -> OhaReport -> (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Int, Text, Maybe ReplayTotals)
+    fromOha replayAccounting report =
         let statusCounts = ohaStatusCounts report
             errorCounts = ohaErrorCounts report
             totalResponses = sum (Map.elems statusCounts)
             totalErrors = sum (Map.elems errorCounts)
-            totalRequests = totalResponses + totalErrors
+            totalRequests = maybe (totalResponses + totalErrors) rtotalScheduled replayAccounting
 
             isSuccess status = "2" `T.isPrefixOf` status || "3" `T.isPrefixOf` status
             successCount = sum [count | (status, count) <- Map.toList statusCounts, isSuccess status]
@@ -353,8 +360,9 @@ drive knobs = \case
             , successReqsPerSec
             , successRate
             , (toMs (ohaP50 report), toMs (ohaP90 report), toMs (ohaP99 report), toMs (ohaP999 report))
-            , deadlineAbortsOf report
+            , maybe (deadlineAbortsOf report) rtotalUnfinished replayAccounting
             , distributionNote report
+            , replayAccounting
             )
 
     toMs :: Maybe Double -> Maybe Double
@@ -416,7 +424,7 @@ renderReports knobs capabilities ecosystem reports =
         , ""
         , "### At a glance"
         , ""
-        , "| scenario | connections | req/s | success | p50 | p99 | process alloc/req | peak residency |"
+        , "| scenario | connections | successful req/s | success | p50 | p99 | process alloc/req | peak residency |"
         , "| --- | --: | --: | --: | --: | --: | --: | --: |"
         ]
             <> map glanceRow reports
@@ -465,7 +473,7 @@ renderReports knobs capabilities ecosystem reports =
             <> " | "
             <> maybe "n/a" (\v -> fmt2 v <> " ms") (srP99Ms r)
             <> " | "
-            <> fmtKiB (round (srAllocPerReqBytes r))
+            <> maybe "n/a" (fmtKiB . round) (srAllocPerReqBytes r)
             <> " | "
             <> fmtMiB (srPeakResidencyBytes r)
             <> " |"
@@ -489,16 +497,18 @@ renderScenario r =
     , "| metric | value |"
     , "| --- | --- |"
     , row "connections held open" (show (srConcurrency r))
-    , row "throughput" (fmt1 (srThroughput r) <> " req/s")
-    , row "requests" (show (srRequests r) <> " (" <> fmt1 (srSuccessRate r * 100) <> "% success)")
+    , row "successful throughput" (fmt1 (srThroughput r) <> " req/s")
+    , row "completed responses" (show (srRequests r))
+    , row "success fraction" (fmt1 (srSuccessRate r * 100) <> "%" <> if isJust (srReplayTotals r) then " of scheduled requests" else " of completed requests and transport failures")
     , row "latency p50 / p90 / p99 / p99.9" (msCell (srP50Ms r) <> " / " <> msCell (srP90Ms r) <> " / " <> msCell (srP99Ms r) <> " / " <> msCell (srP999Ms r))
-    , row "process allocations / request" (fmtKiB (round (srAllocPerReqBytes r)))
+    , row "process allocations / request" (maybe "n/a" (fmtKiB . round) (srAllocPerReqBytes r))
     , row "peak residency" (fmtMiB (srPeakResidencyBytes r))
     , row "retained heap" (fmtMiB (srRetainedBytes r))
     , row "GCs (total / major)" (show (srGcs r) <> " / " <> show (srMajorGcs r))
     , row "GC wall / mean pause" (fmt1 (srGcWallMs r) <> " ms / " <> maybe "n/a" (\p -> fmt2 p <> " ms") (srMeanPauseMs r))
     , row "distribution" (srNote r)
     , ""
+    , maybe "" renderReplayTotals (srReplayTotals r)
     , srEvidence r
     , "> " <> srDescription r
     , ""

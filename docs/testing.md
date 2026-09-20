@@ -309,7 +309,8 @@ No family represents all deployments. The small captured identity space limits e
 | Scan | Repeated full scans with a full-store budget below the expanded wire working set |
 
 `bench-load npm/pattern-cold-install` selects one cell. Substitute `pypi` for its Simple-index trace.
-Every cell completes its finite sequence. Duration knobs apply only to the legacy duration drivers.
+Each cell stops when its finite sequence completes or its whole-replay deadline expires.
+Duration knobs apply only to the legacy duration drivers.
 Clients send sequential requests after their scheduled start. Slow responses extend the run.
 Restart models post-restart arrivals into an empty cache, with the production 60-second TTL.
 It does not model a pre-restart heap or claim that a short default run measures expiry.
@@ -324,16 +325,23 @@ It does not model a pre-restart heap or claim that a short default run measures 
 | `BENCH_PATTERN_ZIPF_EXPONENT` | 1.1 |
 | `BENCH_PATTERN_ARRIVAL_US` | 100000 between restart clients |
 | `BENCH_PATTERN_SEED` | 42 |
-| `BENCH_PATTERN_FULL_BYTES` | The fixture full-store budget, reduced for scan |
+| `BENCH_PATTERN_DEADLINE_US` | 120000000, covering client start delays and response reads |
+| `BENCH_PATTERN_FULL_BYTES` | The fixture full-store budget, reduced for scan unless explicitly overridden. Zero disables full retention |
+| `BENCH_PATTERN_VERSION_BYTES` | The fixture version-store budget, must be positive |
+| `BENCH_PATTERN_ASSEMBLED_BYTES` | The fixture assembled-store budget, must be positive |
 | `BENCH_PATTERN_SELECTED_VERSION` | Unset for listing-only. `pinned` follows each npm listing with its captured pinned version |
 
 Unsupported distinct-name and overlap requests fail instead of creating synthetic package aliases.
 Each report states the parameters, distinct wire bytes, accounted capacity, occupancy, oversized
 refusals, retention fraction, and collapsed fraction per store. The wire-to-resident comparison
-states its units. The full-store wire-equivalent budget uses the shared expansion model, which
-excludes retained artifact keys. It is an estimate, not measured heap residency.
-Successful throughput and latency exclude error responses. Status counts retain failures, including
-body-limit refusals. Allocation averages include all responses. Public upstream requests and the
+uses matching accounted bytes for the full store, computed through production projection and
+`weighCacheEntry` before measurement. Version and assembled working-set bytes remain unavailable.
+The separate full-store wire-equivalent estimate excludes retained artifact keys.
+The finite report retains scheduled, completed, successful, refused, other HTTP failure, transport
+failure, and unfinished totals and rates. Its success fraction divides by all scheduled requests.
+Successful throughput and latency exclude error responses. HTTP refusals count 429 and 503, while
+other non-success statuses have a separate count. Allocation averages include all completed responses
+and are unavailable when no response completes. Public upstream requests and the
 selected-version warm-full shortcut count remain separate from store outcomes.
 
 The `pattern-cold-install-default-body-cap` cell keeps the default body limit. Other finite cells use
@@ -343,9 +351,15 @@ Complete captures and the collapse telemetry are prerequisites for interpreting 
 Capture byte counts must match the provenance manifest before replay starts.
 A build without the required telemetry catalogue reports cache evidence as unavailable.
 
-For a retention decision, compare repeated seeds and skew settings at equal total memory. The matrix
-does not disable full retention or reassign its budget. TTL zero is not an isolated full-store
-intervention and does not create a grace window. Keep 200-body replay separate from the legacy 304
+For a retention decision, compare repeated seeds and skew settings at equal total memory.
+Set only the full budget to zero for a retention-off comparison that preserves single-flight.
+Then add the released full budget to the assembled budget for the reallocation comparison.
+
+Report the same pod memory target and every store budget across those comparisons. A zero full
+budget selects the existing one-byte minimum and refuses every captured full candidate after weighing.
+The report states that effective capacity. Those intentional refusals
+do not indicate unusually large documents. TTL zero changes all stores and creates no grace window.
+Keep 200-body replay separate from the legacy 304
 scenario because 304 avoids assembled-store resolution.
 
 ## Onboarding an ecosystem

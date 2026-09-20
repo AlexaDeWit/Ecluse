@@ -14,6 +14,7 @@ import Data.Universe.Class qualified as Universe
 import Network.Wai (Application)
 import OpenTelemetry.Attributes (fromAttribute, lookupAttribute)
 import OpenTelemetry.MeterProvider (SdkMeterEnv)
+import UnliftIO (evaluate)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Fixture (loadCorpusBodies, withProxyConfigured)
@@ -22,13 +23,20 @@ import Ecluse.BenchLoad.PatternReport (StoreEvidence (..), renderStoreEvidence)
 import Ecluse.BenchLoad.Patterns
 import Ecluse.BenchLoad.Replay (Replay (..))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName)
-import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
-import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
+import Ecluse.Core.Package.Filter (enforceArtifactLocations)
+import Ecluse.Core.Registry.CachedDocument (npmCached, pypiSimpleCached)
+import Ecluse.Core.Registry.Metadata (digestOf)
+import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
+import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
+import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
+import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits, ecosystemArtifactAuthorities)
+import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), StoreBudget (..), weighCacheEntry)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.MemoryModel (contractResidentBytes, expandWireBytes)
 import Ecluse.Core.Telemetry.Catalogue (MetricName, metricName)
 import Ecluse.Runtime.Test.Telemetry (gaugePoints, sumPoints, withTestTelemetry)
-import Ecluse.Test.Corpus (CorpusPackage, cpName)
+import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName)
 import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
 
@@ -47,23 +55,44 @@ patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
                 captures <- loadCorpusBodies packages
                 verifyCaptures ecosystem captures
                 patternKnobs <- knobsFromEnv patternKind (length packages)
-                trace <- either benchFail pure (makeTrace patternKind patternKnobs (map cpName packages))
-                wireBytes <- either benchFail pure (workingBytes (Map.map (fromIntegral . LBS.length) captures) trace)
+                requestTrace <- either benchFail pure (makeTrace patternKind patternKnobs (map cpName packages))
+                wireBytes <- either benchFail pure (workingBytes (Map.map (fromIntegral . LBS.length) captures) requestTrace)
                 let largest = foldl' max 0 (map (fromIntegral . LBS.length) (Map.elems captures))
-                measuredBodies <- newIORef (maxBodyBytes defaultLimits, wireBytes, largest)
-                capacity <- readKnob "BENCH_PATTERN_FULL_BYTES" (sbMaxBytes (cacheFullBudget defaultCacheConfig))
-                when (capacity <= 0) (benchFail "BENCH_PATTERN_FULL_BYTES must be positive")
-                let fullCapacity = if patternKind == Scan then min capacity (max 1 (expandWireBytes wireBytes `div` 2)) else capacity
-                    cacheConfig = defaultCacheConfig{cacheFullBudget = (cacheFullBudget defaultCacheConfig){sbMaxBytes = fullCapacity}}
+                measuredBodies <- newIORef (maxBodyBytes defaultLimits, wireBytes, largest, 0)
+                let defaultFull = sbMaxBytes (cacheFullBudget defaultCacheConfig)
+                    scanDefault = min defaultFull (max 1 (expandWireBytes wireBytes `div` 2))
+                fullCapacity <- readKnob "BENCH_PATTERN_FULL_BYTES" (if patternKind == Scan then scanDefault else defaultFull)
+                versionCapacity <- readKnob "BENCH_PATTERN_VERSION_BYTES" (sbMaxBytes (cacheVersionBudget defaultCacheConfig))
+                assembledCapacity <- readKnob "BENCH_PATTERN_ASSEMBLED_BYTES" (sbMaxBytes (cacheAssembledBudget defaultCacheConfig))
+                when
+                    (fullCapacity < 0 || versionCapacity <= 0 || assembledCapacity <= 0)
+                    (benchFail "pattern full budget must be non-negative and version/assembled budgets must be positive")
+                let cacheConfig =
+                        defaultCacheConfig
+                            { cacheFullBudget = (cacheFullBudget defaultCacheConfig){sbMaxBytes = fullCapacity}
+                            , cacheVersionBudget = (cacheVersionBudget defaultCacheConfig){sbMaxBytes = versionCapacity}
+                            , cacheAssembledBudget = (cacheAssembledBudget defaultCacheConfig){sbMaxBytes = assembledCapacity}
+                            }
                     deps privatePort publicPort = do
                         base <- depsFor privatePort publicPort
                         let authority = if ecosystem == Npm then "https://registry.npmjs.org" else "https://files.pythonhosted.org"
-                            servedSizes = Map.map (fromIntegral . LBS.length . rebaseAuthority authority (localhost publicPort)) captures
+                            servedBodies = Map.map (rebaseAuthority authority (localhost publicPort)) captures
+                            servedSizes = Map.map (fromIntegral . LBS.length) servedBodies
                             servedLargest = foldl' max 0 (Map.elems servedSizes)
                             bodyCap = if defaultCap then maxBodyBytes defaultLimits else max (maxBodyBytes defaultLimits) servedLargest
-                        servedWorking <- either benchFail pure (workingBytes servedSizes trace)
-                        writeIORef measuredBodies (bodyCap, servedWorking, servedLargest)
+                        servedWorking <- either benchFail pure (workingBytes servedSizes requestTrace)
+                        fullWeights <-
+                            traverse
+                                ( \package ->
+                                    case Map.lookup (cpName package) servedBodies of
+                                        Nothing -> benchFail "missing served capture"
+                                        Just bytes -> either benchFail evaluate (accountedFullBytes ecosystem (localhost publicPort) package bytes)
+                                )
+                                [package | package <- packages, cpName package `elem` rtNames requestTrace]
+                        writeIORef measuredBodies (bodyCap, servedWorking, servedLargest, sum fullWeights)
                         pure base{pdLimits = (pdLimits base){maxBodyBytes = bodyCap}}
+                deadlineMicros <- readKnob "BENCH_PATTERN_DEADLINE_US" (120_000_000 :: Int)
+                when (deadlineMicros <= 0) (benchFail "BENCH_PATTERN_DEADLINE_US must be positive")
                 selected <- lookupEnv "BENCH_PATTERN_SELECTED_VERSION"
                 pins <- loadPins
                 upstreamCount <- newIORef (0 :: Int)
@@ -77,9 +106,10 @@ patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
                             use
                                 ( DriveReplay
                                     Replay
-                                        { replayTrace = trace
+                                        { replayTrace = requestTrace
+                                        , replayDeadlineMicros = deadlineMicros
                                         , replayUrls = \name -> let listing = root <> name in listing : [listing <> "/" <> version | ecosystem == Npm, version <- maybeToList (selected >>= \choice -> if choice == "pinned" then Map.lookup name pins else Just (toText choice))]
-                                        , replayEvidence = evidence meter upstreamCount cacheConfig wireBytes measuredBodies patternKnobs trace selected
+                                        , replayEvidence = (<> ("\nReplay deadline: " <> show deadlineMicros <> " microseconds.\n")) <$> evidence meter upstreamCount cacheConfig wireBytes measuredBodies patternKnobs requestTrace selected
                                         }
                                 )
                         _ -> benchFail "pattern fixture requires exactly one URL root"
@@ -124,34 +154,38 @@ verifyCaptures ecosystem bodies = do
         entries <- captures .: fromString (toString (ecosystemName ecosystem))
         traverse (withObject "capture" (.: "bytes")) entries
 
-evidence :: SdkMeterEnv -> IORef Int -> CacheConfig -> Int -> IORef (Int, Int, Int) -> PatternKnobs -> RequestTrace -> Maybe String -> IO Text
-evidence meter upstreamCount config rawBytes measuredBodies knobs trace selected = do
-    (bodyCap, wireBytes, largest) <- readIORef measuredBodies
+evidence :: SdkMeterEnv -> IORef Int -> CacheConfig -> Int -> IORef (Int, Int, Int, Int) -> PatternKnobs -> RequestTrace -> Maybe String -> IO Text
+evidence meter upstreamCount config rawBytes measuredBodies knobs requestTrace selected = do
+    (bodyCap, wireBytes, largest, fullWorkingBytes) <- readIORef measuredBodies
     stores <-
         traverse
-            (collect wireBytes)
+            (collect fullWorkingBytes)
             [("full", "", cacheFullBudget config), ("version", ".version", cacheVersionBudget config), ("assembled", ".assembled", cacheAssembledBudget config)]
     fullHits <- sum . map snd <$> sumPoints "ecluse.metadata_cache.version.full_hits" meter
     upstream <- readIORef upstreamCount
     pure $
         T.unlines
-            [ "Replay parameters: `" <> show knobs <> "`. Actual clients: " <> show (length (rtClients trace)) <> ". Distinct measured names: " <> show (length (rtNames trace)) <> "."
+            [ "Replay parameters: `" <> show knobs <> "`. Actual clients: " <> show (length (rtClients requestTrace)) <> ". Distinct measured names: " <> show (length (rtNames requestTrace)) <> "."
             , "Corpus space and tail are bounded by the committed captures. Zipf is a finite sampled trace, not registry-wide traffic."
+            , "Configured store budgets (full / version / assembled): " <> show (sbMaxBytes (cacheFullBudget config)) <> " / " <> show (sbMaxBytes (cacheVersionBudget config)) <> " / " <> show (sbMaxBytes (cacheAssembledBudget config)) <> " accounted bytes."
+            , if sbMaxBytes (cacheFullBudget config) == 0
+                then "Full retention intentionally disabled by requested budget zero. The existing store clamps this to one byte, below every captured full candidate. Single-flight remains active. These retention refusals do not indicate unusually large documents."
+                else "Full retention enabled under the stated budget."
             , "Raw captured working bytes: " <> show rawBytes <> " B. Served stub working bytes: " <> show wireBytes <> " B. Selected-version mode: " <> maybe "none" toText selected <> "."
             , "Body cap: " <> show bodyCap <> " B. Default cap: " <> show (maxBodyBytes defaultLimits) <> " B. Largest served stub body: " <> show largest <> " B. Default would refuse largest: " <> show (largest > maxBodyBytes defaultLimits) <> "."
             , "Wire working set / full-store wire-equivalent budget: " <> show wireBytes <> " / " <> show (contractResidentBytes (sbMaxBytes (cacheFullBudget config))) <> " B. The resident estimate excludes retained artifact keys."
             , "Public upstream requests: " <> show upstream <> ". Selected-version warm-full shortcuts: " <> (if metricsAvailable then show fullHits else "unavailable") <> ". These shortcuts are separate from version-store resolutions."
-            , if metricsAvailable then renderStoreEvidence stores else "Cache evidence unavailable: this build lacks the collapse and refusal telemetry catalogue."
+            , if metricsAvailable then renderStoreEvidence stores else "Cache evidence unavailable: this build lacks the collapse and refusal telemetry catalogue. Full-store candidate accounted bytes / capacity: " <> show fullWorkingBytes <> " / " <> show (max 1 (sbMaxBytes (cacheFullBudget config))) <> "."
             , "RTS allocation and heap figures include the in-process replay client and stub upstreams. They are not proxy-only costs or directly comparable with the external oha generator."
-            , "Occupancy is the final reported gauge, not peak heap. Store ratios compare distinct capture wire bytes with accounted resident capacity. Assembled bytes and selected-version working sets differ."
-            , "No isolated full-retention or grace-window intervention runs here. TTL 0 would change every store and still weigh inserts. Compare equal-memory interventions separately."
+            , "Occupancy is the final reported gauge, not peak heap. Full working bytes use production projection and weighCacheEntry over each distinct rewritten body before measurement. Version and assembled working sets are unavailable. Their representations differ from listing wire bytes."
+            , "A zero full-store budget is a retention-only intervention and still weighs candidates. It adds no grace window. Compare equal pod memory and state all store budgets. TTL 0 would change every store."
             ]
   where
     metricsAvailable =
         all
             (`elem` map metricName (Universe.universe :: [MetricName]))
             ["ecluse.metadata_cache.version.requests", "ecluse.metadata_cache.assembled.requests", "ecluse.metadata_cache.refused"]
-    collect wireBytes (storeName, suffix, budget) = do
+    collect fullWorkingBytes (storeName, suffix, budget) = do
         outcomes <- sumPoints ("ecluse.metadata_cache" <> suffix <> ".requests") meter
         occupied <- gaugePoints ("ecluse.metadata_cache" <> suffix <> ".resident_bytes") meter
         refused <- sumPoints "ecluse.metadata_cache.refused" meter
@@ -159,11 +193,23 @@ evidence meter upstreamCount config rawBytes measuredBodies knobs trace selected
         pure
             StoreEvidence
                 { seStore = storeName
-                , seCapacity = sbMaxBytes budget
-                , seWireWorkingSet = wireBytes
+                , seCapacity = max 1 (sbMaxBytes budget)
+                , seAccountedWorkingSet = if storeName == "full" then Just fullWorkingBytes else Nothing
                 , seResidentBytes = fromIntegral (sum (map snd occupied))
                 , seHits = count "result" "hit" outcomes
                 , seMisses = count "result" "miss" outcomes
                 , seCollapsed = count "result" "collapsed" outcomes
                 , seRefused = count "store" storeName refused
                 }
+
+accountedFullBytes :: Ecosystem -> Text -> CorpusPackage -> LByteString -> Either Text Int
+accountedFullBytes ecosystem upstreamBase package bytes = do
+    let raw = LBS.toStrict bytes
+    (info, document) <-
+        first show $
+            if ecosystem == Npm
+                then second (fst npmCached) <$> projectNpmManifest defaultLimits (cpPackage package) raw
+                else second (fst pypiSimpleCached) <$> projectPyPIIndex defaultLimits (cpPackage package) raw
+    let hosts = if ecosystem == Npm then npmArtifactHosts else pypiArtifactHosts
+        located = enforceArtifactLocations (ecosystemArtifactAuthorities hosts) upstreamBase info
+    pure (weighCacheEntry (CacheEntry located document (digestOf raw)))

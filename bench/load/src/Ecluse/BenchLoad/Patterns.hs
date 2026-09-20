@@ -14,7 +14,6 @@ module Ecluse.BenchLoad.Patterns (
     workingBytes,
 ) where
 
-import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
 
 -- | Each constructor names a comparison axis, not a representative deployment.
@@ -111,6 +110,6 @@ zipfDraws seed exponent count names = mapMaybe pick (take count (randomWords see
 
 -- | Count each measured identity once, including the fat tail and excluding request multiplicity.
 workingBytes :: Map Text Int -> RequestTrace -> Either Text Int
-workingBytes sizes trace = sum <$> traverse size (rtNames trace)
+workingBytes sizes requestTrace = sum <$> traverse size (rtNames requestTrace)
   where
     size name = maybe (Left ("missing capture size: " <> name)) Right (Map.lookup name sizes)

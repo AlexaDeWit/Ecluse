@@ -1423,6 +1423,7 @@ library ecluse-bench-load
     ecluse:ecluse-core
     , text ^>=2.1
     , containers ^>=0.7
+    , aeson >=2.2 && <2.4
 
 -- Work-per-request bench report core: the PURE CSV-to-Markdown rendering behind the
 -- bench run summary (parse the tasty-bench CSV, group by tasty path, render the
