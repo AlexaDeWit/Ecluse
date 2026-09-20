@@ -8,6 +8,7 @@ module Ecluse.Core.Registry.JsonStream (
     readJsonStream,
     retainedValue,
     retainedObject,
+    retainedObjectOr,
     retainedArray,
     retainedScalar,
 ) where
@@ -75,7 +76,14 @@ retainedValue depth
 
 -- | Materialise only fields whose key selects a parser. Duplicate keys keep their first value.
 retainedObject :: (Text -> J.Parser Value) -> J.Parser Value
-retainedObject select = Object <$> J.catMaybeI (J.foldI insert Nothing events)
+retainedObject select = Object <$> J.catMaybeI (objectMembers select)
+
+-- | Supply an invalid-shape witness without traversing a valid object through a parallel fallback.
+retainedObjectOr :: Value -> (Text -> J.Parser Value) -> J.Parser Value
+retainedObjectOr fallback select = maybe fallback Object <$> objectMembers select
+
+objectMembers :: (Text -> J.Parser Value) -> J.Parser (Maybe (KeyMap.KeyMap Value))
+objectMembers select = J.foldI insert Nothing events
   where
     field key = (Key.fromText (T.copy key),) <$> select key
     events = J.objectFound Nothing Nothing (Just <$> J.objectKeyValues field)

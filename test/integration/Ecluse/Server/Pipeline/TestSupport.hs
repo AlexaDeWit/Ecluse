@@ -96,7 +96,7 @@ module Ecluse.Server.Pipeline.TestSupport (
 
 import Prelude hiding (get)
 
-import Data.Aeson (Value (Object, String), (.=))
+import Data.Aeson (Value (Object, String), object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -402,7 +402,7 @@ conditionalArtifactUpstream version tarballBody =
         | isJust (lookupIfNoneMatch (requestHeaders req)) = responseLBS status304 [(hETag, "\"v1\"")] ""
         | otherwise = responseLBS status200 [] tarballBody
 
--- | Include an unknown top-level field to test lossless metadata assembly.
+-- | Include an unknown top-level field to verify omission during metadata extraction.
 packument :: [(Text, Value)] -> Text -> [(Text, Text)] -> Value
 packument versions latest times =
     packumentValue
@@ -434,11 +434,11 @@ versionObject version integrity hasInstall =
 fixtureAuthority :: Text
 fixtureAuthority = "https://upstream.example"
 
--- A @thing@ version fixture with the unmodelled field the relay assertions preserve.
+-- A version fixture pairs supported dependencies with an unknown field that extraction omits.
 versionFixture :: Text -> Text -> VersionSpec
 versionFixture version tarballUrl =
     (versionSpec "thing" version tarballUrl)
-        { vsExtraPairs = ["_unmodeled" .= ("kept" :: Text)]
+        { vsExtraPairs = ["dependencies" .= object ["fixture-dependency" .= ("^1.0.0" :: Text)], "_unmodeled" .= ("kept" :: Text)]
         }
 
 -- A plain (no-install-script) version object with a distinct integrity.

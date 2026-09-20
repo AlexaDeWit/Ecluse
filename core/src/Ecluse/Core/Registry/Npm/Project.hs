@@ -44,7 +44,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry (ParseError (..))
-import Ecluse.Core.Registry.Npm.Streaming (NpmField (VersionField), NpmRead (VersionListRead), npmFields)
+import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (VersionsContainer), NpmField (BeginContainer, VersionField), NpmRead (VersionListRead), npmFields)
 import Ecluse.Core.Registry.Npm.Wire (
     Dist (..),
     License (LicenseObject, LicenseSpdx),
@@ -79,6 +79,7 @@ projectVersionEntryResult name version publishedAt value =
 versionListParser :: Limits -> J.Parser VersionListItem
 versionListParser limits = J.objectFound VersionListObject VersionListObject (J.catMaybeI (candidate <$> npmFields (maxNestingDepth limits) VersionListRead))
   where
+    candidate (BeginContainer VersionsContainer) = Just VersionListContainer
     candidate (VersionField key raw) = Just (VersionListEntry (if usable raw then Just (mkVersion Npm key) else Nothing))
     candidate _ = Nothing
     usable raw = isJust (raw >>= rightToMaybe . (parseEither parseJSON :: Value -> Either String VersionEntry))

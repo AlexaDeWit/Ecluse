@@ -18,26 +18,43 @@ import Ecluse.Core.Security (LimitError, Limits, checkVersionCountOf)
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- | Container markers distinguish an empty inventory from a document of the wrong shape.
-data VersionListItem = VersionListObject | VersionListEntry (Maybe Version)
+data VersionListItem = VersionListObject | VersionListContainer | VersionListEntry (Maybe Version)
 
 -- | Count every observed entry, retaining only usable identifiers in source-key order.
-data VersionListState = VersionListState Bool Int (Map Text Version)
+data VersionListState = VersionListState
+    { inventoryObjectSeen :: Bool
+    , inventoryContainerSeen :: Bool
+    , inventoryAcceptEntries :: Bool
+    , inventoryCount :: Int
+    , inventoryVersions :: Map Text Version
+    }
 
 -- | Start without assuming that the response contains an inventory object.
 emptyVersionList :: VersionListState
-emptyVersionList = VersionListState False 0 mempty
+emptyVersionList = VersionListState False False False 0 mempty
 
 -- | Apply the ceiling before inserting a usable identifier or discarding an unusable entry.
 collectVersionList :: Limits -> VersionListState -> VersionListItem -> Either LimitError VersionListState
-collectVersionList limits (VersionListState objectSeen count versions) = \case
-    VersionListObject -> Right (VersionListState True count versions)
+collectVersionList limits inventory = \case
+    VersionListObject -> Right inventory{inventoryObjectSeen = True}
+    VersionListContainer ->
+        Right
+            inventory
+                { inventoryContainerSeen = True
+                , inventoryAcceptEntries = not (inventoryContainerSeen inventory)
+                }
+    VersionListEntry _ | not (inventoryAcceptEntries inventory) -> Right inventory
     VersionListEntry candidate -> do
-        let count' = count + 1
-        checkVersionCountOf limits count'
-        pure (VersionListState objectSeen count' (maybe versions (\version -> Map.insert (renderVersion version) version versions) candidate))
+        let count = inventoryCount inventory + 1
+        checkVersionCountOf limits count
+        pure
+            inventory
+                { inventoryCount = count
+                , inventoryVersions = maybe (inventoryVersions inventory) (\version -> Map.insert (renderVersion version) version (inventoryVersions inventory)) candidate
+                }
 
 -- | Refuse a non-object response instead of treating it as an empty store.
 finishVersionList :: VersionListState -> Either ParseError [Version]
-finishVersionList (VersionListState objectSeen _ versions)
-    | objectSeen = Right (Map.elems versions)
+finishVersionList inventory
+    | inventoryObjectSeen inventory = Right (Map.elems (inventoryVersions inventory))
     | otherwise = Left (ParseError "the version list is not a JSON object")

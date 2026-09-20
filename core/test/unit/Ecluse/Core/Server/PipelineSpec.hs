@@ -269,7 +269,7 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
             for_ [(base, "2.0.0", ["1.0.0", "2.0.0"], 1), (base{pdRules = denied}, "1.0.0", ["1.0.0"], 2)] $ \(deps, latest, keys, count) -> do
                 (_, logged) <- captureJsonLog $ \logEnv -> do
                     resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith deps) (servePackument npmPackumentReplies leftpadName defaultRequest)
-                    assertPrivatePackument latest keys resp
+                    assertPrivatePackument deps latest keys resp
                 assertConflictLog True logged
                 divergences `shouldReturn` count
             readIORef publicHits `shouldReturn` 2
@@ -279,7 +279,7 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
             denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
             (_, logged) <- captureJsonLog $ \logEnv -> do
                 resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpadName defaultRequest)
-                assertPrivatePackument "2.0.0" ["1.0.0", "2.0.0"] resp
+                assertPrivatePackument base "2.0.0" ["1.0.0", "2.0.0"] resp
             assertConflictLog True logged
             divergences `shouldReturn` 1
 
@@ -298,7 +298,7 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
                     denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
                     (_, logged) <- captureJsonLog $ \logEnv -> do
                         resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied}) (servePackument npmPackumentReplies leftpadName defaultRequest)
-                        assertPrivatePackument "1.0.0" ["1.0.0"] resp
+                        assertPrivatePackument base "1.0.0" ["1.0.0"] resp
                     assertConflictLog False logged
                     divergences `shouldReturn` 0
 
@@ -308,14 +308,14 @@ divergenceEvidenceSpec = describe "validated divergence evidence across public r
             denied <- prepare inertRuleDeps (atDefaultPrecedence Rules.DenyInstallTimeExecution : allowPolicy)
             (_, logged) <- captureJsonLog $ \logEnv -> do
                 resp <- captureServeWithLog logEnv npmPackumentContract rt (mountWith base{pdRules = denied, pdMinIntegrity = floorSpec}) (servePackument npmPackumentReplies leftpadName defaultRequest)
-                assertTrustedPackument (sriSha256Of "private bytes") "1.0.0" ["1.0.0"] resp
+                assertTrustedPackument (sriSha256Of "private bytes") base "1.0.0" ["1.0.0"] resp
             assertConflictLog False logged
             divergences `shouldReturn` 0
 
     it "does not fetch public conflict evidence for a first-party name" $
         withConflictOrigins (conflictPublicApp id) divergentPrivateApp $ \rt base divergences publicHits -> do
             resp <- captureServe npmPackumentContract rt (mountWith base{pdFirstParty = (== leftpadName)}) (servePackument npmPackumentReplies leftpadName defaultRequest)
-            assertPrivatePackument "1.0.0" ["1.0.0"] resp
+            assertPrivatePackument base "1.0.0" ["1.0.0"] resp
             divergences `shouldReturn` 0
             readIORef publicHits `shouldReturn` 0
 
@@ -508,19 +508,21 @@ servedKeys fields = case KeyMap.lookup "versions" fields of
     Just (Object versions) -> Just (sort (map Key.toText (KeyMap.keys versions)))
     _ -> Nothing
 
-assertPrivatePackument :: Text -> [Text] -> Response -> Expectation
+assertPrivatePackument :: PackumentDeps -> Text -> [Text] -> Response -> Expectation
 assertPrivatePackument = assertTrustedPackument (sha512Integrity "leftpad artifact bytes (privately tampered)")
 
-assertTrustedPackument :: Text -> Text -> [Text] -> Response -> Expectation
-assertTrustedPackument integrity latest keys resp = do
+assertTrustedPackument :: Text -> PackumentDeps -> Text -> [Text] -> Response -> Expectation
+assertTrustedPackument integrity deps latest keys resp = do
+    source <- maybe (fail "missing private source") (pure . registryUrlText) (pdPrivateBaseUrl deps)
     statusCode (responseStatus resp) `shouldBe` 200
     fields <- servedFields resp
     KeyMap.lookup "dist-tags" fields `shouldBe` Just (object ["latest" .= latest])
     servedKeys fields `shouldBe` Just keys
+    KeyMap.lookup "author" fields `shouldBe` Just (String ("See " <> source <> "/leftpad"))
     case KeyMap.lookup "versions" fields of
         Just (Object versions) ->
             KeyMap.lookup "1.0.0" versions
-                `shouldBe` Just (versionValue ((versionSpec "leftpad" "1.0.0" "http://proxy.test/leftpad/-/leftpad-1.0.0.tgz"){vsIntegrity = Just integrity, vsExtraPairs = ["_retained" .= ("private field" :: Text)]}))
+                `shouldBe` Just (versionValue ((versionSpec "leftpad" "1.0.0" "http://proxy.test/leftpad/-/leftpad-1.0.0.tgz"){vsIntegrity = Just integrity, vsExtraPairs = ["dependencies" .= object ["private-marker" .= ("^1.0.0" :: Text)], "author" .= ("See " <> source <> "/leftpad")]}))
         _ -> expectationFailure "expected served version objects"
 
 conflictPublicApp :: (VersionSpec -> VersionSpec) -> Application
@@ -827,7 +829,7 @@ privatePackumentOver host integrity versions latest =
         versionValue
             ( (versionSpec "leftpad" ver ("http://" <> decodeUtf8 host <> "/leftpad/-/leftpad-" <> ver <> ".tgz"))
                 { vsIntegrity = Just integrity
-                , vsExtraPairs = ["_retained" .= ("private field" :: Text)]
+                , vsExtraPairs = ["dependencies" .= object ["private-marker" .= ("^1.0.0" :: Text)], "_retained" .= ("private field" :: Text)]
                 }
             )
 

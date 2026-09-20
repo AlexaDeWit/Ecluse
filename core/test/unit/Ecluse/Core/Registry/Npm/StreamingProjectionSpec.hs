@@ -11,7 +11,7 @@ import Data.Map.Strict qualified as Map
 import Test.Hspec
 
 import Ecluse.Core.Package (PackageDetails (pkgPublishedAt), PackageInfo (infoVersions))
-import Ecluse.Core.Registry.Npm.Streaming (NpmField (..))
+import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField (..))
 import Ecluse.Core.Registry.Npm.StreamingProjection
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Test.Package (unscopedNpm)
@@ -22,11 +22,15 @@ spec = describe "finishProjection" $
     it "joins release timestamps independently of source map order" $ do
         let name = unscopedNpm "thing"
             release = object ["name" .= ("thing" :: Text), "version" .= ("1.0.0" :: Text), "dist" .= object ["tarball" .= ("https://source.example/one.tgz" :: Text)]]
-            fields = [NameField (String "thing"), VersionField "1.0.0" (Just release), TimeField "1.0.0" (String "2020-01-01T00:00:00Z")]
+            fields =
+                [ [NameField (String "thing")]
+                , [BeginContainer VersionsContainer, VersionField "1.0.0" (Just release), IgnoredField]
+                , [BeginContainer TimeContainer, TimeField "1.0.0" (String "2020-01-01T00:00:00Z"), IgnoredField]
+                ]
             project ordered = do
                 collected <- expectRight (foldM (collectField defaultLimits name) emptyProjection ordered)
                 fst <$> expectRight (finishProjection defaultLimits name "See source" collected)
-        forward <- project fields
-        backward <- project (reverse fields)
+        forward <- project (concat fields)
+        backward <- project (concat (reverse fields))
         forward `shouldBe` backward
         (Map.lookup "1.0.0" (infoVersions forward) >>= pkgPublishedAt) `shouldSatisfy` isJust

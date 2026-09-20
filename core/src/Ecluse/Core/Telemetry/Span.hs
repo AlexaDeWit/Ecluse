@@ -89,7 +89,7 @@ data TracingPort = TracingPort
         PackageName ->
         IO a ->
         IO a
-    -- ^ Bracket the projection of a fetched document, which only a success reaches.
+    -- ^ Bracket extraction after a successful metadata response. Streaming body reads can occur inside.
     }
 
 {- | The mirror worker's domain-span tracing port: the worker analogue of 'TracingPort'. The

@@ -18,10 +18,11 @@ import Ecluse.Core.Registry (ParseError (ParseError), RegistryResponse (response
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult, versionListParser)
 import Ecluse.Core.Registry.VersionList (collectVersionList, emptyVersionList, finishVersionList)
-import Ecluse.Core.Registry.WireSupport (Projection, checkNameAgreement, partitionLenient)
+import Ecluse.Core.Registry.WireSupport (Projection, checkNameAgreement)
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
+import Ecluse.Test.Registry.WireSupport (partitionLenient)
 
 -- | Keep the prior whole-tree policy projection as an independent comparison for streamed captures.
 parsePackageInfoFromValue :: PackageName -> Value -> Either ParseError (Projection PackageInfo)

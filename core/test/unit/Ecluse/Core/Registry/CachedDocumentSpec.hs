@@ -18,7 +18,7 @@ spec = describe "CachedDocument (npm's opaque-carrier boundary)" $ do
         map (project . inject) samples `shouldBe` map Just samples
 
     it "foldCachedDoc preserves the same value for diagnostic accounting" $
-        map (foldCachedDoc (\value _ -> value) . inject) samples `shouldBe` samples
+        map (foldCachedDoc const . inject) samples `shouldBe` samples
 
     it "charges representative compact values without understating their encoded bytes" $
         forM_ samples $

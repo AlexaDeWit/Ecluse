@@ -15,6 +15,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -22,7 +23,7 @@ import Ecluse.Core.Package (InvalidEntry, InvalidEntryKind (..), PackageDetails 
 import Ecluse.Core.Registry.Metadata (MetadataError (..))
 import Ecluse.Core.Registry.Metadata.Projection (projectionResult, validateReportedName)
 import Ecluse.Core.Registry.Npm.Project (projectName, projectVersionEntryResult)
-import Ecluse.Core.Registry.Npm.Streaming (NpmField (..))
+import Ecluse.Core.Registry.Npm.Streaming (NpmContainer (..), NpmField (..))
 import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
 import Ecluse.Core.Security (LimitError, Limits, checkArtifactCount, checkVersionCountOf)
 import Ecluse.Core.Version (Version, mkVersion)
@@ -34,17 +35,35 @@ data NpmProjection = NpmProjection
     , projectedTimes :: Map Text (Either InvalidEntry UTCTime, Value)
     , projectedTags :: Map Text (Either InvalidEntry Version, Value)
     , projectedCount :: Int
+    , projectedContainers :: Set NpmContainer
+    , projectedActiveContainer :: Maybe NpmContainer
     }
 
 -- | Start one source projection. No document or input chunk is retained here.
 emptyProjection :: NpmProjection
-emptyProjection = NpmProjection Nothing mempty mempty mempty 0
+emptyProjection =
+    NpmProjection
+        { projectedName = Nothing
+        , projectedVersions = mempty
+        , projectedTimes = mempty
+        , projectedTags = mempty
+        , projectedCount = 0
+        , projectedContainers = mempty
+        , projectedActiveContainer = Nothing
+        }
 
 -- | Project each release once and enforce the version ceiling while receiving source fields.
 collectField :: Limits -> PackageName -> NpmProjection -> NpmField -> Either LimitError NpmProjection
 collectField limits name acc = \case
-    IgnoredField -> Right acc
+    IgnoredField -> Right acc{projectedActiveContainer = Nothing}
+    BeginContainer container ->
+        Right
+            acc
+                { projectedContainers = Set.insert container (projectedContainers acc)
+                , projectedActiveContainer = if Set.member container (projectedContainers acc) then Nothing else Just container
+                }
     NameField value -> Right acc{projectedName = projectedName acc <|> Just value}
+    VersionField _ _ | projectedActiveContainer acc /= Just VersionsContainer -> Right acc
     VersionField key raw -> do
         let count = projectedCount acc + 1
         checkVersionCountOf limits count
@@ -53,7 +72,9 @@ collectField limits name acc = \case
                 { projectedCount = count
                 , projectedVersions = maybe (projectedVersions acc) (\value -> let !typed = release key value in firstInsert key (typed, value) (projectedVersions acc)) raw
                 }
+    TimeField _ _ | projectedActiveContainer acc /= Just TimeContainer -> Right acc
     TimeField key value -> Right acc{projectedTimes = firstInsert key (decode InvalidPublishTime key value, value) (projectedTimes acc)}
+    TagField _ _ | projectedActiveContainer acc /= Just TagsContainer -> Right acc
     TagField key value -> Right acc{projectedTags = firstInsert key (mkVersion Npm <$> decode InvalidDistTag key value, value) (projectedTags acc)}
   where
     release key value = case projectVersionEntryResult name (mkVersion Npm key) Nothing value of

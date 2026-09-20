@@ -27,16 +27,17 @@ import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (InvalidEntry, PackageInfo (..), PackageName, renderPackageName)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
-import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), ParseError (ParseError), isAuthorisationFailure)
+import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), isAuthorisationFailure)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
-import Ecluse.Core.Registry.Exchange (boundedJsonFetch, formThen)
+import Ecluse.Core.Registry.Exchange (boundedJsonFetchWith, formThen)
 import Ecluse.Core.Registry.JsonStream (StreamResult (..))
 import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataFetchError)
+import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), metadataRequest, npmArtifactHosts, packageUrl)
 import Ecluse.Core.Registry.Npm.Streaming (NpmRead (..), npmFields)
 import Ecluse.Core.Registry.Npm.StreamingProjection (NpmProjection, collectField, emptyProjection, finishProjection)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
-import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), LimitError (TooDeeplyNested), Limits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
+import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), Limits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
@@ -71,7 +72,7 @@ fetchNpmManifest tracing origin name = do
 
 fetchNpmStream :: TracingPort -> OriginClient -> PackageName -> NpmRead -> IO (Either MetadataError (StreamResult NpmProjection))
 fetchNpmStream tracing origin name mode =
-    spanMetadataFetch tracing name (spanMetadataDecode tracing name fetch) <&> \case
+    spanMetadataFetch tracing name fetch <&> \case
         Left fault -> Left (metadataFetchError fault)
         Right (404, _) -> Left MetadataAbsent
         Right (code, result)
@@ -83,7 +84,8 @@ fetchNpmStream tracing origin name mode =
     fetch =
         formThen
             FetchUrlUnformable
-            ( boundedJsonFetch
+            ( boundedJsonFetchWith
+                (spanMetadataDecode tracing name)
                 (ocManager origin)
                 (MetadataBodyLimit (maxMetadataBytes limits))
                 (npmFields (maxNestingDepth limits) mode)
@@ -104,10 +106,7 @@ fetchNpmVersion tracing origin name version = do
 -- | Finish a streamed source while preserving its original identity and typed error classification.
 projectNpmStream :: Limits -> PackageName -> Text -> StreamResult NpmProjection -> Either MetadataError (PackageInfo, Value)
 projectNpmStream limits name base streamed =
-    first parseError (streamValue streamed) >>= finishProjection limits name (authorPointer base name)
-  where
-    parseError (ParseError "retained JSON nesting limit") = MetadataBoundExceeded (TooDeeplyNested (maxNestingDepth limits))
-    parseError _ = MetadataUndecodable
+    first (streamError limits) (streamValue streamed) >>= finishProjection limits name (authorPointer base name)
 
 -- | Pair one release with its compact source object and the same document's latest tag.
 selectNpmRead :: Version -> Int -> (PackageInfo, Value) -> VersionRead

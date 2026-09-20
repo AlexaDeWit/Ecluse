@@ -11,6 +11,7 @@ module Ecluse.Core.Registry.Exchange (
     singleAttemptSettings,
     boundedFetch,
     boundedJsonFetch,
+    boundedJsonFetchWith,
     boundedRelay,
 
     -- * Request formation
@@ -90,8 +91,20 @@ readBounded project limits response =
 
 -- | Extract successful metadata within the response lifetime. Refusals do not parse error bodies.
 boundedJsonFetch :: Manager -> BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> Request -> IO (Either FetchFault (Int, Maybe (StreamResult s)))
-boundedJsonFetch manager limits parser step initial request = runExchange manager request $ \response -> do
+boundedJsonFetch = boundedJsonFetchWith id
+
+-- | Bracket successful-body extraction after response headers. Error statuses never enter the observer.
+boundedJsonFetchWith ::
+    (IO (Either LimitError (StreamResult s)) -> IO (Either LimitError (StreamResult s))) ->
+    Manager ->
+    BodyLimit ->
+    J.Parser a ->
+    (s -> a -> Either LimitError s) ->
+    s ->
+    Request ->
+    IO (Either FetchFault (Int, Maybe (StreamResult s)))
+boundedJsonFetchWith observe manager limits parser step initial request = runExchange manager request $ \response -> do
     let code = statusCode (responseStatus response)
     if isSuccessStatus code
-        then fmap ((code,) . Just) <$> readJsonStream limits parser step initial (brRead (responseBody response))
+        then fmap ((code,) . Just) <$> observe (readJsonStream limits parser step initial (brRead (responseBody response)))
         else pure (Right (code, Nothing))

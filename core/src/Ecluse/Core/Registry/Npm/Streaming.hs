@@ -6,6 +6,7 @@
 module Ecluse.Core.Registry.Npm.Streaming (
     NpmRead (..),
     NpmField (..),
+    NpmContainer (..),
     npmFields,
     versionFields,
     versionListFields,
@@ -15,15 +16,20 @@ import Data.Aeson (Value (Array, Null, Number, Object, String))
 import Data.JsonStream.Parser qualified as J
 import Data.Text qualified as T
 
-import Ecluse.Core.Registry.JsonStream (retainedArray, retainedObject, retainedScalar, retainedValue)
+import Ecluse.Core.Registry.JsonStream (retainedArray, retainedObject, retainedObjectOr, retainedScalar, retainedValue)
 
 -- | Full serving data, one release, or the fields needed to recognise usable version entries.
 data NpmRead = FullRead | SelectedRead Text | VersionListRead
     deriving stock (Eq, Show)
 
+-- | Independent top-level maps, with first-container precedence retained by their consumer.
+data NpmContainer = VersionsContainer | TimeContainer | TagsContainer
+    deriving stock (Eq, Ord, Show)
+
 -- | Each field retains its source coordinate. Skipped releases still count towards the version cap.
 data NpmField
     = IgnoredField
+    | BeginContainer NpmContainer
     | NameField Value
     | VersionField Text (Maybe Value)
     | TimeField Text Value
@@ -32,32 +38,28 @@ data NpmField
 
 -- | Extract independent maps without assuming their ordering in the source.
 npmFields :: Int -> NpmRead -> J.Parser NpmField
-npmFields depth mode =
-    (if mode == VersionListRead then mempty else NameField <$> J.objectWithKey "name" value)
-        <> J.objectWithKey "versions" (pure IgnoredField <> J.objectKeyValues release)
-        <> J.objectWithKey "time" (pure IgnoredField <> J.objectKeyValues timestamp)
-        <> J.objectWithKey "dist-tags" (pure IgnoredField <> J.objectKeyValues tag)
+npmFields depth mode = J.objectKeyValues topField
   where
+    topField "name"
+        | mode /= VersionListRead = NameField <$> value
+    topField "versions" = container VersionsContainer (J.objectKeyValues release)
+    topField "time" = case mode of
+        VersionListRead -> mempty
+        SelectedRead target -> container TimeContainer (TimeField target <$> J.objectWithKey target value)
+        FullRead -> container TimeContainer (J.objectKeyValues timestamp)
+    topField "dist-tags" = case mode of
+        VersionListRead -> mempty
+        SelectedRead _ -> container TagsContainer (TagField "latest" <$> J.objectWithKey "latest" value)
+        FullRead -> container TagsContainer (J.objectKeyValues tag)
+    topField _ = mempty
+    container slot parser = J.objectFound (BeginContainer slot) IgnoredField parser <|> pure (BeginContainer slot)
     value = scalar (depth - 1)
-    release key =
-        VersionField (T.copy key) <$> case mode of
-            SelectedRead target | key /= target -> pure Nothing
-            VersionListRead -> (Just <$> retainedObject listField) <|> pure (Just Null)
-            _ -> (Just <$> retainedObject (field versionFields)) <|> pure (Just Null)
-    timestamp key
-        | wantedTime key = TimeField (T.copy key) <$> value
-        | otherwise = mempty
-    tag key
-        | wantedTag key = TagField (T.copy key) <$> value
-        | otherwise = mempty
-    wantedTime key = case mode of
-        FullRead -> True
-        SelectedRead target -> key == target
-        VersionListRead -> False
-    wantedTag key = case mode of
-        FullRead -> True
-        SelectedRead _ -> key == "latest"
-        VersionListRead -> False
+    release key = case mode of
+        SelectedRead target | key /= target -> pure (VersionField "" Nothing)
+        VersionListRead -> VersionField (T.copy key) . Just <$> retainedObjectOr Null listField
+        _ -> VersionField (T.copy key) . Just <$> retainedObjectOr Null (field versionFields)
+    timestamp key = TimeField (T.copy key) <$> value
+    tag key = TagField (T.copy key) <$> value
     listField key
         | key == "name" || key == "version" = witness
         | key == "dist" = retainedObject (\slot -> if slot `elem` ["tarball", "shasum", "integrity"] then witness else mempty) <|> pure Null

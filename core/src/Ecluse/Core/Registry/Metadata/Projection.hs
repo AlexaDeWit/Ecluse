@@ -10,6 +10,7 @@ module Ecluse.Core.Registry.Metadata.Projection (
     validateReportedName,
     projectionResult,
     selectiveError,
+    streamError,
 ) where
 
 import Data.Aeson (Value, eitherDecodeStrict, parseJSON)
@@ -17,7 +18,7 @@ import Data.Aeson.Types (parseMaybe)
 
 import Ecluse.Core.Json.Selective (SelectiveError (SelectiveTooDeeplyNested, SelectiveUndecodable))
 import Ecluse.Core.Package (PackageInfo, PackageName)
-import Ecluse.Core.Registry (ParseError)
+import Ecluse.Core.Registry (ParseError (ParseError))
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable))
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (
@@ -58,3 +59,9 @@ selectiveError :: Limits -> SelectiveError -> MetadataError
 selectiveError limits = \case
     SelectiveUndecodable -> MetadataUndecodable
     SelectiveTooDeeplyNested -> MetadataBoundExceeded (TooDeeplyNested (maxNestingDepth limits))
+
+-- | Translate incremental parser bounds without requiring validity of skipped data.
+streamError :: Limits -> ParseError -> MetadataError
+streamError limits = \case
+    ParseError "retained JSON nesting limit" -> MetadataBoundExceeded (TooDeeplyNested (maxNestingDepth limits))
+    _ -> MetadataUndecodable

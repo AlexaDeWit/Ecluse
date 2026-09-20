@@ -615,7 +615,7 @@ executable site-gen
     , ecluse:ecluse-site
     , filepath   ^>=1.5
 
--- Internal test-support library shared by every suite below. The common home for
+-- Internal support library shared by tests and performance tools. The common home for
 -- cross-suite helpers, fixtures, and specs. It links against the library under test,
 -- so shared fixtures can build domain values directly.
 library ecluse-test-support
@@ -649,6 +649,7 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm.Maintenance
     Ecluse.Test.Registry.Npm.Project
     Ecluse.Test.Registry.JsonStream
+    Ecluse.Test.Registry.WireSupport
     Ecluse.Test.Registry.PyPI
     Ecluse.Test.Registry.PyPI.Wire
     Ecluse.Test.Registry.RubyGems.Wire
@@ -1454,6 +1455,7 @@ library ecluse-bench-load
     Ecluse.BenchLoad.PatternReport
   build-depends:
     ecluse:ecluse-core
+    , ecluse:ecluse-test-support
     , text ^>=2.1
     , containers ^>=0.7
     , bytestring ^>=0.12

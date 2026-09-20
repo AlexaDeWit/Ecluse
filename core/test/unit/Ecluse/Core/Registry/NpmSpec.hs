@@ -21,9 +21,9 @@ import Network.HTTP.Client (
     newManager,
  )
 import Network.HTTP.Types.Header (hContentEncoding)
-import Network.HTTP.Types.Status (status200, status401, status403, statusCode)
+import Network.HTTP.Types.Status (status200, status401, status403, status404, statusCode)
 import Network.TLS qualified as TLS
-import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import UnliftIO (evaluate)
 
 import Ecluse.Core.Fault (
@@ -44,6 +44,7 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooL
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Snapshot (digestOf)
+import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode))
 import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry (isBoundExceededFetch, isTransportFetch)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, isOdd, publicRegistryBaseUrl)
@@ -57,8 +58,28 @@ import Ecluse.Test.Stub (
 spec :: Spec
 spec = do
     boundedBodySpec
+    decodeSpanSpec
     transportFaultSpec
     configAndWiringSpec
+
+decodeSpanSpec :: Spec
+decodeSpanSpec = describe "metadata decode spans" $ do
+    for_ [status200, status401, status403, status404] $ \upstreamStatus ->
+        it ("opens the decode span only after success headers: " <> show (statusCode upstreamStatus)) $
+            withStub upstreamStatus "{\"name\":\"is-odd\"}" $ \stub -> do
+                config <- stubConfig loopbackRegistryUrl stub
+                count <- newIORef (0 :: Int)
+                let tracing = passthroughTracingPort{spanMetadataDecode = \_ action -> modifyIORef' count (+ 1) >> action}
+                _ <- fetchNpmManifest tracing config isOdd
+                readIORef count `shouldReturn` if upstreamStatus == status200 then 1 else 0
+    for_ ["", "http://127.0.0.1:1"] $ \url ->
+        it ("does not open a decode span for request failure at " <> toString url) $ do
+            manager <- newManager defaultManagerSettings
+            count <- newIORef (0 :: Int)
+            let tracing = passthroughTracingPort{spanMetadataDecode = \_ action -> modifyIORef' count (+ 1) >> action}
+            outcome <- fetchNpmManifest tracing (defaultNpmConfig (loopbackRegistryUrl url) manager) isOdd
+            void outcome `shouldSatisfy` isLeft
+            readIORef count `shouldReturn` 0
 
 -- | The shipping metadata reader applies source byte bounds before projecting streamed fields.
 boundedBodySpec :: Spec
