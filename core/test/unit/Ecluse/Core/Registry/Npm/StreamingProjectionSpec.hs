@@ -5,6 +5,7 @@
 -- | Policy timestamps and artifact coordinates stay joined to their source release key.
 module Ecluse.Core.Registry.Npm.StreamingProjectionSpec (spec) where
 
+import Control.Monad (foldM)
 import Data.Aeson (Value (String), object, (.=))
 import Data.Map.Strict qualified as Map
 import Test.Hspec

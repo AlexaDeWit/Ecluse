@@ -33,7 +33,6 @@ import Ecluse.Core.Package (InvalidEntry, PackageName)
 import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Registry (
     FetchFault,
-    ParseError,
     PublishRelayResponse,
     RegistryResponse,
     UrlFormationError,

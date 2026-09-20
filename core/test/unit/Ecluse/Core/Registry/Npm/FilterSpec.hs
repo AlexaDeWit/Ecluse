@@ -31,7 +31,7 @@ import Ecluse.Core.Registry.Npm.Filter (
     npmDocumentName,
     rewriteVersion,
  )
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
+
 import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.Npm.Route (tarballPath)
 import Ecluse.Core.Rules.Types (
@@ -45,6 +45,7 @@ import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
 import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Test.Json (asObject, fieldAt, mapAt, objectAt, textAt)
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest)
 import Ecluse.Test.Rules (atDefaultPrecedence, filterPlan, inertRuleDeps, isApproved)
 import Ecluse.Test.Snapshot (jsonSnapshot, projectJsonSnapshot)
 import Ecluse.Test.Support (decodeJsonOrFail, expectRight)

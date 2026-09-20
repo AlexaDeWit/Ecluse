@@ -34,16 +34,17 @@ import Ecluse.Core.Fault (
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Registry (
     FetchFault (FetchBoundExceeded, FetchUrlUnformable),
-    RegistryResponse (..),
     UrlFormationError (EmptyBaseUrl),
  )
 
-import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
-import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full))
+import Ecluse.Core.Registry.Metadata (Manifest (manifestBodyBytes, manifestDigest), MetadataError (..))
+import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
 import Ecluse.Core.Registry.Origin (OriginClient (..))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
+import Ecluse.Core.Snapshot (digestOf)
+import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry (isBoundExceededFetch, isTransportFetch)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, isOdd, publicRegistryBaseUrl)
 
@@ -59,7 +60,7 @@ spec = do
     transportFaultSpec
     configAndWiringSpec
 
--- | The metadata fetch reads the upstream body through 'boundedRead' against the config's 'ocLimits'.
+-- | The shipping metadata reader applies source byte bounds before projecting streamed fields.
 boundedBodySpec :: Spec
 boundedBodySpec = describe "bounded metadata body read" $ do
     for_ [status401, status403] $ \upstreamStatus ->
@@ -67,31 +68,30 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             withStub upstreamStatus (toLazy oversizedBody) $ \stub -> do
                 base <- stubConfig loopbackRegistryUrl stub
                 let config = base{ocLimits = defaultLimits{maxMetadataBytes = 64}}
-                outcome <- fetchMetadataFormBounded config Full isOdd
-                outcome `shouldBe` Right (RegistryResponse (statusCode upstreamStatus) 0 "")
+                outcome <- fetchNpmManifest passthroughTracingPort config isOdd
+                void outcome `shouldBe` Left (MetadataAuthorisationFailure (statusCode upstreamStatus))
 
     it "refuses an over-cap body fail-closed as a FetchBoundExceeded value" $
         withStub status200 (toLazy oversizedBody) $ \stub -> do
             base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxMetadataBytes = 64}}
-            outcome <- fetchMetadataFormBounded config Full isOdd
-            outcome `shouldBe` Left (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 64)))
+            outcome <- fetchNpmManifest passthroughTracingPort config isOdd
+            void outcome `shouldBe` Left (MetadataFetch (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 64))))
 
-    it "returns a body that is within maxMetadataBytes verbatim" $
-        -- The read returns a body within the cap whole and unchanged: no false refusal.
+    it "digests the complete source body within maxMetadataBytes" $
         withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
             base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxMetadataBytes = 64}}
-            resp <- fetchMetadataFormBounded config Full isOdd
-            fmap responseBody resp `shouldBe` Right "{\"name\":\"is-odd\"}"
+            resp <- fetchNpmManifest passthroughTracingPort config isOdd
+            fmap manifestDigest resp `shouldBe` Right (digestOf "{\"name\":\"is-odd\"}")
 
     it "reports decompressed bytes for an accepted gzip body" $
         withStubHeaders status200 [(hContentEncoding, "gzip")] (GZip.compress (toLazy oversizedBody)) $ \stub -> do
             base <- stubConfig loopbackRegistryUrl stub
             let config = base{ocLimits = defaultLimits{maxMetadataBytes = BS.length oversizedBody}}
-            resp <- fetchMetadataFormBounded config Full isOdd
-            fmap responseBodyBytes resp `shouldBe` Right (BS.length oversizedBody)
-            fmap responseBody resp `shouldBe` Right oversizedBody
+            resp <- fetchNpmManifest passthroughTracingPort config isOdd
+            fmap manifestBodyBytes resp `shouldBe` Right (BS.length oversizedBody)
+            fmap manifestDigest resp `shouldBe` Right (digestOf oversizedBody)
 
     it "bounds DECOMPRESSED size: a small gzip body that inflates past the cap is refused" $
         -- The size cap must cover decompressed bytes, including expansion from a gzip bomb.
@@ -101,16 +101,16 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             -- Sanity: the compressed body is under the cap, so only the
             -- decompressed-size bound can explain a refusal.
             BS.length gzippedOversizedBody `shouldSatisfy` (< 1024)
-            outcome <- fetchMetadataFormBounded config Full isOdd
-            outcome `shouldSatisfy` isBoundExceededFetch
+            outcome <- fetchNpmManifest passthroughTracingPort config isOdd
+            fetchOutcome outcome `shouldSatisfy` isBoundExceededFetch
 
     it "reports an empty base URL as a FetchUrlUnformable value, never thrown" $ do
         -- The read-path URL-formation fault is a value (mirroring the write path's
         -- PublishFetch), not a thrown UrlFormationError laundered by a broad catch.
         manager <- newManager defaultManagerSettings
         let config = defaultNpmConfig (loopbackRegistryUrl "") manager
-        outcome <- fetchMetadataFormBounded config Full isOdd
-        outcome `shouldBe` Left (FetchUrlUnformable EmptyBaseUrl)
+        outcome <- fetchNpmManifest passthroughTracingPort config isOdd
+        void outcome `shouldBe` Left (MetadataFetch (FetchUrlUnformable EmptyBaseUrl))
 
 -- | 'classifyTransport' folds each @http-client@ exception shape onto the bounded 'TransportCause'.
 transportFaultSpec :: Spec
@@ -146,8 +146,8 @@ transportFaultSpec = describe "transport faults as values" $ do
         -- connect. It is the one live-transport case a unit test can drive determinately.
         manager <- newManager defaultManagerSettings
         let config = defaultNpmConfig (loopbackRegistryUrl "http://127.0.0.1:1") manager
-        outcome <- fetchMetadataFormBounded config Full isOdd
-        outcome `shouldSatisfy` isTransportFetch
+        outcome <- fetchNpmManifest passthroughTracingPort config isOdd
+        fetchOutcome outcome `shouldSatisfy` isTransportFetch
   where
     causeOf = tfCause . classifyTransport
 
@@ -183,3 +183,8 @@ data FakeInnerFault = FakeInnerFault
     deriving stock (Show)
 
 instance Exception FakeInnerFault
+
+fetchOutcome :: Either MetadataError a -> Either FetchFault ()
+fetchOutcome = \case
+    Left (MetadataFetch fault) -> Left fault
+    _ -> Right ()

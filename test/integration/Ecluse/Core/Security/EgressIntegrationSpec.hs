@@ -15,11 +15,11 @@ import Ecluse.Core.Credential (bareCredential, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody))
-import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated))
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken))
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig)
+import Ecluse.Test.Registry.Npm.Metadata (fetchMetadataFormBounded)
 import Ecluse.Test.Stub (stubPort, withStub, withStubHeaders)
 
 {- | The data-plane egress posture, driven through the real npm fetch path against an

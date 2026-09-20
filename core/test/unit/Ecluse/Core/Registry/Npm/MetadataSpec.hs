@@ -26,7 +26,7 @@ import Ecluse.Core.Registry.Metadata (
     VersionDoc (vdRaw),
     VersionRead (vrUpstreamLatest, vrVersion),
  )
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion, selectNpmVersionDoc)
+import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
 import Ecluse.Core.Security (
     LimitError (TooDeeplyNested, TooManyVersions),
     Limits (maxNestingDepth, maxVersionCount),
@@ -35,6 +35,7 @@ import Ecluse.Core.Security (
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Json (isObject)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Snapshot (readDetails)
 import Ecluse.Test.Support (expectRight)
 

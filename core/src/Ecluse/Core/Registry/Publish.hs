@@ -43,7 +43,8 @@ import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Exchange (boundedExchange, boundedJsonFetch, formThen)
 import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue))
 import Ecluse.Core.Registry.Request (sealRequest)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, checkVersionCountOf, maxMetadataBytes)
+import Ecluse.Core.Registry.VersionList (VersionListItem, collectVersionList, emptyVersionList, finishVersionList)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits, maxMetadataBytes)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Version (Version)
 
@@ -56,7 +57,7 @@ data PublishPlan = PublishPlan
     , ppLatest :: Version
     -- ^ Always a version the store holds after this write, the published one when it is alone.
     , ppMetadata :: CachedDoc
-    -- ^ The version object the public registry served at admission, republished by the codec.
+    -- ^ Supported source fields paired with the release admitted for mirroring.
     }
     deriving stock (Eq, Show)
 
@@ -66,7 +67,7 @@ so a codec holds no URL, credential, or connection state.
 data PublishCodec = PublishCodec
     { pcProbeRequest :: Text -> Maybe Secret -> PackageName -> Either UrlFormationError Request
     -- ^ Form the metadata read the presence probe makes against the mirror target.
-    , pcVersionListParser :: Limits -> J.Parser [Version]
+    , pcVersionListParser :: Limits -> J.Parser VersionListItem
     -- ^ Select usable version identifiers without retaining source release objects.
     , pcPublishRequest :: Text -> Maybe Secret -> PackageName -> PublishPlan -> MirrorArtifact -> ByteString -> Either PublishFault Request
     {- ^ Form the complete publish request for one verified artifact. A plan whose version object
@@ -125,15 +126,14 @@ probeMetadata transport targetUrl codec name = do
         (sealRequest <$> pcProbeRequest codec targetUrl token name)
 
 -- | Read a codec's identifiers inside the response lifetime, preserving transport and HTTP outcomes.
-fetchVersionList :: Manager -> Limits -> J.Parser [Version] -> Request -> IO (Either FetchFault VersionListResponse)
+fetchVersionList :: Manager -> Limits -> J.Parser VersionListItem -> Request -> IO (Either FetchFault VersionListResponse)
 fetchVersionList manager limits parser request =
-    fmap project <$> boundedJsonFetch manager (MetadataBodyLimit (maxMetadataBytes limits)) parser collect Nothing request
+    fmap project <$> boundedJsonFetch manager (MetadataBodyLimit (maxMetadataBytes limits)) parser (collectVersionList limits) emptyVersionList request
   where
-    collect _ versions = Just versions <$ checkVersionCountOf limits (length versions)
     project (status, result) = VersionListResponse status $
         case result of
             Nothing -> Left (ParseError "no successful version-list body")
-            Just streamed -> streamValue streamed >>= maybe (Left (ParseError "missing version list")) Right
+            Just streamed -> streamValue streamed >>= finishVersionList
 
 -- | HTTP status and usable identifiers from a bounded selective read.
 data VersionListResponse = VersionListResponse

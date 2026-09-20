@@ -16,6 +16,7 @@ main :: IO ()
 main =
     Environment.getArgs >>= \case
         ["--metadata-probe", shape, path] -> MemoryModelResidencySpec.childMain shape path
+        ["--metadata-source-probe", mode, name, version, limit, path] -> MemoryModelResidencySpec.sourceMain mode name version limit path
         _ -> hspec $ do
             TarballResidencySpec.spec
             MemoryModelResidencySpec.spec

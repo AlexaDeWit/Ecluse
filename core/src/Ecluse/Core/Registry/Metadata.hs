@@ -26,6 +26,7 @@ module Ecluse.Core.Registry.Metadata (
 
     -- * Errors
     MetadataError (..),
+    metadataFetchError,
 
     -- * Single-version resolution
     VersionEvaluation (..),
@@ -36,20 +37,20 @@ module Ecluse.Core.Registry.Metadata (
 import Data.Aeson (Value)
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
-import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, responseBodyBytes, responseStatusCode), isAuthorisationFailure, isSuccessStatus)
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded), RegistryResponse (responseBody, responseBodyBytes, responseStatusCode), isAuthorisationFailure, isSuccessStatus)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
-import Ecluse.Core.Security (LimitError)
+import Ecluse.Core.Security (LimitError (..))
 import Ecluse.Core.Snapshot (ContentDigest, digestBytes, digestOf)
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version)
 
--- | A package snapshot with source bytes for assembly and a digest for validators.
+-- | A package snapshot with ecosystem-owned serving data and the original source digest.
 data Manifest = Manifest
     { manifestInfo :: PackageInfo
     -- ^ The typed packument view the rules and merge reason over.
     , manifestRaw :: CachedDoc
-    -- ^ The raw upstream document ('CachedDoc') the served body is built from.
+    -- ^ The supported source fields ('CachedDoc') used to assemble the served body.
     , manifestBodyBytes :: Int
     -- ^ Decompressed byte count from the source read, before projection.
     , manifestDigest :: ContentDigest
@@ -71,7 +72,7 @@ data VersionDoc = VersionDoc
     { vdDetails :: PackageDetails
     -- ^ The typed view the rules engine decides on.
     , vdRaw :: Maybe CachedDoc
-    -- ^ The version object as the source served it. 'Nothing' for an adapter that retains none.
+    -- ^ Supported fields from the selected source version. 'Nothing' when the adapter retains none.
     }
     deriving stock (Eq, Show)
 
@@ -175,3 +176,13 @@ versionTransience = \case
     -- A withdrawn version is gone for good, so no consumer waits for it to come back.
     VersionMissing -> Just WontResolve
     VersionPresent{} -> Nothing
+
+-- | Keep body/transport faults distinct from structural bounds enforced during incremental extraction.
+metadataFetchError :: FetchFault -> MetadataError
+metadataFetchError fault = case fault of
+    FetchBoundExceeded limit -> case limit of
+        BodyTooLarge _ -> MetadataFetch fault
+        TooManyVersions _ _ -> MetadataBoundExceeded limit
+        TooManyArtifacts _ _ -> MetadataBoundExceeded limit
+        TooDeeplyNested _ -> MetadataBoundExceeded limit
+    _ -> MetadataFetch fault

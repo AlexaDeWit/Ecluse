@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MIT
 
 -- | Corpus-authenticated metadata measurements in one child process per retained shape.
-module Ecluse.Core.Server.MemoryModelResidencySpec (spec, childMain) where
+module Ecluse.Core.Server.MemoryModelResidencySpec (spec, childMain, sourceMain) where
 
 import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (Value, eitherDecodeStrict, encode, object, withObject, (.:), (.=))
@@ -16,10 +16,15 @@ import System.Exit (ExitCode (ExitSuccess))
 import System.Process (readProcessWithExitCode)
 import Test.Hspec
 
+import Data.ByteArray.Encoding (Base (Base16), convertToBase)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Core.Package (pkgEcosystem)
+import Ecluse.Core.Registry.Npm.Project (projectName)
+import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Probe (Measurement (..), Shape (..), packages, probe)
+import Ecluse.Core.Server.MemoryModel.Probe (Measurement (..), Shape (..), packages, probe, probeSource)
+import Ecluse.Core.Snapshot (digestBytes)
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
 
 -- | Reject unauthenticated captures and roots that do not survive or release across collections.
@@ -101,3 +106,38 @@ report package digest shape result = do
                 , "measurement" .= result
                 ]
     putStrLn ("metadata-residency " <> toString (decodeUtf8 (LBS.toStrict (encode row)) :: Text))
+
+-- | Run one explicit npm source mode without the legacy Show-based preparation or a hidden warm-up.
+sourceMain :: String -> String -> String -> String -> FilePath -> IO ()
+sourceMain rawMode rawName rawVersion rawLimit path = do
+    mode <- maybe (fail "unknown source mode") pure (readMaybe rawMode)
+    name <- either (fail . show) pure (projectName (toText rawName))
+    limit <- maybe (fail "metadata byte limit must be a positive integer") pure (readMaybe rawLimit >>= \n -> if n > 0 then Just n else Nothing)
+    let limits = defaultLimits{maxMetadataBytes = limit}
+    outcome <- probeSource mode limits name (mkVersion Npm (toText rawVersion)) path
+    case outcome of
+        Left fault -> do
+            LBS.putStr (encode (object ["status" .= ("refused" :: Text), "reason" .= fault, "mode" .= rawMode, "path" .= path, "body_limit" .= limit]))
+            exitFailure
+        Right (result, digest, charge, elapsed) -> do
+            let successful = versions result > 0
+                hex = decodeUtf8 (convertToBase Base16 (digestBytes digest) :: ByteString) :: Text
+            LBS.putStr
+                ( encode
+                    ( object
+                        [ "status" .= (if successful then "ok" else "empty-result" :: Text)
+                        , "mode" .= rawMode
+                        , "path" .= path
+                        , "package" .= rawName
+                        , "selected_version" .= rawVersion
+                        , "body_limit" .= limit
+                        , "chunk_bytes" .= (32768 :: Int)
+                        , "sha256" .= hex
+                        , "compact_byte_estimate" .= charge
+                        , "read_project_ns" .= elapsed
+                        , "measurement" .= result
+                        , "scope" .= ("single read and retained-result forcing by accounting, without Show or output encoding; sample process peak externally" :: Text)
+                        ]
+                    )
+                )
+            unless successful exitFailure

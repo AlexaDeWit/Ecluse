@@ -131,6 +131,34 @@ The smallest warmed entry is 636,232 bytes for PyPI requests.
 These twelve captures do not define a workload distribution, so their mean cannot justify
 a replacement for `cacheEntryExpectedBytes` or its planning assumptions.
 
+### Streaming source probes
+
+The same residency executable accepts `--metadata-source-probe MODE NAME VERSION LIMIT PATH`.
+`LIMIT` is the decompressed body ceiling in bytes. `PATH` remains the complete source capture.
+Modes are `BufferedLegacy`, `BufferedCompact`, `StreamedFull`, `StreamedSelected` and
+`StreamedVersions`. The first uses the prior complete Aeson representation. The second feeds held
+bytes to the new parser, separating input buffering from projection changes. The streamed modes
+read the file in 32 KiB chunks through the production driver.
+
+Each invocation makes one read with no warm-up. Accounting walks force the retained result without
+`Show` or output encoding. `read_project_ns` covers that read, projection and forcing.
+The existing `Measurement` record supplies allocation and major-GC live samples.
+`compactBytes` and `cacheWeight` are zero because this mode neither encodes nor admits a cache entry.
+`compact_byte_estimate` reports the representation estimate separately.
+
+Capture the child process's peak RSS externally, for example with GNU `time`.
+That peak includes the runtime, input, useful output, parser buffers and native lexer allocations.
+RTS allocation and live bytes do not include every native allocation. Report both scopes.
+The native lexer uses batches proportional to the chunk size, and can construct scalar number
+tokens while skipping unknown fields. It never retains a complete unknown value tree.
+
+Results include source SHA-256, consumed bytes, version count, byte ceiling and a status.
+Refusals and empty results return a failing exit status. A larger ceiling used for isolated parser
+measurements does not demonstrate admission under the shipping default.
+Compare equal successful workloads. Full-reference results do not establish a speedup over the
+prior selected-version or inventory algorithms. The warmed retained-shape gate remains a separate
+measurement from this first-read source probe.
+
 ## Smoke tests: `ecluse-smoke` (allowed to fail, non-gating)
 
 Make live calls to public registries (npm today) to confirm our JSON decoding and protocol handling

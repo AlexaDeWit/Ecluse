@@ -17,9 +17,12 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.CachedDocument (npmCached)
-import Ecluse.Core.Registry.JsonStream (StreamResult (..), parseJsonChunks)
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest, selectNpmVersionDoc)
-import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..))
+import Ecluse.Core.Registry.Metadata (VersionRead (vrVersion))
+import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
+
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Registry.Npm.Streaming
 import Ecluse.Core.Registry.Npm.StreamingProjection (collectField, emptyProjection, finishProjection)
@@ -29,6 +32,7 @@ import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), Limits (maxMetadataB
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Corpus (corpusPackages, cpPackage, cpPath)
 import Ecluse.Test.Package (unscopedNpm)
+import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue, parseVersionList)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -91,6 +95,18 @@ spec = describe "npmFields" $ do
         projected <- expectRight (streamValue streamed)
         (_, compact) <- expectRight (finishProjection defaultLimits name "See source" projected)
         lookupField "versions" compact `shouldBe` Just (Object mempty)
+
+    forM_ [Array mempty, object ["install" .= ([] :: [Value])]] $ \scripts ->
+        it ("drops invalid script containers in full, selected and inventory reads: " <> show scripts) $ do
+            let malformed = case release of
+                    Object fields -> Object (KeyMap.insert "scripts" scripts fields)
+                    other -> other
+                raw = toStrict (encode (object ["name" .= ("thing" :: Text), "versions" .= object ["1.0.0" .= malformed]]))
+            (info, _) <- expectRight (projectNpmManifest defaultLimits name raw)
+            infoVersions info `shouldSatisfy` Map.null
+            selected <- expectRight (projectNpmVersion defaultLimits name (mkVersion Npm "1.0.0") raw)
+            vrVersion selected `shouldBe` Nothing
+            parseVersionList (RegistryResponse 200 (BS.length raw) raw) `shouldBe` Right []
 
     it "excludes entries with unusable discriminators from version lists" $ do
         let versions =

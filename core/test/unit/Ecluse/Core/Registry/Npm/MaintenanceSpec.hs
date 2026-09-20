@@ -7,12 +7,11 @@ Invalid package coordinates must not produce deletion requests.
 -}
 module Ecluse.Core.Registry.Npm.MaintenanceSpec (spec) where
 
-import Data.ByteString qualified as BS
-
 import Data.Aeson (Object, Value (Object, String), decodeStrict, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair)
+import Data.ByteString qualified as BS
 import Data.List (lookup)
 import Network.HTTP.Client (Manager, Request, RequestBody (RequestBodyBS), defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as Client
@@ -25,7 +24,6 @@ import Ecluse.Core.Registry.Maintenance (refusalCode)
 import Ecluse.Core.Registry.Npm.Maintenance (
     listingRequestFor,
     packumentRequestFor,
-    parsePackageListing,
     versionDeleteRequestsFor,
  )
 import Ecluse.Core.Registry.Origin (OriginClient)
@@ -35,6 +33,7 @@ import Ecluse.Core.Version (Version)
 import Ecluse.Test.Json (encodeStrict, keysAt, objectAt)
 import Ecluse.Test.Package (leftpadName, npmVersion, unscopedNpm)
 import Ecluse.Test.Registry.Npm (listingValue, writeTokenNpmConfig)
+import Ecluse.Test.Registry.Npm.Maintenance (parsePackageListing)
 import Ecluse.Test.Support (expectRightIO)
 
 -- | Verify that deletion addresses only versions present in the fetched document.

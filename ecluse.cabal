@@ -129,6 +129,7 @@ library ecluse-core
     Ecluse.Core.Registry.CachedDocument
     Ecluse.Core.Registry.Exchange
     Ecluse.Core.Registry.JsonStream
+    Ecluse.Core.Registry.VersionList
     Ecluse.Core.Registry.Maintenance
     Ecluse.Core.Registry.Maintenance.Budget
     Ecluse.Core.Registry.Maintenance.Budget.Internal
@@ -297,6 +298,8 @@ library ecluse-core
     , http-conduit          ^>=2.3
     , http-types            ^>=0.12
     , hs-opentelemetry-api  ^>=1.0
+    , integer-logarithms    ^>=1.0
+    , scientific            ^>=0.3
     , json-stream           ==0.4.6.1
     , iproute               ^>=1.7
     , katip                 ^>=0.8.8
@@ -642,6 +645,10 @@ library ecluse-test-support
     Ecluse.Test.Queue
     Ecluse.Test.Registry
     Ecluse.Test.Registry.Npm
+    Ecluse.Test.Registry.Npm.Metadata
+    Ecluse.Test.Registry.Npm.Maintenance
+    Ecluse.Test.Registry.Npm.Project
+    Ecluse.Test.Registry.JsonStream
     Ecluse.Test.Registry.PyPI
     Ecluse.Test.Registry.PyPI.Wire
     Ecluse.Test.Registry.RubyGems.Wire
@@ -669,6 +676,7 @@ library ecluse-test-support
 
   build-depends:
     , ecluse:ecluse-core
+    , json-stream       ==0.4.6.1
     , aeson             >=2.2 && <2.4
     , bytestring        ^>=0.12
     , case-insensitive  ^>=1.2
@@ -771,6 +779,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.CachedDocumentSpec
     Ecluse.Core.Registry.ExchangeSpec
     Ecluse.Core.Registry.JsonStreamSpec
+    Ecluse.Core.Registry.VersionListSpec
     Ecluse.Core.Registry.Maintenance.BudgetSpec
     Ecluse.Core.Registry.Maintenance.NameSpaceSpec
     Ecluse.Core.Registry.Maintenance.ProtocolSpec
@@ -1238,6 +1247,7 @@ test-suite ecluse-residency
     , http-types       ^>=0.12
     , iproute          ^>=1.7
     , katip            ^>=0.8.8
+    , ram              ^>=0.22
     , process          ^>=1.6
     , text             ^>=2.1
     , time             ^>=1.12

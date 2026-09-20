@@ -11,7 +11,6 @@ module Ecluse.Core.Registry.Npm.Maintenance (
 
     -- * The listing
     listingRequestFor,
-    parsePackageListing,
     packageListingParser,
 
     -- * The unpublish
@@ -22,7 +21,6 @@ module Ecluse.Core.Registry.Npm.Maintenance (
 import Data.Aeson (Object, Value (Object, String), decodeStrict, encode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client (Request (method, requestHeaders))
@@ -31,7 +29,6 @@ import Network.HTTP.Types.Header (hAccept)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, unscopedName)
 import Ecluse.Core.Registry (
-    ParseError (ParseError),
     RegistryResponse (responseBody),
     UrlFormationError,
     renderUrlFormationError,
@@ -41,7 +38,6 @@ import Ecluse.Core.Registry.Adapter.Capability (
     StoreListing (..),
     VersionDelete (..),
  )
-import Ecluse.Core.Registry.JsonStream (StreamResult (streamValue), parseJsonChunks)
 import Ecluse.Core.Registry.Maintenance (StoreRefusal, storeRefusal)
 import Ecluse.Core.Registry.Maintenance.NameSpace (mkNameAlphabet)
 import Ecluse.Core.Registry.Npm.Project (npmNameLeadChars, projectName)
@@ -56,7 +52,6 @@ import Ecluse.Core.Registry.Npm.Request (
 import Ecluse.Core.Registry.Origin (OriginClient (ocToken), originBaseUrl)
 import Ecluse.Core.Registry.Request (joinPath, parseRequestEither)
 import Ecluse.Core.Registry.ServedDocument (adjustField, stringField)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit))
 import Ecluse.Core.Server.Path (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (nonBlank, urlFilenameComponent)
 import Ecluse.Core.Version (Version, compareVersions, mkVersion, renderVersion)
@@ -87,12 +82,6 @@ listingRequestFor origin = do
     base <- parseRequestEither url
     pure . withToken (ocToken origin) $
         base{requestHeaders = (hAccept, "application/json") : requestHeaders base}
-
--- | Ignore the @_updated@ bookkeeping key and keys that are not npm package names.
-parsePackageListing :: ByteString -> Either ParseError [PackageName]
-parsePackageListing body = do
-    streamed <- first (ParseError . show) (parseJsonChunks (MetadataBodyLimit (BS.length body)) packageListingParser (\_ names -> Right names) [] [body])
-    streamValue streamed
 
 -- | Read only package-name keys. Values are skipped without constructing package objects.
 packageListingParser :: J.Parser [PackageName]

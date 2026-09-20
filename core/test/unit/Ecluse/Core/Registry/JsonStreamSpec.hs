@@ -5,7 +5,7 @@
 -- | Chunk boundaries, source identity and cancellation for incremental registry reads.
 module Ecluse.Core.Registry.JsonStreamSpec (spec) where
 
-import Data.Aeson (Value (String), object, (.=))
+import Data.Aeson (Value (Bool, Null, Number, String), object, (.=))
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
 import Test.Hspec
@@ -15,6 +15,7 @@ import UnliftIO.Exception (finally)
 import Ecluse.Core.Registry.JsonStream
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Core.Snapshot (digestOf)
+import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
 import Ecluse.Test.Support (expectRight)
 
 spec :: Spec
@@ -26,7 +27,7 @@ spec = describe "readJsonStream" $ do
         forM_ [1 .. BS.length body - 1] $ \position ->
             decode parser [BS.take position body, BS.drop position body] `shouldBe` baseline
         result <- expectRight baseline
-        streamValue result `shouldSatisfy` isRight
+        streamValue result `shouldBe` Right (Just (object ["keep" .= object ["list" .= [Number 1, Bool True, Null, String "a\\b\xE9"]]]))
         streamDigest result `shouldBe` digestOf body
         streamBytes result `shouldBe` BS.length body
 

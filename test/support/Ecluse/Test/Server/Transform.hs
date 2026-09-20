@@ -25,12 +25,13 @@ import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSour
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMetadata (metadataAssemble, metadataSerialise))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmVersion)
+
 import Ecluse.Core.Rules.Types (EvalContext)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Snapshot (Snapshot (snapshotValue))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Corpus (permissiveAgeRules, syntheticProxyBase)
+import Ecluse.Test.Registry.Npm.Metadata (projectNpmVersion)
 import Ecluse.Test.Rules (filterPlan, inertRuleDeps)
 import Ecluse.Test.Snapshot (readDetails)
 

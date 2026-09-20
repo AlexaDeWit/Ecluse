@@ -39,8 +39,9 @@ import Network.HTTP.Client (
 
 import Ecluse.Core.Ecosystem (Ecosystem (..), parseEcosystem)
 import Ecluse.Core.Registry (RegistryResponse (RegistryResponse))
-import Ecluse.Core.Registry.Npm.Project (parseVersionList)
+
 import Ecluse.Core.Version (renderVersion)
+import Ecluse.Test.Registry.Npm.Project (parseVersionList)
 import Ecluse.Test.Registry.PyPI.Wire qualified as PyPI
 import Ecluse.Test.Registry.RubyGems.Wire qualified as RubyGems
 

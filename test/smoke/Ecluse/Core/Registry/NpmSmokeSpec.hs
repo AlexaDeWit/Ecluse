@@ -23,15 +23,18 @@ import Ecluse.Core.Package (
     renderPackageName,
  )
 import Ecluse.Core.Registry (FetchFault (FetchTransport), RegistryResponse (responseBody))
-import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
-import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest)
-import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue, projectName)
-import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated, Full))
+import Ecluse.Core.Registry.Metadata (Manifest (manifestInfo), MetadataError (MetadataFetch))
+import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
+import Ecluse.Core.Registry.Npm.Project (projectName)
+import Ecluse.Core.Registry.Npm.Request (MetadataForm (Abbreviated))
 import Ecluse.Core.Registry.Origin (OriginClient)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
-import Ecluse.Core.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
+import Ecluse.Core.Security (Limits (maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (mkRegistryUrl)
+import Ecluse.Test.Port (passthroughTracingPort)
 import Ecluse.Test.Registry.Npm (defaultNpmConfig, publicRegistryBaseUrl)
+import Ecluse.Test.Registry.Npm.Metadata (fetchMetadataFormBounded, projectNpmManifest)
+import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Test.Support (expectRightText)
 
 {- | Smoke tier: __live__ calls to the public npm registry, confirming that our decoding, our
@@ -148,33 +151,17 @@ data Admissibility
       Admitted Text Int
     deriving stock (Eq, Show)
 
-{- | Run the bounded fetch, decode, nesting, projection, and version-count sequence the serve path
-applies, over a live full packument under the default 'Limits'.
--}
+-- | Run the shipping streamed read against a live packument under the configured default limits.
 admissibleUnderDefaults :: Manager -> PackageName -> IO Admissibility
 admissibleUnderDefaults manager name = do
     config <- publicRegistryOrigin manager
-    -- Body bound: fetchMetadataFormBounded reads through boundedRead against ocLimits and reports
-    -- a bound breach as a fault value, which is a refusal of a real package rather than an outage.
-    fetched <- fetchMetadataFormBounded config Full name
+    fetched <- fetchNpmManifest passthroughTracingPort config name
     pure $ case fetched of
-        Left (FetchTransport fault) -> Unreachable (show fault)
-        Left fault -> Refused ("the bounded fetch refused a real package: " <> show fault)
-        Right response -> either Refused (uncurry Admitted) (admittedChain name (responseBody response))
-
-{- | Decode, then the nesting bound, the projection, and the version-count bound: the same chain the
-serve-path projection runs, as a refusal reason or the admitted name and version count.
--}
-admittedChain :: PackageName -> ByteString -> Either Text (Text, Int)
-admittedChain name body = do
-    value <- first (\e -> "decode failed: " <> toText e) (eitherDecodeStrict body)
-    bounded <- first (\e -> "nesting bound refused a real package: " <> show e) (checkNestingDepth defaultLimits value)
-    info <- case parsePackageInfoFromValue name bounded of
-        Left e -> Left ("projection failed: " <> show e)
-        Right (NameMismatch reported) -> Left ("projection self-reported a different name: " <> reported)
-        Right (Projected i) -> Right i
-    admitted <- first (\e -> "version bound refused a real package: " <> show e) (checkVersionCount defaultLimits info)
-    pure (renderPackageName (infoName admitted), Map.size (infoVersions admitted))
+        Left (MetadataFetch (FetchTransport fault)) -> Unreachable (show fault)
+        Left fault -> Refused ("the streamed fetch refused a real package: " <> show fault)
+        Right manifest ->
+            let info = manifestInfo manifest
+             in Admitted (renderPackageName (infoName info)) (Map.size (infoVersions info))
 
 {- | Every @dist.shasum@ (as a 'SHA1' digest) and @dist.integrity@ (as an 'SRI') a packument
 carries, across all of its versions. These are the raw wire digests the projection feeds to

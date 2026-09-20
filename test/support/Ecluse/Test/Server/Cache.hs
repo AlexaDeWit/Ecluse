@@ -51,7 +51,7 @@ weighCacheEntry :: CacheEntry -> Int
 weighCacheEntry entry =
     fromInteger (min (toInteger (maxBound :: Int)) (toInteger encodedWeight + keysWeight))
   where
-    encodedWeight = expandWireBytes (fromIntegral (foldCachedDoc (BSL.length . encode) (entryRaw entry)))
+    encodedWeight = expandWireBytes (fromIntegral (foldCachedDoc (\value _ -> BSL.length (encode value)) (entryRaw entry)))
     keysWeight = sum [weighEntryKey (artEntryKey artifact) | details <- toList (infoVersions (entryInfo entry)), artifact <- toList (pkgArtifacts details)]
 
 -- | External doubles may ignore local recency hints and occupancy callbacks.

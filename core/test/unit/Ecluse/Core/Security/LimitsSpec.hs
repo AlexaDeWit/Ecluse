@@ -23,7 +23,7 @@ import Ecluse.Core.Package (
     PackageName,
     renderPackageName,
  )
-import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue)
+
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (
     BodyLimit (..),
@@ -38,6 +38,7 @@ import Ecluse.Core.Security (
  )
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Package (sampleDetails, unscopedNpm)
+import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 
 -- | A minimal per-version snapshot. Only the name and version are meaningful here.
 details :: PackageName -> Version -> PackageDetails

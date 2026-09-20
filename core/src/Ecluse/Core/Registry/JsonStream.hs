@@ -6,14 +6,12 @@
 module Ecluse.Core.Registry.JsonStream (
     StreamResult (..),
     readJsonStream,
-    parseJsonChunks,
     retainedValue,
     retainedObject,
     retainedArray,
     retainedScalar,
 ) where
 
-import Control.Monad.State.Strict (evalState, state)
 import Crypto.Hash (hashInit, hashUpdate)
 import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
@@ -65,14 +63,6 @@ readJsonStream bound parser step initial readChunk = go 0 hashInit initial (J.ru
     finish acc = \case
         J.ParseDone _ -> Right acc
         _ -> Left (ParseError "incomplete registry JSON")
-
--- | Run the same incremental driver against explicit chunks for pure callers and boundary tests.
-parseJsonChunks :: BodyLimit -> J.Parser a -> (s -> a -> Either LimitError s) -> s -> [ByteString] -> Either LimitError (StreamResult s)
-parseJsonChunks bound parser step initial = evalState (readJsonStream bound parser step initial next)
-  where
-    next = state $ \case
-        [] -> (BS.empty, [])
-        chunk : rest -> (chunk, rest)
 
 -- | Decode a retained field within a structural budget. Unknown fields never call this parser.
 retainedValue :: Int -> J.Parser Value

@@ -11,7 +11,7 @@ module Ecluse.Core.Registry.Npm.Streaming (
     versionListFields,
 ) where
 
-import Data.Aeson (Value (Null, Number, Object, String))
+import Data.Aeson (Value (Array, Null, Number, Object, String))
 import Data.JsonStream.Parser qualified as J
 import Data.Text qualified as T
 
@@ -83,7 +83,7 @@ npmFields depth mode =
     personValue keys = (String . T.copy <$> J.string) <|> fixed keys (depth - 4)
     scalar budget
         | budget <= 0 = retainedValue budget
-        | otherwise = retainedScalar <|> pure (Object mempty)
+        | otherwise = retainedScalar <|> pure (Array mempty)
     fixed keys budget = retainedObject (\key -> if key `elem` keys then scalar budget else mempty) <|> scalar budget
     distField "signatures" = retainedArray (fixed ["keyid", "sig"] (depth - 6)) <|> scalar (depth - 4)
     distField "attestations" = retainedObject attestationField <|> scalar (depth - 4)

@@ -43,7 +43,7 @@ import Ecluse.Core.Registry (ParseError (parseErrorMessage))
 import Ecluse.Core.Registry.Adapter.Capability (AdapterMaintenance (maintenanceListing))
 import Ecluse.Core.Registry.Maintenance (StoreObservation (obListPackagesIn), collectPages, storeFaultOfMetadata)
 import Ecluse.Core.Registry.Maintenance.Protocol (ProtocolRead (..), newProtocolObservation)
-import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance, parsePackageListing)
+import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (originClient)
@@ -53,6 +53,7 @@ import Ecluse.E2E.Harness.Types
 import Ecluse.Test.Maintenance (withBucket)
 import Ecluse.Test.Poll (pollUntil)
 import Ecluse.Test.Port (passthroughTracingPort)
+import Ecluse.Test.Registry.Npm.Maintenance (parsePackageListing)
 import Ecluse.Test.Support (expectRightText)
 
 {- | Wait out the window a worker would need to mirror a version, so an absence read after it is

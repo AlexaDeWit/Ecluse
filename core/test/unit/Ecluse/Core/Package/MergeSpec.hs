@@ -24,13 +24,14 @@ import Ecluse.Core.Package
 import Ecluse.Core.Package.Integrity (VersionIntegrity (MeetsFloor), classifyArtifacts)
 import Ecluse.Core.Package.Merge hiding (contribute, mergePackuments)
 import Ecluse.Core.Package.Merge qualified as Merge
-import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue)
+
 import Ecluse.Core.Registry.PyPI.Project (projectSimpleIndexFromValue)
 import Ecluse.Core.Registry.WireSupport (Projection (Projected))
 import Ecluse.Core.Version (mkVersion, renderVersion)
 import Ecluse.Test.Package (hexSha1Of, hexSha256Of, sriSha256Of, sriSha512Of, thingName, unsafeHash)
 import Ecluse.Test.Package qualified as Package
 import Ecluse.Test.Registry.Npm qualified as NpmFixture
+import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
 import Ecluse.Test.Snapshot (syntheticSnapshot)
 
