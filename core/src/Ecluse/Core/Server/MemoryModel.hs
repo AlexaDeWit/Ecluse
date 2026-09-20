@@ -8,7 +8,6 @@ does not bound active input, parser, policy, merge, or output memory.
 -}
 module Ecluse.Core.Server.MemoryModel (
     expandWireBytes,
-    contractResidentBytes,
     mirrorJobEstimatedBytes,
 ) where
 
@@ -17,12 +16,6 @@ This factor is independent of source-byte regression envelopes and active-work a
 -}
 expandWireBytes :: Int -> Int
 expandWireBytes wireBytes = wireBytes * residentRatioNumerator `div` residentRatioDenominator
-
-{- | Invert the retained estimate to a compact representation charge.
-The result does not establish an admissible source-document size.
--}
-contractResidentBytes :: Int -> Int
-contractResidentBytes residentBytes = residentBytes * residentRatioDenominator `div` residentRatioNumerator
 
 residentRatioNumerator :: Int
 residentRatioNumerator = 15
