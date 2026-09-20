@@ -95,7 +95,7 @@ The retained samples include any backing arrays reachable through the selected s
 |---|---|
 | `wireBytes` | Capture bytes before parsing, with identity content encoding |
 | `compactBytes` | Re-encoded raw JSON bytes for raw and shared shapes |
-| `cacheWeight` | The historical full-entry charge for comparison |
+| `cacheWeight` | The selected entry's charge, or the historical full-entry charge for shared shapes |
 | `versions` | Projected version count for typed and shared shapes |
 | `baselineLive`, `heldLive`, `releasedLive` | Absolute live bytes after each major collection |
 | `retained_per_wire_byte` | Held minus baseline live bytes, divided by capture bytes |
@@ -159,7 +159,7 @@ PyPI pins use the same PEP 440 canonicalisation as production artifact routes.
 Modes are `BufferedLegacy`, `BufferedCompact`, `StreamedFull`, `StreamedSelected` and
 `StreamedVersions`. The first uses the prior complete Aeson representation. The second feeds held
 bytes to the new parser, separating input buffering from projection changes. The streamed modes
-read the file in 32 KiB chunks through the production driver.
+read the file in 32 KiB chunks through the production driver. `StreamedVersions` is npm-only.
 
 Each invocation makes one read with no warm-up. Accounting walks force the retained result without
 `Show` or output encoding. `read_project_ns` covers that read, projection and forcing.
@@ -182,7 +182,7 @@ measurement from this first-read source probe.
 
 ### Material admission calibration
 
-`--metadata-material-probe ECOSYSTEM MODE NAME VERSION LIMIT PATH` measures `ColdSelected`,
+On Linux, `--metadata-material-probe ECOSYSTEM MODE NAME VERSION LIMIT PATH` measures `ColdSelected`,
 `RetainedSelected`, `FullOrigin`, `ListingOneOrigin` and `ListingTwoOrigins` in isolated processes.
 It reuses the source reader, rule filter, merge and adapter assembly/serialisation operations.
 The policy admits releases older than one day at a fixed `2026-09-22T00:00:00Z` clock.
@@ -196,8 +196,21 @@ Known-hit costs start after the selected value is rooted and a major collection 
 They use current RSS growth and allocation, because preparation already contaminated high-water.
 Process-counter sampling and rule preparation remain in that interval.
 The source roots survive a final collection before release, but process-sampled deltas do not
-calibrate tiny selected objects. Use `--metadata-selected-retention-probe ECOSYSTEM NAME VERSION LIMIT PATH`
-for the separate warmed, GC-only selected measurement.
+calibrate tiny selected objects. Pair `--metadata-selected-retention-probe ECOSYSTEM NAME VERSION LIMIT PATH`
+with `--metadata-selected-control-probe ECOSYSTEM NAME VERSION LIMIT PATH` for warmed GC comparisons.
+Both read, weigh and encode the same selected result. The control discards it before collection
+and roots a constant marker already present in its warmed baseline. Both retain the result's
+would-be accounting charge as a scalar. GC snapshots return three strict counters so a preceding
+`RTSStats` record cannot become part of the next sample.
+Capture authentication follows these GC snapshots, so external process peaks include a separate
+whole-capture read and must not be attributed to the selected object.
+
+Raw live-byte deltas can remain negative. Interpret a selected value only when its repeated delta
+interval exceeds the matched control interval. Otherwise report the result as unresolved.
+Three value and three control processes per capture separated all twelve selected values.
+Their differences ranged from 2,176 bytes for boto3 to 42,712 bytes for webpack.
+All corresponding production charges exceeded those differences. These objects exclude store keys
+and index overhead, so they do not establish a shared-entry count divisor or a universal bound.
 
 The material calibration used three processes per mode and each of the twelve authentic captures.
 Each name has equal weight. Take each name's median, then the mean across names, add 25%, and round
@@ -224,11 +237,18 @@ The first comparison had six empty selected results because the probe used nonca
 pins. Correcting the probe to use production canonical keys admitted the same releases.
 The original 36 process-sampled selected-retention diagnostics had noise larger than some roots.
 Those diagnostics supplied no admission weights or retained-factor inference.
+The next GC-only attempt also had six negative requests/boto3 samples. Removing full statistics
+records changed each raw value delta by 1,040 bytes, but did not remove the common baseline offset.
+The matched controls above resolved the values without discarding those earlier results.
 
 Vite and Next were separate acceptance stress cases. All twelve full/selected reads completed at a
 48 MiB ingest ceiling. Their original bodies were 38,945,461 and 31,270,567 bytes respectively.
 The largest body has 29.24% byte headroom. Next's median full-read process RSS was 376,426,496 bytes.
 This is input capability evidence, not successful-install or deployment-size evidence.
+Six synthetic boundary checks extended the existing ignored-field fixture with legal whitespace.
+Full and selected reads consumed exactly 134,217,728 bytes at that limit, refused one extra byte,
+and consumed the larger body when the explicit limit rose by one byte. These checks exercise
+decompressed byte accounting and overrides, not the heap cost of arbitrary 128 MiB metadata.
 
 ## Smoke tests: `ecluse-smoke` (allowed to fail, non-gating)
 

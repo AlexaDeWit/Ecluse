@@ -23,7 +23,7 @@ import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Registry.PyPI.Project qualified as PyPI
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Server.MemoryModel (expandWireBytes)
-import Ecluse.Core.Server.MemoryModel.Probe (Measurement (..), Shape (..), packages, probe, probeSelected, probeSource)
+import Ecluse.Core.Server.MemoryModel.Probe (Measurement (..), SelectedShape (SelectedControl, SelectedValue), Shape (..), packages, probe, probeSelected, probeSource)
 import Ecluse.Core.Snapshot (digestBytes)
 import Ecluse.Core.Version (Version, canonicalPep440, mkVersion, renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath), cpName)
@@ -161,17 +161,17 @@ probeIdentity ecosystem name version = do
         _ -> pure (toText version)
     pure (package, mkVersion kind key)
 
--- | Measure a warmed selected root without process sampling between the GC snapshots.
-selectedMain :: String -> String -> String -> String -> FilePath -> IO ()
-selectedMain ecosystem name version rawLimit path = do
+-- | Report selected or discard-control samples without treating unresolved growth as retention.
+selectedMain :: SelectedShape -> String -> String -> String -> String -> FilePath -> IO ()
+selectedMain shape ecosystem name version rawLimit path = do
     (package, selected) <- probeIdentity ecosystem name version
     limits <- probeLimits rawLimit
-    result <- probeSelected limits package selected path
+    result <- probeSelected shape limits package selected path
     bytes <- BS.readFile path
     LBS.putStr $
         encode $
             object
-                [ "mode" .= ("SelectedRetention" :: Text)
+                [ "mode" .= mode
                 , "ecosystem" .= ecosystem
                 , "package" .= name
                 , "selected_version" .= version
@@ -180,8 +180,13 @@ selectedMain ecosystem name version rawLimit path = do
                 , "sha256" .= (show (hash bytes :: Digest SHA256) :: Text)
                 , "body_limit" .= maxMetadataBytes limits
                 , "measurement" .= result
+                , "scope" .= ("Diagnostic GC samples. Compare matched selected and discard-control intervals before interpreting retained bytes. Capture authentication follows measurement, so external process peaks include that read." :: Text)
                 ]
-    unless (heldLive result > baselineLive result) exitFailure
+  where
+    mode :: Text
+    mode = case shape of
+        SelectedValue -> "SelectedRetention"
+        SelectedControl -> "SelectedControl"
 
 -- | Override only the metadata byte limit, preserving the shipped structural limits.
 probeLimits :: String -> IO Limits

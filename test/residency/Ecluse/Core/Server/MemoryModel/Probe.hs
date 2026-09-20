@@ -10,6 +10,7 @@ module Ecluse.Core.Server.MemoryModel.Probe (
     Measurement (..),
     packages,
     probe,
+    SelectedShape (..),
     probeSelected,
     SourceMode (..),
     probeSource,
@@ -92,6 +93,20 @@ instance FromJSON Measurement
 -- | A rooted representation shared by isolated retention and materialisation probes.
 data Held = HeldWire ByteString | HeldRaw Value | HeldTyped PackageInfo | HeldShared CacheEntry | HeldSelected VersionRead | HeldVersions [Version] | HeldLegacy PackageInfo Value
 
+-- | Compare a selected value with the same read whose value is discarded before collection.
+data SelectedShape
+    = -- | Keep the projected release reachable through the collection.
+      SelectedValue
+    | -- | Discard the release and retain only a warmed constant marker.
+      SelectedControl
+    deriving stock (Eq, Show)
+
+data HeapSample = HeapSample
+    { live :: !Word64
+    , sampleAllocated :: !Word64
+    , samplePeakLive :: !Word64
+    }
+
 -- | Use the same complete package catalogue as the performance harnesses.
 packages :: [CorpusPackage]
 packages = corpusPackages <> pypiCorpusPackages
@@ -100,9 +115,13 @@ packages = corpusPackages <> pypiCorpusPackages
 probe :: Shape -> CorpusPackage -> IO Measurement
 probe shape package = measureRetained (prepare shape package)
 
--- | Measure one selected release with warmed GC-only samples, excluding process-counter sampling.
-probeSelected :: Limits -> PackageName -> Version -> FilePath -> IO Measurement
-probeSelected limits name version path = measureRetained $ do
+-- | Use matched selected-value and discard controls to resolve retention above harness overhead.
+probeSelected :: SelectedShape -> Limits -> PackageName -> Version -> FilePath -> IO Measurement
+probeSelected shape limits name version path = measureRetained (prepareSelected shape limits name version path)
+
+{-# NOINLINE prepareSelected #-}
+prepareSelected :: SelectedShape -> Limits -> PackageName -> Version -> FilePath -> IO (StablePtr Held, (Int, Int64, Int, Int))
+prepareSelected shape limits name version path = do
     (root, (bytes, _, count, _)) <- prepareSource StreamedSelected limits name version path >>= either (fail . toString) pure
     held <- deRefStablePtr root
     weight <- evaluate (sourceSize held)
@@ -110,7 +129,13 @@ probeSelected limits name version path = measureRetained $ do
         HeldSelected selected ->
             evaluate (maybe 0 (maybe 0 (LBS.length . encode . diagnosticDocumentValue) . vdRaw) (vrVersion selected))
         _ -> fail "selected retention probe retained a different representation"
-    pure (root, (bytes, compact, weight, count))
+    retainedRoot <- case shape of
+        SelectedValue -> pure root
+        SelectedControl -> freeStablePtr root >> newStablePtr controlRoot
+    pure (retainedRoot, (bytes, compact, weight, count))
+
+controlRoot :: Held
+controlRoot = HeldWire "control"
 
 measureRetained :: IO (StablePtr Held, (Int, Int64, Int, Int)) -> IO Measurement
 measureRetained prepareShape = do
@@ -122,7 +147,7 @@ measureRetained prepareShape = do
         bracket prepareShape (freeStablePtr . fst) $ \(root, (bytes, compact, weight, count)) -> do
             retained <- sample
             observe root
-            pure (bytes, compact, weight, count, retained, allocated_bytes retained)
+            pure (bytes, compact, weight, count, retained, sampleAllocated retained)
     released <- sample
     pure
         Measurement
@@ -133,21 +158,23 @@ measureRetained prepareShape = do
             , baselineLive = live before
             , heldLive = live held
             , releasedLive = live released
-            , preparationAllocated = prepared - allocated_bytes before
-            , preparationMaxLive = max_live_bytes held
+            , preparationAllocated = prepared - sampleAllocated before
+            , preparationMaxLive = samplePeakLive held
             }
 
-sample :: IO RTSStats
-sample = performMajorGC >> getRTSStats
+-- Full RTSStats records must die before the next collection measures a small retained root.
+{-# NOINLINE sample #-}
+sample :: IO HeapSample
+sample = do
+    performMajorGC
+    stats <- getRTSStats
+    evaluate (HeapSample (gcdetails_live_bytes (gc stats)) (allocated_bytes stats) (max_live_bytes stats))
 
 -- Dereferencing after GC makes the root's continued reachability observable.
 observe :: StablePtr Held -> IO ()
 observe root = do
     observed <- deRefStablePtr root >>= evaluate . heldSize
     when (observed <= 0) (fail "retained metadata root is empty")
-
-live :: RTSStats -> Word64
-live = gcdetails_live_bytes . gc
 
 -- The caller retains only a StablePtr and scalars, never the preparation closure's input graph.
 {-# NOINLINE prepare #-}
@@ -230,8 +257,8 @@ probeSource mode limits name version path = do
                         , baselineLive = live before
                         , heldLive = live held
                         , releasedLive = live released
-                        , preparationAllocated = allocated_bytes held - allocated_bytes before
-                        , preparationMaxLive = max_live_bytes held
+                        , preparationAllocated = sampleAllocated held - sampleAllocated before
+                        , preparationMaxLive = samplePeakLive held
                         }
                     , digest
                     , compact
