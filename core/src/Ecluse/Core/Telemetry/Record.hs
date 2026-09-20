@@ -87,7 +87,7 @@ data MetricsPort = MetricsPort
     , mpAssembledCacheRequest :: CacheResult -> IO ()
     -- ^ Assembled-response requests (@ecluse.metadata_cache.assembled.requests@).
     , mpCacheRefused :: CacheStore -> IO ()
-    -- ^ Oversized values served without retention (@ecluse.metadata_cache.refused@).
+    -- ^ Capacity refusals and external backend failures (@ecluse.metadata_cache.refused@).
     , mpVersionCacheFullHit :: IO ()
     -- ^ Selective reads served by full-store retention (@ecluse.metadata_cache.version.full_hits@).
     , mpCacheEntries :: Int -> IO ()

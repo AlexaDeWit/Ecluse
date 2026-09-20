@@ -18,6 +18,7 @@ import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
     SingleFlight,
     newSingleFlight,
+    newSingleFlightWithBackend,
     resolveSingleFlight,
  )
 import Ecluse.Core.Server.Cache.Store qualified as Store
@@ -79,6 +80,46 @@ countingFetch calls value = atomicModifyIORef' calls (\n -> (n + 1, ())) $> valu
 
 spec :: Spec
 spec = do
+    describe "single-flight without retention" $ do
+        for_ [Right "fresh", Left StoreFault] $ \outcome ->
+            it ("shares an active result and drops completed history: " <> show outcome) $ do
+                result <- timeout 1000000 $ do
+                    sf <- newSingleFlightWithBackend Nothing
+                    started <- newEmptyMVar
+                    joined <- newEmptyMVar
+                    release <- newEmptyMVar
+                    let fetch = putMVar started () >> takeMVar release $> outcome
+                        observe request = when (request == Metric.Collapsed) (putMVar joined ())
+                        run = resolveSingleFlight observe (const pass) pass sf "key"
+                    withAsync (run fetch) $ \leader -> do
+                        takeMVar started
+                        withAsync (run fetch) $ \follower -> do
+                            takeMVar joined
+                            putMVar release ()
+                            wait leader `shouldReturn` outcome
+                            wait follower `shouldReturn` outcome
+                    lookupStore sf "key" `shouldReturn` Nothing
+                    run (pure (Right "next")) `shouldReturn` Right "next"
+                result `shouldBe` Just ()
+
+        it "lets followers recover from cancellation without keeping their result" $ do
+            result <- timeout 1000000 $ do
+                sf <- newSingleFlightWithBackend Nothing
+                started <- newEmptyMVar
+                joined <- newEmptyMVar
+                release <- newEmptyMVar
+                let fetch = putMVar started () >> takeMVar release $> Right "cancelled"
+                    observe request = when (request == Metric.Collapsed) (putMVar joined ())
+                withAsync (resolve sf "key" fetch) $ \leader -> do
+                    takeMVar started
+                    withAsync (resolveSingleFlight observe (const pass) pass sf "key" (pure (Right "recovered"))) $ \follower -> do
+                        takeMVar joined
+                        cancel leader
+                        wait follower `shouldReturn` Right "recovered"
+                lookupStore sf "key" `shouldReturn` Nothing
+                resolve sf "key" (pure (Right "next")) `shouldReturn` Right "next"
+            result `shouldBe` Just ()
+
     describe "resolveSingleFlight -- collapse" $ do
         it "collapses concurrent resolutions of one key to a single fetch" $ do
             sf <- roomyStore

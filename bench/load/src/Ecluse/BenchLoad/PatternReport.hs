@@ -26,7 +26,7 @@ data StoreEvidence = StoreEvidence
 renderStoreEvidence :: [StoreEvidence] -> Text
 renderStoreEvidence stores =
     T.unlines
-        ( [ "| store | capacity resident B | working set accounted B | working set / capacity | observed resident B | retention hit fraction | collapsed fraction | hits / misses / collapsed | oversized refusals |"
+        ( [ "| store | capacity resident B | working set accounted B | working set / capacity | observed resident B | retention hit fraction | collapsed fraction | hits / misses / collapsed | retention refusals |"
           , "| --- | --: | --: | --: | --: | --: | --: | --- | --: |"
           ]
             <> map row stores

@@ -47,7 +47,7 @@ import Ecluse.Composition.MemoryPlan.Bounds (
 import Ecluse.Composition.MemoryPlan.Demands (tenantDemands)
 import Ecluse.Composition.MemoryPlan.Internal (OverridePins (..), PlanInputs (..), ShedOutcomes (..), TenantDemands (..))
 import Ecluse.Composition.MemoryPlan.Override (configuredPins, overrideViolationsFor)
-import Ecluse.Composition.MemoryPlan.Render (renderDegradations, renderPlanLines)
+import Ecluse.Composition.MemoryPlan.Render (localCachePolicyLine, renderDegradations, renderPlanLines)
 import Ecluse.Composition.MemoryPlan.Shed (cacheEntryBound, shedCapabilityCount, shedToFit)
 import Ecluse.Composition.MemoryPlan.Types (
     MemoryPlan (..),
@@ -146,7 +146,7 @@ fallbackPlan inputs =
         , mpDegradations = []
         , mpOverrideViolations = []
         }
-    , [piCpuAdmissionLine inputs, responseLine, requestLine, cacheBytesLine, cacheEntriesLine, queueDepthLine]
+    , [localCachePolicyLine, piCpuAdmissionLine inputs, responseLine, requestLine, cacheBytesLine, cacheEntriesLine, queueDepthLine]
         <> [artifactLine | anyMountMirrors demand]
     )
   where
@@ -172,31 +172,21 @@ mirrorArtifactTenantOf :: TenantDemands -> ShedOutcomes -> Maybe MirrorArtifactT
 mirrorArtifactTenantOf d o = MirrorArtifactTenant{matMaxBytes = soArtifactCapFinal o} <$ guard (tdMirrors d)
 
 {- | The metadata cache's tunables: the configured TTL with the plan's cache aggregate
-split across the three stores. A zero aggregate stores nothing, so the proxy serves uncached.
+split across the two locally eligible stores. A zero aggregate stores nothing, so the proxy serves uncached.
 -}
 planCacheConfig :: CacheSettings -> MemoryPlan -> CacheConfig
 planCacheConfig cacheSettings plan =
     CacheConfig
         { cacheTtl = csTtl cacheSettings
-        , cacheFullBudget = StoreBudget{sbMaxEntries = entries, sbMaxBytes = fullBytes}
+        , cacheFullBudget = StoreBudget{sbMaxEntries = 0, sbMaxBytes = 0}
         , cacheVersionBudget = StoreBudget{sbMaxEntries = cacheVersionEntriesFactor * entries, sbMaxBytes = versionBytes}
-        , cacheAssembledBudget = StoreBudget{sbMaxEntries = entries, sbMaxBytes = aggregate - fullBytes - versionBytes}
+        , cacheAssembledBudget = StoreBudget{sbMaxEntries = entries, sbMaxBytes = aggregate - versionBytes}
         }
   where
     aggregate = mpCacheAggregateBytes plan
     entries = mpCacheMaxEntries plan
-    fullBytes = aggregate * cacheFullSharePercent `div` 100
-    versionBytes = aggregate * cacheVersionSharePercent `div` 100
+    versionBytes = aggregate * 3 `div` 8
 
--- The named split of the cache aggregate, in percent. The assembled store takes
--- the remainder, so the three sub-budgets sum to exactly the aggregate.
-cacheFullSharePercent :: Int
-cacheFullSharePercent = 60
-
-cacheVersionSharePercent :: Int
-cacheVersionSharePercent = 15
-
--- The version store's entries are flat and small (16 KiB estimates against the
--- full store's 256 KiB), so it holds several per full entry.
+-- Selected releases keep four entry slots per assembled response slot.
 cacheVersionEntriesFactor :: Int
 cacheVersionEntriesFactor = 4

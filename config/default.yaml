@@ -85,15 +85,16 @@ limits:
   # maxArtifactBytes: 536870912
 
 cache:
-  # Seconds the packument cache keeps metadata. Non-negative, and a fractional value
+  # Seconds the local selected-version and assembled stores keep entries. Non-negative, and a fractional value
   # is refused rather than truncated.
   ttl: 60
   # Écluse computes both bounds at boot from the resolved heap ceiling, as a clamped
   # fraction of it, and the boot log names each decision. Set either one only to
   # override it.
   # maxEntries: 1024
-  # One aggregate budget, split across the three stores (full packument 60%, single
-  # version 15%, assembled the rest). A pod too small for the plan sheds the
+  # The local backend never retains full metadata. Active fetches still coalesce.
+  # One aggregate budget covers selected versions (37.5%) and assembled responses (62.5%).
+  # A pod too small for the plan sheds the
   # mirror-artifact cap first and this aggregate second.
   # maxBytes: 268435456
 

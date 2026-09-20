@@ -122,7 +122,7 @@ cacheHitScenario =
         { scenarioName = "cached-public-hit"
         , scenarioConcurrencyScale = 1
         , scenarioDescription =
-            "GET /npm/{pkg} over the weighted corpus with a warm public metadata cache. Each request still reads and merges private metadata."
+            "GET /npm/{pkg} over the weighted corpus with retained assembled responses. Each request fetches full public and private metadata, except overlapping public reads share active work."
         , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl defaultCacheEntries serveMix (k . DriveHttpUrls)
         }
 
@@ -148,7 +148,7 @@ cacheFitsScenario =
         { scenarioName = "cache-fits-large"
         , scenarioConcurrencyScale = 1
         , scenarioDescription =
-            "GET a uniform corpus working set with a cache that holds every project after warm-up. Compare with cache-evicts-large to measure eviction cost."
+            "GET a uniform corpus working set with enough assembled-response slots for every project. Full public metadata is always fetched. Compare with cache-evicts-large for assembly reuse."
         , scenarioBoot = \knobs k ->
             let pkgs = workingSet knobs
              in withNpmProxy knobs longCacheTtl (length pkgs) (uniformMix pkgs) (k . DriveHttpUrls)
@@ -160,7 +160,7 @@ cacheEvictsScenario =
         { scenarioName = "cache-evicts-large"
         , scenarioConcurrencyScale = 1
         , scenarioDescription =
-            "GET the same uniform corpus working set with BENCH_LOAD_CACHE_MAX_ENTRIES slots. A bound below the working set forces repeated public fetch, decode, and projection."
+            "GET the same uniform corpus working set with BENCH_LOAD_CACHE_MAX_ENTRIES slots. A bound below the working set forces repeated assembly. Full public metadata is always fetched."
         , scenarioBoot = \knobs k ->
             let pkgs = workingSet knobs
              in withNpmProxy knobs longCacheTtl (lkCacheMaxEntries knobs) (uniformMix pkgs) (k . DriveHttpUrls)

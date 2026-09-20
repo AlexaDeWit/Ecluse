@@ -9,6 +9,7 @@ reads one plan whichever path produced it.
 -}
 module Ecluse.Composition.MemoryPlan.Render (
     renderPlanLines,
+    localCachePolicyLine,
     renderDegradations,
 ) where
 
@@ -22,6 +23,10 @@ import Ecluse.Composition.MemoryPlan.Override (overrideFreeOvershoot)
 import Ecluse.Composition.MemoryPlan.Shed (cacheEntryBound)
 import Ecluse.Composition.Sizing (renderSized)
 
+-- | The local backend's retention capabilities, independent of capacity overrides.
+localCachePolicyLine :: Text
+localCachePolicyLine = "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
+
 {- | The ordered boot lines check-config prints: one per resolved bound, tagged with its
 provenance (an explicit config value, or the ceiling it was computed from).
 -}
@@ -33,6 +38,7 @@ renderPlanLines inputs d o =
     , planLine "material aggregate" (soMaterialFinal o) Nothing
     , planLine "response byte cap" (soResponseFinal o) (opResponse pins)
     , planLine "request byte cap" (tdRequestFinal d) (opRequest pins)
+    , localCachePolicyLine
     , planLine "cache byte bound" (soCacheFinal o) (opCache pins)
     , planLine "cache entry bound" (cacheEntryBound d o) (tdCacheEntriesExplicit d)
     ]

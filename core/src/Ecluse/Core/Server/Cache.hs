@@ -2,7 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Three isolated metadata stores share TTL and single-flight machinery.
+{- | Three metadata representations share single-flight with independent optional retention.
 Public metadata and content-addressed responses follow the sharing policy in the web-layer architecture.
 -}
 module Ecluse.Core.Server.Cache (
@@ -13,6 +13,7 @@ module Ecluse.Core.Server.Cache (
     -- * The cache handle
     MetadataCache,
     newMetadataCache,
+    newMetadataCacheWithBackend,
 
     -- * Cache entries
     Source (..),
@@ -47,12 +48,14 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, weighCachedDoc)
 import Ecluse.Core.Registry.Metadata (ContentDigest, MetadataError, VersionRead)
+import Ecluse.Core.Server.Cache.Backend (RetentionBackend, supportsFullRetention)
 import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
     SingleFlight,
-    lookupStore,
     lookupStoreTouching,
+    lookupStoreWithFailure,
     newSingleFlight,
+    newSingleFlightWithBackend,
     resolveSingleFlight,
  )
 import Ecluse.Core.Server.Cache.VersionWeight (weighEntryKey, weighVersion)
@@ -70,11 +73,11 @@ data StoreBudget = StoreBudget
     }
     deriving stock (Eq, Show)
 
--- | Three sub-budgets carved from one cache aggregate, with a shared TTL.
+-- | Retention bounds and the TTL for the local selected-version and assembled stores.
 data CacheConfig = CacheConfig
     { cacheTtl :: NominalDiffTime
     , cacheFullBudget :: StoreBudget
-    -- ^ The full-packument store's bounds, keyed by @(source, package)@.
+    -- ^ Compatibility field, inactive for local retention. No local full store is allocated.
     , cacheVersionBudget :: StoreBudget
     -- ^ The single-version store's bounds (retained-field accounting).
     , cacheAssembledBudget :: StoreBudget
@@ -116,10 +119,6 @@ weighAssembled bytes = BS.length bytes + assembledEntryOverheadBytes
 assembledEntryOverheadBytes :: Int
 assembledEntryOverheadBytes = 256
 
-newtype CacheKey = CacheKey Text
-    deriving stock (Eq, Ord, Show)
-    deriving newtype (Hashable)
-
 keyText :: Source -> PackageName -> Text
 keyText (Source source) name =
     source
@@ -130,9 +129,6 @@ keyText (Source source) name =
         <> "\x1f"
         <> TS.toText (pkgCanonical name)
 
-cacheKey :: Source -> PackageName -> CacheKey
-cacheKey source name = CacheKey (keyText source name)
-
 newtype VersionKey = VersionKey Text
     deriving stock (Eq, Ord, Show)
     deriving newtype (Hashable)
@@ -140,23 +136,29 @@ newtype VersionKey = VersionKey Text
 versionKey :: Source -> PackageName -> Version -> VersionKey
 versionKey source name version = VersionKey (keyText source name <> "\x1f" <> renderVersion version)
 
--- | Isolated full-document, selected-version, and assembled-response stores.
+-- | Independent retention capabilities and process-local request coalescing.
 data MetadataCache = MetadataCache
-    { mcFull :: SingleFlight MetadataError CacheKey CacheEntry
-    -- ^ The full-packument store, keyed by @(source, package)@.
+    { mcFull :: SingleFlight MetadataError Text CacheEntry
+    -- ^ Full fetches partition by source, ecosystem, and package without local retention.
     , mcVersion :: SingleFlight MetadataError VersionKey VersionRead
     , mcAssembled :: SingleFlight Void Text ByteString
     }
 
--- | Build each store with its own bounds and the shared TTL.
+-- | Build local retention for selected versions and assembled responses only.
 newMetadataCache :: CacheConfig -> IO MetadataCache
-newMetadataCache cfg =
+newMetadataCache cfg = newMetadataCacheWithBackend cfg Nothing
+
+{- | Supply optional external full retention. Local backends are always excluded.
+Full retention owns its codec and bounds. Single-flight stays in this process.
+-}
+newMetadataCacheWithBackend :: CacheConfig -> Maybe (RetentionBackend Text CacheEntry) -> IO MetadataCache
+newMetadataCacheWithBackend cfg fullBackend =
     MetadataCache
-        <$> newStore (cacheFullBudget cfg) weighCacheEntry
+        <$> newSingleFlightWithBackend (fullBackend >>= \backend -> backend <$ guard (supportsFullRetention backend))
         <*> newStore (cacheVersionBudget cfg) weighVersion
         <*> newStore (cacheAssembledBudget cfg) weighAssembled
   where
-    newStore :: StoreBudget -> (v -> Int) -> IO (SingleFlight e k v)
+    newStore :: (Hashable k) => StoreBudget -> (v -> Int) -> IO (SingleFlight e k v)
     newStore budget = newSingleFlight (cacheTtl cfg) (sbMaxEntries budget) (sbMaxBytes budget)
 
 -- | Coalesce public metadata fetches. Failures reach all waiters and retain nothing.
@@ -167,7 +169,7 @@ resolveMetadata metrics cache source name =
         (recordFullOccupancy metrics)
         (mpCacheRefused metrics Metric.FullStore)
         (mcFull cache)
-        (cacheKey source name)
+        (keyText source name)
 
 -- | Cache a selectively decoded release or its absence. Oversized releases remain uncached.
 resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (Either MetadataError VersionRead)
@@ -193,7 +195,7 @@ resolveAssembled metrics cache key render =
 
 -- | Probe full metadata without fetching or refreshing recency. Report expiry but no request outcome.
 cachedMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
-cachedMetadata metrics cache source name = lookupStore (recordFullOccupancy metrics) (mcFull cache) (cacheKey source name)
+cachedMetadata metrics cache source name = lookupStoreWithFailure (recordFullOccupancy metrics) (mpCacheRefused metrics Metric.FullStore) (mcFull cache) (keyText source name)
 
 {- | Probe a version and refresh recency. Report expiry but no request outcome.
 A read whose 'vrVersion' is 'Nothing' is a cached absence.

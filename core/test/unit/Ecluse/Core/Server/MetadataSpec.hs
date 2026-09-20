@@ -44,7 +44,8 @@ import Ecluse.Core.Registry.Origin (OriginFor, Public, anonymousOrigin, perCalle
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
-import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache)
+import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache, newMetadataCacheWithBackend)
+import Ecluse.Core.Server.Cache.Backend (externalBackend)
 import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, selectVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetchError, mpVersionCacheFullHit, mpVersionCacheRequest))
@@ -69,7 +70,7 @@ spec = do
             version <- newIORef []
             shortcuts <- newIORef (0 :: Int)
             calls <- newIORef (0 :: Int)
-            cache <- newMetadataCache defaultCacheConfig
+            cache <- externalCache
             let info = manifest name ["1.0.0"]
                 port =
                     noopMetricsPort
@@ -110,7 +111,7 @@ spec = do
 
         it "reuses the warm full-packument cache: a GET then its version select is one upstream call" $ do
             calls <- newIORef (0 :: Int)
-            cache <- newMetadataCache defaultCacheConfig
+            cache <- externalCache
             let info = manifest name ["1.0.0", "2.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
@@ -121,7 +122,7 @@ spec = do
 
         it "pairs a warm full-cache select with that entry's own raw object, with no upstream call" $ do
             calls <- newIORef (0 :: Int)
-            cache <- newMetadataCache defaultCacheConfig
+            cache <- externalCache
             let info = manifest name ["1.0.0", "2.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
@@ -131,7 +132,7 @@ spec = do
 
         it "keys a warm pair by version: a sibling select pairs its own raw object, never a neighbour's" $ do
             calls <- newIORef (0 :: Int)
-            cache <- newMetadataCache defaultCacheConfig
+            cache <- externalCache
             let info = manifest name ["1.0.0", "2.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
@@ -206,7 +207,7 @@ spec = do
 
         it "preserves source byte counts across full-cache hits and warm version selection" $ do
             calls <- newIORef (0 :: Int)
-            cache <- newMetadataCache defaultCacheConfig
+            cache <- externalCache
             let info = manifest name ["1.0.0"]
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             firstRead <- fetchFullManifest client name
@@ -228,6 +229,18 @@ spec = do
             absentHit <- fetchVersionMetadata client name (npmVersion "2.0.0")
             fmap (fmap pkgVersion . readDetails) absentHit `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
+
+    describe "the default local policy" $
+        it "fetches selected metadata after a full read, then retains only the selected result" $ do
+            calls <- newIORef (0 :: Int)
+            cache <- newMetadataCache defaultCacheConfig
+            let info = manifest name ["1.0.0"]
+                client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
+            _ <- fetchFullManifest client name
+            firstRead <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            fetchVersionMetadata client name (npmVersion "1.0.0") `shouldReturn` firstRead
+            readIORef calls `shouldReturn` 2
+            cachedMetadata noopMetricsPort cache source name `shouldReturn` Nothing
 
     describe "the caching policy each builder settles" $
         it "an uncached handle fetches on every call (the per-client private origin)" $ do
@@ -318,6 +331,12 @@ spec = do
             map isUnreachable results `shouldBe` replicate 8 True
             readIORef fetches `shouldReturn` 1
             readIORef failureLogs `shouldReturn` 1
+
+externalCache :: IO MetadataCache
+externalCache = do
+    values <- newIORef Map.empty
+    let backend = externalBackend 100000 (\_ key -> Map.lookup key <$> readIORef values) (\key value -> modifyIORef' values (Map.insert key value))
+    newMetadataCacheWithBackend defaultCacheConfig (Just backend)
 
 httpFailures :: [(MetadataError, Metric.Cause)]
 httpFailures =

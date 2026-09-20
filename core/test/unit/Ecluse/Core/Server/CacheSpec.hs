@@ -7,6 +7,7 @@ Selected-release checks use the production PyPI projection.
 -}
 module Ecluse.Core.Server.CacheSpec (spec) where
 
+import Control.Exception (throw)
 import Data.Aeson (Value (String), encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
@@ -14,7 +15,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 import Test.Hspec
-import UnliftIO (mapConcurrently)
+import UnliftIO (mapConcurrently, timeout, wait, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO)
 
@@ -35,6 +36,8 @@ import Ecluse.Core.Server.Cache (
     weighCacheEntry,
  )
 import Ecluse.Core.Server.Cache qualified as Cache
+import Ecluse.Core.Server.Cache.Backend (externalBackend)
+import Ecluse.Core.Server.Cache.Backend.Local (newLocalBackend)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
@@ -190,108 +193,74 @@ spec = do
             readIORef calls `shouldReturn` 2
             readResidency `shouldReturn` Just 1024
 
-    describe "resolveMetadata -- hit/miss" $ do
-        it "fetches on a miss and returns the parsed metadata with its raw bytes" $ do
+    describe "local full retention" $ do
+        for_ [0, 1, maxBound] $ \capacity ->
+            it ("fetches again without retention at capacity " <> show capacity) $ do
+                c <- newMetadataCache (configBytes 60 capacity capacity)
+                calls <- newIORef 0
+                replicateM_ 2 $ resolveMetadata c publicSource thingName (countingFetch calls thingName "raw")
+                readIORef calls `shouldReturn` 2
+                cachedMetadata noopMetricsPort c publicSource thingName `shouldReturn` Nothing
+
+        it "excludes an explicitly supplied local backend without evaluating its weigher" $ do
+            backend <- newLocalBackend 60 maxBound maxBound (\_ -> throw (UnexpectedFault MetadataUndecodable))
+            c <- Cache.newMetadataCacheWithBackend (configBytes 60 maxBound maxBound) (Just backend)
+            resolveMetadata c publicSource thingName (pure (entry thingName "raw")) `shouldReturn` entry thingName "raw"
+            cachedMetadata noopMetricsPort c publicSource thingName `shouldReturn` Nothing
+
+        it "reports zero full occupancy without counting a capacity refusal" $ do
+            (residencyPort, readResidency) <- recordingResidencyPort
+            (entryPort, readEntries) <- recordingEntriesPort
+            refused <- newIORef (0 :: Int)
+            let port = residencyPort{mpCacheEntries = mpCacheEntries entryPort, mpCacheRefused = \_ -> modifyIORef' refused (+ 1)}
             c <- freshCache
-            result <- resolveMetadata c publicSource (unscopedNpm "is-odd") (pure (entry (unscopedNpm "is-odd") "raw"))
-            infoName (entryInfo result) `shouldBe` unscopedNpm "is-odd"
-            entryRaw result `shouldBe` cachedRaw "raw"
+            Cache.resolveMetadata port c publicSource thingName (pure (Right (entry thingName "raw"))) `shouldReturn` Right (entry thingName "raw")
+            readResidency `shouldReturn` Just 0
+            readEntries `shouldReturn` Just 0
+            readIORef refused `shouldReturn` 0
 
-        it "serves a second resolution from cache without re-fetching" $ do
-            c <- freshCache
-            calls <- newIORef 0
-            _ <- resolveMetadata c publicSource (unscopedNpm "left-pad") (countingFetch calls (unscopedNpm "left-pad") "raw")
-            _ <- resolveMetadata c publicSource (unscopedNpm "left-pad") (countingFetch calls (unscopedNpm "left-pad") "raw")
-            readIORef calls `shouldReturn` 1
+        it "shares one active full fetch and retains nothing after both callers finish" $ do
+            result <- timeout 1000000 $ do
+                c <- freshCache
+                started <- newEmptyMVar
+                joined <- newEmptyMVar
+                release <- newEmptyMVar
+                let expected = entry thingName "shared"
+                    port = noopMetricsPort{mpCacheRequest = \request -> when (request == Metric.Collapsed) (putMVar joined ())}
+                    fetch = putMVar started () >> takeMVar release $> Right expected
+                    run = Cache.resolveMetadata port c publicSource thingName
+                withAsync (run fetch) $ \leader -> do
+                    takeMVar started
+                    withAsync (run fetch) $ \follower -> do
+                        takeMVar joined
+                        putMVar release ()
+                        wait leader `shouldReturn` Right expected
+                        wait follower `shouldReturn` Right expected
+                cachedMetadata noopMetricsPort c publicSource thingName `shouldReturn` Nothing
+                run (pure (Right (entry thingName "next"))) `shouldReturn` Right (entry thingName "next")
+            result `shouldBe` Just ()
 
-        it "returns the coherent pair the entry was cached with on a hit" $ do
-            c <- freshCache
-            _ <- resolveMetadata c publicSource (unscopedNpm "coherent") (pure (entry (unscopedNpm "coherent") "first"))
-            hit <- resolveMetadata c publicSource (unscopedNpm "coherent") (pure (entry (unscopedNpm "coherent") "second"))
-            entryRaw hit `shouldBe` cachedRaw "first"
-            infoName (entryInfo hit) `shouldBe` unscopedNpm "coherent"
+    describe "optional external full retention" $ do
+        it "partitions retained values by source, ecosystem, and package" $ do
+            values <- newIORef Map.empty
+            let backend = externalBackend 100000 (\_ key -> Map.lookup key <$> readIORef values) (\key value -> modifyIORef' values (Map.insert key value))
+                identities = [(publicSource, thingName), (privateSource, thingName), (publicSource, unscopedPyPI "thing"), (publicSource, unscopedNpm "other")]
+            c <- Cache.newMetadataCacheWithBackend (config 60 8) (Just backend)
+            for_ (zip identities [1 ..]) $ \((source, name), marker :: Int) -> do
+                let expected = entry name (show marker)
+                resolveMetadata c source name (pure expected) `shouldReturn` expected
+            for_ (zip identities [1 ..]) $ \((source, name), marker :: Int) -> do
+                cachedMetadata noopMetricsPort c source name `shouldReturn` Just (entry name (show marker))
+                resolveMetadata c source name (throwIO (UnexpectedFault MetadataUndecodable)) `shouldReturn` entry name (show marker)
 
-        it "caches per package, not globally (distinct keys both fetch)" $ do
-            c <- freshCache
-            calls <- newIORef 0
-            _ <- resolveMetadata c publicSource (unscopedNpm "a") (countingFetch calls (unscopedNpm "a") "raw")
-            _ <- resolveMetadata c publicSource (unscopedNpm "b") (countingFetch calls (unscopedNpm "b") "raw")
-            readIORef calls `shouldReturn` 2
-
-        it "exposes a cached entry through cachedMetadata after a resolution" $ do
-            c <- freshCache
-            _ <- resolveMetadata c publicSource (unscopedNpm "react") (pure (entry (unscopedNpm "react") "raw"))
-            cached <- cachedMetadata noopMetricsPort c publicSource (unscopedNpm "react")
-            (infoName . entryInfo <$> cached) `shouldBe` Just (unscopedNpm "react")
-
-        it "reports a miss through cachedMetadata before any resolution" $ do
-            c <- freshCache
-            cachedMetadata noopMetricsPort c publicSource (unscopedNpm "never-fetched") `shouldReturn` Nothing
-
-        it "re-fetches after a failed fetch rather than caching the failure" $ do
-            c <- freshCache
-            calls <- newIORef 0
-            let failing = atomicModifyIORef' calls (\n -> (n + 1, ())) $> Left MetadataUndecodable
-            failed <- Cache.resolveMetadata noopMetricsPort c publicSource (unscopedNpm "flaky") failing
-            failed `shouldBe` Left MetadataUndecodable
-
-            _ <- resolveMetadata c publicSource (unscopedNpm "flaky") (countingFetch calls (unscopedNpm "flaky") "raw")
-            readIORef calls `shouldReturn` 2
-
-    describe "resolveMetadata -- per-source isolation" $ do
-        it "keeps the private and public documents of one package apart" $ do
-            c <- freshCache
-            _ <- resolveMetadata c privateSource (unscopedNpm "shared") (pure (entry (unscopedNpm "shared") "private-doc"))
-            _ <- resolveMetadata c publicSource (unscopedNpm "shared") (pure (entry (unscopedNpm "shared") "public-doc"))
-            priv <- cachedMetadata noopMetricsPort c privateSource (unscopedNpm "shared")
-            pub <- cachedMetadata noopMetricsPort c publicSource (unscopedNpm "shared")
-            (entryRaw <$> priv) `shouldBe` Just (cachedRaw "private-doc")
-            (entryRaw <$> pub) `shouldBe` Just (cachedRaw "public-doc")
-
-        it "fetches once per source even for the same package" $ do
-            c <- freshCache
-            calls <- newIORef 0
-            _ <- resolveMetadata c privateSource (unscopedNpm "two-origins") (countingFetch calls (unscopedNpm "two-origins") "priv")
-            _ <- resolveMetadata c publicSource (unscopedNpm "two-origins") (countingFetch calls (unscopedNpm "two-origins") "pub")
-
-            readIORef calls `shouldReturn` 2
-
-        it "a hit for one source never satisfies a miss for the other" $ do
-            c <- freshCache
-            calls <- newIORef 0
-            _ <- resolveMetadata c privateSource (unscopedNpm "iso") (countingFetch calls (unscopedNpm "iso") "priv")
-
-            _ <- resolveMetadata c publicSource (unscopedNpm "iso") (countingFetch calls (unscopedNpm "iso") "pub")
-            cachedMetadata noopMetricsPort c publicSource (unscopedNpm "iso") >>= \pub ->
-                (entryRaw <$> pub) `shouldBe` Just (cachedRaw "pub")
-            readIORef calls `shouldReturn` 2
-
-    describe "resolveMetadata -- TTL" $
-        it "re-fetches once the short TTL has elapsed" $ do
-            c <- newMetadataCache (config 0.05 100) -- 50 ms TTL
-            calls <- newIORef 0
-            _ <- resolveMetadata c publicSource (unscopedNpm "stale") (countingFetch calls (unscopedNpm "stale") "raw")
-            threadDelay 120000 -- 120 ms > TTL
-            _ <- resolveMetadata c publicSource (unscopedNpm "stale") (countingFetch calls (unscopedNpm "stale") "raw")
-            readIORef calls `shouldReturn` 2
-
-    describe "size bound" $
-        it "counts the two sources of one package as two entries against the bound" $ do
-            (port, readEntries) <- recordingEntriesPort
-            c <- newMetadataCache (config 60 4)
-            for_ [1 .. 10 :: Int] $ \i -> do
-                _ <- Cache.resolveMetadata port c privateSource (unscopedNpm (show i)) (pure (Right (entry (unscopedNpm (show i)) "priv")))
-                Cache.resolveMetadata port c publicSource (unscopedNpm (show i)) (pure (Right (entry (unscopedNpm (show i)) "pub")))
-            readEntries `shouldReturn` Just 4
-
-    describe "resident-byte budget" $
-        it "reports the resident bytes through the residency gauge" $ do
-            (port, readResidency) <- recordingResidencyPort
-            c <- newMetadataCache (config 60 100)
-            for_ [1 .. 4 :: Int] $ \i ->
-                Cache.resolveMetadata port c publicSource (unscopedNpm (show i)) (pure (Right (entry (unscopedNpm (show i)) "raw")))
-            residency <- readResidency
-            residency `shouldBe` Just (4 * entryWeight)
+        it "preserves origin success and reports a failed backend read and write" $ do
+            failures <- newIORef []
+            let backend = externalBackend 100000 (\_ _ -> throwIO (UnexpectedFault MetadataUndecodable)) (\_ _ -> throwIO (UnexpectedFault MetadataUndecodable))
+                port = noopMetricsPort{mpCacheRefused = \store -> modifyIORef' failures (store :)}
+                expected = entry thingName "fresh"
+            c <- Cache.newMetadataCacheWithBackend (config 60 8) (Just backend)
+            Cache.resolveMetadata port c publicSource thingName (pure (Right expected)) `shouldReturn` Right expected
+            readIORef failures `shouldReturn` [Metric.FullStore, Metric.FullStore]
 
     describe "resolveAssembled -- the assembled-representation store" $ do
         it "serves the stored bytes on a repeat key without re-rendering" $ do
@@ -349,7 +318,8 @@ spec = do
                 _ <- Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
                 _ <- Cache.resolveVersion port c publicSource name v1_0_0 (pure (Right (untaggedRead Nothing)))
                 Cache.resolveAssembled port c "assembled" (pure "raw")
-            for_ [full, version, assembled] $ \seen ->
+            readIORef full `shouldReturn` [Metric.Miss, Metric.Miss]
+            for_ [version, assembled] $ \seen ->
                 readIORef seen `shouldReturn` [Metric.Hit, Metric.Miss]
 
         it "attributes oversized non-retention to the store that refused it" $ do
@@ -363,7 +333,7 @@ spec = do
                 Cache.resolveVersion port c publicSource name v1_0_0 (pure (Right (untaggedRead Nothing)))
                     `shouldReturn` Right (untaggedRead Nothing)
                 Cache.resolveAssembled port c "assembled" (pure "raw") `shouldReturn` "raw"
-            readIORef refused `shouldReturn` concat (replicate 2 [Metric.AssembledStore, Metric.VersionStore, Metric.FullStore])
+            readIORef refused `shouldReturn` concat (replicate 2 [Metric.AssembledStore, Metric.VersionStore])
 
         it "reports assembled expiry before retaining a replacement" $ do
             seen <- newIORef []
@@ -376,7 +346,7 @@ spec = do
             Cache.resolveAssembled port c "expired" (pure "new") `shouldReturn` "new"
             readIORef seen `shouldReturn` [weight, 0, weight]
 
-        it "drops the full and version byte gauges when a probe removes an expired entry" $ do
+        it "keeps full residency zero and reports selected-version expiry" $ do
             full <- newIORef 0
             version <- newIORef 0
             entries <- newIORef 0
@@ -390,7 +360,7 @@ spec = do
             c <- newMetadataCache (config 0 8)
             _ <- Cache.resolveMetadata port c publicSource name (pure (Right (entry name "raw")))
             _ <- Cache.resolveVersion port c publicSource name v1_0_0 (pure (Right (untaggedRead Nothing)))
-            readIORef full >>= (`shouldSatisfy` (> 0))
+            readIORef full `shouldReturn` 0
             readIORef version >>= (`shouldSatisfy` (> 0))
             threadDelay 1000
             Cache.cachedMetadata port c publicSource name `shouldReturn` Nothing
@@ -398,7 +368,7 @@ spec = do
             traverse readIORef [full, version, entries] `shouldReturn` [0, 0, 0]
 
     describe "the named sub-budgets" $ do
-        it "a version-store flood evicts only version entries; the full store stays resident" $ do
+        it "a version-store flood preserves assembled entries without retaining full metadata" $ do
             c <-
                 newMetadataCache
                     CacheConfig
@@ -409,13 +379,15 @@ spec = do
                         }
             let name = unscopedNpm "hot-head"
             _ <- resolveMetadata c publicSource name (pure (entry name "raw"))
+            _ <- resolveAssembled c "stable" (pure "assembled")
             for_ ([1 .. 5] :: [Int]) $ \i ->
                 Cache.resolveVersion noopMetricsPort c publicSource name (npmVersion (show i <> ".0.0")) (pure (Right (untaggedRead Nothing)))
 
             Cache.cachedVersion noopMetricsPort c publicSource name (npmVersion "1.0.0") `shouldReturn` Nothing
 
             found <- cachedMetadata noopMetricsPort c publicSource name
-            found `shouldSatisfy` isJust
+            found `shouldBe` Nothing
+            resolveAssembled c "stable" (pure "wrong") `shouldReturn` "assembled"
 
         it "keeps the summed residency of all three stores within the summed sub-budgets" $ do
             fullSeen <- newIORef 0

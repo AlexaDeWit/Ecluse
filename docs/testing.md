@@ -326,7 +326,7 @@ It does not model a pre-restart heap or claim that a short default run measures 
 | `BENCH_PATTERN_ARRIVAL_US` | 100000 between restart clients |
 | `BENCH_PATTERN_SEED` | 42 |
 | `BENCH_PATTERN_DEADLINE_US` | 120000000, covering client start delays and response reads |
-| `BENCH_PATTERN_FULL_BYTES` | The fixture full-store budget, reduced for scan unless explicitly overridden. Zero disables full retention |
+| `BENCH_PATTERN_FULL_BYTES` | Must be zero. The local backend never retains full metadata, regardless of capacity |
 | `BENCH_PATTERN_VERSION_BYTES` | The fixture version-store budget, must be positive |
 | `BENCH_PATTERN_ASSEMBLED_BYTES` | The fixture assembled-store budget, must be positive |
 | `BENCH_PATTERN_NOW` | Latest authenticated capture time plus two days. Override with an ISO8601 UTC time |
@@ -347,11 +347,14 @@ preparation and warm-up. GC-observed live heap does not establish the maximum tr
 Timed allocation and GC deltas keep their original measurement window.
 
 Unsupported distinct-name and overlap requests fail instead of creating synthetic package aliases.
-Each report states the parameters, distinct wire bytes, accounted capacity, occupancy, oversized
+Each report states the parameters, distinct wire bytes, accounted capacity, occupancy, retention
 refusals, retention fraction, and collapsed fraction per store. The wire-to-resident comparison
 uses matching accounted bytes for the full store, computed through production projection and
 `weighCacheEntry` before measurement. Version and assembled working-set bytes remain unavailable.
 The separate full-store wire-equivalent estimate excludes retained artifact keys.
+Full candidate accounting runs only during diagnostic preparation. Local requests never weigh or
+retain full entries, and their effective full capacity is zero. The existing `cached-public-hit`
+and cache capacity scenarios measure assembled-response reuse, while full reads still fetch.
 The finite report retains scheduled, completed, successful, refused, other HTTP failure, transport
 failure, and unfinished totals and rates. Its success fraction divides by all scheduled requests.
 Successful throughput and latency exclude error responses. HTTP refusals count 429 and 503, while

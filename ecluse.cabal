@@ -189,6 +189,9 @@ library ecluse-core
     Ecluse.Core.Security.IpLiteral
     Ecluse.Core.Security.Limits
     Ecluse.Core.Server.Cache
+    Ecluse.Core.Server.Cache.Backend
+    Ecluse.Core.Server.Cache.Backend.Internal
+    Ecluse.Core.Server.Cache.Backend.Local
     Ecluse.Core.Server.Cache.Store
     Ecluse.Core.Server.Cache.VersionWeight
     Ecluse.Core.Server.Accept
@@ -816,6 +819,8 @@ test-suite ecluse-core-unit
     Ecluse.Core.Server.Admission.BytesSpec
     Ecluse.Core.Server.AcceptSpec
     Ecluse.Core.Server.AdmissionSpec
+    Ecluse.Core.Server.Cache.BackendSpec
+    Ecluse.Core.Server.Cache.Backend.LocalSpec
     Ecluse.Core.Server.Cache.StoreSpec
     Ecluse.Core.Server.Cache.VersionWeightSpec
     Ecluse.Core.Server.CacheSpec

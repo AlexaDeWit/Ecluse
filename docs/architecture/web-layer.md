@@ -119,12 +119,25 @@ would force arbitrary full-artifact upstream fetches. So dispatch handles `HEAD`
 
 ## Metadata cache
 
-A short-TTL, size-bounded, in-memory cache holds the parsed packument metadata, keyed by package, so
-concurrent resolutions of a popular package collapse to one upstream call. Each entry is the coherent
-pair of the typed `PackageInfo` and the raw document it was decoded from. The cache holds that raw
-document as an [opaque carrier](registry-model.md#decision-surface-vs-served-surface)
-([`CachedDoc`](../../core/src/Ecluse/Core/Registry/CachedDocument.hs)) and sizes it without reading
-it, so the cache stays ecosystem-agnostic.
+The local backend retains selected versions and assembled responses. It never retains full
+metadata, including a compact full representation. Concurrent full reads share active work,
+then completion removes the flight registration. This path does not weigh, encode, or insert
+full entries. A subsequent full read fetches again, so an earlier listing does not make a later
+selected-version read an upstream-free operation.
+
+Retention uses a backend handle separate from single-flight and request admission.
+The composition root supplies the local backend without an external dependency.
+The optional full-retention interface excludes the shipped local backend even when explicitly
+supplied. An external adapter owns its TTL, representation, codec, bounded decoding, and identity
+validation. It must preserve the source, ecosystem, package, source digest, and artifact identities.
+Each external operation has a deadline capped at one second. A synchronous fault or deadline
+expiry becomes a miss or skipped write. Cancellation propagates. Writes run inline and no pending
+write queue retains documents. There is no external backend implementation or configuration.
+
+Repeated full fetches can increase upstream work. Dependency-graph captures establish large full
+working sets, but no successful paired runtime comparison establishes the size of this trade-off.
+Performance reports must compare equal successful work and distinguish retained bytes from transient
+materialisation, allocation, and upstream transfer.
 
 The selected-version store charges each retained release field, including the full backing
 allocation of each text slice. Repeated artifacts, hashes, licences, and trust evidence each carry
@@ -134,10 +147,10 @@ accounting, not exact heap residency. A release above its store's budget is serv
 or eviction, and occupancy reports the charged weights. Cached absences keep their smaller charge.
 
 The cache holds the metadata, not the verdict. The rules engine re-evaluates the rules on every
-request, so time-sensitive rules (`AllowIfOlderThan`) stay correct. This is in-memory metadata only.
+request, so time-sensitive rules (`AllowIfOlderThan`) stay correct.
 On-disk artifact caching is out of scope, and the mirror stays the durable store.
 
-The cache holds the anonymous public (gated) origin only. It never holds the private origin: the
+Metadata retention and full-read single-flight use the anonymous public (gated) origin only. It never holds the private origin: the
 serve path fetches that origin per request and never hands it to the cache. No caller's private view
 can leak to another inside the TTL, because Écluse forbids a shared private cache. The anonymous public origin crosses no trust boundary, so the cache
 holds it freely.

@@ -351,7 +351,7 @@ The request counters use `result=hit|miss|collapsed`:
 | `ecluse.metadata_cache.version.requests` | Selected-version store requests |
 | `ecluse.metadata_cache.assembled.requests` | Assembled-response store requests |
 | `ecluse.metadata_cache.version.full_hits` | Selected reads answered from a retained full document, including an absent version |
-| `ecluse.metadata_cache.refused` | Fetched values too large to retain, by `store=full|version|assembled` |
+| `ecluse.metadata_cache.refused` | Capacity refusals or external backend failures, by `store=full|version|assembled` |
 
 A `hit` uses a retained value. A `miss` leads a fetch or render. A `collapsed` request joins
 an existing leader and shares its result, including a failure. A follower that retries after
@@ -366,6 +366,13 @@ measure concurrent work saved separately.
 The `ecluse.metadata_cache.resident_bytes`, `ecluse.metadata_cache.version.resident_bytes`,
 and `ecluse.metadata_cache.assembled.resident_bytes` gauges report accounted bytes after insertion,
 eviction, and expiry removal. `ecluse.metadata_cache.entries` reports the full store's entry count.
+The shipped local backend never retains full metadata. Full-store entries and resident bytes stay
+zero, and local full reads report misses or collapsed active work without capacity refusals.
+Selected-version and assembled stores retain their own TTL and bounds. A full listing followed by
+a selected-version read can therefore fetch upstream twice. No external cache service is required.
+Boot and `check-config` output report these local capabilities. `cache.maxBytes` applies only to
+eligible local retention. Increasing it cannot enable full retention.
+
 Expiry removal happens on access or a retaining insert, not on a background timer. An idle store
 can therefore still report the charge for entries whose TTL elapsed until the next removal.
 

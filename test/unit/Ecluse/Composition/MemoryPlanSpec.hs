@@ -199,6 +199,7 @@ spec = describe "resolveMemoryPlan" $ do
                        , "memory plan: material aggregate 386547028" <> ceilingClause
                        , "memory plan: response byte cap 12884900" <> ceilingClause
                        , "memory plan: request byte cap 104857600" <> ceilingClause
+                       , "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
                        , "memory plan: cache byte bound 257698038" <> ceilingClause
                        , "memory plan: cache entry bound 983" <> ceilingClause
                        , "memory plan: publish aggregate 128849019" <> ceilingClause
@@ -229,14 +230,16 @@ spec = describe "resolveMemoryPlan" $ do
 
     describe "planCacheConfig" $ do
         it "marries the TTL to the plan's aggregate, split summing exactly to it" $ do
-            let (plan, _) = resolve bareCache{csTtl = 45} bareLimits bareQueue Nothing (planWith (Just (2 * gib))) NoQueueTenant False
+            let (plan, lines') = resolve bareCache{csTtl = 45} bareLimits bareQueue Nothing (planWith (Just (2 * gib))) NoQueueTenant False
                 cacheCfg = planCacheConfig bareCache{csTtl = 45} plan
             cacheTtl cacheCfg `shouldBe` 45
             sbMaxBytes (cacheFullBudget cacheCfg)
                 + sbMaxBytes (cacheVersionBudget cacheCfg)
                 + sbMaxBytes (cacheAssembledBudget cacheCfg)
                 `shouldBe` mpCacheAggregateBytes plan
-            sbMaxEntries (cacheFullBudget cacheCfg) `shouldBe` mpCacheMaxEntries plan
+            sbMaxEntries (cacheFullBudget cacheCfg) `shouldBe` 0
+            sbMaxBytes (cacheFullBudget cacheCfg) `shouldBe` 0
+            lines' `shouldContain` ["metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"]
             sbMaxEntries (cacheVersionBudget cacheCfg) `shouldBe` 4 * mpCacheMaxEntries plan
   where
     resolve = resolveMemoryPlan
