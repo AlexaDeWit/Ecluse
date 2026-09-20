@@ -14,7 +14,7 @@ import UnliftIO (async, cancel, concurrently, concurrently_, mapConcurrently, ti
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwIO, try)
 
-import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), Recency (..), retentionBackend)
+import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage, LocalStorage), Recency (..), retentionBackend)
 import Ecluse.Test.Server.Cache (externalOperations, newSingleFlight)
 
 import Ecluse.Core.Server.Cache.Store (
@@ -82,6 +82,96 @@ countingFetch calls value = atomicModifyIORef' calls (\n -> (n + 1, ())) $> valu
 
 spec :: Spec
 spec = do
+    describe "prepared request lifetime" $ do
+        it "pins a local hit through eviction and reports only on execution" $ do
+            sf <- newStore 60 1 flatWeight
+            _ <- resolveOk sf "held" (pure "original")
+            seen <- newIORef []
+            prepared <- Store.prepareStore (\outcome -> modifyIORef' seen (outcome :)) (const pass) pass sf "held" (pure (Right "wrong"))
+            Store.preparedReuse prepared `shouldBe` Store.KnownLocalReuse
+            readIORef seen `shouldReturn` []
+            _ <- resolveOk sf "replacement" (pure "other")
+            lookupStore sf "held" `shouldReturn` Nothing
+            Store.executePrepared prepared `shouldReturn` Right "original"
+            readIORef seen `shouldReturn` [Metric.Hit]
+
+        it "pins absence through expiry without a second lookup" $ do
+            held <- newIORef (Just (Nothing :: Maybe Text))
+            lookupCalls <- newIORef (0 :: Int)
+            seen <- newIORef []
+            let operations = externalOperations (\_ _ -> modifyIORef' lookupCalls (+ 1) >> readIORef held) (\_ _ -> pass)
+            sf <- newSingleFlightWithBackend (Just (retentionBackend LocalStorage operations))
+            prepared <- Store.prepareStore (\outcome -> modifyIORef' seen (outcome :)) (const pass) pass sf ("absent" :: Text) (pure (Left StoreFault))
+            writeIORef held Nothing
+            Store.preparedReuse prepared `shouldBe` Store.KnownLocalReuse
+            Store.executePrepared prepared `shouldReturn` Right Nothing
+            readIORef lookupCalls `shouldReturn` 1
+            readIORef seen `shouldReturn` [Metric.Hit]
+
+        for_ [Nothing, Just "external"] $ \held ->
+            it ("defers external storage until execution: " <> show held) $ do
+                lookupCalls <- newIORef (0 :: Int)
+                let operations = externalOperations (\_ _ -> modifyIORef' lookupCalls (+ 1) $> held) (\_ _ -> pass)
+                sf <- newSingleFlightWithBackend (Just (retentionBackend (ExternalStorage 1000000) operations))
+                prepared <- Store.prepareStore (const pass) (const pass) pass sf ("key" :: Text) (pure (Right "fresh" :: Either StoreFault Text))
+                Store.preparedReuse prepared `shouldBe` Store.NeedsMaterialisation
+                readIORef lookupCalls `shouldReturn` 0
+                Store.executePrepared prepared `shouldReturn` Right (fromMaybe "fresh" held)
+                readIORef lookupCalls `shouldReturn` 1
+
+        it "defers an external lookup failure and falls back during execution" $ do
+            failRead <- newIORef True
+            let lookupValue _ _ = do
+                    failing <- readIORef failRead
+                    if failing then throwIO LeaderEscaped else pure (Just ("recovered" :: Text))
+                operations = externalOperations lookupValue (\_ _ -> pass)
+            sf <- newSingleFlightWithBackend (Just (retentionBackend (ExternalStorage 1000000) operations))
+            prepared <- Store.prepareStore (const pass) (const pass) pass sf ("key" :: Text) (pure (Left StoreFault))
+            Store.executePrepared prepared `shouldReturn` Left StoreFault
+            writeIORef failRead False
+            timeout 1000000 (resolve sf "key" (pure (Left StoreFault))) `shouldReturn` Just (Right "recovered")
+
+        it "leaves no flight behind when preparation is abandoned" $ do
+            sf <- roomyStore
+            _ <- Store.prepareStore (const pass) (const pass) pass sf "key" (pure (Right "abandoned"))
+            timeout 1000000 (resolveOk sf "key" (pure "leader")) `shouldReturn` Just "leader"
+
+        it "rechecks a deferred miss populated while admission waited" $ do
+            sf <- roomyStore
+            prepared <- Store.prepareStore (const pass) (const pass) pass sf "key" (pure (Right "wrong"))
+            _ <- resolveOk sf "key" (pure "winner")
+            Store.executePrepared prepared `shouldReturn` Right "winner"
+
+        it "keeps prepared followers coalesced and retries a cancelled leader once" $ do
+            result <- timeout 1000000 $ do
+                sf <- newSingleFlightWithBackend Nothing
+                started <- newEmptyMVar
+                joined <- newEmptyMVar
+                release <- newEmptyMVar
+                seen <- newIORef []
+                let observe outcome = do
+                        modifyIORef' seen (outcome :)
+                        when (outcome == Metric.Collapsed) (putMVar joined ())
+                    blocked = putMVar started () >> takeMVar release $> Right ("abandoned" :: Text)
+                    prepare = Store.prepareStore observe (const pass) pass sf ("key" :: Text)
+                leader <- prepare blocked
+                follower <- prepare (pure (Right "recovered" :: Either StoreFault Text))
+                withAsync (Store.executePrepared leader) $ \runningLeader -> do
+                    takeMVar started
+                    withAsync (Store.executePrepared follower) $ \runningFollower -> do
+                        takeMVar joined
+                        cancel runningLeader
+                        wait runningFollower `shouldReturn` Right "recovered"
+                readIORef seen `shouldReturn` [Metric.Collapsed, Metric.Miss]
+            result `shouldBe` Just ()
+
+        it "does not reserve a flight when a prepared hit observer fails" $ do
+            sf <- roomyStore
+            _ <- resolveOk sf "key" (pure "held")
+            prepared <- Store.prepareStore (const (throwIO LeaderEscaped)) (const pass) pass sf "key" (pure (Right "wrong"))
+            try (Store.executePrepared prepared) `shouldReturn` Left LeaderEscaped
+            timeout 1000000 (resolveOk sf "key" (pure "wrong")) `shouldReturn` Just "held"
+
     describe "local retained hits" $ do
         it "returns a second hit while the first hit's request callback is blocked" $ do
             result <- timeout 1000000 $ do

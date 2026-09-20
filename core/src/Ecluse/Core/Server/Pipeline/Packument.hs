@@ -63,6 +63,8 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (ctxAdvisoryEtag), completeEvidence, mkEvalContext)
 import Ecluse.Core.Security.Egress (registryUrlText)
+import Ecluse.Core.Server.Admission (withServeAdmission)
+import Ecluse.Core.Server.Admission.Material (MaterialWork (ListingMaterial), withMaterialAdmission)
 import Ecluse.Core.Server.Cache (resolveAssembled)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
@@ -208,15 +210,23 @@ serveWithinGuards serving clientToken
     | not (edgeTokenMatches (pdInboundToken (psvDeps serving)) clientToken) =
         liftIO (respond (packumentUnauthorised replies [] (mkRefusal Nothing unauthorisedMessage)))
     | otherwise =
-        withAdmissionOrShed
+        withAdmissionResultOrShed
             (servingMetrics serving)
-            (srAdmission (psvRuntime serving))
             (liftIO (respond (packumentUnavailable replies [shedRetryAfter] (mkRefusal Nothing shedMessage))))
-            (serveAdmittedPackument serving clientToken)
+            ( fmap
+                join
+                ( withServeAdmission (servingMetrics serving) (srAdmission runtime) $
+                    withMaterialAdmission (srMaterialAdmission runtime) (ListingMaterial originCount) $
+                        serveAdmittedPackument serving clientToken
+                )
+            )
             pure
   where
     replies = psvReplies serving
     respond = psvRespond serving
+    runtime = psvRuntime serving
+    deps = psvDeps serving
+    originCount = length (catMaybes [void (pdPrivateBaseUrl deps), guard (not (pdFirstParty deps (psvName serving)))])
 
 serveAdmittedPackument :: PackumentServing response -> Maybe ClientCredential -> Handler ResponseReceived
 serveAdmittedPackument serving clientToken = do

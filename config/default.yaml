@@ -58,26 +58,27 @@ queue:
   # maxMemoryDepth: 50000
 
 limits:
-  # The bounds the memory plan does not size, so they stay a pinned policy stance rather
-  # than a machine property. The three count keys below bound document shape, not bytes.
-  maxVersionCount: 100000
-  # The artifacts one package may carry across all its versions. One version can hold
-  # many files, so this bounds the projection cost and residency the version count does
-  # not reach. It counts files, not bytes: maxArtifactBytes below caps how large a single
-  # artifact the mirror worker will fetch. npm carries one artifact per version, so on an
-  # npm mount this never refuses a document the version count has not refused already.
-  maxArtifactCount: 100000
+  # Structural policy limits stay independent of the memory and CPU controls.
+  # maxVersionCount counts every source npm version. PyPI full reads count distinct
+  # releases, while selected reads count all source file positions, including skips.
+  maxVersionCount: 1000000
+  # Valid retained npm artifacts and full-read PyPI distribution files. The selected
+  # PyPI path uses maxVersionCount's source-file bound instead of a separate check.
+  # This counts files. maxArtifactBytes below bounds a mirror worker's artifact body.
+  maxArtifactCount: 1000000
+  # Nesting in retained metadata fields. Skipped fields do not use this limit.
   maxNestingDepth: 64
   # Refuse to download an advisory database larger than this many bytes (512 MiB). The
   # declared length fails fast and the streaming download enforces the cap. It bounds a
   # stream to disk rather than a heap tenant, which is why the plan does not size it.
   maxAdvisoryDatabaseBytes: 536870912
-  # The memory plan computes the byte-valued caps at boot, as named tenants of the
-  # effective heap ceiling, and the boot log names each decision. Set either one only
-  # to override it. maxResponseBytes bounds an upstream metadata body, floored at
-  # 12 MiB so real packuments fit, and the fetch aborts fail-closed past it.
-  # maxRequestBytes bounds a client request body (a publish), refused with 413.
-  # maxResponseBytes: 12582912
+  # maxResponseBytes defaults to 128 MiB, a fixed metadata ingest ceiling independent of CPU
+  # concurrency and the material estimate budget. Reads fail closed past this limit.
+  # A positive explicit value stays exact. Boot and check-config warn that accepting
+  # a body does not guarantee its materialisation fits the heap.
+  # maxRequestBytes bounds a publish body. The memory plan sizes it from the heap,
+  # and the server refuses a larger body with 413.
+  # maxResponseBytes: 134217728
   # maxRequestBytes: 26214400
   # The mirror worker's per-artifact fetch cap. The memory plan computes this one too,
   # as the mirror-artifact tenant, sized so the transient publish envelope stays within
@@ -187,10 +188,11 @@ advisories:
 #   # slack, floored at half the limit. Enforcing it re-executes the binary once. A
 #   # breach is a clean heap-overflow error, not a kernel OOM kill.
 #   maxHeapBytes: 1073741824
-#   # Concurrent metadata materialisations, computed from cores and the heap ceiling
-#   # (the boot log names the value). Over it a request waits up to 1 s for a slot,
-#   # then gets 503 with Retry-After: 1. That 503 is backpressure: exclude it from
-#   # alerts. A real upstream failure returns 503 without the header.
+#   # Concurrent metadata operations, computed from cores independently of memory.
+#   # A positive explicit value stays exact. A separate material estimate budget
+#   # controls fresh work and known local reuse. Either gate waits up to 1 s before
+#   # returning 503 with Retry-After: 1. Treat these responses as backpressure.
+#   # Estimates reduce concurrency pressure without bounding worst-case heap use.
 #   serveMaxInFlight: 128
 #   # Pooled connections per public upstream host: clamp (32, 1024) (nofile / 8).
 #   # Connections beyond the pool still open, but re-handshake TLS each time.

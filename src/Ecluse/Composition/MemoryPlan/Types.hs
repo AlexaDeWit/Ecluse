@@ -60,13 +60,13 @@ data MemoryPlan = MemoryPlan
     -- ^ Tenant 3: the one cache aggregate, split at 'Ecluse.Composition.MemoryPlan.planCacheConfig'.
     , mpCacheMaxEntries :: Int
     , mpMaterialAggregateBytes :: Int
-    -- ^ Tenant 4: the materialisation envelope bytes admission may hold at once.
+    -- ^ Tenant 4: the independent heuristic capacity for concurrent metadata work.
     , mpMaxResponseBytes :: Int
-    -- ^ The per-response wire cap @R@ carved from the material aggregate.
+    -- ^ The fixed metadata ingest ceiling, independent of memory and CPU admission.
     , mpMaxRequestBytes :: Int
     -- ^ The per-request (publish body) wire cap @Q@, enforced at the publish read site.
     , mpAdmissionCapacity :: Int
-    -- ^ @max 1 (min A_cpu A_mem)@. The composition root builds admission from it.
+    -- ^ CPU-derived concurrency, or the exact explicit operator pin.
     , mpShedCapabilities :: Maybe Int
     {- ^ A count to shrink to when the nursery is the memory pressure, each capability holding an
     allocation area. 'Nothing' leaves the live count.
@@ -82,7 +82,7 @@ data MemoryPlan = MemoryPlan
     , mpFixedBufferBytes :: Int
     -- ^ Tenant 2: the enqueue buffer, charged whenever any mount mirrors.
     , mpDegradations :: [Text]
-    -- ^ The shed-ladder warnings, in the order taken. Empty when everything fits.
+    -- ^ Shed-ladder and explicit-control warnings, including the limits of material estimates.
     , mpOverrideViolations :: [Text]
     {- ^ The pins the plan blames for a residual overshoot it cannot shed around. The boot and
     check-config refuse on these with exit 2.

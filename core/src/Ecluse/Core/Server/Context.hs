@@ -62,6 +62,7 @@ import Ecluse.Core.Security (HostPort, Limits, Origin, TarballHostGate, tarballH
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Admission.Bytes (ByteAdmission)
+import Ecluse.Core.Server.Admission.Material (MaterialAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Contract (ResponseContract)
 import Ecluse.Core.Server.Response (HelpMessage)
@@ -79,7 +80,9 @@ import Ecluse.Core.Telemetry.Span (TracingPort)
 -- | Serve capabilities assembled at boot. Both HTTP managers must validate TLS certificates.
 data ServeRuntime = ServeRuntime
     { srAdmission :: ServeAdmission
-    -- ^ Bounds metadata materialisation, excluding private tarball hits and artifact streaming.
+    -- ^ Bounds concurrent metadata work, excluding private artifact reads and artifact relay.
+    , srMaterialAdmission :: MaterialAdmission
+    -- ^ Static material estimates held through metadata, policy and listing output work.
     , srPublicManager :: Manager
     {- ^ The validating-TLS data-plane manager for the __untrusted__ public-upstream
     metadata fetch and every artifact stream.

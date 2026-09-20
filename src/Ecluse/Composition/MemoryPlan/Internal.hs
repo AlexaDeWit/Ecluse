@@ -47,7 +47,7 @@ data TenantDemands = TenantDemands
     , tdCacheEntriesExplicit :: Maybe Int
     -- ^ Cache entries, not bytes.
     , tdMaterialDesired :: Int
-    , tdMaterialMinimum :: Int
+    , tdResponseFinal :: Int
     , tdAdmissionDesired :: Int
     -- ^ Concurrent serve operations, not bytes.
     , tdPublishConfigured :: Bool

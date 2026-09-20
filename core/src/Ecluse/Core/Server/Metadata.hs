@@ -15,6 +15,7 @@ module Ecluse.Core.Server.Metadata (
     MetadataReads,
     newMetadataReads,
     publicMetadataClient,
+    preparePublicVersion,
     privateMetadataClient,
 
     -- * Projecting one version
@@ -37,9 +38,11 @@ import Ecluse.Core.Server.Cache (
     CacheEntry (CacheEntry, entryBodyBytes, entryDigest, entryInfo, entryRaw),
     MetadataCache,
     Source,
+    prepareVersion,
     resolveMetadata,
     resolveVersion,
  )
+import Ecluse.Core.Server.Cache.Store (PreparedStore)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -53,7 +56,7 @@ data ManifestCaching
 {- | One origin's raw reads bound to their observers, before a caching policy settles them into a
 'MetadataClient'. The phantom is the posture of the origin the reads were bound to.
 -}
-newtype MetadataReads (posture :: Type) = MetadataReads (Metric.Upstream -> ManifestCaching -> MetadataClient)
+newtype MetadataReads (posture :: Type) = MetadataReads (Metric.Upstream -> ManifestCaching -> ClientWiring)
 
 -- As on OriginFor in Ecluse.Core.Registry.Origin: the default phantom role would let coerce
 -- turn per-caller reads into the ones the public builder accepts.
@@ -71,27 +74,33 @@ newMetadataReads ::
     MetadataReads posture
 newMetadataReads metrics logFailure logInvalid logFetch rawFetch rawFetchVersion origin =
     MetadataReads $ \upstream caching ->
-        newMetadataClient
-            ClientWiring
-                { cwMetrics = metrics
-                , cwUpstream = upstream
-                , cwCaching = caching
-                , cwFetch = rawFetch client
-                , cwFetchVersion = rawFetchVersion client
-                , cwLogFailure = logFailure
-                , cwLogInvalid = logInvalid
-                , cwLogFetch = logFetch
-                }
+        ClientWiring
+            { cwMetrics = metrics
+            , cwUpstream = upstream
+            , cwCaching = caching
+            , cwFetch = rawFetch client
+            , cwFetchVersion = rawFetchVersion client
+            , cwLogFailure = logFailure
+            , cwLogInvalid = logInvalid
+            , cwLogFetch = logFetch
+            }
   where
     client = originClientOf origin
 
 -- | The anonymous origin's handle, resolving through the shared cache under its 'Source' key.
 publicMetadataClient :: MetadataCache -> Source -> MetadataReads Public -> MetadataClient
-publicMetadataClient cache source (MetadataReads settle) = settle Metric.Public (Cached cache source)
+publicMetadataClient cache source (MetadataReads settle) = newMetadataClient (settle Metric.Public (Cached cache source))
+
+-- | Prepare anonymous selected metadata while keeping its logs and upstream metrics on the leader.
+preparePublicVersion :: MetadataCache -> Source -> MetadataReads Public -> PackageName -> Version -> IO (PreparedStore MetadataError VersionRead)
+preparePublicVersion cache source (MetadataReads settle) name version =
+    prepareVersion (cwMetrics wiring) cache source name version (versionLeader wiring name version)
+  where
+    wiring = settle Metric.Public (Cached cache source)
 
 -- | The per-caller origin's handle. It takes no cache, so the upstream re-authorises every caller.
 privateMetadataClient :: MetadataReads Private -> MetadataClient
-privateMetadataClient (MetadataReads settle) = settle Metric.Private Uncached
+privateMetadataClient (MetadataReads settle) = newMetadataClient (settle Metric.Private Uncached)
 
 -- One origin's raw reads and observers, already settled by a caching policy and an upstream
 -- label. Bundled so each read below takes it whole rather than nine positional parameters.
