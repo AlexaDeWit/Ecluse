@@ -39,13 +39,13 @@ data CorpusPackage = CorpusPackage
     -- ^ The package's multiplicity in the load harness's large-emphasis serve mix.
     }
 
--- | npm captures, heaviest first for the load harness's working set.
+-- | npm captures in the stable order used to select load working sets.
 corpusPackages :: [CorpusPackage]
 corpusPackages =
     [ entry Heavy 8 (scoped "types" "node") (corpusRoot <> "types-node.full.json")
     , entry Heavy 8 (unscopedNpm "webpack") (corpusRoot <> "webpack.full.json")
     , entry Heavy 6 (scoped "aws-sdk" "client-s3") (corpusRoot <> "aws-sdk-client-s3.full.json")
-    , entry Large 4 (unscopedNpm "express") "core/test/unit/fixtures/npm/express.full.json"
+    , entry Large 4 (unscopedNpm "express") (corpusRoot <> "express.full.json")
     , entry Large 4 (unscopedNpm "typescript") (corpusRoot <> "typescript.full.json")
     , entry Large 3 (scoped "babel" "core") (corpusRoot <> "babel-core.full.json")
     , entry Large 2 (unscopedNpm "react") (corpusRoot <> "react.full.json")
@@ -60,7 +60,7 @@ corpusPackages =
 corpusRoot :: FilePath
 corpusRoot = "bench/corpus/npm/"
 
--- | PEP 691 captures shared by benchmark and acceptance harnesses, heaviest first.
+-- | PEP 691 captures in the stable order used to select load working sets.
 pypiCorpusPackages :: [CorpusPackage]
 pypiCorpusPackages =
     [ entry Heavy 8 "boto3"

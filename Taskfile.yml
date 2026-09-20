@@ -350,12 +350,14 @@ tasks:
     desc: Run the shell-script unit tests
     sources:
       - 'scripts/**/*.sh'
+      - 'bench/corpus/**/*.json'
       - 'flake.lock'
     cmds:
       - bash scripts/ci-build-diagnostics.test.sh
       - bash scripts/ci-gate-verdict.test.sh
       - bash scripts/coverage-tix.test.sh
       - bash scripts/docs-open.test.sh
+      - bash scripts/gen-bench-corpus.test.sh
       - bash scripts/release-assets.test.sh
       - bash scripts/release-version.test.sh
       - bash scripts/source-inventory.test.sh

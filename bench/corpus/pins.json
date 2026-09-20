@@ -1,5 +1,5 @@
 {
-  "_note": "Frozen benchmark catalogue. The pins key selects npm stable releases through each pinned version. pypiPins selects PEP 691 Simple JSON files uploaded by the pinned release's last upload timestamp, fetched from /pypi/{name}/{version}/json. PyPI capture sidecars record the source, media type, cutoff, and file count. task gen-bench-corpus refreshes captures deliberately. Upstream yanks, metadata edits, and deletions can change a recapture, so committed bytes are the measurement authority. npm omits prereleases and unused operational fields. PyPI preserves retained file entries and filters the versions listing, dropping the changing _last-serial. Simple HTML and legacy project JSON are not benchmark inputs. smokeNames supplies live version-oracle names. This is not a package-manager project and Renovate does not update it.",
+  "_note": "Complete npm packuments and PyPI PEP 691 Simple JSON response bodies, preserved byte for byte including prereleases and registry metadata. pins and pypiPins identify workloads, not capture cutoffs. captures records each source, actual Content-Type, identity Content-Encoding, byte size, SHA-256 digest and UTC capture time. Capture paths are relative to this catalogue. Identity encoding makes these JSON entity bytes match the decompressed input measured by boundedRead, not compressed transport bytes. task gen-bench-corpus deliberately replaces snapshots. Committed bytes are the measurement authority. BENCH_CORPUS_VERIFY=1 checks them offline. Simple HTML and legacy PyPI project JSON are not benchmark inputs. smokeNames supplies live version-oracle names. Renovate does not update this catalogue.",
   "pins": {
     "lodash": "4.18.1",
     "request": "2.88.2",
@@ -8,7 +8,8 @@
     "typescript": "6.0.3",
     "@aws-sdk/client-s3": "3.1075.0",
     "webpack": "5.108.1",
-    "@types/node": "26.0.1"
+    "@types/node": "26.0.1",
+    "express": "5.2.1"
   },
   "smokeNames": {
     "npm": [
@@ -42,5 +43,119 @@
     "requests": "2.32.3",
     "numpy": "2.1.0",
     "boto3": "1.35.0"
+  },
+  "captures": {
+    "npm": {
+      "lodash": {
+        "path": "npm/lodash.full.json",
+        "source": "https://registry.npmjs.org/lodash",
+        "mediaType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 247678,
+        "sha256": "95d454b66fb6a90c83ec9ca17dfaf94960634117ba909fe17b54d8a4e76f9a16",
+        "capturedAt": "2026-09-20T02:07:23.674Z"
+      },
+      "request": {
+        "path": "npm/request.full.json",
+        "source": "https://registry.npmjs.org/request",
+        "mediaType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 307243,
+        "sha256": "3c7ae41614505170398581c3b42b51795738c8e28c5b16bcf98066537371a5a3",
+        "capturedAt": "2026-09-20T02:07:23.747Z"
+      },
+      "@babel/core": {
+        "path": "npm/babel-core.full.json",
+        "source": "https://registry.npmjs.org/@babel%2fcore",
+        "mediaType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 797193,
+        "sha256": "8d91e8a563d2a3f13a02715dcf6c9187aaaae9f0c326884f207469ce6f485d2e",
+        "capturedAt": "2026-09-20T02:07:23.831Z"
+      },
+      "react": {
+        "path": "npm/react.full.json",
+        "source": "https://registry.npmjs.org/react",
+        "mediaType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 6997055,
+        "sha256": "0497b16b07845d4baaeaa45f9f4f7a8f123cad881c51e78c17e1f20727905949",
+        "capturedAt": "2026-09-20T02:07:24.187Z"
+      },
+      "typescript": {
+        "path": "npm/typescript.full.json",
+        "source": "https://registry.npmjs.org/typescript",
+        "mediaType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 15693959,
+        "sha256": "4de8d2f015a981ec52e72716913e5e781ee34beacaa96085dbd48071508bd43f",
+        "capturedAt": "2026-09-20T02:07:25.037Z"
+      },
+      "@aws-sdk/client-s3": {
+        "path": "npm/aws-sdk-client-s3.full.json",
+        "source": "https://registry.npmjs.org/@aws-sdk%2fclient-s3",
+        "mediaType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 4159245,
+        "sha256": "ed4f63f23452ab648ed6724f13174b89386cb71d6282d3df329399a5f0737a21",
+        "capturedAt": "2026-09-20T02:07:25.368Z"
+      },
+      "webpack": {
+        "path": "npm/webpack.full.json",
+        "source": "https://registry.npmjs.org/webpack",
+        "mediaType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 5200717,
+        "sha256": "6313256f2dca5874be5d2c3b5c339f301a68c8562f3e059910927350463cca0c",
+        "capturedAt": "2026-09-20T02:07:25.734Z"
+      },
+      "@types/node": {
+        "path": "npm/types-node.full.json",
+        "source": "https://registry.npmjs.org/@types%2fnode",
+        "mediaType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 11150508,
+        "sha256": "169ec4703f9d392a3a8ff5ca3a1ef31d3611cd6bd4375d5de6e99000d12a8aa3",
+        "capturedAt": "2026-09-20T02:07:26.726Z"
+      },
+      "express": {
+        "path": "npm/express.full.json",
+        "source": "https://registry.npmjs.org/express",
+        "mediaType": "application/json",
+        "contentEncoding": "identity",
+        "bytes": 808982,
+        "sha256": "70c8af886dd8728e953494663ca91196342205ff3fafb9dfdc349d80199b9e19",
+        "capturedAt": "2026-09-20T02:07:26.891Z"
+      }
+    },
+    "pypi": {
+      "requests": {
+        "path": "pypi/requests.simple.json",
+        "source": "https://pypi.org/simple/requests/",
+        "mediaType": "application/vnd.pypi.simple.v1+json",
+        "contentEncoding": "identity",
+        "bytes": 123104,
+        "sha256": "10134c88be5b9cf099b4b23c758c26a85f47097243c082f126019f1b3dbbf654",
+        "capturedAt": "2026-09-20T02:01:48.101Z"
+      },
+      "numpy": {
+        "path": "pypi/numpy.simple.json",
+        "source": "https://pypi.org/simple/numpy/",
+        "mediaType": "application/vnd.pypi.simple.v1+json",
+        "contentEncoding": "identity",
+        "bytes": 2780148,
+        "sha256": "e2c888e02299a874ba3c455b4fc013ccc51765b30983551a96784956bed84f3b",
+        "capturedAt": "2026-09-20T02:01:49.155Z"
+      },
+      "boto3": {
+        "path": "pypi/boto3.simple.json",
+        "source": "https://pypi.org/simple/boto3/",
+        "mediaType": "application/vnd.pypi.simple.v1+json",
+        "contentEncoding": "identity",
+        "bytes": 2206044,
+        "sha256": "32251be3a0e6f09c3a2533f5d36dd3d9203ca2772b509ee93d0089cf8559368b",
+        "capturedAt": "2026-09-20T02:01:49.938Z"
+      }
+    }
   }
 }
