@@ -1179,13 +1179,7 @@ test-suite ecluse-integration
     , wai-extra        ^>=3.1
     , warp             ^>=3.4
 
--- The bounded-memory streaming gate. It is its OWN suite rather than a spec inside
--- ecluse-integration, for two structural reasons. The assertion samples live bytes
--- (GHC.Stats) while streaming. It must not share a heap with hundreds of other
--- examples whose residency would drown the signal. It also needs the RTS statistics
--- flag (-T) baked in, which the wider tiers should not pay for. It reuses the
--- integration tier's canonical proxy fixture (TestSupport) through a shared source
--- directory instead of duplicating it.
+-- Isolated RTS measurements reuse the integration tier's proxy fixture.
 test-suite ecluse-residency
   import:             shared
   ghc-options:        -threaded -rtsopts "-with-rtsopts=-T"
@@ -1193,6 +1187,8 @@ test-suite ecluse-residency
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
   other-modules:
+    Ecluse.Core.Server.MemoryModel.Probe
+    Ecluse.Core.Server.MemoryModelResidencySpec
     Ecluse.Core.Server.Pipeline.TarballResidencySpec
     Ecluse.Server.Pipeline.TestSupport
 
@@ -1201,6 +1197,7 @@ test-suite ecluse-residency
     , bytestring        ^>=0.12
     , case-insensitive  ^>=1.2
     , containers        ^>=0.7
+    , crypton           >=1.0 && <1.2
     , ecluse
     , ecluse:ecluse-core
     , ecluse:ecluse-runtime
@@ -1211,6 +1208,7 @@ test-suite ecluse-residency
     , http-types       ^>=0.12
     , iproute          ^>=1.7
     , katip            ^>=0.8.8
+    , process          ^>=1.6
     , text             ^>=2.1
     , time             ^>=1.12
     , unliftio         ^>=0.2.25

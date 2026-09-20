@@ -73,6 +73,64 @@ flag (`-with-rtsopts=-T`) in its `ghc-options`. It runs outside coverage too. No
 WAI stubs only. Run: `cabal test ecluse-residency` (or `task test-residency`). `task check` includes
 it via `cabal-checks`.
 
+Metadata probes use a fresh child process for each corpus package and retained shape.
+They authenticate every capture against the byte count and SHA-256 in `bench/corpus/pins.json`.
+The complete corpus must include a capture above the previous 3,687,514-byte maximum.
+The four shapes are the original strict bytes, a decoded `Value`, the production typed
+projection alone, and the shared `CacheEntry` containing the typed projection, raw document,
+and source digest. The combined measurement preserves sharing, so adding the two separate
+measurements does not give its size.
+
+Each child first prepares and releases one copy to initialise runtime state before its baseline.
+It records a major-GC baseline, roots a newly prepared shape with a stable pointer,
+collects again, dereferences the root, frees it, and records another collection.
+The checks require positive retained growth. After release, at most 16 KiB can remain
+above baseline, and that residual must not exceed one tenth of the held growth.
+Preparation fully consumes the derived rendering of retained metadata without retaining the
+rendered string. That forces opaque fields without adding production `NFData` instances.
+The retained samples include any backing arrays reachable through the selected shape.
+
+| Output | Meaning |
+|---|---|
+| `wireBytes` | Capture bytes before parsing, with identity content encoding |
+| `compactBytes` | Re-encoded raw JSON bytes for raw and shared shapes |
+| `cacheWeight` | The production cache charge for the shared entry |
+| `versions` | Projected version count for typed and shared shapes |
+| `baselineLive`, `heldLive`, `releasedLive` | Absolute live bytes after each major collection |
+| `retained_per_wire_byte` | Held minus baseline live bytes, divided by capture bytes |
+| `preparationAllocated` | Cumulative preparation allocation, including forcing and accounting |
+| `preparationMaxLive` | Process high-water sample through preparation, including warmup and forcing |
+| `existing_model_bytes` | The unchanged production expansion estimate for comparison |
+
+These counters distinguish the retained heap from allocation and cache accounting.
+The high-water sample includes rendering and cannot establish the production read/decode/project
+peak or a bound on transient buffers. The probes use production projection functions with the
+default structural limits. They do not execute the HTTP bounded read or prove that shipping
+response limits admit each capture.
+
+The retained-byte gate uses the following corpus envelopes. The baseline used all nine npm
+and three PyPI captures with the pinned GHC 9.10.3 runtime, one capability, and a warmed process.
+These are regression limits for authenticated fixtures, not a universal metadata expansion model.
+
+| Retained shape | Observed maximum bytes per wire byte | Package | Gate | Margin over maximum |
+|---|---:|---|---:|---:|
+| Wire bytes | 1.000880175 | lodash | 1.25 | 24.9% |
+| Raw `Value` | 6.479016838 | express | 7 | 8.0% |
+| Typed projection | 1.911619444 | requests (PyPI) | 2.25 | 17.7% |
+| Shared cache entry | 6.723927108 | express | 7.5 | 11.5% |
+
+The 48 baseline rows left -8,976 to 10,936 bytes above their warmed baselines after release.
+The 16 KiB release tolerance leaves 5,448 bytes above the observed maximum.
+The second release condition requires at least 90% of each held growth to disappear.
+Signed integer differences preserve samples that fall below baseline without unsigned wraparound.
+
+The production expansion factor stays at 7.5, which covers these retained samples.
+The corpus does not prove a universal bound or justify reducing that factor.
+Every measured shared entry exceeds the 256 KiB typical-entry assumption.
+The smallest warmed entry is 636,232 bytes for PyPI requests.
+These twelve captures do not define a workload distribution, so their mean cannot justify
+a replacement for `cacheEntryExpectedBytes` or its planning assumptions.
+
 ## Smoke tests: `ecluse-smoke` (allowed to fail, non-gating)
 
 Make live calls to public registries (npm today) to confirm our JSON decoding and protocol handling

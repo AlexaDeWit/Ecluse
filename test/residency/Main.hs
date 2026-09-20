@@ -2,15 +2,20 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The residency gate runs as its own suite (own process, RTS @-T@), so this module
-imports the one spec explicitly rather than discovering it. Discovery over the shared
-fixture directory would sweep the whole integration tier into this process, and defeat
-the isolation the measurement depends on.
+{- | Residency tests and their isolated metadata probe entry point.
+Explicit imports keep integration fixtures from registering unrelated examples.
 -}
 module Main (main) where
 
+import Ecluse.Core.Server.MemoryModelResidencySpec qualified as MemoryModelResidencySpec
 import Ecluse.Core.Server.Pipeline.TarballResidencySpec qualified as TarballResidencySpec
+import System.Environment qualified as Environment
 import Test.Hspec (hspec)
 
 main :: IO ()
-main = hspec TarballResidencySpec.spec
+main =
+    Environment.getArgs >>= \case
+        ["--metadata-probe", shape, path] -> MemoryModelResidencySpec.childMain shape path
+        _ -> hspec $ do
+            TarballResidencySpec.spec
+            MemoryModelResidencySpec.spec
