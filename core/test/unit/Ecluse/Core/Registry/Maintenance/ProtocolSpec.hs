@@ -55,7 +55,7 @@ import Ecluse.Core.Registry.Npm.Maintenance (npmMaintenance)
 import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest)
 import Ecluse.Core.Registry.Npm.Publish (npmPublishCodec)
 import Ecluse.Core.Registry.Origin (OriginClient)
-import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
+import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Json (keysAt, withKeys)
 import Ecluse.Test.Maintenance (testDeleteGuard, withBucket)
@@ -434,11 +434,11 @@ unreachableStore = do
 {- The listing body is larger than this, so the bounded read refuses it rather than truncating
 what the sweep would then act on. -}
 tinyBodyBound :: Limits
-tinyBodyBound = defaultLimits{maxBodyBytes = 8}
+tinyBodyBound = defaultLimits{maxMetadataBytes = 8}
 
 -- Wide enough for the packument and the edit's answer, narrower than the tarball delete's.
 midSequenceBound :: Limits
-midSequenceBound = defaultLimits{maxBodyBytes = 4096}
+midSequenceBound = defaultLimits{maxMetadataBytes = 4096}
 
 consentKey :: Text
 consentKey = "set mounts.npm.mirrorTarget.verdaccio.permitDeletion to true"

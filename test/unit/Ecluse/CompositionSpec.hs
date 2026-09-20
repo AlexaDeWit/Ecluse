@@ -50,7 +50,7 @@ import Ecluse.Core.Package.Integrity (
     mkMinTrustedIntegrity,
  )
 import Ecluse.Core.Registry.PyPI.FirstParty (PyPIFirstParty (PyPIOwnedName))
-import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), defaultLimits)
+import Ecluse.Core.Security (Limits (maxMetadataBytes, maxNestingDepth, maxVersionCount), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Admission.Bytes (newByteAdmission)
 import Ecluse.Core.Server.Context (
@@ -225,11 +225,11 @@ planMountsSpec = describe "resolveBootWiring (config-driven serving)" $ do
     it "threads the resolved limits onto every mount's deps" $ do
         -- The memory budget resolves the byte cap before the root runs, and the bindings carry the
         -- resolved 'Limits' record verbatim.
-        let custom = defaultLimits{maxBodyBytes = 2048, maxVersionCount = 10, maxNestingDepth = 16}
+        let custom = defaultLimits{maxMetadataBytes = 2048, maxVersionCount = 10, maxNestingDepth = 16}
         planFromWith MintMirrorWrite custom staticEnvVars Nothing >>= \case
             Right [binding] -> do
                 let deps = bindingPackumentDeps binding
-                maxBodyBytes (pdLimits deps) `shouldBe` 2048
+                maxMetadataBytes (pdLimits deps) `shouldBe` 2048
                 maxVersionCount (pdLimits deps) `shouldBe` 10
                 maxNestingDepth (pdLimits deps) `shouldBe` 16
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))

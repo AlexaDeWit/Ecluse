@@ -7,6 +7,8 @@ Invalid package coordinates must not produce deletion requests.
 -}
 module Ecluse.Core.Registry.Npm.MaintenanceSpec (spec) where
 
+import Data.ByteString qualified as BS
+
 import Data.Aeson (Object, Value (Object, String), decodeStrict, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -105,7 +107,7 @@ deleteSequenceSpec = describe "the version delete verb" $ do
             origin <- storeOrigin
             requests <-
                 either (fail . show) pure $
-                    versionDeleteRequestsFor origin name (npmVersion "1.0.0") (RegistryResponse 200 (encodeStrict onlyVersion))
+                    versionDeleteRequestsFor origin name (npmVersion "1.0.0") (RegistryResponse 200 (BS.length (encodeStrict onlyVersion)) (encodeStrict onlyVersion))
             case requests of
                 request :| [] -> do
                     Client.method request `shouldBe` "DELETE"
@@ -191,7 +193,7 @@ acmeTool = mkPackageName Npm (Just (mkScope "acme")) "tool"
 deletePair :: Value -> PackageName -> Version -> IO (Request, Request)
 deletePair document name subject = do
     origin <- storeOrigin
-    case versionDeleteRequestsFor origin name subject (RegistryResponse 200 (encodeStrict document)) of
+    case versionDeleteRequestsFor origin name subject (RegistryResponse 200 (BS.length (encodeStrict document)) (encodeStrict document)) of
         Left refusal -> fail ("the delete verb refused: " <> toString (refusalCode refusal))
         Right (edit :| [tarball]) -> pure (edit, tarball)
         Right other -> fail ("expected two requests, got " <> show (length other))
@@ -206,7 +208,7 @@ editedPackument document name subject = do
 refusalOf :: ByteString -> Version -> IO (Maybe Text)
 refusalOf body subject = do
     origin <- storeOrigin
-    pure (refusalCode <$> leftToMaybe (versionDeleteRequestsFor origin leftpadName subject (RegistryResponse 200 body)))
+    pure (refusalCode <$> leftToMaybe (versionDeleteRequestsFor origin leftpadName subject (RegistryResponse 200 (BS.length body) body)))
 
 without :: Key.Key -> Value -> Value
 without key = \case

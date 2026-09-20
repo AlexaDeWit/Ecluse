@@ -127,9 +127,18 @@ hot path. The cache goes next, also to zero, and each step logs a loud warning. 
 `check-config` alike refuse only an explicit override that breaks the plan.
 
 The structural hostile-input counts (`maxVersionCount`, `maxArtifactCount`, `maxNestingDepth`) stay
-pinned policy. They bound document shape, not bytes, and do not scale with RAM. The resolution is role-agnostic and
-binds proxy, Pilot, and Dredger alike. The Operator Manual carries the [per-pod
-arithmetic](https://ecluse-proxy.com/docs/operations/#appendix-runtime-sizing-arithmetic).
+pinned policy. They bound document shape, not bytes, and do not scale with RAM. Resolution remains
+role-agnostic across proxy, Pilot, and Dredger. The body bounds name their operations separately:
+
+| Bound | Consumers | Source |
+|---|---|---|
+| Metadata and control response | Serve origins, worker packuments, mirror presence probes, publication replies, Dredger reads and delete replies | Resolved metadata response cap |
+| Client publish request | First-party publish body and its reservation | Resolved publish request cap |
+| Buffered mirror artifact | Worker artifact download before verification | Mirror-artifact tenant cap |
+
+These names preserve the existing limits. They do not impose a serve-derived minimum pod size on
+roles that never serve packuments. Measured body sizes count decompressed bytes before projection.
+The Operator Manual carries the [per-pod arithmetic](https://ecluse-proxy.com/docs/operations/#appendix-runtime-sizing-arithmetic).
 
 ### Rule policy
 

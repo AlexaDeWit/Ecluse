@@ -113,7 +113,7 @@ effectfulSpec = describe "effectful rule tier" $ do
 tightLimits :: Limits
 tightLimits =
     defaultLimits
-        { maxBodyBytes = 4096
+        { maxMetadataBytes = 4096
         , maxVersionCount = 3
         , maxNestingDepth = 8
         }
@@ -247,10 +247,10 @@ boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
         logged `shouldSatisfy` T.isInfixOf "\"bound\":\"version-count\""
         logged `shouldSatisfy` T.isInfixOf "\"package\":\"thing\""
 
-    it "logs a WARNING naming the body-size bound on an oversized body" $ do
+    it "logs a WARNING naming the metadata-body-size bound on an oversized body" $ do
         logged <- captureBreachLog (oversizedPackument "9.9.9")
         logged `shouldSatisfy` T.isInfixOf "\"status\":\"warn\""
-        logged `shouldSatisfy` T.isInfixOf "\"bound\":\"body-size\""
+        logged `shouldSatisfy` T.isInfixOf "\"bound\":\"metadata-body-size\""
 
     it "logs a WARNING naming the nesting-depth bound on a deeply-nested body" $ do
         logged <- captureBreachLog deeplyNestedBody

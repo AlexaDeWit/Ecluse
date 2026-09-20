@@ -26,6 +26,7 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (
+    BodyLimit (..),
     LimitError (..),
     Limits (..),
     boundedRead,
@@ -45,8 +46,8 @@ details name version = (sampleDetails name version){pkgLicenses = ["MIT"]}
 {- | Drive 'boundedRead' with a 'State'-monad chunk producer. It pops one chunk per call and
 yields an empty 'ByteString', the @BodyReader@ EOF signal, once the list runs out.
 -}
-runBounded :: Limits -> [ByteString] -> Either LimitError ByteString
-runBounded limits = evalState (boundedRead limits next)
+runBounded :: Limits -> [ByteString] -> Either LimitError (Int, ByteString)
+runBounded limits = evalState (boundedRead (MetadataBodyLimit (maxMetadataBytes limits)) next)
   where
     next :: State [ByteString] ByteString
     next =
@@ -70,7 +71,7 @@ defaultLimitsSpec :: Spec
 defaultLimitsSpec =
     describe "defaultLimits" $
         it "ships a 12 MiB body, 100k version and artifact ceilings, and 64 nesting levels" $
-            ( maxBodyBytes defaultLimits
+            ( maxMetadataBytes defaultLimits
             , maxVersionCount defaultLimits
             , maxArtifactCount defaultLimits
             , maxNestingDepth defaultLimits
@@ -79,39 +80,43 @@ defaultLimitsSpec =
 
 boundedReadSpec :: Spec
 boundedReadSpec = describe "boundedRead" $ do
-    let limits = defaultLimits{maxBodyBytes = 10}
+    let limits = defaultLimits{maxMetadataBytes = 10}
 
     it "returns the whole body when within the byte budget" $
-        runBounded limits ["hello", "12345"] `shouldBe` Right "hello12345"
+        runBounded limits ["hello", "12345"] `shouldBe` Right (10, "hello12345")
 
     it "returns an empty body for an immediately-EOF reader" $
-        runBounded limits [] `shouldBe` Right ""
+        runBounded limits [] `shouldBe` Right (0, "")
 
     it "aborts fail-closed past the byte budget (never a partial body)" $
         -- 11 bytes against a 10-byte cap: a 'Left', not the first 10 bytes.
-        runBounded limits ["hello", "world!"] `shouldBe` Left (BodyTooLarge 10)
+        runBounded limits ["hello", "world!"] `shouldBe` Left (BodyTooLarge (MetadataBodyLimit 10))
 
     it "reports the configured ceiling in the error" $
-        runBounded (defaultLimits{maxBodyBytes = 4}) ["abcde"]
-            `shouldBe` Left (BodyTooLarge 4)
+        runBounded (defaultLimits{maxMetadataBytes = 4}) ["abcde"]
+            `shouldBe` Left (BodyTooLarge (MetadataBodyLimit 4))
 
     it "accepts a body exactly at the budget" $
-        runBounded limits ["1234567890"] `shouldBe` Right "1234567890"
+        runBounded limits ["1234567890"] `shouldBe` Right (10, "1234567890")
 
     it "rejects any non-empty body under a zero budget" $
-        runBounded (defaultLimits{maxBodyBytes = 0}) ["x"] `shouldBe` Left (BodyTooLarge 0)
+        runBounded (defaultLimits{maxMetadataBytes = 0}) ["x"] `shouldBe` Left (BodyTooLarge (MetadataBodyLimit 0))
 
     it "accepts an empty body even under a zero budget" $
-        runBounded (defaultLimits{maxBodyBytes = 0}) [] `shouldBe` Right ""
+        runBounded (defaultLimits{maxMetadataBytes = 0}) [] `shouldBe` Right (0, "")
 
     it "treats an empty chunk as EOF (the BodyReader contract), stopping early" $
         -- An empty 'ByteString' is the reader's end signal, so nothing reads the chunk after
         -- it. This pins the @http-client@ @BodyReader@ semantics 'boundedRead' relies on.
-        runBounded limits ["ab", "", "cd"] `shouldBe` Right "ab"
+        runBounded limits ["ab", "", "cd"] `shouldBe` Right (2, "ab")
 
     it "passes a small body under the generous default budget" $
         -- Exercises 'defaultLimits' (the 12 MiB cap) directly.
-        runBounded defaultLimits ["small", "body"] `shouldBe` Right "smallbody"
+        runBounded defaultLimits ["small", "body"] `shouldBe` Right (9, "smallbody")
+
+    for_ [MetadataBodyLimit 1, PublishRequestBodyLimit 1, MirrorArtifactBodyLimit 1] $ \bound ->
+        it ("retains the selected bound on refusal: " <> show bound) $
+            boundedRead bound (pure "xx") `shouldReturn` Left (BodyTooLarge bound)
 
     it "stops reading once the budget is breached (does not drain the reader)" $ do
         -- An IORef-backed reader (the real monad is IO) lets us observe that
@@ -120,8 +125,8 @@ boundedReadSpec = describe "boundedRead" $ do
         let next = atomicModifyIORef' ref $ \case
                 [] -> ([], BS.empty)
                 (c : cs) -> (cs, c)
-        result <- boundedRead (defaultLimits{maxBodyBytes = 6}) next
-        result `shouldBe` Left (BodyTooLarge 6)
+        result <- boundedRead (MetadataBodyLimit 6) next
+        result `shouldBe` Left (BodyTooLarge (MetadataBodyLimit 6))
         -- "aaaa" (4) fits. "bbbb" breaches at 8 > 6 and aborts, so nothing pulls
         -- "cccc" or "dddd": two chunks remain unread.
         remaining <- readIORef ref
@@ -231,10 +236,10 @@ realPackumentSpec :: Spec
 realPackumentSpec = describe "default Limits admit a real large trusted packument (no false positive)" $ do
     it "express: bounded read, decode, depth, projection, and version count all clear the defaults" $ do
         body <- readFileBS "core/test/unit/fixtures/npm/express.full.json"
-        -- 1. Body size: the bounded read returns the whole body (within maxBodyBytes).
+        -- 1. Body size: the bounded read returns the whole body (within maxMetadataBytes).
         bounded <- case runBounded defaultLimits [body] of
             Left err -> expectationFailure ("real packument refused by the body bound: " <> show err) >> pure ""
-            Right b -> pure b
+            Right (_, b) -> pure b
         bounded `shouldBe` body
         -- 2. Decode to a Value, then 3. depth-check it (within maxNestingDepth).
         value <- case eitherDecodeStrict bounded of
@@ -279,15 +284,15 @@ propertiesSpec = describe "properties" $ do
             chunks <- forAll (Gen.list (Range.linear 0 8) (Gen.bytes (Range.linear 1 6)))
             cap <- forAll (Gen.int (Range.linear 0 40))
             let total = BS.concat chunks
-                result = runBounded (defaultLimits{maxBodyBytes = cap}) chunks
+                result = runBounded (defaultLimits{maxMetadataBytes = cap}) chunks
             annotateShow (BS.length total, cap)
             -- Non-vacuity: the generator must reach both the within- and
             -- over-budget arms often.
             H.cover 5 "within budget" (BS.length total <= cap)
             H.cover 5 "over budget" (BS.length total > cap)
             if BS.length total <= cap
-                then result === Right total -- exact bytes, never truncated
-                else result === Left (BodyTooLarge cap)
+                then result === Right (BS.length total, total) -- exact bytes, never truncated
+                else result === Left (BodyTooLarge (MetadataBodyLimit cap))
 
 -- | A scalar wrapped in @n-1@ nested single-key objects, giving total depth @n@.
 nestObject :: Int -> Value

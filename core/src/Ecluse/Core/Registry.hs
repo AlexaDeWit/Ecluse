@@ -34,6 +34,8 @@ import Ecluse.Core.Server.Path (Filename)
 data RegistryResponse = RegistryResponse
     { responseStatusCode :: Int
     -- ^ The upstream status, retained before body projection.
+    , responseBodyBytes :: Int
+    -- ^ Decompressed bytes consumed by the bounded read, zero when the body was omitted.
     , responseBody :: ByteString
     -- ^ The bounded response body, omitted for explicit access refusals.
     }

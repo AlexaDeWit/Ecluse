@@ -79,7 +79,7 @@ info name =
         }
 
 entry :: PackageName -> Text -> CacheEntry
-entry name marker = CacheEntry{entryInfo = info name, entryRaw = cachedRaw marker, entryDigest = digestOf (encodeUtf8 marker)}
+entry name marker = CacheEntry{entryInfo = info name, entryRaw = cachedRaw marker, entryBodyBytes = BS.length (encodeUtf8 marker), entryDigest = digestOf (encodeUtf8 marker)}
 
 cachedRaw :: Text -> CachedDoc
 cachedRaw = fst npmCached . String
@@ -146,6 +146,12 @@ selectedRelease count padding =
 
 spec :: Spec
 spec = do
+    describe "source size and cache weighting" $
+        it "retains source size without changing the existing cache charge" $ do
+            let original = entry (unscopedNpm "weight-probe") "raw"
+                measured = original{entryBodyBytes = 1024 * 1024}
+            weighCacheEntry measured `shouldBe` weighCacheEntry original
+
     describe "full-document entry-coordinate accounting" $
         it "charges retained key backing allocations in the typed view" $ do
             let backing = T.replicate 65536 "x"

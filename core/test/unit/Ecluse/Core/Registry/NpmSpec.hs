@@ -33,7 +33,7 @@ import Ecluse.Core.Fault (
  )
 import Ecluse.Core.Fault.Http (classifyTransport)
 import Ecluse.Core.Registry (
-    FetchFault (FetchUrlUnformable),
+    FetchFault (FetchBoundExceeded, FetchUrlUnformable),
     RegistryResponse (..),
     UrlFormationError (EmptyBaseUrl),
  )
@@ -41,7 +41,7 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Npm (fetchMetadataFormBounded)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full))
 import Ecluse.Core.Registry.Origin (OriginClient (..))
-import Ecluse.Core.Security (defaultLimits, maxBodyBytes)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge), defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Security.Egress (mkRegistryUrl, registryUrlText)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Test.Registry (isBoundExceededFetch, isTransportFetch)
@@ -66,30 +66,38 @@ boundedBodySpec = describe "bounded metadata body read" $ do
         it ("retains HTTP " <> show (statusCode upstreamStatus) <> " before an oversized error body") $
             withStub upstreamStatus (toLazy oversizedBody) $ \stub -> do
                 base <- stubConfig loopbackRegistryUrl stub
-                let config = base{ocLimits = defaultLimits{maxBodyBytes = 64}}
+                let config = base{ocLimits = defaultLimits{maxMetadataBytes = 64}}
                 outcome <- fetchMetadataFormBounded config Full isOdd
-                outcome `shouldBe` Right (RegistryResponse (statusCode upstreamStatus) "")
+                outcome `shouldBe` Right (RegistryResponse (statusCode upstreamStatus) 0 "")
 
     it "refuses an over-cap body fail-closed as a FetchBoundExceeded value" $
         withStub status200 (toLazy oversizedBody) $ \stub -> do
             base <- stubConfig loopbackRegistryUrl stub
-            let config = base{ocLimits = defaultLimits{maxBodyBytes = 64}}
+            let config = base{ocLimits = defaultLimits{maxMetadataBytes = 64}}
             outcome <- fetchMetadataFormBounded config Full isOdd
-            outcome `shouldSatisfy` isBoundExceededFetch
+            outcome `shouldBe` Left (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 64)))
 
-    it "returns a body that is within maxBodyBytes verbatim" $
+    it "returns a body that is within maxMetadataBytes verbatim" $
         -- The read returns a body within the cap whole and unchanged: no false refusal.
         withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
             base <- stubConfig loopbackRegistryUrl stub
-            let config = base{ocLimits = defaultLimits{maxBodyBytes = 64}}
+            let config = base{ocLimits = defaultLimits{maxMetadataBytes = 64}}
             resp <- fetchMetadataFormBounded config Full isOdd
             fmap responseBody resp `shouldBe` Right "{\"name\":\"is-odd\"}"
+
+    it "reports decompressed bytes for an accepted gzip body" $
+        withStubHeaders status200 [(hContentEncoding, "gzip")] (GZip.compress (toLazy oversizedBody)) $ \stub -> do
+            base <- stubConfig loopbackRegistryUrl stub
+            let config = base{ocLimits = defaultLimits{maxMetadataBytes = BS.length oversizedBody}}
+            resp <- fetchMetadataFormBounded config Full isOdd
+            fmap responseBodyBytes resp `shouldBe` Right (BS.length oversizedBody)
+            fmap responseBody resp `shouldBe` Right oversizedBody
 
     it "bounds DECOMPRESSED size: a small gzip body that inflates past the cap is refused" $
         -- The size cap must cover decompressed bytes, including expansion from a gzip bomb.
         withStubHeaders status200 [(hContentEncoding, "gzip")] (toLazy gzippedOversizedBody) $ \stub -> do
             base <- stubConfig loopbackRegistryUrl stub
-            let config = base{ocLimits = defaultLimits{maxBodyBytes = 1024}}
+            let config = base{ocLimits = defaultLimits{maxMetadataBytes = 1024}}
             -- Sanity: the compressed body is under the cap, so only the
             -- decompressed-size bound can explain a refusal.
             BS.length gzippedOversizedBody `shouldSatisfy` (< 1024)

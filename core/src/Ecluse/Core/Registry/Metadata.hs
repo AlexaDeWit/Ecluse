@@ -36,7 +36,7 @@ module Ecluse.Core.Registry.Metadata (
 import Data.Aeson (Value)
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
-import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, responseStatusCode), isAuthorisationFailure, isSuccessStatus)
+import Ecluse.Core.Registry (FetchFault, RegistryResponse (responseBody, responseBodyBytes, responseStatusCode), isAuthorisationFailure, isSuccessStatus)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError)
@@ -50,6 +50,8 @@ data Manifest = Manifest
     -- ^ The typed packument view the rules and merge reason over.
     , manifestRaw :: CachedDoc
     -- ^ The raw upstream document ('CachedDoc') the served body is built from.
+    , manifestBodyBytes :: Int
+    -- ^ Decompressed byte count from the source read, before projection.
     , manifestDigest :: ContentDigest
     -- ^ Digest of the wire bytes behind 'manifestInfo' and 'manifestRaw'.
     }
@@ -79,17 +81,19 @@ bounded read, so a caller needing the tag adds no second fetch.
 data VersionRead = VersionRead
     { vrVersion :: Maybe VersionDoc
     -- ^ The pair. 'Nothing' means the package resolved without this version.
+    , vrBodyBytes :: Int
+    -- ^ Decompressed size of the whole source document, including unselected versions.
     , vrUpstreamLatest :: Maybe Version
     -- ^ 'Nothing' when the document declares none, or the ecosystem has no such tag.
     }
     deriving stock (Eq, Show)
 
--- | Project successful responses only, preserving HTTP refusals before decoding.
+-- | Pass decompressed size and bytes to successful-response projection, preserving HTTP refusals first.
 fetchThenProject ::
     TracingPort ->
     (PackageName -> IO (Either FetchFault RegistryResponse)) ->
     PackageName ->
-    (ByteString -> Either MetadataError a) ->
+    (Int -> ByteString -> Either MetadataError a) ->
     IO (Either MetadataError a)
 fetchThenProject tracing fetch name project =
     spanMetadataFetch tracing name (fetch name) >>= \case
@@ -98,7 +102,7 @@ fetchThenProject tracing fetch name project =
             404 -> pure (Left MetadataAbsent)
             code
                 | isAuthorisationFailure code -> pure (Left (MetadataAuthorisationFailure code))
-                | isSuccessStatus code -> spanMetadataDecode tracing name (pure (project (responseBody response)))
+                | isSuccessStatus code -> spanMetadataDecode tracing name (pure (project (responseBodyBytes response) (responseBody response)))
                 | otherwise -> pure (Left (MetadataHttpFailure code))
 
 {- | The ecosystem-specific half of a full-manifest read: how a body projects, what its artifact
@@ -121,11 +125,11 @@ fetchManifestWith ::
     PackageName ->
     IO (Either MetadataError Manifest)
 fetchManifestWith tracing fetch projection name =
-    fetchThenProject tracing fetch name $ \body ->
-        manifestOf (digestOf body) . first (prjLocations projection) <$> prjDecode projection name body
+    fetchThenProject tracing fetch name $ \bodyBytes body ->
+        manifestOf bodyBytes (digestOf body) . first (prjLocations projection) <$> prjDecode projection name body
   where
-    manifestOf digest (info, raw) =
-        Manifest{manifestInfo = info, manifestRaw = prjInject projection raw, manifestDigest = digest}
+    manifestOf bodyBytes digest (info, raw) =
+        Manifest{manifestInfo = info, manifestRaw = prjInject projection raw, manifestDigest = digest, manifestBodyBytes = bodyBytes}
 
 -- | Why a metadata fetch could not yield a usable result.
 data MetadataError

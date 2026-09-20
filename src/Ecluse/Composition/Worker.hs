@@ -27,7 +27,7 @@ import Ecluse.Core.Registry.Publish (
     MirrorTransport (MirrorTransport, ptLimits, ptManager, ptMintToken),
     newMirrorPublish,
  )
-import Ecluse.Core.Security (Limits (maxBodyBytes), Origin (UntrustedOrigin), defaultLimits, thgPublicHostPort)
+import Ecluse.Core.Security (Limits (maxMirrorArtifactBytes), Origin (UntrustedOrigin), defaultLimits, thgPublicHostPort)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Context (
@@ -105,9 +105,7 @@ workerPolicyFor env deps publish artifactMaxBytes =
           -- carry, so the worker fetches a job's bytes exactly as the serve path would.
           wpArtifact = pdArtifact deps
         , wpPublish = publish
-        , -- The artifact fetch cap comes from the memory plan's mirror-artifact tenant, not the
-          -- metadata-path default, because a tarball far exceeds the packument cap.
-          wpArtifactLimits = defaultLimits{maxBodyBytes = artifactMaxBytes}
+        , wpArtifactLimits = defaultLimits{maxMirrorArtifactBytes = artifactMaxBytes}
         , wpNow = pdNow deps
         }
   where

@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.Exchange (boundedFetch)
 import Ecluse.Core.Registry.Npm.Request qualified as Npm
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPI
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext))
-import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits, maxMetadataBytes)
 import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot), digestOf)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName)
@@ -87,7 +87,7 @@ fetchDocument :: Manager -> Ecosystem -> PackageName -> IO (Either Text ByteStri
 fetchDocument manager eco pkg = case liveRequest eco pkg of
     Left reason -> pure (Left reason)
     Right request -> do
-        result <- boundedFetch manager defaultLimits request{responseTimeout = responseTimeoutMicro (30 * 1000 * 1000)}
+        result <- boundedFetch manager (MetadataBodyLimit (maxMetadataBytes defaultLimits)) request{responseTimeout = responseTimeoutMicro (30 * 1000 * 1000)}
         pure $ case result of
             Left fault -> Left (show fault)
             Right response

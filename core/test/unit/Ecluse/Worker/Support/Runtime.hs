@@ -64,7 +64,7 @@ import Ecluse.Core.Registry (
     RegistryResponse (RegistryResponse),
  )
 import Ecluse.Core.Registry.Publish (MirrorPublish (..), PublishPlan)
-import Ecluse.Core.Security (LimitError (BodyTooLarge))
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError (BodyTooLarge))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker (
@@ -101,7 +101,7 @@ worker reads as a known-empty store without consulting the version list.
 recordingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 recordingPublish logRef outcome =
     MirrorPublish
-        { mpProbeMetadata = const (pure (Right (RegistryResponse 404 "")))
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 404 0 "")))
         , mpParseVersionList = const (Left (ParseError "absent: nothing mirrored yet"))
         , mpPublishArtifact = \_ plan artifact document -> do
             atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l, plArtifacts = artifact : plArtifacts l, plPlans = plan : plPlans l}, ()))
@@ -112,7 +112,7 @@ recordingPublish logRef outcome =
 mirrorListingPublish :: IORef PublishLog -> Either PublishFault () -> [Version] -> MirrorPublish
 mirrorListingPublish logRef outcome versions =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 "")))
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 0 "")))
         , mpParseVersionList = const (Right versions)
         }
 
@@ -127,21 +127,21 @@ probeUnreachablePublish logRef outcome =
 probeUnreadablePublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeUnreadablePublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 "not a packument")))
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 200 15 "not a packument")))
         }
 
 -- | 'recordingPublish' whose inventory probe answers a status that is neither success nor an absence.
 probeRefusingPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeRefusingPublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Right (RegistryResponse 503 "")))
+        { mpProbeMetadata = const (pure (Right (RegistryResponse 503 0 "")))
         }
 
 -- | 'recordingPublish' whose inventory probe overruns the response bound, the probe leg's terminal fault.
 probeOverboundPublish :: IORef PublishLog -> Either PublishFault () -> MirrorPublish
 probeOverboundPublish logRef outcome =
     (recordingPublish logRef outcome)
-        { mpProbeMetadata = const (pure (Left (FetchBoundExceeded (BodyTooLarge 1))))
+        { mpProbeMetadata = const (pure (Left (FetchBoundExceeded (BodyTooLarge (MetadataBodyLimit 1)))))
         }
 
 -- | Expose the worker's queue and captured publications to the test callback.

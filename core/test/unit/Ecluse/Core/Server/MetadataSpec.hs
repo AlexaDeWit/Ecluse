@@ -32,11 +32,11 @@ import Ecluse.Core.Package.Entry (EntryKey (..))
 import Ecluse.Core.Registry (FetchFault (FetchTransport))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (
-    Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
+    Manifest (Manifest, manifestBodyBytes, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
     MetadataError (MetadataAbsent, MetadataAuthorisationFailure, MetadataFetch, MetadataHttpFailure, MetadataUndecodable),
     VersionDoc (VersionDoc, vdDetails, vdRaw),
-    VersionRead (VersionRead, vrUpstreamLatest, vrVersion),
+    VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
     digestOf,
  )
 import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
@@ -155,9 +155,23 @@ spec = do
                 client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
             cold <- fetchVersionMetadata client name (npmVersion "1.0.0")
             fmap vrUpstreamLatest cold `shouldBe` Right (Just (npmVersion "2.0.0"))
+            fmap vrBodyBytes cold `shouldBe` Right 17
             _ <- fetchFullManifest client name
             warm <- fetchVersionMetadata client name (npmVersion "2.0.0")
             fmap vrUpstreamLatest warm `shouldBe` Right (Just (npmVersion "2.0.0"))
+
+        it "preserves source byte counts across full-cache hits and warm version selection" $ do
+            calls <- newIORef (0 :: Int)
+            cache <- newMetadataCache defaultCacheConfig
+            let info = manifest name ["1.0.0"]
+                client = publicClient anonymous cache (countingFull calls info) (countingVersion calls info)
+            firstRead <- fetchFullManifest client name
+            fullHit <- fetchFullManifest client name
+            warm <- fetchVersionMetadata client name (npmVersion "1.0.0")
+            fmap manifestBodyBytes firstRead `shouldBe` Right 9
+            fmap manifestBodyBytes fullHit `shouldBe` Right 9
+            fmap vrBodyBytes warm `shouldBe` Right 9
+            readIORef calls `shouldReturn` 1
 
         it "caches a determined absence: an absent version is a Nothing re-served without a re-fetch" $ do
             calls <- newIORef (0 :: Int)
@@ -313,7 +327,7 @@ stubUrl = loopbackRegistryUrl "http://localhost:1"
 countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError Manifest)
 countingFull calls info _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
-    pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached packument, manifestDigest = digestOf "raw-bytes"})
+    pure (Right Manifest{manifestInfo = info, manifestRaw = fst npmCached packument, manifestBodyBytes = 9, manifestDigest = digestOf "raw-bytes"})
   where
     packument :: Value
     packument = object ["versions" .= object [Key.fromText v .= object ["marker" .= v] | v <- Map.keys (infoVersions info)]]
@@ -325,6 +339,7 @@ countingVersion calls info _name version = do
     pure . Right $
         VersionRead
             { vrVersion = (\selected -> VersionDoc{vdDetails = selected, vdRaw = Just (markedObject "cold")}) <$> selectVersion version info
+            , vrBodyBytes = 17
             , vrUpstreamLatest = Map.lookup "latest" (infoDistTags info)
             }
 

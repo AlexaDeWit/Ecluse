@@ -40,7 +40,7 @@ import Ecluse.Core.Registry.Publish (
     newMirrorPublish,
  )
 import Ecluse.Core.Rules.Types (Decision (Undecidable), Transience (WillResolve, WontResolve))
-import Ecluse.Core.Security (LimitError (BodyTooLarge), defaultLimits)
+import Ecluse.Core.Security (BodyLimit (MirrorArtifactBodyLimit), LimitError (BodyTooLarge), defaultLimits)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Version (Version)
 import Ecluse.Core.Worker (
@@ -73,7 +73,7 @@ spec = do
         -- An over-bound response is terminal, so the backend dead-letters it. Treating every
         -- fetch Left as a retry would redeliver a deterministically over-cap tarball forever.
         it "dead-letters an over-bound response (it can never succeed, so it rides the terminus)" $
-            outcomeOfFetchFault BeforePublish renderFault (FetchBoundExceeded (BodyTooLarge 1024))
+            outcomeOfFetchFault BeforePublish renderFault (FetchBoundExceeded (BodyTooLarge (MirrorArtifactBodyLimit 1024)))
                 `shouldBe` DeadLettered "over the bound"
 
         it "retries a transport fault (a redelivery may succeed)" $
@@ -101,6 +101,13 @@ spec = do
                 other -> expectationFailure ("expected a drop for an unclearable inability, got " <> show other)
 
     describe "processJob -- the integrity gate" $ do
+        it "names the mirror-artifact bound when the buffered download is too large" $
+            withUpstream $ \url ->
+                withRuntimePolicies (withArtifactCap 8 admitPolicies) noopWorkerMetricsPort (Right ()) $ \runtime queue _ -> do
+                    job <- enqueueAndReceive queue (jobWith url)
+                    outcome <- runWM runtime (processJob job)
+                    outcome `shouldBe` DeadLettered "artifact exceeded the response bound: BodyTooLarge (MirrorArtifactBodyLimit 8)"
+
         -- The worker recomputes whichever digest current metadata carries, so an artifact the
         -- floor admitted is never admit-but-uncomputable.
         for_ soleAdmittedDigests $ \(label, hash) ->

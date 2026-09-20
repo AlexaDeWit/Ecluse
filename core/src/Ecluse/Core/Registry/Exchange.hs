@@ -38,14 +38,14 @@ import Ecluse.Core.Registry (
     UrlFormationError,
     isAuthorisationFailure,
  )
-import Ecluse.Core.Security (LimitError, Limits, boundedRead)
+import Ecluse.Core.Security (BodyLimit, LimitError, boundedRead)
 
 -- | Destructive clients must return uncertain transport failures for reassessment before retry.
 singleAttemptSettings :: ManagerSettings -> ManagerSettings
 singleAttemptSettings settings = settings{managerRetryableException = const False}
 
--- | Project a bounded response. Connection failures during the body read remain typed transport faults.
-boundedExchange :: (Int -> ByteString -> a) -> Manager -> Limits -> Request -> IO (Either FetchFault a)
+-- | Project status, decompressed byte count, and body. Transport failures retain their typed cause.
+boundedExchange :: (Int -> Int -> ByteString -> a) -> Manager -> BodyLimit -> Request -> IO (Either FetchFault a)
 boundedExchange project manager limits request =
     runExchange manager request (readBounded project limits)
 
@@ -58,17 +58,17 @@ runExchange manager request readResponse =
             Right (Right projected) -> Right projected
 
 -- | Preserve explicit auth refusals without reading their untrusted error bodies.
-boundedFetch :: Manager -> Limits -> Request -> IO (Either FetchFault RegistryResponse)
+boundedFetch :: Manager -> BodyLimit -> Request -> IO (Either FetchFault RegistryResponse)
 boundedFetch manager limits request = runExchange manager request $ \response ->
     let code = statusCode (responseStatus response)
      in if isAuthorisationFailure code
-            then pure (Right (RegistryResponse code ""))
+            then pure (Right (RegistryResponse code 0 ""))
             else readBounded RegistryResponse limits response
 
 -- | The exchange keeping the answered status alongside the body, for the first-party relay.
-boundedRelay :: Manager -> Limits -> Request -> IO (Either FetchFault PublishRelayResponse)
+boundedRelay :: Manager -> BodyLimit -> Request -> IO (Either FetchFault PublishRelayResponse)
 boundedRelay =
-    boundedExchange $ \status body ->
+    boundedExchange $ \status _ body ->
         PublishRelayResponse{relayStatus = status, relayBody = LBS.fromStrict body}
 
 -- | Report request-formation and exchange failures through the same error channel.
@@ -79,8 +79,7 @@ formThen ::
     IO (Either fault a)
 formThen unformable = either (pure . Left . unformable)
 
-{- An overstep yields the 'LimitError' as a value, never a truncated body. -}
-readBounded :: (Int -> ByteString -> a) -> Limits -> Response BodyReader -> IO (Either LimitError a)
+readBounded :: (Int -> Int -> ByteString -> a) -> BodyLimit -> Response BodyReader -> IO (Either LimitError a)
 readBounded project limits response =
-    fmap (project (statusCode (responseStatus response)))
+    fmap (uncurry (project (statusCode (responseStatus response))))
         <$> boundedRead limits (brRead (responseBody response))

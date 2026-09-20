@@ -29,6 +29,7 @@ import Ecluse.Core.Registry.Exchange (boundedFetch, boundedRelay, formThen)
 import Ecluse.Core.Registry.Npm.Publish (publishRequest)
 import Ecluse.Core.Registry.Npm.Request (MetadataForm, metadataRequest)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), originBaseUrl)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), maxMetadataBytes)
 
 {- | Fetch a package's metadata in the requested form.
 The body read is bounded fail-closed, and every failure is a 'FetchFault' value, never an exception.
@@ -41,7 +42,7 @@ fetchMetadataFormBounded ::
 fetchMetadataFormBounded origin form name =
     formThen
         FetchUrlUnformable
-        (boundedFetch (ocManager origin) (ocLimits origin))
+        (boundedFetch (ocManager origin) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
         (metadataRequest (originBaseUrl origin) (ocToken origin) form name)
 
 -- | Relay a client's npm publish document to the publication target and return its own response.
@@ -53,5 +54,5 @@ relayPublishDocument ::
 relayPublishDocument origin name document =
     formThen
         FetchUrlUnformable
-        (boundedRelay (ocManager origin) (ocLimits origin))
+        (boundedRelay (ocManager origin) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
         (publishRequest (originBaseUrl origin) (ocToken origin) name document)

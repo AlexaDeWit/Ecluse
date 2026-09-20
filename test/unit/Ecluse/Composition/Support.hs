@@ -64,7 +64,7 @@ import Ecluse.Composition.Vet (runVet)
 import Ecluse.Config (AppConfig, Config (configApp), StoreTag (TagRegistry), loadConfig, renderConfigError)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Security (Limits (..))
+import Ecluse.Core.Security (Limits (..), defaultLimits)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromRts))
 import Ecluse.Test.Credential (noCredentialReporters)
@@ -83,7 +83,7 @@ fixedNow = UTCTime (fromGregorian 2026 6 23) 0
 
 -- | The resolved 'Limits' the composition root would pass in.
 testLimits :: Limits
-testLimits = Limits{maxBodyBytes = 12582912, maxVersionCount = 100000, maxArtifactCount = 100000, maxNestingDepth = 64}
+testLimits = defaultLimits{maxMetadataBytes = 12582912, maxVersionCount = 100000, maxArtifactCount = 100000, maxNestingDepth = 64}
 
 -- | A pinned file-descriptor soft limit, so both connection-pool sizings are deterministic.
 fdLimit :: Int

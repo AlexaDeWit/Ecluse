@@ -19,6 +19,8 @@ module Ecluse.Test.RegistryCapture (
     parseRegistryVersions,
 ) where
 
+import Data.ByteString qualified as BS
+
 import Control.Exception (try)
 import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.:))
 import Data.Aeson.Types (Parser)
@@ -47,7 +49,7 @@ data Catalogue = Catalogue
     { catSmokeNames :: Map Ecosystem [Text]
     -- ^ Curated gnarly-version package names per ecosystem, for the version-oracle differential.
     , catBenchPins :: Map Text Text
-    -- ^ Benchmark-corpus capture pins: an npm package name to the version it is captured at.
+    -- ^ Workload versions selected by benchmarks, independent of capture size.
     }
     deriving stock (Eq, Show)
 
@@ -115,7 +117,7 @@ fetchVersions manager eco pkg =
 -- | Extract a registry response's published version strings through each ecosystem's __canonical__ wire decoder, never a re-parse here.
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
 parseRegistryVersions eco body = case eco of
-    Npm -> rightToMaybe (map renderVersion <$> parseVersionList (RegistryResponse 200 (BSL.toStrict body)))
+    Npm -> rightToMaybe (map renderVersion <$> parseVersionList (RegistryResponse 200 (BS.length (BSL.toStrict body)) (BSL.toStrict body)))
     PyPI -> PyPI.projectVersions <$> decode' body
     RubyGems -> RubyGems.listingVersions <$> decode' body
   where
