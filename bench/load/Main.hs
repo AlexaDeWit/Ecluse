@@ -24,7 +24,7 @@ import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (
     LoadKnobs (lkUpstreamLatencyMicros),
     Scenario (scenarioName),
-    ScenarioReport,
+    ScenarioReport (srName),
     UpstreamFixture (fixtureEcosystem, fixtureScenarios),
     loadKnobsFromEnv,
     renderLoadSaturation,
@@ -70,13 +70,13 @@ runDriver = do
                 PyPI -> [pypiLoadNotes knobs]
                 _ -> []
         loadedReports <- traverse (runScenarioChild self loadOverrides) names
-        c1Reports <- traverse (runScenarioChild self c1Overrides) names
+        c1Reports <- traverse (runScenarioChild self c1Overrides) (filter (not . T.isInfixOf "/pattern-") names)
         pure $
             fixtureSection eco $
                 notes
                     <> [ renderReports loadPassKnobs capabilities eco loadedReports
                        , renderServiceTime baseline c1Reports
-                       , renderLoadSaturation c1Reports loadedReports
+                       , renderLoadSaturation c1Reports (filter (not . T.isInfixOf "/pattern-" . srName) loadedReports)
                        ]
     let output = T.intercalate "\n" rendered
     putText output

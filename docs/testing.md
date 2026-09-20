@@ -291,6 +291,92 @@ under [#1421](https://github.com/AlexaDeWit/Ecluse/issues/1421).
 Capture byte sizes alone do not establish an expansion ratio, and this corpus change does not
 recalibrate `expandWireBytes` or acceptance budgets.
 
+### Request patterns
+
+The finite replay families run once per captured identity sequence, with a new proxy and empty
+stores for each cell. They do not run the HTTP warm-up or the concurrency-one attribution pass.
+The existing warmed repeats remain controls. Finite hot-set repeats include their first cold pass.
+No family represents all deployments. The small captured identity space limits extrapolation.
+
+| Family | Axis |
+| --- | --- |
+| Hot-set control | Set size and repeat count |
+| Cold install | Distinct names, each requested once by one client |
+| CI fleet | Clients sharing one sequence and their start skew |
+| Heterogeneous fleet | Shared fraction and disjoint private names per client |
+| Zipf | Exponent, captured space, seed, and finite draw count |
+| Restart | Empty process cache and interval between client arrivals |
+| Scan | Repeated full scans with a full-store budget below the expanded wire working set |
+
+`bench-load npm/pattern-cold-install` selects one cell. Substitute `pypi` for its Simple-index trace.
+Each cell stops when its finite sequence completes or its whole-replay deadline expires.
+Duration knobs apply only to the legacy duration drivers.
+Clients send sequential requests after their scheduled start. Slow responses extend the run.
+Restart models post-restart arrivals into an empty cache, with the production 60-second TTL.
+It does not model a pre-restart heap or claim that a short default run measures expiry.
+
+| Environment variable | Default |
+| --- | --- |
+| `BENCH_PATTERN_NAMES` | All captured names, or two per heterogeneous client |
+| `BENCH_PATTERN_CLIENTS` | Four, or two heterogeneous clients |
+| `BENCH_PATTERN_SKEW_US` | 100000 |
+| `BENCH_PATTERN_ROUNDS` | Four for repeat, scan, and Zipf draws |
+| `BENCH_PATTERN_OVERLAP` | 0.5, rounded down to a common-name count |
+| `BENCH_PATTERN_ZIPF_EXPONENT` | 1.1 |
+| `BENCH_PATTERN_ARRIVAL_US` | 100000 between restart clients |
+| `BENCH_PATTERN_SEED` | 42 |
+| `BENCH_PATTERN_DEADLINE_US` | 120000000, covering client start delays and response reads |
+| `BENCH_PATTERN_FULL_BYTES` | The fixture full-store budget, reduced for scan unless explicitly overridden. Zero disables full retention |
+| `BENCH_PATTERN_VERSION_BYTES` | The fixture version-store budget, must be positive |
+| `BENCH_PATTERN_ASSEMBLED_BYTES` | The fixture assembled-store budget, must be positive |
+| `BENCH_PATTERN_NOW` | Latest authenticated capture time plus two days. Override with an ISO8601 UTC time |
+| `BENCH_PATTERN_SELECTED_VERSION` | Unset for listing-only. `pinned` follows each npm listing with its captured public tarball coordinate |
+
+Selected npm replay measures the HTTP metadata gate: listing, private tarball miss, public version
+admission, and artifact relay. It projects the pinned artifact from the complete capture and renders
+the production tarball route. The public stub supplies labelled synthetic artifact bytes, so this
+sequence does not model an npm install or validate the captured integrity digest against a download.
+Public metadata and artifact request counts stay separate. Captured metadata and policy stay unchanged.
+
+Every pattern cell reports its evaluation clock. Paired listing-only and artifact-follow-up cells
+use the same clock. Set `BENCH_PATTERN_NOW` explicitly when comparing runs from different captures.
+Legacy duration-driven fixtures retain their own fixed clock.
+
+The process peak comes from RTS statistics after reporting and the final major GC. It includes
+preparation and warm-up. GC-observed live heap does not establish the maximum transient working set.
+Timed allocation and GC deltas keep their original measurement window.
+
+Unsupported distinct-name and overlap requests fail instead of creating synthetic package aliases.
+Each report states the parameters, distinct wire bytes, accounted capacity, occupancy, oversized
+refusals, retention fraction, and collapsed fraction per store. The wire-to-resident comparison
+uses matching accounted bytes for the full store, computed through production projection and
+`weighCacheEntry` before measurement. Version and assembled working-set bytes remain unavailable.
+The separate full-store wire-equivalent estimate excludes retained artifact keys.
+The finite report retains scheduled, completed, successful, refused, other HTTP failure, transport
+failure, and unfinished totals and rates. Its success fraction divides by all scheduled requests.
+Successful throughput and latency exclude error responses. HTTP refusals count 429 and 503, while
+other non-success statuses have a separate count. Allocation averages include all completed responses
+and are unavailable when no response completes. Public upstream requests and the
+selected-version warm-full shortcut count remain separate from store outcomes.
+
+The `pattern-cold-install-default-body-cap` cell keeps the default body limit. Other finite cells use
+a stated benchmark-only cap derived from the largest actual stub body after URL rewriting.
+Structural limits stay at their defaults. Never read faster refusals as better successful throughput.
+Complete captures and the collapse telemetry are prerequisites for interpreting these results.
+Capture byte counts must match the provenance manifest before replay starts.
+A build without the required telemetry catalogue reports cache evidence as unavailable.
+
+For a retention decision, compare repeated seeds and skew settings at equal total memory.
+Set only the full budget to zero for a retention-off comparison that preserves single-flight.
+Then add the released full budget to the assembled budget for the reallocation comparison.
+
+Report the same pod memory target and every store budget across those comparisons. A zero full
+budget selects the existing one-byte minimum and refuses every captured full candidate after weighing.
+The report states that effective capacity. Those intentional refusals
+do not indicate unusually large documents. TTL zero changes all stores and creates no grace window.
+Keep 200-body replay separate from the legacy 304
+scenario because 304 avoids assembled-store resolution.
+
 ## Onboarding an ecosystem
 
 An ecosystem counts as onboarded when it supplies each item below for its supported operations.
