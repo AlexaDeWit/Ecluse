@@ -33,7 +33,7 @@ import Ecluse.Core.Security (
     defaultLimits,
  )
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Test.Json (isObject)
+import Ecluse.Test.Json (isObject, withKeys)
 import Ecluse.Test.Package (unscopedNpm, validSha1, validSha512Sri)
 import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Test.Snapshot (readDetails)
@@ -47,7 +47,7 @@ spec = do
 
 projectNpmManifestSpec :: Spec
 projectNpmManifestSpec = describe "projectNpmManifest" $ do
-    it "projects a well-formed packument into the manifest paired with its raw document" $
+    it "pairs a valid policy projection with its compact source representation" $
         case projectNpmManifest defaultLimits (unscopedNpm "is-odd") (manifestBytes "is-odd" ["3.0.1"]) of
             Right (info, raw) -> do
                 renderPackageName (infoName info) `shouldBe` "is-odd"
@@ -70,6 +70,14 @@ projectNpmManifestSpec = describe "projectNpmManifest" $ do
     it "reports a version-count breach as a bound breach" $
         projectNpmManifest (defaultLimits{maxVersionCount = 1}) (unscopedNpm "is-odd") (manifestBytes "is-odd" ["1.0.0", "2.0.0"])
             `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
+
+    it "refuses an empty signature object beyond the retained nesting budget" $ do
+        let version = withKeys [("dist", object ["tarball" .= ("https://example.test/is-odd-1.0.0.tgz" :: Text), "signatures" .= [object []]])] (versionObject "is-odd" "1.0.0")
+            body = BL.toStrict (encode (object ["name" .= ("is-odd" :: Text), "versions" .= object ["1.0.0" .= version]]))
+            limited = defaultLimits{maxNestingDepth = 5}
+        projectNpmManifest limited (unscopedNpm "is-odd") body `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 5))
+        projectNpmVersion limited (unscopedNpm "is-odd") (mkVersion Npm "1.0.0") body `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 5))
+        projectNpmManifest defaultLimits{maxNestingDepth = 6} (unscopedNpm "is-odd") body `shouldSatisfy` isRight
 
     it "reports a nesting-depth breach as a bound breach" $
         projectNpmManifest (defaultLimits{maxNestingDepth = 2}) (unscopedNpm "is-odd") (manifestBytes "is-odd" ["1.0.0"])

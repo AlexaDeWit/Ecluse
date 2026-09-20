@@ -210,7 +210,7 @@ hide the new versions, so a client never requests them and demand-driven mirrori
 above the [protocol boundary](#registry-abstraction), as a pure, ecosystem-agnostic fold over
 `PackageInfo` that a new ecosystem does not rewrite. The merge is **order-independent**: private
 wins a collision and the merge flags divergence whatever the fetch order. Only positional labels
-track which input a survivor came from, so the serve layer can index back to the raw document.
+track which input a survivor came from, so assembly can select its retained source representation.
 
 - **Fetch in parallel.** Private (passthrough) and public (anonymous) concurrently. A name inside
   the mount's `firstParty` namespaces is the exception: it has one authority, so Écluse fetches the
@@ -465,8 +465,10 @@ version identifiers and the field shapes needed to exclude unusable releases.
 
 The [operator field contract](https://ecluse-proxy.com/docs/protocol-support/#npm-metadata-fields)
 owns the retained set. Extraction skips unknown fields before constructing values. The parser does
-not establish whole-document JSON validity. Retained structures have a depth budget, and skipped
-structures use the library's constant-state skip path. Body and version ceilings bound other work.
+not establish whole-document JSON validity. A scalar or empty retained container consumes one depth
+level, and each enclosing retained container adds one. Specialised readers check their own level
+before reading members. Skipped structures use the library's constant-state skip path. Body and
+version ceilings bound other work.
 
 The pinned library's native lexer allocates batches proportional to the input chunk size
 (`20 + chunkBytes / 5` result records). Its key accumulator stops at about 64 KiB and its number

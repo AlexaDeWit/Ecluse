@@ -47,7 +47,7 @@ The version representation retains these supported fields:
 | Use | Fields |
 | --- | --- |
 | Identity and policy | `name`, `version`, `dist`, `deprecated`, `hasInstallScript`, `scripts`, `license`, `_npmUser` |
-| Dependency resolution | `dependencies`, `acceptDependencies`, `devDependencies`, `optionalDependencies`, `peerDependencies`, `peerDependenciesMeta`, `bundleDependencies`, `bundledDependencies` |
+| Dependency resolution | `dependencies`, `dependenciesMeta`, `acceptDependencies`, `devDependencies`, `optionalDependencies`, `peerDependencies`, `peerDependenciesMeta`, `bundleDependencies`, `bundledDependencies` |
 | Runtime and type resolution | `main`, `module`, `browser`, `exports`, `imports`, `type`, `types`, `typings`, `typesVersions`, `sideEffects` |
 | Installation and platforms | `engines`, `engineStrict`, `os`, `cpu`, `libc`, `bin`, `man`, `directories`, `gypfile`, `preferGlobal`, `_hasShrinkwrap` |
 | Package configuration | `files`, `config`, `workspaces`, `packageManager`, `devEngines`, `publishConfig` |
@@ -56,7 +56,9 @@ The top-level document retains `name`, `versions`, `time` and `dist-tags`.
 Dependency names, script names, engine names, export conditions, import mappings and type mappings
 are protocol data, so their map entries remain available. Fixed schemas do not retain arbitrary keys:
 publisher records retain `name`, `email` and `url`, and legacy licence objects retain `type` and `url`.
-`peerDependenciesMeta` retains each package's `optional` flag.
+`dependenciesMeta` and `peerDependenciesMeta` retain each entry's `optional` flag and preserve its key.
+Yarn uses [dependency optionality](https://yarnpkg.com/configuration/manifest#dependenciesMeta.optional)
+from registry metadata throughout the dependency tree. Other dependency metadata flags are not retained.
 
 `dist` retains `tarball`, `shasum`, `integrity`, `unpackedSize`, `fileCount`, `signatures` and
 `attestations`. Signatures retain `keyid` and `sig`. Attestations retain `url` and

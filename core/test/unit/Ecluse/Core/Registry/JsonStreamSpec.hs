@@ -5,7 +5,7 @@
 -- | Chunk boundaries, source identity and cancellation for incremental registry reads.
 module Ecluse.Core.Registry.JsonStreamSpec (spec) where
 
-import Data.Aeson (Value (Bool, Null, Number, String), object, (.=))
+import Data.Aeson (Value (Array, Bool, Null, Number, String), encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
 import Test.Hspec
@@ -18,8 +18,17 @@ import Ecluse.Core.Snapshot (digestOf)
 import Ecluse.Test.Registry.JsonStream (parseJsonChunks)
 import Ecluse.Test.Support (expectRight)
 
+-- | Verify retained-depth boundaries, source identity and response cancellation.
 spec :: Spec
 spec = describe "readJsonStream" $ do
+    forM_ [object [], Array mempty, String "leaf"] $ \value -> do
+        it ("accepts one retained level for " <> show value) $ do
+            result <- expectRight (decode (retainedValue 1) [toStrict (encode value)])
+            streamValue result `shouldBe` Right (Just value)
+        it ("refuses an exhausted retained level for " <> show value) $ do
+            result <- expectRight (decode (withinRetainedDepth 0 (retainedValue 1)) [toStrict (encode value)])
+            streamValue result `shouldSatisfy` isLeft
+
     it "preserves nested values and split escapes at every source boundary" $ do
         let body = "{\"keep\":{\"list\":[1,true,null,\"a\\\\b\\u00e9\"]},\"ignored\":{\"blob\":[1,2,3]}}"
             parser = retainedObject (\key -> if key == "keep" then retainedValue 10 else mempty)
@@ -67,6 +76,6 @@ spec = describe "readJsonStream" $ do
             waitCatch worker >>= (`shouldSatisfy` isLeft)
             takeMVar released
 
--- | Tests use the production fold without retaining a list of parser events.
+-- Keep the test fold independent of an accumulated list of parser events.
 decode :: J.Parser a -> [ByteString] -> Either LimitError (StreamResult (Maybe a))
 decode parser = parseJsonChunks (MetadataBodyLimit (1024 * 1024)) parser (\_ value -> Right (Just value)) Nothing

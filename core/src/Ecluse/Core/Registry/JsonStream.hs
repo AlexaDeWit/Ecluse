@@ -7,6 +7,7 @@ module Ecluse.Core.Registry.JsonStream (
     StreamResult (..),
     readJsonStream,
     retainedValue,
+    withinRetainedDepth,
     retainedObject,
     retainedObjectOr,
     retainedArray,
@@ -67,12 +68,17 @@ readJsonStream bound parser step initial readChunk = go 0 hashInit initial (J.ru
 
 -- | Decode a retained field within a structural budget. Unknown fields never call this parser.
 retainedValue :: Int -> J.Parser Value
-retainedValue depth
-    | depth <= 0 = J.mapWithFailure (const (Left "retained JSON nesting limit")) (pure ())
-    | otherwise =
+retainedValue depth =
+    withinRetainedDepth depth $
         retainedScalar
             <|> retainedArray (retainedValue (depth - 1))
             <|> retainedObject (const (retainedValue (depth - 1)))
+
+-- | Charge the parsed value's own level, including empty containers. Children need one less level.
+withinRetainedDepth :: Int -> J.Parser a -> J.Parser a
+withinRetainedDepth budget parser
+    | budget <= 0 = J.mapWithFailure (const (Left "retained JSON nesting limit")) (pure ())
+    | otherwise = parser
 
 -- | Materialise only fields whose key selects a parser. Duplicate keys keep their first value.
 retainedObject :: (Text -> J.Parser Value) -> J.Parser Value
