@@ -376,9 +376,9 @@ covered them. Enable them *after* you warm your private mirror:
    which outranks both. That covers a false positive or a risk you accept.
 
 A warmed version is not exempt forever. `ecluse dredger` checks the stored versions against your
-current rules and prunes what they now deny, so a policy change cannot leave an ineligible version
-in the mirror. When Dredger runs, pin every version you must keep before you add a deny, and run
-`ecluse dredger --dry-run` to see what it would remove.
+current rules and prunes what they deny, so a policy change cannot leave an ineligible version in
+the mirror target or in the private cache that retained it. When Dredger runs, pin every version you
+must keep before you add a deny, and run `ecluse dredger --dry-run` to see what it would remove.
 
 Add `DenyIfEpss` alongside `DenyIfCve`, not instead of it. EPSS estimates exploitation probability,
 not severity or proof of exploitation. An individual missing score makes EPSS abstain, including

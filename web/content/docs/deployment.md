@@ -20,7 +20,7 @@ and run the roles your deployment needs.
 | `ecluse proxy --no-worker` | Serves clients and enqueues mirror jobs, but does not drain the queue | Scale on request rate. Needs a durable queue |
 | `ecluse mirror` | Runs the mirror worker alone, and serves only its health probes | Scale on queue depth. Needs a durable queue |
 | `ecluse pilot` | Builds each ecosystem's advisory database from the OSV exports and the EPSS feed | One instance, because parallel instances race and duplicate API calls |
-| `ecluse dredger` | Deletes mirrored versions your current rules deny. No other role deletes | One per store, because it takes no lease |
+| `ecluse dredger` | Deletes versions your current rules deny from each mount's mirror target and private cache. No other role deletes | One per store, because it takes no lease |
 
 The fast lane, the advisory denies, and Dredger read the advisory database that Pilot publishes.
 [Splitting the proxy from the mirror worker](#splitting-the-proxy-from-the-mirror-worker) and
@@ -36,8 +36,9 @@ Dredger refuses some endpoint pairs that the proxy and the mirror worker accept,
 deletions could reach first-party packages that exist only in the publication target. It refuses a
 mount whose `mirrorTarget` equals any mount's `privateUpstream` or its own `publicationTarget`, and a
 mount whose `privateUpstream` equals its own `publicationTarget`. The proxy and the mirror worker
-start on those pairs, and warn on the two mirror-target pairs. Dredger also refuses a mirror target
-whose tag names a store this build has no maintenance backend for. The
+start on those pairs, and warn on the two mirror-target pairs. Dredger also refuses either cleanup
+target, the mirror target or the private cache, whose tag names a store this build has no
+maintenance backend for, and a mirrored mount whose private cache it cannot observe at all. The
 [endpoint collision table](@/docs/configuration.md#endpoint-collisions) lists every pair and its
 outcome per role.
 
@@ -162,12 +163,13 @@ holds on any backend, and the AWS column shows one way to grant it:
 | `ecluse proxy --no-worker` | Send mirror jobs, read advisory artifacts, read what the private upstream aggregates | `sqs:SendMessage`, `sqs:GetQueueAttributes`, `s3:GetObject`, `codeartifact:DescribeRepository` on the private upstream repository and every repository in its upstream chain |
 | `ecluse mirror` | Consume mirror jobs, publish to the mirror store, read advisory artifacts | SQS receive, delete, change visibility, and get attributes. CodeArtifact token mint, reads, and publish on the mirror repository. `s3:GetObject` |
 | `ecluse pilot` | Publish advisory artifacts | `s3:PutObject` on the advisory prefix |
-| `ecluse dredger` | Read and delete in the mirror store, read advisory artifacts, read what the private upstream aggregates | CodeArtifact token mint, reads, and delete on the mirror repository ([full list](@/docs/dredger.md#permissions)). `codeartifact:DescribeRepository` on the private upstream repository and every repository in its upstream chain. `s3:GetObject` |
+| `ecluse dredger` | Read and delete in the mirror target and in the private cache, read advisory artifacts, read what the private upstream aggregates | CodeArtifact token mint, repository reads, and `codeartifact:DeletePackageVersions` on package ARNs in both repositories ([full list](@/docs/dredger.md#permissions)). `codeartifact:DescribeRepository` on both repositories and on every repository in the private upstream's chain. `s3:GetObject` |
 
 `ecluse proxy` without `--no-worker` runs the mirror worker in the same process, so its identity
 needs the proxy row and the mirror row together. Split the proxy from the worker when the serving
 fleet must hold no write access to the mirror store. Only the mirror worker's identity writes the
-trusted store, and only Dredger's identity deletes from it.
+trusted store, and only Dredger's identity deletes from the stores it sweeps: the mirror target and
+the private cache.
 
 The mirror worker renews each message's visibility while it holds the message, so
 `sqs:ChangeMessageVisibility` is required, not optional
@@ -474,7 +476,7 @@ a separate metrics listener only when that exporter is selected.
 | `ecluse proxy --no-worker` | Public/private metadata and artifact hosts, optional publication target | Queue send and redrive probe, advisory S3 read |
 | `ecluse mirror` | Public metadata/artifact hosts and mirror repository | Queue receive/ack/visibility and redrive probe, advisory S3 read |
 | `ecluse pilot` | OSV export host and EPSS feed host | Advisory S3 upload, no mirror queue |
-| `ecluse dredger` | Mirror repository metadata and its maintenance API | Advisory S3 read, no mirror queue |
+| `ecluse dredger` | Mirror target and private cache metadata, and each one's maintenance API | Advisory S3 read, no mirror queue |
 
 Each role's permissions are in [Role identities and least privilege](#role-identities-and-least-privilege).
 Omit destinations for features a role does not have configured. An in-memory queue needs no queue

@@ -211,11 +211,12 @@ observability:
   # false, which the load then refuses as the wrong type.
   telemetry: "off"
 
-# The mirror sweep, read only by `ecluse dredger`. Every other role carries these keys
-# unread. Each cycle intersects the store's package listing with the names the advisory
-# database covers and the names an identity-deny rule pins, reads each of those packages'
-# metadata back from the store, and deletes a version only on a named decisive deny.
-# Deletion is permanent, so the pacing and the cap below bound what one cycle can do.
+# The sweep over each mount's mirrorTarget and the privateUpstream cache paired with it,
+# read only by `ecluse dredger`. Every other role carries these keys unread. Each cycle
+# intersects both stores' package listings with the names the advisory database covers and
+# the names an identity-deny rule pins, reads each of those packages' metadata back from
+# the store holding it, and deletes a version only on a named decisive deny. Deletion is
+# permanent, so the pacing and the cap below bound what one cycle can do.
 dredger:
   # Candidate packages one chunk examines before the sweep pauses.
   chunkSize: 50

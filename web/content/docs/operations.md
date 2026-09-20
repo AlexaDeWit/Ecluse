@@ -480,7 +480,8 @@ also finds anything an old writer added after an earlier scan reported the name 
 
 If an old Dredger deletes the only bytes during a rollout, later policy agreement cannot restore
 them. A removed version returns only when a usable source still holds its bytes and something
-admits it again. The [threat model](@/docs/threat-model.md) records that accepted residual.
+admits it again. The [threat model](@/docs/threat-model.md) records that accepted residual as
+risk 109, over deletions from the mirror target and from the private cache alike.
 
 ## Mirror receipts and their visibility
 

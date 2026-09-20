@@ -1,13 +1,20 @@
 +++
 title = "Running the Dredger"
-description = "The role that deletes mirrored versions your rules now deny: what one cycle does, what bounds it, and the permissions it needs."
+description = "The role that deletes denied versions from your mirror target and its private cache: what one cycle does, what bounds it, and the permissions it needs."
 weight = 6
 +++
 
-`ecluse dredger` is the only role that deletes. It walks each mount's mirror store and removes
-versions the mount's own rules now deny. Run it when your mirror must not keep serving a version a
-new advisory condemns, and read this page before you point it at a store, because deletion is
-permanent.
+`ecluse dredger` is the only role that deletes. It walks each mount's mirror target and the
+`privateUpstream` cache paired with it, and removes versions the mount's own rules deny. Run it when
+those stores must not keep serving a version a new advisory condemns, and read this page before you
+point it at a store, because deletion is permanent.
+
+`privateUpstream` is a cache. Your builds read through it, the mirror worker writes to
+`mirrorTarget`, and your publishers write to `publicationTarget`. Dredger cleans the first two and
+never the third. Because the cache only holds copies of what those stores already carry, Dredger
+needs no proof that a cached version came from the mirror: an unknown or absent origin does not
+shield a copy. Pointing publishes at a store you also declare as `privateUpstream` breaks that
+premise, so treat it as a deployment fault rather than a supported topology.
 
 Dredger reads actual inventories from each mount's mirror target and private cache independently.
 It removes eligible mirror versions before their eligible cache copies, under separate consent.
@@ -20,6 +27,11 @@ registry. Preview applies the same refusal. Dredger is destructive, and a first-
 exist only in the publication target, so Dredger never runs against a store that also receives
 publications. Distinct repository paths on one host remain valid. Proxy and mirror still
 accept this same-mount pair.
+
+Both cleanup targets have to be sweepable. Dredger refuses a mount whose `mirrorTarget` or whose
+`privateUpstream` names a store this build has no maintenance backend for, and it refuses a mirrored
+mount whose private cache it cannot observe at all. A `registry` target fails that test on either
+side, because it offers no control plane. The refusal names the mount key and the reason.
 
 The Dredger takes no ingress. It exposes only `/livez` and `/readyz` on `ECLUSE_SERVER__PORT`.
 
@@ -352,7 +364,10 @@ and `result`, one of `examined`, `deleted`,
 ## Permissions
 
 Scope the Dredger independently to its configured mirror and private cache. Token minting does not grant repository access by
-itself. The CodeArtifact role needs these permissions for a default candidate cycle:
+itself. An **approved target** below is one of two repositories: the mount's `mirrorTarget` and its
+`privateUpstream` cache. Write both sets of ARNs into the policy, because a grant on one repository
+authorises nothing in the other. The CodeArtifact role needs these permissions for a default
+candidate cycle:
 
 | Action | Resource scope | Purpose |
 |---|---|---|
@@ -393,7 +408,10 @@ replaces no others, so a marker write cannot disturb your consent tag. Granting 
 leaves the consent tag outside the Dredger's reach entirely.
 
 On a store reached through the ecosystem protocol alone, least privilege is an account of the
-store's own: a user whose package rights cover the mirror store and nothing else.
+store's own: a user whose package rights cover that one store and nothing else. Give the mirror
+target and the private cache separate accounts, and declare each one's token under its own key
+(`mirrorTarget.verdaccio.token` and `privateUpstream.verdaccio.token`), so neither target's
+credential reaches the other.
 
 ## Known limits
 
@@ -407,7 +425,8 @@ either path can lose a concurrent publish of another version of the same package
 next install still needs a source that holds it: the public registry, or a copy another store
 retained. Where no source remains, the version stays unavailable after your policy agrees to it. A
 read against the private cache can itself restore a copy there, and the next cycle finds and
-removes that copy.
+removes that copy. The [threat model](@/docs/threat-model.md) carries this residual as accepted
+risk 109, over both the mirror target and the private cache.
 
 **Pre-declaration public copies remain served and protected from Dredger.** Before declaring a
 namespace first-party, review its existing copies in both the mirror and the private read

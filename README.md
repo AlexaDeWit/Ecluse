@@ -47,10 +47,10 @@ target under the `codeArtifact` tag mints its own short-lived write token, and t
 a static token you supply. Écluse hosts no packages itself.
 
 A mirror keeps what it was given, so a version your rules later deny stays until something removes
-it. `ecluse dredger` is that role: it walks each mirror store, re-evaluates the versions a new
-advisory or an operator deny can have changed, and deletes only what a named rule condemns. It is
-the only role that deletes, and it does so only from each mirror or private cache carrying its
-own consent marker, under a per-cycle cap.
+it. `ecluse dredger` is that role: it walks each mount's mirror target and the private cache paired
+with it, re-evaluates the versions a new advisory or an operator deny can have changed, and deletes
+only what a named rule condemns. It is the only role that deletes, and it does so only from a store
+carrying its own consent marker, under a per-cycle cap.
 
 The [operator manual](https://ecluse-proxy.com/docs/) covers running Écluse.
 
