@@ -121,7 +121,7 @@ capabilityShedWarning inputs shedTo =
 
 irreducibleMinimumWarning :: Int -> Text
 irreducibleMinimumWarning overshoot =
-    "memory plan: the irreducible tenant minimum still exceeds the heap ceiling by "
+    "memory plan: the irreducible minimum for the configured tenants still exceeds the heap ceiling by "
         <> show overshoot
         <> " bytes. Booting with the container limit as the backstop. Increase the memory limit"
 
