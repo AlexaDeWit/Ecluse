@@ -105,7 +105,8 @@ for the names and values.
 ### Runtime sizing: cores and heap ceiling
 
 The resolved posture seeds a second derivation, the **memory plan**. It partitions the effective
-heap ceiling between named tenants whose sum it bounds:
+heap ceiling between named tenants. Their sum is an accounting plan, not a measurement of all
+live allocations:
 
 - a runtime reserve
 - the metadata cache
@@ -121,10 +122,34 @@ serialised document coexist before collection. The derivation sets the worker fe
 (`maxArtifactBytes`) so that this envelope is what the tenant charges. An explicit config value
 wins its own bound, and otherwise the shipped fallbacks apply.
 
-A pod too small for the tenants' floors sheds in a documented order and always boots. The
+A pod below the automatic plan's floors sheds optional tenants in a documented order. The
 mirror-artifact cap goes first, to zero, so the background back-fill leg gives way before the serve
 hot path. The cache goes next, also to zero, and each step logs a loud warning. The boot and
 `check-config` alike refuse only an explicit override that breaks the plan.
+
+Metadata ingest, CPU concurrency, transient materialisation and cache retention have separate
+controls. A larger source body does not automatically enlarge a cache or reduce CPU concurrency.
+The fixed ingest ceiling bounds source bytes. The default byte and count ceilings allow growth
+beyond the captured large-package corpus. They express bounded policy headroom, not measured
+limits on heap use.
+
+Materialisation admission charges estimated work against its own capacity, using static allowances
+rather than deriving residency from wire size.
+An allowance above capacity charges the whole capacity, allowing that request to run alone.
+The scheduling minimum therefore establishes no minimum supported heap size.
+
+A public artifact request captures any local selected result before choosing its allowance.
+That captured result stays alive through the metadata decision, so eviction cannot turn a cheap
+reservation into an uncharged origin fetch. A deferred read, including an external-provider
+lookup, receives the cold allowance. Listings reserve for their permitted origins and useful
+output before fetching. Assembled hits and conditional responses happen later and receive no
+early discount. Artifact relay begins after both metadata gates release.
+
+These allowances represent slightly-worse-than-average work. They neither reserve each package's
+worst-case heap nor grow with its observed history. Streaming removes whole-source intermediates,
+but selected fields and useful listing results still materialise. The operator must retain process
+headroom and control edge demand. Explicit positive response and CPU pins win and produce warnings,
+so upgrades do not silently change a declared policy.
 
 The structural hostile-input counts (`maxVersionCount`, `maxArtifactCount`, `maxNestingDepth`) stay
 pinned policy. They bound document shape, not bytes, and do not scale with RAM. Resolution remains
@@ -136,8 +161,7 @@ role-agnostic across proxy, Pilot, and Dredger. The body bounds name their opera
 | Client publish request | First-party publish body and its reservation | Resolved publish request cap |
 | Buffered mirror artifact | Worker artifact download before verification | Mirror-artifact tenant cap |
 
-These names preserve the existing limits. They do not impose a serve-derived minimum pod size on
-roles that never serve packuments. Measured body sizes count decompressed bytes before projection.
+These controls impose no metadata-serving minimum pod size on roles that never serve packuments. Measured body sizes count decompressed bytes before projection.
 The Operator Manual carries the [per-pod arithmetic](https://ecluse-proxy.com/docs/operations/#appendix-runtime-sizing-arithmetic).
 
 ### Rule policy
