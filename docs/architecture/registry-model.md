@@ -315,24 +315,25 @@ divergent `name`.
 
 ### Decision surface vs served surface
 
-The merge decides over the typed `PackageInfo` but serves the raw upstream document, rebuilt from
-the winning sources. The rebuild takes only the surviving versions, rewrites their tarball URLs,
-carries `latest` from the plan, and relays every unmodeled key unchanged. The proxy never
-re-serialises the body from the lossy typed model, which is why the API surface
-[owns that schema](web-layer.md#the-synthesised-packument-schema--the-trust-boundary).
+The merge decides over the typed `PackageInfo` and rebuilds served metadata from the winning source
+representations. It takes only surviving versions, rewrites their tarball URLs, and carries `latest`
+from the plan. npm extraction retains an explicit installation, policy, artifact and mirror field
+set. Unknown npm fields are omitted, and author lists become source-specific pointers. Assembly
+uses those retained fields rather than recreating installation data from the typed policy model.
+The API surface [owns the served schema](web-layer.md#the-synthesised-packument-schema--the-trust-boundary).
 
 Artifact admission identifies a raw entry by its source position, upstream-byte digest, and
 adapter-assigned entry key. A filename alone cannot distinguish admitted and refused siblings.
 The merge carries compact admitted-entry records, without retaining full artifact metadata.
 The shared selector rejects missing keys, ambiguous keys, and mismatched source snapshots.
-It preserves each source's entry order and leaves unknown fields on the selected raw entries.
+It preserves each source's entry order and the fields its adapter retains on selected entries.
 
 Adapters must establish these contracts before their metadata reaches assembly:
 
 - Assign each artifact an explicit key before lenient parsing drops any entry. PyPI uses raw array positions, including malformed gaps.
 - Use an equivalent key for other shapes. npm uses its version-map key. A singleton key is valid only for a source with one artifact entry.
 - Carry the same fetch digest with the typed and raw views. The digest covers exact upstream bytes, with one pass at fetch and none at serve.
-- Pair a single-version read with the source's own version object, on the cold selective read and on both warm cache paths. The pair is scoped by construction: built from one body and cached whole, so it carries no digest and the single-version read pays no digest pass. The fetch digest is the full-document guarantee for assembly. The mirror write republishes that object, and a write without one is refused as a value rather than rebuilt from the typed view. npm carries the pair, and PyPI carries none until its mirror write exists.
+- Pair a single-version read with its retained source version object. npm streaming reads consume and hash the complete source before returning. The selected typed and serving views stay paired through caching and mirroring. Mirror publication refuses a missing source representation instead of recreating one from the typed view. PyPI carries no mirror representation until its mirror write exists.
 - Preserve keys through admission and use the shared selector before rendering. Selective reads must retain the full decoder's entry keys.
 
 Snapshot scope is transient and content-addressed. It changes no stored schema or epoch.
@@ -348,11 +349,14 @@ allocation checks run in CI alongside the adapter regressions.
 
 Decoding into the decision surface is lenient at version granularity, with a fail-closed boundary.
 An undecodable `dist.unpackedSize` reads as absent and the version survives. `fileCount` and
-`signatures` have no reader at all: nothing decides on them, and they relay unmodelled with the
-rest of the body. The decoder drops a version broken in a required field (no `dist` or `tarball`,
+`signatures` do not drive policy. npm retains them as declared artifact fields for serving, while
+mirror publication removes signatures and attestations issued by the source registry. The decoder
+drops a version broken in a required field (no `dist` or `tarball`,
 an unusable `version`) rather than serve it unverifiable. Its healthy siblings keep serving. Only
-an unusable top-level document (not an object, absent `name`, non-object `versions`) denies the
-package wholesale. The decoder tracks dropped entries as `InvalidEntry`
+an unusable top-level document (not an object, absent `name`, or non-object and non-null `versions`,
+`time` or `dist-tags`) denies the package wholesale. Missing and null maps retain their empty meaning.
+Inventory reads reject an invalid `versions` container and ignore unrelated policy maps. The decoder
+tracks dropped entries as `InvalidEntry`
 ([`Package.hs`](../../core/src/Ecluse/Core/Package.hs)), so the drop is observable. This turns
 "one poisoned version denies the whole package" into a per-version drop.
 
@@ -424,7 +428,7 @@ consumes. Its shape follows the npm protocol. Two principles govern it:
 | **Trust / provenance** | `Trust = Trusted (NonEmpty TrustEvidence) \| Untrusted \| TrustUnknown`. `TrustEvidence = Signed \| Attested \| MfaPublished \| OtherEvidence text`. | Signing, attestation, and MFA differ per ecosystem but reduce to one signal. The evidence captures the how without the ecosystem. |
 | **Availability** | `Availability = Available \| Deprecated msg \| Yanked (Maybe reason)`, plus a per-artifact `artYanked`. | npm deprecates and RubyGems yanks whole versions. PyPI yanks individual files, so the per-file flag keeps "listed-but-yanked" and lets exact pins resolve. |
 | **Artifacts** | A version owns `NonEmpty Artifact`. Each carries algorithm-tagged `Hash`es, kind/platform, size, interpreter constraint, and a provenance URL. | npm has one tarball, PyPI an sdist plus many wheels, and RubyGems one gem per platform. |
-| **Dependencies** | Deliberately not modelled, nor parsed off the wire. | A dependency matters only when a client fetches it, and that fetch returns through this gate for its own verdict, so gating a parent's dependency list would duplicate the gate on every child. The raw document still relays the lists untouched. If a dependency-reading rule is ever designed, restore the `Dependency` / `DepKind` vocabulary from history. |
+| **Dependencies** | Retained for installation, outside the typed policy model. | Each dependency receives its own verdict when the client fetches it. npm retains supported dependency relationships in its installation representation, without adding them to the rules vocabulary. |
 
 The types live in [`Ecluse.Core.Package`](../../core/src/Ecluse/Core/Package.hs),
 [`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs), and

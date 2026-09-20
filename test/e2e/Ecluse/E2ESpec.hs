@@ -19,6 +19,7 @@ import Ecluse.E2E.Fixtures.Npm (
     headPkg,
     latestPkg,
     mirrorAuthorFields,
+    mirrorOmittedAuthorFields,
     mirrorPkg,
     mirrorRegistryDistFields,
     mirrorRegistryFields,
@@ -106,7 +107,7 @@ scenarios = do
                     -- The lockfile pins its dependency too, so that mirror must land before public goes down.
                     verdaccioHasVersion e2e (psName allowPkg) (psVersion allowPkg) `shouldReturn` True
                     void $ withUpstreamPaused e2e (npmCiIn proj) >>= shouldSucceed -- (5) public down → from the mirror
-            it "republishes the author's version metadata to the mirror and strips the public registry's own" $ \e2e -> do
+            it "mirrors supported installation metadata and omits unknown and public-registry fields" $ \e2e -> do
                 let name = psName mirrorPkg
                     ver = psVersion mirrorPkg
                 -- The mirror lifecycle case above seeds the store. This reads the version object
@@ -117,6 +118,9 @@ scenarios = do
                 forM_ stored $ \version -> do
                     forM_ mirrorAuthorFields $ \(field, value) ->
                         (field, KeyMap.lookup field version) `shouldBe` (field, Just value)
+                    forM_ mirrorOmittedAuthorFields $ \(field, _) ->
+                        (field, KeyMap.lookup field version) `shouldBe` (field, Nothing)
+                    KeyMap.lookup "author" version `shouldBe` Just (String ("See https://upstream/" <> name))
                     forM_ mirrorRegistryFields $ \(field, _) ->
                         (field, KeyMap.lookup field version) `shouldBe` (field, Nothing)
                     KeyMap.lookup "name" version `shouldBe` Just (String name)

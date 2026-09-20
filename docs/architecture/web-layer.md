@@ -94,9 +94,10 @@ The served packument is Écluse's merged and filtered view: private versions tru
 produces that document, which makes it the highest-scrutiny piece of the manifest. The manifest
 therefore owns its schema and models it as *partial* and *open*. It describes only the fields Écluse
 reads and transforms (`versions`, `dist-tags`, `time`, and each version's `dist`).
-`additionalProperties: true` everywhere states that every unlisted field relays unchanged from the
-contributing upstream (private wins a collision). The schema is a precise statement of what the gate
-touches and what it leaves alone.
+`additionalProperties: true` permits adapter-retained fields beyond those schema properties. It
+does not promise to relay unknown upstream fields. npm extraction retains an explicit supported
+field set and replaces author lists with source-specific pointers. Private metadata still wins a
+version collision before assembly.
 
 ## Streaming and resource lifetime
 

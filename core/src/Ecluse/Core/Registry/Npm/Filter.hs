@@ -2,9 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Assemble admitted npm versions from their source snapshots and rebase artifact URLs.
-Unknown wire fields remain on the exact selected entries.
--}
+-- | Assemble admitted npm installation metadata from source snapshots and rebase artifact URLs.
 module Ecluse.Core.Registry.Npm.Filter (
     -- * URL rewriting
     rewriteVersion,
@@ -87,8 +85,7 @@ assembleMergedPackument mountBase bySource plan base =
     rewriteSurvivor :: Value -> Value
     rewriteSurvivor = maybe id (rewriteVersion . servedTarballUrl mountBase) (npmDocumentName baseObject)
 
-    -- Each survivor's object is the raw @Value@ of the source that won the key, unmodelled
-    -- keys and all. A survivor whose source object is missing drops out, never fabricated.
+    -- A missing source object drops the survivor instead of inventing installation metadata.
     survivingVersions :: KeyMap Value
     survivingVersions =
         KeyMap.fromList

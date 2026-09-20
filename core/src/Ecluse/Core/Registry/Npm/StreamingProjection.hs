@@ -37,6 +37,7 @@ data NpmProjection = NpmProjection
     , projectedCount :: Int
     , projectedContainers :: Set NpmContainer
     , projectedActiveContainer :: Maybe NpmContainer
+    , projectedInvalidContainer :: Bool
     }
 
 -- | Start one source projection. No document or input chunk is retained here.
@@ -50,6 +51,7 @@ emptyProjection =
         , projectedCount = 0
         , projectedContainers = mempty
         , projectedActiveContainer = Nothing
+        , projectedInvalidContainer = False
         }
 
 -- | Project each release once and enforce the version ceiling while receiving source fields.
@@ -61,6 +63,13 @@ collectField limits name acc = \case
             acc
                 { projectedContainers = Set.insert container (projectedContainers acc)
                 , projectedActiveContainer = if Set.member container (projectedContainers acc) then Nothing else Just container
+                }
+    InvalidContainer container ->
+        Right
+            acc
+                { projectedContainers = Set.insert container (projectedContainers acc)
+                , projectedActiveContainer = Nothing
+                , projectedInvalidContainer = projectedInvalidContainer acc || Set.notMember container (projectedContainers acc)
                 }
     NameField value -> Right acc{projectedName = projectedName acc <|> Just value}
     VersionField _ _ | projectedActiveContainer acc /= Just VersionsContainer -> Right acc
@@ -88,6 +97,7 @@ firstInsert = Map.insertWith (\_ old -> old)
 -- | Bind the reported name and join policy timestamps with their same-source release objects.
 finishProjection :: Limits -> PackageName -> Text -> NpmProjection -> Either MetadataError (PackageInfo, Value)
 finishProjection limits requested authorPointer acc = do
+    when (projectedInvalidContainer acc) (Left MetadataUndecodable)
     reported <- validateReportedName projectName (projectedName acc)
     _ <- projectionResult (checkNameAgreement requested reported ())
     info <- first MetadataBoundExceeded (checkArtifactCount limits package)

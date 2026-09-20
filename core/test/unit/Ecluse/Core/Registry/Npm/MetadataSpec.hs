@@ -5,7 +5,7 @@
 -- | Differential checks for full and selective npm metadata reads.
 module Ecluse.Core.Registry.Npm.MetadataSpec (spec) where
 
-import Data.Aeson (Value (Bool, Null, Object, String), encode, object, toJSON, (.=))
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), encode, object, toJSON, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
@@ -24,7 +24,7 @@ import Ecluse.Core.Registry.CachedDocument (npmCached)
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionDoc (vdRaw),
-    VersionRead (vrUpstreamLatest, vrVersion),
+    VersionRead (vrBodyBytes, vrUpstreamLatest, vrVersion),
  )
 import Ecluse.Core.Registry.Npm.Metadata (selectNpmVersionDoc)
 import Ecluse.Core.Security (
@@ -188,6 +188,23 @@ optionalContainerParity = describe "optional containers match the full projectio
             it label $ parity defaultLimits (bodyFor key values)
         forM_ [("null then object", [Null, populated]), ("object then null", [populated, Null]), ("null then invalid", [Null, Bool True]), ("invalid then null", [Bool True, Null])] $ \(label, values) ->
             it ("keeps the first duplicate: " <> label) $ parity defaultLimits (bodyFor key values)
+        forM_ [[], [Null], [object []]] $ \values ->
+            it ("accepts missing, null or empty containers: " <> show values) $ do
+                projectNpmManifest defaultLimits name (bodyFor key values) `shouldSatisfy` isRight
+                projectNpmVersion defaultLimits name version (bodyFor key values) `shouldSatisfy` isRight
+        forM_ [Array mempty, String "invalid", Bool True, Number 0] $ \invalid -> do
+            it ("refuses an invalid first container: " <> show invalid) $ do
+                let body = bodyFor key [invalid, populated]
+                projectNpmManifest defaultLimits name body `shouldBe` Left MetadataUndecodable
+                projectNpmVersion defaultLimits name version body `shouldBe` Left MetadataUndecodable
+            it ("ignores an invalid duplicate after a valid container: " <> show invalid) $ do
+                let body = bodyFor key [populated, invalid]
+                projectNpmManifest defaultLimits name body `shouldBe` projectNpmManifest defaultLimits name (bodyFor key [populated])
+                sameSelected body (bodyFor key [populated])
+            it ("keeps a null first container before an invalid duplicate: " <> show invalid) $ do
+                let body = bodyFor key [Null, invalid]
+                projectNpmManifest defaultLimits name body `shouldBe` projectNpmManifest defaultLimits name (bodyFor key [Null])
+                sameSelected body (bodyFor key [Null])
         it "skips deeply nested duplicate data after the first container" $ do
             let limits = defaultLimits{maxNestingDepth = 5}
                 deep = foldr (\_ value -> object ["nested" .= value]) Null [1 :: Int .. 6]
@@ -205,6 +222,13 @@ optionalContainerParity = describe "optional containers match the full projectio
         ]
     bodyFor :: Text -> [Value] -> ByteString
     bodyFor key values = rawObject (("name", String "is-odd") : filter ((/= key) . fst) containers <> map (key,) values)
+    sameSelected :: ByteString -> ByteString -> Expectation
+    sameSelected body original = do
+        actual <- expectRight (projectNpmVersion defaultLimits name version body)
+        expected <- expectRight (projectNpmVersion defaultLimits name version original)
+        vrVersion actual `shouldBe` vrVersion expected
+        vrUpstreamLatest actual `shouldBe` vrUpstreamLatest expected
+        vrBodyBytes actual `shouldBe` BS.length body
     parity :: Limits -> ByteString -> Expectation
     parity limits body = do
         selectedDetails limits name version body `shouldBe` fullVersionOutcome limits name "1.0.0" body
@@ -212,7 +236,7 @@ optionalContainerParity = describe "optional containers match the full projectio
             `shouldBe` fmap (Map.lookup "latest" . infoDistTags . fst) (projectNpmManifest limits name body)
 
 duplicateKeyParity :: Spec
-duplicateKeyParity = describe "duplicate top-level keys resolve first-occurrence-wins, matching the whole-document decode" $ do
+duplicateKeyParity = describe "duplicate top-level keys keep the first occurrence" $ do
     it "counts only the first versions object, not the sum across duplicate versions keys" $ do
         let body =
                 rawObject

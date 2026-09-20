@@ -271,9 +271,7 @@ coherenceSpec = describe "coherence of the filtered packument" $ do
         distTag "latest" filtered `shouldBe` Just "1.0.0"
 
     it "keeps an admitted but unparseable-version key and still resolves a present latest" $ do
-        -- `banana` is not parseable semver, so `compareVersions` against it yields
-        -- Nothing. It is old enough to survive the quarantine, so it drives the
-        -- unorderable-version path while coherence (a present latest) must hold.
+        -- The admitted key cannot be ordered as semver, but latest must still resolve.
         filtered <- filterTo unparseableSurvivorPackument
         Map.member "banana" (versionsOf filtered) `shouldBe` True
         case distTag "latest" filtered of
@@ -338,9 +336,7 @@ propertiesSpec = describe "properties" $ do
                         Nothing -> annotateShow out >> failure
 
     it "the assembled document forces deeply without bottoming (the metadataAssemble never-throws contract)" $
-        -- The serve tail feeds the assembled document straight into the encoder, so a lurking
-        -- bottom in any branch would escape the request perimeter at serve time. Force the whole
-        -- 'Value' here.
+        -- A deferred failure would escape the request perimeter during response encoding.
         hedgehog $ do
             spec' <- forAll genPackumentSpec
             (info, v) <- loadOrFail (renderPackument spec')

@@ -30,6 +30,7 @@ data NpmContainer = VersionsContainer | TimeContainer | TagsContainer
 data NpmField
     = IgnoredField
     | BeginContainer NpmContainer
+    | InvalidContainer NpmContainer
     | NameField Value
     | VersionField Text (Maybe Value)
     | TimeField Text Value
@@ -52,7 +53,10 @@ npmFields depth mode = J.objectKeyValues topField
         SelectedRead _ -> container TagsContainer (TagField "latest" <$> J.objectWithKey "latest" value)
         FullRead -> container TagsContainer (J.objectKeyValues tag)
     topField _ = mempty
-    container slot parser = J.objectFound (BeginContainer slot) IgnoredField parser <|> pure (BeginContainer slot)
+    container slot parser =
+        J.objectFound (BeginContainer slot) IgnoredField parser
+            <|> (BeginContainer slot <$ J.jNull)
+            <|> pure (InvalidContainer slot)
     value = scalar (depth - 1)
     release key = case mode of
         SelectedRead target | key /= target -> pure (VersionField "" Nothing)

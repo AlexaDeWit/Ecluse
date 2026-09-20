@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Egress and credential-redirect checks against an in-process npm upstream.
 module Ecluse.Core.Security.EgressIntegrationSpec (spec) where
 
 import Data.Aeson (Value, encode, object, (.=))
@@ -22,17 +23,7 @@ import Ecluse.Test.Registry.Npm (defaultNpmConfig)
 import Ecluse.Test.Registry.Npm.Metadata (fetchMetadataFormBounded)
 import Ecluse.Test.Stub (stubPort, withStub, withStubHeaders)
 
-{- | The data-plane egress posture, driven through the real npm fetch path against an
-in-process upstream on loopback.
-
-Production egress is https-only by construction. These cases reach an
-@http:\/\/127.0.0.1@ upstream through the test-only opt-in ('loopbackRegistryUrl'),
-compiled only under the @dev-http-egress@ Cabal flag.
-
-They also cover the credential-redirect invariant, @redirectCount = 0@. The client does
-not follow an upstream @302@, so an upstream cannot bounce a fetch off the build-time host
-allowlist or downgrade the scheme.
--}
+-- | Exercise test-only loopback HTTP and refused redirects through the npm fetch path.
 spec :: Spec
 spec = do
     describe "egress over the validating manager (loopback http opt-in)" $ do
