@@ -121,7 +121,7 @@ data BootPlan = BootPlan
     , bpLimits :: Limits
     -- ^ The request-shape bounds every mount serves under.
     , bpCacheConfig :: CacheConfig
-    -- ^ The metadata cache's budgets, split out of the memory plan's cache aggregate.
+    -- ^ The metadata cache's shared bounds and per-store eviction floors.
     , bpS3Endpoint :: Maybe AwsEndpoint
     -- ^ The @AWS_ENDPOINT_URL@ override the S3 advisory client dials. A malformed one refused the boot.
     , bpPrivateConnections :: Int

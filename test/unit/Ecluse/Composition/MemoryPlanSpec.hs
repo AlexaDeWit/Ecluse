@@ -235,8 +235,8 @@ spec = describe "resolveMemoryPlan" $ do
             cacheTtl cacheCfg `shouldBe` 45
             cacheMaxBytes cacheCfg `shouldBe` mpCacheAggregateBytes plan
             cacheMaxEntries cacheCfg `shouldBe` mpCacheMaxEntries plan
-            map ($ cacheCfg) [cacheFullBudget, cacheVersionBudget, cacheAssembledBudget]
-                `shouldBe` replicate 3 (StoreBudget 0 0)
+            map ($ cacheCfg) [cacheVersionBudget, cacheAssembledBudget]
+                `shouldBe` replicate 2 (StoreBudget 0 0)
             lines' `shouldContain` ["metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"]
   where
     resolve = resolveMemoryPlan

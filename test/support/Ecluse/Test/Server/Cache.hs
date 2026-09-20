@@ -38,7 +38,6 @@ defaultCacheConfig =
         { cacheTtl = 60
         , cacheMaxEntries = 1024
         , cacheMaxBytes = 256 * 1024 * 1024
-        , cacheFullBudget = StoreBudget 0 0
         , cacheVersionBudget = StoreBudget 0 0
         , cacheAssembledBudget = StoreBudget 0 0
         }

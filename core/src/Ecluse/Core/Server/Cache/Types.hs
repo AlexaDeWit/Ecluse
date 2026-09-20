@@ -25,8 +25,6 @@ data CacheConfig = CacheConfig
     -- ^ One entry bound shared by all eligible local stores.
     , cacheMaxBytes :: Int
     -- ^ One accounted-byte bound shared by all eligible local stores.
-    , cacheFullBudget :: StoreBudget
-    -- ^ Compatibility field, inactive for local retention. No local full store is allocated.
     , cacheVersionBudget :: StoreBudget
     -- ^ The selected-version eviction floor. It reserves no capacity.
     , cacheAssembledBudget :: StoreBudget

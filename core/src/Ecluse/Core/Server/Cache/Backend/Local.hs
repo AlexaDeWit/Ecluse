@@ -55,102 +55,102 @@ newPooledRetention pool ttl floorBudget weigh = do
     occupancy <- newTVarIO (CacheOccupancy 0 0)
     expiry <- newTVarIO Map.empty
     record <- newTVarIO (const pass)
-    let local = LocalStore store pool floorBudget weigh clock recency (toTimeSpec ttl) occupancy expiry record
-    registerStore pool (purgeExpired local) ((,) <$> readTVar occupancy <*> readTVar record)
-    pure RetentionOperations{roLookup = lookupStore local, roInsert = insertBounded local}
+    let storeState = LocalStore store pool floorBudget weigh clock recency (toTimeSpec ttl) occupancy expiry record
+    registerStore pool (purgeExpired storeState) ((,) <$> readTVar occupancy <*> readTVar record)
+    pure RetentionOperations{roLookup = lookupStore storeState, roInsert = insertBounded storeState}
 
 insertBounded :: (Hashable k) => LocalStore k v -> (CacheOccupancy -> IO ()) -> IO () -> k -> v -> IO ()
-insertBounded local record refused key value
+insertBounded storeState record refused key value
     | not (poolEnabled pool) = refused
     | not (poolAcceptsWeight pool weight) = refused
     | otherwise = do
         retained <- runPool pool $ \now -> do
-            writeTVar (lsRecord local) record
-            deleteStored local key
-            fits <- evictToBudget local weight
-            when fits (insertStored local now key value weight)
+            writeTVar (lsRecord storeState) record
+            deleteStored storeState key
+            fits <- evictToBudget storeState weight
+            when fits (insertStored storeState now key value weight)
             pure fits
         unless retained refused
   where
-    pool = lsPool local
-    weight = lsWeigh local value
+    pool = lsPool storeState
+    weight = lsWeigh storeState value
 
 insertStored :: (Hashable k) => LocalStore k v -> TimeSpec -> k -> v -> Int -> STM ()
-insertStored local now key value weight = do
-    stamp <- nextStamp local
-    let expires = now + lsTTL local
+insertStored storeState now key value weight = do
+    stamp <- nextStamp storeState
+    let expires = now + lsTTL storeState
         weighted = Weighted value weight stamp expires
-    Cache.insertSTM key weighted (lsStore local) Nothing
-    modifyTVar' (lsExpiry local) (Map.insertWith HashSet.union expires (HashSet.singleton key))
-    modifyTVar' (lsRecency local) (Map.insert stamp key)
-    adjustOccupancy local 1 weight
+    Cache.insertSTM key weighted (lsStore storeState) Nothing
+    modifyTVar' (lsExpiry storeState) (Map.insertWith HashSet.union expires (HashSet.singleton key))
+    modifyTVar' (lsRecency storeState) (Map.insert stamp key)
+    adjustOccupancy storeState 1 weight
 
 evictToBudget :: (Hashable k) => LocalStore k v -> Int -> STM Bool
-evictToBudget local incoming = do
-    fits <- poolFits (lsPool local) incoming
+evictToBudget storeState incoming = do
+    fits <- poolFits (lsPool storeState) incoming
     if fits
         then pure True
         else do
-            recency <- readTVar (lsRecency local)
+            recency <- readTVar (lsRecency storeState)
             case Map.lookupMin recency of
                 Nothing -> pure False
                 Just (_, key) -> do
-                    held <- Cache.lookupSTM False key (lsStore local) (fromNanoSecs 0)
-                    occupancy <- readTVar (lsOccupancy local)
+                    held <- Cache.lookupSTM False key (lsStore storeState) (fromNanoSecs 0)
+                    occupancy <- readTVar (lsOccupancy storeState)
                     case held of
                         Just weighted | aboveFloor occupancy weighted -> do
-                            deleteStored local key
-                            evictToBudget local incoming
+                            deleteStored storeState key
+                            evictToBudget storeState incoming
                         _ -> pure False
   where
     aboveFloor occupancy weighted =
-        occEntries occupancy - 1 >= max 0 (sbMinEntries (lsFloor local))
-            && occBytes occupancy - wWeight weighted >= max 0 (sbMinBytes (lsFloor local))
+        occEntries occupancy - 1 >= max 0 (sbMinEntries (lsFloor storeState))
+            && occBytes occupancy - wWeight weighted >= max 0 (sbMinBytes (lsFloor storeState))
 
 deleteStored :: (Hashable k) => LocalStore k v -> k -> STM ()
-deleteStored local key = do
-    held <- Cache.lookupSTM False key (lsStore local) (fromNanoSecs 0)
+deleteStored storeState key = do
+    held <- Cache.lookupSTM False key (lsStore storeState) (fromNanoSecs 0)
     for_ held $ \weighted -> do
-        Cache.deleteSTM key (lsStore local)
-        modifyTVar' (lsExpiry local) (Map.update dropKey (wExpires weighted))
-        modifyTVar' (lsRecency local) (Map.delete (wStamp weighted))
-        adjustOccupancy local (-1) (negate (wWeight weighted))
+        Cache.deleteSTM key (lsStore storeState)
+        modifyTVar' (lsExpiry storeState) (Map.update dropKey (wExpires weighted))
+        modifyTVar' (lsRecency storeState) (Map.delete (wStamp weighted))
+        adjustOccupancy storeState (-1) (negate (wWeight weighted))
   where
     dropKey bucket =
         let remaining = HashSet.delete key bucket
          in if HashSet.null remaining then Nothing else Just remaining
 
 adjustOccupancy :: LocalStore k v -> Int -> Int -> STM ()
-adjustOccupancy local entries bytes = do
-    modifyTVar' (lsOccupancy local) $ \occupancy ->
+adjustOccupancy storeState entries bytes = do
+    modifyTVar' (lsOccupancy storeState) $ \occupancy ->
         CacheOccupancy (occEntries occupancy + entries) (occBytes occupancy + bytes)
-    adjustPool (lsPool local) entries bytes
+    adjustPool (lsPool storeState) entries bytes
 
 purgeExpired :: (Hashable k) => LocalStore k v -> TimeSpec -> STM ()
-purgeExpired local now = do
-    expiry <- readTVar (lsExpiry local)
+purgeExpired storeState now = do
+    expiry <- readTVar (lsExpiry storeState)
     case Map.lookupMin expiry of
         Just (deadline, bucket) | deadline < now -> do
-            traverse_ (deleteStored local) bucket
-            purgeExpired local now
+            traverse_ (deleteStored storeState) bucket
+            purgeExpired storeState now
         _ -> pass
 
 nextStamp :: LocalStore k v -> STM Integer
-nextStamp local = do
-    stamp <- (+ 1) <$> readTVar (lsClock local)
-    writeTVar (lsClock local) stamp
+nextStamp storeState = do
+    stamp <- (+ 1) <$> readTVar (lsClock storeState)
+    writeTVar (lsClock storeState) stamp
     pure stamp
 
 lookupStore :: (Hashable k) => LocalStore k v -> (CacheOccupancy -> IO ()) -> Recency -> k -> IO (Maybe v)
-lookupStore local record recency key = runPool (lsPool local) $ \now -> do
-    writeTVar (lsRecord local) record
-    held <- Cache.lookupSTM False key (lsStore local) now
+lookupStore storeState record recency key = runPool (lsPool storeState) $ \now -> do
+    writeTVar (lsRecord storeState) record
+    held <- Cache.lookupSTM False key (lsStore storeState) now
     for_ held $ \weighted -> case recency of
         PreserveRecency -> pass
         RefreshRecency -> do
-            stamp <- nextStamp local
-            modifyTVar' (lsRecency local) (Map.insert stamp key . Map.delete (wStamp weighted))
-            Cache.insertSTM key weighted{wStamp = stamp} (lsStore local) Nothing
+            stamp <- nextStamp storeState
+            modifyTVar' (lsRecency storeState) (Map.insert stamp key . Map.delete (wStamp weighted))
+            Cache.insertSTM key weighted{wStamp = stamp} (lsStore storeState) Nothing
     pure (wValue <$> held)
 
 toTimeSpec :: NominalDiffTime -> TimeSpec

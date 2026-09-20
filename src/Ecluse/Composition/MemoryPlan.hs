@@ -173,7 +173,6 @@ planCacheConfig cacheSettings plan =
         { cacheTtl = csTtl cacheSettings
         , cacheMaxEntries = mpCacheMaxEntries plan
         , cacheMaxBytes = mpCacheAggregateBytes plan
-        , cacheFullBudget = StoreBudget 0 0
         , cacheVersionBudget = StoreBudget 0 0
         , cacheAssembledBudget = StoreBudget 0 0
         }

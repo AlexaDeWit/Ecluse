@@ -306,7 +306,7 @@ No family represents all deployments. The small captured identity space limits e
 | Heterogeneous fleet | Shared fraction and disjoint private names per client |
 | Zipf | Exponent, captured space, seed, and finite draw count |
 | Restart | Empty process cache and interval between client arrivals |
-| Scan | Repeated full scans with selected-version and assembled capacity as independent controls |
+| Scan | Repeated full scans with one shared selected-version and assembled byte bound |
 
 `bench-load npm/pattern-cold-install` selects one cell. Substitute `pypi` for its Simple-index trace.
 Each cell stops when its finite sequence completes or its whole-replay deadline expires.
@@ -346,8 +346,8 @@ preparation and warm-up. GC-observed live heap does not establish the maximum tr
 Timed allocation and GC deltas keep their original measurement window.
 
 Unsupported distinct-name and overlap requests fail instead of creating synthetic package aliases.
-Each report states the parameters, distinct wire bytes, accounted capacity, occupancy, retention
-refusals, retention fraction, and collapsed fraction per store. The wire-to-resident comparison
+Each report states the parameters, distinct wire bytes, and shared accounted capacity.
+Occupancy, retention refusals, retention fraction, and collapsed fraction remain per-store observations. The wire-to-resident comparison
 uses matching accounted bytes for the full store, computed through production projection and
 the historical `weighCacheEntry` helper before measurement. Version and assembled working-set bytes remain unavailable.
 The separate full-store wire-equivalent estimate excludes retained artifact keys.

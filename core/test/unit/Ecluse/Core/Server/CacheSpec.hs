@@ -97,15 +97,11 @@ configBytes ttl size bytes =
         { cacheTtl = ttl
         , cacheMaxEntries = size
         , cacheMaxBytes = bytes
-        , cacheFullBudget = budget
         , cacheVersionBudget = budget
         , cacheAssembledBudget = budget
         }
   where
     budget = StoreBudget 0 0
-
-entryWeight :: Int
-entryWeight = weighCacheEntry (entry (unscopedNpm "weight-probe") "raw")
 
 recordingResidencyPort :: IO (MetricsPort, IO (Maybe Int))
 recordingResidencyPort = do
@@ -387,7 +383,6 @@ spec = do
                         { cacheTtl = 60
                         , cacheMaxEntries = 3
                         , cacheMaxBytes = 1024 * 1024
-                        , cacheFullBudget = StoreBudget{sbMinEntries = 100, sbMinBytes = 100 * entryWeight}
                         , cacheVersionBudget = StoreBudget 0 0
                         , cacheAssembledBudget = StoreBudget 0 0
                         }
@@ -403,7 +398,7 @@ spec = do
             found `shouldBe` Nothing
             resolveAssembled c "stable" (pure "wrong") `shouldReturn` "assembled"
 
-        it "bounds eligible local residency without borrowing inactive full capacity" $ do
+        it "bounds eligible residency while full occupancy remains zero" $ do
             fullSeen <- newIORef 0
             versionSeen <- newIORef 0
             assembledSeen <- newIORef 0
@@ -413,16 +408,13 @@ spec = do
                         , mpVersionCacheResidentBytes = writeIORef versionSeen
                         , mpAssembledCacheResidentBytes = writeIORef assembledSeen
                         }
-                fullBytes = 4 * entryWeight
-                versionBytes = 64 * 1024
-                assembledBytes = 8 * 1024
+                aggregateBytes = 72 * 1024
             c <-
                 newMetadataCache
                     CacheConfig
                         { cacheTtl = 60
                         , cacheMaxEntries = 100
-                        , cacheMaxBytes = versionBytes + assembledBytes
-                        , cacheFullBudget = StoreBudget{sbMinEntries = 100, sbMinBytes = fullBytes}
+                        , cacheMaxBytes = aggregateBytes
                         , cacheVersionBudget = StoreBudget 0 0
                         , cacheAssembledBudget = StoreBudget 0 0
                         }
@@ -434,7 +426,7 @@ spec = do
                 pass
             readIORef fullSeen `shouldReturn` 0
             total <- sum <$> traverse readIORef [versionSeen, assembledSeen]
-            total `shouldSatisfy` (<= versionBytes + assembledBytes)
+            total `shouldSatisfy` (<= aggregateBytes)
 
     describe "cachedVersion -- read recency" $
         it "a cachedVersion read bumps the version entry's recency, so a re-read entry survives eviction (LRU, not FIFO)" $ do
@@ -444,7 +436,6 @@ spec = do
                         { cacheTtl = 60
                         , cacheMaxEntries = 2
                         , cacheMaxBytes = 1024 * 1024
-                        , cacheFullBudget = StoreBudget{sbMinEntries = 100, sbMinBytes = 1024 * 1024}
                         , cacheVersionBudget = StoreBudget 0 0
                         , cacheAssembledBudget = StoreBudget 0 0
                         }
