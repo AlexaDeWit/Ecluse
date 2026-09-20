@@ -407,26 +407,78 @@ expiry observation.
 
 ## Memory plan and runtime sizing
 
-Every byte-valued bound is a named tenant of the effective heap ceiling, not an independent
-multiplier. Seven tenants share the ceiling: the runtime reserve, the fixed enqueue buffer, the
-cache aggregate, the materialisation aggregate, the publish aggregate, the in-memory queue depth,
-and the mirror-artifact envelope. Each one boot-logs as a `memory plan:` line. The per-response
-wire cap is carved from the materialisation aggregate rather than being a tenant of its own. A pod
-too small for the tenants' floors **degrades gracefully instead of refusing**: Écluse sheds the
-mirror-artifact cap first, then the cache, each to zero if needed, then serves uncached. Each step
-is a loud warning, and it always boots. Only an explicit override that breaks the plan refuses
-(exit `2`).
-The model is in
-[Runtime sizing](https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture/configuration.md#runtime-sizing-cores-and-heap-ceiling).
+Check the effective plan in the boot log or `ecluse check-config` before changing pod resources.
+Both use the same plan renderer. The checker predicts the runtime posture, while boot measures
+what the runtime applied, so compare them under the same container limits and configuration.
+The [configuration reference](@/docs/configuration.md#the-configuration-reference) owns the keys,
+defaults and override rules.
 
-Cores and the heap ceiling resolve at boot from config, else the cgroup, else a capped fallback,
-and the boot log records each decision with its provenance. The whole-cores guidance, what to set
-on a pod with no CPU limit, and the per-pod memory arithmetic are in the
-[appendix](@/docs/operations.md#appendix-runtime-sizing-arithmetic).
+The controls serve different purposes:
 
-A cold install against an empty cache hits the proxy with dozens of heavy requests at once, which
-causes latency spikes or `503` backpressure. So run one install after starting Écluse and before
-production traffic. Once warm, request coalescing absorbs spikes.
+| Control | What it decides |
+|---|---|
+| Metadata ingest ceiling | The maximum decompressed source body accepted from one metadata response |
+| Structural limits | Protocol-specific version and file counts, and retained structure depth |
+| CPU admission | How much metadata work runs concurrently |
+| Materialisation admission | How much estimated transient metadata work runs concurrently |
+| Cache budget | How much eligible metadata the selected provider retains locally |
+| Runtime heap ceiling | The heap limit applied to the process |
+
+The default data ceilings leave growth room for large real-world metadata while keeping input work bounded.
+They express policy headroom, not a measured maximum that fits every pod. A larger ingest ceiling
+does not automatically enlarge the cache or reduce CPU concurrency.
+Materialisation admission uses static allowances for cold selected reads, captured local selected
+results, full origins and listing output. A local retained result receives the smaller allowance
+only while that request holds the result. Deferred fetches and external-provider reads receive the
+cold allowance. A listing charges each permitted configured origin plus its output before fetching,
+even when it later finds an assembled hit or returns `304`. An estimate above the materialisation
+capacity charges that entire capacity, so one request can still run alone. This does not prove
+that its actual memory use fits.
+
+Either admission gate can return `503` with `Retry-After: 1` when its waiting room fills or its wait
+expires. Treat these responses as backpressure and review concurrency alongside process memory.
+
+These allowances estimate slightly-worse-than-average work. They are not a worst-case heap bound.
+They use no package-size history or expiring estimates. Streaming skips unsupported fields, but
+supported fields and useful listing results still occupy memory. Keep process headroom and edge
+rate limits, then measure your package mix under concurrent traffic.
+
+The memory plan still accounts for runtime reserve, enqueue buffer, cache retention, materialisation,
+publish bodies, in-memory queue and mirror-artifact work. Their accounted sum does not measure
+all live process allocations. Small automatic plans shed mirror-artifact capacity before cache
+retention. Read each warning for the resulting loss of capacity. An explicit override can still
+fail plan validation. The ingest ceiling is independent of those tenant allocations.
+
+Cores and the heap ceiling resolve at boot from config, else the cgroup, else a capped fallback.
+The log records each decision and its source. The
+[appendix](@/docs/operations.md#appendix-runtime-sizing-arithmetic) explains the resource arithmetic.
+
+A warm selected-version or assembled response can avoid repeated work, and simultaneous eligible
+reads can share an active fetch. The local provider never retains full metadata. A warm-up install
+therefore does not promise that later full listings avoid origin reads. Test cold listings and
+selected reads as well as retained hits before admitting production traffic.
+
+### Upgrade existing limits and admission pins
+
+Review your config document and deployment environment together. Environment variables override
+the document, so removing a document pin alone does not restore the automatic value.
+
+| Existing setting | Upgrade consequence | Action |
+|---|---|---|
+| `limits.maxResponseBytes: 12582912` | The old 12 MiB pin still refuses larger metadata after the upgrade | Remove the pin to adopt the shipped ingest ceiling, or retain it as an intentional policy |
+| A larger response pin used as a workaround | The declared ceiling still wins, including above the shipped default | Compare the effective ceiling and warning with your source sizes and process headroom |
+| Explicit `limits.maxVersionCount` or `limits.maxArtifactCount` pins | The existing count policy still applies | Remove old pins to adopt the larger defaults, or keep the intended restriction |
+| An explicit `runtime.serveMaxInFlight` pin | The declared positive concurrency still wins | Review it against the separate materialisation capacity and concurrent workload |
+| No explicit response or CPU pin | The new automatic controls apply | Compare boot output with `check-config` under the deployment's actual resources |
+
+Response and CPU pins are not silently clamped. Read the override warnings before rollout.
+The `memory plan: metadata ingest ceiling` line names the effective body limit.
+The `memory plan: material estimate budget` and `runtime: serve admission` lines name the two
+admission controls. The `metadata admission estimates` line reports each static workload allowance.
+A smaller material estimate budget does not reduce the body ceiling or CPU pin.
+Raising the ingest ceiling admits more input, not more memory. A formerly refused package can now
+reach parsing, policy and assembly work, so repeat your install and latency checks without widening
+performance budgets to hide a regression.
 
 ## Revoking a mirrored version (internal yank)
 
@@ -564,19 +616,20 @@ to whole cores, so a `500m` request becomes 1.
 the processor count when that is lower. Raise `ECLUSE_RUNTIME__CORES_CEILING`, or set
 `ECLUSE_RUNTIME__CORES`, to use a bigger box fully.
 
-**Size a proxy pod's memory from the RTS numbers.** The binary ships `-A64m -n4m`, a 64 MiB
-per-core allocation area in 4 MiB chunks, which trades bounded extra memory for far fewer GCs
-under load. Budget roughly `cores x 64 MiB` of nursery, plus the live heap, which the metadata
-cache dominates, and add up to one live-heap of copying headroom during a major GC. That
-arithmetic gives these worked shapes:
+**Size a proxy pod from measured process usage as well as the RTS numbers.** The binary ships
+`-A64m -n4m`, a 64 MiB per-core allocation area in 4 MiB chunks. Budget the nursery, live heap,
+copying space during major collection and allocations outside the managed heap.
+The heap ceiling alone does not describe the container's peak memory.
 
-| Pod shape | Setting | Note |
-|---|---|---|
-| 2 CPU / 512 MiB | none | Runs as-is on the shipped defaults. |
-| 2 CPU / 256 MiB | `GHCRTS="-A16m"` | The halved memory also needs the smaller allocation area. |
-| 4 CPU / ~750 MiB | none | What four cores want on the default `-A64m`. |
-| 4 CPU / 512 MiB | `-A32m` | The smaller per-core area fits four cores in less memory. |
+These examples show nursery arithmetic, not a minimum supported pod size or a workload guarantee:
 
-Taller pods amortise the cache and coalescing better, so prefer 4-CPU-ish shapes. Tune the
-allocation area with `GHCRTS` and read the effective value back from the boot log. Pilot runs a
-different workload, so tune its allocation area separately.
+| Pod resources | Allocation area | Nursery arithmetic | What remains to verify |
+|---|---|---|---|
+| 2 CPU / 512 MiB | Default `-A64m` | 128 MiB | Effective controls, peak process memory and concurrent listings |
+| 2 CPU / 256 MiB | `GHCRTS="-A16m"` | 32 MiB | Effective controls, reduced throughput and any degradation warnings |
+| 4 CPU / 750 MiB | Default `-A64m` | 256 MiB | Effective controls and collection headroom under the package mix |
+| 4 CPU / 512 MiB | `GHCRTS="-A32m"` | 128 MiB | Effective controls, collection frequency and peak process memory |
+
+Read the effective allocation area and admission controls from the boot log after each change.
+Compare cold reads, retained selected reads and listings under the intended concurrency.
+Pilot runs a different workload, so measure its process memory and allocation area separately.
