@@ -27,8 +27,8 @@ import Data.Time (getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Client.TLS (tlsManagerSettings)
-import Network.HTTP.Types (Header, hContentType, mkStatus, status401, status404, status405, statusCode)
-import Network.Wai (Application, pathInfo, rawQueryString, requestHeaders, requestMethod, responseFile, responseLBS)
+import Network.HTTP.Types (Header, hContentLength, hContentType, mkStatus, status200, status401, status404, status405, statusCode)
+import Network.Wai (Application, Middleware, pathInfo, rawQueryString, requestHeaders, requestMethod, responseFile, responseHeaders, responseLBS, responseStatus)
 import System.Directory (doesFileExist, renameFile)
 import System.FilePath ((</>))
 import System.IO (hClose, openBinaryTempFile)
@@ -93,7 +93,8 @@ graphRegistry capture root latency =
 graphRegistryWithFetch :: Maybe (Text -> IO (Capture, ByteString)) -> FilePath -> Int -> IO Application
 graphRegistryWithFetch fetch root latency = do
     locks <- newMVar mempty
-    pure $ \request respond -> do
+    counters <- newIORef Map.empty
+    pure $ countRegistry counters $ \request respond -> do
         let key = T.intercalate "/" (pathInfo request)
             sensitive = any (\(name, _) -> name `elem` ["authorization", "proxy-authorization", "cookie"]) (requestHeaders request)
             refusal
@@ -122,11 +123,27 @@ serveCapture root key (provenance, bytes) request respond = do
     let status = mkStatus (capStatus provenance) "frozen"
         headers = [(hContentType, encodeUtf8 (capContentType provenance))]
     if "/-/" `T.isInfixOf` key
-        then respond (responseFile status headers (capturePath root key <> ".body") Nothing)
+        then respond (responseFile status ((hContentLength, encodeUtf8 (show (capBytes provenance) :: Text)) : headers) (capturePath root key <> ".body") Nothing)
         else do
             let rewritten = rebaseAuthority "https://registry.npmjs.org" (selfBaseUrl request) (LBS.fromStrict bytes)
             recordWeight root (selfBaseUrl request) key rewritten
-            respond (responseLBS status headers rewritten)
+            respond (responseLBS status ((hContentLength, encodeUtf8 (show (LBS.length rewritten) :: Text)) : headers) rewritten)
+
+countRegistry :: IORef (Map Text Integer) -> Middleware
+countRegistry counters application request respond
+    | pathInfo request == ["_bench", "counters"] = do
+        values <- readIORef counters
+        respond (responseLBS status200 [(hContentType, "application/json")] (encode values))
+    | otherwise = application request $ \response -> do
+        let key = T.intercalate "/" (pathInfo request)
+            kind
+                | "private-miss/" `T.isPrefixOf` key = "private"
+                | "/-/" `T.isInfixOf` key = "artifact"
+                | otherwise = "metadata"
+            status = kind <> "." <> show (statusCode (responseStatus response))
+            bytes = fromMaybe 0 (List.lookup hContentLength (responseHeaders response) >>= readMaybe . toString . (decodeUtf8 :: ByteString -> Text))
+        atomicModifyIORef' counters (\values -> (Map.insertWith (+) status 1 (Map.insertWith (+) (kind <> ".bodyBytes") bytes values), ()))
+        respond response
 
 fetchCapture :: HTTP.Manager -> FilePath -> Text -> IO (Capture, ByteString)
 fetchCapture manager root key = do

@@ -502,6 +502,8 @@
           (hlib.justStaticExecutables toolHpkgs.ghc-prof-flamegraph)
           pkgs.flamegraph
           pkgs.oha
+          pkgs.valkey
+          pkgs.time
         ];
 
         # agent-lsp drives HLS through MCP. mcp-language-server v0.1.1

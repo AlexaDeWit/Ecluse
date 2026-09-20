@@ -942,6 +942,8 @@ test-suite ecluse-unit
     Ecluse.BenchLoad.BreakpointsSpec
     Ecluse.BenchLoad.GraphRegistry
     Ecluse.BenchLoad.GraphRegistrySpec
+    Ecluse.BenchLoad.Valkey
+    Ecluse.BenchLoad.ValkeySpec
     Ecluse.BenchReportSpec
     Ecluse.BootSpec
     Ecluse.CLISpec
@@ -1021,6 +1023,7 @@ test-suite ecluse-unit
     , http-client       ^>=0.7
     , insert-ordered-containers  ^>=0.2
     , http-client-tls   >=0.3.6 && <0.5
+    , network           ^>=3.2
     , openapi3          ^>=3.2
     , http-media        ^>=0.8
     , http-types        ^>=0.12
@@ -1389,6 +1392,7 @@ executable bench-load
     Ecluse.BenchLoad.Graph
     Ecluse.BenchLoad.GraphRegistry
     Ecluse.BenchLoad.Harness
+    Ecluse.BenchLoad.Valkey
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.Oha
     Ecluse.BenchLoad.PyPI
@@ -1414,6 +1418,7 @@ executable bench-load
     , http-types       ^>=0.12
     , iproute          ^>=1.7
     , katip            ^>=0.8.8
+    , network          ^>=3.2
     , text             ^>=2.1
     , time             ^>=1.12
     , typed-process    ^>=0.2.13

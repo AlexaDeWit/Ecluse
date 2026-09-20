@@ -79,6 +79,7 @@ countingFetch calls value = atomicModifyIORef' calls (\n -> (n + 1, ())) $> valu
 
 spec :: Spec
 spec = do
+    observationSpec
     describe "resolveSingleFlight -- collapse" $ do
         it "collapses concurrent resolutions of one key to a single fetch" $ do
             sf <- roomyStore
@@ -595,3 +596,51 @@ recordedOccupancy seen = fmap occupancyPair <$> readIORef seen
 
 occupancyPair :: CacheOccupancy -> (Int, Int)
 occupancyPair occ = (occEntries occ, occBytes occ)
+
+observationSpec :: Spec
+observationSpec = describe "optional cache events" $ do
+    it "distinguishes useful probes, resolved hits, byte eviction, and oversized refusal" $ do
+        events <- newIORef []
+        let emit event = modifyIORef' events (event :)
+            weight value = if value == "large" then 250 else 100
+        sf <- Store.newSingleFlightObserved (Just emit) 60 10 150 weight
+        _ <- resolveOk sf "a" (pure "small")
+        lookupStore sf "a" `shouldReturn` Just "small"
+        _ <- resolveOk sf "a" (pure "unused")
+        _ <- resolveOk sf "b" (pure "small")
+        _ <- resolveOk sf "large" (pure "large")
+        observed <- reverse <$> readIORef events
+        [(key, size) | Store.Inserted key size _ _ <- observed] `shouldBe` [("a", 100), ("b", 100)]
+        [(key, kind) | Store.Reused key kind _ _ <- observed] `shouldBe` [("a", Store.ProbeHit), ("a", Store.ResolvedHit)]
+        [(key, cause, size) | Store.Removed key cause size _ <- observed] `shouldBe` [("a", Store.Capacity True False, 100)]
+        [(key, size) | Store.Rejected key size <- observed] `shouldBe` [("large", 250)]
+        let inserted = [expiry | Store.Inserted "a" _ _ expiry <- observed]
+        ordNub [expiry | Store.Reused "a" _ _ expiry <- observed] `shouldBe` inserted
+    it "reports count pressure independently from byte pressure" $ do
+        events <- newIORef []
+        sf <- Store.newSingleFlightObserved (Just (\event -> modifyIORef' events (event :))) 60 1 1000 (const flatWeight)
+        _ <- resolveOk sf "a" (pure "value")
+        _ <- resolveOk sf "b" (pure "value")
+        observed <- readIORef events
+        [cause | Store.Removed _ cause _ _ <- observed] `shouldBe` [Store.Capacity False True]
+    it "reports an expired generation when lookup removes it" $ do
+        events <- newIORef []
+        sf <- Store.newSingleFlightObserved (Just (\event -> modifyIORef' events (event :))) 0 10 1000 (const flatWeight)
+        _ <- resolveOk sf "expired" (pure "value")
+        lookupStore sf "expired" `shouldReturn` Nothing
+        observed <- readIORef events
+        [(key, cause) | Store.Removed key cause _ _ <- observed] `shouldBe` [("expired", Store.Expiry)]
+    it "releases the mutation lock when an insertion observer is cancelled" $ do
+        result <- timeout 5_000_000 $ do
+            entered <- newEmptyMVar
+            release <- newEmptyMVar
+            let emit event = case event of
+                    Store.Inserted "blocked" _ _ _ -> putMVar entered () >> takeMVar release
+                    _ -> pass
+            sf <- Store.newSingleFlightObserved (Just emit) 60 10 1000 (const flatWeight)
+            withAsync (resolveOk sf "blocked" (pure "value")) $ \leader -> do
+                takeMVar entered
+                cancel leader
+                lookupStore sf "blocked" `shouldReturn` Just "value"
+                resolveOk sf "next" (pure "next") `shouldReturn` "next"
+        result `shouldBe` Just ()

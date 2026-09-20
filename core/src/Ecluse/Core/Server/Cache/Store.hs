@@ -9,6 +9,10 @@ module Ecluse.Core.Server.Cache.Store (
     -- * The store
     SingleFlight,
     newSingleFlight,
+    newSingleFlightObserved,
+    StoreEvent (..),
+    ReuseKind (..),
+    RemovalCause (..),
 
     -- * Resolution
     resolveSingleFlight,
@@ -26,7 +30,7 @@ import Data.Cache qualified as Cache
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Time (NominalDiffTime)
-import System.Clock (Clock (Monotonic), TimeSpec, fromNanoSecs, getTime)
+import System.Clock (Clock (Monotonic), TimeSpec, fromNanoSecs, getTime, toNanoSecs)
 import UnliftIO.Exception (SomeAsyncException, mask, throwIO)
 import UnliftIO.MVar (withMVar)
 
@@ -59,7 +63,25 @@ data SingleFlight e k v = SingleFlight
     -- ^ Exactly one indexed weight per retained key. Empty deadline buckets are removed.
     , sfInsertLock :: MVar ()
     , sfInFlight :: TVar (Map k (TMVar (FlightOutcome e v)))
+    , sfObserver :: Maybe (StoreEvent k -> IO ())
     }
+
+-- | Keys and byte weights, never values. Times are monotonic nanoseconds, expiry identifies a generation.
+data StoreEvent k
+    = Inserted k Int Integer Integer
+    | Reused k ReuseKind Int Integer
+    | Removed k RemovalCause Int Integer
+    | Rejected k Int
+    | Joined k
+    deriving stock (Eq, Show, Functor)
+
+-- | Expiry or pressure from bytes followed by entry count. Both pressures can apply.
+data RemovalCause = Expiry | Capacity Bool Bool
+    deriving stock (Eq, Show)
+
+-- | A resolution refreshes recency. A full-store probe does not.
+data ReuseKind = ResolvedHit | ProbeHit
+    deriving stock (Eq, Show)
 
 data FlightOutcome e v
     = FlightValue v
@@ -68,7 +90,11 @@ data FlightOutcome e v
 
 -- | Build a store with positive bounds. A weight of 'maxBound' means uncacheable.
 newSingleFlight :: NominalDiffTime -> Int -> Int -> (v -> Int) -> IO (SingleFlight e k v)
-newSingleFlight ttl maxEntries maxBytes weigh = do
+newSingleFlight = newSingleFlightObserved Nothing
+
+-- | Mutation observers hold the mutation lock and must not re-enter the store.
+newSingleFlightObserved :: Maybe (StoreEvent k -> IO ()) -> NominalDiffTime -> Int -> Int -> (v -> Int) -> IO (SingleFlight e k v)
+newSingleFlightObserved observer ttl maxEntries maxBytes weigh = do
     -- Expiry belongs to this wrapper so deletion and accounting share one transaction.
     store <- Cache.newCache Nothing
     clock <- newIORef 0
@@ -88,6 +114,7 @@ newSingleFlight ttl maxEntries maxBytes weigh = do
             , sfExpiry = expiry
             , sfInsertLock = insertLock
             , sfInFlight = inFlight
+            , sfObserver = observer
             }
 
 {- | Share concurrent fetches and release waiters on failure or cancellation.
@@ -113,9 +140,11 @@ resolveSingleFlight recordRequest recordOccupancy recordRefused sf key fetch = m
                 Hit weighted -> do
                     reportRequest Metric.Hit
                     touch sf weighted
+                    observeEvent sf (Reused key ResolvedHit (wWeight weighted) (toNanoSecs (wExpires weighted)))
                     pure (Right (wValue weighted))
                 Follow marker -> do
                     reportRequest Metric.Collapsed
+                    observeEvent sf (Joined key)
                     outcome <- restore (atomically (readTMVar marker))
                     case outcome of
                         FlightValue fetched -> pure (Right fetched)
@@ -142,10 +171,10 @@ resolveSingleFlight recordRequest recordOccupancy recordRefused sf key fetch = m
 
 insertBounded :: (Hashable k) => (CacheOccupancy -> IO ()) -> IO () -> SingleFlight e k v -> k -> v -> IO ()
 insertBounded recordOccupancy recordRefused sf key value
-    | weight == maxBound || weight > sfMaxBytes sf = recordRefused
+    | weight == maxBound || weight > sfMaxBytes sf = recordRefused >> observeEvent sf (Rejected key weight)
     | otherwise = withMVar (sfInsertLock sf) $ \() -> do
         nowT <- getTime Monotonic
-        observeOccupancy recordOccupancy sf $ atomically $ do
+        observeExpiry sf nowT $ observeOccupancy recordOccupancy sf $ atomically $ do
             purgeExpired sf nowT
             deleteStored sf key
         evictToBudget recordOccupancy sf weight
@@ -159,6 +188,7 @@ insertBounded recordOccupancy recordRefused sf key value
             modifyTVar' (sfExpiry sf) (Map.insertWith HashMap.union expires (HashMap.singleton key weight))
             modifyTVar' (sfOccupancy sf) $ \occ ->
                 CacheOccupancy (occEntries occ + 1) (occBytes occ + weight)
+        observeEvent sf (Inserted key weight (toNanoSecs insertedAt) (toNanoSecs expires))
   where
     weight = sfWeigh sf value
 
@@ -178,7 +208,7 @@ evictToBudget recordOccupancy sf incoming = do
 
     go [] = pass
     go ((_, k) : rest) = do
-        removed <- observeOccupancy recordOccupancy sf $ atomically $ do
+        removed <- observeEviction sf incoming k $ observeOccupancy recordOccupancy sf $ atomically $ do
             occ <- readTVar (sfOccupancy sf)
             if fits occ
                 then pure False
@@ -236,14 +266,57 @@ lookupWeighted :: (Hashable k) => (CacheOccupancy -> IO ()) -> SingleFlight e k 
 lookupWeighted recordOccupancy sf key = do
     nowT <- getTime Monotonic
     held <- atomically (Cache.lookupSTM False key (sfStore sf) nowT)
-    case held of
+    result <- case held of
         Just weighted | wExpires weighted < nowT -> lookupAfterExpiry recordOccupancy sf key
         _ -> pure held
+    for_ result (\weighted -> observeEvent sf (Reused key ProbeHit (wWeight weighted) (toNanoSecs (wExpires weighted))))
+    pure result
 
 lookupAfterExpiry :: (Hashable k) => (CacheOccupancy -> IO ()) -> SingleFlight e k v -> k -> IO (Maybe (Weighted v))
 lookupAfterExpiry recordOccupancy sf key = withMVar (sfInsertLock sf) $ \() -> do
     nowT <- getTime Monotonic
-    observeOccupancy recordOccupancy sf (atomically (lookupWeightedSTM sf key nowT))
+    observeLookupExpiry sf key nowT $ observeOccupancy recordOccupancy sf (atomically (lookupWeightedSTM sf key nowT))
+
+observeEvent :: SingleFlight e k v -> StoreEvent k -> IO ()
+observeEvent sf event = case sfObserver sf of
+    Nothing -> pass
+    Just emit -> emit event
+{-# INLINE observeEvent #-}
+
+observeExpiry :: SingleFlight e k v -> TimeSpec -> IO a -> IO a
+observeExpiry sf nowT action = case sfObserver sf of
+    Nothing -> action
+    Just emit -> do
+        expiry <- readTVarIO (sfExpiry sf)
+        result <- action
+        for_ (Map.toList (Map.takeWhileAntitone (< nowT) expiry)) $ \(deadline, bucket) ->
+            for_ (HashMap.toList bucket) (\(key, weight) -> emit (Removed key Expiry weight (toNanoSecs deadline)))
+        pure result
+{-# INLINE observeExpiry #-}
+
+observeEviction :: (Hashable k) => SingleFlight e k v -> Int -> k -> IO Bool -> IO Bool
+observeEviction sf incoming key action = case sfObserver sf of
+    Nothing -> action
+    Just emit -> do
+        occupancy <- readTVarIO (sfOccupancy sf)
+        held <- atomically (Cache.lookupSTM False key (sfStore sf) (fromNanoSecs 0))
+        removed <- action
+        when removed $ for_ held $ \weighted ->
+            emit (Removed key (Capacity (occBytes occupancy > sfMaxBytes sf - incoming) (occEntries occupancy >= sfMaxEntries sf)) (wWeight weighted) (toNanoSecs (wExpires weighted)))
+        pure removed
+{-# INLINE observeEviction #-}
+
+observeLookupExpiry :: (Hashable k) => SingleFlight e k v -> k -> TimeSpec -> IO a -> IO a
+observeLookupExpiry sf key nowT action = case sfObserver sf of
+    Nothing -> action
+    Just emit -> do
+        held <- atomically (Cache.lookupSTM False key (sfStore sf) (fromNanoSecs 0))
+        result <- action
+        for_ held $ \weighted ->
+            when (wExpires weighted < nowT) $
+                emit (Removed key Expiry (wWeight weighted) (toNanoSecs (wExpires weighted)))
+        pure result
+{-# INLINE observeLookupExpiry #-}
 
 -- All mutations and their absolute gauge updates hold sfInsertLock, so samples cannot reorder.
 observeOccupancy :: (CacheOccupancy -> IO ()) -> SingleFlight e k v -> IO a -> IO a

@@ -37,7 +37,8 @@ import Ecluse.Composition.Sizing (connectionPoolSettings, openFileSoftLimit, res
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Queue.Memory (defaultMemoryQueueConfig, newBoundedInMemoryQueue)
 import Ecluse.Core.Server.Admission (newServeAdmission)
-import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..), newMetadataCache)
+import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..), newMetadataCacheObserved)
+import Ecluse.Core.Server.Cache.Store (StoreEvent)
 import Ecluse.Core.Server.Context (PackumentDeps)
 import Ecluse.Core.Worker (newWorkerHeartbeat)
 import Ecluse.Runtime.Env (newEnvWithAdmission)
@@ -60,11 +61,11 @@ withProxyConfigured ecosystem depsFor knobs cacheConfig telemetry privateApp pub
     testWithApplication (pure privateApp) $ \privatePort ->
         testWithApplication (pure publicApp) $ \publicPort -> do
             deps <- depsFor privatePort publicPort
-            withExternalProxy ecosystem (const deps) knobs cacheConfig telemetry id (body . mkMix)
+            withExternalProxy ecosystem (const deps) knobs cacheConfig telemetry Nothing id (body . mkMix)
 
 -- | Keep the proxy in its own process when the installer and frozen origin run elsewhere.
-withExternalProxy :: Ecosystem -> (Int -> PackumentDeps) -> LoadKnobs -> CacheConfig -> Telemetry -> Middleware -> (Int -> IO a) -> IO a
-withExternalProxy ecosystem depsFor knobs cacheConfig telemetry observe body = do
+withExternalProxy :: Ecosystem -> (Int -> PackumentDeps) -> LoadKnobs -> CacheConfig -> Telemetry -> Maybe (StoreEvent Text -> IO ()) -> Middleware -> (Int -> IO a) -> IO a
+withExternalProxy ecosystem depsFor knobs cacheConfig telemetry cacheObserver observe body = do
     capabilities <- getNumCapabilities
     fdLimit <- openFileSoftLimit
     let admissionCapacity = fst (resolveServeAdmission (lkServeMaxInFlight knobs) capabilities)
@@ -73,7 +74,7 @@ withExternalProxy ecosystem depsFor knobs cacheConfig telemetry observe body = d
     publicManager <- newManager (connectionPoolSettings publicConnections defaultManagerSettings)
     privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
     admission <- newServeAdmission admissionCapacity
-    cache <- newMetadataCache cacheConfig
+    cache <- newMetadataCacheObserved cacheConfig cacheObserver
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
     queue <-

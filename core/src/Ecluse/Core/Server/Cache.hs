@@ -13,6 +13,7 @@ module Ecluse.Core.Server.Cache (
     -- * The cache handle
     MetadataCache,
     newMetadataCache,
+    newMetadataCacheObserved,
 
     -- * Cache entries
     Source (..),
@@ -50,9 +51,11 @@ import Ecluse.Core.Registry.Metadata (ContentDigest, MetadataError, VersionRead)
 import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
     SingleFlight,
+    StoreEvent,
     lookupStore,
     lookupStoreTouching,
     newSingleFlight,
+    newSingleFlightObserved,
     resolveSingleFlight,
  )
 import Ecluse.Core.Server.Cache.VersionWeight (weighEntryKey, weighVersion)
@@ -150,12 +153,17 @@ data MetadataCache = MetadataCache
 
 -- | Build each store with its own bounds and the shared TTL.
 newMetadataCache :: CacheConfig -> IO MetadataCache
-newMetadataCache cfg =
+newMetadataCache cfg = newMetadataCacheObserved cfg Nothing
+
+-- | Observe public full-store keys and weights without retaining values in the observer.
+newMetadataCacheObserved :: CacheConfig -> Maybe (StoreEvent Text -> IO ()) -> IO MetadataCache
+newMetadataCacheObserved cfg observer =
     MetadataCache
-        <$> newStore (cacheFullBudget cfg) weighCacheEntry
+        <$> newSingleFlightObserved (fmap (\emit event -> emit (fmap (\(CacheKey key) -> key) event)) observer) (cacheTtl cfg) (sbMaxEntries full) (sbMaxBytes full) weighCacheEntry
         <*> newStore (cacheVersionBudget cfg) weighVersion
         <*> newStore (cacheAssembledBudget cfg) weighAssembled
   where
+    full = cacheFullBudget cfg
     newStore :: StoreBudget -> (v -> Int) -> IO (SingleFlight e k v)
     newStore budget = newSingleFlight (cacheTtl cfg) (sbMaxEntries budget) (sbMaxBytes budget)
 

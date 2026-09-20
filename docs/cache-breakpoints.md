@@ -4,10 +4,9 @@ This experiment investigates cache capacity using real pnpm dependency resolutio
 It changes no production retention or admission policy.
 Runtime measurements are informational.
 
-The initial harness captures and freezes registry responses, runs isolated installers,
-and models full-store capacity over their observed HTTP intervals.
-The Valkey candidate, repeated comparison report, and final recommendation remain pending.
-No result from this initial harness establishes a production policy or managed-service benefit.
+The harness captures registry responses, runs isolated installers, and compares retention variants.
+It provides a raw-byte Valkey candidate, optional cache-event observation, and interval models.
+The research findings distinguish runtime measurements from models and unresolved production choices.
 
 ## Inputs and execution
 
@@ -48,6 +47,7 @@ validator generation, and artifact streaming.
 Its configured private origin returns 404 per request.
 
 The origin process runs separately from the proxy and installer.
+The experiment pins its origin port and rejects a changed port before another cell starts.
 HTTP observations include redacted headers, path, timing, status, and capture weight.
 Clients receive an empty environment apart from the pinned tool path and empty npm configuration.
 The capture registry refuses authentication and cookie headers.
@@ -70,6 +70,47 @@ A zero full budget uses the existing store's minimum one-byte capacity.
 It retains neither the full raw document nor its all-version typed view.
 It keeps full single-flight, selected-version retention, and assembled-response retention.
 The other stores keep their existing defaults.
+The refusal path still weighs and re-encodes full candidates.
+Its cost is not the cost of a future backend that avoids that work.
+
+## External retention and memory limits
+
+Set `GRAPH_VALKEY_PORT=18103` and use full budget zero for the external candidate.
+Each cell starts a fresh Valkey process from the pinned Nix package set.
+`GRAPH_EXTERNAL_BYTES` sets its `maxmemory`, default 268435456, with `allkeys-lru` eviction.
+The cell verifies the started process owns the port and uses a fresh key namespace.
+The client keeps at most 16 pooled connections and no local full values.
+Its 100000-microsecond command deadline includes pool waiting. `GRAPH_VALKEY_TIMEOUT_US` overrides it.
+Writes finish synchronously. GET failure or timeout falls back to the frozen origin.
+SET failure preserves the origin result. `GRAPH_VALKEY_MODE=paused` exercises the timeout path.
+`unavailable` leaves the cache port closed and exercises connection failure.
+
+Raw cache hits repeat production body bounds, decoding, projection, name checks,
+artifact-location checks, source digest calculation, and rule evaluation.
+Only the configured anonymous public source uses Valkey. Private or credential-bearing reads bypass it.
+Aggregate counters distinguish actual origin requests from external hits, misses, writes, and fallback.
+Valkey INFO snapshots report server memory, operation counts, eviction, and network totals separately.
+
+Every cell runs the proxy in its own user systemd service.
+`GRAPH_MEMORY_MAX` sets its memory limit, default 2G, with swap disabled.
+The runner saves applied properties, cgroup memory figures, and failures.
+The installer, origin, and Valkey remain outside that cgroup.
+The proxy uses two GHC capabilities and 20 admission slots by default.
+`GRAPH_PROXY_SLOTS` selects another explicit slot count.
+This is the harness operating point, not the shipping 512 MiB memory plan.
+
+Main runtime cells use `GRAPH_TRACE_HTTP=0 GRAPH_CACHE_EVENTS=0`.
+This disables per-request file writes in the proxy, origin, and Valkey client.
+Cheap aggregate counters remain enabled, and each installer saves its lockfile and outcome.
+Diagnostic cells enable both traces to record actual full-store insertion generations,
+reuses, removals, refused weights, and collapse attempts.
+File writes delay responses and hold the insertion lock during mutation events.
+Diagnostic timings therefore describe a perturbed execution and do not supply the main runtime comparison.
+
+The frozen origin serves identity-encoded bodies. Captured size means decompressed JSON size.
+Shipping upstream requests can negotiate gzip, while this Valkey candidate transfers raw values.
+Local results do not establish a managed-service network benefit, compression ratio, TLS cost,
+availability, shared contention, or price. Those remain explicit sensitivities or unresolved limits.
 
 `model.json` sweeps working bytes divided by capacity at
 0.25, 0.5, 0.9, 1, 1.1, 2, 4, and 8.
@@ -100,8 +141,7 @@ The completeness report counts excluded unsuccessful requests.
 - Report compact representation as an executable candidate or a quantified unresolved dependency.
 - Separate observed local Valkey costs from RTT, bandwidth, and price projections.
 
-The initial proxy report includes RTS allocation, GC, peak live heap, post-GC memory,
+The proxy report includes RTS allocation, GC, peak live heap, post-GC memory,
 `/proc/self/status`, and existing cache counters.
 These values alone do not establish memory fit.
-The recorder adds file and observation overhead to the measured proxy.
-That overhead must remain consistent or receive a separate uninstrumented control.
+Report diagnostic traces separately from the uninstrumented runtime cells.

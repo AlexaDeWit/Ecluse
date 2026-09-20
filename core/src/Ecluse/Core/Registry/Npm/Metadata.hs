@@ -10,6 +10,7 @@ typed projection with the selected version object, which the mirror write republ
 module Ecluse.Core.Registry.Npm.Metadata (
     -- * Per-request read handle
     newNpmMetadataReads,
+    newNpmMetadataReadsWithFetch,
 
     -- * npm full-manifest fetch
     fetchNpmManifest,
@@ -80,18 +81,33 @@ newNpmMetadataReads ::
     (PackageName -> IO ()) ->
     OriginFor posture ->
     MetadataReads posture
-newNpmMetadataReads tracing metrics logFailure logInvalid logFetch =
-    newMetadataReads metrics logFailure logInvalid logFetch (fetchNpmManifest tracing) (fetchNpmVersion tracing) selectNpmVersionDoc
+newNpmMetadataReads = newNpmMetadataReadsWithFetch fetchNpmPackument
+
+-- | Substitute a bounded raw fetch while retaining npm projection and source-location checks.
+newNpmMetadataReadsWithFetch ::
+    (OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)) ->
+    TracingPort ->
+    MetricsPort ->
+    (PackageName -> MetadataError -> IO ()) ->
+    (PackageName -> [InvalidEntry] -> IO ()) ->
+    (PackageName -> IO ()) ->
+    OriginFor posture ->
+    MetadataReads posture
+newNpmMetadataReadsWithFetch fetch tracing metrics logFailure logInvalid logFetch =
+    newMetadataReads metrics logFailure logInvalid logFetch (fetchManifestUsing fetch tracing) (fetchVersionUsing fetch tracing) selectNpmVersionDoc
 
 fetchNpmPackument :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
 fetchNpmPackument origin = fetchMetadataFormBounded origin Full
 
 -- | Fetch a bounded full packument with the digest that scopes its cached document.
 fetchNpmManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
-fetchNpmManifest tracing origin =
+fetchNpmManifest = fetchManifestUsing fetchNpmPackument
+
+fetchManifestUsing :: (OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)) -> TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
+fetchManifestUsing fetch tracing origin =
     fetchManifestWith
         tracing
-        (fetchNpmPackument origin)
+        (fetch origin)
         ManifestProjection
             { prjDecode = projectNpmManifest (ocLimits origin)
             , prjLocations = enforceArtifactLocations npmArtifactAuthorities (originBaseUrl origin)
@@ -102,9 +118,9 @@ fetchNpmManifest tracing origin =
 projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
 projectNpmManifest limits name = projectMetadata (parsePackageInfoFromValue name) limits
 
-fetchNpmVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
-fetchNpmVersion tracing origin name version =
-    fetchThenProject tracing (fetchNpmPackument origin) name $ \bodyBytes body ->
+fetchVersionUsing :: (OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)) -> TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
+fetchVersionUsing fetch tracing origin name version =
+    fetchThenProject tracing (fetch origin) name $ \bodyBytes body ->
         (\readResult -> (locationChecked (originBaseUrl origin) readResult){vrBodyBytes = bodyBytes})
             <$> projectNpmVersion (ocLimits origin) name version body
 

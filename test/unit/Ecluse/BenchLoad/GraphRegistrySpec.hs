@@ -4,8 +4,9 @@
 
 module Ecluse.BenchLoad.GraphRegistrySpec (spec) where
 
-import Data.Aeson (encode)
+import Data.Aeson (eitherDecode, encode)
 import Data.ByteString.Lazy qualified as LBS
+import Data.Map.Strict qualified as Map
 import Network.HTTP.Types (status200, status401, status404, status405)
 import Network.Wai (defaultRequest, requestHeaders, requestMethod)
 import Network.Wai.Test (request, runSession, setPath, simpleBody, simpleStatus)
@@ -67,6 +68,12 @@ spec = describe "frozen graph response provenance" $ do
             simpleBody artifact `shouldBe` "\NUL\255artifact"
             for_ [(setPath defaultRequest "/missing", status404), ((setPath defaultRequest "/package"){requestMethod = "POST"}, status405), (setPath defaultRequest "/package?token=hidden", status405), ((setPath defaultRequest "/package"){requestHeaders = [("Authorization", "secret")]}, status401)] $ \(query, expected) ->
                 simpleStatus <$> runSession (request query) app `shouldReturn` expected
+            counters <- runSession (request (setPath defaultRequest "/_bench/counters")) app
+            let counts = eitherDecode (simpleBody counters) :: Either String (Map Text Integer)
+            fmap (Map.lookup "artifact.200") counts `shouldBe` Right (Just 1)
+            fmap (Map.lookup "artifact.bodyBytes") counts `shouldBe` Right (Just 10)
+            fmap (Map.lookup "metadata.405") counts `shouldBe` Right (Just 2)
+            fmap (Map.lookup "metadata.200") counts `shouldBe` Right Nothing
 
 saveCapture :: FilePath -> Text -> LByteString -> IO (Capture, ByteString)
 saveCapture root key bytes = do
