@@ -87,7 +87,7 @@ if BENCH_CORPUS_VERIFY=1 bash "$here/gen-bench-corpus.sh" "$temporary/pins.json"
   echo "verification accepted changed bytes" >&2
   exit 1
 fi
-rg -q 'capture bytes mismatch' "$temporary/error"
+grep -q 'capture bytes mismatch' "$temporary/error"
 node - <<'JS'
 const fs = require("fs");
 const root = process.env.CAPTURE_TEST_ROOT;
@@ -99,6 +99,6 @@ if BENCH_CORPUS_VERIFY=1 bash "$here/gen-bench-corpus.sh" "$temporary/pins.json"
   echo "verification accepted changed digest" >&2
   exit 1
 fi
-rg -q 'capture sha256 mismatch' "$temporary/error"
+grep -q 'capture sha256 mismatch' "$temporary/error"
 BENCH_CORPUS_VERIFY=1 bash "$here/gen-bench-corpus.sh" "$here/../bench/corpus/pins.json" "$here/../bench/corpus/npm"
 echo 'gen-bench-corpus tests passed'
