@@ -23,7 +23,6 @@ import Ecluse.Core.Package (Artifact (artEntryKey), PackageDetails (pkgArtifacts
 import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead, digestOf)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIVersion)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (
     CacheConfig (..),
@@ -43,6 +42,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Package (npmVersion, pypiVersion, sampleArtifact, sampleDetails, thingName, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIVersion)
 import Ecluse.Test.Server.Cache (cachedMetadata, cachedVersion, externalOperations, weighCacheEntry)
 import Ecluse.Test.Snapshot (readDetails, untaggedRead)
 

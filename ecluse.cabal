@@ -99,7 +99,6 @@ library ecluse-core
     Ecluse.Core.Fault.Http
     Ecluse.Core.InFlight
     Ecluse.Core.Json.Lenient
-    Ecluse.Core.Json.Selective
     Ecluse.Core.Osv.Advisory
     Ecluse.Core.Osv.Compile
     Ecluse.Core.Osv.Ecosystem
@@ -167,6 +166,7 @@ library ecluse-core
     Ecluse.Core.Registry.Sweep.Walk
     Ecluse.Core.Registry.PyPI.Adapter
     Ecluse.Core.Registry.PyPI.Credential
+    Ecluse.Core.Registry.PyPI.Document
     Ecluse.Core.Registry.PyPI.Filter
     Ecluse.Core.Registry.PyPI.FirstParty
     Ecluse.Core.Registry.PyPI.Metadata
@@ -174,7 +174,8 @@ library ecluse-core
     Ecluse.Core.Registry.PyPI.Request
     Ecluse.Core.Registry.PyPI.Route
     Ecluse.Core.Registry.PyPI.Route.Internal
-    Ecluse.Core.Registry.PyPI.SelectiveDecode
+    Ecluse.Core.Registry.PyPI.Streaming
+    Ecluse.Core.Registry.PyPI.StreamingProjection
     Ecluse.Core.Registry.PyPI.Wire
     Ecluse.Core.Registry.Request
     Ecluse.Core.Registry.ServedDocument
@@ -649,12 +650,16 @@ library ecluse-test-support
     Ecluse.Test.Registry.Npm.Maintenance
     Ecluse.Test.Registry.Npm.Project
     Ecluse.Test.Registry.JsonStream
+    Ecluse.Test.Registry.Metadata.Projection
     Ecluse.Test.Registry.WireSupport
     Ecluse.Test.Registry.PyPI
+    Ecluse.Test.Registry.PyPI.Metadata
+    Ecluse.Test.Registry.PyPI.Project
     Ecluse.Test.Registry.PyPI.Wire
     Ecluse.Test.Registry.RubyGems.Wire
     Ecluse.Test.RegistryCapture
     Ecluse.Test.Rules
+    Ecluse.Test.Security.Limits
     Ecluse.Test.Sweep
     Ecluse.Test.Server.Cache
     Ecluse.Test.Server.Response
@@ -754,7 +759,6 @@ test-suite ecluse-core-unit
     Ecluse.Core.FaultSpec
     Ecluse.Core.InFlightSpec
     Ecluse.Core.Json.LenientSpec
-    Ecluse.Core.Json.SelectiveSpec
     Ecluse.Core.Osv.AdvisorySpec
     Ecluse.Core.Osv.CompileSpec
     Ecluse.Core.Osv.EcosystemSpec
@@ -819,7 +823,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Registry.PyPI.ProjectSpec
     Ecluse.Core.Registry.PyPI.RequestSpec
     Ecluse.Core.Registry.PyPI.RouteSpec
-    Ecluse.Core.Registry.PyPI.SelectiveDecodeSpec
+    Ecluse.Core.Registry.PyPI.StreamingSpec
     Ecluse.Core.Registry.PyPI.WireSpec
     Ecluse.Core.Registry.RequestSpec
     Ecluse.Core.Registry.ServedDocumentSpec
@@ -886,6 +890,7 @@ test-suite ecluse-core-unit
     Ecluse.Test.LogSpec
     Ecluse.Test.MaintenanceSpec
     Ecluse.Test.Registry.PyPI.WireSpec
+    Ecluse.Test.Registry.Metadata.ProjectionSpec
     Ecluse.Test.Registry.RubyGems.WireSpec
     Ecluse.Test.RegistryCaptureSpec
     Ecluse.Worker.Support

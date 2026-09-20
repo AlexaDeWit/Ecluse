@@ -61,13 +61,12 @@ scenarios = do
                 scriptRan `shouldBe` False
 
         describe "pypi surface -- a real pip install" $
-            it "installs a wheel whose bytes hash to the sha256 the served index advertised" $ \e2e -> do
+            it "installs the compatible non-yanked wheel with its advertised hash and no metadata sidecar" $ \e2e -> do
                 advertised <- advertisedFiles e2e pypiProject
-                case advertised of
+                length advertised `shouldBe` 3
+                case filter ((== pypiWheelFile) . fst) advertised of
                     [(filename, digest)] -> do
                         filename `shouldBe` pypiWheelFile
-                        -- pip's hash-checking mode accepts the download only when it hashes
-                        -- to this digest, so a successful install is that equality.
                         withPipProject e2e pypiProject pypiVersion digest $ \proj -> do
                             void $ pipInstallIn proj >>= shouldSucceed
                             installed <- pipInstalled proj pypiDistInfo

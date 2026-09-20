@@ -315,25 +315,28 @@ divergent `name`.
 
 ### Decision surface vs served surface
 
-The merge decides over the typed `PackageInfo` and rebuilds served metadata from the winning source
-representations. It takes only surviving versions, rewrites their tarball URLs, and carries `latest`
-from the plan. npm extraction retains an explicit installation, policy, artifact and mirror field
-set. Unknown npm fields are omitted, and author lists become source-specific pointers. Assembly
-uses those retained fields rather than recreating installation data from the typed policy model.
-The API surface [owns the served schema](web-layer.md#the-synthesised-packument-schema--the-trust-boundary).
+The merge decides over the typed `PackageInfo` and rebuilds served metadata from the winning
+source representations. Extraction retains supported installation, policy and artifact fields
+before constructing decoded values. Unknown fields do not enter the retained document.
+npm also retains mirror fields and replaces author lists with source-specific pointers.
+Assembly selects admitted versions and files, rewrites artifact URLs, and takes npm tags from the
+merge plan. It uses retained source fields instead of recreating installation data from the policy
+model. The API surface [owns the served schema](web-layer.md#the-synthesised-packument-schema--the-trust-boundary).
 
 Artifact admission identifies a raw entry by its source position, upstream-byte digest, and
 adapter-assigned entry key. A filename alone cannot distinguish admitted and refused siblings.
 The merge carries compact admitted-entry records, without retaining full artifact metadata.
 The shared selector rejects missing keys, ambiguous keys, and mismatched source snapshots.
-It preserves each source's entry order and the fields its adapter retains on selected entries.
+It preserves each source's entry order and supported fields. PyPI stores original array keys
+beside compact file records, so a discarded file cannot shift later admission coordinates.
 
 Adapters must establish these contracts before their metadata reaches assembly:
 
 - Assign each artifact an explicit key before lenient parsing drops any entry. PyPI uses raw array positions, including malformed gaps.
 - Use an equivalent key for other shapes. npm uses its version-map key. A singleton key is valid only for a source with one artifact entry.
-- Carry the same fetch digest with the typed and raw views. The digest covers exact upstream bytes, with one pass at fetch and none at serve.
-- Pair a single-version read with its retained source version object. npm streaming reads consume and hash the complete source before returning. The selected typed and serving views stay paired through caching and mirroring. Mirror publication refuses a missing source representation instead of recreating one from the typed view. PyPI carries no mirror representation until its mirror write exists.
+- Bind the typed and compact views to the same source digest. Incremental hashing covers the complete decompressed source, including omitted fields.
+- Pair a selected npm version with its retained publication fields from the same response. Those views stay paired through caching and mirroring. Mirror publication refuses a missing source representation instead of recreating one from the policy model.
+- PyPI retains only typed selected files because it has no mirror write capability. Both read modes consume the complete successful source inside the HTTP response lifetime.
 - Preserve keys through admission and use the shared selector before rendering. Selective reads must retain the full decoder's entry keys.
 
 Snapshot scope is transient and content-addressed. It changes no stored schema or epoch.

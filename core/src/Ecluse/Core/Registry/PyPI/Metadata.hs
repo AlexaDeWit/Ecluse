@@ -2,75 +2,35 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Read full PyPI indexes or selected releases through one file projection.
-The fetch digest scopes full-document assembly, while selective reads retain original entry positions.
--}
+-- | Full and selected Simple-index reads share incremental extraction and source identity.
 module Ecluse.Core.Registry.PyPI.Metadata (
-    -- * Per-request read handle
     newPyPIMetadataReads,
-
-    -- * PyPI index fetch
     fetchPyPIManifest,
-
-    -- * Pure projection
-    projectPyPIIndex,
-    projectPyPIVersion,
+    projectPyPIStream,
 ) where
 
-import Data.Aeson (Value)
-import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
 
-import Ecluse.Core.Package (
-    InvalidEntry,
-    PackageDetails,
-    PackageInfo (infoVersions),
-    PackageName,
- )
+import Ecluse.Core.Package (InvalidEntry, PackageInfo (infoVersions), PackageName)
 import Ecluse.Core.Package.Filter (enforceArtifactLocations, enforceArtifactLocationsOf)
-import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), RegistryResponse)
+import Ecluse.Core.Registry (FetchFault (FetchUrlUnformable), isAuthorisationFailure)
 import Ecluse.Core.Registry.CachedDocument (pypiSimpleCached)
-import Ecluse.Core.Registry.Exchange (boundedFetch, formThen)
-import Ecluse.Core.Registry.Metadata (
-    Manifest,
-    ManifestProjection (ManifestProjection, prjDecode, prjInject, prjLocations),
-    MetadataError (MetadataBoundExceeded, MetadataUndecodable),
-    VersionDoc (VersionDoc, vdDetails, vdRaw),
-    VersionRead (VersionRead, vrBodyBytes, vrUpstreamLatest, vrVersion),
-    fetchManifestWith,
-    fetchThenProject,
- )
-import Ecluse.Core.Registry.Metadata.Projection (projectMetadata, projectionResult, selectiveError, validateReportedName)
+import Ecluse.Core.Registry.Exchange (boundedJsonFetchWith, formThen)
+import Ecluse.Core.Registry.JsonStream (StreamResult (..))
+import Ecluse.Core.Registry.Metadata (Manifest (..), MetadataError (..), VersionDoc (..), VersionRead (..), metadataFetchError)
+import Ecluse.Core.Registry.Metadata.Projection (streamError)
 import Ecluse.Core.Registry.Origin (OriginClient (ocLimits, ocManager, ocToken), OriginFor, originBaseUrl)
-import Ecluse.Core.Registry.PyPI.Project (
-    fileVersionKey,
-    projectName,
-    projectSimpleFiles,
-    projectSimpleIndexFromValue,
- )
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts, simpleIndexRequest)
-import Ecluse.Core.Registry.PyPI.SelectiveDecode (
-    SelectedFiles (sfFileCount, sfFiles, sfMeta, sfName),
-    selectFilesFromIndex,
- )
-import Ecluse.Core.Registry.PyPI.Wire (checkApiVersion)
-import Ecluse.Core.Registry.WireSupport (checkNameAgreement)
-import Ecluse.Core.Security (
-    AllowedHostPorts,
-    BodyLimit (MetadataBodyLimit),
-    Limits,
-    checkVersionCountOf,
-    ecosystemArtifactAuthorities,
-    maxMetadataBytes,
-    maxNestingDepth,
- )
+import Ecluse.Core.Registry.PyPI.Streaming (PyPIRead (..), pypiFields)
+import Ecluse.Core.Registry.PyPI.StreamingProjection (PyPIProjection, collectField, emptyProjection, finishProjection)
+import Ecluse.Core.Security (AllowedHostPorts, BodyLimit (MetadataBodyLimit), Limits, ecosystemArtifactAuthorities, maxMetadataBytes, maxNestingDepth)
 import Ecluse.Core.Server.Metadata (MetadataReads, newMetadataReads)
 import Ecluse.Core.Telemetry.Record (MetricsPort)
-import Ecluse.Core.Telemetry.Span (TracingPort)
+import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version, renderVersion)
 
--- | Bind one origin's PyPI metadata reads to their observers. The caching policy is the caller's.
+-- | Bind one origin's reads to observers. PyPI retains no publication object for selected releases.
 newPyPIMetadataReads ::
     TracingPort ->
     MetricsPort ->
@@ -82,57 +42,65 @@ newPyPIMetadataReads ::
 newPyPIMetadataReads tracing metrics logFailure logInvalid logFetch =
     newMetadataReads metrics logFailure logInvalid logFetch (fetchPyPIManifest tracing) (fetchPyPIVersion tracing)
 
-fetchSimpleIndex :: OriginClient -> PackageName -> IO (Either FetchFault RegistryResponse)
-fetchSimpleIndex origin name =
-    formThen
-        FetchUrlUnformable
-        (boundedFetch (ocManager origin) (MetadataBodyLimit (maxMetadataBytes (ocLimits origin))))
-        (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name)
-
--- | Fetch a bounded Simple index with the digest that scopes its cached document.
+-- | Fetch compact files and hash the complete decompressed source inside the response lifetime.
 fetchPyPIManifest :: TracingPort -> OriginClient -> PackageName -> IO (Either MetadataError Manifest)
-fetchPyPIManifest tracing origin =
-    fetchManifestWith
-        tracing
-        (fetchSimpleIndex origin)
-        ManifestProjection
-            { prjDecode = projectPyPIIndex (ocLimits origin)
-            , prjLocations = enforceArtifactLocations pypiArtifactAuthorities (originBaseUrl origin)
-            , prjInject = fst pypiSimpleCached
-            }
+fetchPyPIManifest tracing origin name = do
+    result <- fetchPyPIStream tracing origin name FullRead
+    pure $ do
+        streamed <- result
+        (info, document) <- projectPyPIStream (ocLimits origin) name streamed
+        pure
+            Manifest
+                { manifestInfo = enforceArtifactLocations pypiArtifactAuthorities (originBaseUrl origin) info
+                , manifestRaw = fst pypiSimpleCached document
+                , manifestBodyBytes = streamBytes streamed
+                , manifestDigest = streamDigest streamed
+                }
 
--- | Project a nesting-checked index and retain its raw document for assembly.
-projectPyPIIndex :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
-projectPyPIIndex limits name = projectMetadata (projectSimpleIndexFromValue name) limits
+fetchPyPIStream :: TracingPort -> OriginClient -> PackageName -> PyPIRead -> IO (Either MetadataError (StreamResult PyPIProjection))
+fetchPyPIStream tracing origin name mode =
+    spanMetadataFetch tracing name fetch <&> \case
+        Left fault -> Left (metadataFetchError fault)
+        Right (404, _) -> Left MetadataAbsent
+        Right (code, result)
+            | isAuthorisationFailure code -> Left (MetadataAuthorisationFailure code)
+            | Just streamed <- result -> Right streamed
+            | otherwise -> Left (MetadataHttpFailure code)
+  where
+    limits = ocLimits origin
+    fetch =
+        formThen
+            FetchUrlUnformable
+            ( boundedJsonFetchWith
+                (spanMetadataDecode tracing name)
+                (ocManager origin)
+                (MetadataBodyLimit (maxMetadataBytes limits))
+                (pypiFields (maxNestingDepth limits) mode)
+                (collectField limits name mode)
+                emptyProjection
+            )
+            (simpleIndexRequest (originBaseUrl origin) (ocToken origin) name)
 
-{- A 'vrVersion' of 'Nothing' is a release genuinely absent from a sound index, a forwarded miss.
-A Simple index declares no release tag, so 'vrUpstreamLatest' is always 'Nothing' here. -}
 fetchPyPIVersion :: TracingPort -> OriginClient -> PackageName -> Version -> IO (Either MetadataError VersionRead)
-fetchPyPIVersion tracing origin name version =
-    fetchThenProject tracing (fetchSimpleIndex origin) name $ \bodyBytes body ->
-        untagged bodyBytes <$> projectPyPIVersion (ocLimits origin) name version body
-  where
-    untagged bodyBytes details =
-        VersionRead
-            { vrVersion = do
-                located <- details >>= enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin)
-                pure VersionDoc{vdDetails = located, vdRaw = Nothing}
-            , vrBodyBytes = bodyBytes
-            , vrUpstreamLatest = Nothing
-            }
+fetchPyPIVersion tracing origin name version = do
+    result <- fetchPyPIStream tracing origin name (SelectedRead name (renderVersion version))
+    pure $ do
+        streamed <- result
+        (info, _) <- projectPyPIStream (ocLimits origin) name streamed
+        pure
+            VersionRead
+                { vrVersion = do
+                    details <- Map.lookup (renderVersion version) (infoVersions info)
+                    located <- enforceArtifactLocationsOf pypiArtifactAuthorities (originBaseUrl origin) details
+                    pure VersionDoc{vdDetails = located, vdRaw = Nothing}
+                , vrBodyBytes = streamBytes streamed
+                , vrUpstreamLatest = Nothing
+                }
 
--- | Project one release after the full path's protocol check, retaining original file positions.
-projectPyPIVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
-projectPyPIVersion limits name version body = do
-    decoded <- first (selectiveError limits) (selectFilesFromIndex (maxNestingDepth limits) belongsToRelease body)
-    first (const MetadataUndecodable) (parseEither checkApiVersion (maybe mempty (KeyMap.singleton "meta") (sfMeta decoded)))
-    reported <- validateReportedName projectName (sfName decoded)
-    selected <- projectionResult (checkNameAgreement name reported decoded)
-    first MetadataBoundExceeded (checkVersionCountOf limits (sfFileCount selected))
-    pure (Map.lookup wanted (infoVersions (projectSimpleFiles reported (sfFiles selected))))
-  where
-    belongsToRelease filename = fileVersionKey name filename == Just wanted
-    wanted = renderVersion version
+-- | Finish both read modes without separating typed files from their source coordinates.
+projectPyPIStream :: Limits -> PackageName -> StreamResult PyPIProjection -> Either MetadataError (PackageInfo, SimpleDocument)
+projectPyPIStream limits name streamed =
+    first (streamError limits) (streamValue streamed) >>= finishProjection name
 
 pypiArtifactAuthorities :: AllowedHostPorts
 pypiArtifactAuthorities = ecosystemArtifactAuthorities pypiArtifactHosts
