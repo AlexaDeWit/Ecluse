@@ -81,7 +81,7 @@ spec = describe "shared local entry allowance" $ do
 
 plannedCache :: Maybe Int -> Maybe Int -> IO CacheConfig
 plannedCache bytes entries = do
-    app <- expectAppConfig staticEnvVars
+    app <- expectAppConfig staticEnvVars Nothing
     let settings = (cfgCache app){csMaxBytes = bytes, csMaxEntries = entries}
         (plan, _) = resolveMemoryPlan settings (cfgLimits app) (cfgQueue app) Nothing noCeiling NoQueueTenant False
     mpOverrideViolations plan `shouldBe` []
