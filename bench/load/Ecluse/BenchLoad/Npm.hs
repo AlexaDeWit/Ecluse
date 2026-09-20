@@ -8,6 +8,8 @@ The harness uses loopback upstreams and the production composition defaults.
 -}
 module Ecluse.BenchLoad.Npm (
     npmFixture,
+    corpusPublicStub,
+    privateOverlayStub,
 ) where
 
 import Control.Concurrent (threadDelay)
@@ -21,7 +23,7 @@ import GHC.Clock (getMonotonicTime)
 import Katip (LogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (hContentType, status200, status404)
-import Network.Wai (Application, Request, pathInfo, responseLBS)
+import Network.Wai (Application, Request, pathInfo, rawPathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
@@ -97,9 +99,9 @@ npmFixture =
                     corpusPackages
                     npmDeps
                     (\knobs -> privateOverlayStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs)))
-                    ( \knobs bodies -> do
+                    ( \knobs bodies artifacts -> do
                         rewritten <- newIORef mempty
-                        pure (corpusPublicStub rewritten (lkUpstreamLatencyMicros knobs) bodies)
+                        pure (corpusPublicStub rewritten (lkUpstreamLatencyMicros knobs) bodies artifacts)
                     )
                     packageUrl
         }
@@ -220,7 +222,7 @@ withNpmProxy knobs ttl maxEntries mkMix body = do
         ttl
         maxEntries
         (privateOverlayStub latency bytes)
-        (corpusPublicStub rewritten latency bodies)
+        (corpusPublicStub rewritten latency bodies Map.empty)
         mkMix
         body
 
@@ -349,14 +351,18 @@ jsonContentType, octetContentType :: ByteString
 jsonContentType = "application/json"
 octetContentType = "application/octet-stream"
 
-corpusPublicStub :: IORef (Map Text LByteString) -> Int -> Map Text LByteString -> Application
-corpusPublicStub rewritten latency bodies request respond = do
+-- | Serve complete metadata captures and only the selected known artifact paths.
+corpusPublicStub :: IORef (Map Text LByteString) -> Int -> Map Text LByteString -> Map ByteString LByteString -> Application
+corpusPublicStub rewritten latency bodies artifacts request respond = do
     when (latency > 0) (threadDelay latency)
     served <- selfHosted "https://registry.npmjs.org" rewritten (selfBaseUrl request) bodies
-    respond $ case requestedPackage request >>= (`Map.lookup` served) of
-        Just packument -> responseLBS status200 [(hContentType, jsonContentType)] packument
-        Nothing -> responseLBS status404 [(hContentType, jsonContentType)] "{}"
+    respond $ case Map.lookup (rawPathInfo request) artifacts of
+        Just bytes -> responseLBS status200 [(hContentType, octetContentType)] bytes
+        Nothing -> case requestedPackage request >>= (`Map.lookup` served) of
+            Just packument -> responseLBS status200 [(hContentType, jsonContentType)] packument
+            Nothing -> responseLBS status404 [(hContentType, jsonContentType)] "{}"
 
+-- | Only the trusted overlay artifact exists privately. Captured public artifacts miss here.
 privateOverlayStub :: Int -> LByteString -> Application
 privateOverlayStub latency bytes request respond = do
     when (latency > 0) (threadDelay latency)
@@ -364,7 +370,10 @@ privateOverlayStub latency bytes request respond = do
     case mPkg of
         Just pkg
             | "/-/" `T.isInfixOf` pkg ->
-                respond (responseLBS status200 [(hContentType, octetContentType)] bytes)
+                let (name, file) = T.breakOn "/-/" pkg
+                 in if file == "/-/" <> tarballStem name <> "-9999.0.2.tgz"
+                        then respond (responseLBS status200 [(hContentType, octetContentType)] bytes)
+                        else respond (responseLBS status404 [] "")
         Just pkg ->
             respond (responseLBS status200 [(hContentType, jsonContentType)] (encode (privateOverlay (selfBaseUrl request) pkg)))
         Nothing ->

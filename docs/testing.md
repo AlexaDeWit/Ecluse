@@ -329,7 +329,22 @@ It does not model a pre-restart heap or claim that a short default run measures 
 | `BENCH_PATTERN_FULL_BYTES` | The fixture full-store budget, reduced for scan unless explicitly overridden. Zero disables full retention |
 | `BENCH_PATTERN_VERSION_BYTES` | The fixture version-store budget, must be positive |
 | `BENCH_PATTERN_ASSEMBLED_BYTES` | The fixture assembled-store budget, must be positive |
-| `BENCH_PATTERN_SELECTED_VERSION` | Unset for listing-only. `pinned` follows each npm listing with its captured pinned version |
+| `BENCH_PATTERN_NOW` | Latest authenticated capture time plus two days. Override with an ISO8601 UTC time |
+| `BENCH_PATTERN_SELECTED_VERSION` | Unset for listing-only. `pinned` follows each npm listing with its captured public tarball coordinate |
+
+Selected npm replay measures the HTTP metadata gate: listing, private tarball miss, public version
+admission, and artifact relay. It projects the pinned artifact from the complete capture and renders
+the production tarball route. The public stub supplies labelled synthetic artifact bytes, so this
+sequence does not model an npm install or validate the captured integrity digest against a download.
+Public metadata and artifact request counts stay separate. Captured metadata and policy stay unchanged.
+
+Every pattern cell reports its evaluation clock. Paired listing-only and artifact-follow-up cells
+use the same clock. Set `BENCH_PATTERN_NOW` explicitly when comparing runs from different captures.
+Legacy duration-driven fixtures retain their own fixed clock.
+
+The process peak comes from RTS statistics after reporting and the final major GC. It includes
+preparation and warm-up. GC-observed live heap does not establish the maximum transient working set.
+Timed allocation and GC deltas keep their original measurement window.
 
 Unsupported distinct-name and overlap requests fail instead of creating synthetic package aliases.
 Each report states the parameters, distinct wire bytes, accounted capacity, occupancy, oversized

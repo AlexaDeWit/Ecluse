@@ -223,7 +223,7 @@ data ScenarioReport = ScenarioReport
     -}
     , srPeakResidencyBytes :: Word64
     {- ^ Peak live heap over this scenario's process (RTS @max_live_bytes@). A process
-    high-water mark, so it spans the warm-up too, a wider window than the deltas.
+    high-water mark through reporting and the final major GC, wider than the timed deltas.
     -}
     , srRetainedBytes :: Word64
     -- ^ Live heap retained after a major GC at the scenario's end.
@@ -268,7 +268,8 @@ measure knobs scenario driver = do
     when (requests <= 0 && isNothing replayAccounting) $
         benchFail ("scenario " <> scenarioName scenario <> " served no requests -- a harness failure, not a result")
     performMajorGC
-    retained <- gcdetails_live_bytes . gc <$> getRTSStats
+    finalStats <- getRTSStats
+    let retained = gcdetails_live_bytes (gc finalStats)
     let (p50, p90, p99, p999) = percentilesMs
         allocated = fromIntegral (allocated_bytes after - allocated_bytes before)
         gcCount = gcs after - gcs before
@@ -289,7 +290,7 @@ measure knobs scenario driver = do
             , srP99Ms = p99
             , srP999Ms = p999
             , srAllocPerReqBytes = if requests > 0 then Just (allocated / fromIntegral requests) else Nothing
-            , srPeakResidencyBytes = max_live_bytes after
+            , srPeakResidencyBytes = max_live_bytes finalStats
             , srRetainedBytes = retained
             , srGcs = gcCount
             , srMajorGcs = major_gcs after - major_gcs before
@@ -485,7 +486,7 @@ renderReports knobs capabilities ecosystem reports =
         , ""
         , "- **Inform-only.** Throughput and latency are runner-dependent and read coarsely; nothing here gates."
         , "- **Allocations / request is the machine-independent signal**, measured over the whole bench process: the HTTP scenarios also run their in-process stub upstreams (only oha, a subprocess, is excluded), so it is a consistent over-count -- right for trending, not a pure proxy per-request cost, and not comparable to the work-per-request micro-benches."
-        , "- **Peak residency is a process high-water mark** spanning the warm-up as well as the measured window; the allocation and GC figures are before/after deltas over the measured window only."
+        , "- **Peak residency is a process high-water mark** including preparation, warm-up, reporting, and the final major GC. GC-observed live heap does not establish the maximum transient working set. Allocation and GC deltas cover only the timed window."
         , "- **Each scenario runs in its own process**, so residency and GC figures are per scenario."
         , "- **A low success rate is deliberate load shedding, not a broken run.** Success counts 2xx and 3xx only, so a shed `503` carrying `Retry-After` reads as a failure. A saturating scenario answers mostly `503`, so its allocations per request average over shed requests and are not a served request's cost."
         ]

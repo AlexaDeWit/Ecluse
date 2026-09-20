@@ -10,15 +10,19 @@ import Data.Aeson.Types (parseEither)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime, addUTCTime, nominalDay)
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.Universe.Class qualified as Universe
-import Network.Wai (Application)
+import Network.HTTP.Client qualified as HTTP
+import Network.Wai (Application, rawPathInfo)
 import OpenTelemetry.Attributes (fromAttribute, lookupAttribute)
 import OpenTelemetry.MeterProvider (SdkMeterEnv)
 import UnliftIO (evaluate)
 
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Fixture (loadCorpusBodies, withProxyConfigured)
+import Ecluse.BenchLoad.Fixture (artifactBytes, benchNow, loadCorpusBodies, withProxyConfigured)
 import Ecluse.BenchLoad.Harness (Driver (DriveReplay), LoadKnobs (..), Scenario (..))
+import Ecluse.BenchLoad.NpmArtifact (SelectedArtifact (..), selectedNpmArtifact)
 import Ecluse.BenchLoad.PatternReport (StoreEvidence (..), renderStoreEvidence)
 import Ecluse.BenchLoad.Patterns
 import Ecluse.BenchLoad.Replay (Replay (..))
@@ -41,7 +45,7 @@ import Ecluse.Test.Server.Cache (defaultCacheConfig)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
 
 -- | Every family receives a fresh proxy. No preflight request consumes or warms its trace.
-patternScenarios :: Ecosystem -> [CorpusPackage] -> (Int -> Int -> IO PackumentDeps) -> (LoadKnobs -> Application) -> (LoadKnobs -> Map Text LByteString -> IO Application) -> (Int -> Text -> Text) -> [Scenario]
+patternScenarios :: Ecosystem -> [CorpusPackage] -> (Int -> Int -> IO PackumentDeps) -> (LoadKnobs -> Application) -> (LoadKnobs -> Map Text LByteString -> Map ByteString LByteString -> IO Application) -> (Int -> Text -> Text) -> [Scenario]
 patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
     [scenario patternKind False | patternKind <- [minBound .. maxBound]]
         <> [scenario ColdInstall True]
@@ -53,7 +57,7 @@ patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
             , scenarioConcurrencyScale = 1
             , scenarioBoot = \knobs use -> do
                 captures <- loadCorpusBodies packages
-                verifyCaptures ecosystem captures
+                evaluationTime <- verifyCaptures ecosystem captures >>= patternClock
                 patternKnobs <- knobsFromEnv patternKind (length packages)
                 requestTrace <- either benchFail pure (makeTrace patternKind patternKnobs (map cpName packages))
                 wireBytes <- either benchFail pure (workingBytes (Map.map (fromIntegral . LBS.length) captures) requestTrace)
@@ -90,15 +94,22 @@ patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
                                 )
                                 [package | package <- packages, cpName package `elem` rtNames requestTrace]
                         writeIORef measuredBodies (bodyCap, servedWorking, servedLargest, sum fullWeights)
-                        pure base{pdLimits = (pdLimits base){maxBodyBytes = bodyCap}}
+                        pure base{pdLimits = (pdLimits base){maxBodyBytes = bodyCap}, pdNow = pure evaluationTime}
                 deadlineMicros <- readKnob "BENCH_PATTERN_DEADLINE_US" (120_000_000 :: Int)
                 when (deadlineMicros <= 0) (benchFail "BENCH_PATTERN_DEADLINE_US must be positive")
                 selected <- lookupEnv "BENCH_PATTERN_SELECTED_VERSION"
                 pins <- loadPins
-                upstreamCount <- newIORef (0 :: Int)
-                public <- publicApp knobs captures
+                selectedArtifacts <- either benchFail pure (selectArtifacts ecosystem selected pins [package | package <- packages, cpName package `elem` rtNames requestTrace] captures)
+                artifactRequests <- traverse (HTTP.parseRequest . toString . saUpstreamUrl) (Map.elems selectedArtifacts)
+                let artifactBodies = Map.fromList [(HTTP.path request, artifactBytes (lkPayloadBytes knobs)) | request <- artifactRequests]
+                upstreamCount <- newIORef (0 :: Int, 0 :: Int)
+                public <- publicApp knobs captures artifactBodies
                 let counted request respond = do
-                        atomicModifyIORef' upstreamCount (\n -> (n + 1, ()))
+                        atomicModifyIORef'
+                            upstreamCount
+                            ( \(metadataCount, artifactCount) ->
+                                (if Map.member (rawPathInfo request) artifactBodies then (metadataCount, artifactCount + 1) else (metadataCount + 1, artifactCount), ())
+                            )
                         public request respond
                 withTestTelemetry $ \telemetry meter ->
                     withProxyConfigured ecosystem deps knobs cacheConfig telemetry (privateApp knobs) counted (\port -> [urlFor port ""]) $ \case
@@ -108,8 +119,8 @@ patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
                                     Replay
                                         { replayTrace = requestTrace
                                         , replayDeadlineMicros = deadlineMicros
-                                        , replayUrls = \name -> let listing = root <> name in listing : [listing <> "/" <> version | ecosystem == Npm, version <- maybeToList (selected >>= \choice -> if choice == "pinned" then Map.lookup name pins else Just (toText choice))]
-                                        , replayEvidence = (<> ("\nReplay deadline: " <> show deadlineMicros <> " microseconds.\n")) <$> evidence meter upstreamCount cacheConfig wireBytes measuredBodies patternKnobs requestTrace selected
+                                        , replayUrls = \name -> (root <> name) : [root <> saProxyPath artifact | artifact <- maybeToList (Map.lookup name selectedArtifacts)]
+                                        , replayEvidence = (<> ("\nReplay deadline: " <> show deadlineMicros <> " microseconds.\n")) <$> evidence meter upstreamCount cacheConfig wireBytes measuredBodies patternKnobs requestTrace selected evaluationTime
                                         }
                                 )
                         _ -> benchFail "pattern fixture requires exactly one URL root"
@@ -141,31 +152,33 @@ readKnob name fallback =
         Nothing -> pure fallback
         Just raw -> maybe (benchFail ("invalid " <> toText name)) pure (readMaybe raw)
 
-verifyCaptures :: Ecosystem -> Map Text LByteString -> IO ()
+verifyCaptures :: Ecosystem -> Map Text LByteString -> IO UTCTime
 verifyCaptures ecosystem bodies = do
     raw <- readFileLBS "bench/corpus/pins.json"
     manifest <- either (benchFail . toText) pure (eitherDecode raw :: Either String Value)
     sizes <- either (benchFail . toText) pure (parseEither parser manifest)
     for_ (Map.toList bodies) $ \(name, body) ->
-        unless (Map.lookup name sizes == Just (LBS.length body)) (benchFail ("complete capture provenance missing or byte count differs: " <> name))
+        unless ((fst <$> Map.lookup name sizes) == Just (LBS.length body)) (benchFail ("complete capture provenance missing or byte count differs: " <> name))
+    pure (addUTCTime (2 * nominalDay) (foldl' max benchNow (map snd (Map.elems sizes))))
   where
     parser = withObject "pins" $ \pins -> do
         captures <- pins .: "captures"
         entries <- captures .: fromString (toString (ecosystemName ecosystem))
-        traverse (withObject "capture" (.: "bytes")) entries
+        traverse (withObject "capture" (\capture -> (,) <$> capture .: "bytes" <*> capture .: "capturedAt")) entries
 
-evidence :: SdkMeterEnv -> IORef Int -> CacheConfig -> Int -> IORef (Int, Int, Int, Int) -> PatternKnobs -> RequestTrace -> Maybe String -> IO Text
-evidence meter upstreamCount config rawBytes measuredBodies knobs requestTrace selected = do
+evidence :: SdkMeterEnv -> IORef (Int, Int) -> CacheConfig -> Int -> IORef (Int, Int, Int, Int) -> PatternKnobs -> RequestTrace -> Maybe String -> UTCTime -> IO Text
+evidence meter upstreamCount config rawBytes measuredBodies knobs requestTrace selected evaluationTime = do
     (bodyCap, wireBytes, largest, fullWorkingBytes) <- readIORef measuredBodies
     stores <-
         traverse
             (collect fullWorkingBytes)
             [("full", "", cacheFullBudget config), ("version", ".version", cacheVersionBudget config), ("assembled", ".assembled", cacheAssembledBudget config)]
     fullHits <- sum . map snd <$> sumPoints "ecluse.metadata_cache.version.full_hits" meter
-    upstream <- readIORef upstreamCount
+    (metadataRequests, artifactRequests) <- readIORef upstreamCount
     pure $
         T.unlines
             [ "Replay parameters: `" <> show knobs <> "`. Actual clients: " <> show (length (rtClients requestTrace)) <> ". Distinct measured names: " <> show (length (rtNames requestTrace)) <> "."
+            , "Pattern evaluation time: " <> toText (iso8601Show evaluationTime) <> ". Listing-only and artifact-follow-up cells share this clock. Default: latest authenticated capture time plus two days. BENCH_PATTERN_NOW overrides it."
             , "Corpus space and tail are bounded by the committed captures. Zipf is a finite sampled trace, not registry-wide traffic."
             , "Configured store budgets (full / version / assembled): " <> show (sbMaxBytes (cacheFullBudget config)) <> " / " <> show (sbMaxBytes (cacheVersionBudget config)) <> " / " <> show (sbMaxBytes (cacheAssembledBudget config)) <> " accounted bytes."
             , if sbMaxBytes (cacheFullBudget config) == 0
@@ -174,8 +187,9 @@ evidence meter upstreamCount config rawBytes measuredBodies knobs requestTrace s
             , "Raw captured working bytes: " <> show rawBytes <> " B. Served stub working bytes: " <> show wireBytes <> " B. Selected-version mode: " <> maybe "none" toText selected <> "."
             , "Body cap: " <> show bodyCap <> " B. Default cap: " <> show (maxBodyBytes defaultLimits) <> " B. Largest served stub body: " <> show largest <> " B. Default would refuse largest: " <> show (largest > maxBodyBytes defaultLimits) <> "."
             , "Wire working set / full-store wire-equivalent budget: " <> show wireBytes <> " / " <> show (contractResidentBytes (sbMaxBytes (cacheFullBudget config))) <> " B. The resident estimate excludes retained artifact keys."
-            , "Public upstream requests: " <> show upstream <> ". Selected-version warm-full shortcuts: " <> (if metricsAvailable then show fullHits else "unavailable") <> ". These shortcuts are separate from version-store resolutions."
+            , "Public upstream requests (metadata / artifact): " <> show metadataRequests <> " / " <> show artifactRequests <> ". Selected-version warm-full shortcuts: " <> (if metricsAvailable then show fullHits else "unavailable") <> ". These shortcuts are separate from version-store resolutions."
             , if metricsAvailable then renderStoreEvidence stores else "Cache evidence unavailable: this build lacks the collapse and refusal telemetry catalogue. Full-store candidate accounted bytes / capacity: " <> show fullWorkingBytes <> " / " <> show (max 1 (sbMaxBytes (cacheFullBudget config))) <> "."
+            , "Selected npm replay follows listings with captured public tarball coordinates after private misses. Artifact bytes are synthetic relay payloads. This measures the HTTP metadata gate, not a complete npm install or client integrity validation."
             , "RTS allocation and heap figures include the in-process replay client and stub upstreams. They are not proxy-only costs or directly comparable with the external oha generator."
             , "Occupancy is the final reported gauge, not peak heap. Full working bytes use production projection and weighCacheEntry over each distinct rewritten body before measurement. Version and assembled working sets are unavailable. Their representations differ from listing wire bytes."
             , "A zero full-store budget is a retention-only intervention and still weighs candidates. It adds no grace window. Compare equal pod memory and state all store budgets. TTL 0 would change every store."
@@ -213,3 +227,22 @@ accountedFullBytes ecosystem upstreamBase package bytes = do
     let hosts = if ecosystem == Npm then npmArtifactHosts else pypiArtifactHosts
         located = enforceArtifactLocations (ecosystemArtifactAuthorities hosts) upstreamBase info
     pure (weighCacheEntry (CacheEntry located document (digestOf raw)))
+
+selectArtifacts :: Ecosystem -> Maybe String -> Map Text Text -> [CorpusPackage] -> Map Text LByteString -> Either Text (Map Text SelectedArtifact)
+selectArtifacts ecosystem selected pins packages captures =
+    case selected of
+        Just choice | ecosystem == Npm -> Map.fromList <$> traverse (select choice) packages
+        _ -> Right Map.empty
+  where
+    select choice package = do
+        let name = cpName package
+        version <- if choice == "pinned" then maybe (Left ("missing captured pin: " <> name)) Right (Map.lookup name pins) else Right (toText choice)
+        bytes <- maybe (Left ("missing captured body: " <> name)) Right (Map.lookup name captures)
+        artifact <- selectedNpmArtifact (cpPackage package) version (LBS.toStrict bytes)
+        pure (name, artifact)
+
+patternClock :: UTCTime -> IO UTCTime
+patternClock fallback =
+    lookupEnv "BENCH_PATTERN_NOW" >>= \case
+        Nothing -> pure fallback
+        Just raw -> maybe (benchFail "BENCH_PATTERN_NOW must be an ISO8601 UTC time") pure (iso8601ParseM raw)

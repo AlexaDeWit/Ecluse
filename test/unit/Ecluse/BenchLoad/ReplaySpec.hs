@@ -52,7 +52,7 @@ spec = describe "finite HTTP replay" $ do
             ohaSuccessRate report `shouldBe` 0
             ohaP99 report `shouldBe` Nothing
             ohaRequestsPerSec report `shouldBe` 0
-    it "expands a listing into a selected-version request in order" $ do
+    it "expands a listing into an artifact request in order" $ do
         seen <- newIORef ([] :: [[Text]])
         let app request respond = do
                 atomicModifyIORef' seen (\paths -> (pathInfo request : paths, ()))
@@ -62,10 +62,10 @@ spec = describe "finite HTTP replay" $ do
                     Replay
                         (RequestTrace [ClientTrace 0 0 ["pkg"]] ["pkg"])
                         5_000_000
-                        (\name -> [localhost port <> "/" <> name, localhost port <> "/" <> name <> "/1.0.0"])
+                        (\name -> [localhost port <> "/" <> name, localhost port <> "/" <> name <> "/-/" <> name <> "-1.0.0.tgz"])
                         (pure "")
             _ <- runReplay replay
-            reverse <$> readIORef seen `shouldReturn` [["pkg"], ["pkg", "1.0.0"]]
+            reverse <$> readIORef seen `shouldReturn` [["pkg"], ["pkg", "-", "pkg-1.0.0.tgz"]]
 
     it "cancels clients waiting for their scheduled start and counts unstarted work" $
         testWithApplication (pure (\_ respond -> respond (responseLBS status200 [] "{}"))) $ \port -> do

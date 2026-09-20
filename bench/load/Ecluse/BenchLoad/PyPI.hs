@@ -59,7 +59,7 @@ pypiFixture =
                     pypiCorpusPackages
                     pypiDeps
                     (\knobs -> wheelStub (lkUpstreamLatencyMicros knobs) (artifactBytes (lkPayloadBytes knobs)))
-                    ( \knobs bodies -> do
+                    ( \knobs bodies _artifacts -> do
                         rewritten <- newIORef mempty
                         pure (indexStub rewritten (lkUpstreamLatencyMicros knobs) bodies)
                     )
