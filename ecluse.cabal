@@ -1365,15 +1365,14 @@ benchmark ecluse-bench
   type:            exitcode-stdio-1.0
   main-is:         Main.hs
   hs-source-dirs:  bench
-  -- Built at the package's default optimisation (-O1), like every other component,
-  -- so the numbers reflect the shipped build rather than a benchmark-only setting.
-  -- The RTS opts bake in -T, so tasty-bench reports allocated bytes from GC stats on
-  -- every run, with no caller flag.
-  ghc-options:     -rtsopts "-with-rtsopts=-T"
+  -- Use the shipped -O1 default. Loopback replay needs the threaded RTS.
+  -- -T lets tasty-bench report allocations without a caller flag.
+  ghc-options:     -threaded -rtsopts "-with-rtsopts=-T"
   other-modules:
     Ecluse.Bench.Corpus
     Ecluse.Bench.Fit
     Ecluse.Core.CacheBench
+    Ecluse.Core.ColdReadBench
     Ecluse.Core.MergeBench
     Ecluse.Core.RouteBench
     Ecluse.Core.RulesBench
@@ -1390,6 +1389,7 @@ benchmark ecluse-bench
     , aeson            >=2.2 && <2.4
     , bytestring       ^>=0.12
     , containers       ^>=0.7
+    , http-client      ^>=0.7
     , http-types       ^>=0.12
     , tasty            ^>=1.5
     , tasty-bench      ^>=0.4
@@ -1397,6 +1397,8 @@ benchmark ecluse-bench
     , tasty-hunit      ^>=0.10
     , text             ^>=2.1
     , time             ^>=1.12
+    , wai              ^>=3.2
+    , warp             ^>=3.4
 
 -- The load tool links the composed application without entering the shipped library closure.
 -- Its concurrent scenarios require the threaded RTS and expose RTS statistics through -T.
