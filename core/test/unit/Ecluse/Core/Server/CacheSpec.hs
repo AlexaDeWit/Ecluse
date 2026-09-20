@@ -33,10 +33,8 @@ import Ecluse.Core.Server.Cache (
     StoreBudget (..),
     cachedMetadata,
     newMetadataCache,
-    weighCacheEntry,
  )
 import Ecluse.Core.Server.Cache qualified as Cache
-import Ecluse.Core.Server.Cache.Backend (externalBackend)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalBackend)
 import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -44,6 +42,7 @@ import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Package (npmVersion, pypiVersion, sampleArtifact, sampleDetails, thingName, unscopedNpm, unscopedPyPI, v1_0_0)
 import Ecluse.Test.Port (noopMetricsPort)
 import Ecluse.Test.Registry.PyPI (simpleFile, withFileKeys)
+import Ecluse.Test.Server.Cache (externalBackend, weighCacheEntry)
 import Ecluse.Test.Snapshot (readDetails, untaggedRead)
 
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
@@ -389,7 +388,7 @@ spec = do
             found `shouldBe` Nothing
             resolveAssembled c "stable" (pure "wrong") `shouldReturn` "assembled"
 
-        it "keeps the summed residency of all three stores within the summed sub-budgets" $ do
+        it "bounds eligible local residency without borrowing inactive full capacity" $ do
             fullSeen <- newIORef 0
             versionSeen <- newIORef 0
             assembledSeen <- newIORef 0
@@ -416,8 +415,9 @@ spec = do
                 _ <- Cache.resolveVersion port c publicSource name (npmVersion "1.0.0") (pure (Right (untaggedRead Nothing)))
                 _ <- Cache.resolveAssembled port c (show i) (pure (mkBytes 2048 'x'))
                 pass
-            total <- sum <$> traverse readIORef [fullSeen, versionSeen, assembledSeen]
-            total `shouldSatisfy` (<= fullBytes + versionBytes + assembledBytes)
+            readIORef fullSeen `shouldReturn` 0
+            total <- sum <$> traverse readIORef [versionSeen, assembledSeen]
+            total `shouldSatisfy` (<= versionBytes + assembledBytes)
 
     describe "cachedVersion -- read recency" $
         it "a cachedVersion read bumps the version entry's recency, so a re-read entry survives eviction (LRU, not FIFO)" $ do

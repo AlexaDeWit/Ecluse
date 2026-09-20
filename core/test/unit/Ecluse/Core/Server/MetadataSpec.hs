@@ -45,14 +45,13 @@ import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Security.Egress (RegistryUrl)
 import Ecluse.Core.Security.Egress.DevHttp (loopbackRegistryUrl)
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, newMetadataCache, newMetadataCacheWithBackend)
-import Ecluse.Core.Server.Cache.Backend (externalBackend)
 import Ecluse.Core.Server.Metadata (newMetadataReads, privateMetadataClient, publicMetadataClient, selectVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (mpCacheRequest, mpUpstreamFetchError, mpVersionCacheFullHit, mpVersionCacheRequest))
 import Ecluse.Core.Version (Version)
 import Ecluse.Test.Package (npmVersion, unscopedNpm)
 import Ecluse.Test.Port (noopMetricsPort)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Server.Cache (defaultCacheConfig, externalBackend)
 import Ecluse.Test.Snapshot (readDetails)
 
 -- | Tests for the serve-path read handle, whose single-version op is hybrid.

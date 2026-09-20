@@ -94,7 +94,7 @@ The retained samples include any backing arrays reachable through the selected s
 |---|---|
 | `wireBytes` | Capture bytes before parsing, with identity content encoding |
 | `compactBytes` | Re-encoded raw JSON bytes for raw and shared shapes |
-| `cacheWeight` | The production cache charge for the shared entry |
+| `cacheWeight` | The historical full-entry charge for comparison |
 | `versions` | Projected version count for typed and shared shapes |
 | `baselineLive`, `heldLive`, `releasedLive` | Absolute live bytes after each major collection |
 | `retained_per_wire_byte` | Held minus baseline live bytes, divided by capture bytes |
@@ -306,7 +306,7 @@ No family represents all deployments. The small captured identity space limits e
 | Heterogeneous fleet | Shared fraction and disjoint private names per client |
 | Zipf | Exponent, captured space, seed, and finite draw count |
 | Restart | Empty process cache and interval between client arrivals |
-| Scan | Repeated full scans with a full-store budget below the expanded wire working set |
+| Scan | Repeated full scans with selected-version and assembled capacity as independent controls |
 
 `bench-load npm/pattern-cold-install` selects one cell. Substitute `pypi` for its Simple-index trace.
 Each cell stops when its finite sequence completes or its whole-replay deadline expires.
@@ -350,11 +350,13 @@ Unsupported distinct-name and overlap requests fail instead of creating syntheti
 Each report states the parameters, distinct wire bytes, accounted capacity, occupancy, retention
 refusals, retention fraction, and collapsed fraction per store. The wire-to-resident comparison
 uses matching accounted bytes for the full store, computed through production projection and
-`weighCacheEntry` before measurement. Version and assembled working-set bytes remain unavailable.
+the historical `weighCacheEntry` helper before measurement. Version and assembled working-set bytes remain unavailable.
 The separate full-store wire-equivalent estimate excludes retained artifact keys.
 Full candidate accounting runs only during diagnostic preparation. Local requests never weigh or
-retain full entries, and their effective full capacity is zero. The existing `cached-public-hit`
+retain full entries, and their effective full capacity is zero. The `assembled-response-hit`
 and cache capacity scenarios measure assembled-response reuse, while full reads still fetch.
+The selectors `npm/cached-public-hit` and `pypi/cached-public-hit` were renamed to
+`npm/assembled-response-hit` and `pypi/assembled-response-hit`. Update benchmark invocations accordingly.
 The finite report retains scheduled, completed, successful, refused, other HTTP failure, transport
 failure, and unfinished totals and rates. Its success fraction divides by all scheduled requests.
 Successful throughput and latency exclude error responses. HTTP refusals count 429 and 503, while
@@ -369,16 +371,16 @@ Complete captures and the collapse telemetry are prerequisites for interpreting 
 Capture byte counts must match the provenance manifest before replay starts.
 A build without the required telemetry catalogue reports cache evidence as unavailable.
 
-For a retention decision, compare repeated seeds and skew settings at equal total memory.
-Set only the full budget to zero for a retention-off comparison that preserves single-flight.
-Then add the released full budget to the assembled budget for the reallocation comparison.
+Compare repeated seeds and skew settings at equal total memory and equal successful work.
+Full metadata is always ineligible for local retention. Its effective capacity is zero, and
+this path performs no retention weighing, encoding, insertion, or capacity-refusal accounting.
+`BENCH_PATTERN_FULL_BYTES` accepts only zero and does not select a different retention mode.
 
-Report the same pod memory target and every store budget across those comparisons. A zero full
-budget selects the existing one-byte minimum and refuses every captured full candidate after weighing.
-The report states that effective capacity. Those intentional refusals
-do not indicate unusually large documents. TTL zero changes all stores and creates no grace window.
-Keep 200-body replay separate from the legacy 304
-scenario because 304 avoids assembled-store resolution.
+Use `BENCH_PATTERN_VERSION_BYTES` and `BENCH_PATTERN_ASSEMBLED_BYTES` to vary eligible stores.
+Report the pod memory target and both store budgets for every comparison. Full candidate charges
+are historical diagnostics prepared before measurement, not retained local bytes or admission work.
+TTL zero changes both eligible stores. Keep 200-body replay separate from the legacy 304 scenario,
+because 304 avoids assembled-store resolution.
 
 ## Onboarding an ecosystem
 

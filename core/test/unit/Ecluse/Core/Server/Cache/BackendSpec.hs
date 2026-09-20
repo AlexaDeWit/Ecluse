@@ -9,8 +9,10 @@ import Test.Hspec
 import UnliftIO (cancel, timeout, wait, withAsync)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Core.Server.Cache.Backend (externalBackend, supportsFullRetention)
+import Ecluse.Core.Server.Cache.Backend (supportsFullRetention)
 import Ecluse.Core.Server.Cache.Store (SingleFlight, newSingleFlightWithBackend, resolveSingleFlight)
+
+import Ecluse.Test.Server.Cache (externalBackend)
 
 data BackendFault = BackendFault
     deriving stock (Show)

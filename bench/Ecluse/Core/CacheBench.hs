@@ -27,7 +27,7 @@ capacityBench capacity = do
             bgroup
                 (show capacity)
                 [ bench "cold fill" (whnfAppIO filledStore capacity)
-                , bench "full-store churn" (whnfIO (churn churnStore nextRange capacity))
+                , bench "eligible-store churn" (whnfIO (churn churnStore nextRange capacity))
                 , bench "100000 hot hits" (whnfIO (replicateM_ 100000 (resolveKey hotStore 0)))
                 ]
 

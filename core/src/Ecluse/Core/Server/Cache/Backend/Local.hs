@@ -15,7 +15,7 @@ import Data.Time (NominalDiffTime)
 import System.Clock (Clock (Monotonic), TimeSpec, fromNanoSecs, getTime)
 import UnliftIO.MVar (withMVar)
 
-import Ecluse.Core.Server.Cache.Backend.Internal (BackendStorage (LocalStorage), CacheOccupancy (..), Recency (..), RetentionBackend (..))
+import Ecluse.Core.Server.Cache.Backend (BackendStorage (LocalStorage), CacheOccupancy (..), Recency (..), RetentionBackend, retentionBackend)
 
 data Weighted v = Weighted
     { wValue :: v
@@ -66,14 +66,11 @@ newLocalBackend ttl maxEntries maxBytes weigh = do
                 , sfInsertLock = insertLock
                 }
 
-    pure
-        RetentionBackend
-            { rbStorage = LocalStorage
-            , rbLookup = \record _ recency key -> case recency of
-                PreserveRecency -> lookupStore record storeState key
-                RefreshRecency -> lookupStoreTouching record storeState key
-            , rbInsert = \record refused _ -> insertBounded record refused storeState
-            }
+    let readValue record recency key = case recency of
+            PreserveRecency -> lookupStore record storeState key
+            RefreshRecency -> lookupStoreTouching record storeState key
+        writeValue record refused = insertBounded record refused storeState
+    pure (retentionBackend LocalStorage readValue writeValue)
 
 insertBounded :: (Hashable k) => (CacheOccupancy -> IO ()) -> IO () -> LocalStore k v -> k -> v -> IO ()
 insertBounded recordOccupancy recordRefused sf key value

@@ -18,7 +18,6 @@ module Ecluse.Core.Server.Cache (
     -- * Cache entries
     Source (..),
     CacheEntry (..),
-    weighCacheEntry,
 
     -- * Resolution
     resolveMetadata,
@@ -37,16 +36,14 @@ import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime)
 
 import Ecluse.Core.Package (
-    PackageDetails (pkgArtifacts),
-    PackageInfo (infoVersions),
+    PackageInfo,
     PackageName,
-    artEntryKey,
     pkgCanonical,
     pkgEcosystem,
     pkgNamespace,
     renderScope,
  )
-import Ecluse.Core.Registry.CachedDocument (CachedDoc, weighCachedDoc)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Registry.Metadata (ContentDigest, MetadataError, VersionRead)
 import Ecluse.Core.Server.Cache.Backend (RetentionBackend, supportsFullRetention)
 import Ecluse.Core.Server.Cache.Store (
@@ -58,8 +55,7 @@ import Ecluse.Core.Server.Cache.Store (
     newSingleFlightWithBackend,
     resolveSingleFlight,
  )
-import Ecluse.Core.Server.Cache.VersionWeight (weighEntryKey, weighVersion)
-import Ecluse.Core.Server.MemoryModel (expandWireBytes)
+import Ecluse.Core.Server.Cache.VersionWeight (weighVersion)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Core.Version (Version, renderVersion)
@@ -100,18 +96,6 @@ data CacheEntry = CacheEntry
     , entryDigest :: ContentDigest
     }
     deriving stock (Eq, Show)
-
--- | Charge the shared wire expansion plus artifact coordinates retained by the typed view.
-weighCacheEntry :: CacheEntry -> Int
-weighCacheEntry e =
-    fromInteger (min (toInteger (maxBound :: Int)) (toInteger (weighEncodedBytes (weighCachedDoc (entryRaw e))) + keysWeight))
-  where
-    keysWeight = sum [weighEntryKey (artEntryKey artifact) | details <- toList (infoVersions (entryInfo e)), artifact <- toList (pkgArtifacts details)]
-
--- Scale through the one shared wire-to-resident model ("Ecluse.Core.Server.MemoryModel"), so this
--- weigher and the composition root's memory plan never drift on the expansion factor.
-weighEncodedBytes :: Int64 -> Int
-weighEncodedBytes = expandWireBytes . fromIntegral
 
 weighAssembled :: ByteString -> Int
 weighAssembled bytes = BS.length bytes + assembledEntryOverheadBytes

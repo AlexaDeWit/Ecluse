@@ -70,7 +70,7 @@ resolveOkAccumulating seen sf key fetch =
         =<< resolveSingleFlight (const pass) (\occ -> atomicModifyIORef' seen (\os -> (occ : os, ()))) pass sf key (Right <$> fetch)
 
 lookupStore :: SingleFlight StoreFault Text Text -> Text -> IO (Maybe Text)
-lookupStore = Store.lookupStore (const pass)
+lookupStore = Store.lookupStoreWithFailure (const pass) pass
 
 lookupStoreTouching :: SingleFlight StoreFault Text Text -> Text -> IO (Maybe Text)
 lookupStoreTouching = Store.lookupStoreTouching (const pass)
@@ -361,7 +361,7 @@ spec = do
             _ <- resolveOkAccumulating seen sf "second" (pure "raw")
             map occupancyPair <$> readIORef seen `shouldReturn` [(1, flatWeight), (0, 0), (1, flatWeight)]
 
-        for_ [("read-only", Store.lookupStore), ("touching", Store.lookupStoreTouching)] $ \(viewName, readEntry) ->
+        for_ [("read-only", (`Store.lookupStoreWithFailure` pass)), ("touching", Store.lookupStoreTouching)] $ \(viewName, readEntry) ->
             it ("reports expiry immediately through the " <> viewName <> " view") $ do
                 seen <- newIORef Nothing
                 sf <- newStore 0 1 flatWeight

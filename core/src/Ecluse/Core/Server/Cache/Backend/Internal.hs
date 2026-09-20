@@ -19,7 +19,10 @@ data RetentionBackend k v = RetentionBackend
     }
 
 -- | Local storage cannot retain full metadata, regardless of its capacity.
-data BackendStorage = LocalStorage | ExternalStorage
+data BackendStorage
+    = LocalStorage
+    | -- | External operation deadline, in microseconds, capped by the handle.
+      ExternalStorage Int
     deriving stock (Eq, Show)
 
 -- | Whether a probe contributes to eviction recency.

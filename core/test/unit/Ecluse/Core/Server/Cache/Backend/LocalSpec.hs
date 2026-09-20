@@ -9,7 +9,7 @@ import Test.Hspec
 
 import Ecluse.Core.Server.Cache.Backend (supportsFullRetention)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalBackend)
-import Ecluse.Core.Server.Cache.Store (SingleFlight, lookupStore, newSingleFlightWithBackend, resolveSingleFlight)
+import Ecluse.Core.Server.Cache.Store (SingleFlight, lookupStoreWithFailure, newSingleFlightWithBackend, resolveSingleFlight)
 
 data Weighed = Weighed
     deriving stock (Show)
@@ -24,4 +24,4 @@ spec = describe "newLocalBackend" $
             supportsFullRetention backend `shouldBe` False
             store <- newSingleFlightWithBackend (Just backend) :: IO (SingleFlight () Text Text)
             resolveSingleFlight (const pass) (const pass) pass store "key" (pure (Right "value")) `shouldReturn` Right "value"
-            lookupStore (const pass) store "key" `shouldReturn` Nothing
+            lookupStoreWithFailure (const pass) pass store "key" `shouldReturn` Nothing

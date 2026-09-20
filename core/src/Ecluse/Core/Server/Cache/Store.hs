@@ -7,7 +7,6 @@ module Ecluse.Core.Server.Cache.Store (
     newSingleFlight,
     newSingleFlightWithBackend,
     resolveSingleFlight,
-    lookupStore,
     lookupStoreWithFailure,
     lookupStoreTouching,
     CacheOccupancy (..),
@@ -84,10 +83,6 @@ resolveSingleFlight recordRequest recordOccupancy recordRefused sf key fetch = m
      in resolveAt recordRequest
   where
     deregister = modifyTVar' (sfInFlight sf) (Map.delete key)
-
--- | Read without fetching or refreshing recency, reporting expiry removals.
-lookupStore :: (CacheOccupancy -> IO ()) -> SingleFlight e k v -> k -> IO (Maybe v)
-lookupStore record = lookupStoreWithFailure record pass
 
 -- | Probe retention and report external failure without starting an upstream fetch.
 lookupStoreWithFailure :: (CacheOccupancy -> IO ()) -> IO () -> SingleFlight e k v -> k -> IO (Maybe v)

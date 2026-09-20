@@ -35,13 +35,13 @@ import Ecluse.Core.Registry.Npm.Request (npmArtifactHosts)
 import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex)
 import Ecluse.Core.Registry.PyPI.Request (pypiArtifactHosts)
 import Ecluse.Core.Security (Limits (maxMetadataBytes), defaultLimits, ecosystemArtifactAuthorities)
-import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), StoreBudget (..), weighCacheEntry)
+import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), StoreBudget (..))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.MemoryModel (contractResidentBytes)
 import Ecluse.Core.Telemetry.Catalogue (MetricName, metricName)
 import Ecluse.Runtime.Test.Telemetry (gaugePoints, sumPoints, withTestTelemetry)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName)
-import Ecluse.Test.Server.Cache (defaultCacheConfig)
+import Ecluse.Test.Server.Cache (defaultCacheConfig, weighCacheEntry)
 import Ecluse.Test.Wai (localhost, rebaseAuthority)
 
 -- | Every family receives a fresh proxy. No preflight request consumes or warms its trace.
@@ -63,7 +63,7 @@ patternScenarios ecosystem packages depsFor privateApp publicApp urlFor =
                 wireBytes <- either benchFail pure (workingBytes (Map.map (fromIntegral . LBS.length) captures) requestTrace)
                 let largest = foldl' max 0 (map (fromIntegral . LBS.length) (Map.elems captures))
                 measuredBodies <- newIORef (maxMetadataBytes defaultLimits, wireBytes, largest, 0)
-                fullCapacity <- readKnob "BENCH_PATTERN_FULL_BYTES" 0
+                fullCapacity <- readKnob "BENCH_PATTERN_FULL_BYTES" (0 :: Int)
                 when (fullCapacity /= 0) (benchFail "BENCH_PATTERN_FULL_BYTES must be zero: the local backend never retains full metadata")
                 versionCapacity <- readKnob "BENCH_PATTERN_VERSION_BYTES" (sbMaxBytes (cacheVersionBudget defaultCacheConfig))
                 assembledCapacity <- readKnob "BENCH_PATTERN_ASSEMBLED_BYTES" (sbMaxBytes (cacheAssembledBudget defaultCacheConfig))
@@ -187,7 +187,7 @@ evidence meter upstreamCount config rawBytes measuredBodies knobs requestTrace s
             , if metricsAvailable then renderStoreEvidence stores else "Cache evidence unavailable: this build lacks the collapse and refusal telemetry catalogue. Full-store candidate accounted bytes / capacity: " <> show fullWorkingBytes <> " / " <> show (sbMaxBytes (cacheFullBudget config)) <> "."
             , "Selected npm replay follows listings with captured public tarball coordinates after private misses. Artifact bytes are synthetic relay payloads. This measures the HTTP metadata gate, not a complete npm install or client integrity validation."
             , "RTS allocation and heap figures include the in-process replay client and stub upstreams. They are not proxy-only costs or directly comparable with the external oha generator."
-            , "Occupancy is the final reported gauge, not peak heap. Full working bytes use production projection and weighCacheEntry over each distinct rewritten body before measurement. Version and assembled working sets are unavailable. Their representations differ from listing wire bytes."
+            , "Occupancy is the final reported gauge, not peak heap. Full working bytes use production projection and historical weighCacheEntry over each distinct rewritten body before measurement. Version and assembled working sets are unavailable. Their representations differ from listing wire bytes."
             , "Full candidate charges above are diagnostic preparation only. The local request path never weighs full candidates. Compare equal successful work and all eligible store budgets."
             ]
   where

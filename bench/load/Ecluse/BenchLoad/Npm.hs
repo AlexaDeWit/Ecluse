@@ -85,7 +85,7 @@ npmFixture =
         { fixtureEcosystem = Npm
         , fixtureScenarios =
             [ mergeScenario
-            , cacheHitScenario
+            , assembledHitScenario
             , revalidateScenario
             , cacheFitsScenario
             , cacheEvictsScenario
@@ -116,10 +116,10 @@ mergeScenario =
         , scenarioBoot = \knobs k -> withNpmProxy knobs 0 defaultCacheEntries serveMix (k . DriveHttpUrls)
         }
 
-cacheHitScenario :: Scenario
-cacheHitScenario =
+assembledHitScenario :: Scenario
+assembledHitScenario =
     Scenario
-        { scenarioName = "cached-public-hit"
+        { scenarioName = "assembled-response-hit"
         , scenarioConcurrencyScale = 1
         , scenarioDescription =
             "GET /npm/{pkg} over the weighted corpus with retained assembled responses. Each request fetches full public and private metadata, except overlapping public reads share active work."

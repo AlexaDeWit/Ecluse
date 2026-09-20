@@ -47,7 +47,7 @@ pypiFixture =
         { fixtureEcosystem = PyPI
         , fixtureScenarios =
             [ indexScenario "index-cold" "GET the weighted Simple-index corpus with public cache TTL 0. Each request merges a live private overlay and filters files. Concurrent public misses share an in-flight fetch and decode." 0
-            , indexScenario "cached-public-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
+            , indexScenario "assembled-response-hit" "GET the weighted Simple-index corpus with retained assembled responses. Full public and private indexes are fetched per request, except overlapping public reads share active work." longCacheTtl
             , revalidateScenario
             , cacheFitsScenario
             , cacheEvictsScenario

@@ -4,9 +4,10 @@
 -- | Optional retention with bounded external operations and backend-owned codecs.
 module Ecluse.Core.Server.Cache.Backend (
     RetentionBackend,
+    BackendStorage (..),
     Recency (..),
     CacheOccupancy (..),
-    externalBackend,
+    retentionBackend,
     supportsFullRetention,
 ) where
 
@@ -15,23 +16,32 @@ import UnliftIO.Timeout (timeout)
 
 import Ecluse.Core.Server.Cache.Backend.Internal
 
-{- | Wrap synchronous external reads and writes. Each operation gets at most one second.
-The adapter owns TTL, bounded decoding, identity validation, and its storage representation.
+{- | Build storage independently of request coalescing. External deadlines cap at one second.
+Adapters own TTL, bounded decoding, identity validation, and storage representation.
 -}
-externalBackend :: Int -> (Recency -> k -> IO (Maybe v)) -> (k -> v -> IO ()) -> RetentionBackend k v
-externalBackend micros readValue writeValue =
+retentionBackend ::
+    BackendStorage ->
+    ((CacheOccupancy -> IO ()) -> Recency -> k -> IO (Maybe v)) ->
+    ((CacheOccupancy -> IO ()) -> IO () -> k -> v -> IO ()) ->
+    RetentionBackend k v
+retentionBackend storage readValue writeValue =
     RetentionBackend
-        { rbStorage = ExternalStorage
-        , rbLookup = \_ failed recency key -> join <$> bounded failed (readValue recency key)
-        , rbInsert = \_ _ failed key value -> void (bounded failed (writeValue key value))
+        { rbStorage = storage
+        , rbLookup = \record failed recency key -> runBackend storage failed Nothing (readValue record recency key)
+        , rbInsert = \record refused failed key value -> runBackend storage failed () (writeValue record refused key value)
         }
-  where
-    bounded failed action = do
+
+runBackend :: BackendStorage -> IO () -> a -> IO a -> IO a
+runBackend storage failed fallback action = case storage of
+    LocalStorage -> action
+    ExternalStorage micros -> do
         result <- tryAny (timeout (max 1 (min 1_000_000 micros)) action)
         case result of
-            Right (Just value) -> pure (Just value)
-            _ -> failed $> Nothing
+            Right (Just value) -> pure value
+            _ -> failed $> fallback
 
 -- | Only external storage is eligible to retain full metadata.
 supportsFullRetention :: RetentionBackend k v -> Bool
-supportsFullRetention backend = rbStorage backend == ExternalStorage
+supportsFullRetention backend = case rbStorage backend of
+    LocalStorage -> False
+    ExternalStorage _ -> True
