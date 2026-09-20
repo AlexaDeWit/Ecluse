@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | HTTP metadata merging, policy filtering, and representation coherence.
 module Ecluse.Core.Server.Pipeline.PackumentIntegrationSpec (spec) where
 
 import Data.Aeson (Value (String))
@@ -277,8 +278,8 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedLatest resp `shouldBe` Just "1.0.0"
 
 cacheSpec :: Spec
-cacheSpec = describe "metadata cache (read-through coherence)" $ do
-    it "reuses the cached document within the TTL -- a second request does not re-fetch" $ do
+cacheSpec = describe "metadata fetch and assembled-response coherence" $ do
+    it "fetches changed full metadata within the TTL and replaces the assembled representation" $ do
         privateUp <- failingUpstream
         let v1 =
                 encodePackument
@@ -286,20 +287,29 @@ cacheSpec = describe "metadata cache (read-through coherence)" $ do
             v2 =
                 encodePackument
                     ( packument
-                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", plainVersion "2.0.0")]
+                        [("1.0.0", versionObject "1.0.0" (sriFor "updated-1.0.0") False), ("2.0.0", plainVersion "2.0.0")]
                         "2.0.0"
                         [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
                     )
         publicUp <- mutatingUpstream (v1 :| [v2])
         withProxy privateUp publicUp Nothing $ \app -> do
             firstResp <- getThing Nothing app
+            status firstResp `shouldBe` 200
             servedVersions firstResp `shouldBe` ["1.0.0"]
+            servedLatest firstResp `shouldBe` Just "1.0.0"
+            servedIntegrity "1.0.0" firstResp `shouldBe` Just (sriFor "1.0.0")
+            firstEtag <- etagOf firstResp
             secondResp <- getThing Nothing app
             status secondResp `shouldBe` 200
-            servedVersions secondResp `shouldBe` ["1.0.0"]
-            seenAuth publicUp `shouldReturn` [Nothing]
+            servedVersions secondResp `shouldBe` ["1.0.0", "2.0.0"]
+            servedLatest secondResp `shouldBe` Just "2.0.0"
+            servedIntegrity "1.0.0" secondResp `shouldBe` Just (sriFor "updated-1.0.0")
+            servedIntegrity "2.0.0" secondResp `shouldBe` Just (sriFor "2.0.0")
+            secondEtag <- etagOf secondResp
+            secondEtag `shouldNotBe` firstEtag
+            seenAuth publicUp `shouldReturn` [Nothing, Nothing]
 
-    it "serves a coherent pair: the cached typed decision matches the cached bytes" $ do
+    it "keeps each fetched policy decision and its served fields coherent" $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream
@@ -318,6 +328,7 @@ cacheSpec = describe "metadata cache (read-through coherence)" $ do
             servedVersions secondResp `shouldBe` ["1.0.0"]
             servedIntegrity "1.0.0" secondResp `shouldBe` Just (sriFor "1.0.0")
             servedVersionKey "1.0.0" "_unmodeled" secondResp `shouldBe` Just (String "kept")
+            seenAuth publicUp `shouldReturn` [Nothing, Nothing]
 
 noSurvivorsSpec :: Spec
 noSurvivorsSpec = describe "no survivors in the merge" $ do

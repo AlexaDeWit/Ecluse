@@ -94,7 +94,8 @@ privateAuthorisationSpec = describe "private authorisation refusal" $ do
                             header "Set-Cookie" response `shouldBe` Nothing
                             header "Retry-After" response `shouldBe` Nothing
                             servedVersions response `shouldBe` []
-                    seenAuth publicUp `shouldReturn` [Nothing | not firstParty]
+                    seenAuth privateUp `shouldReturn` replicate 4 (Just "Bearer client-token")
+                    seenAuth publicUp `shouldReturn` replicate (if firstParty then 0 else 4) Nothing
                     drainJobs env `shouldReturn` []
 
         it ("retains metadata HTTP " <> show (statusCode upstreamStatus) <> " when its error body is truncated") $ do
@@ -163,7 +164,7 @@ privateAuthoritySpec = describe "private origin is the per-client authority (not
             privAuth <- seenAuth privateUp
             pubAuth <- seenAuth publicUp
             privAuth `shouldBe` [Just "Bearer tokenA", Just "Bearer tokenB"]
-            pubAuth `shouldBe` [Nothing]
+            pubAuth `shouldBe` [Nothing, Nothing]
 
     it "serves byte-identical bodies across identical repeat requests (the assembled representation is reused)" $ do
         (privateUp, publicUp) <- twoServingUpstreams

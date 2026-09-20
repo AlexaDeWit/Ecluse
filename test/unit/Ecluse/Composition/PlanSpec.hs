@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Boot-plan reporting, refusal, and dependency wiring.
 module Ecluse.Composition.PlanSpec (spec) where
 
 import Data.Text qualified as T
@@ -84,6 +85,7 @@ spec = describe "resolveBootPlan" $ do
         bpLines plan
             `shouldBe` [ "runtime: private connection pool 256 (computed from file-descriptor limit 1024)"
                        , "runtime: public connection pool 128 (computed from file-descriptor limit 1024)"
+                       , "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
                        , "runtime: serve admission 20 (computed from 2 capabilities)"
                        , "memory plan: response byte cap 12582912" <> fallbackClause
                        , "memory plan: request byte cap 26214400" <> fallbackClause

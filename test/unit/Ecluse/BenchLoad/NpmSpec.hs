@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Real proxy replay and local-retention configuration checks.
 module Ecluse.BenchLoad.NpmSpec (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -11,6 +12,7 @@ import Network.HTTP.Types (status200, status404)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 
+import Ecluse.BenchLoad.Error (BenchLoadError (BenchLoadError))
 import Ecluse.BenchLoad.Fixture (fetchChecked)
 import Ecluse.BenchLoad.Harness (Driver (DriveReplay), LoadKnobs (..), Scenario (..), UpstreamFixture (fixtureScenarios), defaultLoadKnobs)
 import Ecluse.BenchLoad.Npm (corpusPublicStub, npmFixture, privateOverlayStub)
@@ -38,21 +40,30 @@ spec = describe "npm artifact fixture paths" $ do
             metadata <- fetchChecked status200 [] (localhost port <> "/request")
             HTTP.responseBody metadata `shouldBe` rebaseAuthority "https://registry.npmjs.org" (localhost port) body
 
-    for_ [(154 * 1024 * 1024, 1), (0, 2)] $ \(fullBytes, metadataFetches) ->
-        it ("serves listing and public artifact through the proxy at full budget " <> show (fullBytes :: Int)) $ do
-            let entries =
-                    [ ("BENCH_PATTERN_NAMES", "1")
-                    , ("BENCH_PATTERN_SELECTED_VERSION", "pinned")
-                    , ("BENCH_PATTERN_FULL_BYTES", show fullBytes)
-                    , ("BENCH_PATTERN_NOW", "2026-09-21T00:00:00Z")
-                    ]
-            withEnvVars (map fst entries) entries $
-                case find ((== "pattern-cold-install") . scenarioName) (fixtureScenarios npmFixture) of
-                    Nothing -> expectationFailure "missing cold-install scenario"
-                    Just scenario -> scenarioBoot scenario defaultLoadKnobs{lkUpstreamLatencyMicros = 0, lkPayloadBytes = 32} $ \case
-                        DriveReplay replay -> do
-                            report <- runReplay replay
-                            ohaStatusCounts (replayHttp report) `shouldBe` Map.singleton "200" 2
-                            observed <- replayEvidence replay
-                            observed `shouldSatisfy` T.isInfixOf ("Public upstream requests (metadata / artifact): " <> show (metadataFetches :: Int) <> " / 1.")
-                        _ -> expectationFailure "cold-install scenario did not select finite replay"
+    it "serves a listing and public artifact with no local full retention" $
+        bootSelectedPattern 0 $ \case
+            DriveReplay replay -> do
+                report <- runReplay replay
+                ohaStatusCounts (replayHttp report) `shouldBe` Map.singleton "200" 2
+                observed <- replayEvidence replay
+                observed `shouldSatisfy` T.isInfixOf "Public upstream requests (metadata / artifact): 2 / 1."
+                observed `shouldSatisfy` T.isInfixOf "Local full retention is ineligible. Effective full capacity is zero."
+            _ -> expectationFailure "cold-install scenario did not select finite replay"
+
+    it "rejects a full-retention budget before starting a replay" $
+        bootSelectedPattern (154 * 1024 * 1024) (const (expectationFailure "a nonzero full budget reached the replay"))
+            `shouldThrow` (\(BenchLoadError message) -> message == "BENCH_PATTERN_FULL_BYTES must be zero: the local backend never retains full metadata")
+
+bootSelectedPattern :: Int -> (Driver -> IO ()) -> IO ()
+bootSelectedPattern fullBytes action =
+    withEnvVars (map fst entries) entries $
+        case find ((== "pattern-cold-install") . scenarioName) (fixtureScenarios npmFixture) of
+            Nothing -> expectationFailure "missing cold-install scenario"
+            Just scenario -> scenarioBoot scenario defaultLoadKnobs{lkUpstreamLatencyMicros = 0, lkPayloadBytes = 32} action
+  where
+    entries =
+        [ ("BENCH_PATTERN_NAMES", "1")
+        , ("BENCH_PATTERN_SELECTED_VERSION", "pinned")
+        , ("BENCH_PATTERN_FULL_BYTES", show fullBytes)
+        , ("BENCH_PATTERN_NOW", "2026-09-21T00:00:00Z")
+        ]
