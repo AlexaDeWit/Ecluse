@@ -127,7 +127,7 @@ cacheBytesFallback :: Int
 cacheBytesFallback = 268435456
 
 {- | Shared entry allowance (16 KiB), matching the present-selected base charge.
-See @docs/calibration/local-entry-count.md@ for the cardinality trade-off.
+Calibration and cardinality limits: <https://github.com/AlexaDeWit/Ecluse/pull/1469#issuecomment-5756635550 PR #1469>.
 -}
 cacheEntryExpectedBytes :: Int
 cacheEntryExpectedBytes = 16384
