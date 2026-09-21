@@ -21,6 +21,31 @@ import Ecluse.Test.Support (expectRight)
 -- | Verify retained-depth boundaries, source identity and response cancellation.
 spec :: Spec
 spec = describe "readJsonStream" $ do
+    forM_ [("object", \fallback -> retainedObjectWith fallback (const (retainedValue 3)), object ["keep" .= (1 :: Int)]), ("array", \fallback -> retainedArrayWith fallback (retainedValue 3), Array (fromList [Number 1]))] $ \(label, choose, value) ->
+        it ("commits to the " <> label <> " before reading its next chunk") $ do
+            let fallback = J.mapWithFailure (const (Left "unselected fallback")) (J.objectFound () () mempty <> J.arrayFound () () mempty)
+                body = toStrict (encode value)
+            result <- expectRight (decode (choose fallback) [BS.take 1 body, BS.drop 1 body])
+            streamValue result `shouldBe` Right (Just value)
+
+    forM_ [Null, Bool False, Number 2, String "text", object [], Array mempty] $ \value ->
+        it ("preserves generic shape selection for " <> show value) $ do
+            result <- expectRight (decode (J.objectWithKey "value" (retainedValue 1)) [toStrict (encode (object ["value" .= value]))])
+            streamValue result `shouldBe` Right (Just value)
+
+    it "preserves a scalar fallback and an invalid-container witness" $ do
+        let parser = retainedObjectWith (retainedScalar <|> pure (Array mempty)) (const (retainedValue 1))
+        forM_ [("true", Bool True), ("null", Null), ("[1,2]", Array mempty)] $ \(body, expected) -> do
+            result <- expectRight (decode (J.objectWithKey "value" parser) ["{\"value\":" <> body <> "}"])
+            streamValue result `shouldBe` Right (Just expected)
+
+    it "keeps first duplicate keys and nested array order across both container alternatives" $ do
+        let body = "[{\"key\":[1,2],\"key\":[3]},[false,null]]"
+            expected = fromList [object ["key" .= [Number 1, Number 2]], Array (fromList [Bool False, Null])]
+        forM_ [1 .. BS.length body - 1] $ \position -> do
+            result <- expectRight (decode (retainedValue 4) [BS.take position body, BS.drop position body])
+            streamValue result `shouldBe` Right (Just (Array expected))
+
     forM_ [object [], Array mempty, String "leaf"] $ \value -> do
         it ("accepts one retained level for " <> show value) $ do
             result <- expectRight (decode (retainedValue 1) [toStrict (encode value)])
@@ -31,7 +56,7 @@ spec = describe "readJsonStream" $ do
 
     it "preserves nested values and split escapes at every source boundary" $ do
         let body = "{\"keep\":{\"list\":[1,true,null,\"a\\\\b\\u00e9\"]},\"ignored\":{\"blob\":[1,2,3]}}"
-            parser = retainedObject (\key -> if key == "keep" then retainedValue 10 else mempty)
+            parser = retainedObjectWith mempty (\key -> if key == "keep" then retainedValue 10 else mempty)
             baseline = decode parser [body]
         forM_ [1 .. BS.length body - 1] $ \position ->
             decode parser [BS.take position body, BS.drop position body] `shouldBe` baseline
@@ -44,7 +69,7 @@ spec = describe "readJsonStream" $ do
         result <-
             expectRight
                 ( decode
-                    (retainedObject (\key -> if key == "keep" then retainedValue 3 else mempty))
+                    (retainedObjectWith mempty (\key -> if key == "keep" then retainedValue 3 else mempty))
                     ["{\"ignored\":{\"deep\":[[[[[1]]]]]},\"keep\":\"yes\"}"]
                 )
         streamValue result `shouldBe` Right (Just (object ["keep" .= ("yes" :: Text)]))

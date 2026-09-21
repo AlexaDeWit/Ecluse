@@ -14,7 +14,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.JsonStream.Parser qualified as J
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Registry.JsonStream (retainedArray, retainedObject, retainedObjectOr, retainedScalar, retainedValue)
+import Ecluse.Core.Registry.JsonStream (retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue)
 import Ecluse.Core.Registry.PyPI.Project (fileVersionKey)
 
 -- | Select all files or one canonical release while counting every input file.
@@ -52,10 +52,10 @@ pypiFields depth mode
         | otherwise = retainedScalar <|> pure (Array mempty)
     objectOrScalar budget fields
         | budget <= 0 = retainedValue 0
-        | otherwise = retainedObject fields <|> scalar budget
+        | otherwise = retainedObjectWith (scalar budget) fields
     arrayOrScalar budget
         | budget <= 0 = retainedValue 0
-        | otherwise = retainedArray (scalar (budget - 1)) <|> scalar budget
+        | otherwise = retainedArrayWith (scalar budget) (scalar (budget - 1))
     files =
         J.arrayFound (FilesShape True) IgnoredField (uncurry FileField <$> J.indexedArrayOf file)
             <|> (FilesShape True <$ J.jNull)
