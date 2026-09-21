@@ -32,8 +32,9 @@ import Ecluse.Core.Version (Version, mkVersion)
 data NpmProjection = NpmProjection
     { projectedName :: Maybe Value
     , projectedVersions :: Map Text (Either InvalidEntry PackageDetails, Value)
-    , projectedTimes :: Map Text (Either InvalidEntry UTCTime, Value)
-    , projectedTags :: Map Text (Either InvalidEntry Version, Value)
+    , projectedTimes :: Map Text (Either InvalidEntry UTCTime)
+    , projectedTags :: Map Text (Either InvalidEntry Version)
+    , projectedBookkeeping :: Map Text Value
     , projectedCount :: Int
     , projectedContainers :: Set NpmContainer
     , projectedActiveContainer :: Maybe NpmContainer
@@ -48,6 +49,7 @@ emptyProjection =
         , projectedVersions = mempty
         , projectedTimes = mempty
         , projectedTags = mempty
+        , projectedBookkeeping = mempty
         , projectedCount = 0
         , projectedContainers = mempty
         , projectedActiveContainer = Nothing
@@ -82,14 +84,27 @@ collectField limits name acc = \case
                 , projectedVersions = maybe (projectedVersions acc) (\value -> let !typed = release key value in firstInsert key (typed, value) (projectedVersions acc)) raw
                 }
     TimeField _ _ | projectedActiveContainer acc /= Just TimeContainer -> Right acc
-    TimeField key value -> Right acc{projectedTimes = firstInsert key (decode InvalidPublishTime key value, value) (projectedTimes acc)}
+    TimeField key _ | Map.member key (projectedTimes acc) -> Right acc
+    TimeField key value ->
+        Right
+            acc
+                { projectedTimes = firstInsert key (decode force InvalidPublishTime key value) (projectedTimes acc)
+                , projectedBookkeeping =
+                    if key == "created" || key == "modified"
+                        then firstInsert key value (projectedBookkeeping acc)
+                        else projectedBookkeeping acc
+                }
     TagField _ _ | projectedActiveContainer acc /= Just TagsContainer -> Right acc
-    TagField key value -> Right acc{projectedTags = firstInsert key (mkVersion Npm <$> decode InvalidDistTag key value, value) (projectedTags acc)}
+    TagField key _ | Map.member key (projectedTags acc) -> Right acc
+    TagField key value -> Right acc{projectedTags = firstInsert key (decode (mkVersion Npm) InvalidDistTag key value) (projectedTags acc)}
   where
     release key value = case projectVersionEntryResult name (mkVersion Npm key) Nothing value of
         Left err -> Left $! mkInvalidEntry InvalidVersionManifest key value (toText err)
         Right details -> Right $! details
-    decode kind key value = first (mkInvalidEntry kind key value . toText) (parseEither parseJSON value)
+    -- Force the decoded payload so a successful entry cannot retain its source Value.
+    decode convert kind key value = case parseEither parseJSON value of
+        Left err -> Left $! mkInvalidEntry kind key value (toText err)
+        Right typed -> Right $! convert typed
 
 firstInsert :: (Ord k) => k -> a -> Map k a -> Map k a
 firstInsert = Map.insertWith (\_ old -> old)
@@ -104,17 +119,17 @@ finishProjection limits requested authorPointer acc = do
     pure (info, document)
   where
     versions = Map.mapMaybe (rightToMaybe . fst) (projectedVersions acc)
-    times = Map.mapMaybe (rightToMaybe . fst) (projectedTimes acc)
-    tags = Map.mapMaybe (rightToMaybe . fst) (projectedTags acc)
+    times = Map.mapMaybe rightToMaybe (projectedTimes acc)
+    tags = Map.mapMaybe rightToMaybe (projectedTags acc)
     stamp key details = details{pkgPublishedAt = Map.lookup key times}
-    drops entries = lefts (map (fst . snd) (Map.toAscList entries))
+    drops = lefts . Map.elems
     package =
         PackageInfo
             { infoName = requested
             , infoVersions = Map.mapWithKey stamp versions
             , infoDistTags = tags
             , infoInvalidEntries =
-                drops (projectedVersions acc)
+                lefts (map fst (Map.elems (projectedVersions acc)))
                     <> drops (projectedTags acc)
                     <> drops (Map.restrictKeys (projectedTimes acc) (Map.keysSet versions))
             }
@@ -124,11 +139,9 @@ finishProjection limits requested authorPointer acc = do
                 [ ("name", fromMaybe Null (projectedName acc))
                 , ("author", String authorPointer)
                 , ("versions", Object (KeyMap.fromList [(Key.fromText key, withPointer raw) | (key, (_, raw)) <- Map.toList (projectedVersions acc)]))
-                , ("time", rawMap (projectedTimes acc))
-                , ("dist-tags", rawMap (projectedTags acc))
+                , ("time", Object (KeyMap.fromList [(Key.fromText key, raw) | (key, raw) <- Map.toList (projectedBookkeeping acc)]))
                 ]
             )
     withPointer = \case
         Object fields -> Object (KeyMap.insert "author" (String authorPointer) fields)
         other -> other
-    rawMap entries = Object (KeyMap.fromList [(Key.fromText key, raw) | (key, (_, raw)) <- Map.toList entries])
