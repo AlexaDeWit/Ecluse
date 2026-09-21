@@ -2,7 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Extract supported Simple-index fields without retaining unknown fields or metadata sidecars.
+{- | Extract supported Simple-index fields without retaining unknown fields or metadata sidecars.
+Selected reads retain pending fields only until the first filename excludes the requested release.
+-}
 module Ecluse.Core.Registry.PyPI.Streaming (
     PyPIRead (..),
     PyPIField (..),
@@ -10,6 +12,7 @@ module Ecluse.Core.Registry.PyPI.Streaming (
 ) where
 
 import Data.Aeson (Value (Array, Null, Object, String))
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.JsonStream.Parser qualified as J
 
@@ -47,9 +50,6 @@ pypiFields depth mode
     fullOnly parser = case mode of
         FullRead -> parser
         SelectedRead{} -> mempty
-    scalar budget
-        | budget <= 0 = retainedValue 0
-        | otherwise = retainedScalar <|> pure (Array mempty)
     objectOrScalar budget fields
         | budget <= 0 = retainedValue 0
         | otherwise = retainedObjectWith (scalar budget) fields
@@ -60,12 +60,11 @@ pypiFields depth mode
         J.arrayFound (FilesShape True) IgnoredField (uncurry FileField <$> J.indexedArrayOf file)
             <|> (FilesShape True <$ J.jNull)
             <|> pure (FilesShape False)
-    file = select <$> if depth <= 2 then retainedValue 0 else retainedObjectOr Null fileField
-    select raw = case mode of
-        FullRead -> Just raw
-        SelectedRead name wanted -> case raw of
-            Object fields | Just (String filename) <- KeyMap.lookup "filename" fields, fileVersionKey name filename == Just wanted -> Just raw
-            _ -> Nothing
+    file
+        | depth <= 2 = Nothing <$ retainedValue 0
+        | otherwise = case mode of
+            FullRead -> Just <$> retainedObjectOr Null fileField
+            SelectedRead name wanted -> selectedFile (depth - 3) name wanted
     versions = case mode of
         SelectedRead{} -> mempty
         FullRead ->
@@ -76,7 +75,7 @@ pypiFields depth mode
     version (position, value) = InvalidVersionField position value
     fileField "hashes" = objectOrScalar (depth - 3) (const (scalar (depth - 4)))
     fileField key
-        | key `elem` ["filename", "url", "requires-python", "size", "upload-time", "yanked", "provenance"] = scalar (depth - 3)
+        | isFileScalar key = scalar (depth - 3)
         | otherwise = mempty
     metaField "tracks" = fullOnly (arrayOrScalar (depth - 2))
     metaField key
@@ -86,3 +85,63 @@ pypiFields depth mode
     statusField key
         | key `elem` ["status", "reason"] = scalar (depth - 2)
         | otherwise = mempty
+
+scalar :: Int -> J.Parser Value
+scalar budget
+    | budget <= 0 = retainedValue 0
+    | otherwise = retainedScalar <|> pure (Array mempty)
+
+isFileScalar :: Text -> Bool
+isFileScalar key = key `elem` ["filename", "url", "requires-python", "size", "upload-time", "yanked", "provenance"]
+
+data SelectedFileEvent
+    = FileScalar Key.Key Value
+    | HashesStart
+    | HashesEnd
+    | HashField Key.Key Value
+    | HashesValue Value
+
+data SelectedFile
+    = RejectedFile
+    | CandidateFile Bool [(Key.Key, Value)] (Maybe Value) Bool
+
+selectedFile :: Int -> PackageName -> Text -> J.Parser (Maybe Value)
+selectedFile budget name wanted = finishSelected <$> J.foldI (collectSelected name wanted) initial (J.objectKeyValues field)
+  where
+    initial = CandidateFile False [] Nothing False
+    field "hashes"
+        | budget <= 0 = HashesValue <$> retainedValue 0
+        | otherwise =
+            J.objectFound HashesStart HashesEnd (J.objectKeyValues hashField)
+                <|> (HashesValue <$> scalar budget)
+    field key
+        | isFileScalar key = FileScalar (Key.fromText key) <$> scalar budget
+        | otherwise = mempty
+    hashField key = HashField (Key.fromText key) <$> scalar (budget - 1)
+
+collectSelected :: PackageName -> Text -> SelectedFile -> SelectedFileEvent -> SelectedFile
+collectSelected _ _ RejectedFile _ = RejectedFile
+collectSelected name wanted current@(CandidateFile matched scalars hashes active) event = case event of
+    FileScalar key value
+        | any ((== key) . fst) scalars -> current
+        | key == "filename" -> case value of
+            String filename
+                | fileVersionKey name filename == Just wanted ->
+                    CandidateFile True ((key, value) : scalars) hashes active
+            _ -> RejectedFile
+        | otherwise -> CandidateFile matched ((key, value) : scalars) hashes active
+    HashesStart ->
+        CandidateFile matched scalars (hashes <|> Just (Object mempty)) (isNothing hashes)
+    HashesEnd -> CandidateFile matched scalars hashes False
+    HashesValue value -> CandidateFile matched scalars (hashes <|> Just value) active
+    HashField key value
+        | active
+        , Just (Object fields) <- hashes
+        , not (KeyMap.member key fields) ->
+            CandidateFile matched scalars (Just (Object (KeyMap.insert key value fields))) active
+        | otherwise -> current
+
+finishSelected :: SelectedFile -> Maybe Value
+finishSelected (CandidateFile True fields hashes _) =
+    Just (Object (KeyMap.fromList (maybeToList ((,) "hashes" <$> hashes) <> fields)))
+finishSelected _ = Nothing
