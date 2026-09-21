@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The shipped numbers the memory plan resolves against, and the byte charge a tenant's demand
-turns into. The shares carve up the application heap, the floors and caps bracket every computed
-bound through @clamp@, and the fallbacks stand in for a pod with no heap-ceiling datapoint. A
-configured value overrides a bound. These are what is left when none is configured.
--}
+-- | Default tenant shares, computed bounds, and fallbacks without a heap ceiling.
 module Ecluse.Composition.MemoryPlan.Bounds (
     -- * Shares of the application heap
     runtimeReserveShareDiv,
@@ -130,9 +126,11 @@ cacheBytesCap = 1073741824
 cacheBytesFallback :: Int
 cacheBytesFallback = 268435456
 
--- | The planning allowance per shared local metadata entry slot (256 KiB).
+{- | Shared entry allowance (16 KiB), matching the present-selected base charge.
+Calibration and cardinality limits: <https://github.com/AlexaDeWit/Ecluse/pull/1469#issuecomment-5756635550 PR #1469>.
+-}
 cacheEntryExpectedBytes :: Int
-cacheEntryExpectedBytes = 262144
+cacheEntryExpectedBytes = 16384
 
 -- | The smallest computed cache entry bound.
 cacheEntriesFloor :: Int

@@ -75,11 +75,11 @@ import Ecluse.Rts (
  )
 import Ecluse.Test.Package (unsafeRegistryUrl)
 
+-- | Verify boot reporting and refusals against the resolved configuration.
 spec :: Spec
 spec = describe "resolveBootPlan" $ do
     it "orders the plan's lines into the one list both entry points emit" $ do
-        -- The golden the acceptance criterion rests on: the boot logs this list and
-        -- check-config prints it, so the two transcripts cannot diverge.
+        -- Boot and check-config share this transcript.
         config <- expectConfig staticEnvVars Nothing
         plan <- expectPlan staticEnvVars Nothing config noCeiling
         bpLines plan
@@ -93,7 +93,7 @@ spec = describe "resolveBootPlan" $ do
                        , "metadata admission estimates: cold selected 9437184, retained selected 262144, full origin 38797312, listing output 11534336 bytes"
                        , "memory plan: request byte cap 26214400" <> fallbackClause
                        , "memory plan: cache byte bound 268435456" <> fallbackClause
-                       , "memory plan: cache entry bound 1024" <> fallbackClause
+                       , "memory plan: cache entry bound 16384" <> fallbackClause
                        , "memory plan: memory-queue depth 50000" <> fallbackClause
                        , "memory plan: mirror artifact byte cap 536870912" <> fallbackClause
                        , "mirror queue: sqs, https://sqs.us-east-1.amazonaws.com/123456789012/mirror (region us-east-1)"
