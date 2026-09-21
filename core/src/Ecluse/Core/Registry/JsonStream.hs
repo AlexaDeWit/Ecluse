@@ -2,7 +2,10 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Incremental registry extraction with a complete-source digest and bounded input chunks.
+{- | Incremental registry extraction with a complete-source digest and bounded input chunks.
+With json-stream 0.4.6.1 and text 2.1.3, decoded strings and keys own their arrays, including chunk-spanning tokens.
+See <https://github.com/ondrap/json-stream/blob/537a43a775e64f50dc63c373193323de98619799/Data/JsonStream/Unescape.hs decoder storage>.
+-}
 module Ecluse.Core.Registry.JsonStream (
     StreamResult (..),
     readJsonStream,
@@ -20,7 +23,6 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
-import Data.Text qualified as T
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry (ParseError (..))
@@ -101,7 +103,7 @@ data Retained = Missing | ObjectFields (KeyMap.KeyMap Value) | ArrayItems [Value
 objectEvents :: (Text -> J.Parser Value) -> J.Parser RetainedEvent
 objectEvents select = J.objectFound BeginObject EndContainer (J.objectKeyValues field)
   where
-    field key = ObjectField (Key.fromText (T.copy key)) <$> select key
+    field key = ObjectField (Key.fromText key) <$> select key
 
 arrayEvents :: J.Parser Value -> J.Parser RetainedEvent
 arrayEvents parser = J.arrayFound BeginArray EndContainer (ArrayItem <$> J.arrayOf parser)
@@ -124,4 +126,4 @@ foldRetained = fmap finish . J.foldI collect Missing
 
 -- | Read a scalar without materialising an object or array when the field has the wrong shape.
 retainedScalar :: J.Parser Value
-retainedScalar = (String . T.copy <$> J.string) <|> (Number <$> J.number) <|> (Bool <$> J.bool) <|> (Null <$ J.jNull)
+retainedScalar = (String <$> J.string) <|> (Number <$> J.number) <|> (Bool <$> J.bool) <|> (Null <$ J.jNull)

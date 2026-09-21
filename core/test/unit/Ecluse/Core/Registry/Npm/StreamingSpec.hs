@@ -112,6 +112,25 @@ spec = describe "npmFields" $ do
         selected <- expectRight (projectNpmVersion defaultLimits name (mkVersion Npm "1.0.0") bytes)
         (vrVersion selected >>= vdRaw >>= snd npmCached >>= fieldAt "workspaces") `shouldBe` Just workspaces
 
+    it "preserves escaped map keys and person strings in each npm read mode" $ do
+        let key = "1.0.0-é" :: Text
+            person = "person\n\"😀" :: Text
+            doc = object ["versions" .= object [Key.fromText key .= object ["license" .= person, "_npmUser" .= person]], "time" .= object [Key.fromText key .= person], "dist-tags" .= object ["clé" .= key]]
+            bytes = toStrict (encode doc)
+            releaseEvent = VersionField key (Just (object ["license" .= person, "_npmUser" .= person]))
+        forM_ [FullRead, SelectedRead key, VersionListRead] $ \mode ->
+            forM_ [1, 7, 32768] $ \size -> do
+                let chunks = unfoldr (\rest -> if BS.null rest then Nothing else Just (BS.splitAt size rest)) bytes
+                result <- expectRight (parseJsonChunks (MetadataBodyLimit (BS.length bytes)) (npmFields 12 mode) (\events event -> Right (event : events)) [] chunks)
+                events <- expectRight (streamValue result)
+                events `shouldContain` [releaseEvent]
+                when (mode == FullRead) $ do
+                    events `shouldContain` [TagField "clé" (String key)]
+                    events `shouldContain` [TimeField key (String person)]
+                when (mode == SelectedRead key) $ events `shouldContain` [TimeField key (String person)]
+                streamDigest result `shouldBe` digestOf bytes
+                streamBytes result `shouldBe` BS.length bytes
+
     it "joins timestamps and tags when they precede versions across one-byte chunks" $ do
         streamed <-
             expectRight

@@ -7,6 +7,7 @@ Explicit imports keep integration fixtures from registering unrelated examples.
 -}
 module Main (main) where
 
+import Ecluse.Core.Registry.JsonStreamResidencySpec qualified as JsonStreamResidencySpec
 import Ecluse.Core.Server.MemoryModel.MaterialProbe qualified as MaterialProbe
 import Ecluse.Core.Server.MemoryModel.Probe (SelectedShape (SelectedControl, SelectedValue))
 import Ecluse.Core.Server.MemoryModelResidencySpec qualified as MemoryModelResidencySpec
@@ -24,5 +25,6 @@ main =
         ["--metadata-selected-retention-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedValue ecosystem name version limit path
         ["--metadata-selected-control-probe", ecosystem, name, version, limit, path] -> MemoryModelResidencySpec.selectedMain SelectedControl ecosystem name version limit path
         _ -> hspec $ do
+            JsonStreamResidencySpec.spec
             TarballResidencySpec.spec
             MemoryModelResidencySpec.spec
