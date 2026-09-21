@@ -14,7 +14,6 @@ module Ecluse.Core.Registry.Npm.Streaming (
 
 import Data.Aeson (Value (Array, Null, Number, Object, String))
 import Data.JsonStream.Parser qualified as J
-import Data.Text qualified as T
 
 import Ecluse.Core.Registry.JsonStream (retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue, withinRetainedDepth)
 
@@ -60,10 +59,10 @@ npmFields depth mode = withinRetainedDepth depth (J.objectKeyValues topField)
                 <|> pure (InvalidContainer slot)
     release key = case mode of
         SelectedRead target | key /= target -> pure (VersionField "" Nothing)
-        VersionListRead -> VersionField (T.copy key) . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null listField)
-        _ -> VersionField (T.copy key) . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null (field versionFields))
-    timestamp key = TimeField (T.copy key) <$> scalar (depth - 2)
-    tag key = TagField (T.copy key) <$> scalar (depth - 2)
+        VersionListRead -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null listField)
+        _ -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null (field versionFields))
+    timestamp key = TimeField key <$> scalar (depth - 2)
+    tag key = TagField key <$> scalar (depth - 2)
     listField key
         | key == "name" || key == "version" = withinRetainedDepth (depth - 3) witness
         | key == "dist" = withinRetainedDepth (depth - 3) (retainedObjectOr Null (\slot -> if slot `elem` ["tarball", "shasum", "integrity"] then withinRetainedDepth (depth - 4) witness else mempty))
@@ -86,7 +85,7 @@ npmFields depth mode = withinRetainedDepth depth (J.objectKeyValues topField)
         | key `elem` ["name", "version", "_hasShrinkwrap", "hasInstallScript", "deprecated", "main", "module", "type", "types", "typings", "gypfile", "preferGlobal", "packageManager", "engineStrict"] = scalar (depth - 3)
         | key `elem` supported = retainedValue (depth - 3)
         | otherwise = mempty
-    personValue keys budget = withinRetainedDepth budget ((String . T.copy <$> J.string) <|> fixed keys budget)
+    personValue keys budget = withinRetainedDepth budget ((String <$> J.string) <|> fixed keys budget)
     scalar budget = withinRetainedDepth budget (retainedScalar <|> pure (Array mempty))
     objectValue budget fields = withinRetainedDepth budget (retainedObjectWith (scalar budget) fields)
     arrayValue budget entry = withinRetainedDepth budget (retainedArrayWith (scalar budget) entry)

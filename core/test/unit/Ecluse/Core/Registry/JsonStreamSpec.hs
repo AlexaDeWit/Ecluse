@@ -6,8 +6,10 @@
 module Ecluse.Core.Registry.JsonStreamSpec (spec) where
 
 import Data.Aeson (Value (Array, Bool, Null, Number, String), encode, object, (.=))
+import Data.Aeson.Key qualified as Key
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
+import Data.Text qualified as T
 import Test.Hspec
 import UnliftIO.Async (cancel, waitCatch, withAsync)
 import UnliftIO.Exception (finally)
@@ -21,6 +23,24 @@ import Ecluse.Test.Support (expectRight)
 -- | Verify retained-depth boundaries, source identity and response cancellation.
 spec :: Spec
 spec = describe "readJsonStream" $ do
+    forM_ [("ASCII", "plain", "value"), ("Unicode", "clé😀", "été𝄞"), ("escaped", "key\\\"\n", "value\t\\\""), ("long", T.replicate 40000 "k", T.replicate 40000 "v")] $ \(label, key, value) ->
+        it ("preserves " <> label <> " keys and values across source chunks") $ do
+            let expected = object [Key.fromText key .= value]
+                body = toStrict (encode expected)
+            forM_ [1, 7, 32768] $ \size -> do
+                let chunks = unfoldr (\rest -> if BS.null rest then Nothing else Just (BS.splitAt size rest)) body
+                result <- expectRight (decode (retainedValue 2) chunks)
+                streamValue result `shouldBe` Right (Just expected)
+                streamDigest result `shouldBe` digestOf body
+                streamBytes result `shouldBe` BS.length body
+
+    it "equates escaped Unicode keys and preserves their first value at every boundary" $ do
+        let body = encodeUtf8 ("{\"cl\\u00e9\\ud83d\\ude00\":\"\\ud834\\udd1e\",\"clé😀\":\"later\"}" :: Text)
+            expected = object ["clé😀" .= ("𝄞" :: Text)]
+        forM_ [1 .. BS.length body - 1] $ \position -> do
+            result <- expectRight (decode (retainedValue 2) [BS.take position body, BS.drop position body])
+            streamValue result `shouldBe` Right (Just expected)
+
     forM_ [("object", \fallback -> retainedObjectWith fallback (const (retainedValue 3)), object ["keep" .= (1 :: Int)]), ("array", \fallback -> retainedArrayWith fallback (retainedValue 3), Array (fromList [Number 1]))] $ \(label, choose, value) ->
         it ("commits to the " <> label <> " before reading its next chunk") $ do
             let fallback = J.mapWithFailure (const (Left "unselected fallback")) (J.objectFound () () mempty <> J.arrayFound () () mempty)
