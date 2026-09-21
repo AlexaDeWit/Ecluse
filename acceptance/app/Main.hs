@@ -25,11 +25,12 @@ import Ecluse.Core.Registry.Npm.Request qualified as Npm
 import Ecluse.Core.Registry.PyPI.Request qualified as PyPI
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext))
 import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), defaultLimits, maxMetadataBytes)
-import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot), digestOf)
+import Ecluse.Core.Snapshot (ContentDigest, Snapshot (Snapshot))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage), cpName)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
 import Ecluse.Test.Server.Transform (SelectedDepth (Depth), detailsDepth, serveDocumentSize)
+import Ecluse.Test.Snapshot (digestOf)
 
 -- | Report both ecosystems and forward their combined verdict as the process exit status.
 main :: IO ()

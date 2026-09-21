@@ -7,10 +7,12 @@ Parsed documents enter the nesting guard without timing their decoding.
 -}
 module Ecluse.Core.SecurityBench (benchmarks) where
 
+import Ecluse.Test.Security.Limits (checkVersionCount)
+
 import Data.ByteString qualified as BS
 import Ecluse.Bench.Corpus (entryInfo, entryName, syntheticPackageInfo)
 import Ecluse.Core.Package (PackageInfo)
-import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, boundedRead, checkVersionCount, defaultLimits, maxMetadataBytes)
+import Ecluse.Core.Security (BodyLimit (MetadataBodyLimit), LimitError, boundedRead, defaultLimits, maxMetadataBytes)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..))
 import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnf, whnfIO)
 

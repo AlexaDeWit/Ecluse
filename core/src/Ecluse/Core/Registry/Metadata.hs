@@ -12,13 +12,7 @@ module Ecluse.Core.Registry.Metadata (
     -- * The full-manifest result
     Manifest (..),
     ContentDigest,
-    digestOf,
     digestBytes,
-
-    -- * The fetch-then-project step
-    fetchThenProject,
-    ManifestProjection (..),
-    fetchManifestWith,
 
     -- * One version's read
     VersionDoc (..),
@@ -34,15 +28,12 @@ module Ecluse.Core.Registry.Metadata (
     versionTransience,
 ) where
 
-import Data.Aeson (Value)
-
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
-import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded), RegistryResponse (responseBody, responseBodyBytes, responseStatusCode), isAuthorisationFailure, isSuccessStatus)
+import Ecluse.Core.Registry (FetchFault (FetchBoundExceeded))
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
 import Ecluse.Core.Rules.Types (Transience (WillResolve, WontResolve))
 import Ecluse.Core.Security (LimitError (..))
-import Ecluse.Core.Snapshot (ContentDigest, digestBytes, digestOf)
-import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
+import Ecluse.Core.Snapshot (ContentDigest, digestBytes)
 import Ecluse.Core.Version (Version)
 
 -- | A package snapshot with ecosystem-owned serving data and the original source digest.
@@ -88,49 +79,6 @@ data VersionRead = VersionRead
     -- ^ 'Nothing' when the document declares none, or the ecosystem has no such tag.
     }
     deriving stock (Eq, Show)
-
--- | Pass decompressed size and bytes to successful-response projection, preserving HTTP refusals first.
-fetchThenProject ::
-    TracingPort ->
-    (PackageName -> IO (Either FetchFault RegistryResponse)) ->
-    PackageName ->
-    (Int -> ByteString -> Either MetadataError a) ->
-    IO (Either MetadataError a)
-fetchThenProject tracing fetch name project =
-    spanMetadataFetch tracing name (fetch name) >>= \case
-        Left fault -> pure (Left (MetadataFetch fault))
-        Right response -> case responseStatusCode response of
-            404 -> pure (Left MetadataAbsent)
-            code
-                | isAuthorisationFailure code -> pure (Left (MetadataAuthorisationFailure code))
-                | isSuccessStatus code -> spanMetadataDecode tracing name (pure (project (responseBodyBytes response) (responseBody response)))
-                | otherwise -> pure (Left (MetadataHttpFailure code))
-
-{- | The ecosystem-specific half of a full-manifest read: how a body projects, what its artifact
-locations are held to, and how the raw document enters the cached union.
--}
-data ManifestProjection = ManifestProjection
-    { prjDecode :: PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
-    , prjLocations :: PackageInfo -> PackageInfo
-    , prjInject :: Value -> CachedDoc
-    -- ^ The adapter's own injector, so the raw document stays opaque to every other ecosystem.
-    }
-
-{- | Fetch a bounded document and project it into a 'Manifest' digested over the fetched bytes,
-which is what scopes the cached document.
--}
-fetchManifestWith ::
-    TracingPort ->
-    (PackageName -> IO (Either FetchFault RegistryResponse)) ->
-    ManifestProjection ->
-    PackageName ->
-    IO (Either MetadataError Manifest)
-fetchManifestWith tracing fetch projection name =
-    fetchThenProject tracing fetch name $ \bodyBytes body ->
-        manifestOf bodyBytes (digestOf body) . first (prjLocations projection) <$> prjDecode projection name body
-  where
-    manifestOf bodyBytes digest (info, raw) =
-        Manifest{manifestInfo = info, manifestRaw = prjInject projection raw, manifestDigest = digest, manifestBodyBytes = bodyBytes}
 
 -- | Why a metadata fetch could not yield a usable result.
 data MetadataError

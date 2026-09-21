@@ -10,6 +10,8 @@ module Ecluse.Test.EcosystemBench (
     ecosystemBenches,
 ) where
 
+import Ecluse.Test.Security.Limits (checkNestingDepth)
+
 import Data.Aeson (Value, eitherDecodeStrict)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -27,11 +29,11 @@ import Ecluse.Test.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 
 import Ecluse.Core.Registry.Npm.Route.Internal (npmRoutes)
 import Ecluse.Core.Registry.PyPI.Adapter (pypiAdapter)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIVersion)
+import Ecluse.Core.Registry.PyPI.Document (simpleValue)
 import Ecluse.Core.Registry.PyPI.Project (fileVersionKey)
 import Ecluse.Core.Registry.PyPI.Route.Internal (pypiRoutes)
 import Ecluse.Core.Registry.PyPI.Wire (IndexFile (ifFilename), SimpleIndex (siFiles))
-import Ecluse.Core.Security (checkNestingDepth, defaultLimits)
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Route (Route (routeName), RouteName (RouteName), matchRoute)
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Test.Corpus (CorpusPackage (cpPackage, cpPath, cpTier), corpusPackages, cpName, pypiCorpusPackages)
@@ -40,6 +42,7 @@ import Ecluse.Test.Corpus.PyPI (benchProject, syntheticIndexBytes)
 import Ecluse.Test.EcosystemBench.Types
 import Ecluse.Test.Registry.Npm.Project (parseVersionList)
 import Ecluse.Test.Registry.PyPI (separatorHeavySdist)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex, projectPyPIVersion)
 import Ecluse.Test.Snapshot (readDetails)
 
 -- | Load every registered corpus, failing on missing, malformed, or empty metadata.
@@ -88,8 +91,8 @@ pypiBench =
         , ebDecode = \name raw -> ordNub . mapMaybe (fileVersionKey name . ifFilename) . siFiles <$> first toText (eitherDecodeStrict raw)
         , ebProject = \name -> fmap (second (fst pypiSimpleCached)) . projectPyPIIndex defaultLimits name
         , ebSelective = projectPyPIVersion defaultLimits
-        , ebReadDocument = readDocument (fst pypiSimpleCached)
-        , ebNestingDepth = nestingDepth (snd pypiSimpleCached)
+        , ebReadDocument = readDocument (fst pypiSimpleCached . documentFromValue)
+        , ebNestingDepth = nestingDepth (fmap simpleValue . snd pypiSimpleCached)
         , ebMetadata = adapterMetadata pypiAdapter
         , ebRoutes =
             [ RouteCase "mixed requests" (concat (replicate 1000 pypiRequests))

@@ -2,21 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Assemble PEP 691 Simple indexes from a cross-upstream 'MergePlan' and raw documents.
-Surviving entries retain unmodelled keys and must have a mount-local artifact URL.
--}
+-- | Assemble supported Simple-index fields from exact admitted source coordinates.
 module Ecluse.Core.Registry.PyPI.Filter (
-    -- * Assembling the served index
     assembleSimpleIndex,
-
-    -- * The served-document boundary (PyPI's 'CachedDoc' capabilities)
     assembleSimpleDocument,
     serialiseSimpleDocument,
 ) where
 
 import Data.Aeson (Value (Array, Object, String))
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Vector qualified as V
@@ -25,36 +18,22 @@ import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Package.Merge (MergePlan (mpName, mpSurvivors), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, pypiSimpleCached)
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleDocument, simpleEnvelope, simpleFiles, simpleValue)
 import Ecluse.Core.Registry.PyPI.Route (distributionPath)
-import Ecluse.Core.Registry.ServedDocument (
-    assembleAcross,
-    documentObject,
-    overlaySurvivors,
-    rebaseArtifactUrl,
-    serialiseAcross,
-    stringField,
- )
+import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl, serialiseAcross, stringField)
 import Ecluse.Core.Snapshot (Snapshot)
 import Ecluse.Core.Text (joinUrlPath)
 
-{- | Assemble an object whose artifact URLs use @mountBase@ and the plan's project name.
-Unrelated fields survive, but unsupported metadata companions are not advertised.
--}
-assembleSimpleIndex :: Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value
+-- | Rebase admitted files under the requested project, preserving their winning source order.
+assembleSimpleIndex :: Text -> Map SourceId (Snapshot SimpleDocument) -> MergePlan -> SimpleDocument -> SimpleDocument
 assembleSimpleIndex mountBase bySource plan base =
-    Object
-        ( baseObject
-            & KeyMap.insert "versions" (Array (V.fromList (map String (Map.keys (mpSurvivors plan)))))
-            & KeyMap.insert "files" (Array (V.fromList survivingFiles))
-        )
+    simpleDocument
+        (KeyMap.insert "versions" (Array (V.fromList (map String (Map.keys (mpSurvivors plan))))) (simpleEnvelope base))
+        (zipWith (\position value -> (ArrayEntry position, value)) [0 ..] survivingFiles)
   where
-    baseObject :: KeyMap Value
-    baseObject = documentObject base
-
-    survivingFiles :: [Value]
     survivingFiles =
-        [ dropSidecarKeys rebased
-        | (_, entry) <- overlaySurvivors (zipWith (\position entry -> (ArrayEntry position, entry)) [0 ..] . entriesOf) bySource plan
+        [ rebased
+        | (_, entry) <- overlaySurvivors simpleFiles bySource plan
         , Just rebased <- [rebaseEntry (servedFileUrl mountBase (mpName plan)) entry]
         ]
 
@@ -69,25 +48,18 @@ rebaseEntry renderUrl = \case
             Just (Object (KeyMap.insert "url" (String rebased) entry))
     _ -> Nothing
 
--- Écluse serves no @.metadata@ companion, and the wheel carries the same metadata.
-dropSidecarKeys :: Value -> Value
-dropSidecarKeys = \case
-    Object entry -> Object (foldr KeyMap.delete entry sidecarKeys)
-    other -> other
-
--- The JSON aliases and the HTML attribute spelling.
-sidecarKeys :: [Key.Key]
-sidecarKeys = ["core-metadata", "dist-info-metadata", "data-dist-info-metadata"]
-
-entriesOf :: Value -> [Value]
-entriesOf = \case
-    Object o | Just (Array files) <- KeyMap.lookup "files" o -> toList files
-    _ -> []
-
 -- | Assemble a PyPI document. Sources from another ecosystem contribute nothing.
 assembleSimpleDocument :: Text -> Map SourceId (Snapshot CachedDoc) -> MergePlan -> Maybe CachedDoc -> CachedDoc
-assembleSimpleDocument = assembleAcross pypiSimpleCached assembleSimpleIndex
+assembleSimpleDocument mountBase bySource plan base =
+    fst
+        pypiSimpleCached
+        ( assembleSimpleIndex
+            mountBase
+            (Map.mapMaybe (traverse (snd pypiSimpleCached)) bySource)
+            plan
+            (fromMaybe (simpleDocument mempty []) (snd pypiSimpleCached =<< base))
+        )
 
 -- | Serialise a PyPI document to compact JSON, or an empty object for another ecosystem.
 serialiseSimpleDocument :: CachedDoc -> LByteString
-serialiseSimpleDocument = serialiseAcross (snd pypiSimpleCached)
+serialiseSimpleDocument = serialiseAcross (fmap simpleValue . snd pypiSimpleCached)

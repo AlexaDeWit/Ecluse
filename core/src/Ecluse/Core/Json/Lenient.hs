@@ -2,10 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The __lenient-decode__ primitives every ecosystem's aeson wire decoder shares. They are
-pure aeson support with no registry or package concept, so they sit beside the bounded
-selective-decode engine in "Ecluse.Core.Json.Selective", not in any one ecosystem's wire module.
--}
+-- | Optional advisory fields share lenient Aeson decoding across ecosystems.
 module Ecluse.Core.Json.Lenient (
     lenientOptional,
     typeMismatchOneOf,

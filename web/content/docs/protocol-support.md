@@ -28,6 +28,16 @@ have a usable upload timestamp. If any timestamp is absent or malformed, the rel
 stays unknown and the age rule cannot admit it. An explicit policy exception can still admit
 the release, subject to the other rules and integrity floors.
 
+PyPI indexes retain the supported installation fields: filename, URL, hashes, interpreter
+constraint, size, upload time, yank status and provenance URL. The proxy also preserves the
+project name, API version, serial, tracking declarations, alternate locations and project status.
+It derives the served version list from the admitted releases.
+
+The proxy omits unknown fields and metadata sidecar declarations while reading the index.
+Installers read distribution metadata from the wheel or source archive instead.
+Distribution bytes stay unchanged. The proxy hashes the complete upstream index for response
+validators, including fields omitted from the served response.
+
 A **planned** registry is already a valid `mounts` key, but no adapter answers its routes yet,
 so activating one refuses the boot.
 

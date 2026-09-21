@@ -365,7 +365,7 @@ packumentETag mountBaseUrl originBaseUrls name sources =
 
     fingerprint :: Builder
     fingerprint =
-        "ecluse:packument-etag:v3\0"
+        "ecluse:packument-etag:v4\0"
             <> foldMap (etagFrame . encodeUtf8) originBaseUrls
             <> "\0"
             <> byteString (encodeUtf8 mountBaseUrl)

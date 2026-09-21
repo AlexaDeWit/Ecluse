@@ -14,15 +14,17 @@ module Ecluse.Test.Server.Cache (
     cachedMetadata,
     cachedVersion,
     weighCacheEntry,
+    diagnosticDocumentValue,
 ) where
 
-import Data.Aeson (encode)
+import Data.Aeson (Value (Null), encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Time (NominalDiffTime)
 
 import Ecluse.Core.Package (PackageDetails (pkgArtifacts), PackageInfo (infoVersions), PackageName, artEntryKey)
-import Ecluse.Core.Registry.CachedDocument (foldCachedDoc)
+import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached, pypiSimpleCached)
 import Ecluse.Core.Registry.Metadata (MetadataError (MetadataUndecodable), VersionRead)
+import Ecluse.Core.Registry.PyPI.Document (simpleValue)
 import Ecluse.Core.Server.Cache (CacheConfig (..), CacheEntry (..), MetadataCache, Source, StoreBudget (..), resolveMetadata, resolveVersion)
 import Ecluse.Core.Server.Cache.Backend (BackendStorage (ExternalStorage, LocalStorage), Recency, RetentionBackend, RetentionOperations (..), retentionBackend)
 import Ecluse.Core.Server.Cache.Backend.Local (newLocalPool, newPooledRetention)
@@ -53,7 +55,7 @@ weighCacheEntry :: CacheEntry -> Int
 weighCacheEntry entry =
     fromInteger (min (toInteger (maxBound :: Int)) (toInteger encodedWeight + keysWeight))
   where
-    encodedWeight = expandWireBytes (fromIntegral (foldCachedDoc (\value _ -> BSL.length (encode value)) (entryRaw entry)))
+    encodedWeight = expandWireBytes (fromIntegral (BSL.length (encode (diagnosticDocumentValue (entryRaw entry)))))
     keysWeight = sum [weighEntryKey (artEntryKey artifact) | details <- toList (infoVersions (entryInfo entry)), artifact <- toList (pkgArtifacts details)]
 
 -- | External doubles may ignore local recency hints and occupancy callbacks.
@@ -81,3 +83,7 @@ cachedMetadata metrics cache source name = rightToMaybe <$> resolveMetadata metr
 -- | Inspect selected retention with a failing origin double and ordinary read recency.
 cachedVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Maybe VersionRead)
 cachedVersion metrics cache source name version = rightToMaybe <$> resolveVersion metrics cache source name version (pure (Left MetadataUndecodable))
+
+-- | Reconstruct retained JSON only for diagnostic serialisation outside timed source reads.
+diagnosticDocumentValue :: CachedDoc -> Value
+diagnosticDocumentValue document = fromMaybe Null (snd npmCached document <|> (simpleValue <$> snd pypiSimpleCached document))

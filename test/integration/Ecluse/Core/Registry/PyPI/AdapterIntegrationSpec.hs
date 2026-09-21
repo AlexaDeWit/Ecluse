@@ -7,7 +7,7 @@ Private index failures retain their access-refusal or fallback policy.
 -}
 module Ecluse.Core.Registry.PyPI.AdapterIntegrationSpec (spec) where
 
-import Data.Aeson (Value (Array, Object, String), encode, object, (.=))
+import Data.Aeson (Value (Array, Number, Object, String), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
@@ -108,14 +108,14 @@ conditionalFloorSpec = describe "listing validators across configured integrity 
                 initial <- request [] (proxyApp proxy)
                 statusOf initial `shouldBe` 200
                 servedVersions initial `shouldBe` ["2.34.2"]
-                mapMaybe (textAtPath ["marker"]) (servedFiles initial) `shouldBe` ["weak", "strong", "strong", "last"]
+                mapMaybe (fieldAt "size") (servedFiles initial) `shouldBe` map Number [1, 2, 2, 3]
                 oldTag <- validator initial
                 unchanged <- request [("If-None-Match", oldTag)] (proxyApp proxy)
                 statusOf unchanged `shouldBe` 304
                 changed <- request [("If-None-Match", oldTag)] strictApp
                 statusOf changed `shouldBe` 200
                 servedVersions changed `shouldBe` servedVersions initial
-                mapMaybe (textAtPath ["marker"]) (servedFiles changed) `shouldBe` ["strong", "strong", "last"]
+                mapMaybe (fieldAt "size") (servedFiles changed) `shouldBe` map Number [2, 2, 3]
                 simpleBody changed `shouldNotBe` simpleBody initial
                 newTag <- validator changed
                 newTag `shouldNotBe` oldTag
@@ -134,12 +134,12 @@ mixedIntegrityIndex authority =
     object
         [ "name" .= ("requests" :: Text)
         , "meta" .= object ["api-version" .= ("1.4" :: Text)]
-        , "files" .= [entry "weak" False, entry "strong" True, entry "strong" True, entry "last" True]
+        , "files" .= [entry 1 False, entry 2 True, entry 2 True, entry 3 True]
         ]
   where
-    entry :: Text -> Bool -> Value
-    entry marker strong = case fileOn authority "requests-2.34.2.tar.gz" of
-        Object fields -> Object (KeyMap.insert "marker" (String marker) (KeyMap.insert "hashes" hashes fields))
+    entry :: Int -> Bool -> Value
+    entry size strong = case fileOn authority "requests-2.34.2.tar.gz" of
+        Object fields -> Object (KeyMap.insert "size" (Number (fromIntegral size)) (KeyMap.insert "hashes" hashes fields))
           where
             hashes = if strong then object ["sha512" .= T.replicate 128 "a"] else object ["sha256" .= sha256Digest]
         value -> value

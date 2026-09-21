@@ -22,17 +22,18 @@ import Ecluse.Core.Package.Entry (EntryKey (ArrayEntry))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
  )
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIVersion)
+import Ecluse.Core.Registry.PyPI.Document (simpleValue)
 import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), Rule (AllowByIdentity, AllowIfOlderThan), completeEvidence)
 import Ecluse.Core.Security (
-    LimitError (TooManyVersions),
-    Limits (maxVersionCount),
+    LimitError (TooManyArtifacts, TooManyVersions),
+    Limits (maxArtifactCount, maxVersionCount),
     defaultLimits,
  )
 import Ecluse.Test.Json (encodeStrict)
 import Ecluse.Test.Package (defaultMinIntegrity, pypiVersion, requestsName, unsafeFilename)
 import Ecluse.Test.Registry.PyPI (filesNamed, simpleFile, simpleIndex, simpleIndexWith, withFileKeys)
+import Ecluse.Test.Registry.PyPI.Metadata (projectPyPIIndex, projectPyPIVersion)
 import Ecluse.Test.Rules (admittedBy, atDefaultPrecedence, inertRuleDeps)
 import Ecluse.Test.Support (expectRight)
 
@@ -51,7 +52,7 @@ indexSpec = describe "projectPyPIIndex" $ do
             Right (info, raw) -> do
                 renderPackageName (infoName info) `shouldBe` "requests"
                 Map.keys (infoVersions info) `shouldBe` ["2.34.1", "2.34.2"]
-                raw `shouldBe` simpleIndex "requests" (filesNamed ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"])
+                simpleValue raw `shouldBe` simpleIndex "requests" (filesNamed ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"])
             other -> expectationFailure ("expected a projection, got: " <> show other)
 
     it "reports an undecodable body" $
@@ -68,6 +69,12 @@ indexSpec = describe "projectPyPIIndex" $ do
     it "reports a release count past the bound as a bound breach" $
         projectPyPIIndex defaultLimits{maxVersionCount = 1} requestsName (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"])
             `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
+
+    it "counts artifacts separately from distinct releases on full reads" $ do
+        let body = indexOf ["requests-2.34.2.tar.gz", "requests-2.34.2-py3-none-any.whl"]
+        projectPyPIIndex defaultLimits{maxVersionCount = 1} requestsName body `shouldSatisfy` isRight
+        projectPyPIIndex defaultLimits{maxArtifactCount = 1} requestsName body
+            `shouldBe` Left (MetadataBoundExceeded (TooManyArtifacts 2 1))
 
 versionSpec :: Spec
 versionSpec = describe "projectPyPIVersion" $ do
@@ -90,6 +97,12 @@ versionSpec = describe "projectPyPIVersion" $ do
     it "reports a file count past the bound as a bound breach" $
         artifactNames (projectPyPIVersion defaultLimits{maxVersionCount = 1} requestsName (pypiVersion "2.34.2") (indexOf ["requests-2.34.2.tar.gz", "requests-2.34.1.tar.gz"]))
             `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 2 1))
+
+    it "counts unselected and unusable files without adding a selected-artifact ceiling" $ do
+        let body = encodeStrict (simpleIndex "requests" [Number 7, simpleFile "requests-2.0.tar.gz", simpleFile "requests-1.0.tar.gz", simpleFile "requests-1.0-py3-none-any.whl"])
+        projectPyPIVersion defaultLimits{maxVersionCount = 3} requestsName (pypiVersion "1") body
+            `shouldBe` Left (MetadataBoundExceeded (TooManyVersions 4 3))
+        projectPyPIVersion defaultLimits{maxArtifactCount = 1} requestsName (pypiVersion "1") body `shouldSatisfy` isRight
 
 paritySpec :: Spec
 paritySpec = describe "the two decode paths agree on what they serve" $ do

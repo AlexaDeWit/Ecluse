@@ -24,8 +24,9 @@ import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (ArrayEntry))
 import Ecluse.Core.Package.Filter (enforceArtifactLocations)
 import Ecluse.Core.Package.Integrity (IntegrityFloor, mkMinTrustedIntegrity)
 import Ecluse.Core.Package.Merge (MergePlan (..), Provenance (GatedSource, TrustedSource), SourceId, mergePackuments)
-import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleIndex)
-import Ecluse.Core.Registry.PyPI.Metadata (projectPyPIIndex)
+import Ecluse.Core.Registry.PyPI.Document (SimpleDocument, simpleValue)
+import Ecluse.Core.Registry.PyPI.Filter qualified as Filter
+import Ecluse.Core.Registry.PyPI.Project (projectName)
 import Ecluse.Core.Security (defaultLimits, ecosystemArtifactAuthorities)
 import Ecluse.Core.Server.Pipeline.Internal (admitByIntegrity)
 import Ecluse.Core.Server.Response (
@@ -33,11 +34,12 @@ import Ecluse.Core.Server.Response (
     Rejection (Rejection),
     ServeDecision (Reject),
  )
-import Ecluse.Core.Snapshot (Snapshot (..), digestOf)
-import Ecluse.Test.Json (fieldAt, isObject)
-import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, validSha1, validSha256)
+import Ecluse.Core.Snapshot (Snapshot (..))
+import Ecluse.Test.Json (encodeStrict, fieldAt, isObject)
+import Ecluse.Test.Package (defaultMinIntegrity, defaultMinTrustedIntegrity, requestsName, validSha1, validSha256)
 import Ecluse.Test.Registry.PyPI (simpleFile, simpleIndexWith, withFileKeys)
-import Ecluse.Test.Snapshot (jsonSnapshot, projectJsonSnapshot)
+import Ecluse.Test.Registry.PyPI.Metadata (documentFromValue, projectPyPIIndex)
+import Ecluse.Test.Snapshot (digestOf, jsonSnapshot, projectJsonSnapshot)
 import Ecluse.Test.Support (expectRight)
 
 -- | Pin PyPI source selection, artifact rebasing, and sidecar removal.
@@ -58,8 +60,8 @@ relaySpec = describe "what the assembly relays from the base document" $ do
     it "keeps the project name the winning document reported" $
         fieldAt "name" (assembleOne allFiles) `shouldBe` Just (String "requests")
 
-    it "keeps a top-level key this build does not model" $
-        fieldAt "tracks" (assembleOne allFiles) `shouldBe` Just (Array mempty)
+    it "omits unsupported top-level fields" $
+        fieldAt "tracks" (assembleOne allFiles) `shouldBe` Nothing
 
     it "keeps every modelled key on a served file entry, verbatim" $ do
         let entry = servedEntry (assembleOne allFiles) "requests-2.34.2-py3-none-any.whl"
@@ -69,7 +71,7 @@ relaySpec = describe "what the assembly relays from the base document" $ do
         (entry >>= KeyMap.lookup "yanked") `shouldBe` Just (String "withdrawn")
         (entry >>= KeyMap.lookup "hashes") `shouldBe` Just (object ["sha256" .= validSha256])
 
-    it "keeps an unmodelled key on a served file entry too" $
+    it "keeps the provenance URL" $
         (servedEntry (assembleOne allFiles) "requests-2.34.2-py3-none-any.whl" >>= KeyMap.lookup "provenance")
             `shouldBe` Just (String "https://pypi.org/integrity/x/provenance")
 
@@ -111,7 +113,7 @@ admissionSpec = describe "replaying per-entry admission for duplicate filenames"
         source <- projectAdmitted defaultMinIntegrity [admittedDuplicate]
         plan <- expectRight (maybeToRight ("expected merge plan" :: Text) (mergePackuments [(GatedSource, fst <$> source)]))
         let rawSource = snd <$> source
-            serve sources = servedFiles (assembleSimpleIndex mountBase sources plan (indexOf []))
+            serve sources = servedFiles (simpleValue (Filter.assembleSimpleIndex mountBase sources plan (compactFixture (indexOf []))))
         serve (Map.singleton 0 rawSource) `shouldBe` [rebasedDuplicate admittedDuplicate]
         serve (Map.singleton 1 rawSource) `shouldBe` []
         serve (Map.singleton 0 rawSource{snapshotDigest = digestOf "different upstream bytes"}) `shouldBe` []
@@ -141,7 +143,7 @@ admissionSpec = describe "replaying per-entry admission for duplicate filenames"
                 Map.map (fmap admittedFilename) (mpArtifacts plan) `shouldBe` Map.singleton "1" (duplicateFilename :| [])
                 servedFiles served `shouldBe` [rebasedDuplicate admittedDuplicate]
 
-            it "keeps both valid siblings with their own unknown fields and their original order" $ do
+            it "keeps both valid siblings with their own sizes and their original order" $ do
                 let files = arrange [otherDuplicate, admittedDuplicate]
                 source <- projectAdmitted defaultMinIntegrity files
                 (plan, served) <- assembleDuplicates [(GatedSource, source)]
@@ -169,14 +171,14 @@ admissionSpec = describe "replaying per-entry admission for duplicate filenames"
     for_ [("trusted first", id), ("trusted last", reverse)] $ \(order, arrange) ->
         it ("takes duplicate entries only from the winning source: " <> order) $ do
             private <- projectAdmitted defaultMinTrustedIntegrity [admittedDuplicate, otherDuplicate]
-            public <- projectAdmitted defaultMinIntegrity [withFileKeys [("source-marker", String "public")] admittedDuplicate]
+            public <- projectAdmitted defaultMinIntegrity [withFileKeys [("size", Number 33)] admittedDuplicate]
             let contributions = arrange [(TrustedSource, private), (GatedSource, public)]
                 expectedSource = fst <$> find ((== TrustedSource) . fst . snd) (zip [0 ..] contributions)
             (plan, served) <- assembleDuplicates contributions
             Map.lookup "1" (mpSurvivors plan) `shouldBe` expectedSource
             servedFiles served `shouldBe` map rebasedDuplicate [admittedDuplicate, otherDuplicate]
 
-projectAdmitted :: (IntegrityFloor floor) => floor -> [Value] -> IO (Snapshot (PackageInfo, Value))
+projectAdmitted :: (IntegrityFloor floor) => floor -> [Value] -> IO (Snapshot (PackageInfo, SimpleDocument))
 projectAdmitted floorSpec files = do
     Snapshot digest (info, raw) <- projectJsonSnapshot (projectPyPIIndex defaultLimits (mkPackageName PyPI Nothing "requests")) (indexOf files)
     let located = enforceArtifactLocations (ecosystemArtifactAuthorities ["https://files.pythonhosted.org"]) "https://pypi.org" info
@@ -188,23 +190,23 @@ projectAdmitted floorSpec files = do
                 located
     pure (Snapshot digest (admitted, raw))
 
-assembleDuplicates :: [(Provenance, Snapshot (PackageInfo, Value))] -> IO (MergePlan, Value)
+assembleDuplicates :: [(Provenance, Snapshot (PackageInfo, SimpleDocument))] -> IO (MergePlan, Value)
 assembleDuplicates contributions = do
     plan <- expectRight (maybeToRight ("expected a merge plan" :: Text) (mergePackuments (map (second (fmap fst)) contributions)))
     let sources = Map.fromList [(sid, snd <$> source) | (sid, (_, source)) <- zip [0 ..] contributions]
-    pure (plan, assembleSimpleIndex mountBase sources plan (indexOf []))
+    pure (plan, simpleValue (Filter.assembleSimpleIndex mountBase sources plan (compactFixture (indexOf []))))
 
 duplicateFilename :: Text
 duplicateFilename = "requests-1.0.0.tar.gz"
 
 admittedDuplicate :: Value
-admittedDuplicate = withFileKeys [("source-marker", String "admitted")] (simpleFile duplicateFilename)
+admittedDuplicate = withFileKeys [("size", Number 11)] (simpleFile duplicateFilename)
 
 otherDuplicate :: Value
 otherDuplicate =
     withFileKeys
         [ ("url", String ("https://files.pythonhosted.org/packages/b1/" <> duplicateFilename))
-        , ("source-marker", String "other")
+        , ("size", Number 22)
         ]
         admittedDuplicate
 
@@ -252,11 +254,11 @@ sidecarSpec :: Spec
 sidecarSpec = describe "the PEP 658 sidecar keys" $ do
     for_ ["core-metadata", "dist-info-metadata", "data-dist-info-metadata"] $ \key ->
         for_ [Bool True, Bool False, object ["sha256" .= validSha256]] $ \metadata ->
-            it ("drops " <> show key <> " with value " <> show metadata <> " and preserves unrelated fields") $ do
+            it ("drops " <> show key <> " with value " <> show metadata <> " and omits unknown fields") $ do
                 let filename = "requests-2.34.2-py3-none-any.whl"
                     original = withFileKeys [("custom-metadata", object ["retained" .= True])] (simpleFile filename)
                     advertised = withFileKeys [(key, metadata)] original
-                    expected = withFileKeys [("url", String (mountBase <> "/simple/requests/" <> filename))] original
+                    expected = withFileKeys [("url", String (mountBase <> "/simple/requests/" <> filename))] (simpleFile filename)
                 servedFiles (assembleOne [advertised]) `shouldBe` [expected]
 
     it "drops all sidecar spellings when advertised together" $ do
@@ -370,3 +372,15 @@ servedNames = mapMaybe name . servedFiles
 
 servedEntry :: Value -> Text -> Maybe (KeyMap.KeyMap Value)
 servedEntry served filename = listToMaybe [entry | Object entry <- servedFiles served, KeyMap.lookup "filename" entry == Just (String filename)]
+
+assembleSimpleIndex :: Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value
+assembleSimpleIndex mount sources plan base =
+    simpleValue (Filter.assembleSimpleIndex mount (fmap (fmap compactFixture) sources) plan (compactFixture base))
+
+compactFixture :: Value -> SimpleDocument
+compactFixture raw =
+    either (const (documentFromValue raw)) snd (projectPyPIIndex defaultLimits name (encodeStrict raw))
+  where
+    name = fromMaybe requestsName $ do
+        String reported <- fieldAt "name" raw
+        rightToMaybe (projectName reported)
