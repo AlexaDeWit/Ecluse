@@ -23,7 +23,6 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 
 import Ecluse.Core.Package (PackageName)
-import Ecluse.Core.Package.Entry (EntryKey (ObjectEntry))
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpTime), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc, npmCached)
 import Ecluse.Core.Registry.Npm.Project (projectName)
@@ -32,7 +31,7 @@ import Ecluse.Core.Registry.ServedDocument (
     adjustField,
     assembleAcross,
     documentObject,
-    overlaySurvivors,
+    overlayObjectSurvivors,
     rebaseArtifactUrl,
     safeDocumentName,
     serialiseAcross,
@@ -46,9 +45,7 @@ import Ecluse.Core.Version (renderVersion)
 npmDocumentName :: KeyMap Value -> Maybe PackageName
 npmDocumentName = safeDocumentName (rightToMaybe . projectName)
 
-{- | Rewrite one version object's @dist.tarball@ to @{prefix}\/-\/{file}@, keeping the file name
-verbatim. @prefix@ is upstream-controlled, so the caller gates it through 'npmDocumentName'.
--}
+-- | Rebase @dist.tarball@ while preserving its filename. Gate the prefix through 'npmDocumentName'.
 rewriteVersion :: (Text -> Maybe Text) -> Value -> Value
 rewriteVersion servedUrl = \case
     Object vo -> Object (adjustField "dist" (rewriteDist servedUrl) vo)
@@ -63,9 +60,7 @@ rewriteDist servedUrl = \case
             Object (KeyMap.insert "tarball" (String rebased) dist)
     other -> other
 
-{- | Assemble the served packument for @mountBase@. The plan owns @versions@, @dist-tags@, and
-@time@, every other top-level key comes from the base document, and the result is an object.
--}
+-- | The plan supplies versions, tags and timestamps. Other top-level fields come from the base.
 assembleMergedPackument :: Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value
 assembleMergedPackument mountBase bySource plan base =
     Object rebuilt
@@ -80,8 +75,7 @@ assembleMergedPackument mountBase bySource plan base =
     baseObject :: KeyMap Value
     baseObject = documentObject base
 
-    -- The shared gate reads the document's own upstream-controlled @name@ before it reaches
-    -- the URL, and a document with no usable name has no version rewritten.
+    -- An unusable document name must never enter a rewritten URL.
     rewriteSurvivor :: Value -> Value
     rewriteSurvivor = maybe id (rewriteVersion . servedTarballUrl mountBase) (npmDocumentName baseObject)
 
@@ -90,10 +84,9 @@ assembleMergedPackument mountBase bySource plan base =
     survivingVersions =
         KeyMap.fromList
             [ (Key.fromText version, rewriteSurvivor object)
-            | (version, object) <- overlaySurvivors versionEntries bySource plan
+            | (version, object) <- overlayObjectSurvivors versionEntries bySource plan
             ]
 
-    -- The plan has already resolved @latest@ and dropped absent-target tags over the union.
     distTags :: KeyMap Value
     distTags =
         KeyMap.fromList
@@ -109,8 +102,6 @@ assembleMergedPackument mountBase bySource plan base =
                 | (version, t) <- Map.toList (mpTime plan)
                 ]
 
-    -- Two direct lookups, not a traversal: the base @time@ map carries one entry per published
-    -- version alongside the @created@\/@modified@ bookkeeping keys.
     bookkeepingTime :: KeyMap Value
     bookkeepingTime = case KeyMap.lookup "time" baseObject of
         Just (Object timeObject) ->
@@ -130,19 +121,15 @@ assembleMergedDocument = assembleAcross npmCached assembleMergedPackument
 serialiseMergedDocument :: CachedDoc -> LByteString
 serialiseMergedDocument = serialiseAcross (snd npmCached)
 
-versionEntries :: Value -> [(EntryKey, Value)]
+versionEntries :: Value -> KeyMap Value
 versionEntries = \case
     Object o
         | Just (Object versions) <- KeyMap.lookup "versions" o ->
-            [(ObjectEntry (Key.toText key), entry) | (key, entry) <- KeyMap.toList versions]
-    _ -> []
+            versions
+    _ -> mempty
 
--- The non-version keys an npm @time@ object carries, which the assembly relays
--- unchanged.
 timeBookkeepingKeys :: [Text]
 timeBookkeepingKeys = ["created", "modified"]
 
-{- The mount-local URL a served artifact resolves to, rendered from the artifact route that
-must claim it. -}
 servedTarballUrl :: Text -> PackageName -> Text -> Maybe Text
 servedTarballUrl mountBase name file = joinUrlPath mountBase <$> tarballPath name file

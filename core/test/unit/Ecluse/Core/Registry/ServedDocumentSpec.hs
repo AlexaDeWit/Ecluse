@@ -27,7 +27,7 @@ import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 
 import Ecluse.Core.Registry.PyPI.Document (simpleValue)
 import Ecluse.Core.Registry.PyPI.Filter (assembleSimpleIndex)
-import Ecluse.Core.Registry.ServedDocument (overlaySurvivors, rebaseArtifactUrl, safeDocumentName)
+import Ecluse.Core.Registry.ServedDocument (overlayObjectSurvivors, overlaySurvivors, rebaseArtifactUrl, safeDocumentName)
 import Ecluse.Core.Registry.WireSupport (Projection (NameMismatch, Projected))
 import Ecluse.Core.Security (ecosystemArtifactAuthorities)
 import Ecluse.Core.Snapshot (Snapshot (..))
@@ -45,6 +45,7 @@ spec :: Spec
 spec = do
     overlaySpec
     entryContractSpec
+    objectOverlaySpec
     allocationSpec
     nameGateSpec
     rebaseSpec
@@ -118,6 +119,57 @@ overlaySpec = describe "overlaySurvivors" $ do
             let versions = [show n | n <- [1 .. count :: Int]]
                 survivors = [(v, 0 :: SourceId) | v <- versions]
             length (overlay [(0, sourceOf [(v, v) | v <- versions])] survivors) === count
+
+objectOverlaySpec :: Spec
+objectOverlaySpec = describe "overlayObjectSurvivors" $ do
+    let key = ObjectEntry "release"
+        source = syntheticSnapshot (KeyMap.singleton "release" ("kept" :: Text))
+        sources = Map.singleton 0 source
+        plan = entryPlan source key
+        serve :: Map SourceId (Snapshot (KeyMap.KeyMap Text)) -> MergePlan -> [(Text, Text)]
+        serve = overlayObjectSurvivors id
+    it "looks up the admitted object key independently of the served version" $
+        serve sources plan `shouldBe` [("1", "kept")]
+    it "refuses absent sources, absent raw keys and mismatched snapshots" $ do
+        serve mempty plan `shouldBe` []
+        serve (Map.singleton 0 (mempty <$ source)) plan `shouldBe` []
+        serve (Map.singleton 0 source{snapshotDigest = digestOf "other bytes"}) plan `shouldBe` []
+    it "refuses missing admission and a matching losing source" $ do
+        serve sources plan{mpArtifacts = mempty} `shouldBe` []
+        serve sources plan{mpSurvivors = mempty} `shouldBe` []
+        serve (Map.singleton 1 source) plan `shouldBe` []
+    it "refuses duplicate admitted coordinates, including aliases across served versions" $ do
+        serve sources plan{mpArtifacts = fmap (\entries -> entries <> entries) (mpArtifacts plan)} `shouldBe` []
+        serve sources plan{mpArtifacts = Map.insert "2" (AdmittedEntry (snapshotDigest source) key "other.tgz" :| []) (mpArtifacts plan), mpSurvivors = Map.insert "2" 0 (mpSurvivors plan)} `shouldBe` []
+    it "rejects an ambiguous coordinate before dropping its unnamed occurrence" $
+        serve sources plan{mpArtifacts = fmap (\entries -> entries <> fmap (\entry -> entry{admittedFilename = ""}) entries) (mpArtifacts plan)} `shouldBe` []
+    it "keeps matching admission when another snapshot uses the same raw key" $
+        serve sources plan{mpArtifacts = Map.insert "2" (AdmittedEntry (digestOf "other bytes") key "other.tgz" :| []) (mpArtifacts plan), mpSurvivors = Map.insert "2" 0 (mpSurvivors plan)} `shouldBe` [("1", "kept")]
+    it "uses source-key order when several entries map to one served version" $ do
+        let raw = KeyMap.fromList [("z", "last" :: Text), ("a", "first")]
+            admitted name = AdmittedEntry (snapshotDigest source) (ObjectEntry name) "x.tgz"
+            multiple = plan{mpArtifacts = Map.singleton "1" (admitted "z" :| [admitted "a"])}
+        serve (Map.singleton 0 (raw <$ source)) multiple `shouldBe` [("1", "first"), ("1", "last")]
+    it "refuses unnamed artifacts and non-object coordinates" $ do
+        serve sources plan{mpArtifacts = fmap (fmap (\entry -> entry{admittedFilename = ""})) (mpArtifacts plan)} `shouldBe` []
+        for_ [ArrayEntry (-1), ArrayEntry 0, SingletonEntry] $ \other ->
+            serve sources (entryPlan source other) `shouldBe` []
+    it "matches ordered selection for unique objects and mixed winning sources" $
+        hedgehog $ do
+            count <- forAll (Gen.int (Range.linear 0 40))
+            selected <- forAll (Gen.subsequence [0 .. count - 1])
+            let firstSource = syntheticSnapshot (KeyMap.fromList [(Key.fromText (show index), "first" :: Text) | index <- [0 .. count - 1]])
+                secondSource = syntheticSnapshot (KeyMap.map (const "second") (snapshotValue firstSource))
+                bySource = Map.fromList [(0, firstSource), (1, secondSource)]
+                winner :: Int -> (SourceId, Snapshot (KeyMap.KeyMap Text))
+                winner index = if even index then (0, firstSource) else (1, secondSource)
+                selection =
+                    (entryPlan firstSource key)
+                        { mpSurvivors = Map.fromList [(show index, fst (winner index)) | index <- selected]
+                        , mpArtifacts = Map.fromList [(show index, AdmittedEntry (snapshotDigest (snd (winner index))) (ObjectEntry (show index)) "x.tgz" :| []) | index <- selected]
+                        }
+                orderedEntries = map (first (ObjectEntry . Key.toText)) . KeyMap.toList
+            overlayObjectSurvivors id bySource selection === overlaySurvivors orderedEntries bySource selection
 
 entryContractSpec :: Spec
 entryContractSpec = describe "source-scoped admitted-entry contracts" $ do

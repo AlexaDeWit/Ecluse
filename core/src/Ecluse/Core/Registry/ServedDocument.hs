@@ -12,6 +12,7 @@ module Ecluse.Core.Registry.ServedDocument (
 
     -- * Replaying a merge plan
     overlaySurvivors,
+    overlayObjectSurvivors,
 
     -- * The interpolated-name gate
     safeDocumentName,
@@ -35,12 +36,10 @@ import Data.Text qualified as T
 import Ecluse.Core.Package.Entry (AdmittedEntry (..), EntryKey (..))
 import Ecluse.Core.Package.Merge (MergePlan (mpArtifacts, mpSurvivors), SourceId)
 import Ecluse.Core.Registry.CachedDocument (CachedDoc)
-import Ecluse.Core.Snapshot (Snapshot (..))
+import Ecluse.Core.Snapshot (ContentDigest, Snapshot (..))
 import Ecluse.Core.Text (urlFilename)
 
-{- | Run an ecosystem's plain-'Value' assembly across its own cached-document boundary. A source
-or base another ecosystem injected projects as 'Nothing' and contributes nothing.
--}
+-- | Foreign ecosystem documents contribute nothing to assembly.
 assembleAcross ::
     (Value -> CachedDoc, CachedDoc -> Maybe Value) ->
     (Text -> Map SourceId (Snapshot Value) -> MergePlan -> Value -> Value) ->
@@ -72,19 +71,35 @@ overlaySurvivors entriesOf bySource plan =
     , let entries = entriesOf (snapshotValue source)
     , let unambiguous = uniqueEntries entries
     , (key, entry) <- entries
-    , validKey key
     , Map.member key unambiguous
     , Just (version, kept) <- [Map.lookup (sid, snapshotDigest source, key) admitted]
-    , not (T.null (admittedFilename kept))
+    , usableEntry kept
     ]
   where
-    admitted =
-        uniqueEntries
-            [ ((sid, admittedSnapshot entry, admittedKey entry), (version, entry))
-            | (version, entries) <- Map.toList (mpArtifacts plan)
-            , Just sid <- [Map.lookup version (mpSurvivors plan)]
-            , entry <- toList entries
-            ]
+    admitted = admittedIndex plan
+
+-- | Look up admitted object entries in existing unique-key maps, in source and key order.
+overlayObjectSurvivors :: (src -> KeyMap entry) -> Map SourceId (Snapshot src) -> MergePlan -> [(Text, entry)]
+overlayObjectSurvivors entriesOf bySource plan =
+    [ (version, entry)
+    | ((sid, digest, ObjectEntry key), (version, kept)) <- Map.toAscList (admittedIndex plan)
+    , usableEntry kept
+    , Just source <- [Map.lookup sid bySource]
+    , snapshotDigest source == digest
+    , Just entry <- [KeyMap.lookup (Key.fromText key) (entriesOf (snapshotValue source))]
+    ]
+
+admittedIndex :: MergePlan -> Map (SourceId, ContentDigest, EntryKey) (Text, AdmittedEntry)
+admittedIndex plan =
+    uniqueEntries
+        [ ((sid, admittedSnapshot entry, admittedKey entry), (version, entry))
+        | (version, entries) <- Map.toList (mpArtifacts plan)
+        , Just sid <- [Map.lookup version (mpSurvivors plan)]
+        , entry <- toList entries
+        ]
+
+usableEntry :: AdmittedEntry -> Bool
+usableEntry entry = validKey (admittedKey entry) && not (T.null (admittedFilename entry))
 
 uniqueEntries :: (Ord key) => [(key, value)] -> Map key value
 uniqueEntries = Map.mapMaybe id . Map.fromListWith (\_ _ -> Nothing) . map (second Just)
@@ -95,9 +110,7 @@ validKey = \case
     ObjectEntry _ -> True
     SingletonEntry -> True
 
-{- | What the ecosystem's own name parser makes of the name a document claims for itself. The
-projection already refuses such a name, so this is defence in depth on the interpolated URL.
--}
+-- | Gate the document's claimed name before it enters a rewritten artifact URL.
 safeDocumentName :: (Text -> Maybe a) -> KeyMap Value -> Maybe a
 safeDocumentName parse document = case KeyMap.lookup "name" document of
     Just (String name) -> parse name
@@ -124,9 +137,7 @@ stringField key o = case KeyMap.lookup key o of
     Just (String s) -> Just s
     _ -> Nothing
 
-{- | Edit the value at @key@, only when the object already carries that key. A missing key stays
-absent, never fabricated, so passthrough stays lossless.
--}
+-- | Missing fields stay absent.
 adjustField :: Key.Key -> (Value -> Value) -> KeyMap Value -> KeyMap Value
 adjustField key edit o = case KeyMap.lookup key o of
     Just v -> KeyMap.insert key (edit v) o
