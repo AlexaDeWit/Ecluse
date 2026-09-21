@@ -56,7 +56,7 @@ spec = describe "readJsonStream" $ do
 
     it "preserves nested values and split escapes at every source boundary" $ do
         let body = "{\"keep\":{\"list\":[1,true,null,\"a\\\\b\\u00e9\"]},\"ignored\":{\"blob\":[1,2,3]}}"
-            parser = retainedObject (\key -> if key == "keep" then retainedValue 10 else mempty)
+            parser = retainedObjectWith mempty (\key -> if key == "keep" then retainedValue 10 else mempty)
             baseline = decode parser [body]
         forM_ [1 .. BS.length body - 1] $ \position ->
             decode parser [BS.take position body, BS.drop position body] `shouldBe` baseline
@@ -69,7 +69,7 @@ spec = describe "readJsonStream" $ do
         result <-
             expectRight
                 ( decode
-                    (retainedObject (\key -> if key == "keep" then retainedValue 3 else mempty))
+                    (retainedObjectWith mempty (\key -> if key == "keep" then retainedValue 3 else mempty))
                     ["{\"ignored\":{\"deep\":[[[[[1]]]]]},\"keep\":\"yes\"}"]
                 )
         streamValue result `shouldBe` Right (Just (object ["keep" .= ("yes" :: Text)]))

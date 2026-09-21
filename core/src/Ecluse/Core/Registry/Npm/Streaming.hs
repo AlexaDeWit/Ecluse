@@ -73,8 +73,8 @@ npmFields depth mode = withinRetainedDepth depth (J.objectKeyValues topField)
         | otherwise = mempty
     witness = (String "" <$ J.string) <|> (Null <$ J.jNull) <|> pure (Number 0)
     field supported key
-        | key == "_npmUser" = fixed ["name", "email", "url"] (depth - 3)
-        | key == "license" = fixed ["type", "url"] (depth - 3)
+        | key == "_npmUser" = personValue ["name", "email", "url"] (depth - 3)
+        | key == "license" = personValue ["type", "url"] (depth - 3)
         | key == "dist" = objectValue (depth - 3) distField
         | key == "peerDependenciesMeta" || key == "dependenciesMeta" = objectValue (depth - 3) (const (fixed ["optional"] (depth - 4)))
         | key == "directories" = fixed ["lib", "bin", "man", "doc", "example", "test"] (depth - 3)
@@ -86,6 +86,7 @@ npmFields depth mode = withinRetainedDepth depth (J.objectKeyValues topField)
         | key `elem` ["name", "version", "_hasShrinkwrap", "hasInstallScript", "deprecated", "main", "module", "type", "types", "typings", "gypfile", "preferGlobal", "packageManager", "engineStrict"] = scalar (depth - 3)
         | key `elem` supported = retainedValue (depth - 3)
         | otherwise = mempty
+    personValue keys budget = withinRetainedDepth budget ((String . T.copy <$> J.string) <|> fixed keys budget)
     scalar budget = withinRetainedDepth budget (retainedScalar <|> pure (Array mempty))
     objectValue budget fields = withinRetainedDepth budget (retainedObjectWith (scalar budget) fields)
     arrayValue budget entry = withinRetainedDepth budget (retainedArrayWith (scalar budget) entry)
@@ -158,14 +159,17 @@ versionListFields = ["name", "version", "dist", "deprecated", "hasInstallScript"
 distFields :: [Text]
 distFields = ["tarball", "shasum", "integrity", "unpackedSize", "fileCount", "signatures", "attestations"]
 
+data StringMapShape = ValidStringMap | InvalidStringMap | NullStringMap
+
 stringMapWitness :: Int -> J.Parser Value
-stringMapWitness budget = maybe Null result <$> J.foldI collect Nothing events
+stringMapWitness budget = result <$> J.foldI collect NullStringMap events
   where
     events =
-        J.objectFound (Just True) (Just True) (Just <$> J.objectValues (withinRetainedDepth budget ((True <$ J.string) <|> pure False)))
-            <|> (Nothing <$ J.jNull)
-            <|> pure (Just False)
-    collect _ Nothing = Nothing
-    collect valid (Just next) = Just (fromMaybe True valid && next)
-    result True = Object mempty
-    result False = Number 0
+        J.objectFound ValidStringMap ValidStringMap (J.objectValues (withinRetainedDepth budget ((ValidStringMap <$ J.string) <|> pure InvalidStringMap)))
+            <|> (NullStringMap <$ J.jNull)
+            <|> pure InvalidStringMap
+    collect InvalidStringMap _ = InvalidStringMap
+    collect _ next = next
+    result ValidStringMap = Object mempty
+    result InvalidStringMap = Number 0
+    result NullStringMap = Null

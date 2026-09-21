@@ -8,9 +8,7 @@ module Ecluse.Core.Registry.JsonStream (
     readJsonStream,
     retainedValue,
     withinRetainedDepth,
-    retainedObject,
     retainedObjectOr,
-    retainedArray,
     retainedScalar,
     retainedObjectWith,
     retainedArrayWith,
@@ -84,10 +82,6 @@ withinRetainedDepth budget parser
     | budget <= 0 = J.mapWithFailure (const (Left "retained JSON nesting limit")) (pure ())
     | otherwise = parser
 
--- | Materialise only fields whose key selects a parser. Duplicate keys keep their first value.
-retainedObject :: (Text -> J.Parser Value) -> J.Parser Value
-retainedObject = J.catMaybeI . foldRetained . objectEvents
-
 -- | Supply an invalid-shape witness without traversing a valid object through a parallel fallback.
 retainedObjectOr :: Value -> (Text -> J.Parser Value) -> J.Parser Value
 retainedObjectOr fallback = fmap (fromMaybe fallback) . foldRetained . objectEvents
@@ -95,10 +89,6 @@ retainedObjectOr fallback = fmap (fromMaybe fallback) . foldRetained . objectEve
 -- | Select object events before folding. The fallback handles scalars and other container shapes.
 retainedObjectWith :: J.Parser Value -> (Text -> J.Parser Value) -> J.Parser Value
 retainedObjectWith fallback select = J.catMaybeI (foldRetained (objectEvents select <|> (OtherValue <$> fallback)))
-
--- | Retain array positions in source order, without accepting a non-array as an empty array.
-retainedArray :: J.Parser Value -> J.Parser Value
-retainedArray = J.catMaybeI . foldRetained . arrayEvents
 
 -- | Select array events before folding. A container fallback must yield only its completed value.
 retainedArrayWith :: J.Parser Value -> J.Parser Value -> J.Parser Value

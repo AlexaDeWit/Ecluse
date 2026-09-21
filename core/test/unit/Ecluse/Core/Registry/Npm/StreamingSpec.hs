@@ -140,6 +140,21 @@ spec = describe "npmFields" $ do
         (_, compact) <- expectRight (finishProjection defaultLimits name "See source" projected)
         fieldAt "versions" compact `shouldBe` Just (Object mempty)
 
+    forM_
+        [ (Null, Null)
+        , (object [], object [])
+        , (object ["install" .= ("run" :: Text)], object [])
+        , (object ["a" .= Null, "z" .= ("run" :: Text)], Number 0)
+        , (Array mempty, Number 0)
+        , (String "run", Number 0)
+        ]
+        $ \(scripts, expected) ->
+            it ("preserves the inventory script witness for " <> show scripts) $ do
+                let raw = toStrict (encode (object ["versions" .= object ["1.0.0" .= withKeys [("scripts", scripts)] release]]))
+                streamed <- expectRight (parseJsonChunks (MetadataBodyLimit (BS.length raw)) (npmFields 64 VersionListRead) (\acc event -> Right (event : acc)) [] [raw])
+                events <- expectRight (streamValue streamed)
+                [fieldAt "scripts" value | VersionField "1.0.0" (Just value) <- events] `shouldBe` [Just expected]
+
     forM_ [Array mempty, object ["install" .= ([] :: [Value])]] $ \scripts ->
         it ("drops invalid script containers in full, selected and inventory reads: " <> show scripts) $ do
             let malformed = case release of
