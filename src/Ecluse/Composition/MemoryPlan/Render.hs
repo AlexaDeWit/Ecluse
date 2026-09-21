@@ -10,9 +10,13 @@ reads one plan whichever path produced it.
 module Ecluse.Composition.MemoryPlan.Render (
     renderPlanLines,
     localCachePolicyLine,
+    materialAdmissionPolicyLine,
+    materialAllowancesLine,
     renderDegradations,
+    renderControlWarnings,
 ) where
 
+import Ecluse.Composition.MemoryPlan.Bounds (materialAllowances)
 import Ecluse.Composition.MemoryPlan.Internal (
     OverridePins (opAdmission, opArtifact, opCache, opDepth, opRequest, opResponse),
     PlanInputs (piAllocAreaBytes, piCapabilities, piCeilingClause, piCpuAdmissionLine),
@@ -22,10 +26,28 @@ import Ecluse.Composition.MemoryPlan.Internal (
 import Ecluse.Composition.MemoryPlan.Override (overrideFreeOvershoot)
 import Ecluse.Composition.MemoryPlan.Shed (cacheEntryBound)
 import Ecluse.Composition.Sizing (renderSized)
+import Ecluse.Core.Server.Admission.Material (MaterialAllowances (..))
 
 -- | The local backend's retention capabilities, independent of capacity overrides.
 localCachePolicyLine :: Text
 localCachePolicyLine = "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
+
+-- | State the limit of the static material estimates beside the resolved controls.
+materialAdmissionPolicyLine :: Text
+materialAdmissionPolicyLine = "metadata admission: static workload estimates reduce concurrency pressure. They do not bound worst-case heap use"
+
+-- | Show the static class costs used with the material budget.
+materialAllowancesLine :: Text
+materialAllowancesLine =
+    "metadata admission estimates: cold selected "
+        <> show (maColdSelectedBytes materialAllowances)
+        <> ", retained selected "
+        <> show (maRetainedSelectedBytes materialAllowances)
+        <> ", full origin "
+        <> show (maFullOriginBytes materialAllowances)
+        <> ", listing output "
+        <> show (maListingOutputBytes materialAllowances)
+        <> " bytes"
 
 {- | The ordered boot lines check-config prints: one per resolved bound, tagged with its
 provenance (an explicit config value, or the ceiling it was computed from).
@@ -34,9 +56,10 @@ renderPlanLines :: PlanInputs -> TenantDemands -> ShedOutcomes -> [Text]
 renderPlanLines inputs d o =
     [ planLine "runtime reserve" (tdReserve d) Nothing
     , piCpuAdmissionLine inputs
-    , planLine "admission capacity" (soAdmissionFinal o) (opAdmission pins)
-    , planLine "material aggregate" (soMaterialFinal o) Nothing
-    , planLine "response byte cap" (soResponseFinal o) (opResponse pins)
+    , planLine "material estimate budget" (soMaterialFinal o) Nothing
+    , renderSized "memory plan: metadata ingest ceiling" (soResponseFinal o) (opResponse pins) "built-in default, independent of heap and CPU"
+    , materialAdmissionPolicyLine
+    , materialAllowancesLine
     , planLine "request byte cap" (tdRequestFinal d) (opRequest pins)
     , localCachePolicyLine
     , planLine "cache byte bound" (soCacheFinal o) (opCache pins)
@@ -58,9 +81,9 @@ renderDegradations inputs d o shedCaps =
             <$ guard (soMirrorShed o > 0)
         , shedWarning "cache aggregate" (tdCacheDesired d) (soCacheFinal o) "the proxy serves uncached"
             <$ guard (soCacheShed o > 0)
-        , "memory plan: admission shed to "
-            <> show (soAdmissionFinal o)
-            <> " in-flight operation(s) (the material share cannot hold more at the floor response cap)"
+        , "memory plan: material estimate budget shed to "
+            <> show (soMaterialFinal o)
+            <> " bytes. CPU capacity and metadata ingest ceiling stay unchanged"
             <$ guard (soMaterialShed o > 0)
         , capabilityShedWarning inputs <$> shedCaps
         , "memory plan: publish aggregate shed to one maximum request ("
@@ -70,6 +93,7 @@ renderDegradations inputs d o shedCaps =
         , "memory plan: memory-queue depth shed to " <> show (soDepthFinal o) <$ guard (soQueueShedBytes o > 0)
         , irreducibleMinimumWarning freeOvershoot <$ guard (soResidualOvershoot o > 0 && freeOvershoot > 0)
         ]
+        <> renderControlWarnings (tdPins d) (soAdmissionFinal o) (soResponseFinal o) (soMaterialFinal o)
   where
     freeOvershoot = overrideFreeOvershoot d
 
@@ -97,6 +121,24 @@ capabilityShedWarning inputs shedTo =
 
 irreducibleMinimumWarning :: Int -> Text
 irreducibleMinimumWarning overshoot =
-    "memory plan: the irreducible minimum (one operation on one capability, no cache) still exceeds the heap ceiling by "
+    "memory plan: the irreducible minimum for the configured tenants still exceeds the heap ceiling by "
         <> show overshoot
-        <> " bytes; booting anyway with the container limit as the only backstop -- give this pod more memory"
+        <> " bytes. Booting with the container limit as the backstop. Increase the memory limit"
+
+-- | Explain exact operator pins without treating heuristic estimates as memory guarantees.
+renderControlWarnings :: OverridePins -> Int -> Int -> Int -> [Text]
+renderControlWarnings pins admission response material =
+    [ "metadata admission: preserving configured CPU capacity "
+        <> show admission
+        <> " with material estimate budget "
+        <> show material
+        <> " bytes. Estimates do not bound worst-case heap use"
+    | isJust (opAdmission pins)
+    ]
+        <> [ "metadata admission: preserving configured metadata ingest ceiling "
+                <> show response
+                <> " bytes with material estimate budget "
+                <> show material
+                <> " bytes. Body admissibility does not guarantee materialisation fits the heap"
+           | isJust (opResponse pins)
+           ]

@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Memory plan defaults, explicit pins, and tenant shedding.
 module Ecluse.Composition.MemoryPlanSpec (spec) where
 
 import Data.Text qualified as T
@@ -26,11 +27,13 @@ import Ecluse.Config (CacheSettings (..), LimitsSettings (..), QueueSettings (..
 import Ecluse.Core.Server.Cache (CacheConfig (..), StoreBudget (..))
 import Ecluse.Rts (EffectiveAxis (..), EffectiveRuntimePlan (..), Provenance (FromCgroup, FromRts))
 
+-- | Verify the resolved plan and its operator-facing report.
 spec :: Spec
 spec = describe "resolveMemoryPlan" $ do
     it "falls back to the shipped bounds with no heap-ceiling datapoint" $ do
         let (plan, lines') = resolve bareCache bareLimits bareQueue Nothing (planWith Nothing) MemoryQueueTenant False
-        mpMaxResponseBytes plan `shouldBe` 12582912
+        mpMaxResponseBytes plan `shouldBe` 134217728
+        mpMaterialAggregateBytes plan `shouldBe` 178257920
         mpMaxRequestBytes plan `shouldBe` 26214400
         mpCacheAggregateBytes plan `shouldBe` 268435456
         mpQueueMemoryMaxDepth plan `shouldBe` 50000
@@ -46,14 +49,29 @@ spec = describe "resolveMemoryPlan" $ do
         tenantSum plan `shouldSatisfy` (<= h)
         mpRuntimeReserveBytes plan `shouldSatisfy` (> 0)
         mpAdmissionCapacity plan `shouldSatisfy` (>= 1)
-        mpMaxResponseBytes plan `shouldSatisfy` (>= 12582912)
+        mpMaxResponseBytes plan `shouldBe` 134217728
 
-    it "bounds admission jointly by CPU and the material share" $ do
-        -- 4 capabilities give a CPU capacity of 40, but a 1 GiB ceiling's
-        -- material share holds far fewer 180 MiB envelopes at the floor cap.
-        let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just gib)) NoQueueTenant False
-        mpAdmissionCapacity plan `shouldSatisfy` (< 40)
-        mpAdmissionCapacity plan `shouldSatisfy` (>= 1)
+    it "keeps CPU admission independent of the material share" $ do
+        for_ [64, 256, 512, 1024, 4096] $ \memoryMiB -> do
+            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (memoryMiB * mib))) NoQueueTenant False
+            mpAdmissionCapacity plan `shouldBe` 40
+
+    it "never reduces metadata admissibility when memory or CPU rises" $ do
+        let ceilings = [64, 256, 512, 640, 896, 1024, 1280, 1536, 4096, 16384]
+            cpus = [1, 2, 4, 8, 16, 32, 64]
+            plans = [fst (resolve bareCache bareLimits bareQueue Nothing ((planWith (Just (memoryMiB * mib))){erpCapabilities = enforcedAxis caps}) NoQueueTenant False) | memoryMiB <- ceilings, caps <- cpus]
+            (fallback, _) = resolve bareCache bareLimits bareQueue Nothing (planWith Nothing) NoQueueTenant False
+        map mpMaxResponseBytes plans `shouldSatisfy` all (== mpMaxResponseBytes fallback)
+        map mpMaterialAggregateBytes plans `shouldSatisfy` all (> 0)
+
+    it "preserves every positive explicit CPU and ingest pin on small and large plans" $ do
+        for_ [Nothing, Just (64 * mib), Just (4 * gib)] $ \heapCeiling ->
+            for_ [1, 13000000, maxBound] $ \pin -> do
+                let (plan, _) = resolve bareCache bareLimits{limMaxResponseBytes = Just pin} bareQueue (Just pin) (planWith heapCeiling) NoQueueTenant False
+                mpMaxResponseBytes plan `shouldBe` pin
+                mpAdmissionCapacity plan `shouldBe` pin
+                mpOverrideViolations plan `shouldBe` []
+                mpDegradations plan `shouldSatisfy` any (T.isInfixOf "preserving configured")
 
     it "honours explicit bounds over the computed shares" $ do
         let cache' = bareCache{csMaxBytes = Just 123456789, csMaxEntries = Just 42}
@@ -108,7 +126,7 @@ spec = describe "resolveMemoryPlan" $ do
         it "sheds the mirror-artifact cap on a small mirroring pod, warning loudly" $ do
             -- The background back-fill leg gives way first under memory pressure: the cap
             -- sheds toward zero and the boot log names it.
-            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (256 * mib))) MemoryQueueTenant False
+            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
             mpDegradations plan `shouldSatisfy` any (T.isInfixOf "mirror artifact byte cap shed")
             (matMaxBytes <$> mpMirrorArtifactTenant plan) `shouldBe` Just 0
 
@@ -122,21 +140,20 @@ spec = describe "resolveMemoryPlan" $ do
 
     describe "the graceful-degradation ladder" $ do
         it "sheds the cache first on a small pod, warning loudly, and still boots" $ do
-            -- 256 MiB: the floors overshoot, the cache gives way (its floor is
+            -- 64 MiB: the floors overshoot, the cache gives way (its floor is
             -- 64 MiB), and nothing refuses.
-            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (256 * mib))) MemoryQueueTenant False
+            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
             mpOverrideViolations plan `shouldBe` []
             mpDegradations plan `shouldSatisfy` (not . null)
             mpDegradations plan `shouldSatisfy` any (T.isInfixOf "cache aggregate shed")
             mpCacheAggregateBytes plan `shouldSatisfy` (< 67108864)
 
         it "reaches the irreducible minimum on a tiny pod and boots anyway" $ do
-            -- 64 MiB cannot hold even one materialisation envelope. The plan says
-            -- so at its loudest and boots regardless.
-            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (64 * mib))) NoQueueTenant False
+            let (plan, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (16 * mib))) NoQueueTenant False
             mpOverrideViolations plan `shouldBe` []
-            mpAdmissionCapacity plan `shouldBe` 1
+            mpAdmissionCapacity plan `shouldBe` 40
             mpCacheAggregateBytes plan `shouldBe` 0
+            mpCacheMaxEntries plan `shouldBe` 256
             mpDegradations plan `shouldSatisfy` any (T.isInfixOf "irreducible minimum")
 
         it "sheds the capability count when the nursery is the pressure" $ do
@@ -160,8 +177,8 @@ spec = describe "resolveMemoryPlan" $ do
             -- A pin set to the floor the shed ladder reaches on its own adds no byte, so the pod
             -- must boot with its warning rather than refuse and blame the pin.
             let queue' = bareQueue{qsMaxMemoryDepth = Just 5000} -- the queue-depth floor
-                (pinned, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
-                (free, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (64 * mib))) MemoryQueueTenant False
+                (pinned, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (32 * mib))) MemoryQueueTenant False
+                (free, _) = resolve bareCache bareLimits bareQueue Nothing (planWith (Just (32 * mib))) MemoryQueueTenant False
             mpOverrideViolations pinned `shouldBe` []
             mpDegradations pinned `shouldSatisfy` any (T.isInfixOf "irreducible minimum")
             -- The pin moved no tenant byte: the plan matches the override-free one.
@@ -172,7 +189,7 @@ spec = describe "resolveMemoryPlan" $ do
             -- Under a durable (or absent) queue backend queueCharge is identically zero, so
             -- queue.maxMemoryDepth contributes to no overshoot whatever its value.
             let queue' = bareQueue{qsMaxMemoryDepth = Just 100000} -- the cap, deliberately large
-                (plan, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (64 * mib))) MirroringWithoutMemoryQueue False
+                (plan, _) = resolve bareCache bareLimits queue' Nothing (planWith (Just (32 * mib))) MirroringWithoutMemoryQueue False
             mpOverrideViolations plan `shouldBe` []
             mpQueueTenantBytes plan `shouldBe` 0
             mpDegradations plan `shouldSatisfy` any (T.isInfixOf "irreducible minimum")
@@ -195,13 +212,14 @@ spec = describe "resolveMemoryPlan" $ do
         lines'
             `shouldBe` [ "memory plan: runtime reserve 214748364" <> ceilingClause
                        , "runtime: serve admission 40 (computed from 4 capabilities)"
-                       , "memory plan: admission capacity 2" <> ceilingClause
-                       , "memory plan: material aggregate 386547028" <> ceilingClause
-                       , "memory plan: response byte cap 12884900" <> ceilingClause
+                       , "memory plan: material estimate budget 386547057" <> ceilingClause
+                       , "memory plan: metadata ingest ceiling 134217728 (built-in default, independent of heap and CPU)"
+                       , "metadata admission: static workload estimates reduce concurrency pressure. They do not bound worst-case heap use"
+                       , "metadata admission estimates: cold selected 9437184, retained selected 262144, full origin 38797312, listing output 11534336 bytes"
                        , "memory plan: request byte cap 104857600" <> ceilingClause
                        , "metadata cache: local backend, full retention disabled, selected-version and assembled retention enabled"
                        , "memory plan: cache byte bound 257698038" <> ceilingClause
-                       , "memory plan: cache entry bound 983" <> ceilingClause
+                       , "memory plan: cache entry bound 15728" <> ceilingClause
                        , "memory plan: publish aggregate 128849019" <> ceilingClause
                        , "memory plan: memory-queue depth 41943" <> ceilingClause
                        , "memory plan: mirror artifact byte cap 8589934" <> ceilingClause
@@ -224,8 +242,8 @@ spec = describe "resolveMemoryPlan" $ do
                     ( tenantSum plan <= h
                         || any (T.isInfixOf "irreducible minimum") (mpDegradations plan)
                     )
-                -- The ladder's order: admission never sheds before the cache gives way.
-                when (any (T.isInfixOf "admission shed") (mpDegradations plan)) $
+                -- The material budget gives way only after the cache.
+                when (any (T.isInfixOf "material estimate budget shed") (mpDegradations plan)) $
                     assert (any (T.isInfixOf "cache aggregate shed") (mpDegradations plan))
 
     describe "planCacheConfig" $ do

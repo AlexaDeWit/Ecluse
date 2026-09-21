@@ -14,7 +14,7 @@ assumptions:
       - 0ec10e5e-0000-4000-8000-000000000106
     appliesToModel: true
   - id: as-edge-rate-limiting
-    prose: The operator's edge limits request volume and concurrency, for callers of the proxy and for Pilot's advisory fetches. Écluse bounds the work of one request, not the total. Route selection, including PyPI filename parsing, runs before edge authentication and metadata admission, so the edge is what bounds total routing work.
+    prose: The operator's edge limits request volume and concurrency for proxy callers and Pilot's advisory fetches. Metadata admission limits concurrent estimated work, not total process memory or work across all roles. Route selection, including PyPI filename parsing, runs before edge authentication and metadata admission. The edge therefore bounds total routing work and demand from distinct request keys.
     status: valid
     threats:
       - 0ec10e5e-0000-4000-8000-000000000102
@@ -253,7 +253,7 @@ diagrams:
       - kind: process
         id: 0ec10e5e-0000-4000-8000-000000000020
         name: Écluse proxy
-        description: "The request pipeline: router, parallel upstream fetch, packument merge, deny-by-default rules and integrity gate, then serve. It relays publishes. It holds forwarded caller credentials transiently. It keeps an in-memory cache of anonymous public metadata, which private-upstream reads never enter. It syncs advisory artifacts from the advisory store and swaps each new database in atomically."
+        description: "The request pipeline: router, parallel upstream fetch, packument merge, deny-by-default rules and integrity gate, then serve. It relays publishes. It holds forwarded caller credentials transiently. One provider owns metadata retention. The local provider retains anonymous public selected versions and assembled responses, never full metadata. Assembled reuse never skips private fetches or their per-request authorisation. Private-origin reads share neither retention nor single-flight. It syncs advisory artifacts from the advisory store and swaps each new database in atomically."
         outOfScope: false
         reasonOutOfScope: ""
         position:
@@ -366,7 +366,7 @@ diagrams:
       - kind: flow
         id: 0ec10e5e-0000-4000-8000-000000000041
         name: private read (caller credential forwarded)
-        description: A per-request private read with the caller's own token. The upstream re-authorises each request. Écluse never shared-caches this read under passthrough.
+        description: A per-request private read with the caller's own token. The upstream re-authorises each request. Écluse never shares retention or single-flight across these reads. Metadata limits and extraction apply without changing that authorisation boundary.
         outOfScope: false
         reasonOutOfScope: ""
         protocol: HTTPS
@@ -777,26 +777,26 @@ mitigations:
       - 0ec10e5e-0000-4000-8000-000000000101
   - id: mit-pypi-filename-parser
     title: Bounded PyPI filename parsing
-    prose: PyPI coordinate parsing compares disjoint project-name chunks in bounded passes and keeps the existing filename grammar without a new length cap. Inbound distribution routing and upstream Simple-index projection use the same parser, and unit tests on both entry points assert subquadratic allocation growth for malformed filenames. Route selection runs before authentication and metadata admission, so those controls do not bound total routing work.
+    prose: PyPI coordinate parsing compares disjoint project-name chunks in bounded passes and keeps the filename grammar without a new length cap. Distribution routing and incremental Simple-index extraction use the same parser. Tests at both entry points assert subquadratic allocation growth for malformed filenames. Route selection precedes authentication and metadata admission, so the operator edge bounds total routing demand.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000102
   - id: mit-response-limits
     title: Fail-closed document limits
-    prose: Fail-closed caps bound an upstream document's body size, version count, artifact count, and nesting depth (`ECLUSE_LIMITS__MAX_RESPONSE_BYTES`, `ECLUSE_LIMITS__MAX_VERSION_COUNT`, `ECLUSE_LIMITS__MAX_ARTIFACT_COUNT`, `ECLUSE_LIMITS__MAX_NESTING_DEPTH`). The bounded read stops mid-stream, and the Dredger reads a store's package document under the same size bound. The merge costs O(n log n) in version count. Écluse still projects the whole document before the version cap rejects it, and advisory-backed rules evaluate each version with no memoisation, so a document near the cap multiplies advisory lookups.
+    prose: Fail-closed limits still bound metadata body bytes, version count, artifact count and retained structure depth (`ECLUSE_LIMITS__MAX_RESPONSE_BYTES`, `ECLUSE_LIMITS__MAX_VERSION_COUNT`, `ECLUSE_LIMITS__MAX_ARTIFACT_COUNT`, `ECLUSE_LIMITS__MAX_NESTING_DEPTH`). The reader counts decompressed bytes and stops an oversized response. Dredger reads store package documents under the same body bound. npm and PyPI incrementally extract supported fields with json-stream, checking structural counts during extraction instead of projecting a complete source document first. Skipped fields do not become decoded values, and extraction does not establish whole-document JSON validity. Supported fields still materialise, and listings retain useful release and artifact results. Body limits and structural limits remain separate from heuristic admission. Neither streaming nor the response cap proves a bound on the resulting heap. Advisory-backed rules still perform work for each evaluated version.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000102
       - 0ec10e5e-0000-4000-8000-000000000128
   - id: mit-request-coalescing
-    title: Single-flight cache and request timeout
-    prose: The single-flight cache joins concurrent misses for one package onto one computation, and a per-request timeout caps any single request. A document near the cap still costs CPU and heap, and a flood of distinct keys bypasses single-flight.
+    title: Single-flight requests and request timeout
+    prose: Single-flight joins eligible concurrent reads or renders for the same key onto one active computation, independently of retention. The local provider retains no full metadata, but active full reads still coalesce. Selected-version and assembled-response retention remain available through that provider. A per-request timeout limits each request. Distinct keys do not coalesce, and useful results still occupy memory until their consumers release them.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000102
   - id: mit-metadata-admission
-    title: Memory-sized serve admission and cache weights
-    prose: Serve admission caps concurrent metadata work at a limit derived from the resident-byte memory model. A separate byte-weighted gate admits publish requests. The selected-version cache charges retained release fields, text backing allocations, variable entry keys, and per-node overhead by conservative accounting rather than exact heap measurement, so shared allocations count more than once. An entry above its store budget, including a saturated weight, is served without retention or eviction. Cached absences carry a smaller charge, and occupancy reports the charged weights.
+    title: Heuristic serve admission and bounded retention
+    prose: Separate CPU and materialisation gates control concurrent serve metadata work. Materialisation uses static, slightly-worse-than-average allowances for a cold selected read, a captured local selected result, a full origin and listing output. A retained result stays captured while its request uses the lower allowance. Deferred origin and external-provider reads use the cold allowance. Listings charge output plus each permitted configured origin before concurrent reads, including requests later answered from assembled retention or with 304. Gates cover metadata decisions and listing output, then release before artifact relay. An estimate above capacity charges the whole capacity so that one request can run alone. These are workload heuristics, not exact heap accounting or a worst-case memory guarantee. No package-size history, expiry of estimates or growth reservations participate. A separate byte-weighted gate admits publish bodies. One provider owns metadata retention, and the local provider never retains full metadata. Selected-version and assembled stores charge accounted weights against their retention budget. An entry that cannot fit is served without retention or eviction. Assembled reuse never skips private fetches or their per-request authorisation. Caller credentials never enter shared metadata retention.
     status: implemented
     threats:
       - 0ec10e5e-0000-4000-8000-000000000102
@@ -1067,7 +1067,7 @@ mitigations:
       - 6a368fa6-e4c8-446e-8e24-0685bb0980ef
   - id: mit-pilot-ingest-limits
     title: Bounded advisory ingestion
-    prose: Pilot streams the OSV archive and bounds each advisory as it unzips. It drains an entry past the 8 MiB per-advisory cap to its boundary and drops it before decoding, drops an entry whose JSON does not decode, and logs and counts both, so a few poisoned records do not halt ingestion. It logs an advisory with an anomalous range fan-out at WARNING and still ingests it. The per-entry cap bounds nesting depth and holds decode cost to a constant multiple of the input, and Pilot runs under the boot-resolved heap ceiling (`ECLUSE_RUNTIME__MAX_HEAP_BYTES`, else the cgroup `memory.max`). A small but deeply nested payload therefore ends in a bounded, clean process exit instead of exhausting the machine. That exit is a Pilot crash, not a per-record drop.
+    prose: Pilot streams the OSV archive and bounds each advisory as it unzips. It drains an entry past the 8 MiB per-advisory cap to its boundary and drops it before decoding. It also drops undecodable JSON and logs and counts both outcomes. An anomalous range fan-out draws a warning but remains eligible for ingestion. This per-entry byte cap does not prove a nesting or decoded-heap bound. Pilot runs under the resolved runtime heap ceiling. A small but deeply nested payload can still crash Pilot. That failure is a process failure, not a per-record drop. Serve metadata admission and npm or PyPI field extraction do not govern advisory ingestion.
     status: implemented
     threats:
       - 3735906e-a06a-4e0f-ba45-894ba5400ce8
@@ -1140,7 +1140,7 @@ mitigations:
       - 1da83f8a-f998-4ef8-89bd-61a39b4e22ee
   - id: mit-artifact-entry-keys
     title: Source-local artifact entry keys
-    prose: "Artifact projection gives each entry a source-local key before lenient drops: PyPI keeps raw array positions, including in selective reads, and npm keys entries by version. Merge and assembly match the winning source, the digest of its exact upstream bytes, and the admitted key, and a missing, ambiguous, or mismatched identity contributes no entry. Valid duplicate entries keep their order and unknown fields. The existing fetch digest scopes snapshots, with no new serve-time hash, persistent identity, or schema epoch. CI checks allocation growth for array and object-key fan-out. The npm and PyPI adapters implement this contract."
+    prose: Artifact extraction assigns each entry a source-local key before lenient drops. PyPI preserves original array positions in full and selected reads, including gaps left by discarded files. npm uses version keys. Merge and assembly match the winning source, its complete upstream-byte digest and the admitted key. Missing, ambiguous or mismatched identities contribute no entry. Duplicate admitted files retain their source order and supported fields. Unknown fields are omitted rather than relayed as source spans. Incremental hashing covers the complete successful decompressed response, including omitted fields. No extra serve-time hash, persistent identity or schema epoch is introduced.
     status: implemented
     threats:
       - 72ad19e6-3fbf-44c6-a190-8cb074f89ea0

@@ -204,6 +204,7 @@ library ecluse-core
     Ecluse.Core.Server.Accept
     Ecluse.Core.Server.Admission
     Ecluse.Core.Server.Admission.Bytes
+    Ecluse.Core.Server.Admission.Material
     Ecluse.Core.Server.Admission.Weighted
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
@@ -840,6 +841,7 @@ test-suite ecluse-core-unit
     Ecluse.Core.Security.IpLiteralSpec
     Ecluse.Core.Security.LimitsSpec
     Ecluse.Core.Server.Admission.BytesSpec
+    Ecluse.Core.Server.Admission.MaterialSpec
     Ecluse.Core.Server.AcceptSpec
     Ecluse.Core.Server.AdmissionSpec
     Ecluse.Core.Server.Cache.BackendSpec
@@ -984,6 +986,7 @@ test-suite ecluse-unit
     Ecluse.Composition.ExecutableSpec
     Ecluse.Composition.MaintenanceSpec
     Ecluse.Composition.MemoryPlan.OverrideSpec
+    Ecluse.Composition.MemoryPlan.ShedSpec
     Ecluse.Composition.MemoryPlanSpec
     Ecluse.Composition.MirrorQueueSpec
     Ecluse.Composition.MirrorRoleSpec
@@ -1233,6 +1236,7 @@ test-suite ecluse-residency
   main-is:            Main.hs
   hs-source-dirs:     test/residency test/integration
   other-modules:
+    Ecluse.Core.Registry.JsonStreamResidencySpec
     Ecluse.Core.Server.MemoryModel.MaterialProbe
     Ecluse.Core.Server.MemoryModel.Probe
     Ecluse.Core.Server.MemoryModelResidencySpec
@@ -1364,15 +1368,14 @@ benchmark ecluse-bench
   type:            exitcode-stdio-1.0
   main-is:         Main.hs
   hs-source-dirs:  bench
-  -- Built at the package's default optimisation (-O1), like every other component,
-  -- so the numbers reflect the shipped build rather than a benchmark-only setting.
-  -- The RTS opts bake in -T, so tasty-bench reports allocated bytes from GC stats on
-  -- every run, with no caller flag.
-  ghc-options:     -rtsopts "-with-rtsopts=-T"
+  -- Use the shipped -O1 default. Loopback replay needs the threaded RTS.
+  -- -T lets tasty-bench report allocations without a caller flag.
+  ghc-options:     -threaded -rtsopts "-with-rtsopts=-T"
   other-modules:
     Ecluse.Bench.Corpus
     Ecluse.Bench.Fit
     Ecluse.Core.CacheBench
+    Ecluse.Core.ColdReadBench
     Ecluse.Core.MergeBench
     Ecluse.Core.RouteBench
     Ecluse.Core.RulesBench
@@ -1389,6 +1392,7 @@ benchmark ecluse-bench
     , aeson            >=2.2 && <2.4
     , bytestring       ^>=0.12
     , containers       ^>=0.7
+    , http-client      ^>=0.7
     , http-types       ^>=0.12
     , tasty            ^>=1.5
     , tasty-bench      ^>=0.4
@@ -1396,6 +1400,8 @@ benchmark ecluse-bench
     , tasty-hunit      ^>=0.10
     , text             ^>=2.1
     , time             ^>=1.12
+    , wai              ^>=3.2
+    , warp             ^>=3.4
 
 -- The load tool links the composed application without entering the shipped library closure.
 -- Its concurrent scenarios require the threaded RTS and expose RTS statistics through -T.

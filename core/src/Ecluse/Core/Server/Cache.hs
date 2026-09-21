@@ -24,6 +24,7 @@ module Ecluse.Core.Server.Cache (
 
     -- * Single-version resolution
     resolveVersion,
+    prepareVersion,
 
     -- * Assembled-representation resolution
     resolveAssembled,
@@ -42,8 +43,11 @@ import Ecluse.Core.Registry.Metadata (MetadataError, VersionRead)
 import Ecluse.Core.Server.Cache.Provider (CacheProvider, localCacheProvider, providerAssembled, providerFull, providerVersion)
 import Ecluse.Core.Server.Cache.Store (
     CacheOccupancy (..),
+    PreparedStore,
     SingleFlight,
+    executePrepared,
     newSingleFlightWithBackend,
+    prepareStore,
     resolveSingleFlight,
  )
 import Ecluse.Core.Server.Cache.Types
@@ -96,8 +100,13 @@ resolveMetadata metrics cache source name =
 
 -- | Cache a selectively decoded release or its absence. Oversized releases remain uncached.
 resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (Either MetadataError VersionRead)
-resolveVersion metrics cache source name version =
-    resolveSingleFlight
+resolveVersion metrics cache source name version fetch =
+    prepareVersion metrics cache source name version fetch >>= executePrepared
+
+-- | Pin a selected local value, including absence, before material admission.
+prepareVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Either MetadataError VersionRead) -> IO (PreparedStore MetadataError VersionRead)
+prepareVersion metrics cache source name version =
+    prepareStore
         (mpVersionCacheRequest metrics)
         (mpVersionCacheResidentBytes metrics . occBytes)
         (mpCacheRefused metrics Metric.VersionStore)

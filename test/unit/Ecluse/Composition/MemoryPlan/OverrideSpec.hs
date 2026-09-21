@@ -74,19 +74,21 @@ spec = do
             mirroring - unpinned `shouldBe` 40000000
             notMirroring `shouldBe` unpinned
 
+        it "keeps body and CPU pins outside material tenant arithmetic" $ do
+            let pinned = noOverridePins{opAdmission = Just maxBound, opResponse = Just maxBound}
+            overrideMinShedSum baseDemands pinned `shouldBe` overrideMinShedSum baseDemands noOverridePins
+
     describe "overrideSubstitutions (the per-pin substitution)" $ do
         it "pairs each present override with the pin set that substitutes only it out" $
             overrideSubstitutions allPins
                 `shouldBe` [ ("cache.maxBytes", allPins{opCache = Nothing})
-                           , ("runtime.serveMaxInFlight", allPins{opAdmission = Nothing})
-                           , ("limits.maxResponseBytes", allPins{opResponse = Nothing})
                            , ("limits.maxRequestBytes", allPins{opRequest = Nothing})
                            , ("queue.maxMemoryDepth", allPins{opDepth = Nothing})
                            , ("limits.maxArtifactBytes", allPins{opArtifact = Nothing})
                            ]
 
-        it "yields no substitution for an absent override" $
-            map fst (overrideSubstitutions noOverridePins{opAdmission = Just 2}) `shouldBe` ["runtime.serveMaxInFlight"]
+        it "does not attribute tenant bytes to the independent CPU pin" $
+            map fst (overrideSubstitutions noOverridePins{opAdmission = Just 2}) `shouldBe` []
   where
     -- The substitution arithmetic reads only the base bytes no pin moves, the computed
     -- request floor, and the tenant-presence flags. Every other demand is inert here.
@@ -100,7 +102,7 @@ spec = do
             , tdCacheDesired = 0
             , tdCacheEntriesExplicit = Nothing
             , tdMaterialDesired = 0
-            , tdMaterialMinimum = 0
+            , tdResponseFinal = 12582912
             , tdAdmissionDesired = 1
             , tdPublishConfigured = False
             , tdPublishDesired = 0

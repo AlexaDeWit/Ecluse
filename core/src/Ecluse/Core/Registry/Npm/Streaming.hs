@@ -14,9 +14,8 @@ module Ecluse.Core.Registry.Npm.Streaming (
 
 import Data.Aeson (Value (Array, Null, Number, Object, String))
 import Data.JsonStream.Parser qualified as J
-import Data.Text qualified as T
 
-import Ecluse.Core.Registry.JsonStream (retainedArray, retainedObject, retainedObjectOr, retainedScalar, retainedValue, withinRetainedDepth)
+import Ecluse.Core.Registry.JsonStream (retainedArrayWith, retainedObjectOr, retainedObjectWith, retainedScalar, retainedValue, withinRetainedDepth)
 
 -- | Full serving data, one release, or the fields needed to recognise usable version entries.
 data NpmRead = FullRead | SelectedRead Text | VersionListRead
@@ -60,14 +59,14 @@ npmFields depth mode = withinRetainedDepth depth (J.objectKeyValues topField)
                 <|> pure (InvalidContainer slot)
     release key = case mode of
         SelectedRead target | key /= target -> pure (VersionField "" Nothing)
-        VersionListRead -> VersionField (T.copy key) . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null listField)
-        _ -> VersionField (T.copy key) . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null (field versionFields))
-    timestamp key = TimeField (T.copy key) <$> scalar (depth - 2)
-    tag key = TagField (T.copy key) <$> scalar (depth - 2)
+        VersionListRead -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null listField)
+        _ -> VersionField key . Just <$> withinRetainedDepth (depth - 2) (retainedObjectOr Null (field versionFields))
+    timestamp key = TimeField key <$> scalar (depth - 2)
+    tag key = TagField key <$> scalar (depth - 2)
     listField key
         | key == "name" || key == "version" = withinRetainedDepth (depth - 3) witness
-        | key == "dist" = withinRetainedDepth (depth - 3) (retainedObject (\slot -> if slot `elem` ["tarball", "shasum", "integrity"] then withinRetainedDepth (depth - 4) witness else mempty) <|> pure Null)
-        | key == "scripts" = withinRetainedDepth (depth - 3) (stringMapWitness (depth - 4) <|> (Null <$ J.jNull) <|> pure (Number 0))
+        | key == "dist" = withinRetainedDepth (depth - 3) (retainedObjectOr Null (\slot -> if slot `elem` ["tarball", "shasum", "integrity"] then withinRetainedDepth (depth - 4) witness else mempty))
+        | key == "scripts" = withinRetainedDepth (depth - 3) (stringMapWitness (depth - 4))
         | key == "deprecated" = withinRetainedDepth (depth - 3) (pure Null)
         | key `elem` versionListFields = field versionListFields key
         | otherwise = mempty
@@ -80,16 +79,16 @@ npmFields depth mode = withinRetainedDepth depth (J.objectKeyValues topField)
         | key == "directories" = fixed ["lib", "bin", "man", "doc", "example", "test"] (depth - 3)
         | key == "devEngines" = objectValue (depth - 3) devEngineField
         | key == "publishConfig" = objectValue (depth - 3) publishField
-        | key == "workspaces" = withinRetainedDepth (depth - 3) (retainedArray (scalar (depth - 4)) <|> retainedObject workspaceField <|> scalar (depth - 3))
+        | key == "workspaces" = withinRetainedDepth (depth - 3) (retainedArrayWith (objectValue (depth - 3) workspaceField) (scalar (depth - 4)))
         | key `elem` ["dependencies", "acceptDependencies", "devDependencies", "optionalDependencies", "peerDependencies", "engines", "scripts", "bin", "browser"] =
             objectValue (depth - 3) (const (scalar (depth - 4)))
         | key `elem` ["name", "version", "_hasShrinkwrap", "hasInstallScript", "deprecated", "main", "module", "type", "types", "typings", "gypfile", "preferGlobal", "packageManager", "engineStrict"] = scalar (depth - 3)
         | key `elem` supported = retainedValue (depth - 3)
         | otherwise = mempty
-    personValue keys budget = withinRetainedDepth budget ((String . T.copy <$> J.string) <|> fixed keys budget)
+    personValue keys budget = withinRetainedDepth budget ((String <$> J.string) <|> fixed keys budget)
     scalar budget = withinRetainedDepth budget (retainedScalar <|> pure (Array mempty))
-    objectValue budget fields = withinRetainedDepth budget (retainedObject fields <|> scalar budget)
-    arrayValue budget entry = withinRetainedDepth budget (retainedArray entry <|> scalar budget)
+    objectValue budget fields = withinRetainedDepth budget (retainedObjectWith (scalar budget) fields)
+    arrayValue budget entry = withinRetainedDepth budget (retainedArrayWith (scalar budget) entry)
     fixed keys budget = objectValue budget (\key -> if key `elem` keys then scalar (budget - 1) else mempty)
     distField "signatures" = arrayValue (depth - 4) (fixed ["keyid", "sig"] (depth - 5))
     distField "attestations" = objectValue (depth - 4) attestationField
@@ -101,7 +100,7 @@ npmFields depth mode = withinRetainedDepth depth (J.objectKeyValues topField)
     attestationField _ = mempty
     devEngineField key
         | key `elem` ["cpu", "os", "libc", "runtime", "packageManager"] =
-            withinRetainedDepth (depth - 4) (retainedArray (fixed ["name", "version", "onFail"] (depth - 5)) <|> fixed ["name", "version", "onFail"] (depth - 4))
+            withinRetainedDepth (depth - 4) (retainedArrayWith (fixed ["name", "version", "onFail"] (depth - 4)) (fixed ["name", "version", "onFail"] (depth - 5)))
         | otherwise = mempty
     publishField key
         | key `elem` ["registry", "tag", "access", "provenance", "ignore-scripts", "directory", "linkDirectory", "executableFiles", "main", "module", "types", "typings", "exports", "imports", "bin", "browser"] = retainedValue (depth - 4)
@@ -159,10 +158,17 @@ versionListFields = ["name", "version", "dist", "deprecated", "hasInstallScript"
 distFields :: [Text]
 distFields = ["tarball", "shasum", "integrity", "unpackedSize", "fileCount", "signatures", "attestations"]
 
+data StringMapShape = ValidStringMap | InvalidStringMap | NullStringMap
+
 stringMapWitness :: Int -> J.Parser Value
-stringMapWitness budget = J.catMaybeI (fmap result <$> J.foldI collect Nothing events)
+stringMapWitness budget = result <$> J.foldI collect NullStringMap events
   where
-    events = J.objectFound True True (J.objectValues (withinRetainedDepth budget ((True <$ J.string) <|> pure False)))
-    collect valid next = Just (fromMaybe True valid && next)
-    result True = Object mempty
-    result False = Number 0
+    events =
+        J.objectFound ValidStringMap ValidStringMap (J.objectValues (withinRetainedDepth budget ((ValidStringMap <$ J.string) <|> pure InvalidStringMap)))
+            <|> (NullStringMap <$ J.jNull)
+            <|> pure InvalidStringMap
+    collect InvalidStringMap _ = InvalidStringMap
+    collect _ next = next
+    result ValidStringMap = Object mempty
+    result InvalidStringMap = Number 0
+    result NullStringMap = Null

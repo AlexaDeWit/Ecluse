@@ -6,6 +6,11 @@ module Ecluse.Core.Server.Cache.Store (
     SingleFlight,
     newSingleFlightWithBackend,
     resolveSingleFlight,
+    PreparedStore,
+    MaterialReuse (..),
+    prepareStore,
+    preparedReuse,
+    executePrepared,
     lookupStore,
     CacheOccupancy (..),
 ) where
@@ -32,6 +37,41 @@ data FlightOutcome e v
 newSingleFlightWithBackend :: Maybe (RetentionBackend k v) -> IO (SingleFlight e k v)
 newSingleFlightWithBackend backend = SingleFlight backend <$> newTVarIO Map.empty
 
+-- | Whether execution reuses a captured local value or can allocate fresh metadata.
+data MaterialReuse = KnownLocalReuse | NeedsMaterialisation
+    deriving stock (Eq, Show)
+
+-- | A request-scoped read. Execute once inside the matching material allowance.
+data PreparedStore e v = PreparedStore
+    { preparedReuse :: MaterialReuse
+    -- ^ The selected value's reuse class, determined without external lookup.
+    , executePrepared :: IO (Either e v)
+    -- ^ Resolve the read, recording its request outcome only during execution.
+    }
+
+-- | Capture local retention without claiming a flight or contacting external storage.
+prepareStore ::
+    (Ord k) =>
+    (Metric.CacheResult -> IO ()) ->
+    (CacheOccupancy -> IO ()) ->
+    IO () ->
+    SingleFlight e k v ->
+    k ->
+    IO (Either e v) ->
+    IO (PreparedStore e v)
+prepareStore recordRequest recordOccupancy recordRefused sf key fetch = do
+    held <- lookupLocal recordOccupancy recordRefused sf key
+    pure $ case held of
+        Just value -> PreparedStore KnownLocalReuse (recordRequest Metric.Hit $> Right value)
+        Nothing -> PreparedStore NeedsMaterialisation (resolveDeferred recordRequest recordOccupancy recordRefused sf key fetch)
+
+lookupLocal :: (CacheOccupancy -> IO ()) -> IO () -> SingleFlight e k v -> k -> IO (Maybe v)
+lookupLocal recordOccupancy recordRefused sf key = case sfBackend sf of
+    Just backend
+        | rbStorage backend == LocalStorage ->
+            lookupStore recordOccupancy recordRefused RefreshRecency sf key
+    _ -> pure Nothing
+
 {- | Share active work and release waiters on failure or cancellation.
 Capacity refusals and external backend faults use the refusal callback.
 -}
@@ -44,13 +84,21 @@ resolveSingleFlight ::
     k ->
     IO (Either e v) ->
     IO (Either e v)
-resolveSingleFlight recordRequest recordOccupancy recordRefused sf key fetch = mask $ \restore ->
+resolveSingleFlight recordRequest recordOccupancy recordRefused sf key fetch =
+    prepareStore recordRequest recordOccupancy recordRefused sf key fetch >>= executePrepared
+
+resolveDeferred ::
+    (Ord k) =>
+    (Metric.CacheResult -> IO ()) ->
+    (CacheOccupancy -> IO ()) ->
+    IO () ->
+    SingleFlight e k v ->
+    k ->
+    IO (Either e v) ->
+    IO (Either e v)
+resolveDeferred recordRequest recordOccupancy recordRefused sf key fetch = mask $ \restore ->
     let resolveAt reportRequest = do
-            held <- case sfBackend sf of
-                Just backend
-                    | rbStorage backend == LocalStorage ->
-                        restore (lookupStore recordOccupancy recordRefused RefreshRecency sf key)
-                _ -> pure Nothing
+            held <- restore (lookupLocal recordOccupancy recordRefused sf key)
             case held of
                 Just value -> reportRequest Metric.Hit $> Right value
                 Nothing -> resolveMiss reportRequest

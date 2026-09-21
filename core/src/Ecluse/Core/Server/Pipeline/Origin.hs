@@ -22,6 +22,7 @@ module Ecluse.Core.Server.Pipeline.Origin (
     fetchPrivateOrigin,
     fetchPublicOrigin,
     withPublicMetadataClient,
+    preparePublicMetadata,
     withPrivateMetadataClient,
 
     -- * One origin's coordinates
@@ -53,10 +54,12 @@ import Ecluse.Core.Registry.Metadata (
         MetadataNameMismatch,
         MetadataUndecodable
     ),
+    VersionRead,
  )
 import Ecluse.Core.Registry.Origin (OriginClient, OriginFor, anonymousOrigin, originBaseUrl, originClient, originClientOf, perCallerOrigin)
 import Ecluse.Core.Security.Egress (RegistryUrl, registryUrlText)
 import Ecluse.Core.Server.Cache (Source (Source))
+import Ecluse.Core.Server.Cache.Store (PreparedStore)
 import Ecluse.Core.Server.Context (
     Handler,
     PackumentDeps (..),
@@ -64,8 +67,9 @@ import Ecluse.Core.Server.Context (
     pdPrivateBaseUrl,
     pdPublicBaseUrl,
  )
-import Ecluse.Core.Server.Metadata (MetadataReads, privateMetadataClient, publicMetadataClient)
+import Ecluse.Core.Server.Metadata (MetadataReads, preparePublicVersion, privateMetadataClient, publicMetadataClient)
 import Ecluse.Core.Server.Pipeline.Diagnostics (logInvalidEntries, logMetadataFailure)
+import Ecluse.Core.Version (Version)
 
 -- | A parsed contribution with opaque source bytes and a digest for the derived validator.
 data Contribution = Contribution
@@ -165,9 +169,9 @@ request's @katip@ context into the failure logs, and the fetch holds the mount's
 withMetadataClient ::
     ServeRuntime ->
     PackumentDeps ->
-    (MetadataReads posture -> MetadataClient) ->
+    (MetadataReads posture -> client) ->
     OriginFor posture ->
-    (MetadataClient -> IO a) ->
+    (client -> IO a) ->
     Handler a
 withMetadataClient rt deps settle origin k =
     withRunInIO $ \runInIO ->
@@ -194,6 +198,15 @@ withPublicMetadataClient rt deps baseUrl =
     withMetadataClient rt deps settle (anonymousOrigin (pdLimits deps) (srPublicManager rt) baseUrl)
   where
     settle = publicMetadataClient (srMetadataCache rt) (Source (registryUrlText baseUrl))
+
+-- | Capture public local reuse before entering material admission, without starting remote work.
+preparePublicMetadata :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Handler (PreparedStore MetadataError VersionRead)
+preparePublicMetadata rt deps name version =
+    withMetadataClient rt deps settle origin (\prepare -> prepare name version)
+  where
+    baseUrl = pdPublicBaseUrl deps
+    origin = anonymousOrigin (pdLimits deps) (srPublicManager rt) baseUrl
+    settle = preparePublicVersion (srMetadataCache rt) (Source (registryUrlText baseUrl))
 
 -- | Build an origin with the mount's response bound and the caller-selected manager and credential.
 mountOrigin :: PackumentDeps -> Manager -> RegistryUrl -> Maybe ClientCredential -> OriginClient

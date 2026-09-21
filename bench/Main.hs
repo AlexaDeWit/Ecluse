@@ -11,6 +11,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.Bench.Corpus (benchEvalContext, syntheticInput)
 import Ecluse.Core.CacheBench qualified as CacheBench
+import Ecluse.Core.ColdReadBench qualified as ColdReadBench
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.MergeBench qualified as MergeBench
 import Ecluse.Core.Package (artUrl, infoVersions, pkgArtifacts)
@@ -26,20 +27,22 @@ import Ecluse.Core.WireBench qualified as WireBench
 import Ecluse.Test.Corpus (syntheticProxyBase)
 import Ecluse.Test.EcosystemBench (EcosystemBench (..), ecosystemBenches)
 import Ecluse.Test.Server.Transform (serveDocumentBytes)
+import Ecluse.Test.Support (expectRight)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Bench (bgroup, defaultMain)
-import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 main :: IO ()
 main = do
     ecosystems <- ecosystemBenches
     cacheBenchmarks <- CacheBench.benchmarks
-    defaultMain
-        [ bgroup
-            "ecluse-core (work-per-request)"
-            (map ecosystemGroup ecosystems <> [StreamBench.benchmarks, cacheBenchmarks])
-        , testGroup "synthetic generators" (map generatorTests ecosystems)
-        ]
+    ColdReadBench.withBenchmarks ecosystems $ \coldReads ->
+        defaultMain
+            [ bgroup
+                "ecluse-core (work-per-request)"
+                (map ecosystemGroup ecosystems <> coldReads <> [StreamBench.benchmarks, cacheBenchmarks])
+            , testGroup "synthetic generators" (map generatorTests ecosystems)
+            ]
 
 ecosystemGroup :: EcosystemBench -> TestTree
 ecosystemGroup ecosystem =
@@ -92,6 +95,3 @@ generatorTests ecosystem =
     sampleCount = 500
     name = ebSyntheticName ecosystem
     raw = ebSynthetic ecosystem sampleCount
-
-expectRight :: (Show err) => Either err value -> IO value
-expectRight = either (assertFailure . show) pure

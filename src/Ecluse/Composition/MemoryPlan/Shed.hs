@@ -2,10 +2,9 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Graceful degradation, never a refusal. Where the desired tenant sum exceeds the heap ceiling,
-tenants give way in the fixed ladder order below. A pinned bound never sheds, and one operation on
-one capability with no cache is the irreducible minimum, which always boots. The capability count
-sheds separately, because the nursery sits outside the heap ceiling the tenant sum answers to.
+{- | Reclaim tenant bytes in priority order while preserving explicit storage pins.
+CPU capacity and metadata ingest limits stay independent of material shedding.
+The nursery's capability adjustment remains separate from tenant accounting.
 -}
 module Ecluse.Composition.MemoryPlan.Shed (
     shedToFit,
@@ -19,20 +18,17 @@ import Ecluse.Composition.MemoryPlan.Bounds (
     cacheEntriesCap,
     cacheEntriesFloor,
     cacheEntryExpectedBytes,
-    envelope,
     mirrorArtifactEnvelopeMultiplier,
     queueCharge,
     queueDepthFloor,
-    responseBytesCap,
-    responseBytesFloor,
  )
 import Ecluse.Composition.MemoryPlan.Internal (
-    OverridePins (opAdmission, opArtifact, opCache, opDepth, opResponse),
+    OverridePins (opArtifact, opCache, opDepth),
     PlanInputs (piAllocAreaBytes, piCapabilities),
     ShedOutcomes (..),
     TenantDemands (..),
  )
-import Ecluse.Core.Server.MemoryModel (contractResidentBytes, mirrorJobEstimatedBytes, packumentOriginFanout)
+import Ecluse.Core.Server.MemoryModel (mirrorJobEstimatedBytes)
 import Ecluse.Rts (nurseryFittedCapabilities)
 
 {- | Walk the shed ladder: every tenant at its desired share, then shed in step order until
@@ -47,8 +43,8 @@ shedToFit d =
         , soCacheFinal = stepFinal cacheStep
         , soMaterialShed = stepShed materialStep
         , soMaterialFinal = stepFinal materialStep
-        , soAdmissionFinal = moAdmission material
-        , soResponseFinal = moResponse material
+        , soAdmissionFinal = tdAdmissionDesired d
+        , soResponseFinal = tdResponseFinal d
         , soPublishShed = stepShed publishStep
         , soPublishFinal = stepFinal publishStep
         , soQueueShedBytes = qoShed queue
@@ -64,8 +60,7 @@ shedToFit d =
         Just n -> n
         Nothing -> stepFinal mirrorStep `div` mirrorArtifactEnvelopeMultiplier
     cacheStep = shedCacheStep d (stepResidual mirrorStep)
-    material = shedMaterialStep d (stepResidual cacheStep)
-    materialStep = moStep material
+    materialStep = shedMaterialStep d (stepResidual cacheStep)
     publishStep = shedPublishStep d (stepResidual materialStep)
     queue = shedQueueStep d (stepResidual publishStep)
 
@@ -109,29 +104,10 @@ shedCacheStep d overshoot =
   where
     desired = tdCacheDesired d
 
--- The material tenant after shedding: the shed step plus the admission and response
--- caps the surviving share affords.
-data MaterialOutcome = MaterialOutcome
-    { moStep :: ShedStep
-    , moAdmission :: Int
-    , moResponse :: Int
-    }
-
-{- Step 2: admission shrinks toward one in-flight operation at the floor response cap. The
-surviving material share then fixes both the admission and the response cap. -}
-shedMaterialStep :: TenantDemands -> Int -> MaterialOutcome
+-- Step 2: reclaim material estimates without changing CPU or metadata ingest controls.
+shedMaterialStep :: TenantDemands -> Int -> ShedStep
 shedMaterialStep d overshoot =
-    MaterialOutcome{moStep = step, moAdmission = admissionFinal, moResponse = responseFinal}
-  where
-    step = shedStep overshoot (tdMaterialDesired d) (max 0 (tdMaterialDesired d - tdMaterialMinimum d))
-    materialFinal = stepFinal step
-    responseExplicit = opResponse (tdPins d)
-    admissionFinal = case opAdmission (tdPins d) of
-        Just n -> n
-        Nothing -> max 1 (min (tdAdmissionDesired d) (materialFinal `div` envelope (fromMaybe responseBytesFloor responseExplicit)))
-    responseFinal = case responseExplicit of
-        Just r -> r
-        Nothing -> clamp (responseBytesFloor, responseBytesCap) (contractResidentBytes (materialFinal `div` max 1 (admissionFinal * packumentOriginFanout)))
+    shedStep overshoot (tdMaterialDesired d) (max 0 (tdMaterialDesired d - 1))
 
 -- Step 3: the publish aggregate shrinks to one maximum request.
 shedPublishStep :: TenantDemands -> Int -> ShedStep
@@ -173,7 +149,7 @@ shedQueueStep d overshoot =
             | otherwise -> depthDesired
 
 {- | The cache entry bound: an explicit count, or the surviving aggregate divided by the
-planning allowance per assembled-response slot.
+planning allowance per shared local metadata entry slot.
 -}
 cacheEntryBound :: TenantDemands -> ShedOutcomes -> Int
 cacheEntryBound d o =

@@ -25,6 +25,7 @@ module Ecluse.Core.Registry.Metadata (
     -- * Single-version resolution
     VersionEvaluation (..),
     fetchVersionDetails,
+    versionEvaluation,
     versionTransience,
 ) where
 
@@ -111,11 +112,15 @@ data VersionEvaluation
 -- | Classify a version lookup for public admission and workers, treating metadata failures as transient.
 fetchVersionDetails :: MetadataClient -> PackageName -> Version -> IO VersionEvaluation
 fetchVersionDetails client name version =
-    fetchVersionMetadata client name version <&> \case
-        Left _ -> VersionMetadataUnavailable
-        Right versionRead -> case vrVersion versionRead of
-            Nothing -> VersionMissing
-            Just present -> VersionPresent present (vrUpstreamLatest versionRead)
+    versionEvaluation <$> fetchVersionMetadata client name version
+
+-- | Classify a resolved selected read without changing its acquisition lifetime.
+versionEvaluation :: Either MetadataError VersionRead -> VersionEvaluation
+versionEvaluation = \case
+    Left _ -> VersionMetadataUnavailable
+    Right versionRead -> case vrVersion versionRead of
+        Nothing -> VersionMissing
+        Just present -> VersionPresent present (vrUpstreamLatest versionRead)
 
 -- | Classify unsuccessful lookups for retry. A resolved version has no transience.
 versionTransience :: VersionEvaluation -> Maybe Transience

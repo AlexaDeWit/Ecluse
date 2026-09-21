@@ -2,6 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
+-- | Live npm protocol checks against the shipped read and input bounds.
 module Ecluse.Core.Registry.NpmSmokeSpec (spec) where
 
 import Data.Aeson (Value (Object, String), eitherDecodeStrict)
@@ -37,9 +38,7 @@ import Ecluse.Test.Registry.Npm.Metadata (fetchMetadataFormBounded, projectNpmMa
 import Ecluse.Test.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Test.Support (expectRightText)
 
-{- | Smoke tier: __live__ calls to the public npm registry, confirming that our decoding, our
-projection, and the default 'Limits' still match what the registry serves.
--}
+-- | Check real registry data without treating transport failures as protocol failures.
 spec :: Spec
 spec = describe "live npm registry protocol" $ do
     it "decodes a real abbreviated packument from the public npm registry" $ do
@@ -53,8 +52,6 @@ spec = describe "live npm registry protocol" $ do
                     Right (NameMismatch reported) ->
                         expectationFailure ("abbreviated packument self-reported a different name: " <> toString reported)
                     Right (Projected info) -> do
-                        -- The live decoder still matches reality: the packument
-                        -- projects, and dist-tags always carries `latest`.
                         renderPackageName (infoName info) `shouldBe` "is-odd"
                         Map.member "latest" (infoDistTags info) `shouldBe` True
                         Map.null (infoVersions info) `shouldBe` False
@@ -66,15 +63,12 @@ spec = describe "live npm registry protocol" $ do
         outcome <- fetchMetadataFormBounded config Abbreviated isOdd
         case outcome of
             Left _ ->
-                -- The typed channel reports the unreachable-registry case as a value.
                 pendingWith "npm registry unreachable (offline); smoke test skipped"
             Right response ->
                 case projectNpmManifest defaultLimits isOdd (responseBody response) of
                     Left err ->
                         expectationFailure ("live packument failed to project: " <> show err)
                     Right (info, _raw) -> do
-                        -- The live projection round-trips: the name comes back as published, and
-                        -- `latest` is always a dist-tag.
                         renderPackageName (infoName info) `shouldBe` "is-odd"
                         Map.member "latest" (infoDistTags info) `shouldBe` True
 
@@ -85,19 +79,14 @@ spec = describe "live npm registry protocol" $ do
             Nothing -> pendingWith registryUnreadable
             Just value -> do
                 let digests = collectDistDigests value
-                -- Non-vacuous: the packument carried both digest kinds, so the
-                -- assertion spans both the legacy and modern eras.
                 any ((== SHA1) . fst) digests `shouldBe` True
                 any ((== SRI) . fst) digests `shouldBe` True
-                -- Every real digest validates through the same mkHash the projection
-                -- uses. A Left here is our validator false-rejecting a real format.
                 [(alg, d) | (alg, d) <- digests, isLeft (mkHash alg d)] `shouldBe` []
 
     -- Live responses check default admission against growth since the complete corpus captures.
-    for_ ["react", "@types/node", "lodash"] $ \pkg ->
+    for_ ["react", "@types/node", "lodash", "typescript"] $ \pkg ->
         it ("a real large trusted packument is admissible under the default Limits (" <> toString pkg <> ")") $ do
             manager <- newManager tlsManagerSettings
-            -- The live splitter, not a harness copy: a pin the front door would refuse fails here.
             parsed <- either (fail . show) pure (projectName pkg)
             outcome <- admissibleUnderDefaults manager parsed
             case outcome of
@@ -116,13 +105,9 @@ registryBase = "https://registry.npmjs.org"
 abbreviatedAccept :: String
 abbreviatedAccept = "application/vnd.npm.install-v1+json"
 
--- Both curl reads pend for the same two causes, so they report them the same way.
 registryUnreadable :: String
 registryUnreadable = "npm registry unreachable (offline or curl unavailable); smoke test skipped"
 
-{- | A live registry document under 'registryBase'. 'Nothing' means curl or the registry was
-unavailable, while a document that arrives and does not decode fails the case.
--}
 liveRegistryDocument :: [String] -> String -> IO (Maybe Value)
 liveRegistryDocument extraArgs path = do
     (code, out, _err) <- readProcessWithExitCode "curl" (["-sf"] <> extraArgs <> [registryBase <> path]) ""
@@ -134,9 +119,7 @@ liveRegistryDocument extraArgs path = do
                 (pure . Just)
                 (eitherDecodeStrict (encodeUtf8 out))
 
-{- | What the serve path's admissibility chain answered for a live packument. Only a transport
-fault is the registry's absence, so only that arm may pend a case.
--}
+-- Only transport failures may make a live bound check pending.
 data Admissibility
     = -- | The exchange never produced a document, so the case has nothing to judge.
       Unreachable Text
@@ -146,7 +129,6 @@ data Admissibility
       Admitted Text Int
     deriving stock (Eq, Show)
 
--- | Run the shipping streamed read against a live packument under the configured default limits.
 admissibleUnderDefaults :: Manager -> PackageName -> IO Admissibility
 admissibleUnderDefaults manager name = do
     config <- publicRegistryOrigin manager
@@ -171,8 +153,7 @@ collectDistDigests value =
             <> [(SRI, i) | Just (String i) <- [KeyMap.lookup "integrity" dist]]
     ]
 
--- The live public registry as an origin at the secure-default bounds. Its URL is https, so
--- the production former builds the witness and a refusal here is a broken constant.
+-- Reject an invalid built-in registry URL instead of reporting an offline test.
 publicRegistryOrigin :: Manager -> IO OriginClient
 publicRegistryOrigin manager =
     (`defaultNpmConfig` manager) <$> expectRightText (mkRegistryUrl publicRegistryBaseUrl)

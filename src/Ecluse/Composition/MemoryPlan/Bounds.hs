@@ -2,11 +2,7 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | The shipped numbers the memory plan resolves against, and the byte charge a tenant's demand
-turns into. The shares carve up the application heap, the floors and caps bracket every computed
-bound through @clamp@, and the fallbacks stand in for a pod with no heap-ceiling datapoint. A
-configured value overrides a bound. These are what is left when none is configured.
--}
+-- | Default tenant shares, computed bounds, and fallbacks without a heap ceiling.
 module Ecluse.Composition.MemoryPlan.Bounds (
     -- * Shares of the application heap
     runtimeReserveShareDiv,
@@ -18,9 +14,9 @@ module Ecluse.Composition.MemoryPlan.Bounds (
     mirrorArtifactSharePercent,
 
     -- * Byte floors, caps, and no-ceiling fallbacks
-    responseBytesFloor,
-    responseBytesCap,
     responseBytesFallback,
+    materialBytesFallback,
+    materialAllowances,
     requestBytesFloor,
     requestBytesCap,
     requestBytesFallback,
@@ -38,7 +34,6 @@ module Ecluse.Composition.MemoryPlan.Bounds (
     mirrorArtifactBytesCap,
 
     -- * Tenant charges
-    envelope,
     queueCharge,
     fixedBufferBytes,
     anyMountMirrors,
@@ -47,7 +42,9 @@ module Ecluse.Composition.MemoryPlan.Bounds (
 
 import Ecluse.Composition.MemoryPlan.Types (QueueTenantDemand (MemoryQueueTenant, NoQueueTenant))
 import Ecluse.Composition.Sizing (mirrorEnqueueBufferDepth)
-import Ecluse.Core.Server.MemoryModel (expandWireBytes, mirrorJobEstimatedBytes, packumentOriginFanout)
+import Ecluse.Core.Security.Limits (Limits (maxMetadataBytes), defaultLimits)
+import Ecluse.Core.Server.Admission.Material (MaterialAllowances (..))
+import Ecluse.Core.Server.MemoryModel (mirrorJobEstimatedBytes)
 
 {- | The divisor taking the runtime reserve off the ceiling. The GC and the RTS get a fifth of
 whatever the pod has.
@@ -83,19 +80,25 @@ small so the background back-fill never crowds the serve hot path.
 mirrorArtifactSharePercent :: Int
 mirrorArtifactSharePercent = 4
 
-{- | Real-world packuments reach multiple MiB, so a small pod must never compute a response cap
-below this floor.
--}
-responseBytesFloor :: Int
-responseBytesFloor = 12582912
-
--- | The largest computed response cap, so one hostile document cannot monopolise the heap.
-responseBytesCap :: Int
-responseBytesCap = 67108864
-
--- | The response cap a pod with no heap-ceiling datapoint gets.
+-- | The metadata ingest ceiling, independent of the heap and CPU controls.
 responseBytesFallback :: Int
-responseBytesFallback = 12582912
+responseBytesFallback = maxMetadataBytes defaultLimits
+
+{- | Static estimates from the declared npm/PyPI stage workload with 25% headroom, rounded up.
+See <https://github.com/AlexaDeWit/Ecluse/issues/1427> for the workload and measurement limits.
+-}
+materialAllowances :: MaterialAllowances
+materialAllowances =
+    MaterialAllowances
+        { maColdSelectedBytes = 9437184
+        , maRetainedSelectedBytes = 262144
+        , maFullOriginBytes = 38797312
+        , maListingOutputBytes = 11534336
+        }
+
+-- | Two calibrated two-origin listings without a heap datapoint, independent of CPU capacity.
+materialBytesFallback :: Int
+materialBytesFallback = 2 * (2 * maFullOriginBytes materialAllowances + maListingOutputBytes materialAllowances)
 
 -- | The smallest computed publish-body cap.
 requestBytesFloor :: Int
@@ -123,9 +126,11 @@ cacheBytesCap = 1073741824
 cacheBytesFallback :: Int
 cacheBytesFallback = 268435456
 
--- | The planning allowance per assembled-response entry slot (256 KiB).
+{- | Shared entry allowance (16 KiB), matching the present-selected base charge.
+Calibration and cardinality limits: <https://github.com/AlexaDeWit/Ecluse/pull/1469#issuecomment-5756635550 PR #1469>.
+-}
 cacheEntryExpectedBytes :: Int
-cacheEntryExpectedBytes = 262144
+cacheEntryExpectedBytes = 16384
 
 -- | The smallest computed cache entry bound.
 cacheEntriesFloor :: Int
@@ -164,12 +169,6 @@ charged envelope is therefore at most this times 'mirrorArtifactEnvelopeMultipli
 -}
 mirrorArtifactBytesCap :: Int
 mirrorArtifactBytesCap = 512 * 1024 * 1024
-
-{- | One admitted operation's envelope at response cap @r@: the concurrent origins' wire and parsed
-forms, by the shared wire-to-resident model.
--}
-envelope :: Int -> Int
-envelope r = packumentOriginFanout * expandWireBytes r
 
 -- | The bytes a memory-queue depth charges. Zero unless the memory backend runs.
 queueCharge :: Bool -> Int -> Int

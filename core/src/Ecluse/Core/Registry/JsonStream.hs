@@ -2,16 +2,19 @@
 --
 -- SPDX-License-Identifier: MIT
 
--- | Incremental registry extraction with a complete-source digest and bounded input chunks.
+{- | Incremental registry extraction with a complete-source digest and bounded input chunks.
+With json-stream 0.4.6.1 and text 2.1.3, decoded strings and keys own their arrays, including chunk-spanning tokens.
+See <https://github.com/ondrap/json-stream/blob/537a43a775e64f50dc63c373193323de98619799/Data/JsonStream/Unescape.hs decoder storage>.
+-}
 module Ecluse.Core.Registry.JsonStream (
     StreamResult (..),
     readJsonStream,
     retainedValue,
     withinRetainedDepth,
-    retainedObject,
     retainedObjectOr,
-    retainedArray,
     retainedScalar,
+    retainedObjectWith,
+    retainedArrayWith,
 ) where
 
 import Crypto.Hash (hashInit, hashUpdate)
@@ -20,7 +23,6 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.JsonStream.Parser qualified as J
-import Data.Text qualified as T
 import Data.Vector qualified as V
 
 import Ecluse.Core.Registry (ParseError (..))
@@ -70,9 +72,11 @@ readJsonStream bound parser step initial readChunk = go 0 hashInit initial (J.ru
 retainedValue :: Int -> J.Parser Value
 retainedValue depth =
     withinRetainedDepth depth $
-        retainedScalar
-            <|> retainedArray (retainedValue (depth - 1))
-            <|> retainedObject (const (retainedValue (depth - 1)))
+        retainedObjectWith
+            (retainedArrayWith retainedScalar child)
+            (const child)
+  where
+    child = retainedValue (depth - 1)
 
 -- | Charge the parsed value's own level, including empty containers. Children need one less level.
 withinRetainedDepth :: Int -> J.Parser a -> J.Parser a
@@ -80,33 +84,46 @@ withinRetainedDepth budget parser
     | budget <= 0 = J.mapWithFailure (const (Left "retained JSON nesting limit")) (pure ())
     | otherwise = parser
 
--- | Materialise only fields whose key selects a parser. Duplicate keys keep their first value.
-retainedObject :: (Text -> J.Parser Value) -> J.Parser Value
-retainedObject select = Object <$> J.catMaybeI (objectMembers select)
-
 -- | Supply an invalid-shape witness without traversing a valid object through a parallel fallback.
 retainedObjectOr :: Value -> (Text -> J.Parser Value) -> J.Parser Value
-retainedObjectOr fallback select = maybe fallback Object <$> objectMembers select
+retainedObjectOr fallback = fmap (fromMaybe fallback) . foldRetained . objectEvents
 
-objectMembers :: (Text -> J.Parser Value) -> J.Parser (Maybe (KeyMap.KeyMap Value))
-objectMembers select = J.foldI insert Nothing events
-  where
-    field key = (Key.fromText (T.copy key),) <$> select key
-    events = J.objectFound Nothing Nothing (Just <$> J.objectKeyValues field)
-    insert fields Nothing = Just (fromMaybe mempty fields)
-    insert fields (Just (!key, !value)) =
-        let !current = fromMaybe mempty fields
-            !updated = if KeyMap.member key current then current else KeyMap.insert key value current
-         in Just updated
+-- | Select object events before folding. The fallback handles scalars and other container shapes.
+retainedObjectWith :: J.Parser Value -> (Text -> J.Parser Value) -> J.Parser Value
+retainedObjectWith fallback select = J.catMaybeI (foldRetained (objectEvents select <|> (OtherValue <$> fallback)))
 
--- | Retain array positions in source order, without accepting a non-array as an empty array.
-retainedArray :: J.Parser Value -> J.Parser Value
-retainedArray parser = Array . V.fromList . reverse <$> J.catMaybeI (J.foldI collect Nothing events)
+-- | Select array events before folding. A container fallback must yield only its completed value.
+retainedArrayWith :: J.Parser Value -> J.Parser Value -> J.Parser Value
+retainedArrayWith fallback parser = J.catMaybeI (foldRetained (arrayEvents parser <|> (OtherValue <$> fallback)))
+
+data RetainedEvent = BeginObject | ObjectField Key.Key Value | BeginArray | ArrayItem Value | OtherValue Value | EndContainer
+
+data Retained = Missing | ObjectFields (KeyMap.KeyMap Value) | ArrayItems [Value] | ScalarValue Value
+
+objectEvents :: (Text -> J.Parser Value) -> J.Parser RetainedEvent
+objectEvents select = J.objectFound BeginObject EndContainer (J.objectKeyValues field)
   where
-    events = J.arrayFound Nothing Nothing (Just <$> J.arrayOf parser)
-    collect values Nothing = Just (fromMaybe [] values)
-    collect values (Just !value) = Just (value : fromMaybe [] values)
+    field key = ObjectField (Key.fromText key) <$> select key
+
+arrayEvents :: J.Parser Value -> J.Parser RetainedEvent
+arrayEvents parser = J.arrayFound BeginArray EndContainer (ArrayItem <$> J.arrayOf parser)
+
+-- The fallback contributes one completed value. Unmatched first shapes still skip their input.
+foldRetained :: J.Parser RetainedEvent -> J.Parser (Maybe Value)
+foldRetained = fmap finish . J.foldI collect Missing
+  where
+    collect _ BeginObject = ObjectFields mempty
+    collect _ BeginArray = ArrayItems []
+    collect (ObjectFields fields) (ObjectField key value) =
+        ObjectFields (if KeyMap.member key fields then fields else KeyMap.insert key value fields)
+    collect (ArrayItems values) (ArrayItem value) = ArrayItems (value : values)
+    collect _ (OtherValue value) = ScalarValue value
+    collect current _ = current
+    finish Missing = Nothing
+    finish (ObjectFields fields) = Just (Object fields)
+    finish (ArrayItems values) = Just (Array (V.fromList (reverse values)))
+    finish (ScalarValue value) = Just value
 
 -- | Read a scalar without materialising an object or array when the field has the wrong shape.
 retainedScalar :: J.Parser Value
-retainedScalar = (String . T.copy <$> J.string) <|> (Number <$> J.number) <|> (Bool <$> J.bool) <|> (Null <$ J.jNull)
+retainedScalar = (String <$> J.string) <|> (Number <$> J.number) <|> (Bool <$> J.bool) <|> (Null <$ J.jNull)
