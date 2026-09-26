@@ -1,22 +1,15 @@
 name: Security
 
-# Vulnerability scanning, report-only: it never gates a PR, because findings
-# arrive with disclosure time, not with in-PR changes.
+# Haskell advisory scanning, report-only: it never gates a PR, because findings arrive
+# with disclosure time, not with in-PR changes. osv-scanner matches every exact pin in
+# cabal.project.freeze against OSV.dev, home to the HSEC advisories the GitHub Advisory
+# Database lacks. The freeze is the committed projection of the Nix package set, so it
+# covers the statically linked Haskell libraries no image scan can see.
 #
-# Two scanners cover the two halves of the shipped closure. The first, grype,
-# scans the image's C closure via the sbomnix SBOM. Statically linked Haskell
-# libraries are invisible to it. The second, osv-scanner, matches every exact pin
-# in cabal.project.freeze against OSV.dev. That freeze is the committed projection
-# of the Nix package set, and OSV.dev is home to the HSEC advisories the GitHub
-# Advisory Database lacks.
-#
-# Both upload SARIF to GitHub code scanning, so a human triages every finding in
-# the Security tab and the issue tracker holds only human-filed work. On a PR they
-# run only when the dependency plan changes. On the daily schedule they scan main,
-# so advisories disclosed after a release still surface. Remediation is always
-# flake-side, carried by Renovate's weekly flake.lock refresh. See
-# docs/architecture/release-supply-chain.md → "Vulnerability scanning and
-# dependency updates".
+# The SARIF goes to GitHub code scanning, so a human triages every finding in the
+# Security tab. The C closure's grype scan runs in ci.yml's nightly run. See
+# docs/architecture/release-supply-chain.md, "Vulnerability scanning and dependency
+# updates".
 on:
   pull_request:
     paths: ["flake.lock", "flake.nix", "cabal.project.freeze", ".github/workflows/security.yml"]
@@ -32,40 +25,6 @@ permissions:
   contents: read
 
 jobs:
-  scan:
-    name: Vulnerability scan (grype)
-    runs-on: ubuntu-24.04-arm
-    # Sized for a cold run after a dependency-overlay change in flake.nix. The
-    # sbomnix build of .#ecluse-bin makes the job pay the full source rebuild of
-    # the overridden closure that the main-written cache does not yet hold. A warm
-    # run finishes in a fraction of this.
-    timeout-minutes: 90
-    permissions:
-      contents: read
-      security-events: write # upload the grype SARIF to code scanning
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up toolchain
-        uses: ./.github/actions/setup-toolchain
-
-      # grype scans the sbomnix SBOM of .#ecluse-bin into grype.sarif, and prints a
-      # table in the log.
-      - name: Scan image closure (grype)
-        run: nix develop .#ci --command task scan
-
-      - name: Upload grype SARIF to code scanning
-        # Surface the closure CVEs in the Security tab (code scanning), alongside
-        # Semgrep and Scorecard, via the SARIF upload.
-        if: ${{ always() }}
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
-        with:
-          sarif_file: grype.sarif
-          category: grype
-
   osv-freeze:
     name: Haskell advisories (OSV/HSEC over the freeze)
     runs-on: ubuntu-24.04-arm
@@ -82,14 +41,11 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
 
-      # osv-scanner (from the pinned nixpkgs, like grype) reads the freeze
-      # natively. Findings are report-only, so only a scanner error fails here.
+      # Findings are report-only, so only a scanner error fails here.
       - name: Scan cabal.project.freeze (osv-scanner)
         run: nix develop .#ci --command task scan-osv
 
       - name: Upload osv-scanner SARIF to code scanning
-        # Surface the HSEC advisories in the Security tab (code scanning), alongside
-        # grype, Semgrep, and Scorecard.
         if: ${{ always() }}
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:

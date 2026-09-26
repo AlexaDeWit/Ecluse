@@ -1,7 +1,8 @@
 name: CI
 
 # Push-to-main and pull_request, so a feature-branch push never double-runs beside its
-# PR. The nightly schedule catches live-registry drift that lands outside this repo.
+# PR. The nightly schedule catches live-registry drift that lands outside this repo, and
+# runs the grype scan.
 on:
   push:
     branches: [main]
@@ -534,10 +535,57 @@ jobs:
           tag="$(bash scripts/docker-load.sh "artifacts/image-${ARCH}.tar")"
           docker run --rm --network none "$tag" --version
 
+  # grype findings arrive with disclosure time, not with a change, so the scan runs
+  # nightly (and on dispatch) over the dry-run's SBOMs and never gates.
+  grype:
+    name: Vulnerability scan (grype, report-only)
+    needs: release-dry-run
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write # upload the grype SARIF to code scanning
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+
+      - name: Download the SBOMs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sbom-*
+          path: artifacts
+
+      - name: Scan the arm64 closure
+        run: nix develop .#ci --command task scan-sbom SBOM=artifacts/sbom-arm64/ecluse.cdx.json SARIF=grype-arm64.sarif
+
+      - name: Scan the amd64 closure
+        if: ${{ !cancelled() }}
+        run: nix develop .#ci --command task scan-sbom SBOM=artifacts/sbom-amd64/ecluse.cdx.json SARIF=grype-amd64.sarif
+
+      - name: Upload the arm64 SARIF to code scanning
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          sarif_file: grype-arm64.sarif
+          category: grype
+
+      - name: Upload the amd64 SARIF to code scanning
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          sarif_file: grype-amd64.sarif
+          category: grype-amd64
+
   gate:
     name: CI gate
     # The single Required check. Wire a new one in by adding it to `needs` here AND to
-    # scripts/ci-gate-verdict.sh. The smoke job is absent on purpose: it is non-gating.
+    # scripts/ci-gate-verdict.sh. smoke and grype are absent on purpose: they never gate.
     needs:
       - changes
       - build
