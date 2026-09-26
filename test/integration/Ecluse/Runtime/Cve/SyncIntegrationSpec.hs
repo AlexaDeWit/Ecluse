@@ -23,7 +23,7 @@ import UnliftIO.Async (withAsync)
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Conduit (runResourceT)
-import Ecluse.Config (AppConfig, Config (configApp), loadConfig)
+import Ecluse.Config (Config, loadConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (currentAdvisoryEtag, newCveSlot, withSlotGeneration)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -70,8 +70,8 @@ spec =
                             let endpoint = endpointFor container
                                 endpointUrl = "http://" <> endpointHost endpoint <> ":" <> show (endpointPort endpoint)
                                 bucket = "cve-sync-spec"
-                            appCfg <-
-                                either (fail . ("CveSyncSpec fixture env: " <>) . show) (pure . configApp) $
+                            config <-
+                                either (fail . ("CveSyncSpec fixture env: " <>) . show) pure $
                                     loadConfig (s3EnvVars endpointUrl bucket) Nothing
                             awsEnv <- buildS3Env (Just endpoint)
                             createBucketWithRetry awsEnv bucket 30
@@ -110,7 +110,7 @@ spec =
 
                                 -- The running sync task's next poll verifies the new artifact and
                                 -- swaps it in, with no restart and no config change.
-                                publishViaPilot (Just endpoint) appCfg CorpusV1
+                                publishViaPilot (Just endpoint) config CorpusV1
 
                                 -- Phase 2: the proxy admits the identical request, and
                                 -- the served document carries the fixed version.
@@ -152,8 +152,8 @@ createBucketWithRetry awsEnv bucket attempts =
 
 -- The same compile-then-upload cycle the Pilot worker runs, never a direct PutObject. The
 -- compile output lands in its own temp dir, apart from the proxy's sync data dir.
-publishViaPilot :: Maybe AwsEndpoint -> AppConfig -> CorpusVersion -> IO ()
-publishViaPilot s3Endpoint appCfg v = do
+publishViaPilot :: Maybe AwsEndpoint -> Config -> CorpusVersion -> IO ()
+publishViaPilot s3Endpoint config v = do
     zipBytes <- osvCorpusZip v
     epssBytes <- readFileLBS epssFixtureFile
     logEnv <- quietLogEnv
@@ -165,7 +165,7 @@ publishViaPilot s3Endpoint appCfg v = do
                         logEnv
                         telemetryDisabled
                         s3Endpoint
-                        appCfg
+                        config
                         PilotCompileOptions
                             { pcoEcosystem = "npm"
                             , pcoSource = Just (toString (stubBaseUrl stub) <> "/all.zip")

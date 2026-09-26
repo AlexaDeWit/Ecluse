@@ -7,7 +7,10 @@ module Ecluse.BootSpec (spec) where
 
 import Prelude hiding (get)
 
+import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
+import Network.HTTP.Types.Status (status200, status404)
+import System.Directory (doesFileExist)
 import System.Environment (withArgs)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.FilePath ((</>))
@@ -40,6 +43,7 @@ import Ecluse.Runtime.Server (
  )
 import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Log (captureStderrWith, captureStdout)
+import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub)
 
 runEnv :: [(String, String)]
 runEnv =
@@ -268,6 +272,17 @@ spec = do
                     _ -> [refusal]
             bootRefusal args envVars `shouldReturn` (Left (ExitFailure 2), expected)
 
+    describe "pilot compile after a failed EPSS feed" $
+        for_ [(False, Left ExitSuccess), (True, Left (ExitFailure 1))] $ \(epssRule, expected) ->
+            it ("exits with " <> show expected <> " and publishes only without an EPSS rule, EPSS rule=" <> show epssRule) $ do
+                zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+                withSystemTempDirectory "ecluse-bootspec-compile" $ \outDir ->
+                    withStub status200 zipData $ \osvStub ->
+                        withStub status404 "" $ \epssStub -> do
+                            outcome <- withEnvVars caseKeys (compileEnv epssRule osvStub epssStub) (try (withArgs ["pilot", "compile", "--out", outDir] run))
+                            outcome `shouldBe` expected
+                            doesFileExist (outDir </> "npm-osv-schema4.db") `shouldReturn` not epssRule
+
     describe "check-config (validate and print, boot nothing)" $ do
         it "validates a bootable configuration and exits 0" $
             checkConfig runEnv `shouldReturn` Left ExitSuccess
@@ -366,6 +381,10 @@ caseKeys =
                , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__URL"
                , "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__TOKEN"
                , "ECLUSE_MOUNTS__RUBYGEMS__ENABLED"
+               , "ECLUSE_MOUNTS__NPM__RULES"
+               , "ECLUSE_ADVISORIES__URL"
+               , "ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL"
+               , "ECLUSE_ADVISORIES__EPSS_FEED_URL"
                ]
 
 {- | Start a role under these entries and hold it for 100 ms. 'Nothing' is the bound expiring
@@ -438,6 +457,19 @@ publishingTo = overrideEnv "ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET__REGISTRY__UR
 
 splitRoleRefusal :: [String] -> IO (Either ExitCode (Maybe ()), [Text])
 splitRoleRefusal args = bootRefusal args (withoutQueueUrl runEnv)
+
+{- | An npm mount whose advisory sources are the stubs, with or without a rule that depends on EPSS.
+The store is configured only because such a rule refuses the boot without one. Nothing uploads.
+-}
+compileEnv :: Bool -> Stub -> Stub -> [(String, String)]
+compileEnv epssRule osvStub epssStub =
+    [ ("ECLUSE_SERVER__PUBLIC_URL", "https://registry.example.test")
+    , ("ECLUSE_MOUNTS__NPM__ENABLED", "true")
+    , ("ECLUSE_ADVISORIES__URL", "s3://advisories.example.test")
+    , ("ECLUSE_ADVISORIES__OSV_EXPORT_BASE_URL", toString (stubBaseUrl osvStub))
+    , ("ECLUSE_ADVISORIES__EPSS_FEED_URL", toString (stubBaseUrl epssStub) <> "/epss.csv.gz")
+    ]
+        <> [("ECLUSE_MOUNTS__NPM__RULES", "{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}}") | epssRule]
 
 -- | A shared policy carrying one advisory deny, which needs a store no fixture here configures.
 cveDenyRule :: String

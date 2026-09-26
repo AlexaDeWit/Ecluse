@@ -36,7 +36,6 @@ import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeAndMirror, ServeOnly),
  )
-import Ecluse.Config (Config (configApp))
 import Ecluse.Dredger (runDredger)
 import Ecluse.Dredger.Plan (DredgerOptions (doMode), dredgerBootRole)
 import Ecluse.Internal (ProcessOutcome (ServiceExited, ShutdownRequested), exitCodeFor, exitReasonFor, superviseProcess)
@@ -69,7 +68,7 @@ runCommand = \case
     -- that role's long-running one, so it is the one boot whose behaviour the plan cannot name.
     RunPilotCompile opts ->
         withBootEnv BootWithoutPipeline $ \bootEnv ->
-            shutdownAfter (void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (bpS3Endpoint (beBootPlan bootEnv)) (configApp (beConfig bootEnv)) opts))
+            shutdownAfter (void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (bpS3Endpoint (beBootPlan bootEnv)) (beConfig bootEnv) opts))
   where
     -- Only 'RunDredger' carries sweep options, and only it boots the deleting role.
     noDredgerOptions = Nothing

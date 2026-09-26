@@ -1228,6 +1228,8 @@ test-suite ecluse-integration
     , wai              ^>=3.2
     , wai-extra        ^>=3.1
     , warp             ^>=3.4
+    -- Test-only: the scheduled Pilot case serves its own gzipped EPSS feed.
+    , zlib             ^>=0.7
 
 -- Isolated RTS measurements reuse the integration tier's proxy fixture.
 test-suite ecluse-residency

@@ -8,26 +8,31 @@ Object keys retain their configured prefix and schema epoch.
 -}
 module Ecluse.Pilot.PlanSpec (spec) where
 
+import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Composition.Support (expectAppConfig)
-import Ecluse.Config (AdvisoriesSettings, AdvisoryStoreUrl, AppConfig (cfgAdvisories))
+import Ecluse.Composition.Support (expectAppConfig, expectConfig)
+import Ecluse.Config (AdvisoriesSettings, AdvisoryStoreUrl, AppConfig (cfgAdvisories), Config (configMounts))
 import Ecluse.Config.AdvisoryStore (mkAdvisoryStoreUrl)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Compile (CompileSources (..))
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
 import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
+import Ecluse.Core.Osv.Schema (EpssRequirement (EpssOptional, EpssRequired))
 import Ecluse.Pilot.Plan (
     ExportLoopPlan (ExportIdle, ExportTo),
+    ExportTarget (ExportTarget, etEcosystem, etEpss),
     PilotCompileOptions (..),
     PilotUploadUnconfigured (PilotUploadUnconfigured),
     UploadPlan (UploadSkipped, UploadTo),
+    compileEpssRequirement,
     compileSources,
     configuredSources,
     exportCadenceMicros,
     exportLoopPlan,
     idleCadenceMicros,
     quietTimeFor,
+    unmountedCompileWarning,
     uploadPlan,
     uploadTarget,
  )
@@ -51,8 +56,33 @@ bareOptions =
         , pcoUpload = False
         }
 
+-- A scheduled target under the requirement a mount without EPSS rules resolves to.
+optionalTarget :: Ecosystem -> ExportTarget
+optionalTarget eco = ExportTarget{etEcosystem = eco, etEpss = EpssOptional}
+
+{- A global EPSS rule npm inherits and PyPI switches off, beside a RubyGems mount that adds its own
+under the skip alignment and the maximum threshold. -}
+mixedPolicyDoc :: ByteString
+mixedPolicyDoc =
+    "{\"rules\":{\"risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":0.5}},\"mounts\":{\"npm\":{\"enabled\":true},\"pypi\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false}}},\"rubygems\":{\"enabled\":true,\"rules\":{\"risk\":{\"enabled\":false},\"local-risk\":{\"type\":\"DenyIfEpss\",\"minEpss\":1,\"onUnavailable\":\"skip\"}}}}}"
+
 spec :: Spec
 spec = do
+    describe "compileEpssRequirement -- what a failed EPSS feed means for a one-shot compile" $ do
+        it "takes each mounted ecosystem's resolved policy, inherited, removed, or added" $ do
+            mounts <- configMounts <$> expectConfig [("ECLUSE_SERVER__PUBLIC_URL", "https://proxy.example.test")] (Just mixedPolicyDoc)
+            map (\name -> compileEpssRequirement mounts bareOptions{pcoEcosystem = name}) ["npm", "pypi", "rubygems"]
+                `shouldBe` [EpssRequired, EpssOptional, EpssRequired]
+            map (\name -> unmountedCompileWarning mounts bareOptions{pcoEcosystem = name}) ["npm", "pypi", "rubygems"]
+                `shouldBe` [Nothing, Nothing, Nothing]
+
+        it "requires the feed, with a warning, for an ecosystem the configuration does not mount" $ do
+            mounts <- configMounts <$> expectConfig [] Nothing
+            for_ ["npm", "go"] $ \name -> do
+                let opts = bareOptions{pcoEcosystem = name}
+                compileEpssRequirement mounts opts `shouldBe` EpssRequired
+                unmountedCompileWarning mounts opts `shouldSatisfy` maybe False (T.isInfixOf ("mounts no " <> name <> " ecosystem"))
+
     describe "quietTimeFor -- the thresholds one compile is judged against" $ do
         it "takes the shipped seven days for a mounted ecosystem and for EPSS" $ do
             advisories <- advisoriesWith []
@@ -70,7 +100,7 @@ spec = do
     describe "exportLoopPlan -- whether the scheduled loop exports at all, and for what" $ do
         it "idles on the shipped defaults, which configure no store" $ do
             advisories <- advisoriesWith []
-            exportLoopPlan advisories [Npm] `shouldBe` Just ExportIdle
+            exportLoopPlan advisories [optionalTarget Npm] `shouldBe` Just ExportIdle
 
         it "idles with no mount either, because the store is what turns exporting on" $ do
             advisories <- advisoriesWith []
@@ -79,12 +109,13 @@ spec = do
         it "exports to the configured store, the one thing that turns it on" $ do
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__URL", "s3://advisories/ecluse")]
             store <- storeAt "s3://advisories/ecluse"
-            exportLoopPlan advisories [Npm] `shouldBe` Just (ExportTo store (Npm :| []))
+            exportLoopPlan advisories [optionalTarget Npm] `shouldBe` Just (ExportTo store (optionalTarget Npm :| []))
 
         it "carries every mounted ecosystem, so a second mount earns its own artifact" $ do
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__URL", "s3://advisories/ecluse")]
             store <- storeAt "s3://advisories/ecluse"
-            exportLoopPlan advisories [Npm, PyPI] `shouldBe` Just (ExportTo store (Npm :| [PyPI]))
+            let targets = [ExportTarget Npm EpssRequired, optionalTarget PyPI]
+            exportLoopPlan advisories targets `shouldBe` Just (ExportTo store (ExportTarget Npm EpssRequired :| [optionalTarget PyPI]))
 
         it "plans nothing for a configured store with no mount, which the boot refuses" $ do
             advisories <- advisoriesWith [("ECLUSE_ADVISORIES__URL", "s3://advisories/ecluse")]

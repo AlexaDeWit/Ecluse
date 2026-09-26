@@ -3,7 +3,8 @@
 -- SPDX-License-Identifier: MIT
 
 {- | The decisions Pilot makes before it does anything: whether the scheduled loop exports at
-all and how often, which upstreams one compile reads, and whether a one-shot run uploads.
+all and how often, which upstreams one compile reads, whether a failed EPSS feed stops its
+publication, and whether a one-shot run uploads.
 
 Each is a pure function over the resolved configuration, so "Ecluse.Pilot" dispatches on their
 results instead of branching inside @IO@ ("Ecluse.Composition.MirrorRole" is the same shape).
@@ -11,6 +12,7 @@ results instead of branching inside @IO@ ("Ecluse.Composition.MirrorRole" is the
 module Ecluse.Pilot.Plan (
     -- * The scheduled export loop
     ExportLoopPlan (..),
+    ExportTarget (..),
     exportLoopPlan,
     exportCadenceMicros,
     idleCadenceMicros,
@@ -22,6 +24,8 @@ module Ecluse.Pilot.Plan (
 
     -- * The one-shot run
     PilotCompileOptions (..),
+    compileEpssRequirement,
+    unmountedCompileWarning,
     UploadPlan (..),
     uploadPlan,
     PilotUploadUnconfigured (..),
@@ -34,32 +38,44 @@ import System.FilePath (takeFileName)
 import Ecluse.Config (
     AdvisoriesSettings (advCompileInterval, advEpssFeedUrl, advEpssQuietTime, advOsvExportBaseUrl, advQuietTime, advUrl),
     AdvisoryStoreUrl,
+    Mount,
+    MountMap,
     advisoryObjectKey,
     advisoryStoreBucket,
+    mountEpssRequirement,
     unUrl,
  )
 import Ecluse.Core.Clock (secondsToMicros)
-import Ecluse.Core.Ecosystem (Ecosystem)
+import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Osv.Advisory (osvExportUrl)
 import Ecluse.Core.Osv.Compile (CompileSources (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory), osvEcosystemNamed)
 import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
+import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 
 -- | What the scheduled export loop does with the advisory settings and the mounted ecosystems.
 data ExportLoopPlan
     = -- | No advisory store is configured, so the loop idles and exports nothing.
       ExportIdle
-    | -- | Compile and upload one artifact per ecosystem to this store, each on its own cadence.
-      ExportTo AdvisoryStoreUrl (NonEmpty Ecosystem)
+    | -- | Compile and upload one artifact per target to this store, each on its own cadence.
+      ExportTo AdvisoryStoreUrl (NonEmpty ExportTarget)
+    deriving stock (Eq, Show)
+
+-- | One mounted ecosystem the scheduled loop compiles, with what a failed EPSS feed means for it.
+data ExportTarget = ExportTarget
+    { etEcosystem :: Ecosystem
+    , etEpss :: EpssRequirement
+    -- ^ The mount's resolved requirement, the one its advisory consumers enforce.
+    }
     deriving stock (Eq, Show)
 
 {- | A configured store turns exporting on, as it does for the proxy's sync, and each mounted
 ecosystem earns an artifact. 'Nothing' is a store with no ecosystem to compile, which the boot refuses.
 -}
-exportLoopPlan :: AdvisoriesSettings -> [Ecosystem] -> Maybe ExportLoopPlan
-exportLoopPlan advisories ecosystems = case advUrl advisories of
+exportLoopPlan :: AdvisoriesSettings -> [ExportTarget] -> Maybe ExportLoopPlan
+exportLoopPlan advisories targets = case advUrl advisories of
     Nothing -> Just ExportIdle
-    Just store -> ExportTo store <$> nonEmpty ecosystems
+    Just store -> ExportTo store <$> nonEmpty targets
 
 {- | The delay between export cycles. The config decoder bounds @compileInterval@ to
 @maxBound \`div\` 1000000@ seconds, so this conversion cannot wrap to a negative delay.
@@ -121,6 +137,26 @@ data PilotCompileOptions = PilotCompileOptions
     -- ^ Upload the compiled artifact to the configured advisory store.
     }
     deriving stock (Eq, Show)
+
+{- | The EPSS requirement a one-shot compile runs under. A mounted ecosystem takes its resolved
+policy's. An unmounted one prepares a dataset ahead of its mount, so it requires the feed.
+-}
+compileEpssRequirement :: MountMap -> PilotCompileOptions -> EpssRequirement
+compileEpssRequirement mounts = maybe EpssRequired mountEpssRequirement . compiledMount mounts
+
+-- | The warning a one-shot compile logs for an ecosystem the loaded configuration does not mount.
+unmountedCompileWarning :: MountMap -> PilotCompileOptions -> Maybe Text
+unmountedCompileWarning mounts opts = case compiledMount mounts opts of
+    Just _ -> Nothing
+    Nothing ->
+        Just
+            ( "The loaded configuration mounts no "
+                <> pcoEcosystem opts
+                <> " ecosystem. This compile prepares its full dataset, so it requires EPSS enrichment and publishes nothing without it"
+            )
+
+compiledMount :: MountMap -> PilotCompileOptions -> Maybe Mount
+compiledMount mounts opts = (`Map.lookup` mounts) =<< parseEcosystem (pcoEcosystem opts)
 
 {- | Requesting an upload without a configured advisory store. It is a wiring fault at the
 composition root, so it throws rather than returning a value the caller could only re-raise.
