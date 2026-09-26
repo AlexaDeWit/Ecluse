@@ -53,8 +53,8 @@ lightweight LocalStack alternative, with `amazonka` pointed at `http://<containe
 throwaway credentials. The telemetry specs run a real OTLP **Collector** container the same way. Both
 are hermetic: no real cloud account, no real credentials.
 
-The tier needs a running Docker daemon. CI's `ubuntu-latest` provides one. Locally, install Docker:
-Nix ships the toolchain, not the daemon. Run: `cabal test ecluse-integration` (or
+The tier needs a running Docker daemon. CI's `ubuntu-24.04-arm` runner provides one. Locally,
+install Docker: Nix ships the toolchain, not the daemon. Run: `cabal test ecluse-integration` (or
 `task test-integration`).
 
 > **Token-mint caveat.** No emulator covers the managed-registry token API (CodeArtifact's
@@ -370,6 +370,7 @@ Read a red result according to its measurement:
 
 - Work-per-request benchmarks fail on build errors, harness crashes, or failed complexity assertions. They do not compare performance against regression thresholds.
 - Performance acceptance fails on an overhead budget breach. An unavailable live registry produces an unavailable result, not a breach.
+  Each ecosystem's budgets name the CPU architecture they were calibrated on. On another architecture every leg reports as uncalibrated, and the run passes.
   Its report separates upstream time from Écluse overhead. A breach needs a human decision about a code regression or a budget revision.
 - Load benchmarks use `oha` against the composed proxy. They fail when the harness cannot boot, `oha` cannot run, or a scenario serves nothing.
   Fixture preflights also fail on an unexpected status, index shape, or wheel body.
@@ -621,16 +622,31 @@ target and then runs the residency suite, the doctests, and `cabal check`. `cove
 with one runner per instrumented suite. `docs`, `e2e`, `weeder`, `stan`, and `static-checks` each
 hold their own runner. `codecov-notify` follows the coverage legs and releases the Codecov statuses.
 
+CI's primary architecture is arm64: every job that builds or tests the code runs on the
+`ubuntu-24.04-arm` runner. amd64 is also supported: the release dry-run builds and starts the amd64
+image on an amd64 runner, and no test tier runs on amd64. `scripts/ci-runner-policy.sh` (in
+`task lint-workflows`) fails a job on any other runner unless its allow-list names the job with a
+reason.
+
+The release dry-run also gates. It runs `release-build.yml`, the reusable workflow that
+`release.yml` builds its images with, so both architectures build natively and without a cache, as
+in a release. `release-dry-run-assemble` assembles the multi-arch index without pushing it,
+and `release-dry-run-boot` starts each image with `--version` on its own architecture. No dry-run
+job logs in to a registry, signs, attests, or pushes. The nightly run and a manual dispatch also
+scan both images' SBOMs with grype. That scan is report-only and never gates.
+
 Every job restores caches and only a main run ever saves one, so a pull request reads the default
 branch's entries and adds none of its own. Each cache key has exactly one writer, because GitHub
 caches are immutable per key and two savers would race for the one entry.
 
-There is **one Nix-store cache** for the whole repository, keyed on `flake.nix` and `flake.lock`.
-The `docs` job writes it, because it realises the widest closure. It roots the `.#ci` dev shell and
-the flake checks, so the saved store carries both, and every other job in every workflow restores
-that one entry. Two entries, one per closure, cost more than they saved: the two build graphs shared
-about nine tenths of their derivations, so each entry held mostly the same store paths, and the job
-that restored the Haskell one then refetched the whole dev shell before it could run.
+There is **one Nix-store cache per architecture**, keyed on `flake.nix` and `flake.lock`. Every
+cache key carries the runner's architecture, because a store or build tree from one architecture is
+useless on the other. The `docs` job writes the Nix-store entry, because it realises the widest
+closure. It roots the `.#ci` dev shell and the flake checks, so the saved store carries both, and
+every other job on that architecture restores that one entry. Two entries, one per closure, cost
+more than they saved: the two build graphs shared about nine tenths of their derivations, so each
+entry held mostly the same store paths, and the job that restored the Haskell one then refetched
+the whole dev shell before it could run.
 
 The cabal side keeps two families, because a documentation build wants a doc-variant of every
 dependency and cannot reuse the regular one. `build` writes the regular `cabal-store` and
@@ -649,10 +665,16 @@ against an allow-list of documentation paths in
 [`scripts/ci-classify-change.sh`](../scripts/ci-classify-change.sh), which fails closed: an
 unlisted path runs everything. The static checks run on every PR either way, because the site
 build reads the very files such a PR edits, and it fails on a broken internal link or anchor.
-The `gate` job accepts a skipped job from that filter and from nothing else, so a job that
-silently never ran still fails the gate. Such a PR uploads no coverage and skips the
-`codecov-notify` job, so the required `codecov/project` status stays pending by design, and
-the repo owner merges it by administrator bypass.
+Such a PR uploads no coverage and skips the `codecov-notify` job, so the required
+`codecov/project` status stays pending by design, and the repo owner merges it by administrator
+bypass.
+
+The same script skips the release dry-run for a PR whose paths are all documentation, Haskell
+source, runbooks, or analysis-tool configuration, because the `build` and `docs` jobs already
+compile that source. The flake, `ecluse.cabal`, `cabal.project`, the freeze, the Taskfile, the
+workflows, the CI actions, the scripts, and any unlisted path run it. A push to main, the nightly
+run, and a manual dispatch always run it. The `gate` job accepts a skipped job from these two
+filters and from nothing else, so a job that silently never ran still fails the gate.
 
 The Haddock job wraps its flake checks with `scripts/ci-build-diagnostics.sh`. On Linux,
 the wrapper observes output bytes through two `tee` processes and their `/proc` IO counters.

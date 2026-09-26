@@ -18,6 +18,12 @@ Run before touching a tag.
 # main is green at the commit to tag (merged does not mean gate-green)
 gh run list --branch main --limit 4
 
+# that commit's main-branch CI run built, assembled, and started both images
+run="$(gh run list --workflow ci.yml --branch main --event push --commit "$(git rev-parse origin/main)" \
+  --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh run view "$run" --json jobs \
+  --jq '.jobs[] | select(.name | startswith("Release dry-run")) | "\(.conclusion)  \(.name)"'
+
 # the version the release will assert; the tag must match it
 env -u IN_NIX_SHELL nix develop .#ci --command task version
 
@@ -25,8 +31,10 @@ env -u IN_NIX_SHELL nix develop .#ci --command task version
 git ls-remote --tags origin
 ```
 
-`task init-release` re-checks all three and refuses on any of them, so `DRY_RUN=1 task
-init-release VERSION=vX.Y.Z` rehearses this whole section without creating anything.
+Every `Release dry-run` job must read `success`. Those jobs run the release's own build definition
+on both architectures, so a red one predicts a failed release. `task init-release` re-checks the
+other three and refuses on any of them, so `DRY_RUN=1 task init-release VERSION=vX.Y.Z` rehearses
+the rest of this section without creating anything.
 
 Scope must be final before the tag: the `Tag Integrity` ruleset blocks tag deletion and update
 for everyone, administrators included, so a pushed tag cannot be moved. Decide what merges
@@ -51,9 +59,9 @@ change. That confirmation is the last point where stopping costs nothing.
 ## 3. What fires, and where it stops
 
 The tag push runs `verify-version` (tag matches `ecluse.cabal`), then the two native `build`
-jobs (amd64 and arm64, image plus SBOM each). The `publish` job then STOPS at the `release`
-environment gate: a 72-hour wait timer with self-review prevented. That pause is a designed
-control against stolen-credential tag pushes, not a misconfiguration.
+jobs from `release-build.yml` (amd64 and arm64, image plus SBOM each). The `publish` job then
+STOPS at the `release` environment gate: a 72-hour wait timer with self-review prevented. That
+pause is a designed control against stolen-credential tag pushes, not a misconfiguration.
 
 **Release the gate with the admin bypass on the pending deployment.** Open the run page when
 `publish` shows Waiting; an administrator sees the bypass on the pending deployment. Never zero
