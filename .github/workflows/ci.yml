@@ -24,7 +24,7 @@ permissions:
 jobs:
   changes:
     name: Classify the change
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 5
     permissions:
       contents: read
@@ -54,7 +54,7 @@ jobs:
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
     # Builds the widest cabal plan, so it is the sole writer of the cabal store and of
     # dist-newstyle, which every other Haskell job restores.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 75
     permissions:
       contents: read
@@ -91,20 +91,20 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.cabal
-          key: cabal-store-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          key: cabal-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
 
       - name: Save dist-newstyle (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.toolchain.outputs.dist-cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: dist-newstyle
-          key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
+          key: dist-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
 
   coverage:
     name: Coverage (${{ matrix.suite }})
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 75
     permissions:
       contents: read
@@ -150,9 +150,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: dist-coverage
-          key: dist-coverage-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
+          key: dist-coverage-${{ matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
           restore-keys: |
-            dist-coverage-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-
+            dist-coverage-${{ matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-
 
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
@@ -186,7 +186,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: dist-coverage
-          key: dist-coverage-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
+          key: dist-coverage-${{ matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
 
   codecov-notify:
     name: Codecov statuses
@@ -194,7 +194,7 @@ jobs:
     # Without `always()`, a failed or skipped coverage leg skips this job, so Codecov
     # posts nothing rather than a number computed from a partial report.
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     permissions:
       contents: read
@@ -219,7 +219,7 @@ jobs:
     name: Smoke tests (live registries, non-gating)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     # Catches protocol drift when the live registries change their wire behaviour. Not a
     # `gate` dependency, so a transient blip shows red on the PR but blocks no merge.
@@ -249,7 +249,7 @@ jobs:
     name: End-to-end tests (whole-system, real npm)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     permissions:
       contents: read
@@ -264,7 +264,7 @@ jobs:
           persist-credentials: false
 
       # `.#dockerImage` links the Nix-built Haskell closure the docs job roots, and the
-      # suite runs in `.#ci`. The one Nix-store cache carries both.
+      # suite runs in `.#ci`. The Nix-store cache carries both.
       - name: Set up toolchain
         id: toolchain
         uses: ./.github/actions/setup-toolchain
@@ -290,7 +290,7 @@ jobs:
 
   static-checks:
     name: Static checks (format, lint, Semgrep, workflows, site)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     # Sub-minute checks batched so the toolchain setup is paid once. `task static-checks`
     # also assembles the site, so a dangling link fails here, not on the Pages deploy.
@@ -324,7 +324,7 @@ jobs:
     name: Haddock builds
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     # Sized for a cold run: any flake.lock change misses the Nix-store cache and
     # rebuilds the Haskell closure's doc outputs from source, which ran past 100 minutes.
     timeout-minutes: 160
@@ -340,7 +340,7 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           # Realises the widest Nix closure of any job, so it is the one writer of the
-          # one Nix-store cache. The two roots below are what the saved entry carries.
+          # Nix-store cache. The two roots below are what the saved entry carries.
           save-nix-store: "true"
 
       # A dev shell holds no GC root, so without this profile the save's `nix store gc`
@@ -348,20 +348,28 @@ jobs:
       - name: Root the .#ci shell for the Nix-store cache save
         run: nix develop .#ci --profile "$RUNNER_TEMP/ecluse-ci-profile" --command true
 
+      - name: Resolve the runner's Nix system
+        id: nix-system
+        run: |
+          system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          echo "system=$system" >> "$GITHUB_OUTPUT"
+
       # --out-link, not --no-link: the same gc drops every unrooted path, and the
       # Haskell closure this realises is what the e2e job's image build links against.
       - name: Flake checks (Haddock, locks)
+        env:
+          NIX_SYSTEM: ${{ steps.nix-system.outputs.system }}
         run: >-
           bash scripts/ci-build-diagnostics.sh nix build --out-link "$RUNNER_TEMP/flake-check" --print-build-logs
-          .#checks.x86_64-linux.docs
-          .#checks.x86_64-linux.freeze-sync
-          .#checks.x86_64-linux.amazonka-lockstep
+          ".#checks.$NIX_SYSTEM.docs"
+          ".#checks.$NIX_SYSTEM.freeze-sync"
+          ".#checks.$NIX_SYSTEM.amazonka-lockstep"
 
   weeder:
     name: Dead-code check (weeder)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     # Reports library code unreachable from `Ecluse.run`, and any finding fails the gate.
     # Its own job because the -fwrite-ide-info build is heavy.
@@ -408,7 +416,7 @@ jobs:
     name: Haskell static analysis (stan)
     needs: changes
     if: ${{ needs.changes.outputs.docs-only != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     # HIE-based partial-function analysis at the .stan.toml floor, which Semgrep (no
     # Haskell) and hlint (no type info) cannot see. A finding above the floor fails the gate.
@@ -456,7 +464,7 @@ jobs:
     # scripts/ci-gate-verdict.sh. The smoke job is absent on purpose: it is non-gating.
     needs: [changes, build, coverage, codecov-notify, static-checks, docs, e2e, weeder, stan]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
       # The script accepts a skip only from the documentation-only filter, and only for

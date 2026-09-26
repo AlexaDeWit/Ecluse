@@ -34,7 +34,7 @@ permissions:
 jobs:
   bench-load:
     name: Throughput & latency load test (inform-only)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     env:
       # Pin the cabal store to a deterministic, cacheable location, as the other
@@ -64,23 +64,18 @@ jobs:
           # Restore the warm cabal store (this job compiles the harness).
           cabal-cache: "true"
 
-      # Skipped on an exact cabal-store cache hit: the restored index already covers
-      # cabal.project's pinned index-state. `cabal update` otherwise hits Hackage's
-      # TUF metadata over the network every run, including its occasional
-      # dead-mirror fallback.
+      # An exact cabal-store hit already covers cabal.project's pinned index-state.
       - name: Update package index
         if: steps.toolchain.outputs.cabal-cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # pipefail preserves the harness exit code through tee's output capture.
+      # The runner has 4 cores. The harness pins oha to core 0, and GHC takes the other
+      # 3 as capabilities. The driver passes -N3 to each scenario child through GHCRTS,
+      # because argv RTS flags do not survive the re-exec. pipefail keeps the harness
+      # exit code through tee.
       - name: Run load tests
         run: |
           set -eo pipefail
-          # Isolate the load generator from the server: ubuntu-latest has 4 cores. The
-          # harness pins oha to core 0, and GHC gets 3 capability threads, so they
-          # occupy the remaining 3 cores without self-contention. The driver propagates
-          # this count to the scenario child processes via GHCRTS, because argv RTS
-          # flags do not survive the per-scenario re-exec.
           nix develop .#ci --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
 
       # Preserve partial output when the harness fails.
@@ -88,6 +83,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bench-load-results-${{ github.sha }}
+          name: bench-load-results-${{ runner.arch }}-${{ github.sha }}
           path: bench-load-results.md
           if-no-files-found: warn

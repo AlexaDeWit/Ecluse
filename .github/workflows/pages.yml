@@ -1,11 +1,9 @@
 name: Docs
 
 # Publish the project site to GitHub Pages so it tracks the code on main. The site is
-# the home page at the root and the library's Haddock API docs under /api. Runs
-# nightly and on demand (see the schedule below), not on every push. This is a
-# separate lifecycle from the PR `gate` in ci.yml, because a docs-deploy failure must
-# never block a merge. Like every workflow here, each action carries a full commit SHA
-# pin, which Dependabot keeps current.
+# the home page at the root and the library's Haddock API docs under /api. It runs
+# apart from the PR `gate` in ci.yml, because a docs-deploy failure must never block
+# a merge.
 on:
   # Nightly rebuild, so the site tracks main without deploying on every push. The
   # main branch moves fast, and most pushes touch no site content. Each redundant
@@ -44,7 +42,7 @@ permissions:
 jobs:
   deploy:
     name: Build & deploy site
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     # Without this bound the job falls back to GitHub's six-hour default.
     # Observed ~12 min mean, 22 min worst.
     timeout-minutes: 60
@@ -67,91 +65,61 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same SHA-pinned setup as the gate jobs: install Nix, restore the one shared
-      # Nix store. Restore-only, like every job but the CI docs job that writes it.
-      #
-      # The cabal-cache input stays off. The composite's cabal and dist caches hold the
-      # REGULAR build variant, written by the CI build job's `cabal build all`.
-      # `cabal haddock` cannot reuse it: it needs a documentation-variant of the whole
-      # closure. Pages restores and saves its own doc-variant store and builddir
-      # instead, in the two steps below.
+      # cabal-cache stays off: the shared cabal caches hold the regular build variant,
+      # and `cabal haddock` needs a documentation variant of the whole closure. The two
+      # steps below restore that variant instead.
       - name: Set up toolchain
         id: toolchain
         uses: ./.github/actions/setup-toolchain
 
-      # The documentation-variant cabal store. `cabal haddock` builds and installs a
-      # doc-variant of every dependency, with a different ConfiguredId than the regular
-      # build variant. That closure is ~84% of this job's wall time. The project's own
-      # Haddock accounts for only ~55 s of that. It lives in CABAL_DIR (= the store),
-      # under a docs-specific key so it never collides with that job's pristine
-      # cabal-store-* entry. The key covers the same dependency plan, so it stays a hit
-      # until a real dependency bump. The restore-keys prefix gives partial warmth
-      # across an epoch change: cabal reuses unchanged store entries and rebuilds only
-      # the changed deps. Pages always runs on main, and the `pages` concurrency group
-      # serialises it, so Pages is this cache's single writer: restore here, save
-      # below (main only). The Haddock configuration is part of every store hash, and
-      # a save never overwrites a key, so a Haddock flag change moves the `v2` epoch.
+      # The doc-variant dependency closure is about 84% of this job's wall time. Pages
+      # runs only on main, serialised by the `pages` group, so it is this cache's one
+      # writer. The Haddock configuration is part of every store hash and a save never
+      # overwrites a key, so a Haddock flag change moves the `v2` epoch.
       - name: Restore doc-variant cabal store
         id: restore-docs-cabal
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.cabal
-          key: cabal-store-docs-v2-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          key: cabal-store-docs-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
           restore-keys: |
-            cabal-store-docs-v2-${{ runner.os }}-
+            cabal-store-docs-v2-${{ runner.os }}-${{ runner.arch }}-
 
-      # The doc-variant build products of the project's three libraries (the published
-      # Haddock HTML) and the openapi-gen and site-gen executables, in their own
-      # builddir (DOCS_BUILDDIR). Kept distinct from the gate's regular dist-newstyle.
-      # Small and fast-moving next to the store above. The key has the shape of
-      # dist-newstyle's: the version family bounds a restore, and the commit makes each
-      # main run's save a fresh entry.
+      # The key has dist-newstyle's shape: the version family bounds a restore, and
+      # the commit makes each main run's save a fresh entry.
       - name: Restore doc-variant builddir
         id: restore-docs-dist
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.DOCS_BUILDDIR }}
-          key: dist-docs-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
+          key: dist-docs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
           restore-keys: |
-            dist-docs-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-
+            dist-docs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-
 
-      # Skipped on an exact doc-variant cabal-store cache hit: the restored index
-      # already covers cabal.project's pinned index-state. `cabal update` otherwise
-      # hits Hackage's TUF metadata over the network every run, including its
-      # occasional dead-mirror fallback.
+      # An exact store hit already covers cabal.project's pinned index-state.
       - name: Update package index
         if: steps.restore-docs-cabal.outputs.cache-hit != 'true'
         run: nix develop .#ci --command task update
 
-      # Assembles the Pages site into ./_site: the Zola pages at the root and the
-      # library Haddock under /api (with .nojekyll at the root). Runs in the `.#ci`
-      # shell every other job enters (it carries zola and pagefind), not the heavier
-      # human shell. DOCS_BUILDDIR routes the doc-variant build into the
-      # separately-cached tree restored above.
+      # The Zola pages at the root and the library Haddock under /api.
       - name: Build the Pages site into ./_site
         run: nix develop .#ci --command task site DOCS_BUILDDIR="$DOCS_BUILDDIR"
 
-      # Cache writes: main only, single writer (Pages). They sit right after the build
-      # that produced them and before the deploy steps. The save therefore still
-      # happens when a later step (Configure/Upload/Deploy) fails: the deps built fine
-      # and are worth caching. The cabal-store key covers the dependency plan alone, so
-      # an unchanged-deps run finds its entry already there. The builddir key ends in the
-      # commit, so a run on a new main head writes a fresh entry, and the gate below skips
-      # the save only when the restore already found this commit's. Keys match the
-      # restore keys exactly.
+      # The saves sit before the deploy steps, so a failed deploy still keeps the
+      # built closure. Keys match the restore keys exactly.
       - name: Save doc-variant cabal store (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.cabal
-          key: cabal-store-docs-v2-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          key: cabal-store-docs-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
 
       - name: Save doc-variant builddir (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.restore-docs-dist.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.DOCS_BUILDDIR }}
-          key: dist-docs-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
+          key: dist-docs-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.toolchain.outputs.cabal-version }}-${{ github.sha }}
 
       # enablement: true turns Pages on via the API on first run, so bootstrapping
       # this needs no manual repo-settings step.

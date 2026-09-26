@@ -10,9 +10,10 @@
 set -euo pipefail
 
 # The cache key families this repo's workflows write, each anchored through its
-# runner.os segment so a retired family stops matching and this sweep reaps it. A new
-# cache anywhere in .github must be added here, or the sweep reaps it and says so.
-os='(Linux|macOS|Windows)'
+# runner.os and runner.arch segments, so a retired family or a key without the
+# architecture stops matching and this sweep reaps it. A new cache anywhere in .github
+# must be added here, or the sweep reaps it and says so.
+os='(Linux|macOS|Windows)-(X64|ARM64)'
 allowed_prefixes="nix-v2-$os-|cabal-store-$os-|cabal-store-docs-v2-$os-"
 allowed_prefixes="$allowed_prefixes|dist-$os-|dist-docs-$os-"
 allowed_prefixes="$allowed_prefixes|dist-coverage-[a-z0-9-]+-$os-"

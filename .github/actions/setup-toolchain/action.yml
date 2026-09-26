@@ -2,11 +2,11 @@ name: Set up toolchain
 description: >-
   Install the flake-pinned Nix, restore the Nix store, and optionally the cabal store
   and build dir. One home for the SHA-pinned setup actions and the cache config, so
-  Dependabot bumps each pin once.
+  Renovate bumps each pin once.
 
-  Caching policy: restore everywhere, save only on main, one writer per key. A PR
-  restores main's entries through GitHub's base-branch fallback and never saves. That
-  rule is what holds the repo under the 15 GiB Actions-cache quota.
+  Caching policy: restore everywhere, save only on main, one writer per key and
+  architecture. A PR restores main's entries through GitHub's base-branch fallback and
+  never saves. That rule is what holds the repo under the 15 GiB Actions-cache quota.
 
   The release image builds never use this action, because a Nix store restored from the
   unsigned Actions cache would undermine their provenance attestation. See
@@ -28,10 +28,9 @@ inputs:
     default: "true"
   save-nix-store:
     description: >-
-      Whether this job may save the one shared Nix-store cache (only ever on main).
-      The default is "false", so a job opts in to being the writer. ci.yml's docs job
-      is that writer, and no other job may set it, because GitHub caches are immutable
-      per key and two savers would race for the one entry.
+      Whether this job may save the architecture's Nix-store cache (only ever on
+      main). ci.yml's docs job is the one writer. No other job may set it, because
+      GitHub caches are immutable per key and two savers would race for the entry.
     default: "false"
 
 outputs:
@@ -111,15 +110,15 @@ runs:
         echo "setup-toolchain: the Nix database stayed locked for 60 s" >&2
         exit 1
 
-    # One entry for every job in every workflow, keyed on the flake. The prefix
-    # restore-key keeps a lockfile bump warm: the run takes the previous epoch and
-    # rebuilds only the delta. An entry is immutable, so widening what it holds takes a
-    # fresh epoch: v2 is the first to carry the dev shell and the Haskell closure both.
+    # One entry per architecture for every job in every workflow, keyed on the flake.
+    # The prefix restore-key keeps a lockfile bump warm: the run takes the previous
+    # epoch and rebuilds only the delta. An entry is immutable, so widening what it
+    # holds takes a fresh epoch: v2 carries the dev shell and the Haskell closure both.
     - name: Cache Nix store
       uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
       with:
-        primary-key: nix-v2-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
-        restore-prefixes-first-match: nix-v2-${{ runner.os }}-
+        primary-key: nix-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-prefixes-first-match: nix-v2-${{ runner.os }}-${{ runner.arch }}-
         save: ${{ inputs.save-nix-store == 'true' && github.ref == 'refs/heads/main' }}
         # Sits under the rooted store on purpose, so the trim sheds every unrooted build
         # product and keeps both roots. The entry compresses to roughly a fifth of it.
@@ -146,9 +145,9 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ github.workspace }}/.cabal
-        key: cabal-store-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+        key: cabal-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
         restore-keys: |
-          cabal-store-${{ runner.os }}-
+          cabal-store-${{ runner.os }}-${{ runner.arch }}-
 
     # Small and fast-moving, so a separate key from the store. The key ends in the
     # commit, so each main run saves a fresh entry instead of meeting one that already
@@ -160,6 +159,6 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: dist-newstyle
-        key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.package-version.outputs.cabal-version }}-${{ github.sha }}
+        key: dist-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.package-version.outputs.cabal-version }}-${{ github.sha }}
         restore-keys: |
-          dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.package-version.outputs.cabal-version }}-
+          dist-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}-v${{ steps.package-version.outputs.cabal-version }}-
