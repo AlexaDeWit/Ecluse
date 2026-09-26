@@ -10,15 +10,17 @@ module Ecluse.Test.OsvDb (
     withFixtureOsvDb,
     withOsvZipDb,
     compileOsvZipDbTo,
+    compileOsvZipDbWithFeedTo,
 ) where
 
-import Network.HTTP.Types.Status (status200)
+import Network.HTTP.Types.Status (Status, status200)
 import System.IO.Temp (withSystemTempDirectory)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
 import Ecluse.Core.Osv.Provenance (QuietTime (..))
+import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Test.Osv (CorpusVersion, osvCorpusZip, runOsvTestM)
 import Ecluse.Test.Port (noopAdvisoryCompileMetricsPort)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
@@ -42,14 +44,20 @@ withOsvZipDb eco zipBytes use =
 compileOsvZipDbTo :: Ecosystem -> LByteString -> FilePath -> IO FilePath
 compileOsvZipDbTo eco zipBytes dir = do
     epssBytes <- readFileLBS epssFixtureFile
+    compileOsvZipDbWithFeedTo eco EpssRequired (status200, epssBytes) zipBytes dir
+
+-- | 'compileOsvZipDbTo' against a chosen feed answer, under a chosen EPSS requirement.
+compileOsvZipDbWithFeedTo :: Ecosystem -> EpssRequirement -> (Status, LByteString) -> LByteString -> FilePath -> IO FilePath
+compileOsvZipDbWithFeedTo eco requirement (feedStatus, epssBytes) zipBytes dir =
     withStub status200 zipBytes $ \osvStub ->
-        withStub status200 epssBytes $ \epssStub ->
+        withStub feedStatus epssBytes $ \epssStub ->
             runOsvTestM
                 ( compileOsvToSqlite
                     noopAdvisoryCompileMetricsPort
                     Nothing
                     dir
                     (osvEcosystemFor eco)
+                    requirement
                     CompileSources
                         { csOsvExportUrl = toString (stubBaseUrl osvStub) <> "/all.zip"
                         , csEpssFeedUrl = toString (stubBaseUrl epssStub) <> "/epss_scores-current.csv.gz"

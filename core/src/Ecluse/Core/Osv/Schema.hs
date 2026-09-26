@@ -22,6 +22,8 @@ module Ecluse.Core.Osv.Schema (
     MetaKey (..),
     renderMetaKey,
     EpssRequirement (..),
+    EpssStatus (..),
+    renderEpssStatus,
     EpssEvidence (..),
     decodeEpssEvidence,
 ) where
@@ -128,7 +130,7 @@ data MetaKey
       MetaEpssScoreDate
     | -- | The scoring model the EPSS feed declares.
       MetaEpssModelVersion
-    | -- | Successful feed enrichment, stored as @available@ even without matching advisory scores.
+    | -- | The whole-feed enrichment outcome, an 'EpssStatus'.
       MetaEpssStatus
     | -- | The number of advisory ranges the artifact holds.
       MetaRowCount
@@ -154,15 +156,32 @@ renderMetaKey = \case
     MetaEpssStatus -> "epss_status"
     MetaRowCount -> "row_count"
 
--- | The resolved ecosystem policy's requirement for artifact acceptance.
+{- | Whether an ecosystem's resolved policy depends on EPSS. Where it does, Pilot publishes nothing
+without enrichment and a reader refuses an artifact that lacks it.
+-}
 data EpssRequirement = EpssOptional | EpssRequired
     deriving stock (Eq, Show)
+
+-- | The whole-feed enrichment outcome Pilot records under 'MetaEpssStatus'.
+data EpssStatus
+    = -- | The feed arrived and its scores joined, whether or not any advisory matched one.
+      EnrichmentAvailable
+    | -- | The feed failed where the ecosystem does not require it, so no score joined.
+      EnrichmentUnavailable
+    deriving stock (Eq, Show)
+
+-- | The status's stored form.
+renderEpssStatus :: EpssStatus -> Text
+renderEpssStatus = \case
+    EnrichmentAvailable -> "available"
+    EnrichmentUnavailable -> "unavailable"
 
 -- | Whether metadata establishes successful feed enrichment, independent of individual scores.
 data EpssEvidence = EpssAvailable | EpssNotEstablished
     deriving stock (Eq, Show)
 
--- | Only the exact published success marker establishes available enrichment.
+-- | Only the exact stored form of 'EnrichmentAvailable' establishes enrichment.
 decodeEpssEvidence :: Maybe Text -> EpssEvidence
-decodeEpssEvidence (Just "available") = EpssAvailable
-decodeEpssEvidence _ = EpssNotEstablished
+decodeEpssEvidence stored
+    | stored == Just (renderEpssStatus EnrichmentAvailable) = EpssAvailable
+    | otherwise = EpssNotEstablished

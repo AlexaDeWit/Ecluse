@@ -12,7 +12,7 @@ import Prelude hiding (universe)
 import Data.Universe.Class (Universe (..))
 import Test.Hspec (Spec, describe, it, shouldBe)
 
-import Ecluse.Core.Osv.Schema (EpssEvidence (..), MetaKey, decodeEpssEvidence, osvDbFileName, renderMetaKey)
+import Ecluse.Core.Osv.Schema (EpssEvidence (..), EpssStatus (..), MetaKey, decodeEpssEvidence, osvDbFileName, renderEpssStatus, renderMetaKey)
 
 spec :: Spec
 spec = do
@@ -22,6 +22,13 @@ spec = do
         for_ [Nothing, Just "", Just "unavailable", Just "unknown", Just "AVAILABLE", Just " available", Just "available "] $ \marker ->
             it ("does not establish enrichment from " <> show marker) $
                 decodeEpssEvidence marker `shouldBe` EpssNotEstablished
+
+    describe "renderEpssStatus" $
+        -- The literals pin the stored values a consumer reads, so a rename breaks published artifacts.
+        it "stores each outcome under its published spelling, and only success establishes enrichment" $ do
+            map renderEpssStatus [EnrichmentAvailable, EnrichmentUnavailable] `shouldBe` ["available", "unavailable"]
+            map (decodeEpssEvidence . Just . renderEpssStatus) [EnrichmentAvailable, EnrichmentUnavailable]
+                `shouldBe` [EpssAvailable, EpssNotEstablished]
 
     describe "osvDbFileName" $ do
         -- The literal pins the published object key. A change here changes the

@@ -31,14 +31,17 @@ import System.Directory (doesFileExist, getModificationTime, listDirectory, remo
 import System.FilePath (takeFileName, (</>))
 import System.IO.Error (catchIOError)
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
-import UnliftIO.Exception (finally)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
+import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Exception (finally, try)
+import UnliftIO.Timeout (timeout)
 
-import Ecluse.Core.Cve (CveDb (..), CveLookup (..), openCveDb)
+import Ecluse.Core.Cve (CveDb (..), CveDbRejected (CveDbEpssNotEstablished), CveLookup (..), openCveDb)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
-import Ecluse.Core.Osv.Compile (CompileSources (..), compileOsvToSqlite, osvToRow)
+import Ecluse.Core.Osv.Compile (CompileSources (..), PilotEpssRequired (..), compileOsvToSqlite, osvToRow)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor)
+import Ecluse.Core.Osv.Epss (maxEpssFeedBytes)
 import Ecluse.Core.Osv.Provenance (QuietTime (..))
 import Ecluse.Core.Osv.Schema (EpssRequirement (..), osvDbFileName, osvSchemaEpoch)
 import Ecluse.Core.Osv.Stream (PilotIngestAborted (..))
@@ -50,12 +53,12 @@ import Ecluse.Core.Telemetry.Metrics (
  )
 import Ecluse.Test.Log (captureJsonLog, newTestLogEnv)
 import Ecluse.Test.Osv (CorpusVersion (CorpusV1), osvCorpusZip, osvZipOf, runOsvTestM, runOsvTestMWith)
-import Ecluse.Test.OsvDb (epssFixtureFile)
+import Ecluse.Test.OsvDb (compileOsvZipDbTo, compileOsvZipDbWithFeedTo, epssFixtureFile)
 import Ecluse.Test.Port (RecordedCompile (RecordedCompile), recordingAdvisoryCompileMetricsPort)
 import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub, withStubHeaders)
 import Network.HTTP.Client (applyBasicAuth, defaultRequest, requestHeaders)
 import Network.HTTP.Types.Header (hLastModified)
-import Network.HTTP.Types.Status (status200, status404)
+import Network.HTTP.Types.Status (Status, status200, status404)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp (testWithApplication)
 
@@ -68,7 +71,7 @@ spec = describe "SQLite OSV Compilation" $ do
         (dbFile, sources) <- withStub status200 zipData $ \stub ->
             withStub status200 epssData $ \epssStub -> do
                 let sources = sourcesOf stub epssStub "/sample.zip"
-                path <- runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) sources testQuietTime)
+                path <- runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired sources testQuietTime)
                 pure (path, sources)
         let sourceHost = authorityLabel (toText (csOsvExportUrl sources))
             epssHost = authorityLabel (toText (csEpssFeedUrl sources))
@@ -127,27 +130,26 @@ spec = describe "SQLite OSV Compilation" $ do
         recorded <- readRecorded
         recorded `shouldBe` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 0)] [CompileCompleted]
 
-    for_ [("matching", "CVE-2024-48913", Just 0.75), ("unmatched", "CVE-2026-10001", Nothing)] $ \(label, cveId, expectedScore) ->
-        it ("records available enrichment without feed dates for " <> label <> " scores") $
-            withSystemTempDirectory "epss-status" $ \outDir -> do
-                zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
-                let epssData = GZip.compress ("cve,epss,percentile\n" <> cveId <> ",0.75,0.9\n")
-                (metrics, _) <- recordingAdvisoryCompileMetricsPort
-                dbFile <- withStub status200 zipData $ \stub ->
-                    withStub status200 epssData $ \epssStub ->
-                        runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) (sourcesOf stub epssStub "/sample.zip") testQuietTime)
-                meta <- metaOf dbFile
-                Map.lookup "epss_status" meta `shouldBe` Just "available"
-                for_ ["epss_last_modified", "epss_score_date", "epss_model_version"] $ \key ->
-                    Map.lookup key meta `shouldBe` Nothing
-                withConnection dbFile $ \conn -> do
-                    scores <- query_ conn "SELECT epss_score FROM package_vulnerability_ranges" :: IO [Only (Maybe Double)]
-                    map fromOnly scores `shouldBe` [expectedScore]
-                openCveDb Npm EpssRequired dbFile >>= \case
-                    Left rejection -> fail ("EPSS-stamped artifact rejected: " <> show rejection)
-                    Right db ->
-                        flip finally (cveDbClose db) $
-                            cveCoveredNames (cveDbLookup db) `shouldReturn` ["hono"]
+    for_ [EpssRequired, EpssOptional] $ \requirement ->
+        for_ [("matching", "CVE-2024-48913", Just 0.75), ("unmatched", "CVE-2026-10001", Nothing)] $ \(label, cveId, expectedScore) ->
+            it ("records available enrichment without feed dates for " <> label <> " scores, " <> show requirement) $
+                withSystemTempDirectory "epss-status" $ \outDir -> do
+                    zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+                    let epssData = GZip.compress ("cve,epss,percentile\n" <> cveId <> ",0.75,0.9\n")
+                    (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                    dbFile <- withStub status200 zipData $ \stub ->
+                        withStub status200 epssData $ \epssStub ->
+                            runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) requirement (sourcesOf stub epssStub "/sample.zip") testQuietTime)
+                    meta <- metaOf dbFile
+                    Map.lookup "epss_status" meta `shouldBe` Just "available"
+                    for_ ["epss_last_modified", "epss_score_date", "epss_model_version"] $ \key ->
+                        Map.lookup key meta `shouldBe` Nothing
+                    scoresOf dbFile `shouldReturn` [expectedScore]
+                    openCveDb Npm EpssRequired dbFile >>= \case
+                        Left rejection -> fail ("EPSS-stamped artifact rejected: " <> show rejection)
+                        Right db ->
+                            flip finally (cveDbClose db) $
+                                cveCoveredNames (cveDbLookup db) `shouldReturn` ["hono"]
 
     it "fetches both credential-bearing overrides without persisting or logging their credentials" $ do
         zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
@@ -156,7 +158,7 @@ spec = describe "SQLite OSV Compilation" $ do
         (dbFile, logged) <- captureJsonLog $ \logEnv ->
             withCredentialSource "OSV" zipData $ \source ->
                 withCredentialSource "EPSS" epssData $ \epssSource -> do
-                    path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (CompileSources source epssSource) testQuietTime)
+                    path <- runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired (CompileSources source epssSource) testQuietTime)
                     withConnection path $ \conn -> do
                         meta <- Map.fromList <$> (query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)])
                         Map.lookup "source_url" meta `shouldBe` Just (authorityLabel (toText source))
@@ -188,7 +190,7 @@ spec = describe "SQLite OSV Compilation" $ do
         let action =
                 withStub status200 zipData $ \stub ->
                     withStub status200 epssData $ \epssStub ->
-                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip") testQuietTime)
+                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
         action `shouldThrow` (\(PilotIngestAborted _) -> True)
 
         recorded <- readRecorded
@@ -202,7 +204,7 @@ spec = describe "SQLite OSV Compilation" $ do
         (metrics, _) <- recordingAdvisoryCompileMetricsPort
         dbFile <- withStub status200 zipData $ \stub ->
             withStub status200 epssData $ \epssStub ->
-                runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor PyPI) (sourcesOf stub epssStub "/all.zip") testQuietTime)
+                runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor PyPI) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
 
         conn <- open dbFile
         rows <- query_ conn "SELECT package_name FROM package_vulnerability_ranges" :: IO [Only Text]
@@ -235,7 +237,7 @@ spec = describe "SQLite OSV Compilation" $ do
         (dbFile, logged) <- captureJsonLog $ \logEnv ->
             withStub status200 zipData $ \stub ->
                 withStub status200 epssData $ \epssStub ->
-                    runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip") testQuietTime)
+                    runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
 
         logged `shouldSatisfy` T.isInfixOf "for example pointy 2026.05.1"
         logged `shouldSatisfy` T.isInfixOf "kept 1 unorderable"
@@ -252,16 +254,7 @@ spec = describe "SQLite OSV Compilation" $ do
                        , ("ranged", Nothing, Just "1.2.3", Nothing)
                        ]
 
-    it "fails the pass when the EPSS feed answers non-2xx, so nothing reaches the export" $ do
-        -- A 404 is permanent, so the fetch gives up at once rather than spending the backoff
-        -- budget. The compile throws before it writes meta, and the caller's upload never runs.
-        zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
-        (metrics, _) <- recordingAdvisoryCompileMetricsPort
-        let action =
-                withStub status200 zipData $ \stub ->
-                    withStub status404 LBS.empty $ \epssStub ->
-                        runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip") testQuietTime)
-        action `shouldThrow` anyException
+    epssEnrichmentSpec
 
     for_ [("empty", osvZipOf []), ("wrong-ecosystem", LBS.readFile "test/unit/fixtures/osv/sample.zip")] $ \(label, rejectedZip) ->
         for_ [False, True] $ \hasPrevious ->
@@ -275,7 +268,7 @@ spec = describe "SQLite OSV Compilation" $ do
                         previousModified = UTCTime (fromGregorian 2020 1 1) 0
                         compile logEnv zipData = withStub status200 zipData $ \stub ->
                             withStub status200 epssData $ \epssStub ->
-                                runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor PyPI) (sourcesOf stub epssStub "/all.zip") testQuietTime)
+                                runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor PyPI) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
                     previous <-
                         if hasPrevious
                             then do
@@ -317,7 +310,7 @@ spec = describe "SQLite OSV Compilation" $ do
                     tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
                     withCredentialSource "OSV" zipData $ \source ->
                         withCredentialSource "EPSS" epssData $ \epssSource -> do
-                            let compile = compileOsvToSqlite metrics (Just tracerProvider) outDir (osvEcosystemFor ecosystem) (CompileSources source epssSource) testQuietTime
+                            let compile = compileOsvToSqlite metrics (Just tracerProvider) outDir (osvEcosystemFor ecosystem) EpssRequired (CompileSources source epssSource) testQuietTime
                                 runCompile logEnv = runKatipContextT logEnv () mempty (runResourceT compile)
                             (_, logged) <- captureJsonLog $ \logEnv -> case refusal of
                                 Nothing -> void (runCompile logEnv)
@@ -334,6 +327,7 @@ spec = describe "SQLite OSV Compilation" $ do
                                     , "unorderable" .= (0 :: Int)
                                     ]
                                         <> ["row_count" .= (1 :: Int) | isNothing refusal]
+                                        <> ["epss_status" .= ("available" :: Text) | isNothing refusal]
                             length summaries `shouldBe` 1
                             for_ summaries $ \loggedObject -> do
                                 parseMaybe (.: "data") loggedObject `shouldBe` Just (object fields)
@@ -353,6 +347,7 @@ spec = describe "SQLite OSV Compilation" $ do
                                     , ("ecluse.osv.dropped_malformed", Just (show malformed))
                                     , ("ecluse.osv.unorderable", Just "0")
                                     , ("ecluse.osv.row_count", if isNothing refusal then Just "1" else Nothing)
+                                    , ("ecluse.osv.epss_status", Just "available")
                                     ]
                                     $ \(key, expected) ->
                                         (lookupAttribute (hotAttributes compiledSpan) key >>= fromAttribute) `shouldBe` (expected :: Maybe Text)
@@ -364,7 +359,7 @@ spec = describe "SQLite OSV Compilation" $ do
             (metrics, _) <- recordingAdvisoryCompileMetricsPort
             dbFile <- withStubHeaders status200 [(hLastModified, "Sat, 29 Aug 2026 06:30:00 GMT")] zipData $ \stub ->
                 withStub status200 epssData $ \epssStub ->
-                    runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip") testQuietTime)
+                    runOsvTestM (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") testQuietTime)
             meta <- metaOf dbFile
             Map.lookup "osv_last_modified" meta `shouldBe` Just "2026-08-29T06:30:00Z"
             removeFile dbFile
@@ -444,6 +439,152 @@ spec = describe "SQLite OSV Compilation" $ do
             osvToRow (ExtractedOsv "pkg" "npm" "GHSA-row" Nothing Unbounded Nothing Nothing)
                 `shouldBe` ("pkg", "GHSA-row", Nothing, Nothing, Nothing, Nothing, Nothing)
 
+epssEnrichmentSpec :: Spec
+epssEnrichmentSpec = describe "EPSS enrichment under the ecosystem's requirement" $ do
+    for_ failedFeeds $ \(label, feedAnswer) ->
+        for_ [False, True] $ \hasPrevious ->
+            it ("publishes nothing when a required feed " <> label <> ", previous=" <> show hasPrevious) $
+                withSystemTempDirectory "epss-required" $ \outDir -> do
+                    zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+                    feed <- feedAnswer
+                    let path = outDir </> osvDbFileName "npm"
+                    previous <- if hasPrevious then Just <$> (compileOsvZipDbTo Npm zipData outDir >>= readFileBS) else pure Nothing
+                    compileOsvZipDbWithFeedTo Npm EpssRequired feed zipData outDir
+                        `shouldThrow` (\(PilotEpssRequired ecosystem _ _) -> ecosystem == "npm")
+                    case previous of
+                        Nothing -> doesFileExist path `shouldReturn` False
+                        Just bytes -> readFileBS path `shouldReturn` bytes
+                    listDirectory outDir `shouldReturn` [osvDbFileName "npm" | hasPrevious]
+
+    it "publishes current OSV evidence with unavailable enrichment when an optional feed fails" $
+        withSystemTempDirectory "epss-optional" $ \outDir -> do
+            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            (metrics, readRecorded) <- recordingAdvisoryCompileMetricsPort
+            dbFile <- withStubHeaders status200 [(hLastModified, "Sat, 29 Aug 2026 06:30:00 GMT")] zipData $ \osvStub ->
+                withStub status404 "" $ \epssStub ->
+                    runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssOptional (sourcesOf osvStub epssStub "/all.zip") testQuietTime)
+            meta <- metaOf dbFile
+            filter (T.isPrefixOf "epss_") (Map.keys meta) `shouldBe` ["epss_status"]
+            Map.lookup "epss_status" meta `shouldBe` Just "unavailable"
+            Map.lookup "osv_source" meta `shouldSatisfy` maybe False (T.isSuffixOf "/all.zip")
+            Map.lookup "osv_last_modified" meta `shouldBe` Just "2026-08-29T06:30:00Z"
+            Map.lookup "osv_newest_modified" meta `shouldBe` Just "2026-03-23T17:41:30.891186Z"
+            scoresOf dbFile `shouldReturn` [Nothing]
+            readRecorded `shouldReturn` RecordedCompile [1] [(DropOversize, 0), (DropMalformed, 0)] [CompileCompleted]
+            openCveDb Npm EpssOptional dbFile >>= \case
+                Left rejection -> fail ("optional reader rejected unavailable enrichment: " <> show rejection)
+                Right db -> flip finally (cveDbClose db) $ do
+                    cveCoveredNames (cveDbLookup db) `shouldReturn` ["hono"]
+                    cveRemediationProbe (cveDbLookup db) "hono" "4.6.5" `shouldReturn` True
+            openCveDb Npm EpssRequired dbFile >>= \case
+                Left rejection -> rejection `shouldBe` CveDbEpssNotEstablished
+                Right db -> cveDbClose db >> fail "required reader accepted unavailable enrichment"
+
+    it "records an unavailable feed apart from an available one that scores no advisory" $
+        withSystemTempDirectory "epss-distinct" $ \dir -> do
+            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            let unmatched = GZip.compress "cve,epss,percentile\nCVE-2026-10001,0.75,0.9\n"
+            scored <- compileOsvZipDbWithFeedTo Npm EpssOptional (status200, unmatched) zipData (dir </> "available")
+            failed <- compileOsvZipDbWithFeedTo Npm EpssOptional (status404, "") zipData (dir </> "unavailable")
+            scoresOf scored `shouldReturn` [Nothing]
+            scoresOf failed `shouldReturn` [Nothing]
+            Map.lookup "epss_status" <$> metaOf scored `shouldReturn` Just "available"
+            Map.lookup "epss_status" <$> metaOf failed `shouldReturn` Just "unavailable"
+
+    for_ damagedStreams $ \(label, damaged) ->
+        it ("discards the scores decoded ahead of a gzip stream that " <> label) $
+            withSystemTempDirectory "epss-partial" $ \outDir -> do
+                zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+                dbFile <- compileOsvZipDbWithFeedTo Npm EpssOptional (status200, damaged scoredFeed) zipData outDir
+                Map.lookup "epss_status" <$> metaOf dbFile `shouldReturn` Just "unavailable"
+                scoresOf dbFile `shouldReturn` [Nothing]
+
+    it "still refuses an OSV export it cannot publish after an optional feed fails" $
+        withSystemTempDirectory "epss-optional-osv-refusal" $ \outDir -> do
+            path <- osvCorpusZip CorpusV1 >>= \archive -> compileOsvZipDbTo Npm archive outDir
+            bytes <- readFileBS path
+            emptyZip <- osvZipOf []
+            compileOsvZipDbWithFeedTo Npm EpssOptional (status404, "") emptyZip outDir
+                `shouldThrow` (\(PilotIngestAborted _) -> True)
+            readFileBS path `shouldReturn` bytes
+
+    it "leaves no artifact when the attempt is cancelled, even where the feed is optional" $
+        withSystemTempDirectory "epss-cancelled" $ \outDir -> do
+            zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+            (metrics, _) <- recordingAdvisoryCompileMetricsPort
+            outcome <- withStub status200 zipData $ \osvStub ->
+                withStalledSource $ \epssUrl ->
+                    timeout 200_000 (runOsvTestM (compileOsvToSqlite metrics Nothing outDir (osvEcosystemFor Npm) EpssOptional (CompileSources (unpack (stubBaseUrl osvStub) <> "/all.zip") epssUrl) testQuietTime))
+            outcome `shouldBe` Nothing
+            listDirectory outDir `shouldReturn` []
+
+    for_ [(EpssRequired, Error "required EPSS enrichment unavailable, compile abandoned"), (EpssOptional, Unset)] $ \(requirement, status) ->
+        it ("records a failed feed on the compile span and in the log without its credentials, " <> show requirement) $
+            withSystemTempDirectory "epss-trace" $ \outDir -> do
+                zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+                (metrics, _) <- recordingAdvisoryCompileMetricsPort
+                (processor, spansRef) <- inMemoryListExporter
+                tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
+                (_, logged) <- withStub status200 zipData $ \osvStub ->
+                    withCredentialSource "EPSS" "" $ \epssSource -> do
+                        let compile = compileOsvToSqlite metrics (Just tracerProvider) outDir (osvEcosystemFor Npm) requirement (CompileSources (unpack (stubBaseUrl osvStub) <> "/all.zip") epssSource) testQuietTime
+                        captureJsonLog $ \logEnv -> case requirement of
+                            EpssRequired -> do
+                                outcome <- try (runKatipContextT logEnv () mempty (runResourceT compile))
+                                case outcome of
+                                    Left refusal -> do
+                                        perFeed refusal `shouldBe` authorityLabel (toText epssSource)
+                                        toText (displayException refusal) `shouldSatisfy` T.isInfixOf (authorityLabel (toText epssSource))
+                                        for_ credentialParts $ \part -> toText (displayException refusal) `shouldSatisfy` (not . T.isInfixOf (part <> "EPSS"))
+                                    Right path -> fail ("a required feed failure published " <> path)
+                            EpssOptional -> void (runKatipContextT logEnv () mempty (runResourceT compile))
+                logged `shouldSatisfy` T.isInfixOf (if requirement == EpssRequired then "\"sev\":\"Error\"" else "EPSS enrichment unavailable for npm")
+                for_ credentialParts $ \part -> logged `shouldSatisfy` (not . T.isInfixOf (part <> "EPSS"))
+                _ <- forceFlushTracerProvider tracerProvider Nothing
+                spans <- readIORef spansRef >>= traverse (readIORef . spanHot)
+                let compiled = filter ((== "ecluse.pilot.osv.compile") . hotName) spans
+                map hotStatus compiled `shouldBe` [status]
+                for_ compiled $ \compiledSpan ->
+                    (lookupAttribute (hotAttributes compiledSpan) "ecluse.osv.epss_status" >>= fromAttribute) `shouldBe` Just ("unavailable" :: Text)
+
+-- Each answer the requirement decides on: a status, an empty feed, both byte ceilings, and bad gzip.
+failedFeeds :: [(String, IO (Status, LByteString))]
+failedFeeds =
+    [ ("answers 404", pure (status404, ""))
+    , ("carries no scores", pure (status200, GZip.compress "cve,epss,percentile\n"))
+    , ("passes the served-byte ceiling", pure (status200, storedGzip (LBS.replicate (fromIntegral maxEpssFeedBytes + 1) 0)))
+    , ("passes the decompressed-byte ceiling", pure (status200, GZip.compress (LBS.replicate (fromIntegral maxEpssFeedBytes + 1) 0)))
+    , ("is not gzip", pure (status200, "not a gzip stream"))
+    ]
+        <> [("sends a stream that " <> label, pure (status200, damaged scoredFeed)) | (label, damaged) <- damagedStreams]
+
+-- Gzip with no compression, so the served stream is as large as its expansion.
+storedGzip :: LByteString -> LByteString
+storedGzip = GZip.compressWith GZip.defaultCompressParams{GZip.compressLevel = GZip.noCompression}
+
+-- A feed scoring the fixture's advisory on every row, so any row that decoded would score it.
+scoredFeed :: LByteString
+scoredFeed = GZip.compress (mconcat (replicate 5000 "CVE-2024-48913,0.75,0.9\n"))
+
+-- Ways a served gzip stream can arrive damaged after some of its rows already decode.
+damagedStreams :: [(String, LByteString -> LByteString)]
+damagedStreams =
+    [ ("is cut in half", \whole -> LBS.take (LBS.length whole `div` 2) whole)
+    , ("lacks its trailer", \whole -> LBS.take (LBS.length whole - 8) whole)
+    , ("carries a zeroed trailer", \whole -> LBS.take (LBS.length whole - 8) whole <> LBS.replicate 8 0)
+    ]
+
+-- The user, password, query, and fragment prefixes 'withCredentialSource' writes into its URL.
+credentialParts :: [Text]
+credentialParts = ["user-", "password-", "query-", "fragment-"]
+
+-- A source that accepts the request and never answers, so only a cancellation ends the fetch.
+withStalledSource :: (String -> IO a) -> IO a
+withStalledSource use =
+    testWithApplication (pure stalled) $ \port -> use ("http://127.0.0.1:" <> show port <> "/epss.csv.gz")
+  where
+    stalled _ respond = threadDelay 60_000_000 >> respond (Wai.responseLBS status200 [] "")
+
 systemicDropZip :: IO LByteString
 systemicDropZip =
     osvZipOf
@@ -502,7 +643,11 @@ compileZipWith logEnv zipData quietTime = do
     (metrics, _) <- recordingAdvisoryCompileMetricsPort
     withStub status200 zipData $ \stub ->
         withStub status200 epssData $ \epssStub ->
-            runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) (sourcesOf stub epssStub "/all.zip") quietTime)
+            runOsvTestMWith logEnv (compileOsvToSqlite metrics Nothing "/tmp" (osvEcosystemFor Npm) EpssRequired (sourcesOf stub epssStub "/all.zip") quietTime)
+
+scoresOf :: FilePath -> IO [Maybe Double]
+scoresOf dbFile = withConnection dbFile $ \conn ->
+    map fromOnly <$> (query_ conn "SELECT epss_score FROM package_vulnerability_ranges" :: IO [Only (Maybe Double)])
 
 metaOf :: FilePath -> IO (Map Text Text)
 metaOf dbFile = withConnection dbFile $ \conn ->

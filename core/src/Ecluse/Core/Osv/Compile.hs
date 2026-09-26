@@ -2,12 +2,14 @@
 --
 -- SPDX-License-Identifier: MIT
 
-{- | Compile OSV advisories and EPSS scores into the artifact
-consumed by CVE sync.
+{- | Compile OSV advisories and EPSS scores into the artifact consumed by CVE sync. Every pass
+attempts the EPSS feed, and the ecosystem's 'EpssRequirement' decides whether a failed feed stops
+publication or leaves the artifact recording unavailable enrichment.
 -}
 module Ecluse.Core.Osv.Compile (
     CompileSources (..),
     compileOsvToSqlite,
+    PilotEpssRequired (..),
     osvToRow,
 ) where
 
@@ -27,7 +29,18 @@ import UnliftIO.Exception (bracket, throwIO)
 import Ecluse.Core.BuildIdentity (productVersion)
 import Ecluse.Core.Osv.Advisory (ExtractedOsv (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory, osvWireName))
-import Ecluse.Core.Osv.Epss (EpssFeed (efLastModified, efModelVersion, efScoreDate, efScores), fetchEpssScores, maxEpssFeedBytes)
+import Ecluse.Core.Osv.Epss (
+    EpssEnrichment (EpssEnriched, EpssUnavailable),
+    EpssFeed (efLastModified, efModelVersion, efScoreDate, efScores),
+    EpssFeedFailure,
+    acquireEpssFeed,
+    enrichedFeed,
+    enrichmentStatus,
+    maxEpssFeedBytes,
+    mkEpssScores,
+    renderEpssFeedFailure,
+    resolveEnrichment,
+ )
 import Ecluse.Core.Osv.Provenance (
     AdvisoryProvenance (..),
     QuietTime,
@@ -38,7 +51,17 @@ import Ecluse.Core.Osv.Provenance (
     sourceQuiet,
  )
 import Ecluse.Core.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
-import Ecluse.Core.Osv.Schema (MetaKey (..), metaTableDdl, osvDbFileName, osvSchemaEpoch, rangesTableDdl, renderMetaKey)
+import Ecluse.Core.Osv.Schema (
+    EpssRequirement (EpssOptional, EpssRequired),
+    EpssStatus (EnrichmentAvailable, EnrichmentUnavailable),
+    MetaKey (..),
+    metaTableDdl,
+    osvDbFileName,
+    osvSchemaEpoch,
+    rangesTableDdl,
+    renderEpssStatus,
+    renderMetaKey,
+ )
 import Ecluse.Core.Osv.Stream (
     IngestStats (..),
     OsvAttempt (..),
@@ -74,13 +97,13 @@ data CompileSources = CompileSources
     }
     deriving stock (Eq, Show)
 
-{- | Compile one ecosystem into @outDir@, refusing systemic drops or zero relevant rows. A
-refused candidate leaves any previous artifact, its metadata, and its recorded ages unchanged.
+{- | Compile one ecosystem into @outDir@, refusing systemic drops, zero relevant rows, or a failed
+EPSS feed the requirement makes fatal. A refusal leaves any previous artifact unchanged.
 -}
-compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> CompileSources -> QuietTime -> m FilePath
-compileOsvToSqlite metrics mTracerProvider outDir eco sources quietTime = do
+compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => AdvisoryCompileMetricsPort -> Maybe TracerProvider -> FilePath -> OsvEcosystem -> EpssRequirement -> CompileSources -> QuietTime -> m FilePath
+compileOsvToSqlite metrics mTracerProvider outDir eco requirement sources quietTime = do
     let dbFile = outDir </> osvDbFileName (osvWireName eco)
-    logFM InfoS (ls ("Compiling OSV data for " <> osvWireName eco <> " to " <> toText dbFile))
+    logFM InfoS (ls ("Compiling OSV data for " <> osvWireName eco <> " to " <> toText dbFile <> ", EPSS enrichment " <> renderRequirement requirement))
 
     liftIO $ createDirectoryIfMissing True outDir
 
@@ -94,18 +117,42 @@ compileOsvToSqlite metrics mTracerProvider outDir eco sources quietTime = do
             { crMetrics = metrics
             , crTracerProvider = mTracerProvider
             , crEcosystem = eco
+            , crEpss = requirement
             , crSources = sources
             , crQuietTime = quietTime
             }
 
--- What stays fixed across one pass, so each step below takes one parameter rather than five.
+-- What stays fixed across one pass, so each step below takes one parameter rather than six.
 data CompileRun = CompileRun
     { crMetrics :: AdvisoryCompileMetricsPort
     , crTracerProvider :: Maybe TracerProvider
     , crEcosystem :: OsvEcosystem
+    , crEpss :: EpssRequirement
     , crSources :: CompileSources
     , crQuietTime :: QuietTime
     }
+
+{- | A compile whose ecosystem requires EPSS enrichment met a failed feed, so it published nothing.
+It names the feed by host and port alone, because the configured URL can carry a credential.
+-}
+data PilotEpssRequired = PilotEpssRequired
+    { perEcosystem :: Text
+    , perFeed :: Text
+    -- ^ The feed's @host:port@.
+    , perFailure :: EpssFeedFailure
+    }
+    deriving stock (Eq, Show)
+
+instance Exception PilotEpssRequired where
+    displayException = toString . renderEpssRequired
+
+renderEpssRequired :: PilotEpssRequired -> Text
+renderEpssRequired refusal =
+    perEcosystem refusal
+        <> " requires EPSS enrichment, and the feed at "
+        <> perFeed refusal
+        <> " failed: "
+        <> renderEpssFeedFailure (perFailure refusal)
 
 -- Fill one candidate file, which the caller renames into place only once this returns.
 compileCandidate :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> FilePath -> m ()
@@ -117,22 +164,59 @@ compileCandidate run dbFile =
         -- cannot let a later record pass a check an earlier one failed.
         now <- liftIO getCurrentTime
 
-        -- The join needs the whole score table before the first advisory row lands, and a
-        -- feed the retry budget cannot fetch fails the pass rather than shipping without.
-        feed <- withOsvRetry defaultOsvRetryPolicy (fetchEpssScores maxEpssFeedBytes (csEpssFeedUrl (crSources run)))
-        ingest <- newOsvIngest defaultIngestLimits (crEcosystem run) (efScores feed) now
+        -- The join needs the whole score table before the first advisory row lands.
+        enrichment <- enrichOrRefuse run mSpan
+        ingest <- newOsvIngest defaultIngestLimits (crEcosystem run) (maybe (mkEpssScores []) efScores (enrichedFeed enrichment)) now
 
         bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
             liftIO $ initSchema conn
             ingestAdvisories run ingest conn
             stats <- readIngestStats ingest
             attempt <- readOsvAttempt ingest
-            concludeCompile (crMetrics run) mSpan conn (conclusionOf run now feed attempt stats)
+            concludeCompile (crMetrics run) mSpan conn (conclusionOf run now enrichment attempt stats)
 
 describeCompile :: (MonadIO m) => CompileRun -> Span -> m ()
 describeCompile run sp = do
     addAttribute sp "ecluse.osv.ecosystem" (osvWireName (crEcosystem run))
     addAttribute sp "ecluse.osv.source_host" (authorityLabel (toText (csOsvExportUrl (crSources run))))
+
+-- The attempt runs whatever the requirement, so an ecosystem that could publish without scores
+-- still carries them whenever the feed is up.
+enrichOrRefuse :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => CompileRun -> Maybe Span -> m EpssEnrichment
+enrichOrRefuse run mSpan = do
+    acquired <- acquireEpssFeed maxEpssFeedBytes (csEpssFeedUrl (crSources run))
+    forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.epss_status" (renderEpssStatus (either (const EnrichmentUnavailable) (const EnrichmentAvailable) acquired))
+    enrichment <- either (refuseRequiredEpss run mSpan) pure (resolveEnrichment (crEpss run) acquired)
+    case enrichment of
+        EpssUnavailable failure ->
+            logFM WarningS (ls ("EPSS enrichment unavailable for " <> ecosystem <> " from " <> epssFeedLabel run <> ": " <> renderEpssFeedFailure failure <> ". No " <> ecosystem <> " rule depends on EPSS, so the artifact publishes without scores"))
+        EpssEnriched _ -> pass
+    pure enrichment
+  where
+    ecosystem = osvWireName (crEcosystem run)
+
+-- The throw leaves the candidate unrenamed, so nothing publishes and any previous artifact stays.
+refuseRequiredEpss :: (KatipContext m) => CompileRun -> Maybe Span -> EpssFeedFailure -> m a
+refuseRequiredEpss run mSpan failure = do
+    forM_ mSpan $ \sp -> setStatus sp (Error "required EPSS enrichment unavailable, compile abandoned")
+    logFM ErrorS (ls ("Aborting OSV compile: " <> renderEpssRequired refusal))
+    -- A fault for the caller: the scheduled loop retries on its cadence and a one-shot run exits non-zero.
+    throwIO refusal
+  where
+    refusal =
+        PilotEpssRequired
+            { perEcosystem = osvWireName (crEcosystem run)
+            , perFeed = epssFeedLabel run
+            , perFailure = failure
+            }
+
+epssFeedLabel :: CompileRun -> Text
+epssFeedLabel run = authorityLabel (toText (csEpssFeedUrl (crSources run)))
+
+renderRequirement :: EpssRequirement -> Text
+renderRequirement = \case
+    EpssRequired -> "required"
+    EpssOptional -> "optional"
 
 -- A failed attempt leaves committed batches. NULL bounds defeat deduplication, so each retry
 -- clears the table, the tally, and the source metadata before it re-streams.
@@ -152,18 +236,20 @@ data CompileConclusion = CompileConclusion
     { ccEcosystem :: Text
     , ccSources :: CompileSources
     , ccStats :: IngestStats
+    , ccEpssStatus :: EpssStatus
     , ccProvenance :: AdvisoryProvenance
     , ccQuietTime :: QuietTime
     , ccNow :: UTCTime
     }
 
-conclusionOf :: CompileRun -> UTCTime -> EpssFeed -> OsvAttempt -> IngestStats -> CompileConclusion
-conclusionOf run now feed attempt stats =
+conclusionOf :: CompileRun -> UTCTime -> EpssEnrichment -> OsvAttempt -> IngestStats -> CompileConclusion
+conclusionOf run now enrichment attempt stats =
     CompileConclusion
         { ccEcosystem = osvWireName (crEcosystem run)
         , ccSources = crSources run
         , ccStats = stats
-        , ccProvenance = passProvenance (crSources run) feed attempt
+        , ccEpssStatus = enrichmentStatus enrichment
+        , ccProvenance = passProvenance (crSources run) enrichment attempt
         , ccQuietTime = crQuietTime run
         , ccNow = now
         }
@@ -178,18 +264,21 @@ removeCandidate :: FilePath -> IO ()
 removeCandidate path = catchIOError (removeFile path) (const $ pure ())
 
 -- The sources one finished pass read, as they described themselves. The identities are
--- credential-free, because the artifact travels to every consumer.
-passProvenance :: CompileSources -> EpssFeed -> OsvAttempt -> AdvisoryProvenance
-passProvenance sources feed attempt =
+-- credential-free, because the artifact travels to every consumer. A feed that never arrived
+-- described nothing, so an unavailable enrichment records no EPSS source or date.
+passProvenance :: CompileSources -> EpssEnrichment -> OsvAttempt -> AdvisoryProvenance
+passProvenance sources enrichment attempt =
     AdvisoryProvenance
         { apOsvSource = Just (credentialFreeUrl (toText (csOsvExportUrl sources)))
         , apOsvLastModified = oaLastModified attempt
         , apOsvNewestModified = oaNewestModified attempt
-        , apEpssSource = Just (credentialFreeUrl (toText (csEpssFeedUrl sources)))
-        , apEpssLastModified = efLastModified feed
-        , apEpssScoreDate = efScoreDate feed
-        , apEpssModelVersion = efModelVersion feed
+        , apEpssSource = credentialFreeUrl (toText (csEpssFeedUrl sources)) <$ feed
+        , apEpssLastModified = efLastModified =<< feed
+        , apEpssScoreDate = efScoreDate =<< feed
+        , apEpssModelVersion = efModelVersion =<< feed
         }
+  where
+    feed = enrichedFeed enrichment
 
 concludeCompile :: (KatipContext m) => AdvisoryCompileMetricsPort -> Maybe Span -> Connection -> CompileConclusion -> m ()
 concludeCompile metrics mSpan conn conclusion = do
@@ -202,13 +291,14 @@ concludeCompile metrics mSpan conn conclusion = do
     liftIO $ writeMeta conn conclusion rowCount
     liftIO (acmpCompileRun metrics CompileCompleted)
     forM_ mSpan $ \sp -> addAttribute sp "ecluse.osv.row_count" (show rowCount :: Text)
-    katipAddContext (sl "row_count" rowCount <> dropFields ecosystem stats) $
-        logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem <> " (" <> renderDrops stats <> ")"))
+    katipAddContext (sl "row_count" rowCount <> sl "epss_status" epssStatus <> dropFields ecosystem stats) $
+        logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem <> " (" <> renderDrops stats <> "), epss_status=" <> epssStatus))
     warnOnUnusableDates ecosystem stats
     logSourceAges ecosystem (sourceAges (ccNow conclusion) (ccQuietTime conclusion) (ccProvenance conclusion))
   where
     ecosystem = ccEcosystem conclusion
     stats = ccStats conclusion
+    epssStatus = renderEpssStatus (ccEpssStatus conclusion)
 
 recordCompileSpan :: (MonadIO m) => Maybe Span -> IngestStats -> m ()
 recordCompileSpan mSpan stats = forM_ mSpan $ \sp -> do
@@ -301,14 +391,15 @@ writeMeta conn conclusion rowCount = do
           , (renderMetaKey MetaEcosystem, ccEcosystem conclusion)
           , (renderMetaKey MetaBuiltAt, toText (iso8601Show builtAt))
           , (renderMetaKey MetaSourceUrl, authorityLabel (toText (csOsvExportUrl sources)))
-          , (renderMetaKey MetaEpssSourceUrl, authorityLabel (toText (csEpssFeedUrl sources)))
-          , (renderMetaKey MetaEpssStatus, "available")
+          , (renderMetaKey MetaEpssStatus, renderEpssStatus status)
           , (renderMetaKey MetaRowCount, show rowCount)
           ]
+            <> [(renderMetaKey MetaEpssSourceUrl, authorityLabel (toText (csEpssFeedUrl sources))) | status == EnrichmentAvailable]
             <> provenanceRows (ccProvenance conclusion)
         )
   where
     sources = ccSources conclusion
+    status = ccEpssStatus conclusion
 
 sinkSqlite :: (MonadIO m) => Connection -> ConduitT [ExtractedOsv] o m ()
 sinkSqlite conn = awaitForever $ \batch ->

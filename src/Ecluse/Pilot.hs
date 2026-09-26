@@ -36,6 +36,7 @@ import Ecluse.Config (
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, parseEcosystem)
 import Ecluse.Core.Osv.Compile (compileOsvToSqlite)
 import Ecluse.Core.Osv.Ecosystem (osvEcosystemFor, osvEcosystemNamed)
+import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
 import Ecluse.Core.Supervision (
     BackoffSchedule (BackoffSchedule, bsBaseMicros, bsCapMicros),
     superviseLoop,
@@ -112,6 +113,7 @@ exportEcosystem metrics eco telemetry s3Endpoint advisories store = do
             (telemetryTracerProvider telemetry)
             (advDataDir advisories)
             osvEco
+            EpssRequired
             (configuredSources advisories osvEco)
             (quietTimeFor advisories (Just eco))
     uploadToStore telemetry s3Endpoint store dbPath
@@ -151,6 +153,7 @@ runPilotCompile logEnv telemetry s3Endpoint appCfg opts = do
                     (telemetryTracerProvider telemetry)
                     (pcoOutDir opts)
                     (osvEcosystemNamed (pcoEcosystem opts))
+                    EpssRequired
                     (compileSources advisories opts)
                     (quietTimeFor advisories (parseEcosystem (pcoEcosystem opts)))
             runUploadPlan telemetry s3Endpoint plan dbFile
