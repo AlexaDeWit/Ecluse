@@ -43,7 +43,7 @@ import Ecluse.Runtime.Server (
  )
 import Ecluse.Test.Env (withEnvVars)
 import Ecluse.Test.Log (captureStderrWith, captureStdout)
-import Ecluse.Test.Stub (Stub, stubBaseUrl, withStub)
+import Ecluse.Test.Stub (Stub, allCaptured, stubBaseUrl, withStub)
 
 runEnv :: [(String, String)]
 runEnv =
@@ -334,6 +334,13 @@ spec = do
             (outcome, report) <- checkConfigRefusal (overrideEnv "ECLUSE_RULES" cveDenyRule runEnv)
             outcome `shouldBe` refusedCheck
             report `shouldSatisfy` any (T.isInfixOf "enables the advisory deny rules DenyIfCve")
+
+        it "prints the EPSS feed every compile attempts once, and never fetches it" $
+            withStub status200 "" $ \feed -> do
+                let envVars = overrideEnv "ECLUSE_ADVISORIES__EPSS_FEED_URL" (toString (stubBaseUrl feed) <> "/epss.csv.gz") runEnv
+                output <- checkConfigOutput envVars
+                filter (T.isInfixOf "every compile attempts the EPSS feed at 127.0.0.1:") (lines output) `shouldSatisfy` ((== 1) . length)
+                allCaptured feed `shouldReturn` []
 
         it "prints the mirror-collapse advisory a writing role boots on" $ do
             -- The typed advisory reaches an operator as this line or as nothing at all, so this

@@ -137,8 +137,11 @@ advisories:
   # egress, not osv.dev.
   osvExportBaseUrl: "https://osv-vulnerabilities.storage.googleapis.com"
   # The EPSS daily feed Pilot joins onto the advisories by CVE id, on the same terms:
-  # override it if the upstream moves or you mirror it, and allowlist this host for
-  # Pilot's egress. The DenyIfEpss rule reads the scores it supplies.
+  # override it if the upstream moves or you mirror it. Pilot attempts it on every compile,
+  # whatever the rules, so allowlist this host for Pilot's egress in every deployment. The
+  # DenyIfEpss rule reads the scores it supplies. When the feed fails, an ecosystem whose
+  # rules include DenyIfEpss publishes nothing, and any other ecosystem publishes its OSV
+  # data marked epss_status=unavailable. Pilot and every consumer must share these rules.
   epssFeedUrl: "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
   # Pilot only: how long one ecosystem's advisory export may go unchanged, in seconds, before
   # Pilot logs the quiet-time alarm at ERROR after each compile. The key is the ecosystem, as

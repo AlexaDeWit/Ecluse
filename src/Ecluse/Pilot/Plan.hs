@@ -21,6 +21,7 @@ module Ecluse.Pilot.Plan (
     configuredSources,
     compileSources,
     quietTimeFor,
+    epssAttemptLine,
 
     -- * The one-shot run
     PilotCompileOptions (..),
@@ -52,6 +53,7 @@ import Ecluse.Core.Osv.Compile (CompileSources (..))
 import Ecluse.Core.Osv.Ecosystem (OsvEcosystem (osvExportDirectory), osvEcosystemNamed)
 import Ecluse.Core.Osv.Provenance (QuietTime (..), defaultQuietTime)
 import Ecluse.Core.Osv.Schema (EpssRequirement (EpssRequired))
+import Ecluse.Core.Security.Authority (authorityLabel)
 
 -- | What the scheduled export loop does with the advisory settings and the mounted ecosystems.
 data ExportLoopPlan
@@ -98,6 +100,13 @@ configuredSources advisories eco =
         { csOsvExportUrl = osvExportUrl (unUrl (advOsvExportBaseUrl advisories)) (osvExportDirectory eco)
         , csEpssFeedUrl = toString (unUrl (advEpssFeedUrl advisories))
         }
+
+-- | The egress every compile attempts whatever the rules, named by the host and port an allow-list takes.
+epssAttemptLine :: AdvisoriesSettings -> Text
+epssAttemptLine advisories =
+    "pilot: every compile attempts the EPSS feed at "
+        <> authorityLabel (unUrl (advEpssFeedUrl advisories))
+        <> ", whatever the rules, so its egress must be allowed"
 
 {- | The quiet-time thresholds one compile is judged against. An ecosystem with no configured
 threshold, and a one-shot compile of a name this build does not serve, take 'defaultQuietTime'.

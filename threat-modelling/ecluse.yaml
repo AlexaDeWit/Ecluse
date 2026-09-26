@@ -464,7 +464,7 @@ diagrams:
         name: |-
           Écluse Pilot
           (advisory ingestion)
-        description: "Pilot fetches configured OSV exports and the independent EPSS score feed, compiles per-ecosystem SQLite artifacts, and publishes them to S3. It produces advisory evidence rather than package-admission decisions. Proxy, mirror-worker, and Dredger roles use the shared rules engine against their loaded artifacts. Current Pilot compilation requires a successful EPSS feed and records that success in artifact metadata. A consumer with an EPSS-dependent rule refuses an artifact without that record. Configuration-dependent optional EPSS failure is planned in #1224."
+        description: "Pilot fetches configured OSV exports and the independent EPSS score feed, compiles per-ecosystem SQLite artifacts, and publishes them to S3. It produces advisory evidence rather than package-admission decisions. Proxy, mirror-worker, and Dredger roles use the shared rules engine against their loaded artifacts. Pilot records a successful EPSS feed in artifact metadata. When the feed fails, an ecosystem with an EPSS-dependent rule publishes nothing, and any other ecosystem publishes its OSV data recorded as without enrichment. A consumer with an EPSS-dependent rule refuses an artifact without the success record."
         outOfScope: false
         reasonOutOfScope: ""
         position:
@@ -1185,9 +1185,9 @@ mitigations:
       - 4d309275-cc3c-43d0-a1a2-f024789e9f17
       - b74d9df0-8947-4e67-bf50-1c5e688a09f1
   - id: mit-optional-epss-failure
-    title: EPSS failure optional without EPSS rules
-    prose: "Planned in #1224. Pilot attempts EPSS on every compile, and an EPSS failure fails the compile. The plan lets a compile succeed without EPSS when no consumer has an EPSS-dependent rule."
-    status: proposed
+    title: EPSS failure blocks only EPSS-dependent ecosystems
+    prose: Pilot attempts the EPSS feed on every compile, and each ecosystem's resolved policy decides what a failed feed means. An ecosystem with an active DenyIfEpss rule fails the compile and publishes nothing, so its consumers keep their last accepted artifact. Any other ecosystem publishes its OSV data marked epss_status=unavailable, with no scores and no EPSS provenance, so new advisories and their fixes still reach its consumers. A consumer with an EPSS-dependent rule refuses that artifact. A one-shot compile of an ecosystem the configuration does not mount requires the feed. The decision reads Pilot's own configuration, so Pilot and the consumers must share one rule configuration.
+    status: implemented
     threats:
       - 4d309275-cc3c-43d0-a1a2-f024789e9f17
       - b74d9df0-8947-4e67-bf50-1c5e688a09f1

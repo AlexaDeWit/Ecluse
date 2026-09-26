@@ -59,9 +59,10 @@ import Ecluse.Composition.Types (
     BootRole (BootMirrorPipeline, BootStorePruner, BootWithoutPipeline),
     MirrorRole (MirrorOnly, ServeOnly),
  )
-import Ecluse.Config (advisoryAgeLines, mountPostureLines, resolvedKeyProvenance)
+import Ecluse.Config (AppConfig (cfgAdvisories), Config (configApp), advisoryAgeLines, advisoryEpssLines, mountPostureLines, resolvedKeyProvenance)
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, RubyGems))
+import Ecluse.Pilot.Plan (epssAttemptLine)
 import Ecluse.Rts (
     CgroupLimits (..),
     EffectiveAxis (..),
@@ -100,7 +101,20 @@ spec = describe "resolveBootPlan" $ do
                        ]
                 <> mountPostureLines config
                 <> advisoryAgeLines config
+                <> advisoryEpssLines config
+                <> [epssAttemptLine (cfgAdvisories (configApp config))]
         bpWarnings plan `shouldBe` []
+
+    it "reports the EPSS feed every compile attempts to the role that compiles, and to no other" $ do
+        -- check-config vets under the Pilot's role, so this is the line it prints.
+        let envVars = overrideEnv "ECLUSE_ADVISORIES__EPSS_FEED_URL" "https://epss.example.test:8443/feeds/scores.csv.gz" staticEnvVars
+            attempt = "pilot: every compile attempts the EPSS feed at epss.example.test:8443, whatever the rules, so its egress must be allowed"
+        config <- expectConfig envVars Nothing
+        pilot <- expectPlan envVars Nothing config noCeiling
+        filter (T.isInfixOf "EPSS feed at") (bpLines pilot) `shouldBe` [attempt]
+        for_ [BootMirrorPipeline ServeOnly, BootMirrorPipeline MirrorOnly] $ \role ->
+            fmap (filter (T.isInfixOf "EPSS feed at") . bpLines) (brOutcome (resolveBootPlan role (bootInputsFor envVars Nothing config noCeiling)))
+                `shouldBe` Right []
 
     it "returns the preamble on the refusing path as well as the succeeding one" $ do
         -- A refusal that names a config key stays traceable to the layer that set it.

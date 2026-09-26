@@ -413,8 +413,9 @@ request, at `error`, as [Advisory outages](@/docs/operations.md#advisory-outages
 than that maximum, both advisory denies refuse, and `AllowIfRemediatesCve` abstains. See
 [Advisory push age](@/docs/operations.md#advisory-push-age) for the maximum, its default
 derivation, and the alarm that precedes it. Individual missing scores differ from whole-feed
-failure. Pilot still requires a successful EPSS feed. Optional enrichment failure remains planned
-in [#1224](https://github.com/AlexaDeWit/Ecluse/issues/1224).
+failure, which the rest of this section covers.
+
+### When the EPSS feed fails
 
 Each ecosystem with an active `DenyIfEpss` requires `epss_status=available` in its artifact metadata.
 The requirement follows that ecosystem's resolved policy, including inherited rules and mount additions.
@@ -423,6 +424,28 @@ The consumer rejects missing, unavailable, or unrecognised markers before instal
 A successful marker establishes whole-feed enrichment, not an individual score or a new timestamp.
 Optional feed dates and individual scores can remain absent.
 
-An artifact without the marker serves only ecosystems with no EPSS-dependent rule.
+Pilot applies the same requirement when it compiles. It attempts the EPSS feed on every compile,
+whatever the rules. When the feed fails:
+
+| The ecosystem's resolved policy | What Pilot does |
+|---|---|
+| Has an active `DenyIfEpss` | Fails the compile and publishes nothing. Consumers keep their last accepted artifact. |
+| Has no active `DenyIfEpss` | Publishes the OSV data with `epss_status=unavailable` and no scores, so new advisories and their fixes still reach consumers. |
+
+An artifact without the marker, or with `epss_status=unavailable`, serves only ecosystems with no
+EPSS-dependent rule.
 A running consumer retains its accepted qualified generation after rejection, subject to its existing maximum age.
 A restarted consumer starts with an empty slot and does not recover the local canonical file.
+
+Pilot reads the requirement from its own loaded configuration. It cannot see what a consumer runs,
+so give Pilot, the proxy, the mirror worker, and Dredger the same rule configuration. If Pilot's
+copy lacks a consumer's `DenyIfEpss`, Pilot can publish an artifact that consumer refuses, and the
+consumer keeps serving its last accepted one until that one ages out.
+
+To add a `DenyIfEpss` to a running deployment:
+
+1. Add the rule to Pilot's configuration first, so Pilot requires the feed for that ecosystem.
+2. Confirm that Pilot published an artifact with `epss_status=available`. The compile's
+   `Compiled ... epss_status=available` log line shows it, and so does a run of
+   `ecluse pilot compile --upload` that exits `0`.
+3. Roll the same configuration out to the proxy, the mirror worker, and Dredger.

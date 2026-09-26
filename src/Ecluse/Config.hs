@@ -72,6 +72,7 @@ module Ecluse.Config (
     mountAdvisoryDenials,
     mountDatabaseRequirement,
     advisoryAgeLines,
+    advisoryEpssLines,
     resolvedKeyProvenance,
 ) where
 
@@ -392,6 +393,23 @@ ageLine eco limit =
         <> renderDuration (maxAdvisoryAge limit)
         <> ", "
         <> renderBasis (maxAdvisoryAgeBasis limit)
+
+{- | Each mount's EPSS requirement, which Pilot and that mount's advisory consumers apply alike.
+With no store configured nothing compiles or syncs, so nothing is reported.
+-}
+advisoryEpssLines :: Config -> [Text]
+advisoryEpssLines config =
+    [ epssLine eco (mountEpssRequirement mount)
+    | isJust (advUrl (cfgAdvisories (configApp config)))
+    , (eco, mount) <- Map.toAscList (configMounts config)
+    ]
+
+epssLine :: Ecosystem -> EpssRequirement -> Text
+epssLine eco = \case
+    EpssRequired -> prefix <> "EPSS enrichment is required, because a DenyIfEpss rule is active. A failed EPSS feed publishes no artifact, and consumers refuse one without enrichment"
+    EpssOptional -> prefix <> "EPSS enrichment is optional, because no DenyIfEpss rule is active. A failed EPSS feed publishes the OSV data with epss_status=unavailable"
+  where
+    prefix = "mount \"" <> ecosystemName eco <> "\": "
 
 renderBasis :: AdvisoryAgeBasis -> Text
 renderBasis = \case

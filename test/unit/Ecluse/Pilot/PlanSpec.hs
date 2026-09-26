@@ -28,6 +28,7 @@ import Ecluse.Pilot.Plan (
     compileEpssRequirement,
     compileSources,
     configuredSources,
+    epssAttemptLine,
     exportCadenceMicros,
     exportLoopPlan,
     idleCadenceMicros,
@@ -82,6 +83,12 @@ spec = do
                 let opts = bareOptions{pcoEcosystem = name}
                 compileEpssRequirement mounts opts `shouldBe` EpssRequired
                 unmountedCompileWarning mounts opts `shouldSatisfy` maybe False (T.isInfixOf ("mounts no " <> name <> " ecosystem"))
+
+    describe "epssAttemptLine -- the egress every compile attempts" $
+        it "names the configured feed by host and port, never its path" $ do
+            advisories <- advisoriesWith [("ECLUSE_ADVISORIES__EPSS_FEED_URL", "https://epss.example.test/private/scores.csv.gz")]
+            epssAttemptLine advisories `shouldSatisfy` T.isInfixOf "the EPSS feed at epss.example.test:443,"
+            epssAttemptLine advisories `shouldSatisfy` (not . T.isInfixOf "private")
 
     describe "quietTimeFor -- the thresholds one compile is judged against" $ do
         it "takes the shipped seven days for a mounted ecosystem and for EPSS" $ do
